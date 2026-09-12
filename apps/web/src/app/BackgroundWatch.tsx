@@ -98,13 +98,24 @@ export function BackgroundWatch() {
       // A short one-line success skips the card entirely (#1651): the preview IS the
       // full result (untruncated), so the open-report CTA adds nothing but bulk —
       // render it as a compact inline note instead.
-      const injected = isShortResult(result, failed)
-        ? appendSystem(session, `${desc} — ${result.trim()}`, undefined, "success")
-        : appendSystem(
-            session,
-            failed && result ? `${header}\n\n${result}` : result || header,
-            jobId ? { jobId, title: desc } : undefined,
-          );
+      // A DELEGATION that SUCCEEDED is covered twice over: the delegate's reply lands as its
+      // own message (the background drain, #3051) and the delegation row flips to done — a
+      // note here said the same thing a third time.
+      // A FAILED one is not covered: the row shows ✕ with no reason, and the drained reply
+      // can be as bare as "(failed)". So the reason goes inline, as a note — not behind a
+      // report card's "Open", which is where the operator would have had to dig for it.
+      const delegation = String(data.subagent_type ?? "") === "delegate";
+      const injected = delegation
+        ? failed
+          ? appendSystem(session, result ? `${header}\n\n${result}` : header, undefined, "danger")
+          : chatStore.getSnapshot().sessions.some((s) => s.id === session)
+        : isShortResult(result, failed)
+          ? appendSystem(session, `${desc} — ${result.trim()}`, undefined, "success")
+          : appendSystem(
+              session,
+              failed && result ? `${header}\n\n${result}` : result || header,
+              jobId ? { jobId, title: desc } : undefined,
+            );
       toast({
         tone: failed ? "error" : "success",
         title: failed ? "Background task failed" : "Background task finished",

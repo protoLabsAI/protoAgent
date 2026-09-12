@@ -45,12 +45,28 @@ def test_derived_marketing_overlay_is_in_sync() -> None:
 
 # ── schema contracts the consumers rely on ──────────────────────────────────────────
 
-def test_app_catalog_schema_is_unchanged() -> None:
+def test_app_catalog_schema() -> None:
     """The Discover UI + /api/plugins/catalog expect exactly these entry keys."""
     doc = json.loads(pd.render_app(pd.load()))
     assert set(doc) == {"_comment", "plugins"}
     for p in doc["plugins"]:
-        assert set(p) == {"id", "name", "category", "official", "repo", "tagline"}, p["id"]
+        assert set(p) == {"id", "name", "category", "official", "repo", "tagline", "adds", "docs"}, p["id"]
+        # The console runs on the operator's own host: a root-relative link would 404 there.
+        assert p["docs"].startswith("https://"), f"{p['id']}: docs link {p['docs']!r} is not absolute"
+
+
+def test_discover_says_what_the_website_card_says() -> None:
+    """#2910 / census F3: Discover used to drop the site card's contribution chips and
+    docs link, so the same plugin read thinner in-app than on the website."""
+    entries = pd.load()
+    app = {p["id"]: p for p in json.loads(pd.render_app(entries))["plugins"]}
+    site = {s["id"]: s for s in json.loads(pd.render_site(entries)) if not s.get("hidden")}
+    shared = [e for e in entries if e["id"] in app and (e.get("site_id") or e["id"]) in site]
+    assert shared, "no plugin is listed on both surfaces"
+    for e in shared:
+        a, s = app[e["id"]], site[e.get("site_id") or e["id"]]
+        assert a["adds"] == s["adds"], e["id"]
+        assert a["docs"] == pd._absolute(s["links"]["docs"]), e["id"]
 
 
 def test_bundled_entries_link_the_in_tree_plugin() -> None:
@@ -75,6 +91,11 @@ def test_bundled_entries_link_the_in_tree_plugin() -> None:
 def test_site_overlay_shapes() -> None:
     out = json.loads(pd.render_site(pd.load()))
     for e in out:
+        if e.get("hidden"):
+            # An unlisted entry is ONLY a drop marker — nothing the page could render.
+            assert set(e) == {"id", "status", "hidden"}, e["id"]
+            assert e["status"] not in pd._SITE_STATUSES
+            continue
         assert set(e) >= {"id", "name", "category", "official", "tagline", "adds", "bundled", "links"}
         if e["bundled"]:
             assert "install" not in e and e["links"]["source"].startswith(pd.TREE)
@@ -113,17 +134,66 @@ def test_app_false_entries_stay_out_of_the_app_catalog() -> None:
     assert [p["id"] for p in site] == ["ext2", "built"]
 
 
-def test_non_active_status_is_emitted_nowhere(tmp_path: Path) -> None:
+def _census(tmp_path: Path) -> list[dict]:
     doc = {"plugins": [
-        {"id": "gone", "name": "G", "category": "T", "tagline": "t", "status": "deprecated",
-         "repo": "https://github.com/protoLabsAI/gone-plugin"},
-        {"id": "kept", "name": "K", "category": "T", "tagline": "t",
-         "repo": "https://github.com/protoLabsAI/kept-plugin"},
+        {"id": s, "name": s.title(), "category": "T", "tagline": "t", "status": s,
+         "repo": f"https://github.com/protoLabsAI/{s}-plugin"}
+        for s in ("active", "incubating", "personal", "archived", "deprecated", "internal")
     ]}
     f = tmp_path / "dir.yaml"
     f.write_text(json.dumps(doc), encoding="utf-8")  # JSON is valid YAML
-    entries = pd.load(f)
-    assert [e["id"] for e in entries] == ["kept"]
+    return pd.load(f)
+
+
+def test_load_keeps_the_whole_census(tmp_path: Path) -> None:
+    # The file is the full census (#2910): every status survives load(); which surface
+    # lists what is the renderers' call.
+    assert [e["id"] for e in _census(tmp_path)] == [
+        "active", "incubating", "personal", "archived", "deprecated", "internal",
+    ]
+
+
+def test_discover_lists_active_plugins_only(tmp_path: Path) -> None:
+    # One-click install from Discover is for finished plugins — not an incubating one.
+    app = json.loads(pd.render_app(_census(tmp_path)))
+    assert [p["id"] for p in app["plugins"]] == ["active"]
+
+
+def test_the_marketing_page_badges_incubating_and_hides_the_rest(tmp_path: Path) -> None:
+    site = {e["id"]: e for e in json.loads(pd.render_site(_census(tmp_path)))}
+    assert "status" not in site["active"] and not site["active"].get("hidden")
+    assert site["incubating"]["status"] == "incubating" and not site["incubating"].get("hidden")
+    assert site["incubating"]["install"] == "https://github.com/protoLabsAI/incubating-plugin"
+    # The page renders every `protoagent-plugin`-tagged repo it finds, so "listed
+    # nowhere" needs a marker to drop that scraped card — a mere omission would keep it.
+    for s in ("personal", "archived", "deprecated", "internal"):
+        assert site[s] == {"id": s, "status": s, "hidden": True}
+
+
+def test_a_hidden_marker_uses_the_site_key(tmp_path: Path) -> None:
+    doc = {"plugins": [{"id": "palmier_pro", "site_id": "palmier-pro", "name": "P", "category": "T",
+                        "tagline": "t", "status": "personal",
+                        "repo": "https://github.com/protoLabsAI/palmier-pro-plugin"}]}
+    f = tmp_path / "dir.yaml"
+    f.write_text(json.dumps(doc), encoding="utf-8")
+    assert json.loads(pd.render_site(pd.load(f))) == [{"id": "palmier-pro", "status": "personal", "hidden": True}]
+
+
+def test_every_external_entry_keys_onto_its_scraped_card() -> None:
+    """The page folds an overlay entry onto the card it scraped from the repo by
+    `<repo-name minus -plugin>`. A key that doesn't match renders a DUPLICATE for a
+    listed plugin (#1772), and — worse — a hidden marker that hides nothing, so an
+    archived repo that keeps its topic stays on the page. Set `site_id` when the
+    manifest id differs."""
+    import re
+
+    for e in pd.load():
+        if not e.get("repo"):
+            continue
+        scraped = re.sub(r"-plugin$", "", e["repo"].rstrip("/").rsplit("/", 1)[-1]).lower()
+        assert (e.get("site_id") or e["id"]).lower() == scraped, (
+            f"{e['id']}: overlay key {(e.get('site_id') or e['id'])!r} != scraped card key {scraped!r} — set site_id"
+        )
 
 
 @pytest.mark.parametrize("bad", [

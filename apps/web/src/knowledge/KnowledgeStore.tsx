@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 
 import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
+import { KNOWLEDGE_INGEST_ACCEPT } from "../lib/attachTypes";
 import { ago, errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { knowledgeQuery, queryKeys } from "../lib/queries";
@@ -94,11 +95,8 @@ function ChunkForm({
 
 // Document ingestion (ADR 0021) — extract a file / web URL / YouTube link into
 // the KB, chunked + enriched + embedded server-side. Distinct from ChunkForm
-// (typed facts): this is "bring a whole document in".
-const INGEST_ACCEPT =
-  ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf," +
-  ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac," +
-  ".mp4,.mov,.mkv,.webm,.avi,.m4v";
+// (typed facts): this is "bring a whole document in". The picker's accept list
+// is KNOWLEDGE_INGEST_ACCEPT (lib/attachTypes — shared with the chat composer).
 
 // The source a preview is holding, so Confirm can re-send the exact same thing.
 type PendingSource = { kind: "file"; file: File } | { kind: "url"; url: string };
@@ -262,7 +260,7 @@ function IngestForm({
             <input
               type="file"
               hidden
-              accept={INGEST_ACCEPT}
+              accept={KNOWLEDGE_INGEST_ACCEPT}
               disabled={busy}
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -271,7 +269,7 @@ function IngestForm({
               }}
             />
           </label>{" "}
-          — txt, md, html, pdf, audio &amp; video
+          — txt, md, html, pdf, docx, audio &amp; video
         </span>
       </div>
       <div className="knowledge-chunk-form-row">
@@ -647,7 +645,7 @@ export function KnowledgeStore() {
                   variant="ghost"
                   type="button"
                   onClick={() => { setEditingId(null); setAdding(false); setIngesting((v) => !v); }}
-                  title="Add a source — file (text/pdf/audio/video), web URL, or YouTube link"
+                  title="Add a source — file (text/pdf/docx/audio/video), web URL, or YouTube link"
                 >
                   <FileUp size={16} />
                 </Button>

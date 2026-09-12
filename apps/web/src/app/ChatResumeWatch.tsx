@@ -4,9 +4,7 @@ import { useEffect } from "react";
 import { chatStore } from "../chat/chat-store";
 import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
-import type { ChatMessage } from "../lib/types";
-import { resumedTurnRender } from "./resumedTurn";
-import { isLiveServerTurn } from "./serverTurnProgress";
+import { resumedTurnRender, settleResumedTurn } from "./resumedTurn";
 import { originForSession } from "../chat/server-turn-store";
 
 // Live surfacing of a `wait` / scheduled RESUME (ADR 0053, bd-k02) into the chat tab.
@@ -54,33 +52,18 @@ export function ChatResumeWatch() {
         return;
       }
 
-      const liveIdx = target.messages.findIndex((m) =>
-        isLiveServerTurn(m, render.taskId, render.session),
+      // Replace the live preview in place (or append), distributing the answer across a
+      // preview an interjection split — see settleResumedTurn. Tag the settled message with
+      // its trigger origin (#3028) so ChatMessageView renders it as a compact, expandable
+      // result card, not a full-size bubble. The server stamps `origin` on the event; fall
+      // back to what the store captured at `turn.started` for an older server. Persisted on
+      // the message, so the card treatment survives a reload.
+      const next = settleResumedTurn(
+        target.messages,
+        render,
+        render.origin || originForSession(render.session) || undefined,
+        `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       );
-      const live = liveIdx >= 0 ? target.messages[liveIdx] : null;
-      const msg: ChatMessage = {
-        id: live?.id ?? `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        role: "assistant",
-        content: render.content,
-        createdAt: live?.createdAt ?? Date.now(),
-        status: render.status,
-        taskId: render.taskId || undefined,
-        // Tag the settled message with its trigger origin (#3028) so ChatMessageView renders it
-        // as a compact, expandable result card, not a full-size bubble. The server stamps `origin`
-        // on the event; fall back to what the store captured at `turn.started` for an older server.
-        // Persisted on the message, so the card treatment survives a reload.
-        origin: render.origin || originForSession(render.session) || undefined,
-        // Keep the tool cards the live view already rendered — the resume payload carries
-        // the final TEXT only, so dropping these would erase the turn's visible work.
-        // `parts` is deliberately not carried over: it interleaves the streamed text, which
-        // the authoritative `content` now supersedes, so the message falls back to the
-        // grouped tools→content layout history-loaded messages already use.
-        toolCalls: live?.toolCalls,
-      };
-      const next =
-        liveIdx >= 0
-          ? target.messages.map((m, i) => (i === liveIdx ? msg : m))
-          : [...target.messages, msg];
       chatStore.updateMessages(render.session, next);
       toast(render.toast);
       notifyIfHidden(render.notify.title, render.notify.body);

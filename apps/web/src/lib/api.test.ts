@@ -361,6 +361,37 @@ describe("roomReplyFromParts", () => {
     });
   });
 
+  it("carries a delegation ask's summary, background job and error (the delegation row)", () => {
+    const got = roomReplyFromParts([
+      {
+        metadata: { mimeType: ROOM_MIME },
+        data: {
+          addressed_to: "sonnet",
+          text: "the whole brief",
+          summary: " Land PR #13 ",
+          background: true,
+          job_id: "bg-4109c71161eb",
+          error: "Error: unknown delegate 'sonet'.",
+          ok: false,
+        },
+      },
+    ]);
+    expect(got?.addressedTo).toBe("sonnet");
+    expect(got?.text).toBe("the whole brief");
+    expect(got?.delegation).toEqual({
+      summary: "Land PR #13",
+      background: true,
+      jobId: "bg-4109c71161eb",
+      error: "Error: unknown delegate 'sonet'.",
+    });
+    // An older server's ask carries none of it — the row falls back to the prompt.
+    const bare = roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { addressed_to: "proto", text: "x" } }]);
+    expect(bare?.delegation).toBeUndefined();
+    // A REPLY never carries delegation fields.
+    const reply = roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "proto", job_id: "bg-1" } }]);
+    expect(reply?.delegation).toBeUndefined();
+  });
+
   it("reads the flattened proto-JSON form", () => {
     const got = roomReplyFromParts([
       { metadata: { mimeType: ROOM_MIME }, data: { author: "claude-code", from: "proto", text: "patched" } },

@@ -12,8 +12,19 @@
 # WORKS on desktop with no manifest change, and protobanana's `pillow>=10`
 # refusal disappears (Pillow arrives transitively via python-pptx/reportlab).
 #
+# This file is ALSO the managed Python runtime's baseline (ADR 0094 D3): it is what gets
+# pip-installed into the interpreter execute_code spawns. That child can't import
+# anything from the frozen host (PyInstaller packs it into the PYZ), so every library a
+# document skill imports in execute_code must be listed here — even one that is already
+# a core dependency. pypdf is exactly that case: core ships it in the host, so the plugin
+# dep check (host-first for unscoped deps) calls it satisfied and never installs it in
+# the child; without this line cowork's pdf skill could not read a PDF on the desktop.
+# Editing this file changes its hash, which flags every provisioned runtime's baseline
+# stale (Settings ▸ Tools offers the deps-only update) — see docs/guides/python-runtime.md.
+#
 # lxml, Pillow, et-xmlfile, XlsxWriter come transitively — not pinned here.
 python-docx>=1.1     # .docx authoring (imports as `docx`; ships default.docx template data)
 openpyxl>=3.1        # .xlsx authoring
 python-pptx>=0.6.23  # .pptx authoring (imports as `pptx`; pulls lxml + Pillow)
 reportlab>=4.0       # PDF authoring (compiled _rl_accel + bundled font/AFM data)
+pypdf>=4.0           # PDF reading/splitting/merging in execute_code (core dep in the host — see above)

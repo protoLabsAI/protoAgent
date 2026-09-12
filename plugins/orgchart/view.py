@@ -20,8 +20,12 @@ def build_view_router():
 
     router = APIRouter()
 
-    @router.get("/view")
-    async def _view() -> HTMLResponse:  # served at /plugins/orgchart/view
+    # `response_class=`, not a `-> HTMLResponse` annotation: with postponed annotations the
+    # return type is a string FastAPI resolves against this MODULE's globals, where the
+    # function-local import isn't visible — the unresolved reference broke /openapi.json
+    # for every agent with orgChart enabled.
+    @router.get("/view", response_class=HTMLResponse)
+    async def _view():  # served at /plugins/orgchart/view
         return HTMLResponse(_VIEW_PAGE.read_text(encoding="utf-8"))
 
     return router

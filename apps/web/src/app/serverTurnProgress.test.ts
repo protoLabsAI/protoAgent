@@ -207,3 +207,93 @@ describe("isLiveServerTurn", () => {
     expect(isLiveServerTurn(msgs[0], "", "s1")).toBe(true);
   });
 });
+
+describe("consumed interjection frames (steer_consumed)", () => {
+  const steer = (items: { id: string; text: string }[]): ProgressFrame => ({
+    session: "s1",
+    taskId: "task-1",
+    kind: "steer",
+    items,
+  });
+
+  it("parses the server's boundary frame, keeping only items it can match and show", () => {
+    expect(
+      parseProgress({
+        session_id: "s1",
+        task_id: "task-1",
+        phase: "steer_consumed",
+        items: [{ id: "i1", text: "yes 2024 as proposed" }, { id: "", text: "no id" }, { id: "i2" }, "junk"],
+      }),
+    ).toEqual({ session: "s1", taskId: "task-1", kind: "steer", items: [{ id: "i1", text: "yes 2024 as proposed" }] });
+    expect(parseProgress({ session_id: "s1", task_id: "task-1", phase: "steer_consumed", items: [] })).toBeNull();
+    expect(parseProgress({ session_id: "s1", task_id: "task-1", phase: "steer_consumed" })).toBeNull();
+  });
+
+  it("settles the interjection as a user message at the boundary, with the turn streaming on below it", () => {
+    let msgs = applyProgressFrame([], text("Checked the PR."));
+    msgs = applyProgressFrame(msgs, steer([{ id: "i1", text: "yes 2024 as proposed" }]));
+    msgs = applyProgressFrame(msgs, text("Locked it in."));
+    expect(msgs.map((m) => [m.role, m.content, m.status])).toEqual([
+      ["assistant", "Checked the PR.", "done"],
+      ["user", "yes 2024 as proposed", "done"],
+      ["assistant", "Locked it in.", "streaming"],
+    ]);
+    // The continuation is still THE preview, so chat.resumed finds and settles it; the frozen
+    // half links back to it, so the terminal text is distributed rather than landed twice.
+    expect(isLiveServerTurn(msgs[2], "task-1", "s1")).toBe(true);
+    expect(msgs[0].splitOf).toBe(liveMessageId("task-1", "s1"));
+    expect(msgs[1].id).toBe("i1");
+  });
+
+  it("a marker before the turn has said anything lands as the newest row", () => {
+    const prior: ChatMessage[] = [{ id: "a0", role: "assistant", content: "Earlier answer.", status: "done" }];
+    let msgs = applyProgressFrame(prior, steer([{ id: "i1", text: "go" }]));
+    msgs = applyProgressFrame(msgs, text("On it."));
+    expect(msgs.map((m) => [m.id, m.content])).toEqual([
+      ["a0", "Earlier answer."],
+      ["i1", "go"],
+      [liveMessageId("task-1", "s1"), "On it."],
+    ]);
+  });
+
+  it("a repeated marker is a no-op", () => {
+    const once = applyProgressFrame(applyProgressFrame([], text("x")), steer([{ id: "i1", text: "go" }]));
+    expect(applyProgressFrame(once, steer([{ id: "i1", text: "go" }]))).toBe(once);
+  });
+});
+
+describe("a delegation made during a server-fired turn", () => {
+  it("parses the ask and appends ONE delegation row per ask", () => {
+    const frame = parseProgress({
+      session_id: "s1",
+      task_id: "task-1",
+      phase: "room_reply",
+      message_id: "ask-bg-4109c71161eb",
+      addressed_to: "sonnet",
+      text: "the whole brief",
+      summary: "Land PR #13",
+      background: true,
+      job_id: "bg-4109c71161eb",
+    });
+    expect(frame).toEqual({
+      session: "s1",
+      taskId: "task-1",
+      kind: "ask",
+      id: "ask-bg-4109c71161eb",
+      addressedTo: "sonnet",
+      text: "the whole brief",
+      delegation: { summary: "Land PR #13", background: true, jobId: "bg-4109c71161eb" },
+    });
+    const once = applyProgressFrame([], frame!);
+    expect(once).toHaveLength(1);
+    expect(once[0]).toMatchObject({
+      role: "assistant",
+      addressedTo: "sonnet",
+      content: "the whole brief",
+      delegation: { summary: "Land PR #13", background: true, jobId: "bg-4109c71161eb" },
+    });
+    expect(once[0].author).toBeUndefined();
+    // The same ask delivered twice (a bus replay) is still one row.
+    expect(applyProgressFrame(once, frame!)).toBe(once);
+  });
+});

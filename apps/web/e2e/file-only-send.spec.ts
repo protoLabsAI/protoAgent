@@ -5,6 +5,17 @@ import { expect, test } from "@playwright/test";
 // (@protolabsai/ui ≥ 0.34) enables submit when attachments are present, and the
 // composer's send gate matches.
 test("attach a file with no caption and send it", async ({ page }) => {
+  // The A2A message the turn goes out as — asserted at the WIRE level below.
+  const sent: { parts?: { text?: string }[]; metadata?: Record<string, unknown> }[] = [];
+  page.on("request", (req) => {
+    if (!req.url().endsWith("/a2a") || req.method() !== "POST") return;
+    try {
+      const body = JSON.parse(req.postData() || "{}");
+      if (body?.method === "SendStreamingMessage") sent.push(body.params?.message ?? {});
+    } catch {
+      // non-JSON /a2a traffic — not a chat turn
+    }
+  });
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
   const slot = page.locator(".chat-session-slot:not([hidden])");
@@ -32,4 +43,10 @@ test("attach a file with no caption and send it", async ({ page }) => {
   await expect(slot.locator(".pl-message--assistant .markdown")).toContainText(
     "Done — found 8 results.",
   );
+
+  // The model gets the attachment context; the message ALSO records the bubble it drew,
+  // so a chat rebuilt from the durable turn (ADR 0104) shows the 📎 line, not the dump.
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0].parts?.[0]?.text).toContain("hello from the attached file");
+  expect(sent[0].metadata?.display).toBe("Attached: notes.txt");
 });

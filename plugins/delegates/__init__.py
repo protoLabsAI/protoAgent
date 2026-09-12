@@ -38,6 +38,7 @@ def _build_delegate_to(registry: DelegateRegistry):
     async def delegate_to(
         target: str,
         query: str,
+        summary: str = "",
         background: bool = False,
         item_id: str = "",
         resume_task_id: str = "",
@@ -72,6 +73,9 @@ def _build_delegate_to(registry: DelegateRegistry):
                 description).
             query: the full, self-contained question or instruction — the delegate
                 does not see this conversation, so restate what it needs.
+            summary: ONE short line saying what you're asking, written for your
+                operator (e.g. "Review PR #13 and merge it"). The chat shows this
+                instead of the full query, which stays one click away. Always set it.
             background: run the delegation detached and get the reply back on
                 completion, instead of waiting inline (default False).
             item_id: stable work-item id for a coding task on a managed-git coding
@@ -109,7 +113,14 @@ def _build_delegate_to(registry: DelegateRegistry):
             timeout_s = None
         if background:
             return await _spawn_background_delegation(
-                registry, target, query, state, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout_s
+                registry,
+                target,
+                query,
+                state,
+                item_id=item_id,
+                resume_task_id=resume_task_id,
+                timeout=timeout_s,
+                summary=summary,
             )
         try:
             return await _dispatch_into_room(
@@ -351,6 +362,7 @@ async def _spawn_background_delegation(
     item_id: str = "",
     resume_task_id: str = "",
     timeout: float | None = None,
+    summary: str = "",
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
@@ -401,11 +413,16 @@ async def _spawn_background_delegation(
             target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout
         )
 
-    snippet = " ".join(query.split())[:80]
+    # The job's title everywhere it's listed (the Background panel, the console's delegation
+    # row): the agent's one-line summary when it wrote one, else the query's first sentence —
+    # the SAME fallback the chat row uses, so a title and its row can't read differently.
+    from infra.text import first_sentence
+
+    label = " ".join(str(summary or "").split())[:120] or first_sentence(query)
     job_id = await mgr.spawn_work(
         origin_session=session,
         kind="delegate",
-        description=f"delegate → {target}: {snippet}",
+        description=f"delegate → {target}: {label}",
         detail=query,
         work=_work,
         result_author=target,

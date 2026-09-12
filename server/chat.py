@@ -15,6 +15,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import re
@@ -549,6 +550,30 @@ def _coerce_tool_output(value) -> str:
     return _coerce_tool_value(_tool_payload(value))
 
 
+# The job handle a background `delegate_to` returns in its receipt ("… (job `bg-…`) …").
+_BG_JOB_ID = re.compile(r"\(job `(bg-[a-f0-9]{12})`\)")
+# The ONE refusal a background dispatch answers with instead of a job handle. Matched
+# exactly: a bare `startswith("Error")` also catches a delegate whose own reply opens with
+# that word (the no-manager inline fallback returns the reply here), and calling that a
+# failed dispatch would hide the answer behind an error row.
+_BG_DISPATCH_REFUSED = re.compile(r"^Error: unknown delegate\b")
+
+
+def _delegation_summary(summary: object, query: str) -> str:
+    """The one line the console shows for a delegation instead of its full query.
+
+    The agent's own ``summary`` argument when it wrote one; else the query's first sentence
+    — a delegation prompt restates everything the delegate needs, so the whole thing is a
+    wall of text the operator didn't write and rarely needs to read. Same fallback the job's
+    title uses (``infra.text.first_sentence``), so the row and the Background panel agree."""
+    from infra.text import first_sentence
+
+    line = " ".join(str(summary or "").split())
+    if not line:
+        return first_sentence(query)
+    return line if len(line) <= 120 else f"{line[:119].rstrip()}…"
+
+
 def _coerce_room_text(value) -> str:
     """A delegate's reply/query as a chat MESSAGE — full text, never preview-capped.
 
@@ -783,6 +808,57 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
 
 
+# The node langchain's `create_agent` runs tool calls in — see `_speaks_for_the_lead`.
+_TOOL_NODE = "tools"
+
+
+@functools.cache
+def _lc_internal_call_marker() -> tuple[str, str] | None:
+    """langchain's (key, token) marking a middleware-INTERNAL model call, or None on a
+    langchain that predates it. The token is process-local, so user metadata cannot forge
+    it; ``lc_source`` (below) is the older, purpose-naming marker."""
+    try:
+        from langchain.agents.middleware.internal_call_transformer import (
+            INTERNAL_CALL_METADATA_KEY,
+            internal_call_metadata,
+        )
+    except ImportError:
+        return None
+    return INTERNAL_CALL_METADATA_KEY, internal_call_metadata()[INTERNAL_CALL_METADATA_KEY]
+
+
+def _speaks_for_the_lead(metadata: dict) -> bool:
+    """Whether a chat-model event with this metadata is the LEAD answering, so its tokens
+    belong in the turn's answer text. (A subagent's are ruled out before this: they carry
+    ``parent_task_id``.)
+
+    Not a call made anywhere under the lead's TOOL node. The checkpoint namespace's first
+    segment names the node of the lead graph a run belongs to, however deep it nests: the
+    tool body itself, a graph a tool runs (``sdk.run_subagent`` — a workflow step — is
+    ``tools:<id>|model:<id>``, its own node reads "model"), or work a tool detached into
+    a copy of its context, which keeps reporting into this stream while the lead answers.
+
+    And not a middleware's own internal call — the compaction summary, tool selection —
+    which langchain marks (``internal_call_metadata()``; ``lc_source`` names its purpose).
+
+    Deliberately an exclusion, not "only the model node": a graph whose answering node is
+    named differently still streams its answer, where an inclusion would silence it."""
+    ns = str(metadata.get("langgraph_checkpoint_ns") or metadata.get("checkpoint_ns") or "")
+    if ns.split("|", 1)[0].split(":", 1)[0] == _TOOL_NODE:
+        return False
+    marker = _lc_internal_call_marker()
+    if marker is not None and metadata.get(marker[0]) == marker[1]:
+        return False
+    return not metadata.get("lc_source")
+
+
+def _paragraph_break(before: str, after: str) -> str:
+    """The newlines to put between ``before`` and ``after`` so ``after`` opens a new
+    paragraph: one blank line, counting any newlines either side already carries."""
+    have = (len(before) - len(before.rstrip("\n"))) + (len(after) - len(after.lstrip("\n")))
+    return "\n" * max(0, 2 - have)
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -846,9 +922,20 @@ async def _run_turn_stream(
     from observability import pricing
 
     accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
+    # The model call the answer's latest text came from. Each lead model call is its own
+    # message: "I'll check the time first." → tool → "It is noon." must not be glued into
+    # "first.It is". So text arriving from a DIFFERENT call than the last text opens a
+    # paragraph — keyed on the text's own run, never on a model merely STARTING, because
+    # work a tool detached keeps reporting into this stream mid-answer (see below). The
+    # break rides the streamed delta itself, not just this accumulator, so the live
+    # stream, the executor's accumulation and the canonical `done` text stay ONE string.
+    # (The console keeps a turn's text-to-tool interleaving only while they agree; #3210
+    # separated only the executor's copy, which the `done` text overrode on this path.)
+    _answer_run: object = None
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
     _delegate_targets: dict[str, str] = {}  # run_id → delegate name, for delegate_to → room bubble (#3042)
+    _bg_delegations: dict[str, dict] = {}  # run_id → a BACKGROUND delegate_to's ask, emitted once it has a job id
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
         graph_input,
@@ -889,19 +976,32 @@ async def _run_turn_stream(
             # the latency timing above uses.
             if name == "delegate_to" and rid:
                 _tgt = (event.get("data") or {}).get("input") or {}
-                _target = str((_tgt or {}).get("target") or "").strip() if isinstance(_tgt, dict) else ""
-                if _target:
+                _tgt = _tgt if isinstance(_tgt, dict) else {}
+                _target = str(_tgt.get("target") or "").strip()
+                _q = str(_tgt.get("query") or "").strip()
+                _summary = _delegation_summary(_tgt.get("summary"), _q)
+                if _target and _tgt.get("background") is True:
+                    # A BACKGROUND delegation returns a receipt, not the delegate's answer —
+                    # that arrives later through the background drain (#3051). So no reply
+                    # frame at on_tool_end (the receipt is instructions to the MODEL; shown
+                    # as the delegate's words it read as the delegate's thought process),
+                    # and the ask waits for on_tool_end too, to carry the job id the
+                    # console tracks the delegation's status by.
+                    _bg_delegations[rid] = {"id": rid, "target": _target, "query": _q, "summary": _summary}
+                elif _target:
                     _delegate_targets[rid] = _target
-                    # Surface the lead's OUTGOING ask as a directed bubble, so the operator
-                    # sees what was delegated, not just the reply (#3042) — the console
-                    # analogue of the `operator → proto` half of an `@` exchange, here
-                    # `lead → proto`. `addressed_to` + no `author` = the lead speaking to a
+                    # Surface the lead's OUTGOING ask, so the operator sees what was
+                    # delegated, not just the reply (#3042) — the `lead → proto` half of the
+                    # exchange. `addressed_to` + no `author` = the lead speaking to a
                     # participant; the reply below is `author`-stamped as the participant.
-                    _q = str((_tgt or {}).get("query") or "").strip()
+                    # The console shows `summary` and keeps the full query behind a
+                    # disclosure: the prompt is written for the delegate, not the operator.
                     if _q:
                         yield (
                             "room_reply",
-                            {"addressed_to": _target, "text": _q, "ok": True},
+                            # `id` is this delegation's run — two identical asks (same target,
+                            # same words) are still two rows, not one deduped away.
+                            {"id": rid, "addressed_to": _target, "text": _q, "summary": _summary, "ok": True},
                         )
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
@@ -910,8 +1010,56 @@ async def _run_turn_stream(
             # the collaboration the lead moderates then reads as a conversation (proto,
             # reviewer) rather than machinery under one reply (#3042). REPLACES the card —
             # this branch emits a room_reply and continues, so no tool_end frame follows.
-            # Foreground only: a background delegate_to answers via the background manager,
-            # never through on_tool_end, so it is untouched here.
+            # Foreground only: a background delegate_to answers via the background manager —
+            # its on_tool_end is the receipt, handled just above.
+            _bg = _bg_delegations.pop(rid, None) if rid else None
+            if _bg:
+                # A background delegate_to's receipt: surface the ASK — once, with the job id
+                # to track and the summary — and nothing else. No tool card (#3042) and no
+                # reply frame: the delegate's answer arrives on its own through the drain.
+                _receipt = _coerce_room_text(output)
+                _job = _BG_JOB_ID.search(_receipt)
+                _failed = getattr(output, "status", None) == "error" or bool(_BG_DISPATCH_REFUSED.match(_receipt))
+                if _job or _failed:
+                    yield (
+                        "room_reply",
+                        {
+                            "id": _bg["id"],
+                            "addressed_to": _bg["target"],
+                            "text": _bg["query"],
+                            "summary": _bg["summary"],
+                            "background": True,
+                            "ok": not _failed,
+                            **({"job_id": _job.group(1)} if _job else {}),
+                            **({"error": _receipt} if _failed else {}),
+                        },
+                    )
+                    continue
+                # No job handle and no error: no BackgroundManager was wired, so the tool
+                # fell back to an inline dispatch and `output` IS the delegate's reply. Render
+                # it as the foreground exchange it turned into.
+                yield (
+                    "room_reply",
+                    {
+                        "id": _bg["id"],
+                        "addressed_to": _bg["target"],
+                        "text": _bg["query"],
+                        "summary": _bg["summary"],
+                        "ok": True,
+                    },
+                )
+                yield (
+                    "room_reply",
+                    {
+                        "author": _bg["target"],
+                        "from": "assistant",
+                        "text": _receipt,
+                        "ok": True,
+                        "catchup": 0,
+                        "truncated": False,
+                    },
+                )
+                continue
             _dtgt = _delegate_targets.pop(rid, None) if rid else None
             if _dtgt:
                 _dtext = _coerce_room_text(output)
@@ -1001,6 +1149,14 @@ async def _run_turn_stream(
             # (subagent tokens still bill). Only the lead's own tokens reach the answer.
             if parent_tool_id:
                 continue
+            # Nor does any other model call that is not the lead answering: one made under
+            # a tool — its body, a graph it runs (a workflow step), work it detached (a
+            # background ingest's describe/enrich, a plugin's spawn_work) — or a
+            # middleware's own call (the compaction summary). Those tokens used to land in
+            # the middle of the answer ("I started the IMAGE-DESCRIPTIONingest…") and in
+            # the stored text. Billing below is untouched.
+            if not _speaks_for_the_lead(event.get("metadata") or {}):
+                continue
             # Native reasoning: the model's REAL thinking, streamed on its own channel.
             # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into
             # additional_kwargs; reasoning chunks carry NO `content`, so this is checked
@@ -1038,6 +1194,10 @@ async def _run_turn_stream(
                             len(text.split()),
                             text[:40],
                         )
+                    run = event.get("run_id")
+                    if run != _answer_run and accumulated_raw.strip():
+                        text = _paragraph_break(accumulated_raw, text) + text
+                    _answer_run = run
                     accumulated_raw += text
                     yield ("text", text)
         elif kind == "on_chat_model_end":

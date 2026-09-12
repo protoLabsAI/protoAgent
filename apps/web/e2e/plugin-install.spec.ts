@@ -52,6 +52,31 @@ test("the install dialog's form guards an empty URL", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Install", exact: true })).toBeDisabled();
 });
 
+test("Discover cards show what a plugin adds and link its docs, like the website (#2910)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
+
+  const artifact = page.locator(".plugin-card", { hasText: "Artifact" });
+  await expect(artifact.locator(".plugin-card-adds")).toHaveText(/tool\s*view/);
+  await expect(artifact.getByRole("link", { name: "docs" })).toHaveAttribute(
+    "href",
+    "https://agent.protolabs.studio/docs/guides/plugins",
+  );
+
+  // A catalog entry without the fields (a fork's own catalog) renders neither.
+  const discord = page.locator(".plugin-card", { hasText: "Discord" });
+  await expect(discord).toBeVisible();
+  await expect(discord.locator(".plugin-card-adds")).toHaveCount(0);
+  await expect(discord.getByRole("link", { name: "docs" })).toHaveCount(0);
+
+  // Search reaches the chips too, as the website's does.
+  await page.getByRole("searchbox", { name: "Search plugins" }).fill("view");
+  await expect(page.locator(".plugin-card")).toHaveCount(1);
+  await expect(page.locator(".plugin-card", { hasText: "Artifact" })).toBeVisible();
+});
+
 test("Discover install → Configure dialog hydrates without a page refresh (#1643)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();

@@ -519,7 +519,7 @@ def create(
             # comes up with the bundle installed-but-off and the operator has to flip each
             # one on in Settings ▸ Plugins (#1346). Then seed the bundle's recommended
             # per-plugin config defaults (#1350) — a fresh workspace, so nothing to clobber.
-            _enable_installed_in_config(cfg, ws / "plugins.lock")
+            _enable_installed_in_config(cfg, ws / "plugins.lock", sources=[bundle])
             _apply_bundle_config_defaults(cfg, ws / "plugins.lock")
             # Operator answers to the bundle's declared config_inputs prompts (#2934) —
             # written AFTER the defaults overlay so an explicit answer wins over a
@@ -583,11 +583,13 @@ def create(
     return {**rec, "path": str(ws), "installed": installed, **({"warnings": oauth_warnings} if oauth_warnings else {})}
 
 
-def _enable_installed_in_config(cfg: Path, lock: Path) -> list[str]:
+def _enable_installed_in_config(cfg: Path, lock: Path, *, sources: tuple[str, ...] | list[str] = ()) -> list[str]:
     """Add a freshly-installed bundle's plugins to ``plugins.enabled`` in the workspace
     config, so the agent starts with them on. Honors each bundle's curated ``enabled``
     subset (cached in the lock by ``_install_bundle``), falling back to every installed
     member; for a bare single-plugin install with no bundle entry, enables that plugin.
+    ``sources`` are the plugin URLs that were installed: one a bundled plugin supersedes
+    fetched nothing (so it has no lock entry), and the bundled copy is what to enable.
     Unions with whatever the template already enabled (``delegates``); returns the ids
     newly added. Best-effort — a malformed lock/config leaves enablement untouched."""
     import json
@@ -602,9 +604,19 @@ def _enable_installed_in_config(cfg: Path, lock: Path) -> list[str]:
     want: list[str] = []
     if bundles:
         for b in bundles:
-            want += [str(x) for x in (b.get("enabled") or b.get("plugins") or [])]
+            # No curated list → every member: the fetched ones (`plugins`) plus any skipped
+            # because a bundled plugin supersedes their URL (`superseded`) — the bundled
+            # copy is that member now, and it was on under this fallback before the move.
+            want += [str(x) for x in (b.get("enabled") or [*(b.get("plugins") or []), *(b.get("superseded") or [])])]
     else:  # a bare plugin install (no bundle record) — enable what landed
         want += [str(p["id"]) for p in (data.get("plugins") or []) if p.get("id")]
+    if sources:
+        from graph.plugins.installer import superseding_plugin
+
+        for url in sources:
+            moved = superseding_plugin(str(url))
+            if moved is not None and moved.id not in want:
+                want.append(moved.id)
     if not want:
         return []
 

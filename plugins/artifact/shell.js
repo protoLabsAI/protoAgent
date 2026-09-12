@@ -296,7 +296,7 @@
       $frame=document.getElementById("frame"), $edit=document.getElementById("edit"),
       $editor=document.getElementById("editor"), $code=document.getElementById("code"),
       $run=document.getElementById("run"), $cancel=document.getElementById("cancel"),
-      $estat=document.getElementById("estat");
+      $estat=document.getElementById("estat"), $dlstat=document.getElementById("dlstat");
   var editing=false;
 
   // Persist the user's selection (artifact + version + whether to auto-follow the newest) so it
@@ -365,15 +365,27 @@
   function saveBlob(b, name){ var u=URL.createObjectURL(b);
     var el=document.createElement("a"); el.href=u; el.download=name;
     document.body.appendChild(el); el.click(); el.remove(); setTimeout(function(){URL.revokeObjectURL(u);},1000); }
+  // Transient download acknowledgement, sharing the failure-button pattern. The browser owns
+  // the actual save and its completion isn't observable from here, so a success says the
+  // download STARTED — it must not claim a file reached disk. Both outcomes also land on the
+  // aria-live status region ($dlstat): a lone label swap on an unfocused button isn't announced
+  // to assistive tech. The label restores to "Download" after a short flash either way.
+  var dlFlashT=null;
+  function dlFlash(label, status){
+    clearTimeout(dlFlashT); $dl.textContent=label;
+    if($dlstat) $dlstat.textContent=status;
+    dlFlashT=setTimeout(function(){ $dl.textContent="Download"; },1800);
+  }
   $dl.addEventListener("click", async function(){
     var a=selArt(); if(!a)return; var vi=verIdx(a), v=a.versions[vi];
     if(a.kind==="file"){  // download the STORED BYTES via the gated blob route (ADR 0092 D2)
       try{ var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id)+"/blob?version="+(vi+1));
-        if(!r.ok) throw 0; saveBlob(await r.blob(), (v.file&&v.file.filename)||("artifact-"+a.id)); }
-      catch(e){ $dl.textContent="Failed"; setTimeout(function(){ $dl.textContent="Download"; },1800); }
+        if(!r.ok) throw 0; saveBlob(await r.blob(), (v.file&&v.file.filename)||("artifact-"+a.id)); dlFlash("Started","Download started"); }
+      catch(e){ dlFlash("Failed","Download failed"); }
       return;
     }
     saveBlob(new Blob([v.code],{type:"text/plain"}), "artifact-"+a.id+"-v"+(vi+1)+"."+(EXT[a.kind]||"txt"));
+    dlFlash("Started","Download started");
   });
 
   // Inline two-click confirm (no confirm() — a sandboxed plugin iframe may block modals).

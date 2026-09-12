@@ -31,6 +31,10 @@
     border-top:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30)}
   #estat{color:var(--pl-color-fg-muted,#9aa0aa);font-size:12px}
   #ebar .grow{flex:1}
+  /* Visually-hidden live region: the Download button's transient outcome is announced to
+     assistive tech here (a bare button-label swap on an unfocused button isn't). */
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0}
 </style></head><body>
 <div id="wrap">
   <div id="bar">
@@ -43,6 +47,7 @@
     <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
     <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
     <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
+    <span id="dlstat" class="sr-only" role="status" aria-live="polite"></span>
   </div>
   <div id="stage">
     <div id="empty">No artifact yet. Ask the agent to render one — a chart, diagram, or widget.</div>

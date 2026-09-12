@@ -13,9 +13,17 @@
 #                         override onto its auto-scraped card by `<repo-name minus -plugin>`
 #                         (see sites/marketing/src/pages/plugins.astro, #1772)
 #   name / category / tagline (required)  display copy, shared by both surfaces
-#   status    (optional)  active (default) | deprecated | internal — only active entries
-#                         are emitted anywhere; flipping this pulls a plugin from every
-#                         surface in one line while keeping the record
+#   status    (optional)  where the plugin is listed (#2910) — this file is the full
+#                         census, so every public plugin repo has a row:
+#                           active (default)  Discover + the marketing page
+#                           incubating        marketing page only, badged — installable,
+#                                             not finished
+#                           personal          nowhere — built for one operator's setup
+#                           archived          nowhere — kept as a record
+#                           deprecated / internal   nowhere (older values, still accepted)
+#                         "Nowhere" includes the marketing page's topic auto-discovery: an
+#                         unlisted row emits a hidden marker that drops the scraped card,
+#                         so its site_id must match `<repo-name minus -plugin>`
 #   bundled   (optional)  true = ships in-tree under plugins/<id> (source link derived);
 #                         mutually exclusive with repo
 #   repo      (required unless bundled)  the external git URL — install URL + source link
@@ -188,6 +196,20 @@ plugins:
     adds: [tool, view, subagent, settings, config]
     docs: /docs/guides/plugins
 
+  - id: social
+    name: Social Studio
+    category: Marketing
+    repo: https://github.com/protoLabsAI/social-plugin
+    tagline: "Organic social marketing that never posts — a brand kit every draft follows, nine platforms' hard limits and dated norms, a content queue, a linter, and a copy-ready export pack, with a writer + editor + researcher crew. The Social Marketing archetype installs it."
+    adds: [tool, skill, subagent, view, settings]
+
+  - id: bloodbowl
+    name: Blood Bowl
+    category: Examples
+    repo: https://github.com/protoLabsAI/bloodbowl-plugin
+    tagline: "A real 26×15 Blood Bowl pitch in the console — drag positionals onto squares, hover for stats, and set scenarios up by hand or by asking the agent. Ships roster data for 30 teams."
+    adds: [tool, skill, view]
+
   # ── Bundled built-ins (ship in-tree under plugins/<id>) ───────────────────────────
   #    These are LISTED in in-app Discover (#2249): Discover is where an operator finds
   #    out what a plugin does, and a bundled plugin has no other surface that says so.
@@ -303,6 +325,79 @@ plugins:
     bundled: true
     tagline: "The agent records its own friction — missing or awkward tools, confusing errors, wrong paths — alongside auto-captured tool errors, so the improvement backlog writes itself from real use. Open friction is projected into the agent's working state, so it acts on its own backlog instead of re-reporting it. On by default."
     adds: [tool, view, skill, subagent, settings, config]
+
+  # ── The rest of the census (#2910) ───────────────────────────────────────────────
+  #    Every other public plugin repo, with an honest status. None of these is in
+  #    Discover; incubating ones show on the marketing page with a badge, the rest are
+  #    hidden there too. Statuses set 2026-09-11 from each repo's activity, releases and
+  #    where it runs — the evidence is on #2910.
+  - id: promptlab
+    name: Prompt Lab
+    category: Engineering
+    repo: https://github.com/protoLabsAI/promptlab-plugin
+    tagline: "A versioned prompt library and a streaming playground view, with agent tools to manage both."
+    adds: [tool, skill, view]
+    status: incubating   # released, active; runs only on a dev instance so far
+
+  - id: reddit
+    name: Reddit
+    category: Communication
+    repo: https://github.com/protoLabsAI/reddit-plugin
+    tagline: "A subreddit feed view plus tools to read and interact with Reddit as you."
+    adds: [tool, skill, view, settings, secrets]
+    status: incubating   # v0.1.0, never released
+
+  - id: ebay
+    name: Marketplace prices
+    category: Finance
+    repo: https://github.com/protoLabsAI/ebay-plugin
+    tagline: "eBay + Amazon price research and seller economics through a signed-in browser session."
+    status: personal     # built for one commerce agent's setup
+
+  - id: palmier_pro
+    site_id: palmier-pro
+    name: Palmier Pro
+    category: Media
+    repo: https://github.com/protoLabsAI/palmier-pro-plugin
+    tagline: "Drives the Palmier Pro macOS video editor over a persistent MCP session."
+    status: personal     # drives one specific macOS app
+
+  - id: gameblocks
+    name: GameBlocks
+    category: Examples
+    repo: https://github.com/protoLabsAI/gameblocks-plugin
+    tagline: "Vendored three.js building blocks and a skill — the agent composes browser 3D game prototypes as artifacts."
+    status: archived     # no commits since its 07-02 release; flip to incubating to list it again
+
+  - id: linear
+    name: Linear
+    category: Integrations
+    repo: https://github.com/protoLabsAI/linear-plugin
+    tagline: "Linear issues from the agent — list, search, get, create with dedup, and comment."
+    status: archived     # never released, untouched since 06-26
+
+  - id: media_manager
+    site_id: media-manager
+    name: Media Manager
+    category: Media
+    repo: https://github.com/protoLabsAI/media-manager-plugin
+    tagline: "Pull a video URL or upload a file, generate Jellyfin metadata, and drop it into a media library."
+    status: archived     # never released, untouched since 07-06
+
+  - id: personal-finance
+    name: Personal Finance
+    category: Finance
+    repo: https://github.com/protoLabsAI/personal-finance-plugin
+    tagline: "Deterministic personal and family finance tools — time value of money, projections, budgeting, retirement."
+    status: archived     # never released, untouched since 06-18; Monarch Money + protoTrader Finance cover it
+
+  - id: mythxengine
+    site_id: mythxengine-protoagent
+    name: MythxEngine
+    category: Examples
+    repo: https://github.com/protoLabsAI/mythxengine-protoagent-plugin
+    tagline: "Design a band and run it in a generated survival world."
+    status: archived     # untouched since 06-19; the work moved to mythx-mcp
 
 # ── Archetype repos ──────────────────────────────────────────────────────────────
 # Published bundle repos that ship an `archetype:` block (ADR 0100, amended

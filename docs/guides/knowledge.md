@@ -103,7 +103,7 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 | Tool | What it does |
 |---|---|
 | `memory_ingest(content, domain, heading?, memory_kind?, subject?, delivery_policy?, expires_in_days?)` | store a self-contained fact/note for later recall — optionally typed: what it is, whether it enters the prompt `always` / when `retrieved` (default) / only `on_demand` ([ADR 0108 D4](/adr/0108-context-architecture-v2)), and a shelf life in days (D7). Every agent write starts `review_state="pending"` until the operator confirms it |
-| `knowledge_ingest(source, domain, title?)` | fetch + extract + store a **URL or local file** — YouTube/web/PDF/audio/video — through the full [ingestion pipeline](/guides/ingestion#from-the-agent) |
+| `knowledge_ingest(source, domain, title?)` | fetch + extract + store a **URL or local file** — YouTube/web/PDF/Word/audio/video — through the full [ingestion pipeline](/guides/ingestion#from-the-agent) |
 | `memory_recall(query, k=5, domain?, memory_kind?, delivery_policy?, include_superseded=False)` | search long-term memory (hybrid, or FTS5 if the breaker is open); the typed filters narrow to one kind / delivery policy; `include_superseded` also returns replaced rows, tagged `[superseded]` |
 | `session_search(query, limit=5, surface?)` | search prior session transcripts by content, then expand a result with `recall_session` |
 | `recall_session(session_id)` | read one prior session summary by id |

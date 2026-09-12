@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from "react";
 
 import type { ChatMessage } from "../lib/types";
-import { applyCanonicalTurnText, repairDuplicatedTurnText, turnBubbleIndexes } from "./turnText";
+import { rendersText, textRuns } from "./parts";
+import { applyCanonicalTurnText, repairDuplicatedTurnText, shownRuns, turnBubbleIndexes } from "./turnText";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -135,13 +136,6 @@ export type HydrationEligibility = {
   localSession: ChatSession | null;
 };
 
-function assistantTextFromParts(message: ChatMessage): string {
-  return (message.parts ?? [])
-    .filter((part) => part.kind === "text")
-    .map((part) => part.text)
-    .join("");
-}
-
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
   if (!message || message.role !== "assistant" || message.status === "streaming") return false;
   if (!message.parts?.length) return false;
@@ -151,11 +145,17 @@ function hydrationCanRepairMessage(message: ChatMessage | undefined): message is
 /** Would durable hydration have prose to reconcile into THIS assistant message?
  *  A completed, parts-bearing tool/component reply whose ordered parts don't carry
  *  its flat `content` answer renders the cards but no text — the #3340 regression.
- *  Judged per-message so a whole-session scan can still catch an earlier stale turn. */
+ *  Judged per-message so a whole-session scan can still catch an earlier stale turn.
+ *
+ *  "Carry" is `rendersText` — the same test the terminal replace uses. A byte compare
+ *  flagged EVERY healthy narrate → tool → narrate turn: `content` keeps the server's
+ *  paragraph break between model calls, the parts drop it at the run boundary, so
+ *  such sessions were re-downloaded and rewritten on every boot. */
 function messageNeedsDurableHydration(message: ChatMessage): boolean {
   if (!hydrationCanRepairMessage(message)) return false;
-  const orderedText = assistantTextFromParts(message).trim();
-  return Boolean(message.content.trim() && orderedText !== message.content.trim()) || !orderedText;
+  const runs = textRuns(message.parts);
+  if (!runs.some((run) => run.trim())) return true;
+  return Boolean(message.content.trim()) && !rendersText(runs, message.content);
 }
 
 /** True when ANY assistant turn in the session is a settled tool/component reply
@@ -196,8 +196,10 @@ function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]):
     const indexes = turnBubbleIndexes(messages, anchorId);
     if (!indexes.some((index) => hydrationCanRepairMessage(messages[index]))) continue;
     if (indexes.some((index) => messages[index].status === "streaming")) continue;
-    const orderedText = indexes.map((index) => assistantTextFromParts(messages[index])).join("");
-    if (orderedText.trim() === recoveredMessage.content.trim()) continue;
+    // Already rendered (the same test as the terminal replace): leave the turn — and
+    // the session object — untouched, so a healthy session is never rewritten.
+    const shown = indexes.flatMap((index) => shownRuns(messages[index]));
+    if (rendersText(shown, recoveredMessage.content)) continue;
     messages = applyCanonicalTurnText(messages, anchorId, recoveredMessage.content);
     changed = true;
   }

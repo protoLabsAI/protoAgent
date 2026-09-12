@@ -238,9 +238,18 @@ class TestStore:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, text: str = ""):
+    def __init__(self, status_code: int, text: str = "", body: dict | None = None):
         self.status_code = status_code
         self.text = text
+        self._body = body
+
+    def json(self):
+        # The real A2A reply carries the durable Task; callers read the task id off it to
+        # address the turn-lifecycle events they publish. An older fake without a body
+        # answers None, which is exactly the "couldn't read it" path.
+        if self._body is None:
+            raise ValueError("no body")
+        return self._body
 
 
 class _FakeClient:
@@ -489,6 +498,38 @@ class TestResumeOriginTurnEvents:
             assert d["trigger"] == "bg-xyz"
         # turn.finished carries the outcome so the console clears an accurate state.
         assert turn_events[-1][1]["ok"] is True
+
+    async def test_resume_origin_addresses_its_finish_with_the_task_id(self, tmp_path, monkeypatch):
+        """``turn.finished`` must say WHICH turn ended (#3446). Two nudges can be in flight
+        on one session — the A2A server serializes them, but the second's control frame
+        reaches the console while the first still runs — so an un-addressed finish made the
+        console drop the LIVE turn's control, and with it a queued interjection."""
+        import httpx
+
+        body = {"jsonrpc": "2.0", "id": "1", "result": {"id": "task-42", "contextId": "sess-1"}}
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, body=body)))
+        events: list = []
+        mgr = _manager(tmp_path, event_publish=lambda topic, data: events.append((topic, data)))
+
+        assert await mgr.resume_origin(_resume_job()) is True
+
+        finished = next(d for (t, d) in events if t == "turn.finished")
+        assert finished["task_id"] == "task-42"
+        # `turn.started` is published BEFORE the task exists, so it carries no id.
+        started = next(d for (t, d) in events if t == "turn.started")
+        assert "task_id" not in started
+
+    async def test_resume_origin_finish_omits_an_unreadable_task_id(self, tmp_path, monkeypatch):
+        """An unreadable body must not break the fire: the finish degrades to the old
+        un-addressed form, which the console resolves with its own in-flight count."""
+        import httpx
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        events: list = []
+        mgr = _manager(tmp_path, event_publish=lambda topic, data: events.append((topic, data)))
+
+        assert await mgr.resume_origin(_resume_job()) is True
+        assert "task_id" not in next(d for (t, d) in events if t == "turn.finished")
 
     async def test_resume_origin_finishes_even_on_delivery_failure(self, tmp_path, monkeypatch):
         """A failed nudge must still emit ``turn.finished`` — a hanging ``turn.started``
@@ -977,6 +1018,59 @@ class TestChatProgress:
         }
         assert kw == {"retain": False}
 
+    def test_a_delegation_made_during_a_server_turn_republishes_its_ask(self, monkeypatch):
+        """The lead answering background reports by delegating again: the ask (no author)
+        used to be dropped here, so that delegation had no row in the open chat."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "task-9",
+            {
+                "phase": "room_reply",
+                "addressed_to": "sonnet",
+                "text": "the whole brief",
+                "summary": "Land PR #13",
+                "background": True,
+                "job_id": "bg-4109c71161eb",
+                "ok": True,
+                "origin": "background-resume",
+            },
+        )
+        assert len(published) == 1, "one frame in, one chat.progress out"
+        _, data, kw = published[0]
+        assert data == {
+            "session_id": "chat-7",
+            "task_id": "task-9",
+            "phase": "room_reply",
+            "message_id": "ask-bg-4109c71161eb",  # the job id dedupes the live copy
+            "addressed_to": "sonnet",
+            "text": "the whole brief",
+            "ok": True,
+            "summary": "Land PR #13",
+            "background": True,
+            "job_id": "bg-4109c71161eb",
+        }
+        assert kw == {"retain": False}
+
+    def test_each_delegation_gets_its_own_id_even_when_two_asks_are_identical(self, monkeypatch):
+        """The client dedupes rows by this id, so two identical asks — same target, same
+        words — must not collapse into one. The emitter's run id is what separates them."""
+        a2a, published = self._capture(monkeypatch)
+        frame = {"phase": "room_reply", "addressed_to": "proto", "text": "look", "ok": True, "origin": "scheduler"}
+        a2a._a2a_progress("chat-7", "task-9", {**frame, "id": "run-1"})
+        a2a._a2a_progress("chat-7", "task-9", {**frame, "id": "run-2"})
+        assert [d["message_id"] for _, d, _ in published] == ["ask-run-1", "ask-run-2"]
+
+    def test_an_ask_from_an_emitter_with_no_id_still_gets_one(self, monkeypatch):
+        """A pre-#3447 emitter sends no id: fall back to the ask's content, which at least
+        dedupes the live bus copy of THAT ask."""
+        a2a, published = self._capture(monkeypatch)
+        frame = {"phase": "room_reply", "addressed_to": "proto", "text": "look", "ok": True, "origin": "scheduler"}
+        a2a._a2a_progress("chat-7", "task-9", dict(frame))
+        a2a._a2a_progress("chat-7", "task-9", dict(frame))
+        ids = [d["message_id"] for _, d, _ in published]
+        assert ids[0] == ids[1] and ids[0].startswith("ask-") and len(ids[0]) == len("ask-") + 12
+
     def test_published_unretained(self, monkeypatch):
         """Live-only: the 128-event replay ring must not fill with one turn's progress,
         and a reconnecting tab must not render frames from a turn that already ended."""
@@ -1041,6 +1135,64 @@ class TestChatProgress:
         finally:
             chat_mod._LIVE_SERVER_TURNS.clear()
             chat_mod._ATTENDED_SESSIONS.clear()
+
+    def test_consumed_interjection_is_republished_with_its_control(self, monkeypatch):
+        """The steer-consumed boundary is the console's only acknowledgement that an
+        interjection into a server-fired turn reached the agent (the turn's own stream is
+        held by the server). It must ride chat.progress with the operator's exact words and
+        the live control contract, unretained like every other progress frame."""
+        import importlib
+
+        chat_mod = importlib.import_module("server.chat")
+        chat_mod._LIVE_SERVER_TURNS.clear()
+        chat_mod._ATTENDED_SESSIONS.clear()
+        chat_mod.mark_session_attended("chat-7")
+        try:
+            a2a, published = self._capture(monkeypatch)
+            a2a._a2a_progress(
+                "chat-7",
+                "t",
+                {"phase": "turn_started", "origin": "background-resume", "trigger": "bg-1"},
+            )
+            published.clear()
+            words = "yes 2024 as proposed " * 200  # the operator's text travels whole
+            a2a._a2a_progress(
+                "chat-7",
+                "t",
+                {
+                    "phase": "steer_consumed",
+                    "items": [{"id": "msg-1", "text": words}, {"id": "", "text": "no id"}, "junk"],
+                    "origin": "background-resume",
+                },
+            )
+            assert len(published) == 1
+            topic, data, kw = published[0]
+            assert topic == "chat.progress"
+            assert kw == {"retain": False}
+            assert data["phase"] == "steer_consumed"
+            assert data["items"] == [{"id": "msg-1", "text": words}]
+            assert data["control"]["task_id"] == "t" and data["control"]["operator_controllable"] is True
+        finally:
+            chat_mod._LIVE_SERVER_TURNS.clear()
+            chat_mod._ATTENDED_SESSIONS.clear()
+
+    def test_consumed_marker_without_usable_items_is_not_published(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7", "t", {"phase": "steer_consumed", "items": [{"id": "x"}], "origin": "scheduler"}
+        )
+        assert published == []
+
+    def test_operator_turn_consumed_marker_is_not_republished(self, monkeypatch):
+        """A browser-owned turn already carries the marker inline on its own stream —
+        republishing it would settle the same interjection twice."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "t",
+            {"phase": "steer_consumed", "items": [{"id": "m", "text": "hi"}], "origin": "operator"},
+        )
+        assert published == []
 
     def test_long_tool_output_is_previewed(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)

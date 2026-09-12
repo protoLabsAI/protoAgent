@@ -155,3 +155,110 @@ test("a server-fired turn streams its narration and tools, then settles into a c
   await expect(card.locator(".chat-server-result-body")).toContainText(FINAL);
   await expect(page.locator(".pl-toolcard").filter({ hasText: "roll_block" }).first()).toBeVisible();
 });
+
+test("a turn answering background reports settles IN PLACE — no card, same layout, nothing jumps", async ({ page }) => {
+  // The complaint this pins: a background report streamed in as normal chat text, then — the
+  // moment it settled — collapsed into a differently-tinted, folded result card, and whoever
+  // was reading it lost their place. The agent answering its own background reports is the
+  // conversation continuing, so it stays the message it was while streaming.
+  const BG_TASK = "task-bgresume-1";
+  await page.addInitScript(
+    ([session]) => {
+      window.localStorage.setItem(
+        "protoagent.chat.sessions",
+        JSON.stringify({
+          version: 1,
+          currentSessionId: session,
+          sessions: [{ id: session, title: "spawner", createdAt: 1, updatedAt: 2, messages: [] }],
+        }),
+      );
+    },
+    [SESSION],
+  );
+  const live = [
+    { topic: "turn.started", data: { session_id: SESSION, origin: "background-resume", trigger: "job-9" } },
+    { topic: "chat.progress", data: { session_id: SESSION, task_id: BG_TASK, phase: "text", text: NARRATION_A } },
+    {
+      topic: "chat.progress",
+      data: { session_id: SESSION, task_id: BG_TASK, phase: "tool_start", tool: "roll_block", tool_call_id: "tc1" },
+    },
+    {
+      topic: "chat.progress",
+      data: { session_id: SESSION, task_id: BG_TASK, phase: "tool_end", tool: "roll_block", tool_call_id: "tc1", output: "Push Back ×3" },
+    },
+    { topic: "chat.progress", data: { session_id: SESSION, task_id: BG_TASK, phase: "text", text: NARRATION_B } },
+  ];
+  let phase = 0;
+  let liveReleased = false;
+  let terminalReleased = false;
+  await page.route("**/api/events**", async (route) => {
+    if (phase++ === 0) {
+      await until(() => liveReleased);
+      return route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: sse(live),
+      });
+    }
+    await until(() => terminalReleased);
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+      body: sse([
+        {
+          topic: "chat.resumed",
+          // The durable answer joins the streamed segments with a paragraph break (#3210).
+          data: {
+            session_id: SESSION,
+            task_id: BG_TASK,
+            text: `${NARRATION_A}\n\n${NARRATION_B}`,
+            state: "completed",
+            origin: "background-resume",
+          },
+        },
+        { topic: "turn.finished", data: { session_id: SESSION, origin: "background-resume" } },
+      ]),
+    });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByPlaceholder(/Message protoAgent/i).waitFor({ state: "visible" });
+  liveReleased = true;
+
+  const narrationA = page.getByText(NARRATION_A);
+  const tool = page.locator(".pl-toolcard").filter({ hasText: "roll_block" }).first();
+  await expect(narrationA).toBeVisible();
+  await expect(page.getByText(NARRATION_B)).toBeVisible();
+  await expect(tool).toBeVisible();
+  const liveBg = await narrationA.evaluate((el) => getComputedStyle(el.closest(".pl-message, [data-role]") ?? el).backgroundColor);
+
+  terminalReleased = true;
+  // Settled: ChatResumeWatch applied the terminal event (its toast is the positive signal)…
+  await expect(page.locator(".pl-toast", { hasText: "Task resumed" })).toBeVisible();
+  await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
+  // …and it is still an ordinary chat message, not a collapsed result card.
+  await expect(page.locator(".chat-server-result")).toHaveCount(0);
+  await expect(narrationA).toBeVisible();
+  await expect(page.getByText(NARRATION_B)).toBeVisible();
+  await expect(tool).toBeVisible();
+  // Same order the reader was reading it in: narration → the tool it ran → more narration.
+  const order = await page.evaluate(
+    ([a, b]) => {
+      const all = [...document.querySelectorAll("*")];
+      const idx = (pred: (el: Element) => boolean) => all.findIndex(pred);
+      const textIdx = (t: string) => idx((el) => el.children.length === 0 && (el.textContent ?? "").includes(t));
+      return {
+        a: textIdx(a),
+        tool: idx((el) => el.classList.contains("pl-toolcard") && (el.textContent ?? "").includes("roll_block")),
+        b: textIdx(b),
+      };
+    },
+    [NARRATION_A, NARRATION_B],
+  );
+  expect(order.a).toBeGreaterThan(-1);
+  expect(order.a).toBeLessThan(order.tool);
+  expect(order.tool).toBeLessThan(order.b);
+  // No tint change under the reader.
+  const settledBg = await narrationA.evaluate((el) => getComputedStyle(el.closest(".pl-message, [data-role]") ?? el).backgroundColor);
+  expect(settledBg).toBe(liveBg);
+});
