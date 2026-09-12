@@ -51,11 +51,11 @@ export function PluginRailManage() {
       }}
       onClose={clearPluginUninstall}
     >
-      {pluginUninstall
-        ? pendingRow?.superseded
-          ? uninstallConfirmText(pluginUninstall.name, pendingRow)
-          : `Uninstall ${pluginUninstall.name}? This cannot be undone.`
-        : undefined}
+      {/* The same text the Plugins table shows — including the "this removes the old
+          copy, the built-in keeps running" wording for a plugin that moved into core.
+          Unconditional on purpose: picking the generic destructive line while the
+          inventory is still loading would warn about deleting code that isn't going. */}
+      {pluginUninstall ? uninstallConfirmText(pluginUninstall.name, pendingRow) : undefined}
     </ConfirmDialog>
   );
 }
