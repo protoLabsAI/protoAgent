@@ -440,7 +440,8 @@ def _cmd_install_python(args) -> int:
         if name == "deps":
             print(file=sys.stderr)
             print(
-                "  installing the document baseline (python-docx, openpyxl, python-pptx, reportlab)…", file=sys.stderr
+                "  installing the document baseline (python-docx, openpyxl, python-pptx, reportlab, pypdf)…",
+                file=sys.stderr,
             )
 
     try:

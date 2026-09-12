@@ -30,6 +30,7 @@ type TranscriptMessageRowProps = {
   actions: ChatMessageActions;
   onCancelDelegation: (id: string) => void;
   onDismissToolCall: (id: string) => void;
+  activityLabel?: string | null;
 };
 
 const TranscriptMessageRow = memo(function TranscriptMessageRow({
@@ -38,6 +39,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
   actions,
   onCancelDelegation,
   onDismissToolCall,
+  activityLabel,
 }: TranscriptMessageRowProps) {
   // Filtering a dismissed card creates a derived message object. Retain that identity until
   // either its source row or the dismissal set changes, so another row's stream cannot make
@@ -52,6 +54,7 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
       onCancelDelegation={onCancelDelegation}
       onDismissToolCall={onDismissToolCall}
       actions={actions}
+      activityLabel={activityLabel}
     />
   );
 });
@@ -59,6 +62,14 @@ const TranscriptMessageRow = memo(function TranscriptMessageRow({
 // Keep the transcript outside the controlled composer's render path. In long chats the
 // message tree contains expensive markdown, reasoning, and tool cards; a draft keystroke
 // must not revisit that settled tree when none of these props changed (#3087).
+/** The live message a server-fired turn is streaming into (the bus preview, #2361): the
+ *  last assistant message still streaming. Its own spinner carries the turn's label. */
+export function liveServerTurnMessageId(messages: ChatMessage[], serverTurnLabel: string | null): string | null {
+  if (!serverTurnLabel) return null;
+  const last = messages[messages.length - 1];
+  return last && last.role === "assistant" && last.status === "streaming" ? (last.id ?? null) : null;
+}
+
 export const ChatTranscript = memo(function ChatTranscript({
   sessionId,
   messages,
@@ -80,6 +91,10 @@ export const ChatTranscript = memo(function ChatTranscript({
     const settled = new Set(messages.map((message) => message.id));
     return steerQueue.filter((queued) => !settled.has(queued.id));
   }, [messages, steerQueue]);
+  // One activity cue per server-fired turn: once it has a live message, the label moves onto
+  // that message's spinner and the standalone indicator below stands down. (The indicator
+  // predates the live preview, when such a turn showed nothing else at all.)
+  const liveId = liveServerTurnMessageId(messages, serverTurnLabel);
   return (
     <Conversation id={`pl-conv-${sessionId}`}>
       {messages.length === 0 ? (
@@ -95,6 +110,7 @@ export const ChatTranscript = memo(function ChatTranscript({
             onCancelDelegation={onCancelDelegation}
             onDismissToolCall={onDismissToolCall}
             actions={actions}
+            activityLabel={liveId && message.id === liveId ? serverTurnLabel : null}
           />
         ))
       )}
@@ -117,7 +133,7 @@ export const ChatTranscript = memo(function ChatTranscript({
           <span className="chat-user-text">{queued.text}</span>
         </Message>
       ))}
-      {serverTurnLabel && status !== "streaming" ? (
+      {serverTurnLabel && status !== "streaming" && !liveId ? (
         /* A server-owned background turn cannot stream through this browser connection,
            so keep its activity visible until the resumed result arrives. */
         <Message role="assistant">

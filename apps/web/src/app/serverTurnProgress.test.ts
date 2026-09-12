@@ -261,3 +261,39 @@ describe("consumed interjection frames (steer_consumed)", () => {
     expect(applyProgressFrame(once, steer([{ id: "i1", text: "go" }]))).toBe(once);
   });
 });
+
+describe("a delegation made during a server-fired turn", () => {
+  it("parses the ask and appends ONE delegation row per ask", () => {
+    const frame = parseProgress({
+      session_id: "s1",
+      task_id: "task-1",
+      phase: "room_reply",
+      message_id: "ask-bg-4109c71161eb",
+      addressed_to: "sonnet",
+      text: "the whole brief",
+      summary: "Land PR #13",
+      background: true,
+      job_id: "bg-4109c71161eb",
+    });
+    expect(frame).toEqual({
+      session: "s1",
+      taskId: "task-1",
+      kind: "ask",
+      id: "ask-bg-4109c71161eb",
+      addressedTo: "sonnet",
+      text: "the whole brief",
+      delegation: { summary: "Land PR #13", background: true, jobId: "bg-4109c71161eb" },
+    });
+    const once = applyProgressFrame([], frame!);
+    expect(once).toHaveLength(1);
+    expect(once[0]).toMatchObject({
+      role: "assistant",
+      addressedTo: "sonnet",
+      content: "the whole brief",
+      delegation: { summary: "Land PR #13", background: true, jobId: "bg-4109c71161eb" },
+    });
+    expect(once[0].author).toBeUndefined();
+    // The same ask delivered twice (a bus replay) is still one row.
+    expect(applyProgressFrame(once, frame!)).toBe(once);
+  });
+});

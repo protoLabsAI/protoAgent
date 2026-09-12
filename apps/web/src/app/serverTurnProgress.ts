@@ -19,7 +19,8 @@
 
 import { liveMessageId } from "../chat/server-turn-store";
 import { placeServerTurnSteers } from "../chat/steerPlacement";
-import type { ChatMessage, ChatPart, ConsumedSteer, ToolCall } from "../lib/types";
+import { delegationFromFrame } from "../lib/delegation";
+import type { ChatMessage, ChatPart, ConsumedSteer, Delegation, ToolCall } from "../lib/types";
 
 export type ChatProgressEvent = {
   session_id?: unknown;
@@ -35,6 +36,12 @@ export type ChatProgressEvent = {
   from?: unknown;
   ok?: unknown;
   items?: unknown;
+  // An outgoing delegation ask (#3042 → the delegation row): whom, the one-line summary,
+  // and for a background delegation its job id.
+  addressed_to?: unknown;
+  summary?: unknown;
+  background?: unknown;
+  job_id?: unknown;
 };
 
 /** A parsed frame, or null when the event is malformed / not for a session we track. */
@@ -61,7 +68,17 @@ export type ProgressFrame =
     }
   /** The server folded queued operator interjections into this turn at a model-call
    *  boundary — the acknowledgement that settles their queued bubbles. */
-  | { session: string; taskId: string; kind: "steer"; items: ConsumedSteer[] };
+  | { session: string; taskId: string; kind: "steer"; items: ConsumedSteer[] }
+  | {
+      // The lead's outgoing delegation ask, made during the server-fired turn.
+      session: string;
+      taskId: string;
+      kind: "ask";
+      id: string;
+      addressedTo: string;
+      text: string;
+      delegation?: Delegation;
+    };
 
 export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
   const session = String(data.session_id ?? "");
@@ -91,6 +108,18 @@ export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
   if (phase === "room_reply") {
     const id = String(data.message_id ?? "");
     const author = String(data.author ?? "");
+    const addressedTo = String(data.addressed_to ?? "");
+    if (id && !author && addressedTo) {
+      return {
+        session,
+        taskId,
+        kind: "ask",
+        id,
+        addressedTo,
+        text: String(data.text ?? ""),
+        delegation: delegationFromFrame(data),
+      };
+    }
     if (!id || !author) return null;
     return {
       session,
@@ -146,6 +175,22 @@ export function applyProgressFrame(messages: ChatMessage[], frame: ProgressFrame
       frozenId: `${liveId}:before:${frame.items[0].id}`,
       createdAt: Date.now(),
     });
+  }
+  if (frame.kind === "ask") {
+    const id = `background-${frame.id}`;
+    if (messages.some((message) => message.id === id)) return messages;
+    return [
+      ...messages,
+      {
+        id,
+        role: "assistant",
+        content: frame.text,
+        addressedTo: frame.addressedTo,
+        ...(frame.delegation ? { delegation: frame.delegation } : {}),
+        createdAt: Date.now(),
+        status: "done",
+      },
+    ];
   }
   if (frame.kind === "room") {
     const id = `background-room-${frame.id}`;

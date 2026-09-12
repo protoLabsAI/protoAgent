@@ -922,15 +922,50 @@ const server = createServer(async (req, res) => {
         pathname === "/api/chat/sessions/chat-recovered/turns"
       ) {
         return sendJson(res, {
-          turns: [{
-            task_id: "task-recovered",
-            state: "TASK_STATE_COMPLETED",
-            last_updated: "2026-08-20T12:00:00Z",
-            text: "The durable answer is back.",
-            status: { state: "TASK_STATE_COMPLETED" },
-            artifacts: [{ parts: [{ text: "The durable answer is back." }] }],
-            history: [{ role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] }],
-          }],
+          turns: [
+            {
+              task_id: "task-recovered",
+              state: "TASK_STATE_COMPLETED",
+              last_updated: "2026-08-20T12:00:00Z",
+              text: "The durable answer is back.",
+              status: { state: "TASK_STATE_COMPLETED" },
+              artifacts: [{ parts: [{ text: "The durable answer is back." }] }],
+              history: [
+                { role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] },
+                // The operator interjected mid-turn and the agent read it: the marker the
+                // executor stores carries the text, so the rebuild shows it as a bubble.
+                {
+                  role: "ROLE_AGENT",
+                  parts: [{
+                    data: { items: [{ id: "msg-steer-e2e", text: "Also check the version" }] },
+                    metadata: { mimeType: "application/vnd.protolabs.steer-consumed-v1+json" },
+                  }],
+                },
+              ],
+            },
+            {
+              // A server-fired turn into the same chat, as the server stores it: NO user
+              // frame — its prompt was machine text the live console never showed.
+              task_id: "task-scheduled",
+              state: "TASK_STATE_COMPLETED",
+              last_updated: "2026-08-20T12:05:00Z",
+              text: "Scheduled check: the deploy is green.",
+              status: { state: "TASK_STATE_COMPLETED" },
+              artifacts: [{ parts: [{ text: "Scheduled check: the deploy is green." }] }],
+              history: [],
+            },
+            {
+              // A hidden send (an approval resume), as the server stores it: the message
+              // with no text — no bubble — but its metadata kept.
+              task_id: "task-approved",
+              state: "TASK_STATE_COMPLETED",
+              last_updated: "2026-08-20T12:06:00Z",
+              text: "Approved — the release is out.",
+              status: { state: "TASK_STATE_COMPLETED" },
+              artifacts: [{ parts: [{ text: "Approved — the release is out." }] }],
+              history: [{ role: "ROLE_USER", metadata: { hidden: true, hitl_resume: true } }],
+            },
+          ],
         });
       }
       // Mid-turn steering: turn-end reconcile reads the still-queued items.

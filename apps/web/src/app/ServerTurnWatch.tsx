@@ -86,14 +86,14 @@ function emitServerTurnControl(value: unknown) {
  *
  *  One producer per bubble: a reattach's resubscribe stream replays everything, so letting
  *  the bus write the same chunks is what doubled the text. Two frame kinds are not part of
- *  that contest and must land either way — a room reply is its own bubble, which no
- *  reattach drives, and a consumed-interjection marker is one the reattach stream NEVER
+ *  that contest and must land either way — a room reply and a delegation ask are their own
+ *  rows, which no reattach drives, and a consumed-interjection marker is one it NEVER
  *  places (snapshot replay deliberately skips steer markers, because a flattened artifact
  *  can't say where the boundary was). Dropping the marker for a reattached turn would leave
  *  the operator's message queued under an answer that already used it — with no second
  *  producer to fix it. Placement dedupes by id, so nothing can settle twice. */
 export function busMayFold(kind: ProgressFrame["kind"], reattaching: boolean): boolean {
-  return kind === "room" || kind === "steer" || !reattaching;
+  return kind === "room" || kind === "ask" || kind === "steer" || !reattaching;
 }
 
 /** Fold one `chat.progress` bus event into the open session's live preview. Exported so

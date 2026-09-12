@@ -17,7 +17,8 @@ import {
   type ChatSession,
   type HydrationEligibility,
 } from "./chat-store";
-import { replaceText } from "./parts";
+import { rendersText, replaceText, textRuns } from "./parts";
+import { isEmptyPlaceholder } from "./roomBubble";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -28,22 +29,39 @@ function timestamp(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
-function isUserRole(role: string | undefined): boolean {
-  const normalized = (role ?? "").toLowerCase();
-  return normalized === "user" || normalized.includes("role_user");
+type DurableMessage = NonNullable<DurableChatTurn["history"]>[number];
+
+/** A durable user frame the OPERATOR sent — the console's own send. A server-fired
+ *  turn (scheduler / watch / background-resume) also starts with a user-role message,
+ *  but it carries machine text and the `origin` that fired it. */
+function isOperatorMessage(message: DurableMessage): boolean {
+  const role = (message.role ?? "").toLowerCase();
+  if (role !== "user" && !role.includes("role_user")) return false;
+  const origin = message.metadata?.origin;
+  return !(typeof origin === "string" && origin);
 }
 
-function firstUserText(turn: DurableChatTurn): string {
-  const user = (turn.history ?? []).find((message) => isUserRole(message.role));
-  return textFromParts(user?.parts);
+/** The operator bubble this turn showed live, or "" for none. The server already stores
+ *  each turn's opening message that way (ADR 0104): the bubble text for a `display`
+ *  send, no text for a `hidden` one (an approval or dismissal resume, a regenerate, a
+ *  goal kickoff), nothing for a server-fired turn. The same rules apply here to any row,
+ *  whoever wrote it. A turn stored before the server kept prompts has no user message at
+ *  all and rebuilds as its answer alone. */
+function operatorPrompt(turn: DurableChatTurn): string {
+  const user = (turn.history ?? []).find(isOperatorMessage);
+  if (!user || user.metadata?.hidden === true) return "";
+  const display = user.metadata?.display;
+  return typeof display === "string" ? display : textFromParts(user.parts);
 }
 
 /** Incognito is per operator message and therefore must be recovered from the
- * newest durable user frame. Defaulting a recovered private tab to ordinary
- * would let its next send participate in memory without the operator opting in. */
+ * newest durable OPERATOR frame — hidden sends included (the console stamps every
+ * send), server-fired ones not (they never carry the flag). Defaulting a recovered
+ * private tab to ordinary would let its next send participate in memory without the
+ * operator opting in. */
 function durableIncognito(turns: DurableChatTurn[]): boolean {
   for (const turn of [...turns].reverse()) {
-    const user = [...(turn.history ?? [])].reverse().find((message) => isUserRole(message.role));
+    const user = [...(turn.history ?? [])].reverse().find(isOperatorMessage);
     if (user) return user.metadata?.incognito === true;
   }
   return false;
@@ -55,25 +73,54 @@ function titleFromPrompt(prompt: string): string {
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
 
-/** Pure conversion of one task into the local prompt/answer pair. */
+/** Pure conversion of one task into the prompt, the interjections the agent read
+ *  mid-turn, and the answer. */
 export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   const at = timestamp(turn.last_updated);
-  const prompt = firstUserText(turn);
+  const prompt = operatorPrompt(turn);
   const messages: ChatMessage[] = prompt
     ? [{ id: `durable-${turn.task_id}-user`, role: "user", content: prompt, createdAt: at, status: "done" }]
     : [];
-  let assistant: ChatMessage = {
-    id: `durable-${turn.task_id}-assistant`,
+  const anchorId = `durable-${turn.task_id}-assistant`;
+  const fresh = (): ChatMessage => ({
+    id: anchorId,
     role: "assistant",
     content: "",
     createdAt: at,
     status: "streaming",
     taskId: turn.task_id,
-  };
+  });
+  let assistant = fresh();
+  // What the turn had already shown when the agent read an interjection, plus the
+  // interjection itself. The turn's trailing bubble keeps the anchor id, so the halves
+  // frozen ahead of it name it in `splitOf` — one turn, several bubbles (turnText.ts).
+  const settled: ChatMessage[] = [];
   const terminal = TERMINAL.test(turn.state);
   replayDurableChatTurn(turn, "", {
     onText: (text, append) => {
       assistant = applyText(assistant, text, append);
+    },
+    onSteerConsumed: (items) => {
+      // The agent read the operator's interjection HERE — between the work above and
+      // the work below — so the rebuilt transcript splits there, exactly as the live
+      // one does (roomBubble.insertConversationBubbles). The ANSWER lands on the
+      // trailing bubble: the durable artifacts flatten every text frame into one
+      // accumulation, so how much of the prose preceded the interjection is not
+      // recoverable. Ids are the steer's own, so a later live settle is a no-op
+      // (steerPlacement.placeConsumedSteers dedupes on them).
+      if (!isEmptyPlaceholder(assistant)) {
+        settled.push({ ...assistant, id: `${anchorId}-${settled.length}`, status: "done", splitOf: anchorId });
+      }
+      settled.push(
+        ...items.map((item, index) => ({
+          id: item.id,
+          role: "user" as const,
+          content: item.text,
+          createdAt: at + index,
+          status: "done" as const,
+        })),
+      );
+      assistant = fresh();
     },
     onReasoning: (delta) => {
       assistant = applyReasoning(assistant, delta);
@@ -108,17 +155,8 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // reconcile it in as the trailing run — the same seam reattach.finalize closes
     // on the live resubscribe path, applied here to durable hydration. A turn that
     // already surfaced the full ordered text is left untouched.
-    const hasOrderedParts = Boolean(assistant.parts?.length);
-    const orderedText = (assistant.parts ?? [])
-      .filter((part) => part.kind === "text")
-      .map((part) => part.text)
-      .join("");
-    if (turn.text && hasOrderedParts && orderedText.trim() !== turn.text.trim()) {
-      assistant = {
-        ...assistant,
-        content: turn.text,
-        parts: replaceText(assistant.parts, turn.text, orderedText),
-      };
+    if (turn.text && assistant.parts?.length && !rendersText(textRuns(assistant.parts), turn.text)) {
+      assistant = { ...assistant, content: turn.text, parts: replaceText(assistant.parts, turn.text) };
     }
   } else {
     // Keep the durable partial visible if a cold/failed reattach cannot produce
@@ -126,7 +164,14 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // clears snapshot-derived fields immediately before authoritative replay.
     assistant = { ...assistant, durableSnapshotFallback: true };
   }
-  return [...messages, assistant];
+  // A turn the agent had nothing left to say after — everything it did came before the
+  // last interjection — would otherwise settle as a blank row under it (the live path's
+  // `settleTurnBubbles` folds the same case away). A non-terminal turn keeps its empty
+  // trailing bubble: that is the one a reattach streams into.
+  if (settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length) {
+    return [...messages, ...settled];
+  }
+  return [...messages, ...settled, assistant];
 }
 
 /** Build one fixed-id local session from its ordered durable turns. */

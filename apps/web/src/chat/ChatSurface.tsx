@@ -12,6 +12,7 @@ import { openContextMenu } from "../contextMenu";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
+import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
 import { chatCommandsQuery, chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
@@ -58,6 +59,8 @@ import {
   useServerTurn,
   useServerTurnSessions,
 } from "./server-turn-store";
+import { useSessionsWithBackgroundWork } from "./backgroundJobStore";
+import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
@@ -233,6 +236,9 @@ export function ChatSurface({
   // turns don't touch sessionStatusMap, so without this their tab would read idle. Read once
   // here (the tab bar can't call the per-session hook inside its .map).
   const serverTurnSessions = useServerTurnSessions();
+  // …and sessions whose background jobs (a delegation, a spawned subagent) are still running:
+  // detached work the chat is waiting on, which the tab must not read as idle either.
+  const backgroundSessions = useSessionsWithBackgroundWork();
   const currentSession = chat.sessions.find((session) => session.id === chat.currentSessionId) || null;
   const [pendingClose, setPendingClose] = useState<string | null>(null);
   // Bulk close (others/left/right): GOAL tabs still waiting for their Stop/Detach confirm AFTER
@@ -494,7 +500,7 @@ export function ChatSurface({
                 ? "error"
                 : fg === "streaming"
                   ? "streaming"
-                  : serverTurnSessions.has(session.id)
+                  : serverTurnSessions.has(session.id) || backgroundSessions.has(session.id)
                     ? "processing"
                     : "idle";
             return {
@@ -2484,6 +2490,7 @@ function ChatSessionSlot({
             status: "done",
             ...(reply.author ? { author: reply.author } : {}),
             ...(reply.addressedTo ? { addressedTo: reply.addressedTo } : {}),
+            ...(reply.delegation ? { delegation: reply.delegation } : {}),
           };
           chatStore.updateMessages(
             session.id,
@@ -2602,6 +2609,11 @@ function ChatSessionSlot({
         incognito: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.incognito,
         // Marks this message as the answer to the pending HITL interrupt (#1560).
         hitlResume: opts.hitlResume,
+        // What this send looked like in the transcript, carried into the durable turn so
+        // a rebuilt chat (ADR 0104) draws the same user bubble — none for a hidden send,
+        // the typed text + 📎 list rather than the prepended attachment context.
+        hidden: opts.hidden,
+        display: !opts.hidden && content !== sent ? content : undefined,
       });
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the
@@ -2841,6 +2853,7 @@ function ChatSessionSlot({
             acts only when addressed, and clicking a name is exactly that affordance
             (inserts `@name `). No remove control: history is not removable, and an X
             that gated nothing was confusion pretending to be a control. */}
+        <BackgroundWorkStrip sessionId={sessionId} />
         {cast.length ? (
           <div className="chat-roster" aria-label="In this chat">
             <Users size={13} aria-hidden />
@@ -3091,11 +3104,7 @@ function ChatSessionSlot({
           type="file"
           multiple
           hidden
-          accept={
-            ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf," +
-            ".png,.jpg,.jpeg,.gif,.webp,.bmp," +
-            ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac,.mp4,.mov,.mkv,.webm,.avi,.m4v"
-          }
+          accept={CHAT_ATTACH_ACCEPT}
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
             files.forEach((f) => void uploadAttachment(f));

@@ -189,8 +189,8 @@ def test_build_agent_card_omits_bearer_when_not_configured():
 # ── ProtoAgentExecutor end-to-end (through a2a-sdk) ───────────────────────────
 
 
-def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task_store=None):
-    """Mount a real a2a-sdk app driven by ProtoAgentExecutor(stream_fn)."""
+def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task_store=None, **executor_kwargs):
+    """Mount a real a2a-sdk app driven by ProtoAgentExecutor(stream_fn, **executor_kwargs)."""
     card = pa.build_agent_card(
         name="test",
         description="d",
@@ -200,7 +200,7 @@ def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task
         bearer=bool(bearer),
     )
     handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(stream_fn),
+        agent_executor=ProtoAgentExecutor(stream_fn, **executor_kwargs),
         task_store=task_store if task_store is not None else InMemoryTaskStore(),
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
