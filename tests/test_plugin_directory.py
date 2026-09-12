@@ -364,6 +364,7 @@ def test_a_bundled_rows_retired_repo_card_is_hidden() -> None:
     Install button) until someone archives it."""
     overrides = json.loads(pd.render_site(pd.load()))
     by_key = {str(o.get("id")): o for o in overrides}
+    checked: list[str] = []
     for e in pd.load():
         site_id = e.get("site_id")
         if not (e.get("bundled") and site_id and site_id != e["id"]):
@@ -374,3 +375,8 @@ def test_a_bundled_rows_retired_repo_card_is_hidden() -> None:
             f"{e['id']}: no hidden marker for the retired repo card {site_id!r}"
         )
         assert marker.get("superseded_by") == e["id"]
+        checked.append(e["id"])
+    # Not vacuous: dropping agent_browser's site_id would empty the loop and pass silently,
+    # while the retired repo's live card came back (#3451 review).
+    assert checked, "no bundled row with a retired-repo site_id was exercised"
+    assert "agent_browser" in checked

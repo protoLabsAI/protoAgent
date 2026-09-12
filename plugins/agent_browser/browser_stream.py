@@ -162,14 +162,19 @@ def resolve_page_target(binary: str, timeout: float = 10.0) -> tuple[str | None,
         return None, f"{binary!r} not on PATH"
     except subprocess.TimeoutExpired:
         return None, "agent-browser get cdp-url timed out"
-    browser_ws = (cdp.stdout or "").strip().splitlines()[0].strip() if cdp.stdout else ""
+    # Whitespace-only stdout (a bare newline) made `[0]` raise IndexError — outside the WS
+    # route's try block, so the panel got a dropped socket instead of this function's
+    # documented `(None, note)` (#3451 review).
+    ws_lines = (cdp.stdout or "").strip().splitlines()
+    browser_ws = ws_lines[0].strip() if ws_lines else ""
     if cdp.returncode != 0 or not browser_ws.startswith("ws"):
         return None, ((cdp.stderr or "").strip() or "no CDP url — is a session open?")
     base = _http_base_from_ws(browser_ws)
     cur = ""
     try:
         u = subprocess.run([binary, "get", "url"], capture_output=True, text=True, timeout=timeout)
-        cur = (u.stdout or "").strip().splitlines()[0].strip() if u.returncode == 0 else ""
+        url_lines = (u.stdout or "").strip().splitlines() if u.returncode == 0 else []
+        cur = url_lines[0].strip() if url_lines else ""
     except Exception:  # noqa: BLE001 — current url is a nicety for tab selection
         cur = ""
     try:

@@ -86,7 +86,7 @@ the target.
 
 Three details worth knowing:
 
-- **Leave the path blank** and the file is named for you (`page-20260911-174233-9f3a.pdf`).
+- **Leave the path blank** and the file is named for you (`page-20260911-174233-7-9f3a2c.pdf`).
   Two unnamed captures then never overwrite each other — which they did when both defaulted
   to `page.pdf`.
 - **"Saved to …" means this call's bytes are on disk, and the old file is never at risk.**

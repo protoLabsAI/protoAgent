@@ -23,6 +23,7 @@ out are all caught by the same check.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import logging
 import os
 import secrets
@@ -56,17 +57,24 @@ def capture_root() -> Path:
     return sdk.plugin_store(CAPTURE_SUBDIR, plugin_id=PLUGIN_ID)
 
 
+_NAME_SEQ = itertools.count(1)
+
+
 def unique_default_name(default_name: str) -> str:
-    """``page.pdf`` → ``page-20260911-174233-9f3a.pdf``.
+    """``page.pdf`` → ``page-20260911-174233-7-9f3a2c.pdf``.
 
     Used when the caller names no file. Concurrent agents (or one agent in a loop) all
-    calling ``browser_pdf()`` would otherwise resolve to the same ``page.pdf`` and
-    silently clobber each other's output — the second caller hands ``save_file_artifact``
-    the first caller's page.
+    calling ``browser_pdf()`` would otherwise resolve to the same ``page.pdf`` and silently
+    clobber each other's output — the second caller hands ``save_file_artifact`` the first
+    caller's page. The per-process counter makes names unique within this process by
+    construction (the first version used only 2 random bytes after a one-second timestamp,
+    which a burst of calls could repeat); 3 random bytes keep two processes that start in
+    the same second apart.
     """
     stem, _, suffix = default_name.rpartition(".")
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    return f"{stem or default_name}-{stamp}-{secrets.token_hex(2)}" + (f".{suffix}" if suffix else "")
+    name = f"{stem or default_name}-{stamp}-{next(_NAME_SEQ)}-{secrets.token_hex(3)}"
+    return name + (f".{suffix}" if suffix else "")
 
 
 # ── writing a capture without ever touching the previous file ──────────────────────

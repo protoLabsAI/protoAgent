@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -41,30 +42,41 @@ import time
 from langchain_core.tools import tool
 
 from . import preflight, storage
-from .runtime import launch_flags
+from .runtime import bad_operand, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
 # Default aggregate stdout+stderr byte cap when `max_response_bytes` is unset.
 _DEFAULT_MAX_RESPONSE_BYTES = 200_000
 _READ_CHUNK = 65_536
+# How long to wait for the pipe-draining threads once the CLI has exited (or been killed).
+# Normally they finish at once; see _run for the case where they can't.
+_JOIN_TIMEOUT_S = 5.0
+
+
+def _kill_tree(proc) -> None:
+    """Kill the CLI AND everything it started. It runs in its own session
+    (``start_new_session=True``), so its pid is its process-group id and one ``killpg``
+    reaches a grandchild that would otherwise keep our pipes open — the case that left the
+    drain threads, and the ``asyncio.to_thread`` worker joined on them, blocked forever."""
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    pid = getattr(proc, "pid", None)
+    if isinstance(pid, int) and hasattr(os, "killpg"):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:  # group already gone (ProcessLookupError) or not ours
+            pass
 
 # Setup re-probe rate limits (see _recheck). A probe is ~40 ms, but it is two subprocesses,
 # and a failing agent loop can fire several calls a second.
 _RECHECK_AFTER_FAILURE_S = 60.0
 _RECHECK_AFTER_SUCCESS_S = 10.0
 
-# The CLI's option grammar — `-h`, `--help`, `--headed`, … : a dash, optionally another,
-# then a LETTER. See _bad_operand for why this, and not "any leading dash".
-_OPTION_LIKE = re.compile(r"^--?[A-Za-z]")
-_WORKAROUND = {
-    "text": ("To enter it anyway, set the field from JavaScript with browser_eval, e.g. "
-             "document.querySelector('#q').value = '--foo' (then dispatch an 'input' event if "
-             "the page reacts to typing)."),
-    "key": "Key names never start that way; for the minus key pass '-' (or 'Minus').",
-    "expression": "Wrap it in parentheses, e.g. (-a) instead of -a.",
-    "*": "No URL, selector or @ref starts that way — check the value.",
-}
+# The argv option guard lives in runtime.bad_operand: the panel's /nav route needs the SAME
+# rule, and keeping a second copy is how the panel came to have none (#3451 review).
 
 # "Does this page have anything on it?" — 1 or 0. The URL alone can't say: an agent can open
 # a blank page, write a report into it with browser_eval and print THAT, all at about:blank.
@@ -83,7 +95,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     """
     cfg = cfg or {}
     binary = str(cfg.get("binary") or "agent-browser")
-    timeout = float(cfg.get("timeout_s", 60))
+    timeout = number(cfg, "timeout_s", 60.0, positive=True)
     # Plugin-owned cap on the total bytes a single invocation may buffer. Untrusted page
     # content (get text/html, eval) can emit unbounded output that would otherwise pile up
     # in memory and flood the model's context window, so we read the pipes incrementally
@@ -165,7 +177,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         Either way the child is reaped — no zombies.
         """
         try:
-            proc = subprocess.Popen([binary, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # Its own session: its pid becomes a process-group id, so a timeout can kill
+            # everything it started (see _kill_tree). Ignored on Windows.
+            proc = subprocess.Popen([binary, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=True)
         except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
             # showed `warnings: []` while every browser call failed, which is the gap the
@@ -182,7 +197,12 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             nonlocal total, overflow
             hit = False
             try:
-                for block in iter(lambda: pipe.read(_READ_CHUNK), b""):
+                # read1, not read: BufferedReader.read(n) blocks until it has n bytes or EOF,
+                # so when a descendant holds the pipe open (no EOF, ever) the CLI's last
+                # output sat in the reader's buffer and a bounded join returned NOTHING.
+                # read1 hands over whatever has arrived.
+                read = getattr(pipe, "read1", pipe.read)
+                for block in iter(lambda: read(_READ_CHUNK), b""):
                     with lock:
                         if overflow:
                             break
@@ -200,7 +220,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                 except Exception:
                     pass
             if hit:
-                proc.kill()  # unblock the sibling reader and let wait() return
+                _kill_tree(proc)  # unblock the sibling reader and let wait() return
 
         drains = [threading.Thread(target=_drain, args=(proc.stdout, out_buf), daemon=True),
                   threading.Thread(target=_drain, args=(proc.stderr, err_buf), daemon=True)]
@@ -212,30 +232,33 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            proc.kill()  # terminate …
+            _kill_tree(proc)  # terminate the CLI and anything it started …
             try:
                 proc.wait(timeout=5)  # … and reap, so we never leave a zombie
             except subprocess.TimeoutExpired:
                 pass
-        # KNOWN LIMITATION (vendored from the standalone repo's #20, tracked for a
-        # follow-up): the kill above reaps only the DIRECT child. If that child left a
-        # grandchild holding the pipes, the drain threads stay blocked in `pipe.read()`
-        # and this join never returns — leaking the `asyncio.to_thread` worker for the
-        # life of the process. Reproducible with a stand-in CLI that backgrounds a
-        # `sleep`; the real agent-browser 0.27.1 does NOT do it (a killed child releases
-        # the pipes). The fix is `start_new_session=True` + a process-GROUP kill, or a
-        # bounded join — deliberately not folded into this import, which is already
-        # carrying four behaviour changes.
+        # BOUNDED joins. The kill above takes the CLI's whole process group, which is what
+        # closes the pipes in practice. A descendant that left the group (its own setsid) can
+        # still hold them; the drains then stay blocked in `pipe.read()` — daemon threads,
+        # they end when it does — but THIS call returns instead of pinning an
+        # asyncio.to_thread worker for the life of the process (the reviewer's reproducer: a
+        # CLI that backgrounds `sleep 300`). What the CLI wrote before exiting was already
+        # read, so the snapshot below is its full output.
         for t in drains:
-            t.join()
+            t.join(timeout=_JOIN_TIMEOUT_S)
+        if any(t.is_alive() for t in drains):
+            log.warning("[agent_browser] `agent-browser %s` exited but something it started "
+                        "kept its output open; returning what it wrote", " ".join(args[:2]))
+        with lock:  # a still-running drain may append: take a consistent snapshot
+            out_bytes, err_bytes = bytes(out_buf), bytes(err_buf)
 
         if timed_out:
             return f"Error: `agent-browser {' '.join(args)}` timed out after {timeout:g}s"
         if overflow:
             return f"Error: output exceeded {max_bytes} bytes (truncated)"
-        out = out_buf.decode("utf-8", "replace").strip()
+        out = out_bytes.decode("utf-8", "replace").strip()
         if proc.returncode != 0:
-            err = (err_buf.decode("utf-8", "replace") or out or "").strip()
+            err = (err_bytes.decode("utf-8", "replace") or out or "").strip()
             # A non-zero exit can ALSO be a setup gap the boot-time preflight didn't catch
             # — most often "the CLI is here but has no Chrome to drive", which never raises
             # FileNotFoundError. Re-probe so that banner appears (and clears) mid-session
@@ -248,32 +271,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     async def _ab(*args: str) -> str:
         return await asyncio.to_thread(_run, *args)
 
-    def _bad_operand(**values: str) -> str | None:
-        """Reject a model-supplied argv element the CLI would take as one of ITS options.
-
-        The CLI scans the whole argv for options — verified on 0.27.1: ``fill '#q'
-        '--help'`` prints help instead of filling, and ``--headed`` / ``--allow-file-access``
-        in a value would change how a first launch happens, so model- or page-chosen text
-        could set a launch flag. But it only swallows what LOOKS like an option: ``-5``,
-        ``-$50.00``, ``- buy milk``, a lone ``-`` or ``--`` all go through untouched, and
-        ``eval '-1'`` returns -1. So the rule is the option grammar — a dash, then a letter
-        (``_OPTION_LIKE``) — not "starts with a dash"; the first version refused every
-        leading dash and blocked negative amounts and the minus key.
-
-        Deliberately the grammar, not the CLI's current option list: an option upstream adds
-        tomorrow is refused today. The price is that flag-shaped text the CLI happens not to
-        know (``--foo``, ``-x=1``) is refused too, and the message says how to enter it
-        anyway. The CLI has no ``--`` end-of-options escape (``open -- --help`` still prints
-        help), so refusing is the only lever. Returns an error string, or None.
-        """
-        for what, value in values.items():
-            text = str(value)
-            if _OPTION_LIKE.match(text):
-                return (f"Error: {what} {text[:80]!r} looks like a command-line option (a dash and "
-                        f"then a letter), and the agent-browser CLI reads options anywhere in a "
-                        f"command, so it would be taken as a flag rather than as your {what}. "
-                        f"{_WORKAROUND.get(what, _WORKAROUND['*'])}")
-        return None
+    _bad_operand = bad_operand  # runtime.bad_operand — shared with the panel's /nav route
 
     async def _capture(verb: str, path: str, default_name: str) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.

@@ -14,6 +14,7 @@ tools:
   - browser_type
   - browser_get_text
   - browser_press
+  - browser_eval
   - browser_screenshot
   - browser_pdf
   - browser_close

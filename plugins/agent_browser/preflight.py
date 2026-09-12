@@ -110,7 +110,10 @@ def _cli_version(path: str, timeout: float) -> tuple[str, str]:
         return "", ""
     if p.returncode != 0:
         return "", ""
-    return ((p.stdout or "").strip().splitlines()[0].strip() if p.stdout else ""), ""
+    # Whitespace-only stdout made `[0]` raise IndexError; probe() swallowed it and skipped
+    # the Chrome check entirely (#3451 review).
+    lines = (p.stdout or "").strip().splitlines()
+    return (lines[0].strip() if lines else ""), ""
 
 
 def _chrome_status(path: str, timeout: float) -> tuple[str, str]:

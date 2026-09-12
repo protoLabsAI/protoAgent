@@ -46,7 +46,7 @@ from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import browser_stream, preflight
-from .runtime import launch_flags
+from .runtime import bad_operand, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
@@ -79,8 +79,10 @@ def build_panel_data_router(cfg: dict | None):
     single-use ticket that ``POST /stream-ticket`` (which IS gated) hands out."""
     cfg = cfg or {}
     binary = str(cfg.get("binary") or "agent-browser")
-    timeout = float(cfg.get("timeout_s", 60))
-    quality = int(cfg.get("stream_quality", 80) or 80)
+    # A hand-written config reaches here raw (`type: number` only validates Settings
+    # edits): a non-numeric value used to raise and leave the panel unmounted.
+    timeout = number(cfg, "timeout_s", 60.0, positive=True)
+    quality = number(cfg, "stream_quality", 80, cast=int)
 
     router = APIRouter()
 
@@ -183,6 +185,12 @@ def build_panel_data_router(cfg: dict | None):
         if action == "open":
             if not url:
                 return JSONResponse({"ok": False, "error": "url required"})
+            # The SAME argv guard the tools use (CWE-88): this url lands in the CLI's argv,
+            # and the CLI reads options anywhere in it — `--profile=/tmp/x` or `--headed`
+            # would set a launch flag. The bearer gate limits WHO can call /nav; it doesn't
+            # make the value safe.
+            if (bad := bad_operand(url=url)):
+                return JSONResponse({"ok": False, "error": bad})
             # launch flags (headed/profile/stealth/…) so a session started from the panel
             # matches one the agent opens.
             rc, err = await asyncio.to_thread(lambda: _run(*launch_flags(cfg), "open", url))

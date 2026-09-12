@@ -35,6 +35,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import textwrap
@@ -796,8 +797,8 @@ def test_pruning_never_raises_on_an_unreadable_store(monkeypatch):
 def test_an_unnamed_capture_gets_a_unique_filename():
     """Concurrent `browser_pdf()` calls all defaulted to `page.pdf` and clobbered each
     other — the second caller handed save_file_artifact the first caller's page."""
-    names = {storage.unique_default_name("page.pdf") for _ in range(20)}
-    assert len(names) == 20
+    names = {storage.unique_default_name("page.pdf") for _ in range(200)}
+    assert len(names) == 200
     for n in names:
         assert n.startswith("page-") and n.endswith(".pdf")
 
@@ -822,7 +823,7 @@ async def test_pdf_defaults_to_a_collision_free_filename(monkeypatch):
     first, second = (Path(o.split("Saved to ", 1)[1].splitlines()[0]).name for o in outs)
     assert first != second, "two unnamed captures must not clobber each other"
     for name in (first, second):
-        assert re.fullmatch(r"page-\d{8}-\d{6}-[0-9a-f]{4}\.pdf", name), name
+        assert re.fullmatch(r"page-\d{8}-\d{6}-\d+-[0-9a-f]{6}\.pdf", name), name
 
 
 async def test_pdf_is_fenced_exactly_like_screenshot(monkeypatch):
@@ -2080,3 +2081,186 @@ async def test_the_real_cli_prints_html_written_into_a_blank_page(monkeypatch):
         assert "Quarterly report" in text
     finally:
         await t["browser_close"].ainvoke({})
+
+
+# ── CodeRabbit review threads (#3451): each of these fails on 3024f8f8 ─────────────
+
+
+@pytest.mark.parametrize("url", ["--profile=/tmp/x", "--headed", "-h"])
+def test_nav_refuses_a_url_that_reads_as_a_cli_option(monkeypatch, url):
+    """CWE-88. The /nav url lands in the CLI's argv, and the CLI reads options anywhere in
+    it. The tools had the guard; the panel's route didn't. The bearer gate limits WHO can
+    call /nav — it doesn't make the value safe."""
+    from fastapi.testclient import TestClient
+
+    rec = []
+    monkeypatch.setattr(bp.subprocess, "run", fake_run(record=rec))
+    body = TestClient(_app()).post("/api/plugins/agent_browser/nav", json={"action": "open", "url": url}).json()
+    assert body["ok"] is False and "command-line option" in body["error"]
+    assert rec == [], "refused before the CLI runs"
+
+
+def test_nav_uses_the_same_grammar_not_any_leading_dash(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    rec = []
+    monkeypatch.setattr(bp.subprocess, "run", fake_run(record=rec))
+    body = TestClient(_app()).post("/api/plugins/agent_browser/nav", json={"action": "open", "url": "-1"}).json()
+    assert body["ok"] is True and rec[-1][-2:] == ["open", "-1"]
+    assert bp.bad_operand is rt.bad_operand is tools.bad_operand   # ONE guard, not two copies
+
+
+def test_whitespace_only_cdp_output_returns_a_note_not_an_exception(monkeypatch):
+    monkeypatch.setattr(bs.subprocess, "run",
+                        lambda args, **kw: types.SimpleNamespace(returncode=0, stdout="\n", stderr=""))
+    ws, note = bs.resolve_page_target("ab")
+    assert ws is None and note          # the documented (None, note) — never IndexError
+
+
+def test_the_panel_stream_reports_a_blank_cdp_answer_instead_of_dropping_the_socket(monkeypatch):
+    """resolve_page_target runs before the WS route's try block, so its IndexError used to
+    reach the client as a closed socket instead of the {"t": "error"} note."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(bs.subprocess, "run",
+                        lambda args, **kw: types.SimpleNamespace(returncode=0, stdout="\n", stderr=""))
+    c = TestClient(_app())
+    ticket = c.post("/api/plugins/agent_browser/stream-ticket").json()["ticket"]
+    with c.websocket_connect(f"/api/plugins/agent_browser/stream?ticket={ticket}") as ws:
+        msg = ws.receive_json()
+    assert msg["t"] == "error" and msg["msg"]
+
+
+def test_a_whitespace_only_version_line_does_not_skip_the_chrome_probe(monkeypatch):
+    """`--version` printing a bare newline raised IndexError in _cli_version; probe()
+    swallowed it and never asked about Chrome."""
+    _probe_env(monkeypatch, which="/opt/ab", version="\n", chrome="pass")
+    probe = preflight.probe({})
+    assert probe.cli_ok and probe.cli_version == "" and probe.chrome == "ok"
+
+
+def test_every_browser_tool_the_skill_body_uses_is_in_its_tools_list():
+    """`tools:` is the skill's advisory list of what it relies on; the body tells the model
+    to use browser_eval (typing flag-shaped text, writing HTML into a blank page), and the
+    list omitted it."""
+    from graph.skills.loader import parse_skill_md
+
+    declared = set(parse_skill_md(ROOT / "skills" / "web-browse" / "SKILL.md").tools_used)
+    used = set(re.findall(r"`(browser_[a-z_]+)`", _skill_text()))
+    assert used and used <= declared, sorted(used - declared)
+
+
+@pytest.mark.parametrize("bad", ["1m", "soon", "", None, [1]])
+async def test_a_non_numeric_timeout_never_breaks_the_tools(monkeypatch, bad):
+    """`type: number` validates Settings edits only; a hand-written langgraph-config.yaml
+    reaches the plugin raw. `timeout_s: "1m"` raised inside get_browser_tools."""
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))
+    t = _toolmap({"binary": "ab", "timeout_s": bad})
+    assert set(t) == EXPECTED_TOOLS
+    assert await t["browser_snapshot"].ainvoke({}) == "ok"
+
+
+def test_register_still_contributes_everything_with_garbage_numbers(monkeypatch):
+    """The real consequence: register() swallowed that ValueError, so the agent silently had
+    NO browser tools and no panel."""
+    _probe_env(monkeypatch, which="/opt/ab")
+    reg = _registry({"timeout_s": "1m", "max_output": "lots", "stream_quality": "high"})
+    _PKG.register(reg)
+    assert {t.name for t in reg.tools} == EXPECTED_TOOLS
+    assert len(reg.routers) == 2
+
+
+def test_a_non_numeric_max_output_never_breaks_launch_flags():
+    assert rt.launch_flags({"max_output": "lots"}) == []
+    assert rt.launch_flags({"max_output": "250"}) == ["--max-output", "250"]
+
+
+def test_the_panel_router_builds_with_garbage_numbers():
+    router = bp.build_panel_data_router({"timeout_s": "soon", "stream_quality": "high"})
+    assert {r.path for r in router.routes} == {"/stream-ticket", "/stream", "/nav"}
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(0, 60.0), (-5, 60.0), ("2.5", 2.5), (None, 60.0)])
+def test_a_timeout_must_be_a_positive_number(raw, expected):
+    """A 0 s timeout would time every command out; blank means the default."""
+    assert rt.number({"timeout_s": raw}, "timeout_s", 60.0, positive=True) == expected
+
+
+def test_default_names_are_collision_free_under_a_burst():
+    """Two random bytes after a one-second timestamp: a burst of unnamed captures inside one
+    second repeated names (~190 collisions expected in 5000). A per-process counter makes it
+    impossible by construction."""
+    names = [storage.unique_default_name("page.pdf") for _ in range(5000)]
+    assert len(set(names)) == len(names)
+    for n in names[:3]:
+        assert re.fullmatch(r"page-\d{8}-\d{6}-\d+-[0-9a-f]{6}\.pdf", n), n
+
+
+# C8 — the drain threads, fixed here rather than as a follow-up.
+
+
+def _reap(pids: list[int]) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+@posix_only
+async def test_a_timed_out_cli_whose_children_hold_the_pipes_cannot_pin_a_worker(tmp_path):
+    """The reviewer's reproducer: the CLI backgrounds `sleep 300`s that inherit our pipes,
+    then hangs. The timeout killed only the direct child, the sleeps kept the pipes open, and
+    the unbounded join pinned an asyncio.to_thread worker for five minutes. The CLI now runs
+    in its own session and a timeout kills the whole group."""
+    pids = tmp_path / "pids"
+    cli = tmp_path / "hangs"
+    cli.write_text(f"#!/bin/sh\nsleep 300 &\necho $! >> '{pids}'\nsleep 300 &\necho $! >> '{pids}'\nwait\n",
+                   encoding="utf-8")
+    cli.chmod(0o755)
+    t = _toolmap({"binary": str(cli), "timeout_s": 1})
+    started = time.monotonic()
+    recorded: list[int] = []
+    try:
+        out = await asyncio.wait_for(t["browser_snapshot"].ainvoke({}), timeout=20)
+        assert "timed out" in out and time.monotonic() - started < 15
+        recorded = [int(x) for x in pids.read_text().split()]
+        deadline = time.monotonic() + 5
+        while True:                                   # the group kill reached the sleeps too
+            alive = []
+            for pid in recorded:
+                try:
+                    os.kill(pid, 0)
+                    alive.append(pid)
+                except ProcessLookupError:
+                    pass
+            if not alive or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.05)
+        assert alive == [], f"descendants survived the timeout: {alive}"
+    finally:
+        _reap(recorded or ([int(x) for x in pids.read_text().split()] if pids.exists() else []))
+
+
+@posix_only
+async def test_a_cli_that_exits_but_leaves_a_descendant_holding_the_pipes_still_returns(tmp_path, monkeypatch):
+    """The other half: a descendant that left the process group (its own session) holds our
+    pipes after the CLI exits 0. There's nothing to kill, so the bounded join is the
+    backstop — the call returns what the CLI wrote instead of waiting on the stray process."""
+    monkeypatch.setattr(tools, "_JOIN_TIMEOUT_S", 0.5, raising=False)
+    pidfile = tmp_path / "grandchild.pid"
+    cli = tmp_path / "leaks"
+    cli.write_text(
+        f"#!{sys.executable} -S\n"
+        "import pathlib, subprocess, sys\n"
+        "g = subprocess.Popen([sys.executable, '-S', '-c', 'import time; time.sleep(300)'], start_new_session=True)\n"
+        f"pathlib.Path({str(pidfile)!r}).write_text(str(g.pid))\n"
+        "print('hello')\n",
+        encoding="utf-8")
+    cli.chmod(0o755)
+    t = _toolmap({"binary": str(cli), "timeout_s": 30})
+    try:
+        out = await asyncio.wait_for(t["browser_snapshot"].ainvoke({}), timeout=20)
+        assert out == "hello"
+    finally:
+        _reap([int(pidfile.read_text())] if pidfile.exists() else [])
