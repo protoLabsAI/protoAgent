@@ -128,6 +128,15 @@ type Harness = {
    *  folded it in between the reconcile's read and its dequeue. */
   drainOnDelete: (id: string) => void;
   drained: () => string[];
+  /** Reload the tab. Use this, not `page.reload`: it retires the bus connections the old
+   *  document opened, so none of them can take a phase meant for the reloaded console. */
+  reload: () => Promise<void>;
+  /** Hold `SubscribeToTask` unanswered — a reattach's resubscribe that is slow to come back
+   *  (a loaded box, a cold member behind the fleet proxy). */
+  holdResubscribe: (on: boolean) => void;
+  heldResubscribes: () => number;
+  /** Resubscribes the console gave up on (the request was aborted from the page side). */
+  resubscribeAborts: () => number;
   deletes: string[];
   a2aSends: string[];
   /** Dequeues and sends, in the order the console made them. */
@@ -163,11 +172,15 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
     [session],
   );
 
-  // Connection n serves released phase n. The console holds one EventSource at a time and
-  // reconnects when a body ends, so each phase lands on its own connection, in order; a
-  // connection past the script idles out (the console just reconnects), never replays.
+  // Released phases are served in order, one per bus connection. The console holds one
+  // EventSource at a time and reconnects when a body ends, so each phase lands on its own
+  // connection; a connection with nothing released idles out (the console just reconnects),
+  // never replays. A connection opened before the last `reload()` is dropped UNSERVED: its
+  // document is gone, so a phase handed to it is swallowed — and whether the old tab's 1s
+  // reconnect beat the reload would decide what the reloaded console gets to see.
   const phases: Frame[][] = [];
-  let connections = 0;
+  let served = 0;
+  let generation = 0;
   let posted: { id: string; text: string } | null = null;
   let pending: { id: string; text: string }[] = [];
   const deletes: string[] = [];
@@ -175,13 +188,15 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
   const order: string[] = [];
 
   await page.route("**/api/events**", async (route) => {
-    const n = connections++;
-    await until(() => phases.length > n, 20_000);
+    const gen = generation;
+    await until(() => phases.length > served || gen !== generation, 20_000);
+    if (gen !== generation) return route.abort().catch(() => {});
+    const frames = phases.length > served ? phases[served++] : [];
     await route
       .fulfill({
         status: 200,
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-        body: sse(phases[n] ?? []),
+        body: sse(frames),
       })
       .catch(() => {});
   });
@@ -196,6 +211,9 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
   const drainDuringDelete = new Set<string>();
   const taskState = new Map<string, string>();
   const taskConsumed = new Map<string, string[]>();
+  let holdResub = false;
+  const heldResub: Route[] = [];
+  let resubAborts = 0;
   await page.route("**/api/chat/sessions/*/server-turns/*/interject", async (route) => {
     const body = route.request().postDataJSON() as { id: string; text: string };
     posted = { id: body.id, text: body.text };
@@ -220,6 +238,10 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
   // markers its history carries.
   await page.route("**/a2a", async (route) => {
     const body = route.request().postDataJSON() as { id?: unknown; method?: string; params?: { id?: string } } | null;
+    if (body?.method === "SubscribeToTask" && holdResub) {
+      heldResub.push(route); // never answered: only the console giving up ends this request
+      return;
+    }
     if (body?.method !== "GetTask") return route.fallback();
     const id = String(body.params?.id ?? "");
     const consumed = taskConsumed.get(id) ?? [];
@@ -273,6 +295,9 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
       a2aSends.push(body);
       order.push("send");
     }
+  });
+  page.on("requestfailed", (req: Request) => {
+    if (req.url().endsWith("/a2a") && (req.postData() ?? "").includes("SubscribeToTask")) resubAborts += 1;
   });
 
   const release = (frames: Frame[]) => {
@@ -328,6 +353,18 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
       drainDuringDelete.add(id);
     },
     drained: () => drained,
+    reload: async () => {
+      await page.reload({ waitUntil: "load" });
+      // Only now is the old document gone for good, so every connection opened before this
+      // point is stale. At worst that includes the reloaded page's own first one, which costs
+      // it a 1s reconnect and never a frame.
+      generation += 1;
+    },
+    holdResubscribe: (on) => {
+      holdResub = on;
+    },
+    heldResubscribes: () => heldResub.length,
+    resubscribeAborts: () => resubAborts,
     deletes,
     a2aSends,
     order,
@@ -753,7 +790,7 @@ test("a reload mid-submission never leaves the server holding a message nobody t
 
   // The tab reloads while the POST is in flight: the console never learned whether the
   // server took it, but the queued bubble (and its unconfirmed flag) are persisted.
-  await page.reload({ waitUntil: "load" });
+  await h.reload();
   await page.locator(`${SLOT} .pl-prompt__field`).waitFor({ state: "visible" });
   await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
 
@@ -769,6 +806,45 @@ test("a reload mid-submission never leaves the server holding a message nobody t
   // in the server's queue to ride a later turn.
   await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length, { timeout: 15_000 }).toBe(1);
   await expect.poll(() => h.deletes.length, { timeout: 15_000 }).toBe(1);
+});
+
+test("a reload whose reattach loses the race to the turn's end still hands the session back", async ({ page }) => {
+  const session = "chat-interject-reattach-race";
+  const h = await openAttendedServerTurn(page, session);
+  h.holdInterject(true);
+  const field = page.locator(`${SLOT} .pl-prompt__field`);
+  await field.fill(INTERJECTION);
+  await field.press("Enter");
+  await expect.poll(() => h.heldInterjects()).toBe(1);
+
+  // The reload reattaches to the turn's still-streaming preview, and that resubscribe is slow
+  // to come back. The turn ends meanwhile: its `chat.resumed` settles the preview on the bus
+  // while the reattach is still waiting, so the slot cancels the reattach — which then never
+  // reaches the finalize that would have released the session. The CI flake hit this order
+  // by chance (a loaded runner answered the resubscribe late); here it is forced.
+  h.holdResubscribe(true);
+  await h.reload();
+  await field.waitFor({ state: "visible" });
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
+  await expect.poll(() => h.heldResubscribes()).toBe(1);
+  const stop = page.locator(SLOT).getByRole("button", { name: "Stop", exact: true });
+  await expect(stop).toBeVisible(); // reattached: the session reads as busy
+
+  await h.releaseInterjects((body) => ({ ok: true, id: body.id, pending: 1 }));
+  h.release(terminalFrames(session));
+  await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
+  // The reattach gave up on its resubscribe, which was never answered — so the losing order
+  // really happened, and nothing but the cancel can have released the session below.
+  await expect.poll(() => h.resubscribeAborts()).toBe(1);
+
+  // THE BUG: nothing released it. Stop stayed up, Send stayed disabled, and the interjection
+  // stayed "queued" for good, held back as though this browser's own stream would drain it.
+  await expect(stop).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+  // Resolved the ordinary way for a leftover the ended turn never read: dequeued, then sent.
+  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
+  expect(h.deletes).toHaveLength(1);
 });
 
 // ── the ladder itself: it must outlive every kind of missing answer ─────────────────────

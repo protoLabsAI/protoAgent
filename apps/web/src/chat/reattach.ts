@@ -145,12 +145,35 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
  * cancel function (unmount / a new live turn taking over). */
 export function reattachTurn(sessionId: string, assistantId: string, taskId: string, hooks: ReattachHooks = {}) {
   let cancelled = false;
+  // Whether the session's "streaming" is still this reattach's to hand back: claimed when
+  // run() sets it, given up once run() is over (finalize and the paused path settle it).
+  let holdsStatus = false;
   const controller = new AbortController();
   const token = Symbol(assistantId);
   driving.set(assistantId, token);
   const release = () => {
     if (driving.get(assistantId) === token) driving.delete(assistantId);
   };
+
+  /** Hand back the "streaming" this reattach set when it is cancelled before settling it.
+   *
+   *  The slot cancels a reattach whenever its bubble stops being a live one, and the usual
+   *  reason is that ANOTHER producer settled it first: the bus's `chat.resumed` replacing a
+   *  server turn's preview after a reload, while the resubscribe was still waiting on the
+   *  server. run() then never reaches finalize, nothing else releases the status it set, and
+   *  the session sat "streaming" for good — Stop up, Send disabled, and any interjection
+   *  queued for that turn held back as if this browser's own stream would drain it. Only
+   *  while nothing in the transcript is still live: an unmount mid-turn leaves the status
+   *  to the reattach the next mount starts, and a turn started since keeps its own. */
+  function releaseStatus() {
+    if (!holdsStatus) return;
+    holdsStatus = false;
+    const snap = chatStore.getSnapshot();
+    if (snap.sessionStatusMap[sessionId] !== "streaming") return;
+    const cur = snap.sessions.find((s) => s.id === sessionId);
+    if (!cur || cur.messages.some((m) => m.role === "assistant" && m.status === "streaming")) return;
+    chatStore.setSessionStatus(sessionId, "idle");
+  }
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
@@ -233,6 +256,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   async function run() {
     chatStore.setSessionStatus(sessionId, "streaming");
+    holdsStatus = true;
     for (let attempt = 0; attempt < MAX_ATTEMPTS && !cancelled; attempt++) {
       try {
         await api.resumeTask(taskId, sessionId, handlers);
@@ -269,11 +293,15 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     .catch(() => {
       /* reattach is best-effort — never crash the surface */
     })
-    .finally(release);
+    .finally(() => {
+      holdsStatus = false;
+      release();
+    });
 
   return () => {
     cancelled = true;
     controller.abort();
     release();
+    releaseStatus();
   };
 }

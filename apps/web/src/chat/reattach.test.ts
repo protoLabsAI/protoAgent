@@ -120,6 +120,56 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// cancelled before it settled: the session status it claimed must not be orphaned
+// ---------------------------------------------------------------------------
+
+describe("reattach cancelled before it settles", () => {
+  it("hands the session back when another producer settled the bubble first", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(() => new Promise<never>(() => {})); // the resubscribe never answers
+    const cancel = attach(sessionId);
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("streaming");
+
+    // The bus's `chat.resumed` replaces the preview with the final answer, so the slot's
+    // effect (keyed on the streaming bubble) cancels the reattach. THE BUG: nothing then
+    // released the "streaming" run() had set — Stop stayed up and Send disabled for good.
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    chatStore.updateMessages(
+      sessionId,
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+    );
+    cancel();
+
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(getTask).not.toHaveBeenCalled(); // released by the cancel, not by a finalize
+    expect(assistantMessage(sessionId)?.content).toBe("final answer"); // the settled bubble is left alone
+  });
+
+  it("leaves a turn that is still live streaming, for the reattach the next mount starts", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(() => new Promise<never>(() => {}));
+    const cancel = attach(sessionId);
+    await settle();
+    cancel(); // an unmount mid-turn: the bubble is still streaming
+    expect(sessionStatus(sessionId)).toBe("streaming");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+  });
+
+  it("never releases a status it no longer holds", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "done" });
+    const cancel = attach(sessionId);
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("idle"); // finalize settled it
+    chatStore.setSessionStatus(sessionId, "streaming"); // something else has claimed the session since
+    cancel();
+    expect(sessionStatus(sessionId)).toBe("streaming");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // run(): the resubscribe stream closed, GetTask reports a PAUSED state
 // ---------------------------------------------------------------------------
 
