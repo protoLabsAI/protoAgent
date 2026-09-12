@@ -131,6 +131,7 @@ packages = [
   "a2a_impl",
   "activity",
   "background",
+  "deck",
   "tasks",
   "enforcement",
   "evals",
@@ -177,6 +178,7 @@ package = false
 # tasklist C2, owns most of the burndown).
 root_packages = [
   "a2a_impl",
+  "deck",
   "events",
   "graph",
   "infra",
@@ -224,7 +226,7 @@ ignore_imports = [
 name = "infra packages do not import server or operator_api"
 type = "forbidden"
 source_modules = [
-  "a2a_impl", "events", "infra", "ingestion", "knowledge", "observability",
+  "a2a_impl", "deck", "events", "infra", "ingestion", "knowledge", "observability",
   "ops", "runtime", "scheduler", "security", "tools",
 ]
 forbidden_modules = ["server", "operator_api"]

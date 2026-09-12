@@ -53,7 +53,7 @@ then exits:
 |---|---|---|
 | `protoagent plugin install <git-url>` · `list` · `update` · `uninstall` · `sync` | Manage drop-in plugins (pinned in `plugins.lock`). | [0027](../adr/0027-install-plugins-from-git-url.md) |
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
-| `protoagent fleet up` · `down` · `ls` | Run fleet **member** agents as background processes. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| `protoagent fleet ls` · `up` · `down` | Inspect and run fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
@@ -62,6 +62,43 @@ then exits:
 | `protoagent agent import <zip> [--name N] [--dry-run] [--yes]` | Stand up a **fresh agent** from a snapshot. Prints the plan (plugins it will install and run, capabilities it grants) and refuses to apply without `--yes`. | [0091](../adr/0091-agent-snapshot-portability.md) |
 | `protoagent runtime use <rt>` · `list` | Select the agent runtime. **`native` (LangGraph) is the supported value**; the `acp:*` runtimes are [deprecated](/guides/acp-runtime) — hand coding jobs to an [`acp` delegate](/guides/coding-agents) instead. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 | `protoagent hermes` | **Deprecated** ([#2633](https://github.com/protoLabsAI/protoAgent/issues/2633)) — the Hermes preset still works for existing installs but is no longer offered. Hand work to an external agent with [ACP delegates](delegates.md) instead. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
+
+#### `fleet` talks to the running hub
+
+`fleet ls` / `up` / `down` look for a **running hub** before they read anything from
+disk, because the hub is the only source of live truth about the fleet: its
+`GET /api/fleet` is what the console shows, and its control plane is what owns the
+member processes. A shell that read `fleet.json` from its own instance root used to
+report a fleet of one beside the desktop app's hub (which lives under a different
+`PROTOAGENT_HOME`) — and called the CLI's own pid a running server.
+
+How a hub is found, in order: this instance's `server.pid` (from `protoagent up`), the
+`.instances/<pid>.json` heartbeats every server writes under its box root — scanned
+across every box root this machine uses, including the desktop app's — then `:7870`.
+How it is opened: `--token` / `PROTOAGENT_HUB_TOKEN`, then the hub's own fleet service
+token (`<instance root>/workspaces/.fleet-token`, ADR [0089](../adr/0089-intra-instance-trust-boundary.md)),
+then `A2A_AUTH_TOKEN`, then no credential. Tokens are never printed.
+
+```bash
+protoagent fleet ls                       # live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat
+protoagent fleet ls --json | jq '.agents[] | select(.running) | .name'
+protoagent fleet up protoEngineer         # POST /api/fleet/protoEngineer/start — the hub owns the process
+protoagent fleet down                     # POST /api/fleet/down
+protoagent fleet ls --hub ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an explicit --hub that fails is an error, not a fallback)
+protoagent fleet ls --offline             # this instance's fleet.json, no probe
+```
+
+When **nothing** answers the output is badged `offline · reading <fleet.json>` and `up` /
+`down` act through the supervisor on disk — the right thing only when nothing is
+running. A hub that answered but could not be opened (rejected credential, timeout,
+5xx, or only a fleet *member* answering) is an **error, not a fallback**: driving
+processes from disk beside a running hub is exactly the two-hubs bug. A member's `401`
+is reported as that member's credential problem, never as the hub's.
+
+This box's fleet service tokens and `A2A_AUTH_TOKEN` are sent to **loopback hubs only**.
+A `--hub` on another host gets `--token` / `PROTOAGENT_HUB_TOKEN` and nothing else, so a
+stray URL can never harvest local credentials. `--json` emits per-member result rows of
+one shape (`{name, ok, …}`) plus `mode` and `hub`.
 
 ### Point at a local model
 
