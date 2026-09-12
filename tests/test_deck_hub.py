@@ -46,6 +46,33 @@ def test_normalize_url_adds_scheme_and_strips_slash():
         hub.normalize_url("   ")
 
 
+def test_normalize_url_strips_userinfo_and_rejects_garbage():
+    # a secret in --hub must never reach an error message or a header
+    assert hub.normalize_url("http://user:secret@ava.tail:7870/") == "http://ava.tail:7870"
+    assert "secret" not in hub.normalize_url("https://user:secret@ava.tail:7870")
+    for bad in ("http://[::1", "ftp://x:1", "http://"):
+        with pytest.raises(ValueError):
+            hub.normalize_url(bad)
+
+
+def test_is_loopback():
+    assert hub.is_loopback("http://127.0.0.1:7870")
+    assert hub.is_loopback("http://localhost:7870")
+    assert hub.is_loopback("http://[::1]:7870")
+    assert not hub.is_loopback("http://ava.tail:7870")
+    assert not hub.is_loopback("http://100.119.239.8:7870")
+
+
+def test_infra_paths_are_late_bound(monkeypatch, tmp_path):
+    """The suite's `_isolate_instance_roots` patches infra.paths at runtime; an import-time
+    `from infra.paths import data_home` would keep pointing at the developer's real
+    ~/.protoagent and the first un-patched test would read real heartbeats + tokens."""
+    from infra import paths as real
+
+    monkeypatch.setattr(real, "data_home", lambda: tmp_path / "isolated")
+    assert hub.data_home() == tmp_path / "isolated"
+
+
 def test_known_box_roots_dedupes_and_includes_existing_desktop_root(tmp_path, monkeypatch):
     box = tmp_path / "box"
     box.mkdir()
@@ -100,10 +127,12 @@ def test_discover_hubs_orders_pidfile_heartbeats_default_and_dedupes(tmp_path, m
     monkeypatch.setattr(hub, "known_box_roots", lambda: [desktop])
 
     cands = hub.discover_hubs()
+    # the desktop heartbeat on 7870 is deduped into the pidfile row, and the default 7870
+    # candidate is not repeated either
     assert [(c.url, c.source) for c in cands] == [
-        ("http://127.0.0.1:7870", "pidfile"),  # the desktop heartbeat on 7870 is deduped away
+        ("http://127.0.0.1:7870", "pidfile"),
         ("http://127.0.0.1:7875", "heartbeat"),
-    ] + [("http://127.0.0.1:7870", "default")][:0]  # default 7870 already present → not repeated
+    ]
     assert cands[1].identity == "protoEngineer"
     assert cands[1].instance_root == desktop / "ws"
 
@@ -178,6 +207,25 @@ def test_token_chain_order_and_dedupe(tmp_path, monkeypatch):
     assert chain == ["fleet-cand", "fleet-own", "fleet-box", "operator-bearer", None]
 
 
+def test_token_chain_sends_no_local_credential_off_box(tmp_path, monkeypatch):
+    """`--hub evil:7870` must not harvest this box's fleet service token or operator bearer:
+    a non-loopback hub gets the explicit/env credential and open mode, nothing else."""
+    (tmp_path / "workspaces").mkdir()
+    (tmp_path / "workspaces" / hub.FLEET_TOKEN_FILE).write_text("LOCAL-FLEET-SECRET")
+
+    class _Paths:
+        instance_root = tmp_path
+
+    monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
+    monkeypatch.setattr(hub, "known_box_roots", lambda: [tmp_path])
+    monkeypatch.setenv(hub.ENV_OPERATOR_BEARER, "LOCAL-OPERATOR-BEARER")
+    monkeypatch.setenv(hub.ENV_TOKEN, "from-env")
+    remote = hub.HubCandidate("http://evil.example.com:7870", "flag")
+    assert list(hub.token_chain(remote, explicit="explicit")) == ["explicit", "from-env", None]
+    local = hub.HubCandidate("http://127.0.0.1:7870", "default")
+    assert list(hub.token_chain(local)) == ["from-env", "LOCAL-FLEET-SECRET", "LOCAL-OPERATOR-BEARER", None]
+
+
 def test_token_chain_without_any_source_is_open_mode_only(tmp_path, monkeypatch):
     class _Paths:
         instance_root = tmp_path
@@ -219,6 +267,55 @@ def test_client_401_on_agents_path_is_member_unauthorized_with_slug():
         c._request("GET", "/agents/roxy-e815/api/runtime/status")
     assert ei.value.slug == "roxy-e815"
     assert not isinstance(ei.value, hub.HubUnauthorized)
+
+
+def test_client_403_is_a_credential_rejection_too():
+    """A federation-tier token in PROTOAGENT_HUB_TOKEN gets a 403 on /api — that is
+    "wrong credential", so the chain must keep walking, not report a hub failure."""
+    c = hub.HubClient("http://127.0.0.1:7870", "fed", transport=_transport(lambda r: httpx.Response(403)))
+    with pytest.raises(hub.HubUnauthorized):
+        c.fleet()
+
+
+def test_client_4xx_without_detail_falls_back_to_body_text():
+    c = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(500, json={"error": "boom"})))
+    with pytest.raises(hub.HubRequestError) as ei:
+        c.fleet()
+    assert ei.value.detail and ei.value.detail != "None"
+    c2 = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(502, text="bad gateway")))
+    with pytest.raises(hub.HubRequestError) as ei2:
+        c2.fleet()
+    assert ei2.value.detail == "bad gateway"
+
+
+def test_client_torn_connection_is_unreachable_not_a_traceback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("Server disconnected", request=request)
+
+    c = hub.HubClient("http://127.0.0.1:7870", transport=_transport(handler))
+    with pytest.raises(hub.HubUnreachable):
+        c.fleet()
+
+
+def test_lifecycle_calls_get_a_long_read_budget():
+    """The hub boot-watches a start for 10 s, busy-waits a stop for 10 s, and /down does
+    that for every running member in sequence — a 5 s read timeout reported a working hub
+    as unreachable (and dropped the results collected so far)."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[request.url.path] = request.extensions.get("timeout", {}).get("read")
+        return httpx.Response(200, json={"ok": True, "stopped": []})
+
+    c = hub.HubClient("http://127.0.0.1:7870", transport=_transport(handler))
+    c.start("a")
+    c.stop("a")
+    c.down(running=5)
+    c.fleet()
+    assert seen["/api/fleet/a/start"] >= 60
+    assert seen["/api/fleet/a/stop"] >= 60
+    assert seen["/api/fleet/down"] >= 5 * hub._DOWN_PER_MEMBER_S
+    assert seen["/api/fleet"] == 5.0
 
 
 def test_client_4xx_carries_detail_and_status():
@@ -304,6 +401,50 @@ def test_connect_walks_the_token_chain_until_the_roster_reads(tmp_path, monkeypa
     conn.client.close()
 
 
+def test_connect_records_a_hub_that_answered_but_could_not_be_read(tmp_path, monkeypatch):
+    """The HIGH finding of the S0 review: card 200 + /api/fleet ReadTimeout used to read as
+    "no hub answered", and the CLI then drove the supervisor beside the running hub."""
+    _no_disk_tokens(monkeypatch, tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (r := _card_ok(request)) is not None:
+            return r
+        raise httpx.ReadTimeout("slow", request=request)
+
+    cand = hub.HubCandidate("http://127.0.0.1:7870", "default")
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(candidates=[cand], transport=_transport(handler))
+    assert ei.value.answered is True
+    assert list(ei.value.failed) == ["http://127.0.0.1:7870"]
+    assert "could not be read" in str(ei.value)
+
+    def handler_500(request: httpx.Request) -> httpx.Response:
+        return _card_ok(request) or httpx.Response(500, json={"detail": "task store exploded"})
+
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(candidates=[cand], transport=_transport(handler_500))
+    assert ei.value.answered is True
+    assert "task store exploded" in str(ei.value)
+
+
+def test_connect_treats_403_as_rejected_credential_and_keeps_walking(tmp_path, monkeypatch):
+    _no_disk_tokens(monkeypatch, tmp_path)
+    monkeypatch.setenv(hub.ENV_OPERATOR_BEARER, "operator")
+    tried: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if (r := _card_ok(request)) is not None:
+            return r
+        tok = _bearer(request)
+        tried.append(tok)
+        return httpx.Response(200, json={"agents": []}) if tok == "operator" else httpx.Response(403)
+
+    cand = hub.HubCandidate("http://127.0.0.1:7870", "default")
+    conn = hub.connect(token="federation-token", candidates=[cand], transport=_transport(handler))
+    assert tried == ["federation-token", "operator"]
+    conn.client.close()
+
+
 def test_connect_skips_non_hubs_and_reports_unauthorized_separately(tmp_path, monkeypatch):
     _no_disk_tokens(monkeypatch, tmp_path)
 
@@ -367,6 +508,7 @@ def test_connect_no_candidates_answering_says_so(tmp_path, monkeypatch):
     with pytest.raises(hub.NoHub) as ei:
         hub.connect(candidates=[hub.HubCandidate("http://127.0.0.1:7870", "default")], transport=_transport(handler))
     assert ei.value.unauthorized == []
+    assert ei.value.answered is False  # the only case the CLI may fall back to disk on
     assert "no hub answered at http://127.0.0.1:7870" in str(ei.value)
 
 

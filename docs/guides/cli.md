@@ -88,10 +88,17 @@ protoagent fleet ls --hub ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an
 protoagent fleet ls --offline             # this instance's fleet.json, no probe
 ```
 
-When no hub answers the output is badged `offline · reading <fleet.json>` and `up` /
+When **nothing** answers the output is badged `offline · reading <fleet.json>` and `up` /
 `down` act through the supervisor on disk — the right thing only when nothing is
-running. A member's `401` is reported as that member's credential problem, never as the
-hub's.
+running. A hub that answered but could not be opened (rejected credential, timeout,
+5xx, or only a fleet *member* answering) is an **error, not a fallback**: driving
+processes from disk beside a running hub is exactly the two-hubs bug. A member's `401`
+is reported as that member's credential problem, never as the hub's.
+
+This box's fleet service tokens and `A2A_AUTH_TOKEN` are sent to **loopback hubs only**.
+A `--hub` on another host gets `--token` / `PROTOAGENT_HUB_TOKEN` and nothing else, so a
+stray URL can never harvest local credentials. `--json` emits per-member result rows of
+one shape (`{name, ok, …}`) plus `mode` and `hub`.
 
 ### Point at a local model
 

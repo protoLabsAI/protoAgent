@@ -45,8 +45,8 @@ class FakeClient:
         self.calls.append(("stop", name))
         return self._stop(name)
 
-    def down(self):
-        self.calls.append(("down",))
+    def down(self, running=0):
+        self.calls.append(("down", running))
         return self._down()
 
     def close(self):
@@ -66,9 +66,12 @@ def _live(monkeypatch, client: FakeClient, source="heartbeat"):
     return seen
 
 
-def _offline(monkeypatch, *, unauthorized=None):
+def _offline(monkeypatch, *, unauthorized=None, failed=None, members=None):
+    """Nothing answered (the default) → the CLI may fall back to disk. Pass unauthorized /
+    failed / members to simulate a hub that ANSWERED but could not be opened."""
+
     def fake_connect(*, url=None, token=None, candidates=None, transport=None):
-        raise deckhub.NoHub(["http://127.0.0.1:7870"], unauthorized or [])
+        raise deckhub.NoHub(["http://127.0.0.1:7870"], unauthorized or [], members, failed)
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
 
@@ -162,6 +165,43 @@ def test_ls_explicit_hub_that_fails_is_an_error_not_a_fallback(monkeypatch, caps
     assert "alpha" not in captured.out
 
 
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"failed": {"http://127.0.0.1:7870": "http://127.0.0.1:7870 did not answer (ReadTimeout)"}},
+        {"unauthorized": ["http://127.0.0.1:7870"]},
+        {"members": ["http://127.0.0.1:7871"]},
+    ],
+)
+def test_a_hub_that_answered_but_could_not_be_opened_never_falls_back_to_disk(monkeypatch, capsys, sup, kw):
+    """The two-hubs rule, on the FAILING path (review HIGH-1): a slow/500/403 hub used to
+    read as "no hub", and `fleet up` then drove the supervisor beside the running hub."""
+    _offline(monkeypatch, **kw)
+    assert cli.run_fleet_cli(["up", "alpha"]) == 1
+    assert sup == []  # the supervisor was never touched
+    assert cli.run_fleet_cli(["down"]) == 1
+    assert sup == []
+    assert cli.run_fleet_cli(["ls"]) == 1
+    captured = capsys.readouterr()
+    assert "alpha" not in captured.out
+    assert "✗" in captured.err
+
+
+def test_offline_and_hub_are_mutually_exclusive(capsys):
+    with pytest.raises(SystemExit) as ei:
+        cli.run_fleet_cli(["ls", "--offline", "--hub", "x:1"])
+    assert ei.value.code == 2
+
+
+def test_malformed_hub_is_a_clean_exit(monkeypatch, capsys):
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None):
+        raise ValueError("invalid hub url: 'http://[::1'")
+
+    monkeypatch.setattr(deckhub, "connect", fake_connect)
+    assert cli.run_fleet_cli(["ls", "--hub", "http://[::1"]) == 1
+    assert "invalid hub url" in capsys.readouterr().err
+
+
 def test_ls_passes_hub_and_token_through(monkeypatch, capsys):
     seen = _live(monkeypatch, FakeClient())
     cli.run_fleet_cli(["status", "--hub", "ava.tail:7870", "--token", "abc"])
@@ -199,11 +239,29 @@ def test_up_live_failure_is_reported_per_member_with_exit_1(monkeypatch, capsys,
     assert "✗ ghost" in capsys.readouterr().err
 
 
+def test_up_live_keeps_partial_results_when_one_start_times_out(monkeypatch, capsys, sup):
+    """Review HIGH-2: a boot-watch that outlasts the read budget must not discard the
+    results already collected for the other members."""
+
+    def start(name):
+        if name == "slow":
+            raise deckhub.HubUnreachable("http://127.0.0.1:7870", "http://127.0.0.1:7870 did not answer (ReadTimeout)")
+        return {"ok": True, "agent": {"name": name, "port": 7999, "pid": 1}}
+
+    client = FakeClient(start=start)
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["up", "Cindi", "slow", "Claudia", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert [(r["name"], r["ok"]) for r in data["results"]] == [("Cindi", True), ("slow", False), ("Claudia", True)]
+    assert "ReadTimeout" in data["results"][1]["error"]
+
+
 def test_up_live_json(monkeypatch, capsys, sup):
     _live(monkeypatch, FakeClient())
     assert cli.run_fleet_cli(["up", "Cindi", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["mode"] == "live" and data["results"][0]["name"] == "Cindi" and data["results"][0]["ok"] is True
+    assert data["mode"] == "live" and data["hub"] == "http://127.0.0.1:7870"
+    assert data["results"] == [{"name": "Cindi", "ok": True, "agent": {"name": "Cindi", "port": 7999, "pid": 4242}}]
 
 
 def test_up_offline_uses_the_supervisor(monkeypatch, capsys, sup):
@@ -216,25 +274,43 @@ def test_up_offline_uses_the_supervisor(monkeypatch, capsys, sup):
 # ── down ─────────────────────────────────────────────────────────────────────
 
 
-def test_down_live_all_uses_the_fleet_down_route(monkeypatch, capsys, sup):
-    client = FakeClient()
+def test_down_live_all_uses_the_fleet_down_route_with_a_budget_per_running_member(monkeypatch, capsys, sup):
+    client = FakeClient(down=lambda: {"ok": False, "stopped": ["protoEngineer"], "failed": [{"name": "old", "reason": "survived SIGKILL"}]})
     _live(monkeypatch, client)
-    assert cli.run_fleet_cli(["down"]) == 0
-    assert client.calls == [("down",)]
-    out = capsys.readouterr().out
-    assert "✓ protoEngineer" in out and "✓ old" in out
+    assert cli.run_fleet_cli(["down", "--json"]) == 1
+    assert client.calls == [("down", 2)]  # protoEngineer + old are the running LOCAL members
+    data = json.loads(capsys.readouterr().out)
+    # one row shape for every mode: {name, ok, ...}
+    assert data["results"] == [
+        {"name": "protoEngineer", "ok": True, "stopped": True},
+        {"name": "old", "ok": False, "error": "survived SIGKILL", "stopped": False},
+    ]
 
 
 def test_down_live_named_reports_a_survivor_as_failure(monkeypatch, capsys, sup):
     client = FakeClient(stop=lambda n: {"ok": False, "stopped": False, "reason": "still alive after SIGKILL"})
     _live(monkeypatch, client)
     assert cli.run_fleet_cli(["down", "old"]) == 1
-    assert "not stopped — still alive after SIGKILL" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "✗ old" in captured.err and "not stopped — still alive after SIGKILL" in captured.err
+    assert captured.out == ""  # failures go to stderr; stdout stays clean for pipelines
 
 
 def test_down_offline_uses_the_supervisor_and_json(monkeypatch, capsys, sup):
     _offline(monkeypatch)
     assert cli.run_fleet_cli(["down", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
-    assert data["mode"] == "offline" and data["results"] == [{"name": "alpha", "stopped": True}]
+    assert data["mode"] == "offline" and data["results"] == [{"name": "alpha", "ok": True, "stopped": True}]
     assert sup == [("down", None)]
+
+
+def test_down_offline_honours_a_survivor_and_an_unknown_name(monkeypatch, capsys, sup):
+    """Review MEDIUM-5: offline `down` printed ✓ and exited 0 for a member that survived
+    SIGKILL, and swallowed a name the supervisor did not know."""
+    _offline(monkeypatch)
+    monkeypatch.setattr(cli.supervisor, "down", lambda names=None: [{"name": "alpha", "stopped": False, "reason": "still alive after SIGKILL"}])
+    assert cli.run_fleet_cli(["down", "alpha", "ghost"]) == 1
+    captured = capsys.readouterr()
+    assert "✗ alpha" in captured.err and "still alive after SIGKILL" in captured.err
+    assert "✗ ghost" in captured.err
+    assert "✓" not in captured.out

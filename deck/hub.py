@@ -8,7 +8,9 @@ were registered and five were online. The hub's ``GET /api/fleet`` (ADR 0042) is
 source of live truth, and in live mode every mutation must go through the hub so the hub
 keeps owning its child processes: a ``supervisor.up`` next to a running hub spawns members
 the hub cannot see (``_is_our_agent``). This resolves ADR 0075's open question 2 the lean
-way: live hub first, badged disk fallback.
+way: live hub first, badged disk fallback — and the fallback only when NOTHING answered.
+A hub that answered but could not be opened (bad credential, timeout, 5xx) is an error the
+operator has to see, never a reason to start driving processes from disk beside it.
 
 Three jobs, in order:
 
@@ -16,19 +18,32 @@ Three jobs, in order:
    environment the shell inherited: this instance's ``server.pid`` (``protoagent up``),
    the ``.instances/<pid>.json`` heartbeats every server writes under its box root
    (``infra.paths.register_instance``) — scanned across every box root this machine is
-   known to use, including the desktop app's — and finally the default port.
+   known to use, including the desktop app's — and finally the default port. A MEMBER
+   is a full server too (it writes a heartbeat and serves ``/api/fleet`` as a fleet of
+   itself), so member instance roots are skipped by their ``workspace.yaml`` marker and a
+   roster whose host row is ``member: True`` is refused unless the operator named it.
 2. **Open it.** ``token_chain()`` yields credentials to try: ``--token`` / the env, then the
    hub's own fleet service token (``<instance root>/workspaces/.fleet-token``, ADR 0089 —
    operator tier on the hub and on every member through the proxy), then the operator
    bearer env, then no credential (open mode). ``connect()`` tries them until the roster
-   reads. Tokens are read from disk and never logged, printed, or echoed in errors.
+   reads. **Disk tokens and the operator bearer go to loopback only**: an explicit
+   ``--hub`` on another host gets the explicit/env credential and nothing else, so a
+   ``--hub evil:7870`` can never harvest this box's service token. Tokens are read from
+   disk and never logged, printed, or echoed in errors; URL userinfo is stripped.
 3. **Talk.** ``HubClient`` wraps the handful of routes the CLI needs with bounded timeouts
-   and typed errors. A ``401`` on ``/agents/<slug>/…`` is that MEMBER's credential problem
-   (``MemberUnauthorized``), never the hub's — the July 2026 remote audit (#1607/#1609)
-   found the console conflating the two, and the deck must not repeat it.
+   and typed errors. A ``401``/``403`` on ``/agents/<slug>/…`` is that MEMBER's credential
+   problem (``MemberUnauthorized``), never the hub's — the July 2026 remote audit
+   (#1607/#1609) found the console conflating the two, and the deck must not repeat it.
+   (Invariant that makes the split honest: ``connect()`` proves the credential on the hub
+   itself first, so a later 401 on a member path cannot be the hub's own middleware.)
+   Lifecycle calls get a long read budget: the hub boot-watches a start for up to 10 s,
+   busy-waits a stop for up to 10 s, and ``/api/fleet/down`` does that for every running
+   member in sequence.
 
 Neutral by contract: httpx + ``infra`` only. Never imports ``server``, ``operator_api``,
-or ``graph`` (the fleet CLI in ``graph/`` imports *this*).
+or ``graph`` (the fleet CLI in ``graph/`` imports *this*). ``infra.paths`` is late-bound
+through the thin delegates below so the test suite's instance-root isolation (which
+patches ``infra.paths`` at runtime) reaches this module too.
 """
 
 from __future__ import annotations
@@ -37,14 +52,14 @@ import json
 import os
 import sys
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
-from infra.paths import box_root, data_home, instance_paths, pid_alive
+from infra import paths as _paths
 
 DEFAULT_PORT = 7870
 ENV_TOKEN = "PROTOAGENT_HUB_TOKEN"
@@ -52,13 +67,42 @@ ENV_TOKEN = "PROTOAGENT_HUB_TOKEN"
 ENV_OPERATOR_BEARER = "A2A_AUTH_TOKEN"
 # Same file the hub mints (graph/fleet/service_token.py): <workspaces root>/.fleet-token.
 FLEET_TOKEN_FILE = ".fleet-token"
+# The spawn-time marker the supervisor writes into a MEMBER's instance root
+# (graph/workspaces/manager.py::is_workspace_member).
+WORKSPACE_MARKER = "workspace.yaml"
 # The Tauri identifier — the desktop app sets PROTOAGENT_HOME = PROTOAGENT_BOX_ROOT = its
 # per-user app-data dir for this id (apps/desktop/src-tauri/src/lib.rs), so a shell that
 # wants the desktop hub's heartbeats and fleet token has to look there.
 DESKTOP_APP_ID = "studio.protolabs.protoagent"
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+# Read budgets. Reads are ordinary JSON; lifecycle waits on the hub's own blocking windows
+# (graph/fleet/supervisor.py: _BOOT_WATCH_SECONDS=10 on start, stop timeout 8 s + 2 s
+# kill grace; /api/fleet/down runs stop() sequentially over every running member).
 _TIMEOUT = httpx.Timeout(5.0, connect=2.0)
 _PROBE_TIMEOUT = httpx.Timeout(2.0, connect=1.0)
+_LIFECYCLE_TIMEOUT = httpx.Timeout(60.0, connect=2.0)
+_DOWN_PER_MEMBER_S = 15.0
+
+
+# ── late-bound infra delegates (see module docstring) ─────────────────────────
+
+
+def instance_paths():
+    return _paths.instance_paths()
+
+
+def box_root() -> Path:
+    return _paths.box_root()
+
+
+def data_home() -> Path:
+    return _paths.data_home()
+
+
+def pid_alive(pid: int) -> bool:
+    return _paths.pid_alive(pid)
 
 
 # ── errors ────────────────────────────────────────────────────────────────────
@@ -73,15 +117,16 @@ class HubError(RuntimeError):
 
 
 class HubUnreachable(HubError):
-    """No TCP/HTTP answer from the hub within the bounded timeout."""
+    """No usable answer from the hub within the bounded timeout (connect, read, or a
+    torn connection mid-response)."""
 
 
 class HubUnauthorized(HubError):
-    """The HUB rejected our credential (a 401 on a hub path)."""
+    """The HUB rejected our credential (a 401/403 on a hub path)."""
 
 
 class MemberUnauthorized(HubError):
-    """A MEMBER behind the proxy rejected the credential the hub attached (a 401 on
+    """A MEMBER behind the proxy rejected the credential the hub attached (a 401/403 on
     ``/agents/<slug>/…``). This is the member's problem, not the hub's — surface it per
     member, never as a hub auth failure."""
 
@@ -100,25 +145,43 @@ class HubRequestError(HubError):
 
 
 class NoHub(HubError):
-    """No candidate hub could be opened. ``tried`` / ``unauthorized`` / ``members`` summarize
-    the search so the CLI can say exactly what it looked at."""
+    """No candidate hub could be opened. The lists say what the search saw, and
+    :attr:`answered` is the bit the CLI keys its fallback on: when ANY candidate answered
+    its agent card, something is running, and driving processes from disk beside it is
+    the wrong move — the operator needs the reason instead."""
 
-    def __init__(self, tried: list[str], unauthorized: list[str], members: list[str] | None = None):
-        self.tried = tried
-        self.unauthorized = unauthorized
+    def __init__(
+        self,
+        tried: list[str],
+        unauthorized: list[str],
+        members: list[str] | None = None,
+        failed: dict[str, str] | None = None,
+    ):
+        self.tried = list(tried)
+        self.unauthorized = list(unauthorized)
         self.members = list(members or [])
-        if unauthorized:
+        self.failed = dict(failed or {})
+        if self.unauthorized:
             msg = (
-                f"a hub answered at {', '.join(unauthorized)} but rejected every credential — "
+                f"a hub answered at {', '.join(self.unauthorized)} but rejected every credential — "
                 f"pass --token or set {ENV_TOKEN}"
             )
-        elif self.members and len(self.members) == len(tried):
+        elif self.failed:
+            parts = "; ".join(f"{u}: {why}" for u, why in self.failed.items())
+            msg = f"a hub answered but could not be read — {parts}"
+        elif self.members:
             msg = f"only fleet MEMBERS answered ({', '.join(self.members)}) — their hub is not running"
-        elif tried:
-            msg = f"no hub answered at {', '.join(tried)}"
+        elif self.tried:
+            msg = f"no hub answered at {', '.join(self.tried)}"
         else:
             msg = "no hub candidates on this box"
-        super().__init__(unauthorized[0] if unauthorized else (tried[0] if tried else ""), msg)
+        first = self.unauthorized or list(self.failed) or self.members or self.tried
+        super().__init__(first[0] if first else "", msg)
+
+    @property
+    def answered(self) -> bool:
+        """Something protoAgent-shaped answered somewhere (even if unusable)."""
+        return bool(self.unauthorized or self.failed or self.members)
 
 
 # ── candidates ────────────────────────────────────────────────────────────────
@@ -135,30 +198,31 @@ class HubCandidate:
     pid: int | None = None
 
 
-# The spawn-time marker the supervisor writes into a MEMBER's instance root
-# (graph/workspaces/manager.py::is_workspace_member). A member is a full server — it
-# writes a heartbeat and serves /api/fleet like a hub — so discovery has to tell the two
-# apart by evidence or `fleet down <name>` lands on a member that has no such member.
-WORKSPACE_MARKER = "workspace.yaml"
-
-
-def is_member_root(instance_root: Path | None) -> bool:
-    """True when ``instance_root`` is a fleet MEMBER's (spawned by some hub's supervisor)."""
-    if instance_root is None:
-        return False
-    try:
-        return (instance_root / WORKSPACE_MARKER).is_file()
-    except OSError:
-        return False
-
-
 def normalize_url(url: str) -> str:
-    u = url.strip().rstrip("/")
-    if not u:
+    """``host:port`` → ``http://host:port``; trailing slash dropped; userinfo STRIPPED (a
+    ``--hub http://user:secret@host`` must not echo the secret in any message). Raises
+    ``ValueError`` on anything that is not a usable absolute URL."""
+    u = (url or "").strip()
+    if not u.strip("/"):
         raise ValueError("hub url is empty")
     if "://" not in u:
         u = f"http://{u}"
-    return u
+    try:
+        parsed = httpx.URL(u)
+    except httpx.InvalidURL as exc:
+        raise ValueError(f"invalid hub url: {exc}") from exc
+    if parsed.scheme not in ("http", "https") or not parsed.host:
+        raise ValueError(f"invalid hub url: {url!r}")
+    clean = parsed.copy_with(username=None, password=None, path="", query=None, fragment=None)
+    return str(clean).rstrip("/")
+
+
+def is_loopback(url: str) -> bool:
+    try:
+        host = httpx.URL(url).host.strip("[]").lower()
+    except httpx.InvalidURL:
+        return False
+    return host in _LOOPBACK_HOSTS
 
 
 def _loopback(port: int) -> str:
@@ -193,6 +257,16 @@ def known_box_roots() -> list[Path]:
             continue
         seen.append(rp)
     return seen
+
+
+def is_member_root(instance_root: Path | None) -> bool:
+    """True when ``instance_root`` is a fleet MEMBER's (spawned by some hub's supervisor)."""
+    if instance_root is None:
+        return False
+    try:
+        return (instance_root / WORKSPACE_MARKER).is_file()
+    except OSError:
+        return False
 
 
 def read_heartbeats(root: Path) -> list[dict]:
@@ -308,7 +382,11 @@ def fleet_token_files(cand: HubCandidate) -> list[Path]:
 
 def token_chain(cand: HubCandidate, *, explicit: str | None = None) -> Iterator[str | None]:
     """Credentials to try for ``cand``, in order, each yielded once; ends with ``None``
-    (open mode — an unset-auth instance accepts no bearer at all). Never logs a value."""
+    (open mode — an unset-auth instance accepts no bearer at all). Never logs a value.
+
+    This box's fleet service tokens and its operator bearer are LOOPBACK-ONLY: a hub on
+    another host gets the explicit ``--token`` / ``PROTOAGENT_HUB_TOKEN`` and nothing else.
+    Anything that returns a 200 agent card must not be able to harvest local credentials."""
     seen: set[str] = set()
 
     def once(tok: str | None) -> Iterator[str]:
@@ -318,9 +396,10 @@ def token_chain(cand: HubCandidate, *, explicit: str | None = None) -> Iterator[
 
     yield from once((explicit or "").strip() or None)
     yield from once(os.environ.get(ENV_TOKEN, "").strip() or None)
-    for f in fleet_token_files(cand):
-        yield from once(_read_token_file(f))
-    yield from once(os.environ.get(ENV_OPERATOR_BEARER, "").strip() or None)
+    if is_loopback(cand.url):
+        for f in fleet_token_files(cand):
+            yield from once(_read_token_file(f))
+        yield from once(os.environ.get(ENV_OPERATOR_BEARER, "").strip() or None)
     yield None
 
 
@@ -358,27 +437,46 @@ class HubClient:
     def close(self) -> None:
         self._client.close()
 
+    def __enter__(self) -> HubClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
 
-    def _request(self, method: str, path: str, *, json_body: Any = None) -> Any:
+    def _request(self, method: str, path: str, *, json_body: Any = None, timeout: httpx.Timeout | None = None) -> Any:
         try:
-            r = self._client.request(method, path, json=json_body, headers=self._headers())
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            r = self._client.request(
+                method,
+                path,
+                json=json_body,
+                headers=self._headers(),
+                **({"timeout": timeout} if timeout is not None else {}),
+            )
+        except httpx.TransportError as exc:  # connect / read timeout, refused, torn mid-response
             raise HubUnreachable(self.url, f"{self.url} did not answer ({type(exc).__name__})") from exc
-        if r.status_code == 401:
+        except httpx.HTTPError as exc:  # anything else httpx can raise — never a raw traceback
+            raise HubError(self.url, f"{self.url}: {type(exc).__name__}") from exc
+        if r.status_code in (401, 403):
             slug = _slug_of(path)
             if slug:
                 raise MemberUnauthorized(self.url, slug, f"member {slug!r} rejected the credential the hub attached")
-            raise HubUnauthorized(self.url, f"{self.url} rejected the credential")
+            raise HubUnauthorized(self.url, f"{self.url} rejected the credential ({r.status_code})")
         if r.status_code >= 400:
             detail = ""
             try:
                 body = r.json()
-                detail = str(body.get("detail") if isinstance(body, dict) else body)
             except ValueError:
-                detail = r.text[:300]
-            raise HubRequestError(self.url, r.status_code, detail or r.reason_phrase)
+                body = None
+            if isinstance(body, dict) and isinstance(body.get("detail"), str) and body["detail"].strip():
+                detail = body["detail"].strip()
+            elif body is not None and not isinstance(body, dict):
+                detail = str(body)[:300]
+            if not detail:
+                detail = (r.text or "").strip()[:300] or r.reason_phrase or "error"
+            raise HubRequestError(self.url, r.status_code, detail)
         if not r.content:
             return None
         try:
@@ -414,13 +512,16 @@ class HubClient:
         return list(agents or [])
 
     def start(self, name: str) -> dict:
-        return self._request("POST", f"/api/fleet/{quote(name, safe='')}/start") or {}
+        return self._request("POST", f"/api/fleet/{quote(name, safe='')}/start", timeout=_LIFECYCLE_TIMEOUT) or {}
 
     def stop(self, name: str) -> dict:
-        return self._request("POST", f"/api/fleet/{quote(name, safe='')}/stop") or {}
+        return self._request("POST", f"/api/fleet/{quote(name, safe='')}/stop", timeout=_LIFECYCLE_TIMEOUT) or {}
 
-    def down(self) -> dict:
-        return self._request("POST", "/api/fleet/down") or {}
+    def down(self, running: int = 0) -> dict:
+        """Stop every running member. The hub stops them one after another, each with
+        its own grace window, so the read budget scales with how many are up."""
+        budget = max(_LIFECYCLE_TIMEOUT.read or 0.0, _DOWN_PER_MEMBER_S * max(int(running), 0))
+        return self._request("POST", "/api/fleet/down", timeout=httpx.Timeout(budget, connect=2.0)) or {}
 
     def runtime_status(self) -> dict:
         return self._request("GET", "/api/runtime/status") or {}
@@ -444,7 +545,7 @@ class Connection:
     card: dict
     # The roster read that proved the credential — callers that only need `ls` use it
     # instead of paying for a second GET.
-    roster: list[dict]
+    roster: list[dict] = field(default_factory=list)
 
 
 def connect(
@@ -457,21 +558,21 @@ def connect(
     """Open the first candidate hub whose roster we can read.
 
     For each candidate: probe the public agent card (no credential); on a hit, walk
-    :func:`token_chain` until ``GET /api/fleet`` succeeds. A hub that answers but rejects
-    every credential is remembered so :class:`NoHub` can say "unauthorized at …" rather
-    than "no hub" — those are different operator actions.
+    :func:`token_chain` until ``GET /api/fleet`` succeeds. Every outcome short of success
+    is recorded on the :class:`NoHub` — rejected credentials, a hub that answered but whose
+    roster read failed (timeout, 5xx, torn connection), a member answering as a fleet of
+    itself — so the CLI can tell "nothing is running" from "something is, and here is why
+    I could not use it". Only the former may fall back to disk.
     """
     tried: list[str] = []
     unauthorized: list[str] = []
     members: list[str] = []
+    failed: dict[str, str] = {}
     explicit = bool(url)
     for cand in candidates if candidates is not None else discover_hubs(explicit_url=url):
         tried.append(cand.url)
-        probe = HubClient(cand.url, transport=transport)
-        try:
+        with HubClient(cand.url, transport=transport) as probe:
             card = probe.agent_card()
-        finally:
-            probe.close()
         if card is None:
             continue
         rejected = False
@@ -483,10 +584,14 @@ def connect(
                 client.close()
                 rejected = True
                 continue
-            except HubError:
+            except HubError as exc:
                 client.close()
                 rejected = False
+                failed[cand.url] = str(exc)
                 break
+            except BaseException:
+                client.close()
+                raise
             if roster_is_a_member(roster) and not explicit:
                 # A member answers /api/fleet with a fleet-of-itself. Driving lifecycle
                 # through it would "start"/"stop" members that do not exist there. Only
@@ -498,4 +603,4 @@ def connect(
             return Connection(client=client, candidate=cand, card=card, roster=roster)
         if rejected:
             unauthorized.append(cand.url)
-    raise NoHub(tried, unauthorized, members)
+    raise NoHub(tried, unauthorized, members, failed)
