@@ -730,13 +730,18 @@ function UsageTip({
 function SentTimestamp({ createdAt }: { createdAt?: number }) {
   const stamp = sentTimestamp(createdAt);
   if (!stamp) return null;
+  // The row is what puts the chip on its own line: the DS Tooltip wraps its trigger in an
+  // inline-flex span, so without a block-level parent the chip ran on straight after a user
+  // bubble's text.
   return (
-    <Tooltip label={stamp.full} side="top" align="start">
-      <span className="chat-sent-time" tabIndex={0} aria-label={`Sent ${stamp.full}`}>
-        <Clock size={12} aria-hidden />
-        <span className="chat-sent-time-label">{stamp.label}</span>
-      </span>
-    </Tooltip>
+    <div className="chat-sent-time-row">
+      <Tooltip label={stamp.full} side="top" align="start">
+        <span className="chat-sent-time" tabIndex={0} aria-label={`Sent ${stamp.full}`}>
+          <Clock size={12} aria-hidden />
+          <span className="chat-sent-time-label">{stamp.label}</span>
+        </span>
+      </Tooltip>
+    </div>
   );
 }
 

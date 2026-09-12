@@ -443,14 +443,21 @@
 
 /* Sent-time footer widget (#3448) — a quiet clock chip on a settled user/assistant message;
    the full local sent date-and-time lives in the DS Tooltip on hover/focus. Mirrors the muted,
-   monospace .chat-usage footer tone so it reads as metadata, not content. inline-flex + a
-   fit-content width keeps the hover/focus target tight around the icon+time, not the row. */
+   monospace .chat-usage footer tone so it reads as metadata, not content. The ROW is block-level
+   so the chip always starts its own line (the DS Tooltip's trigger wrapper is inline-flex); the
+   chip itself stays tight around the icon+time so the hover/focus target is not the whole row. */
+.chat-sent-time-row {
+  display: flex;
+  margin-top: 6px;
+}
+/* In a user bubble the time sits bottom-right, under the text — where a sent receipt reads. */
+.pl-message--user .chat-sent-time-row {
+  justify-content: flex-end;
+}
 .chat-sent-time {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  width: fit-content;
-  margin-top: 6px;
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
   font-size: 12px;
@@ -462,7 +469,7 @@
   opacity: 0.8;
 }
 .chat-sent-time:focus-visible {
-  outline: 2px solid var(--pl-color-focus-ring, var(--pl-color-accent, currentColor));
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
   outline-offset: 2px;
 }
 

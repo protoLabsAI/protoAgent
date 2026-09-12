@@ -50,6 +50,50 @@ function deferred<T>() {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("durable turn sent times (the chat footer's sent-time widget reads createdAt)", () => {
+  const LANDED = Date.parse("2026-08-20T12:00:00Z");
+
+  it("gives a finished turn's answer the time it landed, and the prompt no borrowed time", () => {
+    const [user, assistant] = messagesFromDurableTurn(turn());
+    expect(user.role).toBe("user");
+    // The store never recorded when the prompt was sent — only when the turn last changed.
+    expect(user.createdAt).toBeUndefined();
+    expect(assistant).toMatchObject({ role: "assistant", status: "done", createdAt: LANDED });
+  });
+
+  it("keeps a steered turn's interjection and frozen half untimed; only the answer is timed", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Start" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "c1", name: "a", phase: "completed", result: "ok" } } },
+          { role: "ROLE_AGENT", parts: [{ data: { items: [{ id: "s1", text: "aside" }] }, metadata: { mimeType: STEER } }] },
+        ],
+      }),
+    );
+    expect(messages.map((m) => [m.role, m.createdAt])).toEqual([
+      ["user", undefined],
+      ["assistant", undefined], // the half frozen at the interjection — sent earlier, time unknown
+      ["user", undefined],
+      ["assistant", LANDED],
+    ]);
+  });
+
+  it("never fabricates a message time when the store has none — but the session still sorts", () => {
+    const untimed = turn({ last_updated: null });
+    expect(messagesFromDurableTurn(untimed).map((m) => m.createdAt)).toEqual([undefined, undefined]);
+    const session = sessionFromDurableTurns({ ...summary(), last_updated: null }, [untimed]);
+    expect(typeof session?.createdAt).toBe("number"); // session ordering keeps its fallback
+  });
+
+  it("leaves an unfinished turn's streaming bubble untimed", () => {
+    const messages = messagesFromDurableTurn(turn({ state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } }));
+    const last = messages[messages.length - 1];
+    expect(last).toMatchObject({ role: "assistant", status: "streaming" });
+    expect(last.createdAt).toBeUndefined();
+  });
+});
+
 describe("durable turn conversion", () => {
   it("rebuilds the user bubble and drives assistant text/tools through shared reducers", () => {
     const messages = messagesFromDurableTurn(
