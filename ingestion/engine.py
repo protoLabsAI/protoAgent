@@ -7,8 +7,10 @@ parsing helpers (HTML→text, YouTube-id parsing, decode) stay unit-testable off
 
 from __future__ import annotations
 
+import gc
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -44,6 +46,10 @@ class MissingDependency(IngestionError):
     """A format needs an optional package that isn't installed."""
 
 
+class SourceTooLarge(ExtractionError):
+    """The source would cost more to extract than the engine allows (routes answer 413)."""
+
+
 @dataclass
 class ExtractResult:
     """Extracted text plus light provenance for the knowledge chunk."""
@@ -67,12 +73,39 @@ _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 _LEGACY_DOC_EXTS = {".doc"}
 _LEGACY_DOC_MIME = "application/msword"
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
-# A .docx is a zip, so its upload size says nothing about what it inflates to. Checked
-# from the central directory BEFORE python-docx opens it (which reads every part into
-# memory). The declared sizes can be trusted as a ceiling: CPython's zipfile never
-# inflates a member past its declared size — a lying header fails the CRC instead.
-_MAX_DOCX_UNCOMPRESSED_BYTES = _MAX_FETCH_BYTES
+# A .docx is a zip of XML parts, and neither its upload size nor its declared sizes bound
+# what opening it costs. python-docx reads each part with ZipFile.read(), which inflates a
+# member in ONE call (deflate up to 2 GiB, bzip2/LZMA without limit) and only then cuts it
+# to the declared size — so a header that lies about its size, carrying the CRC of the
+# kept prefix, passes every zipfile check. lxml then builds ~130 bytes of tree per node.
+# So _repack_docx inflates the text parts itself, streaming and capped, and python-docx
+# only ever opens that re-packed copy. Budgets are measured from real documents: a résumé
+# is ~0.1 MiB of XML scoring ~11k on the node budget below; a 300-page report ~4 MiB, ~560k.
+_MAX_DOCX_XML_BYTES = 12 * 1024 * 1024  # inflated XML, all parts together
+# Tree cost, bounded from the bytes — no Python object per node, since an XML pre-parser
+# would itself materialise a million-attribute tag. libxml2 allocates a node per element
+# (~150 B), per attribute (~270 B) AND per non-blank text run (~120 B — remove_blank_text
+# only drops whitespace-only ones). Every element costs a '<' and a '>', every attribute an
+# '=', and every text run follows a '>', so '<' + '>' + 2×'=' over-counts all three. Worst
+# shape measured: `x<w:i/>` filler at ~142 B per unit (+170 MiB for the costliest package
+# these budgets accept). Counting only '<' and '=' undercounted text runs by ~2×.
+_MAX_DOCX_XML_NODES = 1_000_000
 _MAX_DOCX_MEMBERS = 5000
+_DOCX_READ_CHUNK = 64 * 1024
+# Per-document budgets bound ONE extraction. Callers run extraction in a thread pool —
+# `asyncio.to_thread` defaults to min(32, cpu+4), 14 on a typical box — so without a limit
+# the aggregate is that multiple (~1.6 GB measured across 10 concurrent worst-case uploads).
+# Gate the docx path so the aggregate stays ~2× the single-document ceiling; waiting costs
+# a pool thread and nothing else, and every extraction is bounded in time, so the queue
+# always drains. Threading, not asyncio: this runs in worker threads, off the loop.
+_MAX_CONCURRENT_DOCX = 2
+_docx_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_DOCX)
+# Nodes that may go uncollected before extraction spends a collect (see
+# _release_docx_memory) — a tenth of the node budget, ~10× a résumé, so the common path
+# rarely pays for it. Cumulative across documents, so no document size escapes it.
+_DOCX_GC_NODES = 100_000
+_docx_gc_debt = 0
+_docx_gc_lock = threading.Lock()
 # Audio → transcribed directly via the gateway STT endpoint.
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma", ".aiff", ".aif"}
 # Video → audio track extracted with ffmpeg, then transcribed.
@@ -212,6 +245,17 @@ _ENCRYPTED_DOCX_HINT = (
     "this Word document is password-protected — remove the password "
     "(Word: File ▸ Info ▸ Protect Document) or export it to PDF, then attach that"
 )
+_MACRO_OR_TEMPLATE_HINT = (
+    "macro-enabled and template Word files (.docm/.dotx/.dotm) aren't accepted — save it as a "
+    "regular .docx (Word: File ▸ Save As ▸ Word Document) or export it to PDF, then attach that"
+)
+# Word's other package flavours: macro-enabled documents and (macro-enabled) templates.
+_WORD_VARIANT_EXTS = {".docm", ".dotx", ".dotm"}
+_WORD_VARIANT_MIMES = {
+    "application/vnd.ms-word.document.macroenabled.12",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+    "application/vnd.ms-word.template.macroenabled.12",
+}
 # A password-protected .docx isn't a zip at all: Office wraps the encrypted package in the
 # same OLE2 container a legacy .doc uses, as a stream with this (UTF-16) name.
 _ENCRYPTED_OOXML_MARKER = "EncryptedPackage".encode("utf-16-le")
@@ -259,27 +303,110 @@ _HEADING_STYLE_RE = re.compile(r"heading\s*([1-9])")
 _LIST_STYLE_RE = re.compile(r"list (?:bullet|number)(?:\s*([1-9]))?")
 
 
-def _guard_docx_zip(data: bytes) -> None:
-    """Refuse a .docx that isn't a sane zip BEFORE anything inflates it: too big on the
-    wire, not a zip at all, too many members, or a declared uncompressed total past the
-    cap (the zip-bomb case — kilobytes that expand to gigabytes of XML)."""
+_DOCX_TOO_BIG = (
+    "this Word document is too large or too complex to read here ({detail}) — "
+    "split it, or export it to PDF, then attach that"
+)
+
+
+def _repack_docx(data: bytes):
+    """Re-pack an untrusted .docx into an in-memory zip (a ``BytesIO``) that python-docx can
+    open without unbounded work, with the package's member names and the node budget it
+    spent. Nothing python-docx does touches the original.
+
+    Each XML part is inflated here by STREAMING reads: ``ZipExtFile.read(n)`` inflates at
+    most ``n`` bytes per step for stored/deflate members and stops at the declared size,
+    so a lying header yields only the bytes it declared. Every chunk counts against the
+    byte and node budgets, and only what was read is written back, under honest headers.
+    Parts with no text in them (images, fonts, embedded objects) go back EMPTY and are
+    never inflated. bzip2/LZMA members — which zipfile inflates without a bound even
+    when read in chunks, and which Word never writes — are refused outright."""
     import io
     import zipfile
+    import zlib
 
     if len(data) > _MAX_FETCH_BYTES:
-        raise ExtractionError(f"document too large ({len(data)} bytes > {_MAX_FETCH_BYTES})")
+        raise SourceTooLarge(f"document too large ({len(data)} bytes > {_MAX_FETCH_BYTES})")
+    # zipfile builds a ZipInfo for every central-directory record before anything can be
+    # counted, and each record starts with this signature — so count them first.
+    if data.count(b"PK\x01\x02") > _MAX_DOCX_MEMBERS:
+        raise SourceTooLarge(_DOCX_TOO_BIG.format(detail=f"more than {_MAX_DOCX_MEMBERS} archive members"))
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            members = zf.infolist()
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, OSError) as exc:
+        src = zipfile.ZipFile(io.BytesIO(data))
+    except (zipfile.BadZipFile, ValueError, OSError, EOFError) as exc:
         raise ExtractionError(f"not a valid .docx file (a .docx is a zip archive): {exc}") from exc
-    if len(members) > _MAX_DOCX_MEMBERS:
-        raise ExtractionError(f"refusing a .docx with {len(members)} archive members (> {_MAX_DOCX_MEMBERS})")
-    inflated = sum(max(0, m.file_size) for m in members)
-    if inflated > _MAX_DOCX_UNCOMPRESSED_BYTES:
-        raise ExtractionError(
-            f"refusing a .docx that expands to {inflated} bytes (> {_MAX_DOCX_UNCOMPRESSED_BYTES}) uncompressed"
+
+    out = io.BytesIO()
+    bytes_left, nodes_left = _MAX_DOCX_XML_BYTES, _MAX_DOCX_XML_NODES
+    over_bytes = _DOCX_TOO_BIG.format(detail=f"its text runs past {_MAX_DOCX_XML_BYTES // (1024 * 1024)} MB of XML")
+    over_nodes = _DOCX_TOO_BIG.format(detail="more XML elements and attributes than it can hold")
+    names: set[str] = set()
+    with src, zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as dst:
+        for info in src.infolist():
+            name = info.filename
+            if name in names:
+                raise ExtractionError(f"not a valid .docx file: archive member {name!r} appears twice")
+            names.add(name)
+            if info.is_dir():
+                continue
+            if not name.lower().endswith((".xml", ".rels")):
+                # LOAD-BEARING: media/fonts/embeddings are never read, so writing them back
+                # empty is the only thing bounding them (the compression check below only
+                # covers parts we inflate). Copying them through would reopen the hole a
+                # bomb in word/media/ exploits — covered by a peak-RSS test.
+                dst.writestr(name, b"")
+                continue
+            if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) or info.flag_bits & 0x1:
+                raise ExtractionError(
+                    f"not a valid .docx file: part {name!r} uses zip method {info.compress_type}"
+                    f"{' with encryption' if info.flag_bits & 0x1 else ''} (Word writes only stored or deflate)"
+                )
+            if info.file_size > bytes_left:  # declared: refuse before reading a byte
+                raise SourceTooLarge(over_bytes)
+            chunks: list[bytes] = []
+            try:
+                with src.open(info) as part:
+                    while chunk := part.read(_DOCX_READ_CHUNK):
+                        bytes_left -= len(chunk)
+                        nodes_left -= chunk.count(b"<") + chunk.count(b">") + 2 * chunk.count(b"=")
+                        # Unreachable by construction — the declared-size pre-check above
+                        # reserves this member's bytes and zipfile stops at that size — so
+                        # it is a backstop for a future zipfile that doesn't truncate.
+                        if bytes_left < 0:
+                            raise SourceTooLarge(over_bytes)
+                        if nodes_left < 0:
+                            raise SourceTooLarge(over_nodes)
+                        chunks.append(chunk)
+            except (zipfile.BadZipFile, zlib.error, EOFError, OSError, ValueError, NotImplementedError) as exc:
+                raise ExtractionError(f"could not parse DOCX: part {name!r} is damaged: {exc}") from exc
+            body = b"".join(chunks)
+            if b"<!DOCTYPE" in body:  # Word never writes one; refusing it leaves no entity tricks to play
+                raise ExtractionError(f"could not parse DOCX: part {name!r} declares a DTD, which Word never writes")
+            dst.writestr(name, body)
+    out.seek(0)
+    return out, names, _MAX_DOCX_XML_NODES - nodes_left
+
+
+def _not_a_word_document(names: set[str], detail: str = "") -> UnsupportedSource:
+    """Name the package a renamed Office/OpenDocument file actually is, instead of
+    surfacing python-docx's error about a part it didn't expect."""
+    lowered = {n.lower() for n in names}
+    if any(n.startswith("xl/") for n in lowered):
+        return UnsupportedSource(
+            "this file is an Excel workbook (.xlsx), not a Word document — export it to PDF or CSV and attach that"
         )
+    if any(n.startswith("ppt/") for n in lowered):
+        return UnsupportedSource(
+            "this file is a PowerPoint deck (.pptx), not a Word document — export it to PDF and attach that"
+        )
+    if "mimetype" in lowered:
+        return UnsupportedSource(
+            "this file is an OpenDocument file, not a Word document — save it as .docx or export it to PDF"
+        )
+    return UnsupportedSource(
+        "this file isn't a Word document" + (f" ({detail})" if detail else "")
+        + " — open it in Word and save it as .docx, or export it to PDF"
+    )
 
 
 def _docx_style_kinds(document) -> tuple[dict[str, int], dict[str, int]]:
@@ -433,19 +560,72 @@ def _docx_story(lines: list[str]) -> str:
 
 def _extract_docx(data: bytes) -> str:
     """Word → markdown-ish text: header, body, footer. Headings become ``#`` lines, list
-    items ``- `` (indented by level), tables row by row — all in document order."""
+    items ``- `` (indented by level), tables row by row — all in document order.
+
+    Runs under ``_docx_slots`` so N concurrent uploads can't multiply the per-document
+    memory ceiling by the size of the caller's thread pool."""
     if data[:8] == _OLE2_MAGIC:  # a password-protected .docx, or a legacy .doc renamed
         raise _ole_word_refusal(data)
-    _guard_docx_zip(data)
+    with _docx_slots:
+        # The repack reports the budget it spent BEFORE anything is parsed, so the reclaim
+        # below also covers the paths that RAISE. Failing late still leaves a full tree
+        # behind: a package whose main part is declared a header parses completely, wiring
+        # the cyclic graph, and is only then rejected on content type — a clean 415 that
+        # used to retain ~120 MiB a time (~750 MiB over six).
+        package, names, nodes_used = _repack_docx(data)  # python-docx never sees the original
+        try:
+            return _extract_docx_bounded(package, names)
+        finally:
+            _release_docx_memory(nodes_used)
+
+
+def _release_docx_memory(nodes_used: int) -> None:
+    """Reclaim abandoned document trees once enough have piled up.
+
+    An OPC package's object graph is cyclic (package → rels → part → package, and
+    ``Document`` ↔ ``DocumentPart``), so none of it — including the lxml trees, which are
+    megabytes of C memory behind a handful of Python proxies — is freed by reference
+    counting. CPython's GC triggers on OBJECT COUNTS, not on those megabytes, so nothing
+    forces one: measured +130 MiB per extraction, ~900 MiB over six, flat once collected.
+
+    The debt is CUMULATIVE rather than per-document. A threshold on one document's size
+    left everything under it behaving exactly as before — ~95k units is an ordinary
+    ~50-page document (a 300-page report is ~560k), and a run of them retained ~12 MiB
+    apiece with no ceiling (388 MiB over thirty). Carrying the arrears means the common
+    path still skips the collect and the steady state is bounded at any document size.
+
+    Cost: a collect is 30-50 ms and holds the GIL, so it is stop-the-world — the event loop
+    feels it even though extraction runs in a worker thread (worst tick 25 ms → 53 ms).
+    Worth it against unbounded retention, but the cost is global, not confined to the
+    worker. (Clearing the trees by hand instead is not an option: with the package's own
+    proxies still alive, ``element.clear()`` takes lxml's per-node path — 60 SECONDS on the
+    same document.)"""
+    global _docx_gc_debt
+    with _docx_gc_lock:
+        _docx_gc_debt += max(0, nodes_used)
+        if _docx_gc_debt < _DOCX_GC_NODES:
+            return
+        _docx_gc_debt = 0
+    gc.collect()  # outside the lock: concurrent extractions needn't queue behind it
+
+
+def _extract_docx_bounded(package, names: set[str]) -> str:
     try:
         import docx  # python-docx
         from docx.opc.constants import RELATIONSHIP_TYPE as RT
     except ImportError as exc:
         raise MissingDependency(_DOCX_MISSING_HINT) from exc
-    import io
 
     try:
-        document = docx.Document(io.BytesIO(data))
+        document = docx.Document(package)
+    except Exception as exc:  # noqa: BLE001 — translate python-docx's view of a foreign package
+        message = str(exc).lower()
+        if "macroenabled" in message or ".template" in message:  # its "not a Word file" names the type
+            raise UnsupportedSource(_MACRO_OR_TEMPLATE_HINT) from exc
+        if "is not a word file" in message or not any(n.lower().startswith("word/") for n in names):
+            raise _not_a_word_document(names) from exc
+        raise ExtractionError(f"could not parse DOCX: {exc}") from exc
+    try:
         kinds = _docx_style_kinds(document)
         body = document.element.find(f"{_W}body")
         body_lines: list[str] = []
@@ -598,6 +778,8 @@ def extract_bytes(
 
     if ext in _PDF_EXTS or ct == "application/pdf":
         text, source_type = _extract_pdf(data), "pdf"
+    elif ext in _WORD_VARIANT_EXTS or ct in _WORD_VARIANT_MIMES:
+        raise UnsupportedSource(_MACRO_OR_TEMPLATE_HINT)
     elif ext in _DOCX_EXTS or ct == _DOCX_MIME:
         text, source_type = _extract_docx(data), "docx"
     elif ext in _LEGACY_DOC_EXTS or ct == _LEGACY_DOC_MIME:
@@ -650,6 +832,8 @@ def extract_url(url: str, *, fetch=None, transcribe=None) -> ExtractResult:
 
     if "pdf" in ct or url_ext in _PDF_EXTS:
         text, source_type, title = _extract_pdf(data), "pdf", url
+    elif ct in _WORD_VARIANT_MIMES or url_ext in _WORD_VARIANT_EXTS:
+        raise UnsupportedSource(_MACRO_OR_TEMPLATE_HINT)
     elif ct == _DOCX_MIME or url_ext in _DOCX_EXTS:
         text, source_type, title = _extract_docx(data), "docx", url
     elif ct == _LEGACY_DOC_MIME or url_ext in _LEGACY_DOC_EXTS:

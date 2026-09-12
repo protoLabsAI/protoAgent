@@ -78,7 +78,10 @@ dependencies = [
   "filelock>=3.12",
   "zeroconf>=0.131",
   # Document ingestion engine (ADR 0021) — light pure-Python extractors:
-  "pypdf>=4.0",                  # PDF → text
+  # Security floor: pypdf grew per-filter output limits for decompression bombs across
+  # 6.x (FlateDecode 6.0, LZW 6.2, JBIG2 6.5, RunLength 6.8); no 4.x/5.x release has
+  # any of them. The APIs used here (PdfReader, .pages, extract_text) are unchanged.
+  "pypdf>=6.8",                  # PDF → text
   "youtube-transcript-api>=1.0", # YouTube captions → text (1.x instance API)
   # Markdown → HTML for the `docs` plugin's reader view (server-side render, offline).
   "markdown-it-py>=3.0",
