@@ -115,6 +115,27 @@ valid plugin, #1644).
 - Uninstall removes the dir + the lock entry. Cloned-but-disabled plugins are inert
   (discovery is data-only).
 
+> **Amendment (2026-09-11) — superseded sources.** A built-in (bundled) plugin may
+> declare `supersedes: [<git URL>]`: the standalone repo(s) it replaces after the
+> plugin moved into core under the same id. For those URLs only, the built-in guard
+> *skips* instead of refusing: an install (direct, or as a bundle member) fetches
+> nothing, an update or auto-update stands down with a reason, and uninstall removes the
+> ignored copy and its lock entry but keeps the id's enable state, config and secrets,
+> which the bundled copy now uses. The loader lets the bundled copy win over a lock
+> entry recorded from a superseded URL, at any version. That refines the #1574 rule, in
+> which a recorded copy always won. A copy recorded from any other URL (a fork) is still
+> a deliberate override, and every other URL still gets the refusal above. See
+> [When a plugin moves into core](/guides/plugin-registry#when-a-plugin-moves-into-core-supersedes).
+>
+> Two consequences of that skip are deliberate. It runs **before the `sources.allow`
+> allowlist** (D3): nothing is fetched from the retired URL, and what ends up enabled is
+> code that shipped inside protoAgent — which the operator already trusts by running it
+> — so installing the old URL under a deny-all allowlist enables the bundled copy rather
+> than failing. And the *deps* half of D4 follows the copy that actually **runs**: with a
+> bundled copy superseding an old install, `install-deps` installs the bundled manifest's
+> `requires_pip`, and the consent/allowlist re-check is skipped because that copy has no
+> fetched origin to re-validate.
+
 ### D9 — Slices
 
 - **PR1:** manifest additions (`requires_pip`/`repository`/`min_protoagent_version`)

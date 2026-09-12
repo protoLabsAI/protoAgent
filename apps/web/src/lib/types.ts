@@ -273,6 +273,17 @@ export type InstalledPlugin = {
   // joined server-side from the lock's bundles[] registry. `name` may be empty on locks
   // written before it was persisted; fall back to `id`.
   bundle?: { id: string; name?: string; url?: string };
+  // The plugin now ships with protoAgent and its bundled copy `supersedes` the repo this
+  // copy was installed from: the installed copy is ignored (the bundled one runs, at
+  // `bundled_version`). Uninstall removes only that copy.
+  superseded?: boolean;
+  bundled_version?: string;
+  // Whether this lock row has files of its own. `present` answers "is the plugin there"
+  // (a superseded row, or a bundled plugin's wheel-deps pin, is present via the bundled
+  // copy even with nothing on disk) — so a row is never shown as "missing on disk, run
+  // Sync" when sync can't fetch anything. This is the disk truth behind that.
+  copy_on_disk?: boolean;
+  // Describes the copy that RUNS (for a superseded row, the bundled one).
   manifest?: {
     name: string;
     version: string;

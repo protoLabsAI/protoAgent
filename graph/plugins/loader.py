@@ -21,7 +21,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from graph.plugins.host import timed_lifecycle_phase
-from graph.plugins.manifest import PluginManifest, _iframe_page_route, load_manifest
+from graph.plugins.manifest import (
+    PluginManifest,
+    _iframe_page_route,
+    display_source,
+    is_swap_leftover,
+    load_manifest,
+    supersedes_source,
+)
 from graph.plugins.registry import PluginRegistry
 
 log = logging.getLogger("protoagent.plugins")
@@ -74,46 +81,104 @@ def _version_key(v: str) -> tuple[int, int, int]:
 def _tracked_ids() -> set[str]:
     """Plugin ids recorded in ``plugins.lock`` — an INTENTIONAL install/override, vs
     an untracked hand-placed/leftover copy. Best-effort (empty on any error)."""
+    return set(_tracked_sources())
+
+
+def _tracked_sources() -> dict[str, str]:
+    """``{plugin id: recorded source_url}`` for every ``plugins.lock`` entry — the ids
+    (see ``_tracked_ids``) plus WHERE each copy was fetched from, which is what decides
+    whether a bundled copy's ``supersedes`` retires it. Best-effort (empty on any error)."""
     try:
         from graph.plugins import installer
 
-        return {e.get("id") for e in installer._read_lock().get("plugins", []) if e.get("id")}
+        # The installer's one row-per-id accessor, so the loader and uninstall can never
+        # read different rows of a lock that lists an id twice.
+        return {pid: str(e.get("source_url") or "") for pid, e in installer._lock_rows_by_id().items()}
     except Exception:  # noqa: BLE001
-        return set()
+        return {}
 
 
-def discover_plugins(roots: list[Path], *, tracked_ids: set[str] | None = None) -> list[PluginManifest]:
+# The setup-gap key the loader reports a superseded install under (see
+# ``discover_plugins``). Host-owned; the installer clears it when the ignored copy goes.
+SUPERSEDED_GAP_KEY = "superseded-install"
+
+
+def discover_plugins(
+    roots: list[Path],
+    *,
+    tracked_ids: set[str] | None = None,
+    tracked_sources: dict[str, str] | None = None,
+    superseded: dict[str, dict] | None = None,
+) -> list[PluginManifest]:
     """Find plugins (dirs with a manifest) under *roots*, later roots (the live/installed
-    dir) taking precedence over earlier ones (the bundled dir) by id — but ONLY when the live
-    copy that is UNTRACKED (not in ``plugins.lock``) only wins when it's NOT OLDER than the
-    bundled one.
+    dir) taking precedence over earlier ones (the bundled dir) by id — with three
+    exceptions, checked in order:
 
-    This stops a stale, untracked leftover from shadowing the bundled plugin: a plugin that was
-    once git-installed (e.g. artifact @ 0.11.3) and later bundled in-tree at a newer version
-    (0.14.0) would otherwise stay stuck on the old installed copy forever, never updating with
-    the app. An intentional install/override (tracked in the lock) still wins at ANY version;
-    a same-or-newer untracked copy (a dev override) still wins too. ``tracked_ids`` defaults to
-    the ``plugins.lock`` ids."""
-    if tracked_ids is None:
-        tracked_ids = _tracked_ids()
+    1. **Superseded** — the bundled copy declares ``supersedes: [<git URL>]`` and
+       ``plugins.lock`` records the installed copy as fetched from one of those URLs: the
+       plugin moved into core, so the BUNDLED copy wins at any version. (The same id is
+       kept on purpose — a new one would orphan ``plugins.enabled``, the config section,
+       and every archetype's enable list.) Each such decision lands in ``superseded``
+       (``{id: {source_url, installed_version, installed_path, bundled_version}}``) when
+       the caller passes a dict, so ``load_plugins`` can tell the operator.
+    2. **Tracked** — any other copy recorded in ``plugins.lock`` (a fork, a deliberate
+       pin) is an intentional override and wins at ANY version.
+    3. **Untracked** — a copy not in the lock only wins when it's NOT OLDER than the
+       bundled one (#1574). This stops a stale leftover from shadowing the bundled
+       plugin: a plugin once git-installed (artifact @ 0.11.3) and later bundled in-tree
+       at a newer version (0.14.0) would otherwise stay stuck on the old copy forever. A
+       same-or-newer untracked copy (a dev override) still wins.
+
+    A ``<id>.bak`` folder is the installer's transient swap copy (#3075), never a plugin,
+    and is skipped — an interrupted install/uninstall must not leave a copy that loads.
+
+    ``tracked_sources`` (id → recorded ``source_url``) defaults to ``plugins.lock``;
+    ``tracked_ids`` alone marks ids as tracked with no known source (never superseded)."""
+    if tracked_sources is None:
+        tracked_sources = {pid: "" for pid in tracked_ids} if tracked_ids is not None else _tracked_sources()
+    tracked = set(tracked_sources) | set(tracked_ids or ())
     by_id: dict[str, PluginManifest] = {}
-    for root in roots:
+    root_of: dict[str, int] = {}
+    for index, root in enumerate(roots):
         if not (root and root.exists() and root.is_dir()):
             continue
         for child in sorted(root.iterdir()):
-            if not child.is_dir():
+            if not child.is_dir() or is_swap_leftover(child):
                 continue
             manifest = load_manifest(child)
             if manifest is None:
                 continue
             incumbent = by_id.get(manifest.id)
-            if (
-                incumbent is None
-                or manifest.id in tracked_ids
-                or _version_key(manifest.version) >= _version_key(incumbent.version)
-            ):
+            if incumbent is None:
+                wins = True
+            elif root_of[manifest.id] < index and supersedes_source(incumbent, tracked_sources.get(manifest.id)):
+                # An earlier root (the bundled tree) declared it replaces the repo this
+                # copy was installed from — the copy is retired, whatever its version.
+                wins = False
+                if superseded is not None:
+                    superseded[manifest.id] = {
+                        "source_url": tracked_sources.get(manifest.id, ""),
+                        "installed_version": manifest.version,
+                        "installed_path": str(manifest.path),
+                        "bundled_version": incumbent.version,
+                    }
+            else:
+                wins = manifest.id in tracked or _version_key(manifest.version) >= _version_key(incumbent.version)
+            if wins:
                 by_id[manifest.id] = manifest
+                root_of[manifest.id] = index
     return list(by_id.values())
+
+
+def _superseded_message(plugin_id: str, note: dict) -> str:
+    """The operator-facing line for a superseded install — what happened, and the one
+    action that clears it. Kept under the setup-gap cap (300 chars) for a normal URL."""
+    return (
+        f"now ships with protoAgent (v{note.get('bundled_version')}); the copy installed from "
+        f"{display_source(note.get('source_url'))} (v{note.get('installed_version')}) is ignored. "
+        f"Uninstall it in Settings ▸ Plugins or with `protoagent plugin uninstall {plugin_id}` — "
+        "settings and enabled state are kept."
+    )
 
 
 def _entry_file(manifest: PluginManifest) -> Path | None:
@@ -554,8 +619,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     enabled_ids = set(getattr(config, "plugins_enabled", []) or [])
     disabled_ids = set(getattr(config, "plugins_disabled", []) or [])
     seen_tool_names = set(core_tool_names or set())
+    superseded: dict[str, dict] = {}
 
-    for manifest in discover_plugins(roots):
+    for manifest in discover_plugins(roots, superseded=superseded):
         # A builtin (core runtime infrastructure, e.g. the delegate registry) always
         # loads — it ignores the enable gate AND the disabled list, so it can't be
         # turned off. Otherwise plugins.disabled wins: turn off a bundled plugin (e.g.
@@ -618,6 +684,43 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             _setup_gaps.clear_plugin(manifest.id)
             result.meta.append(entry)
             continue
+
+        # A retired git-installed copy of a plugin that now ships with protoAgent
+        # (``supersedes``): the bundled copy is what loads, and the operator is told the
+        # leftover can go. Reported (or cleared) on every load, so the banner leaves the
+        # moment the copy does — whoever removed it.
+        note = superseded.get(manifest.id)
+        if note:
+            log.warning(
+                "[plugins] %s: loading the bundled copy (v%s) — the installed copy at %s (v%s, from %s) "
+                "is superseded and ignored; uninstall it to clean up",
+                manifest.id,
+                note["bundled_version"],
+                note["installed_path"],
+                note["installed_version"],
+                display_source(note["source_url"]),
+            )
+            if _version_key(note["installed_version"]) >= _version_key(note["bundled_version"]):
+                # The move's contract: the bundled copy is NEWER than every standalone
+                # release. If it isn't, and this copy ever loses its lock row (a hand
+                # edit, a reset lock), the #1574 rule lets it — untracked and not older —
+                # shadow the bundled copy again. Say so while it's still recorded.
+                log.warning(
+                    "[plugins] %s: the superseded installed copy (v%s) is not older than the bundled one "
+                    "(v%s) — a bundled plugin must be versioned above every release of the repo it "
+                    "supersedes; remove the installed copy",
+                    manifest.id,
+                    note["installed_version"],
+                    note["bundled_version"],
+                )
+        from graph.plugins import setup_gaps as _setup_gaps
+
+        _setup_gaps.report(
+            manifest.id,
+            SUPERSEDED_GAP_KEY,
+            _superseded_message(manifest.id, note) if note else None,
+            label=str(manifest.name or manifest.id),
+        )
 
         missing = [v for v in manifest.requires_env if not os.environ.get(v)]
         if missing:

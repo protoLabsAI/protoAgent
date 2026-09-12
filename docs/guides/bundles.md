@@ -52,6 +52,11 @@ SHA-pinned in `plugins.lock` — and the bundle itself is recorded in the lock's
 `bundles:` section (that row powers provenance chips, the update check, and uninstall).
 Unknown `archetype:` keys warn at install rather than vanishing.
 
+A member listed by a URL that a bundled plugin **supersedes** (the plugin moved into
+core, see [When a plugin moves into core](/guides/plugin-registry#when-a-plugin-moves-into-core-supersedes))
+is skipped like `builtin: true`, with nothing fetched, and it's still turned on by the
+bundle's `enabled:` list. Keep listing it by URL: that is what older hosts need.
+
 **`config_inputs:`** are the questions the Setup Wizard / New Agent panel asks *before*
 the agent exists, written into its config at the declared dotted keys (`type`:
 `string` · `path` · `delegate` · `boolean`). `required: true` is a hard gate — a create

@@ -1,7 +1,10 @@
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 
+import { installedPluginsQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
+import { uninstallConfirmText } from "./installed";
 import { usePluginManage } from "./usePluginManage";
 
 // Root-mounted host for the rail context-menu plugin actions (#1521 / #1522, ADR 0036).
@@ -17,6 +20,13 @@ export function PluginRailManage() {
   const pluginUninstall = useUI((s) => s.pluginUninstall);
   const clearPluginUninstall = useUI((s) => s.clearPluginUninstall);
   const { update, remove } = usePluginManage();
+  // The inventory row for the pending uninstall — only fetched while a confirm is open —
+  // so a plugin that now ships with protoAgent gets the truthful "removes the old copy;
+  // the built-in keeps running" text instead of "cannot be undone".
+  const inventory = useQuery({ ...installedPluginsQuery(), enabled: pluginUninstall !== undefined });
+  const pendingRow = pluginUninstall
+    ? inventory.data?.plugins.find((e) => e.id === pluginUninstall.id)
+    : undefined;
 
   // Fire the requested update, consuming the trigger first so it runs exactly once
   // (the next render sees `pluginUpdate` cleared and early-returns). The toast reports
@@ -41,7 +51,11 @@ export function PluginRailManage() {
       }}
       onClose={clearPluginUninstall}
     >
-      {pluginUninstall ? `Uninstall ${pluginUninstall.name}? This cannot be undone.` : undefined}
+      {pluginUninstall
+        ? pendingRow?.superseded
+          ? uninstallConfirmText(pluginUninstall.name, pendingRow)
+          : `Uninstall ${pluginUninstall.name}? This cannot be undone.`
+        : undefined}
     </ConfirmDialog>
   );
 }
