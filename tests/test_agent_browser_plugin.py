@@ -409,9 +409,25 @@ def test_preflight_never_raises_when_the_probe_explodes(monkeypatch):
     probe = preflight.probe({})                                  # degraded, never raised…
     # …and an OSError from STARTING the binary is a real gap, not "healthy": a CLI that
     # can't be exec'd is as useless as a missing one (#3451 round 3)
-    assert probe.cli_path == "/opt/ab" and probe.cli_ok is False and probe.chrome == "unknown"
+    # cli_path is the RESOLVED location, so it is platform-native (`\opt\ab` on Windows):
+    # compare paths, not strings. The operator's configured value is `binary`, and THAT one
+    # is echoed verbatim — see the next test.
+    assert Path(probe.cli_path) == Path("/opt/ab") and probe.cli_ok is False and probe.chrome == "unknown"
     assert "exec format error" in probe.cli_error
     assert "can't be started" in preflight.hint(probe)
+
+
+@pytest.mark.parametrize("configured", ["C:/Tools/agent-browser.exe", r"C:\Tools\agent-browser.exe",
+                                        "~/bin/agent browser"])
+def test_the_operators_configured_binary_is_echoed_verbatim(monkeypatch, configured):
+    """The one path the plugin must NOT normalise is the operator's own `binary` setting:
+    the banner quotes it back so they can recognise — and fix — exactly what they typed.
+    Only the RESOLVED location (`cli_path`) is platform-native (a Windows CI failure, #3451)."""
+    _probe_env(monkeypatch, which=None)
+    reg = FakeRegistry({"binary": configured}, plugin_id="agent_browser", plugin_dir=ROOT)
+    probe = preflight.report(reg, reg.config)
+    assert probe.binary == configured
+    assert repr(configured) in reg.setup_gaps[preflight.CLI_GAP]
 
 
 def test_preflight_resolves_an_operator_pinned_absolute_path(monkeypatch, tmp_path):
