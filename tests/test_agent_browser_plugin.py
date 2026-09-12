@@ -736,6 +736,16 @@ async def test_ordinary_operands_still_pass_through(monkeypatch):
     assert rec[-1] == ["ab", "press", "Control+a"]
 
 
+def test_every_pdf_surface_says_the_output_is_us_letter():
+    """`agent-browser pdf` has no paper-size option and ignores CSS `@page size` (pinned
+    against the real binary below). An agent that promises A4 hands the user the wrong
+    paper, so the tool, the skill and the guide all have to say Letter."""
+    assert "US Letter" in _toolmap()["browser_pdf"].description
+    assert "US Letter" in _skill_text()
+    guide = (REPO / "docs" / "guides" / "browser-automation.md").read_text(encoding="utf-8")
+    assert "always US Letter" in guide
+
+
 def test_pdf_tells_the_model_about_the_artifact_handoff():
     """The reason browser_pdf exists: print a page, then hand the file to the artifact
     plugin. If the docstring stops saying so, the capability is undiscoverable."""
@@ -1472,6 +1482,30 @@ def test_the_real_cli_really_does_eat_a_leading_dash_operand():
     assert "Usage: agent-browser fill" in run("fill", "#q", "--help"), "no longer eats a 3rd positional"
     assert "Usage: agent-browser press" in run("press", "--help")
     assert "Usage: agent-browser open" in run("open", "--", "--help"), "`--` is now honoured?"
+
+
+@needs_cli
+async def test_the_real_cli_prints_us_letter_and_ignores_css_page_size(monkeypatch, tmp_path):
+    """Checked against the binary, not assumed: an `@page { size: A4 }` page prints at
+    612x792 pt (Letter), not 595x842 (A4). If this starts failing with 595x842, upstream
+    now honours `@page` — update browser_pdf's docstring, the skill and the guide, which
+    all say Letter."""
+    pypdf = pytest.importorskip("pypdf")
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-pagesize-{os.getpid()}")
+    page = tmp_path / "a4.html"
+    page.write_text("<!doctype html><style>@page { size: A4; margin: 0 }</style><h1>A4 probe</h1>",
+                    encoding="utf-8")
+    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    try:
+        opened = await t["browser_open"].ainvoke({"url": page.as_uri()})
+        if opened.startswith("Error:"):
+            pytest.skip(f"no browser available here: {opened[:120]}")
+        out = await t["browser_pdf"].ainvoke({"path": "a4-probe.pdf"})
+        assert not out.startswith("Error:"), out
+        box = pypdf.PdfReader(storage.capture_root().resolve() / "a4-probe.pdf").pages[0].mediabox
+        assert (round(float(box.width)), round(float(box.height))) == (612, 792)
+    finally:
+        await t["browser_close"].ainvoke({})
 
 
 @needs_cli

@@ -372,7 +372,11 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
         `path` is an optional FILENAME or relative path (`out/resume.pdf`); leave it blank
         and the file is named for you (two unnamed captures never overwrite each other).
         Files land in this plugin's own capture directory; an absolute path outside it is
-        refused."""
+        refused.
+
+        The PDF is always US Letter (8.5 x 11 in). The CLI has no paper-size option and
+        IGNORES a page's CSS `@page size` — an A4 page comes out Letter. Don't promise the
+        user A4: lay the page out for Letter, or say the output is Letter."""
         return await _capture("pdf", path, "page.pdf")
 
     @tool

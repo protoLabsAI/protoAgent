@@ -49,6 +49,10 @@ path to `save_file_artifact` so it appears in the Artifact panel with a Download
 button. That works for a URL and for an HTML file you generated yourself — open it
 with a `file://` URL.
 
+The PDF is always **US Letter** (8.5 x 11 in): the CLI has no paper-size option and
+ignores a page's CSS `@page size`, so an A4 layout still prints on Letter. Lay the
+page out for Letter, and never tell the user a PDF is A4.
+
 For the always-current usage — workflows, common patterns, troubleshooting, and
 (with `--full`) the complete command reference and templates — load it from the
 CLI, which serves skill content matched to the installed version so the

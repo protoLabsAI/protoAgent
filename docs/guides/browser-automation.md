@@ -93,6 +93,10 @@ Three details worth knowing:
   (no page open, a swallowed renderer error), so the tool stats the file and reports an
   error — naming `browser_open` as the likely fix — instead of handing a phantom path to
   `save_file_artifact` two steps later.
+- **PDFs are always US Letter.** `agent-browser pdf` has no paper-size option and ignores a
+  page's CSS `@page size`: an A4 page prints at 612 × 792 pt (Letter), not 595 × 842.
+  Design pages that will be printed for Letter, and don't promise A4. (A live test pins this,
+  so if upstream starts honouring `@page` the suite says so.)
 - **Captures are disposable.** The directory is pruned oldest-first past 200 files or
   512 MB. Anything you want to keep should go to `save_file_artifact` (which copies the
   bytes into its own store) or a project folder. A capture over the artifact plugin's
