@@ -435,6 +435,12 @@ def register_chat_routes(app, ui: str) -> None:
                     # could not be written. The other cleanup is idempotent, so a
                     # caller may retry this partially completed deletion safely.
                     raise
+        # Mid-turn steering state is per session: a queued message nobody can act on any
+        # more, and the log of what earlier turns folded in (which answers "did the agent
+        # read this?" for a console that is asking — a deleted chat has no one asking).
+        from graph import steering
+
+        steering.forget(session_id)
         return {"deleted": True, "harvested": chunk_id is not None}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -770,10 +776,19 @@ def register_chat_routes(app, ui: str) -> None:
         """Items still queued for ``session_id`` — i.e. steering messages that
         arrived after the turn's last model call and weren't folded in. The
         console reads this at turn-end: it settles the consumed ones into the
-        thread and re-sends these un-consumed ones as a fresh turn."""
+        thread and re-sends these un-consumed ones as a fresh turn.
+
+        ``drained`` names the ids a turn actually FOLDED IN (recently). Absence from
+        ``pending`` alone can't tell "the agent read it" from "it never arrived" — the
+        queue is in-memory and the live boundary marker is best-effort — and the console
+        must not guess between settling a message the agent never saw and re-offering one
+        it already used. This is the server answering that question directly."""
         from graph import steering
 
-        return {"pending": steering.pending_items(session_id)}
+        return {
+            "pending": steering.pending_items(session_id),
+            "drained": steering.drained(session_id),
+        }
 
     @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")
     async def _api_server_turn_interject(session_id: str, task_id: str, body: dict | None = None):

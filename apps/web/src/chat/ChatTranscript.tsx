@@ -4,7 +4,7 @@ import { Conversation, Message } from "@protolabsai/ui/ai";
 import { TerminalSquare } from "lucide-react";
 import { memo, useMemo } from "react";
 
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, QueuedSteer } from "../lib/types";
 import type { SessionStatus } from "./chat-store";
 import { ChatMessageView, type ChatMessageActions } from "./ChatMessageView";
 import { hideDismissedToolCalls } from "./dismissedToolCalls";
@@ -14,8 +14,9 @@ type ChatTranscriptProps = {
   messages: ChatMessage[];
   dismissedToolCalls: Set<string>;
   actions: ChatMessageActions;
-  steerQueue: { id: string; text: string }[];
-  serverInterjectionQueue: { id: string; text: string }[];
+  /** Everything queued into a running turn — steers into this browser's stream AND
+   *  interjections into an attended server turn (those carry `serverTaskId`). */
+  steerQueue: QueuedSteer[];
   serverTurnLabel: string | null;
   status: SessionStatus;
   onCancelDelegation: (id: string) => void;
@@ -75,13 +76,21 @@ export const ChatTranscript = memo(function ChatTranscript({
   dismissedToolCalls,
   actions,
   steerQueue,
-  serverInterjectionQueue,
   serverTurnLabel,
   status,
   onCancelDelegation,
   onDismissToolCall,
   onCancelSteer,
 }: ChatTranscriptProps) {
+  // The transcript is the one record of "settled": once a queued message's id is in it (the
+  // agent consumed it and a marker or reconcile placed it), it is a normal user message and
+  // must not ALSO render as pending. The slot prunes its queue to match; this keeps the one
+  // render between the two from showing the message twice.
+  const pending = useMemo(() => {
+    if (!steerQueue.length) return steerQueue;
+    const settled = new Set(messages.map((message) => message.id));
+    return steerQueue.filter((queued) => !settled.has(queued.id));
+  }, [messages, steerQueue]);
   // One activity cue per server-fired turn: once it has a live message, the label moves onto
   // that message's spinner and the standalone indicator below stands down. (The indicator
   // predates the live preview, when such a turn showed nothing else at all.)
@@ -105,21 +114,22 @@ export const ChatTranscript = memo(function ChatTranscript({
           />
         ))
       )}
-      {steerQueue.map((queued) => (
-        /* Optimistic steer bubble: cancellation either removes it before consumption or
-           lets the authoritative stream settle it into the transcript. */
+      {pending.map((queued) => (
+        /* Optimistic queued bubble: cancellation either removes it before consumption or
+           lets the server's consumed marker settle it into the transcript. A server-turn
+           interjection is the same thing sent to a turn this browser isn't streaming — the
+           server drains both from one steering queue — so it gets the same ✕. */
         <Message
           key={queued.id}
           role="user"
           queued
-          queuedLabel="queued — folds into the agent's work at its next step"
+          queuedLabel={
+            queued.serverTaskId
+              ? "queued interjection — sent to this server turn"
+              : "queued — folds into the agent's work at its next step"
+          }
           onCancel={() => onCancelSteer(queued.id)}
         >
-          <span className="chat-user-text">{queued.text}</span>
-        </Message>
-      ))}
-      {serverInterjectionQueue.map((queued) => (
-        <Message key={queued.id} role="user" queued queuedLabel="queued interjection — sent to this server turn">
           <span className="chat-user-text">{queued.text}</span>
         </Message>
       ))}
