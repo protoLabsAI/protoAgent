@@ -70,6 +70,14 @@ def _is_builtin(plugin_id: str) -> bool:
 # ``discover_plugins``), ``_lock_entry`` (one lock row per id, the same one the loader
 # reads) and ``effective_copies`` (the loader's full precedence rule).
 
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
+    """A file's identity for a cache key: mtime AND size AND inode AND ctime. mtime is
+    coarse on HFS+ (1 s), FAT/exFAT (2 s) and some network mounts, so a same-size save
+    inside one tick — or an atomic-rename save that keeps the mtime — used to keep the
+    stamp and serve a stale value. A rename changes the inode; any write moves the ctime."""
+    return (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
+
+
 # bundled-tree path → (manifest stamp, {id: manifest}). Re-read when any manifest moves.
 _BUNDLED_INDEX_CACHE: dict[str, tuple[tuple, dict[str, PluginManifest]]] = {}
 
@@ -78,12 +86,12 @@ def _bundled_index() -> dict[str, PluginManifest]:
     """``{plugin id: bundled copy}`` for the in-tree ``plugins/`` tree — keyed by MANIFEST
     id exactly as the loader keys it, so a folder named ``agent-browser`` holding id
     ``agent_browser`` is found under ``agent_browser`` here too. Cached per tree; the
-    cache key is every manifest's (name, mtime, size), so an edit is picked up at once."""
+    cache key is every manifest's name + file identity (``_stamp``), so an edit is picked up at once."""
     root = bundled_plugins_dir()
     try:
         children = sorted(c for c in root.iterdir() if (c / MANIFEST_FILENAME).is_file())
         stamp = tuple(
-            (c.name, (c / MANIFEST_FILENAME).stat().st_mtime_ns, (c / MANIFEST_FILENAME).stat().st_size)
+            (c.name, *_stamp((c / MANIFEST_FILENAME).stat()))
             for c in children
         )
     except OSError:
@@ -130,7 +138,7 @@ def superseding_plugin(url: str) -> PluginManifest | None:
 # config path → ((mtime, size), override). `live_plugins_dir()` resolves the override on
 # every call and a plugins request makes several, so parsing the YAML each time is real
 # work: 11.7 ms per call against a 30 KB config here, ~6 calls on GET /api/plugins/installed.
-_PLUGINS_DIR_CACHE: dict[str, tuple[tuple[int, int], str]] = {}
+_PLUGINS_DIR_CACHE: dict[str, tuple[tuple[int, int, int, int], str]] = {}
 
 
 def configured_plugins_dir() -> str:
@@ -146,7 +154,7 @@ def configured_plugins_dir() -> str:
             stat = cfg_path.stat()
         except OSError:
             return ""  # no live config yet — the instance default applies
-        stamp = (stat.st_mtime_ns, stat.st_size)
+        stamp = _stamp(stat)
         hit = _PLUGINS_DIR_CACHE.get(str(cfg_path))
         if hit is not None and hit[0] == stamp:
             return hit[1]
@@ -1417,16 +1425,25 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     "is a built-in"; for the untracked one that was a regression the moment a plugin moved
     into core, since removing it worked right up until then. A copy recorded from some
     OTHER url — a deliberate fork override — is still refused: it is the running copy and
-    a recorded choice, not a leftover."""
+    a recorded choice, not a leftover.
+
+    What gets deleted is never "whatever sits at <live>/<id>" — only the path the loader
+    itself found as that plugin's copy (``_removable_copy``). A different plugin's folder,
+    a folder with no plugin in it, and the bundled tree can never be that path."""
     if _is_builtin(plugin_id):
         bundled = _bundled_manifest(plugin_id)
         recorded = recorded_source_url(plugin_id)
-        displaced = bundled is not None and (
-            bundled_superseding(plugin_id, recorded) is not None or (not recorded and _installed_copy_exists(plugin_id))
-        )
-        if not displaced:
+        # A copy RECORDED from a URL the bundled copy doesn't supersede is a deliberate fork
+        # override — refused, unchanged. (No bundled manifest at all: a bundle dir.)
+        if bundled is None or (recorded and bundled_superseding(plugin_id, recorded) is None):
             raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
-        return _uninstall_superseded(plugin_id, bundled, purge=purge)
+        target, why_not = _removable_copy(plugin_id)
+        if target is None and not recorded:
+            # Untracked, and nothing the loader vouches for: refuse, delete nothing. (A tracked
+            # superseded row with no verifiable copy still gets its lock entry cleared below —
+            # which removes no files.)
+            raise InstallError(why_not)
+        return _uninstall_superseded(plugin_id, bundled, purge=purge, target=target)
     target = live_plugins_dir() / plugin_id
     # Read the manifest BEFORE deleting — purge needs the config section + we report
     # the declared deps.
@@ -1483,7 +1500,7 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     }
 
 
-def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: bool) -> dict:
+def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: bool, target: Path | None) -> dict:
     """Remove the IGNORED installed copy of a plugin that now ships with protoAgent —
     whether the bundled manifest superseded its source or #1574 demoted it (an untracked
     copy, which has no lock row to remove and is often a symlinked dev checkout).
@@ -1504,10 +1521,11 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
     from graph.plugins.manifest import display_source
 
     source_url = recorded_source_url(plugin_id)
-    target = live_plugins_dir() / plugin_id
-    was_loaded = _running_copy_is(plugin_id, target)
+    # `target` is the ONE path `_removable_copy` verified — or None: nothing on disk to
+    # remove (a tracked row whose files are already gone). Nothing else is touched.
+    was_loaded = _running_copy_is(plugin_id, target) if target is not None else False
     removed: list[str] = []
-    if target.exists() or target.is_symlink():
+    if target is not None:
         # Same rename-aside-then-delete as a normal uninstall (#3075); a symlinked copy
         # (the #2298 live-checkout workflow) is unlinked, never followed.
         _remove_installed_copy(target)
@@ -1554,12 +1572,57 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
     }
 
 
-def _installed_copy_exists(plugin_id: str) -> bool:
-    """Is there a copy of ``plugin_id`` in the live plugins dir? A broken or live SYMLINK
-    counts (the #2298 dev-checkout workflow installs one), which ``exists()`` alone
-    misses — and that copy is exactly the one an operator needs to be able to remove."""
-    target = live_plugins_dir() / plugin_id
-    return target.exists() or target.is_symlink()
+def _removable_copy(plugin_id: str) -> tuple[Path | None, str]:
+    """The ONE path uninstall may delete for a built-in id — ``(path, "")`` — or
+    ``(None, why)`` with a reason the operator can act on.
+
+    Never "whatever sits at <live>/<id>": that folder can hold a DIFFERENT plugin (a
+    renamed fork running alongside the bundled one), the operator's own work with no
+    manifest at all, or — with ``plugins.dir`` aimed at the app's tree — the bundled
+    plugin itself; deleting it wholesale did all three. The candidate is only ever a copy
+    the LOADER itself found for this id in the live root: the one it ignored (the very
+    path its banner names, whatever the folder is called) or, for an untracked copy that
+    isn't older, the one it runs. Even then every guard must hold: the live root is not
+    the bundled tree, the path sits directly in the live root, and it holds a manifest
+    whose id is ``plugin_id``."""
+    from graph.plugins.loader import discover_plugins
+
+    bundled_root, live_root = loader_roots()
+    if _same_dir(bundled_root, live_root):
+        return None, (
+            f"{plugin_id!r}: the live plugins dir is protoAgent's own bundled plugins tree, so nothing "
+            "in it is an installed copy — uninstall won't delete from it. Point plugins.dir somewhere else."
+        )
+    notes: dict = {}
+    running = {m.id: m for m in discover_plugins([bundled_root, live_root], superseded=notes)}
+    note = notes.get(plugin_id)
+    if note:
+        candidate: Path | None = Path(note["installed_path"])
+    else:
+        run = running.get(plugin_id)
+        candidate = run.path if run is not None and _same_dir(run.path.parent, live_root) else None
+    if candidate is None:
+        stray = live_root / plugin_id
+        if stray.is_symlink() and not stray.exists():
+            return None, (
+                f"{stray} is a symlink to a path that no longer exists, so there is no plugin copy there "
+                f"to verify — uninstall won't touch it. Remove the link yourself: rm {stray}"
+            )
+        if stray.exists():
+            return None, (
+                f"{stray} doesn't hold a copy of {plugin_id!r} (it holds another plugin, or none) — "
+                f"uninstall won't delete it. {plugin_id!r} ships with protoAgent; to turn it off, disable it."
+            )
+        return None, (
+            f"{plugin_id!r} ships with protoAgent and there is no installed copy of it in {live_root} — "
+            "nothing to uninstall. To turn the plugin off, disable it instead."
+        )
+    if not _same_dir(candidate.parent, live_root):
+        return None, f"{candidate} is outside the live plugins dir {live_root} — refusing to delete it."
+    manifest = load_manifest(candidate)
+    if manifest is None or manifest.id != plugin_id:
+        return None, f"{candidate} does not hold plugin {plugin_id!r} — refusing to delete it."
+    return candidate, ""
 
 
 def _discard(path: Path) -> None:

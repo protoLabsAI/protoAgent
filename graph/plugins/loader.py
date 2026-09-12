@@ -101,6 +101,9 @@ def _tracked_sources() -> dict[str, str]:
 # The setup-gap key the loader reports a superseded install under (see
 # ``discover_plugins``). Host-owned; the installer clears it when the ignored copy goes.
 SUPERSEDED_GAP_KEY = "superseded-install"
+# The setup-gap owner for a refused plugin-root override. The ':' makes it an id no plugin
+# can have (ids are `[A-Za-z0-9][A-Za-z0-9_-]*`), so it can't collide with a real one.
+PLUGIN_ROOT_GAP_ID = "protoagent:plugin-root"
 
 
 def discover_plugins(
@@ -968,6 +971,22 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
 
         _setup_gaps.retain({str(m.get("id")) for m in result.meta})
     except Exception:  # noqa: BLE001 — hygiene must never break plugin loading
+        pass
+    # A REFUSED plugin-root override (a relative `plugins.dir` / PROTOAGENT_PLUGINS_DIR)
+    # silently moves the whole root back to the default — the operator's plugins just stop
+    # loading. Say so where they look, not only in the log. Host-owned (an id no plugin can
+    # have), reported after `retain` so the sweep above can't drop it, and self-clearing.
+    try:
+        from graph.plugins import setup_gaps as _setup_gaps
+        from graph.plugins.pconfig import refused_plugins_dir_message
+
+        _setup_gaps.report(
+            PLUGIN_ROOT_GAP_ID,
+            "refused-override",
+            refused_plugins_dir_message(getattr(config, "plugins_dir", "")),
+            label="Plugins",
+        )
+    except Exception:  # noqa: BLE001 — a banner must never break plugin loading
         pass
     return result
 

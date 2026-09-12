@@ -124,8 +124,11 @@ On every host that upgrades, that one field changes the lifecycle above:
 `plugins.lock` entry — is judged on version instead (that rule predates `supersedes`):
 older than the bundled copy and it stops being what runs. That used to happen in silence;
 now it says so, in the log and as a banner naming the path, and `plugin uninstall <id>`
-removes it (a symlinked dev checkout is unlinked, never followed, so your working tree
-survives). Keep such a copy in charge by giving it a version above the bundled one.
+removes exactly that path (a symlinked dev checkout is unlinked, never followed, so your
+working tree survives). It never removes anything else: a folder named after the id that
+holds a *different* plugin, a folder with no plugin in it, or the bundled tree itself are
+all refused with the reason, and a symlink to a checkout that no longer exists is named
+for you to remove rather than deleted. Keep such a copy in charge by giving it a version above the bundled one.
 
 Three rules hold throughout. **A fork still wins**: a copy installed from any URL
 *not* listed is a deliberate override, exactly as before. **Matching is exact about

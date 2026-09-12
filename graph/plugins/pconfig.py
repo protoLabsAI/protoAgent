@@ -124,9 +124,10 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
         return []
 
 
-# Bad `plugins.dir` values already warned about, so a refusal is said once per value and
-# not on every resolution (`live_plugins_dir` resolves the override on each call).
-_WARNED_PLUGIN_DIRS: set[str] = set()
+# The value last refused, so a refusal is said once per breakage rather than on every
+# resolution — and said AGAIN when a value that was fixed is later broken again. (A set of
+# every value ever warned about stayed silent for the life of the process instead.)
+_LAST_REFUSED_PLUGIN_DIR: str | None = None
 
 
 def valid_plugins_dir_override(raw: object) -> str:
@@ -139,16 +140,19 @@ def valid_plugins_dir_override(raw: object) -> str:
     Same call the fs fence makes for a relative ``projects[].path`` (``graph/config.py``),
     and the same shape of answer: warn with the value, then fall back to the default root
     so the agent still boots on its normal plugins instead of an empty one."""
+    global _LAST_REFUSED_PLUGIN_DIR
     text = str(raw or "").strip()
     if not text:
+        _LAST_REFUSED_PLUGIN_DIR = None  # no override — a later bad one warns afresh
         return ""
     expanded = Path(text).expanduser()
     # Absoluteness is judged on the EXPANDED-but-unresolved path: `.resolve()` makes every
     # path absolute (against the CWD), which would swallow the input this refuses.
     if expanded.is_absolute():
+        _LAST_REFUSED_PLUGIN_DIR = None  # fixed — a later breakage warns again
         return str(expanded)
-    if text not in _WARNED_PLUGIN_DIRS:
-        _WARNED_PLUGIN_DIRS.add(text)
+    if text != _LAST_REFUSED_PLUGIN_DIR:
+        _LAST_REFUSED_PLUGIN_DIR = text
         log.warning(
             "[plugins] plugins.dir %r is not absolute — ignored, using the instance's own "
             "plugins dir. A relative path resolves against the working directory of whatever "
@@ -157,6 +161,31 @@ def valid_plugins_dir_override(raw: object) -> str:
             text,
         )
     return ""
+
+
+def refused_plugins_dir_message(config_value: object = None) -> str | None:
+    """The operator banner for a REFUSED plugin-root override — a relative ``plugins.dir``
+    (config) or ``PROTOAGENT_PLUGINS_DIR`` (env) — else ``None``.
+
+    Unlike the fs fence skipping one project, this refusal moves the WHOLE plugin root
+    back to the default, so the operator's plugins simply stop loading; a log line alone
+    left nothing on screen to explain it."""
+    import os
+
+    text = str(config_value or "").strip()
+    if text and not Path(text).expanduser().is_absolute():
+        return (
+            f"plugins.dir {text!r} is not absolute, so it is ignored and plugins load from the "
+            "instance's own plugins dir instead — a relative path resolves differently in each "
+            "process (server, CLI, fleet subprocess). Set an absolute path."
+        )
+    env = os.environ.get("PROTOAGENT_PLUGINS_DIR", "").strip()
+    if env and not Path(env).expanduser().is_absolute():
+        return (
+            f"PROTOAGENT_PLUGINS_DIR {env!r} is not absolute, so it is ignored and plugins load from "
+            "the instance's own plugins dir instead. Set an absolute path."
+        )
+    return None
 
 
 def plugin_roots_from(plugins_root: Path, dir_override: str = "") -> list[Path]:
