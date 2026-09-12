@@ -232,6 +232,56 @@ def test_the_real_loader_discovers_the_pack_and_its_verifier(tmp_path, monkeypat
     assert not res.tools and not res.routers
 
 
+def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch):
+    """The first-run exposure this pack is the poster case for (#3450).
+
+    Its `requires_pip` is satisfied on the desktop app (the doc stack is frozen in), but
+    on a fresh server/Docker host a Cowork-archetype first run used to complete with the
+    plugin ENABLED and four of five libraries absent and no warning on any surface: the
+    libraries are imported inside `execute_code`, not at module level, so nothing failed
+    until the operator asked for a Word document — and `/api/plugins/installed`, which
+    drives the console's deps report, has no row for a bundled plugin to badge."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import installer, loader, setup_gaps
+
+    _isolated_bundled_root(tmp_path, monkeypatch)
+    setup_gaps.reset()
+    monkeypatch.setattr(installer, "_importable", lambda pkg: False)  # nothing pip-installed
+    monkeypatch.setattr(installer, "_frozen_like", lambda: False)  # a server, not the frozen app
+
+    res = loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
+    meta = next(m for m in res.meta if m["id"] == "cowork")
+    assert meta["loaded"], "the pack still loads — a missing doc library must not disable it"
+    assert meta["deps_missing"] == ["openpyxl", "pypdf", "python-docx", "python-pptx", "reportlab"]
+    [gap] = [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
+    assert gap["plugin"] == "cowork"
+    assert "install-deps cowork" in gap["message"]
+    assert "optional:" in gap["message"] and "required:" not in gap["message"]  # the whole stack is optional
+
+    # Provisioned (desktop, or a server after install-deps): no banner, no nag.
+    monkeypatch.setattr(installer, "_importable", lambda pkg: True)
+    loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
+    assert not [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
+    setup_gaps.reset()
+
+
+def test_every_document_dep_is_declared_in_the_optional_tier(tmp_path):
+    """The tier is load-bearing and the name list alone doesn't pin it: the OPTIONAL tier
+    (#1954) is what lets the pack install and run where a library is absent — the dep-free
+    skills keep working and a missing lib WARNS instead of refusing the plugin. A hard
+    entry here would make the whole pack refuse to load on the frozen desktop app
+    (ADR 0058 D2), which is where most of its operators are."""
+    from graph.plugins.manifest import load_manifest
+
+    m = load_manifest(ROOT)
+    assert m is not None
+    assert m.requires_pip == [], f"hard-tier deps would gate the whole pack: {m.requires_pip}"
+    assert sorted(m.optional_pip) == ["openpyxl", "pypdf", "python-docx", "python-pptx", "reportlab"]
+    # Unscoped on purpose (#2246): the skills import these inside execute_code, which on
+    # desktop is the managed-runtime child — `scope: host` would judge the wrong runtime.
+    assert m.pip_scopes == {}
+
+
 def test_the_pack_stays_off_until_it_is_enabled(tmp_path, monkeypatch):
     """`enabled: false` in the manifest is the whole reason ten skills don't land in
     every agent's index the moment this version ships."""

@@ -157,6 +157,97 @@ def test_requires_pip_malformed_entries_warn_not_fail(tmp_path, caplog) -> None:
     assert "has no 'pkg'" in caplog.text
 
 
+# --- Declared deps that aren't installed are REPORTED, not silent (#3450) ---
+
+
+def _absent(monkeypatch, *names: str) -> None:
+    """A host where `names` can't be imported — a fresh server, not a dev box that
+    happens to have the libraries. Only the environment probe is faked; the tier split
+    and the gap logic under test are real."""
+    from graph.plugins import installer
+
+    gone = {n.replace("-", "_") for n in names} | set(names)
+    real = installer._importable
+    monkeypatch.setattr(installer, "_importable", lambda pkg: False if pkg in gone else real(pkg))
+
+
+def _deps_gaps() -> list[dict]:
+    from graph.plugins import setup_gaps
+
+    return [g for g in setup_gaps.active() if g["key"] == plugin_loader.DEPS_GAP_KEY]
+
+
+def test_an_enabled_plugins_missing_hard_deps_raise_a_setup_gap(tmp_path, monkeypatch) -> None:
+    """`install` deliberately doesn't install deps (ADR 0027 D4) and a plugin that
+    imports them lazily never trips the loader's ModuleNotFoundError branch — so an
+    enabled plugin could be loaded and unusable with nothing said on any surface."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(tmp_path, "hardp", enabled=True, manifest_extra='requires_pip: ["nope-pkg-a", "nope-pkg-b"]\n')
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    _absent(monkeypatch, "nope-pkg-a", "nope-pkg-b")
+
+    res = load_plugins(_cfg())
+    meta = next(m for m in res.meta if m["id"] == "hardp")
+    assert meta["loaded"] and meta["deps_missing"] == ["nope-pkg-a", "nope-pkg-b"]
+    [gap] = _deps_gaps()
+    assert "required: nope-pkg-a, nope-pkg-b" in gap["message"]
+    assert "install-deps hardp" in gap["message"]
+    # The one fix, as closed declarative data — never a URL or a callback.
+    assert gap["actions"] == [{"kind": "plugin_config", "target": "hardp"}]
+    setup_gaps.reset()
+
+
+def test_the_optional_tier_is_reported_too_but_worded_as_degraded(tmp_path, monkeypatch) -> None:
+    """The tier a plugin that degrades gracefully uses (#1954) — and the one an
+    all-optional pack like cowork declares, so a hard-tier-only check would say nothing
+    at all about a knowledge-worker agent with no document libraries."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(
+        tmp_path, "softp", enabled=True,
+        manifest_extra='requires_pip:\n  - { pkg: "nope-pkg-c", optional: true }\n',
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    _absent(monkeypatch, "nope-pkg-c")
+
+    res = load_plugins(_cfg())
+    assert next(m for m in res.meta if m["id"] == "softp")["deps_missing"] == ["nope-pkg-c"]
+    [gap] = _deps_gaps()
+    assert "optional: nope-pkg-c" in gap["message"]
+    assert "parts of it don't work" in gap["message"]  # not "can't run"
+    assert "required:" not in gap["message"]
+    setup_gaps.reset()
+
+
+def test_the_deps_gap_clears_when_the_packages_arrive_and_never_fires_while_off(tmp_path, monkeypatch) -> None:
+    """`install-deps` + reload has to clear the banner live, and a plugin that is off (or
+    declares nothing) must never raise it."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(tmp_path, "depp", enabled=True, manifest_extra='requires_pip: ["nope-pkg-d"]\n')
+    _make_plugin(tmp_path, "offp", enabled=False, manifest_extra='requires_pip: ["nope-pkg-d"]\n')
+    _make_plugin(tmp_path, "cleanp", enabled=True)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+
+    with monkeypatch.context() as m:
+        _absent(m, "nope-pkg-d")
+        load_plugins(_cfg())
+    assert [g["plugin"] for g in _deps_gaps()] == ["depp"]  # not offp (disabled), not cleanp (declares none)
+
+    # The operator ran install-deps and reloaded: the package resolves now.
+    from graph.plugins import installer
+
+    monkeypatch.setattr(installer, "_importable", lambda pkg: True)
+    res = load_plugins(_cfg())
+    assert not _deps_gaps()
+    assert next(m for m in res.meta if m["id"] == "depp")["deps_missing"] == []
+    setup_gaps.reset()
+
+
 # --- Typed event contracts (#1636) — `emits:` entries may carry a payload schema ---
 
 

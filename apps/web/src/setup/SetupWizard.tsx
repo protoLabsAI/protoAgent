@@ -44,6 +44,7 @@ import {
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypeConfigField } from "./ArchetypeConfigField";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
+import { needyPlugins } from "./depsReport";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
 import { personaSoul } from "./persona";
 
@@ -656,19 +657,14 @@ export function SetupWizard({
             // wizard open on a one-click dependency report instead of unmounting —
             // previously this was an "install manually" advisory buried in a toast.
             try {
-              const inst = await api.installedPlugins();
-              const needy = inst.plugins.filter((p) => r.enabled.includes(p.id) && p.deps_missing?.length);
+              // Both sources (#3450): /api/plugins/installed has no row for a BUNDLED
+              // plugin, so the loader's runtime meta is the only place a bundled pack's
+              // missing deps show up — which is the Cowork archetype's whole case.
+              const [inst, status] = await Promise.all([api.installedPlugins(), api.runtimeStatus()]);
+              const needy = needyPlugins(r.enabled, inst.plugins, status.plugins ?? []);
               if (needy.length) {
                 setMessage("");
-                setPostInstall(
-                  needy.map((p) => ({
-                    id: p.id,
-                    name: p.manifest?.name || p.id,
-                    deps: p.deps_missing ?? [],
-                    state: "pending" as const,
-                    error: "",
-                  })),
-                );
+                setPostInstall(needy.map((p) => ({ ...p, state: "pending" as const, error: "" })));
                 return;
               }
             } catch {
