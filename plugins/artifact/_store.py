@@ -26,6 +26,15 @@ log = logging.getLogger("protoagent.plugins.artifact")
 # show_artifact creates one; update_artifact/rewrite_artifact append a version (the
 # proven Claude "update vs rewrite" model — iterate the same artifact, don't spam the
 # panel with near-duplicates). The file is {"artifacts": [newest-first], "current": id}.
+#
+# An artifact may carry ``"pinned": true`` — it is then exempt from the history eviction in
+# _write_store (see _evict), and pinned artifacts are stored FIRST: the list is really
+# [pinned] + [unpinned], each group most-recently-touched first (pinning or unpinning counts as
+# a touch for order, though not for `current`). The key is ABSENT on an unpinned artifact
+# rather than false, so a store that never pinned anything is byte-for-byte the pre-pin format.
+# An older (pre-0.18) plugin reading a pinned store ignores the key and keeps only
+# artifacts[:history] on its next write — pins-first means that keeps them until `history`
+# newer artifacts push them out, rather than evicting them on the very first write.
 
 
 def _store_path() -> Path:
@@ -177,9 +186,39 @@ def _read_store() -> dict:
     return {"artifacts": [], "current": None}
 
 
+def _is_pinned(art: dict) -> bool:
+    """Pinned = exempt from history eviction. Strictly ``True`` — a hand-edited truthy
+    string must not silently pin an artifact past the ``max_pinned`` cap."""
+    return art.get("pinned") is True
+
+
+def _pinned(store: dict) -> list[dict]:
+    """The pinned artifacts, in store (most-recently-touched first) order."""
+    return [a for a in store.get("artifacts", []) if _is_pinned(a)]
+
+
+def _evict(arts: list[dict], keep: int) -> list[dict]:
+    """Keep every PINNED artifact plus the ``keep`` most-recently-touched unpinned ones. Pins
+    don't count toward ``keep``: with nothing pinned this is exactly ``arts[:keep]``, the
+    eviction point the store has always had. The number of pins is bounded separately
+    (``_config._max_pinned``, enforced by pin_artifact).
+
+    Pinned artifacts go FIRST (a stable partition, so each group keeps its most-recently-touched-
+    first order; pin_artifact moves a new pin to the front) as a downgrade guard:
+    a pre-0.18 plugin knows nothing of pins and keeps just ``artifacts[:history]``, so pins at
+    the front survive its writes until ``history`` newer artifacts push them out — at the back,
+    where a long-lived artifact usually sits, its first write would evict them."""
+    pinned = [a for a in arts if _is_pinned(a)]
+    unpinned = [a for a in arts if not _is_pinned(a)]
+    return pinned + unpinned[:keep]
+
+
 def _write_store(store: dict) -> None:
     max_versions = _config._max_versions()
-    store["artifacts"] = store.get("artifacts", [])[: _config._max_history()]
+    store["artifacts"] = _evict(store.get("artifacts", []), _config._max_history())
+    # Version trimming applies to pinned artifacts too, deliberately: a pin keeps the artifact
+    # (its id keeps resolving), not every edit ever made to it — a long-lived document edited
+    # daily would otherwise grow history.json without bound, and it's read on every panel poll.
     for a in store["artifacts"]:
         if len(a.get("versions", [])) > max_versions:
             a["versions"] = a["versions"][-max_versions:]
