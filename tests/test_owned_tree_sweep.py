@@ -232,6 +232,55 @@ def test_the_sweep_never_reads_its_own_record_as_a_dead_owner(box):
     untrack_tree(child.pid)
 
 
+def test_a_corrupt_record_never_blocks_the_sweep(tmp_path, box):
+    """A record that is not the shape we write (`[]`, a non-list `trees`, bad JSON)
+    used to raise inside the sweep and abort it before it deleted that file — so every
+    later sweep died on it too, and reached none of the records behind it."""
+    d = box / ".owned-trees"
+    d.mkdir(parents=True)
+    bad = [d / "101.json", d / "102.json", d / "103.json"]
+    bad[0].write_text("[]")
+    bad[1].write_text(json.dumps({"owner": 102, "trees": 5}))
+    bad[2].write_text("{not json")
+    owner, grandchild, record = _spawn_owner(tmp_path, box)
+    _sigkill(owner)
+
+    assert sweep_orphaned_trees(grace=0.5) >= 1
+    assert _wait(lambda: not _alive(grandchild)), "a corrupt record stopped the sweep reaching a real one"
+    assert not any(p.exists() for p in bad), "a corrupt record must be cleared, not left to trip every sweep"
+
+
+def test_a_final_reap_kills_only_what_it_asked_to_stop_first(box):
+    """The SIGKILL round targets exactly the trees the SIGTERM round signalled. A tree
+    tracked during the grace got no SIGTERM, so it is neither SIGKILLed nor forgotten:
+    it stays tracked and recorded for atexit or the next sweep."""
+    import threading
+
+    stubborn = subprocess.Popen(["sh", "-c", "trap '' TERM; echo ready; exec sleep 300"], stdout=subprocess.PIPE, text=True, **group_kwargs())
+    assert stubborn.stdout.readline().strip() == "ready"
+    _KILL_AFTER.append(stubborn.pid)
+    track_tree(stubborn.pid)
+
+    reaper = threading.Thread(target=proc_mod.reap_tracked_trees, kwargs={"grace": 1.0})
+    reaper.start()
+    time.sleep(0.3)  # inside the grace
+    late = subprocess.Popen(["sleep", "300"], **group_kwargs())
+    _KILL_AFTER.append(late.pid)
+    track_tree(late.pid)
+    reaper.join(timeout=10)
+
+    assert _wait(lambda: stubborn.poll() is not None), "the SIGTERM-ignoring tree was not SIGKILLed"
+    assert late.poll() is None, "a tree that never got SIGTERM was SIGKILLed"
+    assert proc_mod.tracked_trees() == [late.pid], "the late tree was forgotten"
+    rec = json.loads((box / ".owned-trees" / f"{os.getpid()}.json").read_text())
+    assert [t["root"] for t in rec["trees"]] == [late.pid], "the late tree's record was dropped"
+    untrack_tree(late.pid)
+
+
+def test_config_explain_reports_the_records_dir(box):
+    assert paths_mod.instance_paths().explain()["paths"]["owned_trees_dir"] == str(box / ".owned-trees")
+
+
 def test_one_sweep_logs_what_it_reaped_and_never_raises(monkeypatch, caplog):
     import server
 

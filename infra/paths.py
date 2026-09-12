@@ -787,6 +787,7 @@ class InstancePaths:
                 "host_config": str(self.host_config),
                 "commons_dir": str(self.commons_dir),
                 "instances_dir": str(self.instances_dir),
+                "owned_trees_dir": str(self.owned_trees_dir),
                 "data_version_file": str(self.data_version_file),
                 "cache_dir": str(self.cache_dir),
                 "bundle_dir": str(self.bundle_dir),

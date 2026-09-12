@@ -405,11 +405,12 @@ def _drop(pid: int) -> None:
         _TRACKED.pop(pid, None)
 
 
-def _signal_tracked(*, force: bool) -> int:
-    """Signal every tracked tree once, without waiting. Returns how many were still
-    there to signal; prunes the ones that are gone. Never raises."""
+def _signal_tracked(*, force: bool, only: set[int] | None = None) -> int:
+    """Signal every tracked tree once — or just the roots in ``only`` — without waiting.
+    Returns how many were still there to signal; prunes the ones that are gone. Never
+    raises."""
     with _TRACKED_LOCK:
-        items = list(_TRACKED.items())
+        items = [(pid, key) for pid, key in _TRACKED.items() if only is None or pid in only]
     signalled = 0
     for pid, key in items:
         if _WINDOWS:
@@ -469,21 +470,24 @@ def reap_tracked_trees(*, grace: float = 1.0) -> int:
     and ``atexit``. Returns at once when nothing is tracked. Never raises.
     """
     try:
-        n = _signal_tracked(force=False)
-        killed: list[int] = []
+        # The trees THIS reap is responsible for. One tracked during the grace below got
+        # no SIGTERM, so it must not get the SIGKILL either, nor be forgotten: it stays
+        # tracked and recorded, for atexit or — if this process never gets that far —
+        # the next process's orphan sweep (#3463).
+        with _TRACKED_LOCK:
+            termed = set(_TRACKED)
+        n = _signal_tracked(force=False, only=termed)
         if n:
             time.sleep(grace)
-            with _TRACKED_LOCK:
-                killed = list(_TRACKED)
-            _signal_tracked(force=True)
-        # Settle the on-disk record (#3463) so a clean exit leaves none behind. A group
-        # that has had SIGKILL — which nothing can ignore — is done even if a member
-        # still shows as a zombie (a killed root this exit never waited on), so it is
-        # forgotten rather than pruned by a liveness probe that would call it alive.
-        # Only what that round signalled: a tree tracked meanwhile stays recorded.
+            _signal_tracked(force=True, only=termed)
+        # Settle the on-disk record so a clean exit leaves none behind. A group that has
+        # had SIGKILL — which nothing can ignore — is done even if a member still shows
+        # as a zombie (a killed root this exit never waited on), so it is forgotten
+        # rather than pruned by a liveness probe that would call it alive.
         with _TRACKED_LOCK:
-            for pid in killed:
-                _TRACKED.pop(pid, None)
+            if n:
+                for pid in termed:
+                    _TRACKED.pop(pid, None)
             _prune_dead_locked()
             _persist_locked()
         return n
@@ -649,12 +653,21 @@ def sweep_orphaned_trees(*, grace: float = 1.0) -> int:
                 continue
             try:
                 rec = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                done.append(path)  # unreadable: it can guard nothing, so it goes
+                trees = rec.get("trees") or []
+                if not isinstance(trees, list):
+                    raise TypeError("trees is not a list")
+                owner_start = rec.get("owner_start")
+                if owner_start is not None:
+                    owner_start = float(owner_start)
+            except (OSError, ValueError, TypeError, AttributeError):
+                # Unreadable or not the shape we write (`[]`, a truncated edit): it can
+                # guard nothing, so it goes — and it must never stop this sweep, or every
+                # later one, from reaching the records behind it.
+                done.append(path)
                 continue
-            if _owner_alive(owner, rec.get("owner_start")):
+            if _owner_alive(owner, owner_start):
                 continue
-            for tree in rec.get("trees") or ():
+            for tree in trees:
                 try:
                     pgid, at = int(tree["pgid"]), float(tree["tracked_at"])
                 except (KeyError, TypeError, ValueError):
