@@ -489,6 +489,45 @@ def test_a_hostile_docx_cannot_drive_memory_past_the_budget(tmp_path):
         )
 
 
+def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
+    """Resident size (MiB) of a fresh interpreter after extracting ``data`` ``repeats``
+    times — the footprint left behind, which a peak-only reading can't show."""
+    path = tmp_path / f"resident-{repeats}.docx"
+    path.write_bytes(data)
+    program = textwrap.dedent(
+        """
+        import os, subprocess, sys
+        import docx  # noqa: F401
+        from ingestion import engine
+
+        def resident_kb():
+            try:  # Linux: resident pages from /proc
+                with open("/proc/self/statm") as statm:
+                    return int(statm.read().split()[1]) * (os.sysconf("SC_PAGE_SIZE") // 1024)
+            except OSError:  # macOS and friends
+                return int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(os.getpid())]).strip())
+
+        payload = open(sys.argv[1], "rb").read()
+        for _ in range(int(sys.argv[2])):
+            try:
+                engine.extract_bytes("probe.docx", payload)
+            except engine.IngestionError:
+                pass
+        print(resident_kb() // 1024)
+        """
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    done = subprocess.run(
+        [sys.executable, "-c", program, str(path), str(repeats)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
+    )
+    assert done.returncode == 0, f"probe failed: {done.stderr[-800:]}"
+    return int(done.stdout.split()[0])
+
+
 def test_the_node_budget_counts_text_runs_not_only_elements_and_attributes():
     """``x<w:i/>`` filler buys libxml2 a TEXT NODE per element for a single '<' of budget.
     Counting only elements and attributes let a package through with twice the intended
@@ -540,13 +579,16 @@ def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
     behind them, so nothing forced one: six worst-case extractions grew RSS to ~900 MiB
     and stayed there. Extraction now collects after a big document, so the footprint is
     flat instead of per-upload."""
-    pytest.importorskip("resource")
     _docx_lib()
-    grew_once, _ = _peak_rss_growth_mb(_worst_accepted_docx(), tmp_path, repeats=1)
-    grew_six, _ = _peak_rss_growth_mb(_worst_accepted_docx(), tmp_path, repeats=6)
+    data = _worst_accepted_docx()
+    # CURRENT RSS, not ru_maxrss: a high-water mark can't show memory coming back, and
+    # where the interpreter's own start-up peak already covers one extraction its delta
+    # reads 0 (CI's Linux runners). What matters here is the footprint left behind.
+    after_one = _rss_after_extractions(data, tmp_path, repeats=1)
+    after_six = _rss_after_extractions(data, tmp_path, repeats=6)
 
-    assert grew_six < grew_once * 2, (
-        f"six extractions grew RSS by {grew_six} MiB vs {grew_once} MiB for one — "
+    assert after_six <= 2 * after_one, (
+        f"six extractions left {after_six} MiB resident vs {after_one} MiB after one — "
         "the per-document tree is accumulating again"
     )
 
