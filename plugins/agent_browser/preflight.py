@@ -33,6 +33,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,11 @@ INSTALL_HINT = "npm i -g agent-browser && agent-browser install"
 # The doctor check that answers "is there a browser to drive". Keyed by id, not by
 # parsing the pretty table, so a cosmetic output change can't turn into a false banner.
 _CHROME_CHECK = "chrome.installed"
+
+# The preflight runs inside register(), i.e. during BOOT. Two serial probes at 15 s each
+# could stall boot ~30 s on a wedged binary, so the budget is TOTAL — shared by both calls,
+# never per call. The real CLI answers both in ~40 ms: 6 s is ~150x headroom, not a guess.
+PREFLIGHT_BUDGET_S = 6.0
 
 
 @dataclass(frozen=True)
@@ -126,8 +132,10 @@ def _chrome_status(path: str, timeout: float) -> tuple[str, str]:
     return "unknown", ""
 
 
-def probe(cfg: dict | None, *, timeout: float = 15.0) -> Probe:
-    """Resolve the CLI and ask it about Chrome. Never raises."""
+def probe(cfg: dict | None, *, timeout: float = PREFLIGHT_BUDGET_S) -> Probe:
+    """Resolve the CLI and ask it about Chrome. Never raises, and never takes longer than
+    ``timeout`` in TOTAL: ``--version`` gets at most half, ``doctor`` whatever is left, and
+    if a wedged ``--version`` spent it all, the Chrome probe is skipped (``unknown``)."""
     cfg = cfg or {}
     binary = str(cfg.get("binary") or "agent-browser")
     try:
@@ -137,9 +145,12 @@ def probe(cfg: dict | None, *, timeout: float = 15.0) -> Probe:
         return Probe(binary=binary)
     if not path:
         return Probe(binary=binary)
+    budget = max(0.1, float(timeout))
+    deadline = time.monotonic() + budget
     try:
-        version = _cli_version(path, timeout)
-        chrome, detail = _chrome_status(path, timeout)
+        version = _cli_version(path, budget / 2)
+        remaining = deadline - time.monotonic()
+        chrome, detail = _chrome_status(path, remaining) if remaining > 0 else ("unknown", "")
     except Exception:  # noqa: BLE001
         log.exception("[agent_browser] probing %r failed", path)
         return Probe(binary=binary, cli_path=path)
@@ -167,7 +178,7 @@ def gaps(p: Probe) -> list[tuple[str, str | None, object]]:
     return [(CLI_GAP, None, None), (CHROME_GAP, chrome_msg, None)]
 
 
-def report(registry, cfg: dict | None, *, timeout: float = 15.0) -> Probe:
+def report(registry, cfg: dict | None, *, timeout: float = PREFLIGHT_BUDGET_S) -> Probe:
     """Probe and push the result through ``registry.report_setup_gap``. Returns the probe.
 
     Guarded with ``getattr`` per the seam's own contract, so the plugin still loads on a

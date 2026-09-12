@@ -373,6 +373,27 @@ def test_an_unreadable_doctor_never_invents_a_chrome_gap(monkeypatch, doctor):
     assert reg.setup_gaps == {}
 
 
+def test_a_wedged_binary_cannot_stall_boot_past_the_preflight_budget(monkeypatch):
+    """The preflight runs inside register(), i.e. at boot. Two serial probes at 15 s each
+    let a hung binary stall boot ~30 s. The budget is now TOTAL across both calls. Simulated
+    with a clock the wedged binary advances by its full allowance on every call."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(preflight.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: "/opt/ab")
+    given = []
+
+    def wedged(args, **kw):
+        given.append(kw["timeout"])
+        clock["t"] += kw["timeout"]   # burns every second it was allowed
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kw["timeout"])
+
+    monkeypatch.setattr(preflight.subprocess, "run", wedged)
+    probe = preflight.probe({})
+    assert probe.cli_ok and probe.chrome == "unknown"          # degraded, never raised
+    assert sum(given) <= preflight.PREFLIGHT_BUDGET_S + 1e-9, given
+    assert preflight.PREFLIGHT_BUDGET_S <= 10                   # a boot-time budget, not a leash
+
+
 def test_preflight_never_raises_when_the_probe_explodes(monkeypatch):
     monkeypatch.setattr(preflight.shutil, "which", lambda name: "/opt/ab")
 
