@@ -1,0 +1,39 @@
+id: browse-and-extract
+name: Browse & Extract
+description: Open a URL, take an accessibility snapshot, and extract information matching
+  a user-supplied goal. Returns the extracted text as output.
+inputs:
+- name: url
+  type: string
+  description: The URL to open and browse.
+- name: goal
+  type: string
+  description: What information to extract from the page (e.g. "list all product prices").
+steps:
+- id: open-and-snapshot
+  prompt: 'Open the URL {{inputs.url}} using `browser_open`, then take a snapshot
+
+    with `browser_snapshot`. Return the snapshot output so the next step can
+
+    parse it.
+
+    '
+- id: extract
+  depends_on: open-and-snapshot
+  prompt: 'Using the snapshot from the previous step, extract the information
+
+    described by the goal: {{inputs.goal}}.
+
+
+    Use `browser_get_text` or re-snapshot with `browser_snapshot` to read
+
+    the page content.  If the page has interactive elements you need to
+
+    click (e.g. expand a section), use `browser_click` first.
+
+
+    Return only the extracted information — no preamble.
+
+    '
+output:
+  step: extract

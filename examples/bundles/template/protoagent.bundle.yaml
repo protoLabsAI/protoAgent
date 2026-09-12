@@ -34,13 +34,16 @@ verified_against: 0.35.3
 
 plugins:
   - { id: delegates, builtin: true }                                                  # ships with protoAgent
+  - { id: agent_browser, builtin: true }                                              # bundled in-tree (#3451)
   - { id: project_board, url: https://github.com/protoLabsAI/projectBoard-plugin,  ref: v0.1.1 }
-  - { id: agent_browser, url: https://github.com/protoLabsAI/agent-browser-plugin, ref: v0.1.1 }
 
 enabled: [delegates, project_board, agent_browser]   # suggested turn-on list (you apply it)
 config:                                              # recommended defaults (you apply them)
   agent_browser:
-    panel_mode: full
+    # agent_browser needs the `agent-browser` CLI on PATH; the plugin raises a setup-gap
+    # banner if it's missing. Pin an absolute path here when PATH isn't enough.
+    binary: agent-browser
+    headed: false
 
 # MCP servers to seed into a new agent (ADR 0083 D5, #2011). Each item is catalog-shaped
 # (like config/mcp-catalog.json rows): a `template` (an mcp.servers entry, transport

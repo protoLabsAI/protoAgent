@@ -92,7 +92,13 @@ def test_site_overlay_shapes() -> None:
     out = json.loads(pd.render_site(pd.load()))
     for e in out:
         if e.get("hidden"):
-            # An unlisted entry is ONLY a drop marker — nothing the page could render.
+            # A drop marker is ONLY a marker — nothing the page could render. Two shapes:
+            # an unlisted row (carries the status that unlisted it), and a bundled row's
+            # RETIRED repo card (#3451 — names the bundled id that replaced it).
+            if "superseded_by" in e:
+                assert set(e) == {"id", "hidden", "superseded_by"}, e["id"]
+                assert any(d["id"] == e["superseded_by"] and d.get("bundled") for d in pd.load())
+                continue
             assert set(e) == {"id", "status", "hidden"}, e["id"]
             assert e["status"] not in pd._SITE_STATUSES
             continue
@@ -101,7 +107,9 @@ def test_site_overlay_shapes() -> None:
             assert "install" not in e and e["links"]["source"].startswith(pd.TREE)
             # app:false rows (libraries / always-on builtins) must carry an explicit
             # null so the site's merge suppresses the auto-discovered enable CTA.
-            src = next(d for d in pd.load() if (d.get("site_id") or d["id"]) == e["id"])
+            # a bundled override is keyed by the MANIFEST id (its card isn't scraped),
+            # so site_id never stands in for it here
+            src = next(d for d in pd.load() if d["id"] == e["id"])
             if not src.get("app", True):
                 assert e["enable"] is None, f"{e['id']}: app:false row must not ship an enable CTA"
             else:
@@ -261,3 +269,114 @@ def test_archetype_catalog_bundles_are_registered() -> None:
         assert entry["id"] in by_archetype, (
             f"archetype {entry['id']}: no registry row claims this catalog id via `archetype:`"
         )
+
+
+# ── the marketing page's real merge: one card per plugin, no duplicate names ─────────
+# sites/marketing/src/pages/plugins.astro folds the editorial overlay onto its DISCOVERED
+# cards by a lowercased `id || name` key, then appends every override the fold didn't
+# match. So an override keyed differently from its discovered card renders TWICE — which
+# is exactly what `site_id: agent-browser` on the bundled `agent_browser` row did (#3451):
+# `bundledPlugins()` keys a bundled card by the MANIFEST id, and `plugin_directory check`
+# can't see it because it only diffs yaml→JSON. These replicate the merge.
+
+
+def _bundled_cards() -> list[dict]:
+    """What plugins.astro's `bundledPlugins()` discovers: one card per in-tree manifest,
+    keyed by the MANIFEST id (not the folder name, not any site_id)."""
+    import yaml
+
+    root = Path(__file__).parent.parent / "plugins"
+    cards = []
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        mf = d / "protoagent.plugin.yaml"
+        if not mf.is_file():
+            continue
+        m = yaml.safe_load(mf.read_text(encoding="utf-8")) or {}
+        cards.append({"id": m.get("id") or d.name, "name": m.get("name") or d.name, "bundled": True})
+    return cards
+
+
+def _scraped_cards() -> list[dict]:
+    """What `ecosystemPlugins()` discovers from the `protoagent-plugin` topic: every
+    external row's repo, keyed by `<repo-name minus -plugin>` and NAMED after the repo.
+    Stands in for the live GitHub search (offline, and deterministic)."""
+    cards = []
+    for e in pd.load():
+        repo = e.get("repo") or ""
+        if not repo:
+            continue
+        name = repo.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        cards.append({"id": name.removesuffix("-plugin"), "name": name, "bundled": False})
+    return cards
+
+
+def _astro_merge(discovered: list[dict]) -> list[dict]:
+    """plugins.astro's merge, verbatim in Python: fold overrides onto discovered cards by
+    a lowercased key, append override-only entries, drop `hidden`."""
+    overrides = json.loads(pd.render_site(pd.load()))
+    by_key = {str(o.get("id") or o.get("name") or "").lower(): o for o in overrides}
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for p in discovered:
+        k = str(p.get("id") or p.get("name") or "").lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append({**p, **(by_key.get(k) or {})})
+    for o in overrides:
+        k = str(o.get("id") or o.get("name") or "").lower()
+        if k not in seen:
+            seen.add(k)
+            merged.append(o)
+    return [p for p in merged if not p.get("hidden")]
+
+
+def test_marketing_merge_renders_no_duplicate_display_names() -> None:
+    """The #3451 regression: two cards both titled "Agent Browser"."""
+    rendered = _astro_merge(_bundled_cards() + _scraped_cards())
+    by_name: dict[str, list[str]] = {}
+    for p in rendered:
+        by_name.setdefault(str(p.get("name") or "").strip().lower(), []).append(str(p.get("id")))
+    dupes = {n: ids for n, ids in by_name.items() if len(ids) > 1}
+    assert dupes == {}, f"the marketing page would render duplicate cards: {dupes}"
+
+
+def test_every_bundled_plugin_renders_exactly_one_bundled_card() -> None:
+    """A bundled plugin must fold its override onto the in-tree card — never leave the raw
+    manifest card unfolded next to an override-only append."""
+    rendered = _astro_merge(_bundled_cards() + _scraped_cards())
+    listed = {e["id"] for e in pd.load()
+              if e.get("bundled") and pd._status(e) in pd._SITE_STATUSES and e.get("site", True)}
+    for pid in listed:
+        cards = [p for p in rendered if str(p.get("id")) == pid]
+        assert len(cards) == 1, f"{pid}: expected one card, got {len(cards)}"
+        card = cards[0]
+        assert card.get("bundled") is True, f"{pid}: rendered card is not marked bundled"
+        # folded, not raw: the override's curated category/tagline won
+        assert card.get("category") and card["category"] != "Built-in", (
+            f"{pid}: the override never folded onto the in-tree card (category is the raw default)"
+        )
+
+
+def test_a_bundled_rows_retired_repo_card_is_hidden() -> None:
+    """When a bundled plugin's retired repo slug differs from its id, the build must also
+    emit a `hidden` marker for the scraped card — or the retired repo keeps a card (with an
+    Install button) until someone archives it."""
+    overrides = json.loads(pd.render_site(pd.load()))
+    by_key = {str(o.get("id")): o for o in overrides}
+    checked: list[str] = []
+    for e in pd.load():
+        site_id = e.get("site_id")
+        if not (e.get("bundled") and site_id and site_id != e["id"]):
+            continue
+        assert by_key.get(e["id"], {}).get("bundled") is True, f"{e['id']}: override not keyed by id"
+        marker = by_key.get(site_id)
+        assert marker and marker.get("hidden") is True, (
+            f"{e['id']}: no hidden marker for the retired repo card {site_id!r}"
+        )
+        assert marker.get("superseded_by") == e["id"]
+        checked.append(e["id"])
+    # Not vacuous: dropping agent_browser's site_id would empty the loop and pass silently,
+    # while the retired repo's live card came back (#3451 review).
+    assert checked, "no bundled row with a retired-repo site_id was exercised"
+    assert "agent_browser" in checked

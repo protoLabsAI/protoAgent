@@ -18,7 +18,7 @@
 #   - `archetype_repos` is a space-separated `owner/repo` list and DEFAULTS TO
 #     EMPTY — the loop body never runs, so plugins that aren't in any archetype
 #     carry the step as a no-op. Member repos (projectBoard-plugin,
-#     github-plugin, agent-browser-plugin) set it to
+#     github-plugin) set it to
 #     `protoLabsAI/project-manager-archetype`.
 #   - The repo-scoped `GITHUB_TOKEN` cannot dispatch to ANOTHER repo, so a real
 #     cross-repo notify needs a `GH_PAT` secret with access to the archetype
