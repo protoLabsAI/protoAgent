@@ -185,6 +185,10 @@
         {
           "path": "guides/discord.md",
           "title": "Discord surface"
+        },
+        {
+          "path": "guides/browser-automation.md",
+          "title": "Browser automation"
         }
       ]
     },

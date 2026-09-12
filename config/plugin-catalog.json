@@ -41,21 +41,6 @@
       "docs": "https://github.com/protoLabsAI/terminal-plugin#readme"
     },
     {
-      "id": "agent_browser",
-      "name": "Agent Browser",
-      "category": "Automation",
-      "official": true,
-      "repo": "https://github.com/protoLabsAI/agent-browser-plugin",
-      "tagline": "Browser automation backed by vercel-labs/agent-browser: tools + skill + workflows + a live browser panel.",
-      "adds": [
-        "tool",
-        "skill",
-        "workflow",
-        "view"
-      ],
-      "docs": "https://github.com/protoLabsAI/agent-browser-plugin#readme"
-    },
-    {
       "id": "project_board",
       "name": "Project Board",
       "category": "Orchestration",
@@ -383,6 +368,21 @@
         "verifier"
       ],
       "docs": "https://agent.protolabs.studio/docs/guides/plugins"
+    },
+    {
+      "id": "agent_browser",
+      "name": "Agent Browser",
+      "category": "Automation",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/agent_browser",
+      "tagline": "Browser automation backed by vercel-labs/agent-browser: tools (incl. page→PDF) + skill + workflows + a live, drivable browser panel. Ships in-tree, off by default; needs the agent-browser CLI on PATH.",
+      "adds": [
+        "tool",
+        "skill",
+        "workflow",
+        "view"
+      ],
+      "docs": "https://agent.protolabs.studio/docs/guides/browser-automation"
     },
     {
       "id": "workflows",

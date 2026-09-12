@@ -9,9 +9,14 @@
 #
 # Entry fields:
 #   id        (required)  canonical plugin id — the manifest id, used by the in-app catalog
-#   site_id   (optional)  overlay key when it differs from id: the marketing page folds an
-#                         override onto its auto-scraped card by `<repo-name minus -plugin>`
-#                         (see sites/marketing/src/pages/plugins.astro, #1772)
+#   site_id   (optional)  the marketing page's SCRAPED-card key, `<repo-name minus -plugin>`,
+#                         when it differs from id — the page folds an override onto its
+#                         auto-scraped card by that key (plugins.astro, #1772).
+#                         On a `bundled: true` row it means something different: the page
+#                         keys a bundled card by the MANIFEST id, so the override is keyed by
+#                         `id` and `site_id` names the RETIRED standalone repo's scraped card,
+#                         which the build hides (#3451). Omit it unless the repo slug and the
+#                         plugin id really differ.
 #   name / category / tagline (required)  display copy, shared by both surfaces
 #   status    (optional)  where the plugin is listed (#2910) — this file is the full
 #                         census, so every public plugin repo has a row:
@@ -61,14 +66,6 @@ plugins:
     repo: https://github.com/protoLabsAI/terminal-plugin
     tagline: "A full terminal (xterm.js + a real PTY over WebSocket) as a console view, themed from the design system."
     adds: [view]
-
-  - id: agent_browser
-    site_id: agent-browser
-    name: Agent Browser
-    category: Automation
-    repo: https://github.com/protoLabsAI/agent-browser-plugin
-    tagline: "Browser automation backed by vercel-labs/agent-browser: tools + skill + workflows + a live browser panel."
-    adds: [tool, skill, workflow, view]
 
   - id: project_board
     site_id: projectBoard
@@ -289,6 +286,21 @@ plugins:
     bundled: true
     tagline: "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083). Ships in-tree, on by default."
     adds: [skill, verifier]
+
+  # Moved in-tree in #3451 from agent-browser-plugin (now retired; the bundled manifest's
+  # `supersedes` retires an installed copy). Bundled but OFF by default — 17 tools and
+  # `network: ["*"]` are a deliberate turn-on, and it needs the `agent-browser` CLI on PATH.
+  - id: agent_browser
+    # The retired repo's slug (`agent-browser-plugin` → `agent-browser`) differs from the
+    # plugin id, so it is NOT the override key here — the bundled card is keyed by the
+    # manifest id. The build hides the scraped card for this slug instead.
+    site_id: agent-browser
+    name: Agent Browser
+    category: Automation
+    bundled: true
+    tagline: "Browser automation backed by vercel-labs/agent-browser: tools (incl. page→PDF) + skill + workflows + a live, drivable browser panel. Ships in-tree, off by default; needs the agent-browser CLI on PATH."
+    adds: [tool, skill, workflow, view]
+    docs: /docs/guides/browser-automation
 
   - id: workflows
     name: Workflows

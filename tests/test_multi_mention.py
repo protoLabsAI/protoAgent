@@ -306,3 +306,165 @@ async def test_unexpected_address_failure_settles_work_card(wired, monkeypatch):
         ),
     ]
     assert frames[-1] == ("error", "dispatch machinery broke")
+
+
+# --- the answer says which replies it restates (#3449) ------------------------
+#
+# An `@`-address short-circuits the lead, so ONE answer goes out TWICE over: a
+# `room_reply` frame per exchange carrying that participant's own words, and the
+# terminal `done` text composed from those very replies for consumers that get no room
+# frames at all (A2A, `/v1`). A console that renders both drew the answer twice,
+# verbatim — the v0.164.0 report.
+#
+# The split is PER EXCHANGE, because the rendering is: `in_answer` marks each exchange
+# whose bubble carries what the answer says for it, and whatever the answer says beyond
+# those bubbles rides its own `note` frame. Claiming per TURN instead — dropping the
+# claim whenever the answer carried anything extra — left the reported symptom alive on
+# DEFAULT config (a long chat truncates its catch-up, appends a note), which is what the
+# `room_note` tests below pin.
+
+
+@pytest.mark.asyncio
+async def test_a_single_address_declares_that_the_answer_restates_its_reply(wired, monkeypatch):
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+    wired.replies = {"proto": "line 40"}
+
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto status?", "s-claim")]
+    rooms = [p for k, p in frames if k == "room_reply"]
+
+    assert [r["text"] for r in rooms] == ["line 40"]
+    assert rooms[0]["in_answer"] is True
+    assert rooms[0]["from"] == "operator"  # the console honours a claim only from the operator
+    # …and the claim is TRUE: the answer is that reply and nothing else, so a consumer
+    # that drew the bubble has already shown every word of it.
+    assert frames[-1] == ("done", "line 40")
+
+
+@pytest.mark.asyncio
+async def test_a_multi_address_join_still_declares_each_reply(wired, monkeypatch):
+    """The attribution the join adds (`**@proto** — `) IS the byline the authored bubble
+    already renders, so it is not content the answer holds alone."""
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+    wired.replies = {"proto": "line 40", "reviewer": "agreed"}
+
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto @reviewer status?", "s-claim2")]
+    rooms = [p for k, p in frames if k == "room_reply"]
+
+    assert [(r["author"], r["text"], r["in_answer"]) for r in rooms] == [
+        ("proto", "line 40", True),
+        ("reviewer", "agreed", True),
+    ]
+    assert frames[-1] == ("done", "**@proto** — line 40\n\n**@reviewer** — agreed")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_address_rides_its_own_note_frame_and_the_rest_is_claimed(wired, monkeypatch):
+    """`@a @b` with one member offline — the reviewer's case. b's failure line lives only
+    in the answer, so it goes out as the ROOM's note; a's reply is still claimed, so it
+    renders once. Claiming per TURN dropped a's claim and doubled its reply."""
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+
+    async def _dispatch(name, query, *, conversation_key=None, permissions=None):
+        if name == "proto":
+            raise RuntimeError("offline")
+        return "agreed"
+
+    wired.dispatch = _dispatch
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto @reviewer status?", "s-claim3")]
+    rooms = [p for k, p in frames if k == "room_reply"]
+
+    replies = [r for r in rooms if r.get("author")]
+    notes = [r for r in rooms if r.get("note")]
+    assert [(r["author"], r["text"], r.get("in_answer")) for r in replies] == [
+        ("proto", "", None),  # a failed address has no words of its own to show
+        ("reviewer", "agreed", True),
+    ]
+    assert len(notes) == 1 and notes[0]["text"] == "**@proto** — Delegate @proto failed: offline"
+    # Every word of the answer is on screen exactly once: the claimed bubble, the note.
+    assert frames[-1][1] == "**@proto** — Delegate @proto failed: offline\n\n**@reviewer** — agreed"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_reply_rides_the_note_frame(wired, monkeypatch):
+    """A delegate that answers with nothing: the answer's stand-in line is in no bubble,
+    so it is the note — and with NOTHING claimed there is no note frame at all, because
+    the console lands the answer whole and the frame would be the duplicate."""
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+    wired.replies = {"proto": "   "}
+
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto status?", "s-claim4")]
+    rooms = [p for k, p in frames if k == "room_reply"]
+
+    assert len(rooms) == 1 and "in_answer" not in rooms[0]  # byline only, no claim
+    assert not [r for r in rooms if r.get("note")]
+    assert frames[-1] == ("done", "@proto replied with nothing.")
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_catchup_is_claimed_and_its_note_rides_a_frame(wired, monkeypatch):
+    """The reported symptom's own shape (#3449): an ordinary long chat truncates the
+    catch-up on DEFAULT caps, which appends a room note. Dropping the claim for the whole
+    turn left that case doubling; the note gets its own frame instead."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from graph.config import LangGraphConfig
+
+    class _Graph:
+        def __init__(self, messages):
+            self.messages = list(messages)
+
+        async def aget_state(self, config):
+            return type("S", (), {"values": {"messages": list(self.messages)}})()
+
+        async def aupdate_state(self, config, update, *, as_node=None):
+            self.messages.extend(update["messages"])
+
+    history = []
+    for i in range(60):
+        history.append(HumanMessage(content=f"operator line {i}"))
+        history.append(AIMessage(content=f"lead line {i}"))
+    monkeypatch.setattr(rs.STATE, "graph", _Graph(history), raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)  # DEFAULTS
+    wired.replies = {"proto": "line 40"}
+
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto status?", "s-longroom")]
+    rooms = [p for k, p in frames if k == "room_reply"]
+    replies = [r for r in rooms if r.get("author")]
+    notes = [r for r in rooms if r.get("note")]
+
+    assert replies[0]["truncated"] is True  # the default caps really did clip the window
+    assert replies[0]["in_answer"] is True  # …and the reply is still claimed
+    assert len(notes) == 1
+    assert "left out of the catch-up for @proto" in notes[0]["text"]
+    assert "room.catchup_max_messages" in notes[0]["text"]
+    # The answer still carries the whole thing for consumers with no room frames.
+    assert frames[-1][1].startswith("line 40")
+    assert "left out of the catch-up" in frames[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_the_note_frame_is_ordered_last(wired, monkeypatch):
+    """It is a footnote on what was just said, so it must not precede the bubbles it
+    annotates — the console inserts room frames in arrival order."""
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+
+    async def _dispatch(name, query, *, conversation_key=None, permissions=None):
+        if name == "reviewer":
+            raise RuntimeError("offline")
+        return "line 40"
+
+    wired.dispatch = _dispatch
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto @reviewer status?", "s-order")]
+    kinds = [("note" if p.get("note") else "reply") for k, p in frames if k == "room_reply"]
+    assert kinds == ["reply", "reply", "note"]
+
+
+def test_a_reply_with_no_words_is_not_covered_by_a_bubble():
+    """The coverage test the claim is built on, in isolation: a bubble the console will
+    render, whose text is what the answer says for that exchange. Both halves matter —
+    a failed exchange's answer line is the failure, not any reply it might carry."""
+    assert sc._covered_by_a_bubble({"ok": True, "reply": "line 40"}) is True
+    assert sc._covered_by_a_bubble({"ok": True, "reply": "   "}) is False
+    assert sc._covered_by_a_bubble({"ok": True, "reply": ""}) is False
+    assert sc._covered_by_a_bubble({"ok": False, "reply": "line 40"}) is False
+    assert sc._covered_by_a_bubble({}) is False

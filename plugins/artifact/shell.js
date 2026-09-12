@@ -21,7 +21,9 @@
   // it auto-follows new versions). followNewest jumps to the newest artifact on create
   // unless the user navigated to an older one.
   var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "";
-  var renderingId = null, renderingVer = 0;  // the (id, 1-based version) currently in the frame — for render-status (#1458)
+  // The version in the frame, for render-status (#1458): its id, 1-based position, and its identity —
+  // lifetime number + ts — which the route resolves even after a trim has shifted the position.
+  var renderingId = null, renderingVer = 0, renderingN = 0, renderingTs = 0;
   var EXT = { html: "html", svg: "svg", mermaid: "mmd", react: "jsx" };
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   // The NESTED artifact iframe (sandboxed, no stylesheet access) gets the live theme
@@ -147,8 +149,26 @@
   // Wrap graphic content in the fit-to-window viewport (svg + mermaid share this).
   function viewport(inner){ return VP_CSS + '<body><div id="__vp">' + inner + '</div>'; }
 
+  // An `html` artifact that is a FULL document must keep its own prologue FIRST. Prepending the
+  // DS link + base() ahead of its `<!doctype …>` put content before the doctype, and a doctype —
+  // or a `<head>` tag — that follows content is a parse error the parser DISCARDS: the panel
+  // showed the document with no doctype (document.doctype null) and without its <head>
+  // attributes. (It was never quirks mode: a srcdoc document is always no-quirks.)
+  // A document therefore gets the injection INSIDE its head: right after `<head>`, else after
+  // `<html>`, else after the doctype — still ahead of the author's own styles and scripts, so
+  // they override the base exactly as before. The match is ANCHORED at the start (a BOM,
+  // whitespace, comments or an XML prolog may precede, as the parser allows), so markup a
+  // document merely mentions later is never mistaken for its prologue. A fragment (no leading
+  // doctype or `<html>`) keeps the plain prepend. Unit-tested from Python off this regex source.
+  var DOC_PROLOGUE = /^\uFEFF?(?:\s|<!--[\s\S]*?-->|<\?[^>]*>)*(<!doctype[^>]*>)?(?:\s|<!--[\s\S]*?-->)*(<html(?:\s[^>]*)?>)?(?:\s|<!--[\s\S]*?-->)*(<head(?:\s[^>]*)?>)?/i;
+  function htmlDoc(code, inject){
+    var m = DOC_PROLOGUE.exec(code);
+    if (!m || !(m[1] || m[2])) return inject + code;  // a fragment
+    return m[0] + inject + code.slice(m[0].length);
+  }
+
   function srcdoc(kind, code) {
-    if (kind === "html") return dsLink() + base(kind) + code;
+    if (kind === "html") return htmlDoc(code, dsLink() + base(kind));
     if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + '</body>';
     if (kind === "mermaid") return '<!doctype html>' + base(kind) + viewport('<pre class="mermaid">' + esc(code) + '</pre>') +
       cdn("mermaid") +
@@ -331,8 +351,12 @@
     $vprev.disabled = vi<=0; $vnext.disabled = vi>=a.versions.length-1;
     $empty.style.display="none";
     $edit.style.display = a.kind==="file" ? "none" : "";  // a file's preview isn't user-editable
-    var key=a.id+"@"+vi;  // re-srcdoc only when the shown version actually changes
-    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1;
+    // Re-srcdoc only when the shown version actually changes. Keyed by ts as well as position: at
+    // the max_versions cap every new version lands in the SAME slot (the trim shifts the rest down),
+    // so a position-only key never re-rendered past the cap.
+    var key=a.id+"@"+vi+"@"+v.ts;
+    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
+      renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;  // lifetime number (_store._version_key)
       $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code); $frame.style.display="block"; }
   }
 
@@ -446,7 +470,7 @@
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
+      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
       return;
     }
     if(m.type!=="protoArtifact:ask") return;
