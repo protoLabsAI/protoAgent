@@ -147,15 +147,10 @@ def configured_plugins_dir() -> str:
 
 def _loader_roots() -> list[Path]:
     """The roots the LOADER discovers, in its order: bundled tree first, then the live
-    plugins dir — honouring the ``plugins.dir`` config override, exactly as
-    ``loader._plugin_roots`` and ``pconfig.plugin_roots_from`` do.
-
-    Deliberately not ``live_plugins_dir()`` alone: that is the installer's install
-    TARGET and ignores the override, so resolving against it would answer about a folder
-    the loader never reads."""
-    override = configured_plugins_dir()
-    live = Path(override).expanduser() if override else live_plugins_dir()
-    return [bundled_plugins_dir(), live]
+    plugins dir — the same pair as ``loader._plugin_roots`` and
+    ``pconfig.plugin_roots_from``, including the ``plugins.dir`` override that
+    ``live_plugins_dir`` now resolves."""
+    return [bundled_plugins_dir(), live_plugins_dir()]
 
 
 def _same_dir(a: Path, b: Path) -> bool:
@@ -197,7 +192,7 @@ def effective_source_url(plugin_id: str) -> str:
     would call it bundled)."""
     running = effective_copies().get(plugin_id)
     if running is not None:
-        bundled_root, live_root = _loader_roots()[0], _loader_roots()[-1]
+        bundled_root, live_root = _loader_roots()
         if _same_dir(running.path.parent, bundled_root) and not _same_dir(bundled_root, live_root):
             return ""
     return recorded_source_url(plugin_id)
@@ -253,9 +248,18 @@ class BundleNotInstalledError(InstallError):
 
 
 def live_plugins_dir() -> Path:
-    """Where git-installed plugins land — the live dir the loader discovers
-    (``instance_paths().plugins_dir``, honoring ``PROTOAGENT_PLUGINS_DIR``)."""
-    return instance_paths().plugins_dir
+    """Where git-installed plugins live — the live dir the LOADER discovers: the
+    ``plugins.dir`` config override when set, else ``instance_paths().plugins_dir``
+    (honoring ``PROTOAGENT_PLUGINS_DIR``).
+
+    The override is read HERE, not only in ``loader._plugin_roots``, so every lifecycle
+    operation acts on the dir the loader actually reads — install, uninstall (a
+    superseded copy's removal included), the installed inventory, sync, and scaffolding.
+    Honoring it in only some of those is how a removal drops a lock row while leaving the
+    copy on disk: the copy then loads as an UNTRACKED one and can shadow the bundled
+    plugin again under the #1574 rule."""
+    override = configured_plugins_dir()
+    return Path(override).expanduser() if override else instance_paths().plugins_dir
 
 
 def _git(*args: str, cwd: Path | None = None, timeout: float | None = None, env: dict | None = None) -> str:
@@ -1526,7 +1530,14 @@ def _remove_installed_copy(target: Path) -> None:
         return
     backup = target.parent / (target.name + ".bak")
     _discard(backup)
-    os.rename(target, backup)
+    try:
+        os.rename(target, backup)
+    except OSError as exc:
+        # Callers (the REST routes, the ops layer, the CLI) handle InstallError; a bare
+        # OSError escaping from here is a 500 / traceback instead of "couldn't remove it".
+        raise InstallError(
+            f"could not remove the installed copy at {target} (it was left in place): {exc}"
+        ) from exc
     _discard(backup)
     if backup.exists() or backup.is_symlink():
         log.warning("[plugins] %s could not be fully deleted — it is inert (*.bak is never loaded); remove it by hand", backup)

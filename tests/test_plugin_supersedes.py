@@ -22,6 +22,7 @@ installer walks its real https path — ls-remote, clone — with no network.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -31,6 +32,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _pytest.outcomes import Failed
 
 # Only names that predate the feature are imported at module level, so running this file
 # against a host WITHOUT it fails test-by-test (the red check) rather than at collection.
@@ -1273,3 +1275,62 @@ async def test_devkit_uninstall_unloads_a_superseded_copy_it_was_running(host, m
     out = await mod.uninstall_plugin.ainvoke({"plugin_id": "cowork"})
     assert "removed the superseded copy" not in out and out.startswith("✓ uninstalled cowork")
     assert MODULE not in sys.modules and applied == [None]  # purged + reloaded
+
+
+# ── every lifecycle op acts on the root the loader reads (`plugins.dir`) ───────────
+
+
+def test_lifecycle_operations_follow_the_configured_plugins_dir(host):
+    """Removal, the inventory and sync all have to use the dir the LOADER reads. Using
+    the instance dir while the loader read the configured one let a superseded uninstall
+    drop the lock row and leave the copy on disk — where, now untracked, it can shadow
+    the bundled copy again (#1574)."""
+    alt = host.home / "alt-plugins"
+    _write_plugin(alt / "cowork", "cowork", "0.3.1")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "cowork", "source_url": UPSTREAM}]}))
+    _ship_bundled(host)
+    _write_config(host, {"plugins": {"dir": str(alt), "enabled": ["cowork"]}})
+
+    assert installer.live_plugins_dir() == alt
+    [row] = [r for r in installer.list_installed() if r["id"] == "cowork"]
+    assert row["superseded"] is True and row["copy_on_disk"] is True  # the ALT copy was seen
+    assert installer.sync() == [{"id": "cowork", "status": "present"}]
+
+    assert installer.uninstall("cowork")["superseded_by_bundled"] == "0.4.0"
+    assert not (alt / "cowork").exists()  # the copy that actually loads is what went
+    assert installer._read_lock()["plugins"] == []
+    assert _read_config(host)["plugins"]["enabled"] == ["cowork"]  # still on
+    assert installer.list_installed() == []
+
+
+def test_a_removal_that_cannot_rename_raises_install_error(host):
+    """A failed removal must reach callers as InstallError (they all handle it) — a bare
+    OSError is a 500 with a traceback instead of "couldn't remove it"."""
+    _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
+    _old_host_install(host)
+    _ship_bundled(host)
+    host.live.chmod(0o500)  # the copy's PARENT is read-only → rename can't move it aside
+    try:
+        with pytest.raises(installer.InstallError, match="could not remove the installed copy"):
+            installer.uninstall("cowork")
+    except Failed:  # pragma: no cover — a platform where the rename still succeeds
+        pytest.skip("this platform allows the rename with a read-only parent")
+    finally:
+        host.live.chmod(0o700)
+    # Nothing was half-done: the copy is still there, still recorded, still ignored.
+    assert (host.live / "cowork").exists() and installer._read_lock()["plugins"]
+
+
+def test_the_autoupdate_skip_log_redacts_the_install_url(host, monkeypatch, caplog):
+    from server import agent_init
+
+    secret_url = "https://x-access-token:SEKRET@git.example.test/protoLabsAI/cowork-plugin"
+    _superseded_pair(host, recorded=secret_url)
+    cfg = types.SimpleNamespace(plugins_enabled=["cowork"], plugins_disabled=[], plugins_sources_allow=[])
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **kw: (True, []))
+    with caplog.at_level(logging.INFO):
+        updated = asyncio.run(
+            agent_init._plugin_autoupdate_sweep(cfg, {"cowork": {"track": "main", "when": "always"}})
+        )
+    assert updated == 0
+    assert "ships with protoAgent now" in caplog.text and "SEKRET" not in caplog.text
