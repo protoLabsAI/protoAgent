@@ -640,33 +640,35 @@ def test_install_deps_hard_pip_failure_still_raises(env, monkeypatch):
 def test_install_deps_already_satisfied_runs_no_pip_and_reports_nothing_new(env, monkeypatch):
     """The confirmed waste (#3450): pip ran for every declared dep regardless, the route
     counted already-present packages as "installed", and that triggered a refresh for a
-    plugin whose state had not changed. Real pre-check here — this venv has both."""
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [requests>=2, {pkg: 'rich', optional: true}]\n")
+    plugin whose state had not changed. Real pre-check here, on two LOCKED core deps
+    (packaging, pyyaml) so it holds in any environment — not on whatever the dev's venv
+    happens to carry (`rich` arrived with import-linter locally and isn't in uv.lock)."""
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [packaging>=1, {pkg: 'pyyaml', optional: true}]\n")
     installer.install(str(repo))
     monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: pytest.fail("pip ran for deps already there"))
     newly: list[str] = []
-    assert installer.install_deps("demo_ext", newly_installed=newly) == ["requests>=2", "rich"]  # satisfied
+    assert installer.install_deps("demo_ext", newly_installed=newly) == ["packaging>=1", "pyyaml"]  # satisfied
     assert newly == []
 
 
 def test_install_deps_pips_only_what_is_missing(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [requests>=2, nope-pkg-q]\n")
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [packaging>=1, nope-pkg-q]\n")
     installer.install(str(repo))
     calls = []
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
     newly: list[str] = []
-    assert installer.install_deps("demo_ext", newly_installed=newly) == ["requests>=2", "nope-pkg-q"]
-    assert [c[4:] for c in calls] == [["--", "nope-pkg-q"]]  # requests was already there
+    assert installer.install_deps("demo_ext", newly_installed=newly) == ["packaging>=1", "nope-pkg-q"]
+    assert [c[4:] for c in calls] == [["--", "nope-pkg-q"]]  # packaging was already there
     assert newly == ["nope-pkg-q"]
 
 
 @pytest.mark.parametrize(
     "spec,met",
     [
-        ("requests>=2", True),
-        ("requests>=999", False),  # installed, but too old: pip must still run (it upgrades)
+        ("packaging>=1", True),  # a locked core dep — present in every environment
+        ("packaging>=9999", False),  # installed, but too old: pip must still run (it upgrades)
         ("nope-pkg-q", False),
-        ('requests>=999; python_version < "3"', True),  # ruled out on this Python
+        ('packaging>=9999; python_version < "3"', True),  # ruled out on this Python
     ],
 )
 def test_spec_satisfied_checks_the_version_not_just_the_name(spec, met):
