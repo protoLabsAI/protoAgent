@@ -490,6 +490,9 @@ export const installedPluginsQuery = () =>
     queryKey: queryKeys.installedPlugins,
     queryFn: () => api.installedPlugins(),
     retry: false,
+    // Poll while the server reports a dependency install running (one per environment at
+    // a time), so a row that's busy because of another tab clears when that install ends.
+    refetchInterval: (query) => (query.state.data?.deps_installing ? 2000 : false),
   });
 
 // Per-plugin update status (ADR 0027) — joined to the installed/runtime rows to

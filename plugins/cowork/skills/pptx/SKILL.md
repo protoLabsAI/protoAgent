@@ -7,7 +7,7 @@ tools: [execute_code, save_file_artifact]
 # Slide decks with python-pptx
 
 Write the deck with `execute_code` using `python-pptx`, save into the fenced
-project folder (or configured `output_dir`), report the path.
+project folder (if there are several, ask once which and remember it), report the path.
 
 ## Work outline-first
 

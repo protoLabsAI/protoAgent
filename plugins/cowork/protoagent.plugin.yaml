@@ -40,11 +40,13 @@ enables: [execute_code]
 supersedes:
   - https://github.com/protoLabsAI/cowork-plugin
 
-config_section: cowork
-config:
-  # Where document deliverables are written. Empty = the skills tell the agent
-  # to use the operator's fenced project folder (or ask once and remember).
-  output_dir: ""
+# No config. `cowork.output_dir` shipped from v0.1.0 through v0.4.0, but nothing ever read
+# it: no code, and no channel that shows plugin config to the agent. So the skills'
+# "(or configured output_dir)" pointed at a value the model could never see. Deliverables
+# go to the operator's fenced work folders (Settings ▸ Tools), and save_file_artifact
+# registers them in the Artifact panel. A config that still sets `cowork.output_dir` is
+# left in the file untouched and ignored: no plugin claims the section, so nothing reads,
+# warns about or rewrites it.
 
 requires_pip:
   # Optional tier (protoAgent #1954): the document skills lazy-import these and degrade with a

@@ -4,6 +4,8 @@ import {
   bundleLabel,
   distinctBundles,
   contributionCount,
+  depsButtonState,
+  depsInstallBusyId,
   filterInstalled,
   needsAttention,
   sortInstalled,
@@ -198,6 +200,22 @@ describe("uninstall wording for a plugin that now ships with protoAgent (#3445)"
   });
 });
 
+
+describe("Install deps while an install is running (one pip per environment)", () => {
+  it("prefers this tab's own request, else the install the server reports", () => {
+    expect(depsInstallBusyId("cowork", null)).toBe("cowork");
+    expect(depsInstallBusyId(undefined, "notes")).toBe("notes");
+    expect(depsInstallBusyId("cowork", "notes")).toBe("cowork");
+    expect(depsInstallBusyId(undefined, undefined)).toBeNull();
+    expect(depsInstallBusyId(null, null)).toBeNull();
+  });
+
+  it("shows the running row installing and makes every other row wait", () => {
+    expect(depsButtonState("cowork", "cowork")).toBe("installing");
+    expect(depsButtonState("notes", "cowork")).toBe("blocked");
+    expect(depsButtonState("notes", null)).toBe("idle");
+  });
+});
 
 describe("toggleToast", () => {
   it("names a just-enabled plugin's missing packages and where to install them (#3450)", () => {

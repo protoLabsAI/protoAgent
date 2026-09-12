@@ -694,6 +694,10 @@ export function SetupWizard({
     }
   }
 
+  // One dependency install per environment at a time (the server 409s a second), so while
+  // one row installs, the others wait instead of offering a click that can only be refused.
+  const depsBusy = (postInstall ?? []).some((r) => r.state === "busy");
+
   async function installDepsFor(id: string) {
     setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "busy" as const } : r)) ?? null);
     try {
@@ -1092,7 +1096,7 @@ export function SetupWizard({
                       <Button
                         type="button"
                         onClick={() => void installDepsFor(row.id)}
-                        disabled={row.state === "busy" || row.state === "done"}
+                        disabled={row.state === "busy" || row.state === "done" || depsBusy}
                       >
                         {row.state === "busy" ? <Spinner size={14} /> : null}
                         {row.state === "done" ? "Installed ✓" : row.state === "error" ? "Retry" : "Install"}
