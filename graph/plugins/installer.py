@@ -981,7 +981,7 @@ def install(
         backup = target.parent / (target.name + ".bak")
         _discard(backup)  # leftover from a previously interrupted swap
         backed_up = False
-        if target.exists() or target.is_symlink():
+        if target.exists() or _is_link(target):
             try:
                 os.rename(target, backup)
                 backed_up = True
@@ -1429,7 +1429,11 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
 
     What gets deleted is never "whatever sits at <live>/<id>" — only the path the loader
     itself found as that plugin's copy (``_removable_copy``). A different plugin's folder,
-    a folder with no plugin in it, and the bundled tree can never be that path."""
+    a folder with no plugin in it, and the bundled tree can never be that path. The
+    ordinary (non-bundled) uninstall applies the same rule (``_plain_copy_refusal``): since
+    #3452 ``<live>`` is ``plugins.dir`` when set, often a folder of checkouts. A dangling
+    link at exactly ``<live>/<id>`` is unlinked (it has no target to harm) and named in
+    the report as ``dangling_link``."""
     if _is_builtin(plugin_id):
         bundled = _bundled_manifest(plugin_id)
         recorded = recorded_source_url(plugin_id)
@@ -1439,20 +1443,30 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
             raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
         target, why_not = _removable_copy(plugin_id)
         if target is None and not recorded:
-            # Untracked, and nothing the loader vouches for: refuse, delete nothing. (A tracked
-            # superseded row with no verifiable copy still gets its lock entry cleared below —
-            # which removes no files.)
-            raise InstallError(why_not)
-        return _uninstall_superseded(plugin_id, bundled, purge=purge, target=target)
-    target = live_plugins_dir() / plugin_id
+            # Untracked, and nothing the loader vouches for: refuse, delete nothing.
+            raise InstallError(
+                why_not
+                or f"{plugin_id!r} ships with protoAgent and there is no installed copy of it in "
+                f"{live_plugins_dir()} — nothing to uninstall. To turn the plugin off, disable it instead."
+            )
+        # A tracked superseded row still gets its lock entry cleared — which removes no files.
+        # If something IS on disk that the guards refused, that reason rides along in the
+        # report (`left_in_place`) instead of vanishing behind a "removed: lock" success.
+        return _uninstall_superseded(plugin_id, bundled, purge=purge, target=target, left_in_place=why_not)
+    live_root = live_plugins_dir()
+    target = live_root / plugin_id
+    dangling = _is_link(target) and not target.exists()
     # Read the manifest BEFORE deleting — purge needs the config section + we report
     # the declared deps.
-    manifest = load_manifest(target) if (target / "protoagent.plugin.yaml").exists() else None
+    manifest = None if dangling else (load_manifest(target) if (target / MANIFEST_FILENAME).exists() else None)
+    refusal = _plain_copy_refusal(plugin_id, target, live_root, manifest, dangling=dangling)
+    if refusal:
+        raise InstallError(refusal)
     section = (manifest.config_section if manifest else "") or plugin_id
     deps_left = [*manifest.requires_pip, *manifest.optional_pip] if manifest else []
 
     removed: list[str] = []
-    if target.exists() or target.is_symlink():
+    if target.exists() or _is_link(target):
         # Rename aside first (atomic, same parent dir), then delete (#3075): an
         # interrupted removal leaves `<id>.bak` — never a half-deleted live plugin
         # dir. A leftover backup is cleared by the next install of the same id.
@@ -1491,16 +1505,21 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
 
     _audit("uninstall", {"id": plugin_id, "purge": purge}, f"uninstalled {plugin_id} ({', '.join(removed)})")
     log.info("[plugins] uninstalled %s (%s)", plugin_id, ", ".join(removed))
-    return {
+    report = {
         "id": plugin_id,
         "removed": removed,
         "deps_left": deps_left,
         "purged": purge,
         "jobs_cancelled": jobs_cancelled,
     }
+    if dangling:
+        report["dangling_link"] = str(target)
+    return report
 
 
-def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: bool, target: Path | None) -> dict:
+def _uninstall_superseded(
+    plugin_id: str, bundled: PluginManifest, *, purge: bool, target: Path | None, left_in_place: str = ""
+) -> dict:
     """Remove the IGNORED installed copy of a plugin that now ships with protoAgent —
     whether the bundled manifest superseded its source or #1574 demoted it (an untracked
     copy, which has no lock row to remove and is often a symlinked dev checkout).
@@ -1524,6 +1543,7 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
     # `target` is the ONE path `_removable_copy` verified — or None: nothing on disk to
     # remove (a tracked row whose files are already gone). Nothing else is touched.
     was_loaded = _running_copy_is(plugin_id, target) if target is not None else False
+    dangling = target is not None and _is_link(target) and not target.exists()
     removed: list[str] = []
     if target is not None:
         # Same rename-aside-then-delete as a normal uninstall (#3075); a symlinked copy
@@ -1561,7 +1581,7 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
         bundled.version,
         " (this process was still running the removed copy — unload it)" if was_loaded else "",
     )
-    return {
+    report = {
         "id": plugin_id,
         "removed": removed,
         "deps_left": [],
@@ -1570,6 +1590,12 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
         "superseded_by_bundled": bundled.version,
         "was_loaded": was_loaded,
     }
+    if dangling:
+        report["dangling_link"] = str(target)
+    if target is None and left_in_place:
+        report["left_in_place"] = left_in_place
+        log.warning("[plugins] %s: lock entry cleared, but %s", plugin_id, left_in_place)
+    return report
 
 
 def _removable_copy(plugin_id: str) -> tuple[Path | None, str]:
@@ -1584,7 +1610,9 @@ def _removable_copy(plugin_id: str) -> tuple[Path | None, str]:
     path its banner names, whatever the folder is called) or, for an untracked copy that
     isn't older, the one it runs. Even then every guard must hold: the live root is not
     the bundled tree, the path sits directly in the live root, and it holds a manifest
-    whose id is ``plugin_id``."""
+    whose id is ``plugin_id``. The one exception is a DANGLING link at exactly
+    ``<live>/<id>``: nothing is there to verify, and unlinking it harms nothing.
+    ``(None, "")`` means there is nothing on disk at all."""
     from graph.plugins.loader import discover_plugins
 
     bundled_root, live_root = loader_roots()
@@ -1603,20 +1631,17 @@ def _removable_copy(plugin_id: str) -> tuple[Path | None, str]:
         candidate = run.path if run is not None and _same_dir(run.path.parent, live_root) else None
     if candidate is None:
         stray = live_root / plugin_id
-        if stray.is_symlink() and not stray.exists():
-            return None, (
-                f"{stray} is a symlink to a path that no longer exists, so there is no plugin copy there "
-                f"to verify — uninstall won't touch it. Remove the link yourself: rm {stray}"
-            )
+        if _is_link(stray) and not stray.exists():
+            # A dangling link at exactly <live>/<id> (the checkout it pointed at moved): it has
+            # no target, so unlinking it can't touch anything else — it goes, rather than
+            # leaving the operator to `rm` it by hand.
+            return stray, ""
         if stray.exists():
             return None, (
                 f"{stray} doesn't hold a copy of {plugin_id!r} (it holds another plugin, or none) — "
                 f"uninstall won't delete it. {plugin_id!r} ships with protoAgent; to turn it off, disable it."
             )
-        return None, (
-            f"{plugin_id!r} ships with protoAgent and there is no installed copy of it in {live_root} — "
-            "nothing to uninstall. To turn the plugin off, disable it instead."
-        )
+        return None, ""  # nothing on disk at all
     if not _same_dir(candidate.parent, live_root):
         return None, f"{candidate} is outside the live plugins dir {live_root} — refusing to delete it."
     manifest = load_manifest(candidate)
@@ -1625,13 +1650,69 @@ def _removable_copy(plugin_id: str) -> tuple[Path | None, str]:
     return candidate, ""
 
 
+def _is_link(path: Path) -> bool:
+    """A symlink OR a Windows directory junction — the no-admin way to link a dev checkout
+    (#2298). Either is UNLINKED, never followed: treated as a real folder, a junction was
+    renamed aside, ``rmtree`` refused it, and ``ignore_errors`` left an inert ``.bak``.
+    ``Path.is_junction`` is 3.12+, hence the ``getattr``. (Junction handling is untested
+    on real Windows; the unit test simulates one.)"""
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    try:
+        return bool(is_junction and is_junction())
+    except OSError:
+        return False
+
+
+def _unlink_link(path: Path) -> None:
+    """Remove the LINK itself. A junction is a directory reparse point: ``os.rmdir``
+    removes it and never touches the files it points at (``unlink`` refuses one)."""
+    if path.is_symlink():
+        path.unlink()
+    else:
+        os.rmdir(path)
+
+
+def _plain_copy_refusal(
+    plugin_id: str, target: Path, live_root: Path, manifest: PluginManifest | None, *, dangling: bool
+) -> str | None:
+    """Why the ordinary uninstall must NOT delete ``target`` (``<live>/<id>``), else None.
+
+    Since #3452 ``<live>`` is ``plugins.dir`` when set — often a folder of checkouts, not a
+    folder only the installer writes — so "a folder is there" proves nothing. It goes only
+    when it IS this plugin: a manifest with this id, or (no readable manifest) a
+    ``plugins.lock`` row saying the installer put it there, so a broken install stays
+    removable. Never from the bundled tree. A dangling link has no target, so unlinking
+    it touches nothing else."""
+    if not (target.exists() or _is_link(target)):
+        return None  # nothing on disk — only the lock row / config refs to clear
+    if _same_dir(bundled_plugins_dir(), live_root):
+        return (
+            f"{target} is in protoAgent's own bundled plugins tree (plugins.dir points there) — "
+            "uninstall won't delete from it. Point plugins.dir somewhere else."
+        )
+    if dangling:
+        return None
+    if manifest is not None:
+        if manifest.id == plugin_id:
+            return None
+        return f"{target} holds plugin {manifest.id!r}, not {plugin_id!r} — uninstall won't delete it."
+    if plugin_id in _lock_rows_by_id():
+        return None
+    return (
+        f"{target} holds no plugin and plugins.lock has no entry for {plugin_id!r}, so it isn't an "
+        "install — uninstall won't delete it. If it's yours to remove, delete it by hand."
+    )
+
+
 def _discard(path: Path) -> None:
     """Best-effort removal of an install/uninstall swap leftover (``<id>.bak``). A
-    symlink is unlinked, never followed — ``shutil.rmtree`` refuses symlinks, and with
-    ``ignore_errors`` that refusal used to leave the link behind silently."""
+    link (symlink or junction) is unlinked, never followed — ``shutil.rmtree`` refuses
+    links, and with ``ignore_errors`` that refusal used to leave the link behind silently."""
     try:
-        if path.is_symlink():
-            path.unlink()
+        if _is_link(path):
+            _unlink_link(path)
         elif path.exists():
             shutil.rmtree(path, ignore_errors=True)
     except OSError:
@@ -1644,8 +1725,8 @@ def _remove_installed_copy(target: Path) -> None:
     folder is renamed aside and then deleted (#3075), so an interruption leaves
     ``<id>.bak``, never a half-deleted live plugin — and discovery skips ``*.bak``, so a
     leftover can never load in place of anything."""
-    if target.is_symlink():
-        target.unlink()
+    if _is_link(target):  # re-checked HERE, at delete time — a folder swapped for a link since the guards ran
+        _unlink_link(target)
         return
     backup = target.parent / (target.name + ".bak")
     _discard(backup)
@@ -1658,7 +1739,7 @@ def _remove_installed_copy(target: Path) -> None:
             f"could not remove the installed copy at {target} (it was left in place): {exc}"
         ) from exc
     _discard(backup)
-    if backup.exists() or backup.is_symlink():
+    if backup.exists() or _is_link(backup):
         log.warning("[plugins] %s could not be fully deleted — it is inert (*.bak is never loaded); remove it by hand", backup)
 
 

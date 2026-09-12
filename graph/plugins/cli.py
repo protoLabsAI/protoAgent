@@ -252,6 +252,13 @@ def run_plugin_cli(argv: list[str]) -> int:
             was_enabled = _enabled_in_live_config(args.id)
             rep = installer.uninstall(args.id, purge=args.purge)
             print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
+            if rep.get("dangling_link"):
+                print(
+                    f"  {rep['dangling_link']} was a link to a path that no longer exists — unlinked "
+                    "(it had no target, so nothing else was touched)."
+                )
+            if rep.get("left_in_place"):
+                print(f"  ⚠ lock entry cleared, files left in place: {rep['left_in_place']}")
             if rep.get("superseded_by_bundled"):
                 # Only the ignored copy went — the bundled one keeps running, and nothing
                 # keyed by the id was touched.

@@ -168,24 +168,39 @@ def refused_plugins_dir_message(config_value: object = None) -> str | None:
     (config) or ``PROTOAGENT_PLUGINS_DIR`` (env) — else ``None``.
 
     Unlike the fs fence skipping one project, this refusal moves the WHOLE plugin root
-    back to the default, so the operator's plugins simply stop loading; a log line alone
-    left nothing on screen to explain it."""
+    to the fallback, so the operator's plugins simply stop loading; a log line alone left
+    nothing on screen to explain it. Only a refusal that actually decides the root counts:
+    an absolute ``plugins.dir`` wins, so a bad env var under it changes nothing and says
+    nothing. The banner names the directory plugins really load from instead."""
     import os
 
     text = str(config_value or "").strip()
-    if text and not Path(text).expanduser().is_absolute():
+    if text:
+        if Path(text).expanduser().is_absolute():
+            return None  # the config override is valid and wins; the env var is irrelevant
         return (
-            f"plugins.dir {text!r} is not absolute, so it is ignored and plugins load from the "
-            "instance's own plugins dir instead — a relative path resolves differently in each "
+            f"plugins.dir {text!r} is not absolute, so it is ignored and plugins load from "
+            f"{_fallback_plugins_root()} instead — a relative path resolves differently in each "
             "process (server, CLI, fleet subprocess). Set an absolute path."
         )
     env = os.environ.get("PROTOAGENT_PLUGINS_DIR", "").strip()
     if env and not Path(env).expanduser().is_absolute():
         return (
             f"PROTOAGENT_PLUGINS_DIR {env!r} is not absolute, so it is ignored and plugins load from "
-            "the instance's own plugins dir instead. Set an absolute path."
+            f"{_fallback_plugins_root()} instead. Set an absolute path."
         )
     return None
+
+
+def _fallback_plugins_root() -> str:
+    """Where plugins load from when ``plugins.dir`` is refused: the instance's plugins dir,
+    which itself honours an ABSOLUTE ``PROTOAGENT_PLUGINS_DIR``."""
+    try:
+        from infra.paths import instance_paths
+
+        return str(instance_paths().plugins_dir)
+    except Exception:  # noqa: BLE001 — a banner's wording must never break plugin loading
+        return "the instance's own plugins dir"
 
 
 def plugin_roots_from(plugins_root: Path, dir_override: str = "") -> list[Path]:
