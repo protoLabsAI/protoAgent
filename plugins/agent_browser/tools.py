@@ -9,6 +9,12 @@ Tools return the CLI's stdout (refs, extracted text, file paths) for the model t
 read, and degrade to a readable ``Error: …`` string rather than raising — a failed
 browser action should inform the loop, not crash it.
 
+The CLI each call runs is RESOLVED per call (``preflight.cli_for_run``): PATH first, then a
+path pinned in ``binary``, then the pinned download ``cli_fetch`` keeps in the box cache —
+and on FIRST USE with none of those, that download happens inline (``cli_autofetch``, on by
+default), so the agent's first ``browser_open`` just works once Chrome is there. Chrome
+itself is never installed from here; that's the operator's banner button.
+
 Three things the in-tree copy adds (#3451):
 
 * **A broken setup is an operator banner, not just a tool-loop error.** The tools start
@@ -41,8 +47,8 @@ import time
 
 from langchain_core.tools import tool
 
-from . import preflight, storage
-from .runtime import bad_operand, launch_flags, number
+from . import cli_fetch, preflight, storage
+from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
@@ -96,6 +102,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     cfg = cfg or {}
     binary = str(cfg.get("binary") or "agent-browser")
     timeout = number(cfg, "timeout_s", 60.0, positive=True)
+    # First use with no CLI anywhere → download the pinned build (see the module doc).
+    autofetch = flag(cfg, "cli_autofetch", True)
     # Plugin-owned cap on the total bytes a single invocation may buffer. Untrusted page
     # content (get text/html, eval) can emit unbounded output that would otherwise pile up
     # in memory and flood the model's context window, so we read the pipes incrementally
@@ -159,6 +167,15 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         is the wrong advice for the second, so tell them apart."""
         found = preflight.resolve_binary(binary)
         if isinstance(e, FileNotFoundError) and not found:
+            fetch = cli_fetch.fetch_state() if preflight.is_default(binary) else {}
+            if fetch.get("state") == "fetching":
+                return (f"Error: the {binary!r} CLI is still downloading (a slow connection) — it "
+                        f"carries on in the background; try again in a minute. The console's setup "
+                        f"banner shows its progress.")
+            if fetch.get("state") == "failed":
+                return (f"Error: {binary!r} isn't installed, and downloading it failed "
+                        f"({str(fetch.get('error'))[:200]}). The console's setup banner has a Retry "
+                        f"button; or install it yourself: `{preflight.INSTALL_HINT}`.")
             return (f"Error: {binary!r} not on PATH — install it: "
                     f"`{preflight.INSTALL_HINT}`. The console's setup banner now says so too.")
         reason = e.strerror or str(e) or e.__class__.__name__
@@ -176,10 +193,13 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         is killed and a bounded diagnostic is returned; on timeout the child is terminated.
         Either way the child is reaped — no zombies.
         """
+        # PATH > pinned path > the fetched CLI; on first use with none, the pinned download.
+        exe = preflight.cli_for_run(binary, autofetch=autofetch,
+                                    on_done=refresh_gaps if callable(refresh_gaps) else None)
         try:
             # Its own session: its pid becomes a process-group id, so a timeout can kill
             # everything it started (see _kill_tree). Ignored on Windows.
-            proc = subprocess.Popen([binary, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = subprocess.Popen([exe, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)
         except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console

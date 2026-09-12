@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@protolabsai/ui/data";
+import { useToast } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
+import { api } from "../lib/api";
+import { queryKeys } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 
 // Structured plugin SETUP GAP delivered on runtime status `setup_gaps[]` (server side:
@@ -17,9 +21,16 @@ import { useUI } from "../state/uiStore";
 // UI-store method (below). A plugin string is never turned into a URL, markup, or a
 // callback — anything unrecognized renders no interactive control and the banner degrades
 // to a plain message. This mirrors ACTION_KINDS in setup_gaps.py on the way out.
+//
+// `plugin_setup` is the one kind whose button reaches the server: it POSTs
+// /api/plugin-setup/<gap.plugin>/<step>, a path built from THIS gap's plugin id and the
+// server-validated step identifier (never a URL from the payload), and the host runs only the
+// callable that plugin registered for that step ("Download the CLI", "Install Chrome"). The
+// route is core and outside /api/plugins/<id>/, so no plugin manifest can un-gate it.
 export type SetupGapAction = {
   kind: string;
   target?: string;
+  step?: string;
   label?: string;
   fields?: string[];
 };
@@ -203,7 +214,78 @@ export function useSetupGapDismissals(
 function ctaLabel(action: SetupGapAction, gap: SetupGap): string {
   if (typeof action.label === "string" && action.label.trim()) return action.label.trim();
   if (action.kind === "plugin_config") return `Configure ${gap.label}`;
+  if (action.kind === "plugin_setup") return "Run setup";
   return "Open settings";
+}
+
+type SetupStepWatch = { plugin: string; key: string; since: number; until: number };
+
+/**
+ * Whether App can stop polling runtime status for a setup step it started: the watch expired,
+ * or a status fetched AFTER the click (`dataUpdatedAt > since`) shows the gap gone (done) or
+ * offering a `plugin_setup` button again (failed → Retry). A status from before the click still
+ * shows the button that was just pressed, so it proves nothing; an unknown list neither.
+ */
+export function setupStepWatchDone(
+  watch: SetupStepWatch | undefined,
+  gaps: SetupGap[],
+  gapsKnown: boolean,
+  dataUpdatedAt: number,
+  now: number = Date.now(),
+): boolean {
+  if (!watch) return true;
+  if (now >= watch.until) return true;
+  if (!gapsKnown || dataUpdatedAt <= watch.since) return false;
+  const gap = gaps.find((g) => g.plugin === watch.plugin && g.key === watch.key);
+  if (!gap) return true;
+  return (Array.isArray(gap.actions) ? gap.actions : []).some((a) => Boolean(a) && a.kind === "plugin_setup");
+}
+
+/** True while a banner-started setup step is being watched — App's status poll reads this. */
+export function setupStepWatchActive(now: number = Date.now()): boolean {
+  const watch = useUI.getState().setupStepWatch;
+  return Boolean(watch && watch.until > now);
+}
+
+/**
+ * A `plugin_setup` CTA: runs the step the REPORTING plugin registered. Its own component so the
+ * query-client / toast hooks exist only where such an action is actually rendered. A `pending`
+ * answer (the plugin started a download/install in the background) arms App's status poll so
+ * the banner's progress and outcome show up without a reload.
+ */
+function SetupStepButton({ gap, action }: { gap: SetupGap; action: SetupGapAction }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const watchSetupStep = useUI((s) => s.watchSetupStep);
+  const [busy, setBusy] = useState(false);
+  const step = typeof action.step === "string" ? action.step : "";
+  const label = ctaLabel(action, gap);
+
+  const run = useCallback(async () => {
+    if (!step) return;
+    setBusy(true);
+    try {
+      const res = await api.runPluginSetupStep(gap.plugin, step);
+      if (res.ok === false) {
+        toast({ tone: "error", title: `${gap.label}: ${label} failed`, message: res.message || "The setup step failed." });
+      } else {
+        if (res.pending) watchSetupStep(gap.plugin, gap.key);
+        if (res.message) toast({ tone: res.pending ? "info" : "success", title: gap.label, message: res.message });
+      }
+    } catch (err) {
+      toast({ tone: "error", title: `${gap.label}: ${label} failed`, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(false);
+      // The step re-reported its gap before answering ("downloading…", no button) — show it now.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
+    }
+  }, [gap.plugin, gap.key, gap.label, label, step, toast, watchSetupStep, queryClient]);
+
+  return (
+    <Button variant="default" size="sm" type="button" disabled={busy} onClick={() => void run()}>
+      {busy ? "Working…" : label}
+    </Button>
+  );
 }
 
 /**
@@ -239,6 +321,12 @@ export function SetupGapBanner({ gap, onDismiss }: { gap: SetupGap; onDismiss: (
   const ctas = rawActions
     .map((action, index) => {
       if (!action || typeof action !== "object") return null;
+      if (action.kind === "plugin_setup") {
+        // No step, no button: there'd be nothing to run (the host drops such an action anyway).
+        return typeof action.step === "string" && action.step ? (
+          <SetupStepButton key={`${action.kind}:${action.step}:${index}`} gap={gap} action={action} />
+        ) : null;
+      }
       const onClick = handlerFor(action);
       if (!onClick) return null; // unknown/malformed → render no interactive control
       return (

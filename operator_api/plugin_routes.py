@@ -255,6 +255,33 @@ def register_plugin_routes(app) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "installed": installed}
 
+    # NOT under /api/plugins/<id>/: that subtree is one a plugin may exempt from the auth gate
+    # (manifest `public_paths`) or open to fleet peers (`federation_paths`), and a core route
+    # there inherits the exemption. Running a step (a download, an install) must ALWAYS take the
+    # operator credential, so it lives in a namespace no manifest can claim.
+    @app.post("/api/plugin-setup/{plugin_id}/{step}")
+    async def _run_setup_step(plugin_id: str, step: str):
+        """Run one SETUP STEP a plugin registered (``registry.register_setup_step``) — what a
+        setup-gap banner's ``plugin_setup`` button calls ("Download the CLI", "Install
+        Chrome"). The host runs only the callable it holds for exactly this (plugin, step)
+        pair: nothing from the request is executed, and a step is reachable only while its
+        plugin is loaded (a disable, an uninstall or a failed reload drops it). 404 otherwise.
+        Operator-only: the path is outside every plugin-exemptable prefix. Off the event loop —
+        a step may spawn a process or touch the network before it hands long work to a
+        thread. Returns ``{"ok", "message", "pending"}``; a step that raised is ``ok: false``
+        with its message, never a 500."""
+        from graph.plugins import setup_gaps
+
+        if not setup_gaps.has_step(plugin_id, step):
+            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)")
+        log.info("[plugins] running setup step %s/%s", plugin_id, step)
+        result = await asyncio.to_thread(setup_gaps.run_step, plugin_id, step)
+        if result is None:  # dropped between the check and the run (a reload / disable)
+            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)")
+        # Audit-logged like install-deps (ADR 0027 D5): a step may fetch or install software.
+        installer._audit("setup_step", {"id": plugin_id, "step": step}, result.get("message") or "", success=result["ok"])
+        return result
+
     @app.get("/api/plugins/catalog")
     async def _catalog():
         """The curated official-plugin directory (ADR 0059) — `config/plugin-catalog.json`

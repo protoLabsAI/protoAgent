@@ -288,6 +288,7 @@ class FakeRegistry:
         self.thread_id_resolver = None
         self.setup_gaps: dict[str, str] = {}  # key -> message reported via report_setup_gap
         self.setup_gap_actions: dict = {}  # key -> raw action passed alongside a gap (unvalidated capture)
+        self.setup_steps: dict = {}  # step -> fn registered via register_setup_step
 
     def live_config(self) -> dict:
         """The real registry re-reads host state here; with no host that falls back to
@@ -310,6 +311,13 @@ class FakeRegistry:
             self.setup_gaps[key] = str(message).strip()
             if action is not None:
                 self.setup_gap_actions[key] = action
+
+    def register_setup_step(self, step: str, fn) -> None:
+        """Records the step (``self.setup_steps[step] = fn``) so a plugin test can run it the
+        way the host's ``POST /api/plugins/<id>/setup-steps/<step>`` would — call it and
+        assert on the message / ``pending`` it returns. Same signature as the host method;
+        the host also validates the id and caps the count."""
+        self.setup_steps[step] = fn
 
     # contributions
     def register_tool(self, tool) -> None:

@@ -131,11 +131,14 @@ export type RuntimeStatus = {
 // a known "fix this" affordance — a plugin string is never turned into a URL, HTML,
 // or a callback. `target` is an identifier (the reporting plugin's id for
 // `plugin_config`, or a settings-section slug for `global_settings`), never a URL.
+// `plugin_setup` carries a `step` — an identifier naming a setup step the reporting
+// plugin registered — which the console POSTs to /api/plugin-setup/<plugin>/<step>.
 // `label`/`fields` are bounded plain text. The host sanitizes all of this on the way
 // in (graph/plugins/setup_gaps.py), so anything unrecognized/unsafe is already gone.
 export type SetupGapAction = {
-  kind: "plugin_config" | "global_settings";
+  kind: "plugin_config" | "global_settings" | "plugin_setup";
   target?: string;
+  step?: string;
   label?: string;
   fields?: string[];
 };

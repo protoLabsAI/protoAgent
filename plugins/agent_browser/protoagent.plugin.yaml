@@ -16,10 +16,11 @@ description: >-
   keyboard/scroll over a gated same-origin WebSocket), so you can click and type in the
   page alongside the agent.
 
-  Requires the **`agent-browser`** binary on PATH (`npm i -g agent-browser &&
-  agent-browser install`); the plugin reports a setup gap in the console when the CLI
-  or its Chrome is missing. Ships DISABLED; enable with
-  `plugins: { enabled: [agent_browser] }`.
+  The **`agent-browser`** CLI installs itself: with none on PATH, the plugin downloads
+  the pinned, checksum-verified release on first use (or from the setup banner's
+  **Download agent-browser** button), and the banner's **Install Chrome** button fetches
+  the browser it drives. An `npm i -g agent-browser` install on PATH still wins. Ships
+  DISABLED; enable with `plugins: { enabled: [agent_browser] }`.
 # Bundled but OPT-IN: the pack contributes 17 tools and drives a real browser at
 # `network: ["*"]`, so it turns on deliberately — never by shipping.
 enabled: false
@@ -36,6 +37,9 @@ supersedes:
 config_section: agent_browser
 config:
   binary: agent-browser     # the agent-browser CLI on PATH (override for a pinned path)
+  cli_autofetch: true       # no CLI on PATH → download the PINNED, sha256-verified release on
+                            # first use (cli_fetch.py). The banner's Download button works
+                            # either way; Chrome is only ever installed from its own button.
   timeout_s: 60             # per-command subprocess timeout
   max_response_bytes: 200000  # aggregate stdout+stderr byte cap per command; untrusted page
                             # output over this is dropped and the tool returns a bounded error
@@ -78,6 +82,7 @@ settings:
   - { key: timeout_s, label: "Command timeout (s)", type: number, description: "Per-command subprocess timeout for the browser tools." }
   - { key: max_response_bytes, label: "Max response bytes", type: number, description: "Aggregate stdout+stderr byte cap per browser command. Output beyond this is dropped and the tool returns a bounded error — protects process memory and the model's context from unbounded page content. Default 200000." }
   - { key: binary, label: "agent-browser binary", type: string, description: "The agent-browser CLI on PATH (override with a pinned absolute path if needed)." }
+  - { key: cli_autofetch, label: "Download the CLI on first use", type: bool, description: "When no agent-browser CLI is on PATH, download the pinned, checksum-verified release the first time the browser is used. Off = install it yourself (npm i -g agent-browser) or use the setup banner's Download button. Chrome is never downloaded automatically." }
 
 # Console view (ADR 0026) — an interactive, drivable browser viewport (CDP screencast + input).
 views:

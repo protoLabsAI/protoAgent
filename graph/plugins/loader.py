@@ -818,6 +818,12 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 # NameError with no location. Bounded — the meta rides /api/runtime/status.
                 entry["traceback"] = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))[-2000:]
             log.warning("[plugins] %s failed to load: %s — skipping", manifest.id, entry["error"])
+            # No live code stands behind this plugin's banners now: drop its setup gaps and
+            # steps (a previous load's "Retry" would otherwise still run that load's code) and
+            # retire its generation, so a thread of the previous load can't re-raise one.
+            from graph.plugins import setup_gaps as _setup_gaps
+
+            _setup_gaps.clear_plugin(manifest.id)
             result.meta.append(entry)
             continue
 

@@ -28,22 +28,27 @@ browser_close()
 
 ## Requirements
 
-The **`agent-browser`** binary on PATH — nothing in protoAgent installs it:
+Nothing to install by hand:
 
-```bash
-npm i -g agent-browser && agent-browser install   # the second step downloads Chrome for Testing
-```
+- **The `agent-browser` CLI downloads itself.** With none on PATH, the first browser command
+  fetches the **pinned** upstream release for this platform (v0.27.1), from the
+  vercel-labs/agent-browser GitHub release. The install is refused unless the download's
+  SHA-256 matches the value pinned in `cli_fetch.py`, then it is moved into place
+  atomically. It lands in the machine-wide cache, `<box root>/cache/agent-browser/<version>/`.
+  Upstream publishes no checksum file, so the pins were computed from the release assets and
+  cross-checked against GitHub's own asset digests. This is a runtime download, not a
+  bundled binary; the operator ruled on that on 2026-09-12. `cli_autofetch: false` turns the
+  automatic download off.
+- **Chrome is installed only on request.** The setup banner's **Install Chrome** button runs
+  the CLI's own `agent-browser install` (Chrome for Testing, ~150 MB). A tool call never
+  does.
 
-(Homebrew, Cargo, and the upstream standalone binaries work too.) If the CLI or its
-Chrome is missing, the plugin reports a **setup gap** — an operator banner in the
-console's status (`GET /api/runtime/status` → `warnings[]`), raised at load and re-checked
-on every failing or recovering browser command, so the next call after you fix the setup
-clears it with no restart. On the desktop app the Tauri shell inherits your **login shell's**
-PATH, which is how an nvm-installed CLI is found; a pinned absolute path in the `binary`
-setting is the robust alternative.
-
-A managed, pinned + checksummed download of the binary is deliberately **not** here (see
-`__init__.py`) — it needs an ADR and a ruling on the no-bundled-`br` order first.
+If either is missing the plugin reports a **setup gap**: an operator banner in the console
+(`GET /api/runtime/status` → `setup_gaps[]`), with a button that runs the fix. The CLI gap
+offers **Download agent-browser**, plus **Set the CLI path**. The Chrome gap offers
+**Install Chrome**. Each gap is raised at load and re-checked on every failing or recovering
+browser command, so it clears with no restart. A CLI on PATH (`npm i -g agent-browser`,
+Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the download.
 
 ## Layout
 
@@ -51,7 +56,10 @@ A managed, pinned + checksummed download of the binary is deliberately **not** h
 |---|---|
 | `tools.py` | the 17 browser tools — subprocess wrappers over the CLI, the byte cap, and the fenced captures |
 | `storage.py` | the capture write fence — `browser_screenshot` / `browser_pdf` resolve inside this plugin's instance store, an escape is refused; also the collision-free default filename and oldest-first retention (200 files / 512 MB) |
-| `preflight.py` | the setup-gap probe — is the CLI resolvable, and does it have a Chrome to drive |
+| `preflight.py` | the setup-gap probe — which CLI resolves (PATH > pinned path > the download), does it have a Chrome to drive — and the banners' buttons |
+| `cli_fetch.py` | the pinned, SHA-256-verified CLI download: per-platform pins, atomic install, the box-tier cache |
+| `chrome_install.py` | `agent-browser install`, run only from the Install Chrome button |
+| `setup_steps.py` | the setup steps behind the Download agent-browser / Install Chrome buttons |
 | `browser_panel.py` | the Browser panel page + routes — the interactive canvas, the gated nav / stream-ticket / WS-stream routes |
 | `browser_stream.py` | the CDP bridge — screencast frames out, input in, viewport resize + nav re-arm; the WS ticket auth |
 | `runtime.py` | shared launch-flag builder (headed / profile / device / stealth), used by the tools and the panel |

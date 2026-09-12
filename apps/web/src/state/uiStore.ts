@@ -52,6 +52,10 @@ export type PluginsTab = "local" | "market";
 // string — the section ids live in settings/sections.ts, the import-light leaf). The old
 // `settingsScope` "two homes" axis is gone (never read by any view — see the v14 migration).
 
+// How long App keeps polling for a banner-started setup step before giving up on it — past the
+// longest step a plugin runs (agent_browser's Chrome install is bounded at 20 min).
+export const SETUP_STEP_WATCH_MS = 25 * 60 * 1000;
+
 type UIState = {
   surface: Surface;
   rightPanel: RightPanel;
@@ -77,6 +81,14 @@ type UIState = {
   configurePlugin?: { id: string; name: string };
   openPluginConfig: (id: string, name: string) => void;
   closePluginConfig: () => void;
+  // A `plugin_setup` step the operator started from a setup-gap banner that is still running
+  // server-side (it answered `pending`). While set and before `until`, App keeps polling
+  // runtime status so the banner's progress → done / failed shows without a reload; App clears
+  // it once a status fetched AFTER `since` shows that gap gone or offering its button again.
+  // EPHEMERAL — partialized out of persistence.
+  setupStepWatch?: { plugin: string; key: string; since: number; until: number };
+  watchSetupStep: (plugin: string, key: string) => void;
+  clearSetupStepWatch: () => void;
   // Rail context-menu plugin actions (#1521 / #1522, ADR 0036). A right-click "Update
   // available" / "Uninstall…" on a plugin's rail icon records the target here; a root
   // PluginRailManage mount fires the update mutation or renders the uninstall confirm.
@@ -357,6 +369,12 @@ export const useUI = create<UIState>()(
       configurePlugin: undefined,
       openPluginConfig: (id, name) => set({ configurePlugin: { id, name } }),
       closePluginConfig: () => set({ configurePlugin: undefined }),
+      setupStepWatch: undefined,
+      watchSetupStep: (plugin, key) => {
+        const since = Date.now();
+        set({ setupStepWatch: { plugin, key, since, until: since + SETUP_STEP_WATCH_MS } });
+      },
+      clearSetupStepWatch: () => set({ setupStepWatch: undefined }),
       pluginUpdate: undefined,
       requestPluginUpdate: (id, name) => set({ pluginUpdate: { id, name } }),
       clearPluginUpdate: () => set({ pluginUpdate: undefined }),
@@ -543,7 +561,7 @@ export const useUI = create<UIState>()(
       // (the Global settings overlay, the per-plugin Configure dialog, the pending
       // rail-menu Update/Uninstall action, and the per-session background-delivery set
       // (#1640) — a view's page re-requests it on every load).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, ...rest }) => rest,
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, setupStepWatch: _ssw, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, ...rest }) => rest,
     },
   ),
 );

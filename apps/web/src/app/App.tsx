@@ -39,7 +39,14 @@ import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
-import { SetupGapBanner, gapIdentity, splitRuntimeWarnings, useSetupGapDismissals } from "./SetupGapBanner";
+import {
+  SetupGapBanner,
+  gapIdentity,
+  setupStepWatchActive,
+  setupStepWatchDone,
+  splitRuntimeWarnings,
+  useSetupGapDismissals,
+} from "./SetupGapBanner";
 import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
@@ -154,9 +161,20 @@ export function App() {
     ...runtimeStatusQuery(),
     retry: (failureCount, error) => !is401(error) && failureCount < 30,
     retryDelay: 1000,
-    refetchInterval: (q) => (q.state.data?.graph_loaded ? false : 2500),
+    // Poll until the graph loads — and while a setup step the operator started from a banner is
+    // still running server-side (a CLI download, a Chrome install), so its progress and outcome
+    // replace the banner without a reload (SetupGapBanner.tsx `setupStepWatchActive`).
+    refetchInterval: (q) => (q.state.data?.graph_loaded && !setupStepWatchActive() ? false : 2500),
   });
   const runtime = runtimeQ.data ?? null;
+  // …and stop that poll once a status fetched AFTER the click shows the step's gap resolved.
+  const setupStepWatch = useUI((s) => s.setupStepWatch);
+  const clearSetupStepWatch = useUI((s) => s.clearSetupStepWatch);
+  useEffect(() => {
+    if (!setupStepWatch) return;
+    const { setupGaps: gapsNow, gapsKnown: knownNow } = splitRuntimeWarnings(runtime);
+    if (setupStepWatchDone(setupStepWatch, gapsNow, knownNow, runtimeQ.dataUpdatedAt)) clearSetupStepWatch();
+  }, [setupStepWatch, runtime, runtimeQ.dataUpdatedAt, clearSetupStepWatch]);
   const [bootOverride, setBootOverride] = useState(false);
   const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
   const engineReady = Boolean(runtime?.graph_loaded);

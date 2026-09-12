@@ -82,6 +82,29 @@ preflight = _mod("preflight")
 rt = _mod("runtime")
 storage = _mod("storage")
 tools = _mod("tools")
+cli_fetch = _mod("cli_fetch")
+chrome_install = _mod("chrome_install")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cli_fetch(monkeypatch, tmp_path):
+    """Every test here runs with an EMPTY, private CLI cache and no network: a missing CLI
+    must never make a unit test download the real one (first use fetches it), and a CLI a
+    developer already fetched must never make a "missing CLI" test pass or fail by accident.
+    The real download is exercised by tests/test_agent_browser_cli_fetch.py, opt-in."""
+    monkeypatch.setenv(cli_fetch.ENV_CLI_DIR, str(tmp_path / "ab-cli-cache"))
+
+    def _offline(url, timeout):
+        raise OSError("network disabled in unit tests")
+
+    monkeypatch.setattr(cli_fetch, "_urllib_download", _offline)
+    monkeypatch.setattr(cli_fetch, "_egress_check", lambda url: None)  # it resolves DNS otherwise
+    cli_fetch.reset_state()
+    chrome_install.reset_state()
+    monkeypatch.setitem(rt._CHROME, "major", 0)
+    yield
+    cli_fetch.reset_state()
+    chrome_install.reset_state()
 
 
 def _manifest() -> dict:
@@ -321,16 +344,20 @@ def test_the_cli_gap_carries_a_config_action_the_host_actually_keeps(monkeypatch
     _probe_env(monkeypatch, which=None)
     reg = FakeRegistry({}, plugin_id="agent_browser", plugin_dir=ROOT)
     preflight.report(reg, reg.config)
-    action = reg.setup_gap_actions[preflight.CLI_GAP]
-    assert action["kind"] in setup_gaps.ACTION_KINDS and action["kind"] == "plugin_config"
+    actions = reg.setup_gap_actions[preflight.CLI_GAP]
+    # the Download button first, then the config fallback — both host-allowlisted kinds
+    assert [a["kind"] for a in actions] == ["plugin_setup", "plugin_config"]
+    assert all(a["kind"] in setup_gaps.ACTION_KINDS for a in actions)
 
     setup_gaps.reset()
     try:
-        setup_gaps.report("agent_browser", preflight.CLI_GAP, "cli missing", label="Agent Browser", action=action)
+        setup_gaps.report("agent_browser", preflight.CLI_GAP, "cli missing", label="Agent Browser", action=actions)
         [gap] = setup_gaps.active()
-        # survived sanitizing WITH its label and highlighted field — the real contract
-        assert gap["actions"] == [{"kind": "plugin_config", "target": "agent_browser",
-                                  "label": "Set the CLI path", "fields": ["binary"]}]
+        # survived sanitizing WITH their labels, step and highlighted field — the real contract
+        assert gap["actions"] == [
+            {"kind": "plugin_setup", "target": "agent_browser", "step": "download-cli",
+             "label": "Download agent-browser"},
+            {"kind": "plugin_config", "target": "agent_browser", "label": "Set the CLI path", "fields": ["binary"]}]
         assert setup_gaps.warnings() == ["Agent Browser: cli missing"]
     finally:
         setup_gaps.reset()
@@ -345,8 +372,9 @@ def test_preflight_reports_chrome_separately_from_the_cli(monkeypatch):
     assert preflight.CLI_GAP not in reg.setup_gaps          # the CLI is fine
     chrome_msg = reg.setup_gaps[preflight.CHROME_GAP]
     assert "agent-browser install" in chrome_msg and "No Chrome install found" in chrome_msg
-    # the Chrome fix is a CLI command, and ACTION_KINDS has no command kind — so no action
-    assert preflight.CHROME_GAP not in reg.setup_gap_actions
+    # the Chrome fix is a CLI command — now a button that runs it (a `plugin_setup` step)
+    assert reg.setup_gap_actions[preflight.CHROME_GAP] == {
+        "kind": "plugin_setup", "step": preflight.STEP_INSTALL_CHROME, "label": "Install Chrome"}
 
 
 def test_preflight_clears_both_gaps_when_everything_resolves(monkeypatch):
@@ -1191,8 +1219,11 @@ def test_nav_open_applies_launch_flags(monkeypatch):
 
     rec = []
     monkeypatch.setattr(bp.subprocess, "run", fake_run(record=rec))
+    # argv[0] is the RESOLVED CLI now; with none resolvable (and no first-use download) it is
+    # the configured name, whatever the developer's own PATH holds.
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
     # a session started from the panel gets the same headed/stealth setup as the agent's
-    c = TestClient(_app({"headed": True, "stealth": True}))
+    c = TestClient(_app({"headed": True, "stealth": True, "cli_autofetch": False}))
     c.post("/api/plugins/agent_browser/nav", json={"action": "open", "url": "https://x.com"})
     argv = rec[-1]
     assert argv[-2:] == ["open", "https://x.com"]
@@ -1490,11 +1521,12 @@ def test_browser_args_without_stealth_passes_through():
 
 def test_the_stealth_surface_is_intact_and_unedited():
     """The anti-detection / UA-spoofing options were vendored VERBATIM pending a
-    drop-or-keep ruling (#3451 "Decision needed"). This pins the exact surface — the three
-    config keys, their settings rows, and the two runtime.py mechanisms — so a later edit
-    is a deliberate answer to that question, not a drive-by. (It checks the surface that
-    exists here; byte-identity with the source repo was confirmed by sha at import time,
-    and nothing in-tree can re-verify that.)"""
+    drop-or-keep ruling (#3451 "Decision needed"). The ruling (2026-09-12): stealth SHIPS
+    with core and stays OFF by default; when on, the spoofed UA claims the installed
+    Chrome's real version instead of a hard-coded one (tests/test_agent_browser_cli_fetch.py
+    pins that). This pins the rest of the surface — the three config keys, their settings
+    rows, the off default, and the two runtime.py mechanisms — so a later edit is a
+    deliberate answer, not a drive-by."""
     m = _manifest()
     assert {"stealth", "user_agent", "browser_args"} <= set(m["config"])
     assert m["config"]["stealth"] is False and m["config"]["user_agent"] == ""

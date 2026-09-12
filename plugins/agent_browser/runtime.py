@@ -23,8 +23,35 @@ log = logging.getLogger("protoagent.plugins.agent_browser")
 
 # A realistic desktop Chrome UA (no "HeadlessChrome" giveaway). Used for stealth when
 # running headless and no explicit user_agent is set; override with `user_agent`.
-_STEALTH_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+#
+# The Chrome version is the INSTALLED Chrome's major — the one doctor reports and that
+# actually drives the page (the preflight probe notes it here) — in Chrome's own reduced-UA
+# form, `Chrome/<major>.0.0.0`, which is what a real Chrome sends. A UA claiming a Chrome
+# other than the one executing the page is a tell of its own (its JS surface and Client
+# Hints give the real version away). Until a probe has seen Chrome — or if doctor can't say
+# — it falls back to _FALLBACK_CHROME_MAJOR. Stealth stays OFF by default (the manifest).
+_FALLBACK_CHROME_MAJOR = 149
+_STEALTH_UA_TEMPLATE = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+_STEALTH_UA = _STEALTH_UA_TEMPLATE.format(major=_FALLBACK_CHROME_MAJOR)
+_CHROME = {"major": 0}  # the detected installed-Chrome major; 0 = not detected yet
+
+
+def note_chrome_version(version: str) -> int:
+    """Remember the installed Chrome's version (``"149.0.7827.55"``) for the stealth UA.
+    Returns the major it kept, or 0 — leaving any earlier detection in place — when the text
+    isn't a plausible Chrome version."""
+    m = re.match(r"^\s*(\d{2,4})\.\d+", str(version or ""))
+    major = int(m.group(1)) if m else 0
+    if not 60 <= major <= 999:
+        return 0
+    _CHROME["major"] = major
+    return major
+
+
+def stealth_user_agent() -> str:
+    """The stealth UA for the detected Chrome, else the fallback major."""
+    return _STEALTH_UA_TEMPLATE.format(major=_CHROME["major"] or _FALLBACK_CHROME_MAJOR)
 
 
 def launch_flags(cfg: dict | None) -> list[str]:
@@ -65,7 +92,7 @@ def launch_flags(cfg: dict | None) -> list[str]:
         if "--disable-blink-features=AutomationControlled" not in args:
             args.append("--disable-blink-features=AutomationControlled")
         if not ua and not headed:
-            ua = _STEALTH_UA
+            ua = stealth_user_agent()
     if ua:
         f += ["--user-agent", ua]
     if args:
@@ -96,6 +123,18 @@ def number(cfg: dict | None, key: str, default, *, cast=float, positive: bool = 
         log.warning("[agent_browser] ignoring %s=%r (must be > 0); using %r", key, raw, default)
         return default
     return value
+
+
+def flag(cfg: dict | None, key: str, default: bool) -> bool:
+    """A boolean setting that tolerates a hand-written config: ``"false"`` / ``"0"`` /
+    ``"off"`` are false (``bool("false")`` is True). ``type: bool`` validates Settings edits
+    only. Blank/None means the default."""
+    raw = (cfg or {}).get(key, default)
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, str):
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    return bool(raw)
 
 
 # ── the argv option guard (the tools AND the panel's /nav route) ──────────────────

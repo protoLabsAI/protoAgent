@@ -46,7 +46,7 @@ from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import browser_stream, preflight
-from .runtime import bad_operand, launch_flags, number
+from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
 
@@ -86,9 +86,14 @@ def build_panel_data_router(cfg: dict | None):
 
     router = APIRouter()
 
+    autofetch = flag(cfg, "cli_autofetch", True)
+
     def _run(*args: str) -> tuple[int, str]:
+        # The same resolution as the tools: PATH > pinned path > the fetched CLI, and the
+        # pinned download on first use (the panel's Start button is a use).
+        exe = preflight.cli_for_run(binary, autofetch=autofetch)
         try:
-            p = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout)
+            p = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout)
             return p.returncode, (p.stderr or p.stdout or "").strip()
         except OSError:
             # Missing OR unstartable (FileNotFoundError covers both, PermissionError the
@@ -115,7 +120,8 @@ def build_panel_data_router(cfg: dict | None):
             await ws.close(code=1008)  # policy violation: missing/replayed/expired ticket
             return
         await ws.accept()
-        page_ws, note = await asyncio.to_thread(browser_stream.resolve_page_target, binary, timeout)
+        page_ws, note = await asyncio.to_thread(
+            lambda: browser_stream.resolve_page_target(preflight.effective_binary(binary), timeout))
         if not page_ws:
             # A setup problem gets the setup sentence (install the CLI / install Chrome);
             # "no session" / "no page open" pass through as the normal states they are.
