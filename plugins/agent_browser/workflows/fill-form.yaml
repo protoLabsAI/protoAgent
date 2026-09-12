@@ -1,0 +1,47 @@
+id: fill-form
+name: Fill Form
+description: Open a URL containing a form, fill in each field with the supplied values,
+  submit the form, and confirm the result.
+inputs:
+- name: url
+  type: string
+  description: The URL of the page containing the form.
+- name: fields
+  type: string
+  description: 'A description of the form fields and their values (e.g. "name: Alice,
+    email: alice@example.com, message: Hello").'
+steps:
+- id: open-and-snapshot
+  prompt: 'Open the URL {{inputs.url}} with `browser_open`, then take a snapshot
+
+    with `browser_snapshot`. Return the snapshot so the next step can
+
+    identify the form fields.
+
+    '
+- id: fill-fields
+  depends_on: open-and-snapshot
+  prompt: "Using the snapshot from the previous step, fill in every form field\ndescribed\
+    \ below:\n\n{{inputs.fields}}\n\nFor each field:\n1. Locate the field in the snapshot\
+    \ (match by label, placeholder, or\n   `@eN` ref).\n2. Call `browser_fill` with\
+    \ the field's selector and the value.\n\nAfter filling all fields, take another\
+    \ snapshot with `browser_snapshot`\nand return it so the next step can verify\
+    \ and submit.\n"
+- id: submit
+  depends_on: fill-fields
+  prompt: 'Using the snapshot from the previous step, locate the submit button
+
+    (e.g. a button with text "Submit", "Send", or type="submit") and click
+
+    it with `browser_click`. Then wait a moment and take a final snapshot
+
+    with `browser_snapshot` to confirm the submission result.
+
+
+    Return a short confirmation describing what happened (e.g. success
+
+    message, redirect, or error).
+
+    '
+output:
+  step: submit

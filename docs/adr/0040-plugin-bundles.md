@@ -65,6 +65,15 @@ a `bundles:` section of the lock for traceability + reproducible re-install. `bu
 are skipped (they ship with the host). `plugin sync` already re-clones the locked set, so bundle
 members re-sync for free — no bundle-specific sync path.
 
+**Amendment (2026-09): a member whose plugin has moved in-tree is skipped like a builtin.**
+The example above is period-accurate, not current: `cowork` (#3450) and `agent_browser`
+(#3451) are now **bundled** plugins, and the bundled manifest's `supersedes:` names the
+retired repo. A `{ id, url, ref }` member pointing at a superseded URL is therefore skipped
+the way `builtin: true` is — on new and old hosts alike, so existing archetype bundles need
+no edit (#3445) — and the pin is surfaced as a warning if it points *past* the bundled
+version. Write new members for those two as `{ id: <id>, builtin: true }`; the worked
+example in `examples/bundles/template/protoagent.bundle.yaml` shows the current shape.
+
 **Amendment (2026-08): install ≠ enable ≠ trust now holds on the CLI only.** As first
 written, the `enabled` list and `config` were *returned as suggestions*, never written to
 the live config. Three paths have since deliberately moved to enable-and-seed — installing

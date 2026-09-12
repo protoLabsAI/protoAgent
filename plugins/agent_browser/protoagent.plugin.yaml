@@ -1,0 +1,91 @@
+id: agent_browser
+name: Agent Browser
+# Bundled into core (#3451) from the retired agent-browser-plugin repo, whose last tag was
+# v0.6.4 (main was 0.6.5 + unreleased work). The bundled version MUST stay strictly above
+# every release of a superseded repo: a copy that loses its plugins.lock row becomes
+# untracked, and an untracked copy that isn't OLDER than the bundled one wins (#1574).
+# 0.7.0 is that floor.
+version: 0.7.0
+description: >-
+  Browser automation for protoAgent, backed by **agent-browser** (vercel-labs) — a
+  fast native-Rust CLI/daemon that drives Chrome over CDP with accessibility-tree
+  snapshots and compact `@eN` element refs. Wraps the CLI as tools (open, snapshot,
+  click, fill, type, screenshot, pdf, …), ships a discovery skill that defers to the
+  CLI's always-current workflow content, browser workflows, and a **Browser panel**
+  console view — a fully interactive, drivable viewport (live CDP screencast + mouse/
+  keyboard/scroll over a gated same-origin WebSocket), so you can click and type in the
+  page alongside the agent.
+
+  Requires the **`agent-browser`** binary on PATH (`npm i -g agent-browser &&
+  agent-browser install`); the plugin reports a setup gap in the console when the CLI
+  or its Chrome is missing. Ships DISABLED; enable with
+  `plugins: { enabled: [agent_browser] }`.
+# Bundled but OPT-IN: the pack contributes 17 tools and drives a real browser at
+# `network: ["*"]`, so it turns on deliberately — never by shipping.
+enabled: false
+# The standalone repo this bundled copy retires (#3445). An installed copy that
+# plugins.lock records as fetched from it stands down in favour of this one — at any
+# version — and installing/updating from that URL (directly or as a bundle member, which
+# is how the bundle template and several archetypes still list it) is skipped rather than
+# refused. Enabled state, the `agent_browser` config section and every archetype's enable
+# list keep working because the id did not change.
+supersedes:
+  - https://github.com/protoLabsAI/agent-browser-plugin
+
+# Plugin config (read from `agent_browser:` in langgraph-config.yaml).
+config_section: agent_browser
+config:
+  binary: agent-browser     # the agent-browser CLI on PATH (override for a pinned path)
+  timeout_s: 60             # per-command subprocess timeout
+  max_response_bytes: 200000  # aggregate stdout+stderr byte cap per command; untrusted page
+                            # output over this is dropped and the tool returns a bounded error
+                            # (memory + model-context safety). Read/enforced by the plugin wrapper.
+  home_url: ""              # homepage the panel opens to. When set, the panel auto-opens it if
+                            # no browser page is open; the empty state also shows a Start button.
+                            # Blank → the Start button opens about:blank (no auto-open).
+  stream_quality: 80        # interactive panel JPEG quality (1–100). Higher = crisper, more data.
+                            # (The panel also renders at your dock's size × device-pixel-ratio.)
+  # Runtime / launch options — a curated set passed to `agent-browser open` so you can
+  # shape and lock down the browser the agent spins up. Blank/0/false = CLI default.
+  headed: false             # show a real browser window instead of headless
+  profile: ""               # path to a browser profile dir (isolation + persisted auth/cookies)
+  device: ""                # device emulation, e.g. "iPhone 16 Pro"
+  allowed_domains: ""       # comma-separated navigable-domain whitelist (e.g. "example.com,*.foo.com")
+  confirm_actions: ""       # comma-separated action categories that require confirmation
+  max_output: 0             # cap page-text output chars (LLM-safety); 0 = CLI default
+  # Anti-detection — help pages that block automated/headless browsers (Google, Reddit,
+  # Cloudflare, …). No setting defeats detection entirely; headed + a logged-in `profile`
+  # is the most reliable combination. Applied at session launch (the first open).
+  stealth: false            # drop the navigator.webdriver automation flag; when headless, also
+                            # swap the "HeadlessChrome" User-Agent for a real desktop Chrome one
+  user_agent: ""            # override the User-Agent (blank → CLI default; stealth may set one)
+  browser_args: ""          # extra Chrome launch args, comma/newline separated
+                            # (e.g. "--disable-blink-features=AutomationControlled")
+
+# Editable in Settings ▸ Plugins (ADR 0019) — the operator knobs above as UI fields.
+settings:
+  - { key: home_url, label: "Homepage URL", type: string, description: "The page the interactive panel opens to. When set, it auto-opens if no browser page is open, and the empty state shows a Start button. Blank = a Start button that opens about:blank." }
+  - { key: stealth, label: "Anti-detection (stealth)", type: bool, description: "Help pages that block automated/headless browsers (Google, Reddit, Cloudflare). Drops the navigator.webdriver flag and, when headless, uses a real desktop User-Agent. Most reliable paired with Headed + a logged-in Browser profile. No setting defeats detection entirely." }
+  - { key: headed, label: "Headed browser", type: bool, description: "Show a real browser window instead of running headless. Also far less bot-detectable than headless." }
+  - { key: user_agent, label: "User-Agent override", type: string, description: "Override the browser User-Agent. Blank = CLI default (stealth may set a realistic one when headless)." }
+  - { key: browser_args, label: "Extra Chrome args", type: string, description: "Extra Chrome launch args, comma/newline separated (e.g. --disable-blink-features=AutomationControlled)." }
+  - { key: allowed_domains, label: "Allowed domains", type: string, description: "Comma-separated navigable-domain allowlist (e.g. example.com,*.foo.com). Blank = unrestricted." }
+  - { key: confirm_actions, label: "Confirm actions", type: string, description: "Comma-separated action categories that require confirmation before the agent runs them." }
+  - { key: profile, label: "Browser profile dir", type: string, description: "Path to a browser profile directory — isolation + persisted auth/cookies across sessions. Reusing a logged-in Chrome profile is the most reliable way past login walls." }
+  - { key: device, label: "Device emulation", type: string, description: "Emulate a device, e.g. \"iPhone 16 Pro\". Blank = desktop." }
+  - { key: stream_quality, label: "Panel stream quality", type: number, description: "Interactive panel JPEG quality (1–100). Higher = crisper, more bandwidth. The panel also renders at your dock's size × device-pixel-ratio." }
+  - { key: max_output, label: "Max page-text output (chars)", type: number, description: "Cap characters of page text returned to the model (LLM-safety). 0 = the CLI default." }
+  - { key: timeout_s, label: "Command timeout (s)", type: number, description: "Per-command subprocess timeout for the browser tools." }
+  - { key: max_response_bytes, label: "Max response bytes", type: number, description: "Aggregate stdout+stderr byte cap per browser command. Output beyond this is dropped and the tool returns a bounded error — protects process memory and the model's context from unbounded page content. Default 200000." }
+  - { key: binary, label: "agent-browser binary", type: string, description: "The agent-browser CLI on PATH (override with a pinned absolute path if needed)." }
+
+# Console view (ADR 0026) — an interactive, drivable browser viewport (CDP screencast + input).
+views:
+  - { id: panel, label: "Browser", icon: Globe, path: /plugins/agent_browser/panel }
+
+# Declarative only (surfaced for review).
+capabilities:
+  network: ["*"]            # the browser navigates arbitrary URLs
+  filesystem: scoped        # ENFORCED (#3451): browser_screenshot / browser_pdf write only
+                            # inside this plugin's own instance store (sdk.plugin_store),
+                            # and a traversing/absolute path is refused, not redirected.
