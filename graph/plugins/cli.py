@@ -252,13 +252,21 @@ def run_plugin_cli(argv: list[str]) -> int:
             was_enabled = _enabled_in_live_config(args.id)
             rep = installer.uninstall(args.id, purge=args.purge)
             print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
+            if rep.get("dangling_link"):
+                print(
+                    f"  {rep['dangling_link']} was a link to a path that no longer exists — unlinked "
+                    "(it had no target, so nothing else was touched)."
+                )
+            if rep.get("left_in_place"):
+                print(f"  ⚠ lock entry cleared, files left in place: {rep['left_in_place']}")
             if rep.get("superseded_by_bundled"):
                 # Only the ignored copy went — the bundled one keeps running, and nothing
                 # keyed by the id was touched.
                 print(
-                    f"  that was the superseded copy — {args.id} ships with protoAgent (bundled "
-                    f"v{rep['superseded_by_bundled']}) and keeps running; its enabled state, config "
-                    "and secrets are unchanged" + (" (--purge doesn't apply to them)." if args.purge else ".")
+                    f"  that was an installed copy the loader ignores — {args.id} ships with protoAgent "
+                    f"(bundled v{rep['superseded_by_bundled']}) and keeps running; its enabled state, "
+                    "config and secrets are unchanged"
+                    + (" (--purge doesn't apply to them)." if args.purge else ".")
                 )
                 # Out-of-process, this CLI can't see what a running server imported. A server
                 # that hasn't restarted since protoAgent began shipping the plugin may still

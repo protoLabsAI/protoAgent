@@ -101,22 +101,33 @@ export function statusCounts(rows: InstalledRow[]): Record<InstalledStatus, numb
   };
 }
 
-/** The Uninstall confirm text for one inventory row. A plugin that now ships with
- *  protoAgent (`superseded`: its bundled copy replaced the repo this copy came from)
- *  runs from the bundled copy — Uninstall only removes the ignored old copy and the
- *  plugin stays on, so "this deletes its code" would be a false warning there. */
+/** The Uninstall confirm text for one inventory row.
+ *
+ *  A plugin that now ships with protoAgent (`superseded`: the built-in copy is what
+ *  runs) only loses the copy the loader is ignoring — the plugin stays — so "this
+ *  deletes its code" would be a false warning. What exactly goes depends on the row:
+ *  a stale lock entry with no files, an untracked folder with no lock entry (often a
+ *  symlinked dev checkout), or both. With no row at all — the rail opens this dialog
+ *  from a context menu, so the inventory query can still be in flight — say what holds
+ *  either way rather than promising a deletion that may not happen. */
 export function uninstallConfirmText(
   name: string,
-  row?: { superseded?: boolean; bundled_version?: string; copy_on_disk?: boolean },
+  row?: { superseded?: boolean; bundled_version?: string; copy_on_disk?: boolean; tracked?: boolean },
 ): string {
-  if (row?.superseded) {
+  if (!row) {
+    return (
+      `Uninstall ${name}? This removes its installed copy, and its plugins.lock entry if it has one. ` +
+      "A plugin that ships with protoAgent keeps running from the built-in copy."
+    );
+  }
+  if (row.superseded) {
     const version = row.bundled_version ? ` v${row.bundled_version}` : "";
-    // `copy_on_disk: false` = someone already deleted the folder, so only the stale
-    // plugins.lock entry is left — promising to remove a copy would be a lie.
     const what =
       row.copy_on_disk === false
         ? "This clears the stale plugins.lock entry left by the old copy (its files are already gone)"
-        : "This removes the old installed copy it replaced and its plugins.lock entry";
+        : row.tracked === false
+          ? "This removes the copy in your plugins dir — it has no plugins.lock entry, and a symlinked checkout is unlinked, never followed"
+          : "This removes the old installed copy it replaced and its plugins.lock entry";
     return (
       `"${name}" now ships with protoAgent${version}. ${what}; the built-in keeps running with its ` +
       "settings. To turn it off, Disable it instead."

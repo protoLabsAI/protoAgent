@@ -665,6 +665,15 @@ Two roots (like skills): bundled `plugins/` (shipped, e.g. the `hello` example)
 and live `<config-dir>/plugins/` (your drop-ins; `<config-dir>` honors
 `PROTOAGENT_CONFIG_DIR`, override with `plugins.dir`). Live overrides bundled by `id`.
 
+`plugins.dir` must be an **absolute** path. A relative one is ignored with a warning
+(the instance's own plugins dir is used instead): it would resolve against the working
+directory of whichever process read it — the server, a CLI, a fleet subprocess — so they
+would disagree about where your plugins live. Everything that acts on installed copies
+reads this same setting: install, uninstall, the Plugins list, `plugin sync`, scaffolding,
+and the managed-MCP subprocess. `PROTOAGENT_PLUGINS_DIR` follows the same rule, and a
+refused value shows as a **Plugins** banner, not only in the log — because it moves the whole
+plugin root, your plugins would otherwise just stop loading with nothing on screen.
+
 A plugin loads only when **enabled** — either:
 
 ```yaml
