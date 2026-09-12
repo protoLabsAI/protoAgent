@@ -262,6 +262,12 @@ export function ChatMessageView({
       {showChatUsage && message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
         <UsageFooter usage={message.usage} context={message.contextWindow} />
       ) : null}
+      {/* Sent-time footer (#3448): a settled normal user/assistant turn shows when it was sent.
+          Streaming turns haven't finished their send/receipt lifecycle, so no final timestamp
+          until settled; system notes and the specialized cards (returned above) are excluded. */}
+      {!streaming && (message.role === "user" || message.role === "assistant") ? (
+        <SentTimestamp createdAt={message.createdAt} />
+      ) : null}
       {actions && message.role === "assistant" && !streaming && message.content ? (
         <MessageActions>
           {actions.onCopy ? (
@@ -461,6 +467,22 @@ function fmtClock(ms?: number): string {
   if (!ms) return "";
   const d = new Date(ms);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** A settled message's sent time for the footer widget (#3448): a concise local-time `label`
+ *  plus the full, locale-aware local date-and-time (`full`) for the hover/focus tooltip. Returns
+ *  `null` when `createdAt` is missing, zero, negative, non-finite, or otherwise not a real instant
+ *  — so no misleading widget (and never an `Invalid Date`, throw, or current-time fallback)
+ *  renders. Derives ONLY from the persisted epoch, never the render-time wall clock. Pure, so it
+ *  is exercised through rendering. */
+export function sentTimestamp(createdAt?: number): { label: string; full: string } | null {
+  if (typeof createdAt !== "number" || !Number.isFinite(createdAt) || createdAt <= 0) return null;
+  const d = new Date(createdAt);
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    label: d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+    full: d.toLocaleString([], { dateStyle: "full", timeStyle: "medium" }),
+  };
 }
 
 /** Collapse a result to one line — whitespace squeezed, truncated for the chip. */
@@ -694,6 +716,27 @@ function UsageTip({
       ) : null}
       <p className="chat-usage-tip-note">{usageTipNote(subscription)}</p>
     </div>
+  );
+}
+
+/** The sent-time footer widget (#3448) — a quiet clock chip on a SETTLED normal user/assistant
+ *  message, showing a concise local time with the full local sent date-and-time behind the DS
+ *  `Tooltip` on pointer hover or keyboard focus. Renders nothing when the message carries no valid
+ *  `createdAt` (see `sentTimestamp`), so a turn saved before timestamps existed — or with a
+ *  zero/invalid one — shows no widget rather than a wrong or `Invalid Date` value. Reuses the
+ *  footer `Clock` icon and the same DS `Tooltip` the usage footer uses (no bespoke tooltip). It is
+ *  rendered only after the specialized-card early returns, so report/schedule/server-result cards
+ *  keep their own timestamp treatment. */
+function SentTimestamp({ createdAt }: { createdAt?: number }) {
+  const stamp = sentTimestamp(createdAt);
+  if (!stamp) return null;
+  return (
+    <Tooltip label={stamp.full} side="top" align="start">
+      <span className="chat-sent-time" tabIndex={0} aria-label={`Sent ${stamp.full}`}>
+        <Clock size={12} aria-hidden />
+        <span className="chat-sent-time-label">{stamp.label}</span>
+      </span>
+    </Tooltip>
   );
 }
 
