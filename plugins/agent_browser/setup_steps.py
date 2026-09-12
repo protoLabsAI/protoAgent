@@ -2,7 +2,7 @@
 **Install Chrome** actually do.
 
 ``__init__.register`` hands both to ``registry.register_setup_step``; the console's
-``plugin_setup`` button POSTs ``/api/plugins/agent_browser/setup-steps/<step>`` and the host
+``plugin_setup`` button POSTs ``/api/plugin-setup/agent_browser/<step>`` and the host
 calls the step off the event loop. Each one STARTS its work on a daemon thread, re-reports
 the gaps at once — so the banner flips to "downloading…" / "installing…", with no button,
 before the click's response lands — and returns ``pending``. The thread re-reports again

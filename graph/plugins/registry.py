@@ -57,6 +57,12 @@ class PluginRegistry:
         self.plugin_id = plugin_id
         # Display name for operator-facing banners; the loader sets it from the manifest.
         self.display_name: str = plugin_id
+        from graph.plugins import setup_gaps as _setup_gaps
+
+        # The setup-gap generation this load belongs to. Once the plugin is cleared (disabled,
+        # uninstalled, a failed reload) every report through THIS registry is dropped, so a
+        # background thread of this load finishing late can't re-raise a banner.
+        self._setup_gap_generation = _setup_gaps.generation(plugin_id)
         # The plugin's own directory on disk. The right base for reading files the plugin
         # ships — templates, a view's HTML, seed data — since the process CWD is not it.
         self.plugin_dir = plugin_dir
@@ -130,10 +136,21 @@ class PluginRegistry:
         never a plugin string into a URL or callback. ``action`` arrived in v0.162.0; a
         plugin that must also run on older hosts feature-detects the keyword
         (``"action" in inspect.signature(fn).parameters``) and makes the plain call
-        otherwise."""
+        otherwise.
+
+        A report from a registry whose plugin has since been disabled, uninstalled, or failed
+        to reload is dropped — so a thread of the old load that finishes late (a download, an
+        install) can't bring back a banner whose buttons no longer lead anywhere."""
         from graph.plugins import setup_gaps
 
-        setup_gaps.report(self.plugin_id, key, message, label=label or self.display_name, action=action)
+        setup_gaps.report(
+            self.plugin_id,
+            key,
+            message,
+            label=label or self.display_name,
+            action=action,
+            generation=self._setup_gap_generation,
+        )
 
     def register_setup_step(self, step: str, fn) -> None:
         """Register a SETUP STEP: the server-side half of a ``plugin_setup`` setup-gap action.
@@ -142,9 +159,11 @@ class PluginRegistry:
         — which a banner would otherwise tell the operator to go and run in a terminal.
         Report the gap with ``action={"kind": "plugin_setup", "step": step, "label":
         "Download the CLI"}`` and the console renders a button on its banner; clicking it
-        POSTs ``/api/plugins/<this plugin>/setup-steps/<step>`` (operator-bearer gated), and
-        the host runs ``fn()`` off the event loop. Only the callable held for exactly this
-        (plugin, step) pair ever runs — the action is data naming it, nothing more.
+        POSTs ``/api/plugin-setup/<this plugin>/<step>`` — a core route outside the
+        ``/api/plugins/<id>/`` subtree, so no manifest ``public_paths`` / ``federation_paths``
+        can lower its operator-credential gate — and the host runs ``fn()`` off the event loop.
+        Only the callable held for exactly this (plugin, step) pair ever runs — the action is
+        data naming it, nothing more.
 
         ``step`` is one lowercase identifier (``[a-z0-9][a-z0-9_-]*``, at most 64 chars; a
         plugin may hold 8). ``fn`` takes no arguments and returns a short message string, or

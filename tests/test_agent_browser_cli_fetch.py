@@ -10,13 +10,17 @@ this platform, verifies it and runs ``--version``:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import http.server
 import importlib
 import io
 import json
 import os
 import re
+import signal
 import subprocess
+import sys
 import threading
 import time
 import types
@@ -93,12 +97,26 @@ def _pin_fake(monkeypatch, payload: bytes = PAYLOAD) -> str:
     return key
 
 
+class _Finished:
+    """A finished ``agent-browser install`` as chrome_install's ``Popen`` sees it."""
+
+    pid = None
+
+    def __init__(self, rc: int, out: str, err: str):
+        self._rc, self.returncode = rc, None
+        self.stdout, self.stderr = io.BytesIO(out.encode()), io.BytesIO(err.encode())
+
+    def wait(self, timeout=None):
+        self.returncode = self._rc
+        return self._rc
+
+
 def _cli_env(monkeypatch, *, which=None, chrome="pass",
              chrome_msg="Google Chrome for Testing 151.0.7900.12 at /x/chrome", installs=None, install_rc=0,
              install_err=""):
-    """A synthetic CLI behind ``subprocess.run`` (shared by preflight and chrome_install):
-    ``--version``, ``doctor --json`` (one Chrome check, whose status an ``install`` flips to
-    pass when it succeeds), and ``install``."""
+    """A synthetic CLI: ``--version`` and ``doctor --json`` behind ``subprocess.run`` (the
+    preflight), and ``install`` behind ``subprocess.Popen`` (chrome_install) — a successful
+    install flips doctor's one Chrome check to pass."""
     monkeypatch.setattr(preflight.shutil, "which", lambda name: which)
     state = {"chrome": chrome, "msg": chrome_msg}
 
@@ -110,18 +128,23 @@ def _cli_env(monkeypatch, *, which=None, chrome="pass",
             payload = json.dumps({"checks": [{"id": "chrome.installed", "status": state["chrome"],
                                               "message": state["msg"]}]})
             return types.SimpleNamespace(returncode=0, stdout=payload, stderr="")
-        if verb == ["install"]:
-            if installs is not None:
-                installs.append(list(args))
-            if install_rc == 0:
-                state["chrome"] = "pass"
-                state["msg"] = "Google Chrome for Testing 151.0.7900.12 at /x/chrome-151.0.7900.12/chrome"
-                return types.SimpleNamespace(returncode=0, stdout="✓ Chrome 151.0.7900.12 installed successfully",
-                                             stderr="")
-            return types.SimpleNamespace(returncode=install_rc, stdout="", stderr=install_err)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
+    real_popen = subprocess.Popen
+
+    def _popen(args, **kw):
+        if list(args[1:2]) != ["install"]:
+            return real_popen(args, **kw)
+        if installs is not None:
+            installs.append(list(args))
+        if install_rc == 0:
+            state["chrome"] = "pass"
+            state["msg"] = "Google Chrome for Testing 151.0.7900.12 at /x/chrome-151.0.7900.12/chrome"
+            return _Finished(0, "✓ Chrome 151.0.7900.12 installed successfully", "")
+        return _Finished(install_rc, "", install_err)
+
     monkeypatch.setattr(preflight.subprocess, "run", _run)
+    monkeypatch.setattr(chrome_install.subprocess, "Popen", _popen)
     return state
 
 
@@ -561,12 +584,16 @@ def test_install_chrome_without_a_cli_says_so(monkeypatch):
 def test_a_second_install_click_joins_the_first(monkeypatch):
     gate, runs = threading.Event(), []
 
-    def slow_run(args, **kw):
-        runs.append(args)
-        gate.wait(5)
-        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+    class _Slow(_Finished):
+        def wait(self, timeout=None):
+            gate.wait(5)
+            return super().wait(timeout)
 
-    monkeypatch.setattr(chrome_install.subprocess, "run", slow_run)
+    def slow_popen(args, **kw):
+        runs.append(list(args))
+        return _Slow(0, "ok", "")
+
+    monkeypatch.setattr(chrome_install.subprocess, "Popen", slow_popen)
     assert chrome_install.start("/opt/ab")["state"] == "installing"
     assert chrome_install.start("/opt/ab")["state"] == "installing"
     gate.set()
@@ -681,6 +708,240 @@ def test_the_version_is_read_from_doctors_real_message_shape():
     msg = ("Google Chrome for Testing 149.0.7827.55 at /Users/me/.agent-browser/browsers/"
            "chrome-149.0.7827.55/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
     assert preflight.chrome_version_of(msg) == "149.0.7827.55"
+
+
+# ── review round 1: ghosts, real bounds, the real opener, the cache key, slow links ─
+
+
+def test_a_download_finishing_after_the_plugin_was_disabled_raises_no_ghost_banner(monkeypatch):
+    """Click Download, disable the plugin mid-download (the host drops its gaps AND steps),
+    then the fetch thread finishes: its completion refresh must not bring back a banner whose
+    Retry button would 404. Through the REAL registry and gap store."""
+    from graph.plugins.registry import PluginRegistry
+
+    _pin_fake(monkeypatch)
+    gate = threading.Event()
+
+    def slow_then_fail(url, timeout):
+        gate.wait(10)
+        raise OSError("network down")
+
+    monkeypatch.setattr(cli_fetch, "_urllib_download", slow_then_fail)
+    _cli_env(monkeypatch, which=None)
+    reg = PluginRegistry("agent_browser", ROOT, config={})
+    _PKG.register(reg)
+    assert [g["key"] for g in setup_gaps.active()] == [preflight.CLI_GAP]
+    assert setup_gaps.run_step("agent_browser", "download-cli")["pending"] is True
+    setup_gaps.clear_plugin("agent_browser")               # disabled mid-download
+    gate.set()
+    assert cli_fetch._slot().idle.wait(10)
+    assert cli_fetch.fetch_state()["state"] == "failed"   # the thread did finish and refresh…
+    assert setup_gaps.active() == []                       # …and raised no ghost
+    assert not setup_gaps.has_step("agent_browser", "download-cli")
+
+
+_POSIX = pytest.mark.skipif(os.name == "nt", reason="POSIX process groups (Windows goes through taskkill /T)")
+
+
+def _script(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "agent-browser"
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _gone(pid: int, within: float = 5.0) -> bool:
+    """True once ``pid`` is dead or a zombie (reaped or not, it holds nothing)."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        if not stat or stat.startswith("Z"):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@_POSIX
+def test_a_wedged_chrome_install_is_killed_with_everything_it_started(tmp_path):
+    """REAL processes: a CLI that starts a child holding its pipes and never exits. The bound
+    must hold (subprocess.run's didn't: it communicate()s with no timeout after the kill), the
+    state must leave "installing", and the child must die with it (its own process group)."""
+    pidfile = tmp_path / "child.pid"
+    cli = _script(tmp_path, f'sleep 300 &\necho $! > "{pidfile}"\necho "Downloading Chrome"\nsleep 300\n')
+    started = time.monotonic()
+    chrome_install.start(str(cli), background=False, timeout=1)
+    elapsed = time.monotonic() - started
+    st = chrome_install.state()
+    assert st["state"] == "failed" and "didn't finish within 1s" in st["error"], st
+    assert "Downloading Chrome" in st["output"]
+    assert elapsed < 8, elapsed
+    assert chrome_install._slot().idle.is_set()
+    assert _gone(int(pidfile.read_text().strip()))
+
+
+@_POSIX
+def test_a_descendant_that_escapes_the_group_cannot_pin_the_install_thread(monkeypatch, tmp_path):
+    """A descendant in its OWN session survives the group kill and keeps the pipes open; the
+    drain joins are bounded, so the install still reports instead of hanging for its life."""
+    monkeypatch.setattr(chrome_install, "_JOIN_TIMEOUT_S", 0.5)
+    pidfile = tmp_path / "escaped.pid"
+    escapee = f'import os, time; os.setsid(); open("{pidfile}", "w").write(str(os.getpid())); time.sleep(30)'
+    cli = _script(tmp_path, f"\"{sys.executable}\" -c '{escapee}' &\nsleep 300\n")
+    try:
+        started = time.monotonic()
+        chrome_install.start(str(cli), background=False, timeout=1)
+        elapsed = time.monotonic() - started
+        assert chrome_install.state()["state"] == "failed"
+        assert elapsed < 6, elapsed                         # not the 30 s the escapee holds the pipes
+    finally:
+        deadline = time.monotonic() + 3
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if pidfile.exists() and pidfile.read_text().strip():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pidfile.read_text().strip()), signal.SIGKILL)
+
+
+class _QuietServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+    def handle_error(self, request, client_address):
+        pass  # a client that hung up mid-trickle is the point of some of these tests
+
+
+@contextlib.contextmanager
+def _serve(handler):
+    srv = _QuietServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_port}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def _redirect_to(location: str):
+    class _Redirect(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    return _Redirect
+
+
+@pytest.mark.parametrize("location", ["http://127.0.0.1:1/evil", "https://evil.example/asset"])
+def test_the_real_opener_refuses_a_redirect_off_https_githubusercontent(location):
+    """Through the REAL urllib opener, not check_redirect_target alone: building the opener
+    without _PinnedRedirects must turn this red."""
+    with _serve(_redirect_to(location)) as base:
+        with pytest.raises(PermissionError, match="refused"):
+            _REAL_DOWNLOAD(f"{base}/asset", 5)
+
+
+def _trickle(*, chunks: int, size: int, gap: float, stall_after: int | None = None, stall: float = 0.0):
+    class _Trickle(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(chunks * size))
+            self.end_headers()
+            for i in range(chunks):
+                if stall_after is not None and i == stall_after:
+                    time.sleep(stall)
+                self.wfile.write(b"x" * size)
+                self.wfile.flush()
+                time.sleep(gap)
+
+        def log_message(self, *a):
+            pass
+
+    return _Trickle
+
+
+def test_a_slow_but_steady_link_finishes_well_past_the_idle_timeout(monkeypatch):
+    monkeypatch.setattr(cli_fetch, "FETCH_IDLE_TIMEOUT_S", 0.5)
+    with _serve(_trickle(chunks=8, size=512, gap=0.2)) as base:
+        started = time.monotonic()
+        data = _REAL_DOWNLOAD(f"{base}/asset", 30)
+    assert data == b"x" * 4096
+    assert time.monotonic() - started > 1.0                   # several idle periods, never idle for one
+
+
+def test_a_stalled_link_fails_on_the_idle_timeout(monkeypatch):
+    monkeypatch.setattr(cli_fetch, "FETCH_IDLE_TIMEOUT_S", 0.3)
+    with _serve(_trickle(chunks=4, size=512, gap=0.0, stall_after=2, stall=3.0)) as base:
+        with pytest.raises(TimeoutError, match="stalled"):
+            _REAL_DOWNLOAD(f"{base}/asset", 30)
+
+
+def test_the_overall_ceiling_still_holds_on_a_trickle(monkeypatch):
+    monkeypatch.setattr(cli_fetch, "FETCH_IDLE_TIMEOUT_S", 5.0)
+    with _serve(_trickle(chunks=30, size=256, gap=0.1)) as base:
+        with pytest.raises(TimeoutError, match="ceiling"):
+            _REAL_DOWNLOAD(f"{base}/asset", 0.5)
+
+
+def test_the_ceiling_is_generous_and_the_first_use_wait_is_bounded():
+    # ~12 KB/s still lands a ~10 MB asset under the ceiling; a tool call waits far less
+    assert cli_fetch.FETCH_TIMEOUT_S >= 15 * 60 and cli_fetch.FETCH_IDLE_TIMEOUT_S <= 120
+    assert cli_fetch.FIRST_USE_WAIT_S < cli_fetch.FETCH_TIMEOUT_S
+
+
+async def test_a_slow_first_use_download_answers_still_downloading_and_keeps_going(monkeypatch):
+    _pin_fake(monkeypatch)
+    gate = threading.Event()
+
+    def slow(url, timeout):
+        gate.wait(10)
+        return PAYLOAD
+
+    monkeypatch.setattr(cli_fetch, "_urllib_download", slow)
+    monkeypatch.setattr(cli_fetch, "FIRST_USE_WAIT_S", 0.2)
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
+
+    def missing(args, **kw):
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(tools.subprocess, "Popen", missing)
+    out = await {t.name: t for t in tools.get_browser_tools({})}["browser_snapshot"].ainvoke({})
+    assert "still downloading" in out
+    gate.set()
+    assert cli_fetch._slot().idle.wait(5)
+    assert cli_fetch.fetch_state()["state"] == "done" and cli_fetch.installed_path()
+
+
+@pytest.mark.parametrize("cache_verdicts", [
+    pytest.param(True, marks=pytest.mark.skipif(os.name == "nt", reason="Windows never caches (st_ctime = creation)")),
+    False,
+])
+def test_a_same_size_swap_with_the_mtime_restored_is_not_trusted(monkeypatch, cache_verdicts):
+    _pin_fake(monkeypatch)
+    monkeypatch.setattr(cli_fetch, "_CACHE_VERDICTS", cache_verdicts)
+    cli_fetch.ensure_cli(background=False, downloader=lambda url, timeout: PAYLOAD)
+    path = Path(cli_fetch.installed_path())
+    assert path.is_file()
+    before = path.stat()
+    path.write_bytes(bytes(b ^ 0xFF for b in PAYLOAD))       # same size, different bytes, same inode
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = path.stat()
+    assert (after.st_size, after.st_mtime_ns, after.st_ino) == (before.st_size, before.st_mtime_ns, before.st_ino)
+    assert cli_fetch.installed_path() == ""
+
+
+def test_windows_never_caches_a_verdict(monkeypatch):
+    _pin_fake(monkeypatch)
+    monkeypatch.setattr(cli_fetch, "_CACHE_VERDICTS", False)
+    cli_fetch.ensure_cli(background=False, downloader=lambda url, timeout: PAYLOAD)
+    assert cli_fetch.installed_path()
+    assert cli_fetch._slot().verified == {}
 
 
 # ── the real thing (opt-in) ──────────────────────────────────────────────────────

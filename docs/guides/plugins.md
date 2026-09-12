@@ -652,9 +652,12 @@ def _preflight(registry):
 browser" would still send the operator to a terminal. Register the command as a **setup
 step** with `registry.register_setup_step(step, fn)` and report the gap with
 `action={"kind": "plugin_setup", "step": step, "label": "Download the CLI"}`: the banner
-renders a button, a click POSTs `/api/plugins/<id>/setup-steps/<step>` (operator-bearer
-gated), and the host runs the `fn` it holds for exactly that plugin and step — the action
-is only the step's name. Start long work on a thread, re-report the gap with its progress
+renders a button, a click POSTs `/api/plugin-setup/<id>/<step>`, and the host runs the
+`fn` it holds for exactly that plugin and step — the action is only the step's name. The
+route is core and sits outside `/api/plugins/<id>/` on purpose: your manifest's
+`public_paths` / `federation_paths` can open that subtree, and a setup step always takes the
+operator credential. If the plugin is disabled, uninstalled, or fails to reload, its steps
+go with its gaps, and nothing the old load reports afterwards brings a banner back. Start long work on a thread, re-report the gap with its progress
 and no action (so it can't be clicked twice), and return
 `{"ok": True, "pending": True, "message": …}`; the console keeps refreshing the banner
 while the step runs, and your re-report on completion clears it or shows the error with a

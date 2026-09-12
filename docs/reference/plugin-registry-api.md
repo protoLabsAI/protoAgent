@@ -337,9 +337,11 @@ For a fix that is a COMMAND rather than a setting — download a CLI, install a 
 — which a banner would otherwise tell the operator to go and run in a terminal.
 Report the gap with `action={"kind": "plugin_setup", "step": step, "label":
 "Download the CLI"}` and the console renders a button on its banner; clicking it
-POSTs `/api/plugins/<this plugin>/setup-steps/<step>` (operator-bearer gated), and
-the host runs `fn()` off the event loop. Only the callable held for exactly this
-(plugin, step) pair ever runs — the action is data naming it, nothing more.
+POSTs `/api/plugin-setup/<this plugin>/<step>` — a core route outside the
+`/api/plugins/<id>/` subtree, so no manifest `public_paths` / `federation_paths`
+can lower its operator-credential gate — and the host runs `fn()` off the event loop.
+Only the callable held for exactly this (plugin, step) pair ever runs — the action is
+data naming it, nothing more.
 
 `step` is one lowercase identifier (`[a-z0-9][a-z0-9_-]*`, at most 64 chars; a
 plugin may hold 8). `fn` takes no arguments and returns a short message string, or
@@ -505,6 +507,10 @@ never a plugin string into a URL or callback. `action` arrived in v0.162.0; a
 plugin that must also run on older hosts feature-detects the keyword
 (`"action" in inspect.signature(fn).parameters`) and makes the plain call
 otherwise.
+
+A report from a registry whose plugin has since been disabled, uninstalled, or failed
+to reload is dropped — so a thread of the old load that finishes late (a download, an
+install) can't bring back a banner whose buttons no longer lead anywhere.
 
 ### `registry.save_media` {#registry-save-media}
 

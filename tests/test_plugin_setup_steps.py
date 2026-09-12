@@ -1,7 +1,8 @@
 """The ``plugin_setup`` setup-gap action and the setup steps behind it: a banner button
 that runs a command the reporting plugin registered (``registry.register_setup_step``), via
-``POST /api/plugins/<id>/setup-steps/<step>``. The action is data naming a step; the host
-runs only the callable it holds for exactly that (plugin, step)."""
+the core route ``POST /api/plugin-setup/<id>/<step>``. The action is data naming a step; the
+host runs only the callable it holds for exactly that (plugin, step). Also the generation
+fence that keeps a cleared plugin's late threads from re-raising its banners."""
 
 from __future__ import annotations
 
@@ -121,7 +122,68 @@ def test_the_testkit_fake_records_steps_with_the_host_signature():
     assert fake.setup_steps["download-cli"]()["pending"] is True
 
 
+# ── the generation fence: a cleared plugin's late threads raise no ghost banner ──
+
+
+def test_a_registry_from_before_a_clear_reports_nothing(tmp_path):
+    old = PluginRegistry("pb", tmp_path)
+    old.report_setup_gap("cli", "the CLI is missing")
+    setup_gaps.clear_plugin("pb")                          # the operator disabled it
+    # …and a download thread of that load finishes afterwards, re-reporting with a Retry
+    old.report_setup_gap("cli", "the download failed", action={"kind": "plugin_setup", "step": "download-cli"})
+    assert setup_gaps.active() == []
+    fresh = PluginRegistry("pb", tmp_path)                # re-enabled: the new load reports normally
+    fresh.report_setup_gap("cli", "the CLI is missing")
+    assert [g["key"] for g in setup_gaps.active()] == ["cli"]
+    old.report_setup_gap("late", "still the old load")    # …and the old one still can't
+    assert [g["key"] for g in setup_gaps.active()] == ["cli"]
+
+
+def test_an_uninstall_retires_the_generation_too(tmp_path):
+    old = PluginRegistry("pb", tmp_path)
+    setup_gaps.retain({"other"})                           # pb is gone from disk
+    old.report_setup_gap("cli", "late")
+    assert setup_gaps.active() == []
+
+
+def test_host_side_reports_are_not_fenced():
+    """The host reports some gaps under a plugin's id itself (a superseded copy on disk, for a
+    plugin that is merely OFF) — those carry no registry generation and must still land."""
+    setup_gaps.clear_plugin("pb")
+    setup_gaps.report("pb", "superseded", "an ignored copy is on disk")
+    assert [g["key"] for g in setup_gaps.active()] == ["superseded"]
+
+
+def test_a_plugin_whose_reload_fails_loses_its_steps_and_banners(tmp_path, monkeypatch):
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader as plugin_loader
+
+    root = tmp_path / "plugins"
+    plugin = root / "boomy"
+    plugin.mkdir(parents=True)
+    (plugin / "protoagent.plugin.yaml").write_text("id: boomy\nname: Boomy\nenabled: true\n", encoding="utf-8")
+    (plugin / "__init__.py").write_text(
+        "def register(registry):\n"
+        "    registry.register_setup_step('go', lambda: 'ran the OLD code')\n"
+        "    registry.report_setup_gap('cli', 'missing', action={'kind': 'plugin_setup', 'step': 'go'})\n",
+        encoding="utf-8")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda _config: [root])
+    first = plugin_loader.load_plugins(LangGraphConfig(plugins_enabled=["boomy"]))
+    assert first.meta[0].get("loaded") is True
+    assert setup_gaps.has_step("boomy", "go") and [g["key"] for g in setup_gaps.active()] == ["cli"]
+
+    (plugin / "__init__.py").write_text("def register(registry):\n    raise RuntimeError('broken edit')\n",
+                                        encoding="utf-8")
+    plugin_loader.purge_plugin_modules("boomy")            # what a reload does before re-importing
+    second = plugin_loader.load_plugins(LangGraphConfig(plugins_enabled=["boomy"]))
+    assert "broken edit" in str(second.meta[0].get("error"))
+    # no live code behind them any more: the old load's step is unreachable, its banner gone
+    assert not setup_gaps.has_step("boomy", "go") and setup_gaps.active() == []
+
+
 # ── the route the banner button calls ────────────────────────────────────────────
+
+ROUTE = "/api/plugin-setup/{plugin}/{step}"
 
 
 def _client(monkeypatch, audits=None):
@@ -137,7 +199,7 @@ def _client(monkeypatch, audits=None):
 def test_the_route_runs_the_registered_step_and_audits_it(monkeypatch):
     audits: list = []
     setup_gaps.register_step("pb", "download-cli", lambda: {"ok": True, "pending": True, "message": "Downloading…"})
-    r = _client(monkeypatch, audits).post("/api/plugins/pb/setup-steps/download-cli")
+    r = _client(monkeypatch, audits).post(ROUTE.format(plugin="pb", step="download-cli"))
     assert r.status_code == 200
     assert r.json() == {"ok": True, "message": "Downloading…", "pending": True}
     [(args, kwargs)] = audits
@@ -148,8 +210,10 @@ def test_the_route_404s_a_step_the_plugin_never_registered_and_never_reaches_ano
     ran = []
     setup_gaps.register_step("pb", "download-cli", lambda: ran.append(1) or "ok")
     client = _client(monkeypatch)
-    assert client.post("/api/plugins/other/setup-steps/download-cli").status_code == 404
-    assert client.post("/api/plugins/pb/setup-steps/install-chrome").status_code == 404
+    assert client.post(ROUTE.format(plugin="other", step="download-cli")).status_code == 404
+    assert client.post(ROUTE.format(plugin="pb", step="install-chrome")).status_code == 404
+    # …and nothing answers inside the plugin-exemptable namespace any more
+    assert client.post("/api/plugins/pb/setup-steps/download-cli").status_code in (404, 405)
     assert ran == []
 
 
@@ -158,11 +222,36 @@ def test_the_route_reports_a_raising_step_as_not_ok_never_a_500(monkeypatch):
         raise OSError("disk full")
 
     setup_gaps.register_step("pb", "go", boom)
-    r = _client(monkeypatch).post("/api/plugins/pb/setup-steps/go")
+    r = _client(monkeypatch).post(ROUTE.format(plugin="pb", step="go"))
     assert r.status_code == 200 and r.json() == {"ok": False, "message": "OSError: disk full", "pending": False}
 
 
 def test_a_disabled_plugins_button_404s(monkeypatch):
     setup_gaps.register_step("pb", "go", lambda: "ok")
     setup_gaps.clear_plugin("pb")
-    assert _client(monkeypatch).post("/api/plugins/pb/setup-steps/go").status_code == 404
+    assert _client(monkeypatch).post(ROUTE.format(plugin="pb", step="go")).status_code == 404
+
+
+def test_the_setup_route_takes_the_operator_credential_whatever_a_manifest_exempts():
+    """A plugin may exempt its OWN namespace from the auth gate (``public_paths``) or open it to
+    fleet peers (``federation_paths``) — /plugins/<id>/ and /api/plugins/<id>/. The setup route
+    is core and lives OUTSIDE both, so even a manifest claiming its whole namespace through
+    both keys can't let an anonymous caller — or a fleet peer — run its steps."""
+    from a2a_impl import auth
+    from graph.plugins.manifest import _parse_public_paths
+
+    route = ROUTE.format(plugin="agent_browser", step="install-chrome")
+    claimed = ["/api/plugins/agent_browser/", "/plugins/agent_browser/"]
+    saved = (list(auth._PLUGIN_PUBLIC), list(auth._PLUGIN_FEDERATION))
+    try:
+        auth.set_public_prefixes(_parse_public_paths(claimed, "agent_browser"))
+        auth.set_federation_prefixes(_parse_public_paths(claimed, "agent_browser", kind="federation_path"))
+        # the exemptions really are in force on the plugin's own subtree…
+        assert auth._is_public("/api/plugins/agent_browser/anything")
+        assert not auth._requires_operator("/api/plugins/agent_browser/anything")
+        # …and do not reach the core setup route
+        assert auth._is_public(route) is False
+        assert auth._requires_operator(route) is True
+    finally:
+        auth.set_public_prefixes(saved[0])
+        auth.set_federation_prefixes(saved[1])

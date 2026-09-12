@@ -23,9 +23,10 @@ import { useUI } from "../state/uiStore";
 // to a plain message. This mirrors ACTION_KINDS in setup_gaps.py on the way out.
 //
 // `plugin_setup` is the one kind whose button reaches the server: it POSTs
-// /api/plugins/<gap.plugin>/setup-steps/<step>, a path built from THIS gap's plugin id and the
+// /api/plugin-setup/<gap.plugin>/<step>, a path built from THIS gap's plugin id and the
 // server-validated step identifier (never a URL from the payload), and the host runs only the
-// callable that plugin registered for that step ("Download the CLI", "Install Chrome").
+// callable that plugin registered for that step ("Download the CLI", "Install Chrome"). The
+// route is core and outside /api/plugins/<id>/, so no plugin manifest can un-gate it.
 export type SetupGapAction = {
   kind: string;
   target?: string;

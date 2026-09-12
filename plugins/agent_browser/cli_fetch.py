@@ -46,8 +46,17 @@ beside the target, ``chmod 0755`` (POSIX only — Windows has no execute bit), a
 ever sits at the resolved path. On Windows, ``os.replace`` over a binary another process is
 RUNNING raises ``PermissionError``: that's retried a few times with backoff, then accepted
 if the file already there is the pinned one (another instance won the race with the same
-bytes), and refused otherwise. The resolved file is re-verified once per (size, mtime), so
-a binary swapped behind our back is ignored rather than run.
+bytes), and refused otherwise. Resolving the cached file re-hashes it whenever its
+(device, inode, size, mtime, ctime) signature changes — on POSIX ctime is the inode-change
+time, which every write, rename, chmod and utime moves and no unprivileged user can set back
+— and on EVERY resolve on Windows, where ``st_ctime`` is the creation time and an in-place
+rewrite with a restored mtime would otherwise look unchanged. A file that no longer hashes to
+the pin is not run.
+
+**Slow is not dead.** Each connect/read has an IDLE timeout (``FETCH_IDLE_TIMEOUT_S``: no
+bytes for that long fails the download); the overall ceiling (``FETCH_TIMEOUT_S``, 15 min)
+lets ~12 KB/s still land the ~10 MB asset. A tool call's first use waits
+``FIRST_USE_WAIT_S`` for the download and then answers "still downloading" while it goes on.
 
 **Egress** mirrors ``br_fetch`` (project_board): the host's allowlist (``security.egress``,
 ADR 0008) is consulted for the URL and for every redirect hop, and a hop must stay on HTTPS
@@ -97,8 +106,16 @@ ASSETS: dict[str, tuple[str, str]] = {
     ),
     "win32-x64": ("agent-browser-win32-x64.exe", "ac88ef4261ccae30d047506a8c45d465f6c7b7a96743189131e6fb0b841bc3b1"),
 }
-FETCH_TIMEOUT_S = 120.0
+# Download bounds (see "Slow is not dead" above): an overall CEILING, a per-read IDLE timeout,
+# and how long a tool call waits on a first-use download before answering.
+FETCH_TIMEOUT_S = 15 * 60.0
+FETCH_IDLE_TIMEOUT_S = 60.0
+FIRST_USE_WAIT_S = 120.0
 MAX_ASSET_BYTES = 64 * 1024 * 1024  # a release binary is ~10-12 MB; refuse anything absurd
+# Whether an unchanged (dev, inode, size, mtime, ctime) signature may stand in for re-hashing.
+# Not on Windows: st_ctime is the CREATION time there, so an in-place same-size rewrite with the
+# mtime restored keeps every field — the file is re-hashed on each resolve instead (~20 ms).
+_CACHE_VERDICTS = os.name != "nt"
 ENV_CLI_DIR = "AGENT_BROWSER_CLI_DIR"
 # Where a redirect hop may land: GitHub serves release assets from
 # release-assets.githubusercontent.com (the same hop br_fetch verified live).
@@ -206,11 +223,15 @@ def _sha256_file(path: Path) -> str:
 
 
 def installed_path(platform: str | None = None, *, base: Path | None = None) -> str:
-    """The fetched CLI's path when it is present AND is the pinned asset, else ``""``.
+    """The fetched CLI's path when it is present AND hashes to the pinned asset, else ``""``.
 
-    Every browser command resolves the CLI, and hashing ~10 MB costs ~20 ms, so the verdict
-    is cached per (path, size, mtime): a file replaced behind our back gets a new signature
-    and is re-hashed — and ignored unless it's still the pinned build."""
+    Every browser command resolves the CLI, and hashing ~10 MB costs ~20 ms, so on POSIX the
+    verdict is cached per (path, device, inode, size, mtime_ns, ctime_ns). ctime is the
+    inode-change time there: any write, rename, chmod or utime moves it and an unprivileged
+    user can't restore it, so a changed file always gets a new signature and is re-hashed (to
+    the filesystem's timestamp resolution). On Windows ``st_ctime`` is the creation time — an
+    in-place rewrite with the mtime put back would keep the signature — so nothing is cached
+    there and every resolve re-hashes (``_CACHE_VERDICTS``)."""
     spec = fetch_spec(platform)
     if spec is None:
         return ""
@@ -221,19 +242,22 @@ def installed_path(platform: str | None = None, *, base: Path | None = None) -> 
             return ""
     except OSError:
         return ""
-    sig = (str(path), st.st_size, st.st_mtime_ns)
+    sig = (str(path), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
     holder = _slot()
-    with holder.lock:
-        verdict = holder.verified.get(sig)
+    verdict = None
+    if _CACHE_VERDICTS:
+        with holder.lock:
+            verdict = holder.verified.get(sig)
     if verdict is None:
         try:
             verdict = _sha256_file(path) == spec.sha256
         except OSError:
             return ""
-        with holder.lock:
-            if len(holder.verified) > 32:
-                holder.verified.clear()
-            holder.verified[sig] = verdict
+        if _CACHE_VERDICTS:
+            with holder.lock:
+                if len(holder.verified) > 32:
+                    holder.verified.clear()
+                holder.verified[sig] = verdict
     if not verdict:
         return ""
     if os.name != "nt" and not os.access(path, os.X_OK):
@@ -324,17 +348,30 @@ class _PinnedRedirects(urllib.request.HTTPRedirectHandler):
 
 
 def _urllib_download(url: str, timeout: float) -> bytes:
-    """Plain HTTPS GET → bytes, bounded by ``timeout`` overall (checked between chunks; the
-    socket timeout is 30 s per operation) and by ``MAX_ASSET_BYTES``."""
+    """Plain HTTPS GET → bytes, with two bounds, because a SLOW link is not a DEAD one:
+
+    * ``FETCH_IDLE_TIMEOUT_S`` is the socket timeout on the connect and on EVERY read — no
+      bytes for that long fails the download ("stalled");
+    * ``timeout`` is the overall ceiling, checked before every read, so the worst case is
+      ``timeout`` plus one idle period.
+
+    Reads use ``read1`` (whatever has arrived, up to 256 KB), so even a trickle comes back to
+    the deadline check between packets. Every redirect hop goes through
+    ``_PinnedRedirects``. Capped at ``MAX_ASSET_BYTES``."""
     deadline = time.monotonic() + timeout
+    idle = max(0.05, min(FETCH_IDLE_TIMEOUT_S, timeout))
     req = urllib.request.Request(url, headers={"User-Agent": "protoagent-agent-browser/cli-fetch"})
     buf = io.BytesIO()
     opener = urllib.request.build_opener(_PinnedRedirects())
-    with opener.open(req, timeout=max(1.0, min(30.0, timeout))) as resp:  # noqa: S310 — pinned https URL
+    with opener.open(req, timeout=idle) as resp:  # noqa: S310 — pinned https URL
+        read = getattr(resp, "read1", resp.read)
         while True:
-            if deadline - time.monotonic() <= 0:
-                raise TimeoutError(f"download exceeded {timeout:.0f}s")
-            chunk = resp.read(256 * 1024)
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"download exceeded its {timeout:g}s ceiling")
+            try:
+                chunk = read(256 * 1024)
+            except TimeoutError as exc:
+                raise TimeoutError(f"no data for {idle:g}s — the connection stalled") from exc
             if not chunk:
                 break
             buf.write(chunk)

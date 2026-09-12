@@ -158,13 +158,15 @@ def effective_binary(binary: str) -> str:
 
 def cli_for_run(binary: str, *, autofetch: bool, on_done=None) -> str:
     """``effective_binary`` — plus FIRST USE: when nothing resolves, ``binary`` is the stock
-    name and ``autofetch`` is on, download the pinned CLI now (inline: every caller is
-    already off the event loop) and resolve again. A download already in flight (the
-    banner's button) is joined, not repeated; a FAILED one isn't retried on every call — the
-    banner's Retry button is the operator's lever."""
+    name and ``autofetch`` is on, start the pinned download and wait for it — at most
+    ``cli_fetch.FIRST_USE_WAIT_S`` — then resolve again. On a slow link the call answers
+    (the caller's missing-CLI path says "still downloading") while the download carries on to
+    its own ceiling. A download already in flight (the banner's button) is joined, not
+    repeated; a FAILED one isn't retried on every call — the banner's Retry is the operator's
+    lever."""
     if resolve_binary(binary) or not autofetch or not is_default(binary):
         return effective_binary(binary)
-    cli_fetch.ensure_cli(background=False, wait=cli_fetch.FETCH_TIMEOUT_S, on_done=on_done)
+    cli_fetch.ensure_cli(background=True, wait=cli_fetch.FIRST_USE_WAIT_S, on_done=on_done)
     return effective_binary(binary)
 
 

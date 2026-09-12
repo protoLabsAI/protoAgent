@@ -168,6 +168,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         found = preflight.resolve_binary(binary)
         if isinstance(e, FileNotFoundError) and not found:
             fetch = cli_fetch.fetch_state() if preflight.is_default(binary) else {}
+            if fetch.get("state") == "fetching":
+                return (f"Error: the {binary!r} CLI is still downloading (a slow connection) — it "
+                        f"carries on in the background; try again in a minute. The console's setup "
+                        f"banner shows its progress.")
             if fetch.get("state") == "failed":
                 return (f"Error: {binary!r} isn't installed, and downloading it failed "
                         f"({str(fetch.get('error'))[:200]}). The console's setup banner has a Retry "

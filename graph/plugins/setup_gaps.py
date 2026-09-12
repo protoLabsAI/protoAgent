@@ -40,12 +40,15 @@ _GAPS: dict[tuple[str, str], dict] = {}
 # ``plugin_setup`` is the one kind whose button DOES something server-side, and it stays data
 # all the same: the action names a ``step`` — an identifier — that the REPORTING plugin
 # registered at load time with ``registry.register_setup_step(step, fn)``. The console POSTs
-# ``/api/plugins/<gap.plugin>/setup-steps/<step>`` and the host runs the callable it holds for
+# ``/api/plugin-setup/<gap.plugin>/<step>`` and the host runs the callable it holds for
 # exactly that (plugin, step) pair; nothing in the action is ever executed, fetched, or turned
 # into a URL, and a step another plugin registered is unreachable through it (the target is
-# forced to the reporting plugin, like ``plugin_config``). It exists for fixes that are a
-# COMMAND, not a setting — "download the CLI", "install Chrome" — which the operator would
-# otherwise be told to go and run in a terminal.
+# forced to the reporting plugin, like ``plugin_config``). The route is CORE and deliberately
+# outside ``/api/plugins/<id>/``: that subtree is one a plugin may exempt from the auth gate
+# (manifest ``public_paths``) or open to fleet peers (``federation_paths``), and running a
+# step must always take the operator credential. It exists for fixes that are a COMMAND, not a
+# setting — "download the CLI", "install Chrome" — which the operator would otherwise be told to
+# go and run in a terminal.
 ACTION_KINDS = ("plugin_config", "global_settings", "plugin_setup")
 MAX_ACTIONS = 4  # a gap offering more than a handful of fixes is a bug, not a banner
 MAX_ACTION_STR_CHARS = 120
@@ -61,6 +64,25 @@ MAX_STEPS_PER_PLUGIN = 8
 # (plugin_id, step) -> the plugin's callable. SERVER-SIDE ONLY: never serialized, never in a
 # gap record — the gap carries the step's NAME, the host keeps the behavior.
 _STEPS: dict[tuple[str, str], object] = {}
+# plugin_id -> how many times its gaps/steps were CLEARED (disable, uninstall, a failed reload).
+# A PluginRegistry captures the value when it's built and passes it with every report, so a
+# report from a registry whose plugin has since been cleared is dropped: a background thread of
+# a disabled plugin (a download finishing late) can't re-raise a banner whose button would 404.
+# Monotonic — never reset, so no stale registry can ever match again.
+_GEN: dict[str, int] = {}
+
+
+def generation(plugin_id: str) -> int:
+    """The plugin's current clear-count (see ``_GEN``); registers the id so ``retain`` can
+    retire it later. ``PluginRegistry`` reads it once, at construction."""
+    pid = str(plugin_id or "").strip()
+    with _LOCK:
+        return _GEN.setdefault(pid, 0)
+
+
+def _retire(pid: str) -> None:
+    """Bump ``pid``'s generation (caller holds ``_LOCK``)."""
+    _GEN[pid] = _GEN.get(pid, 0) + 1
 
 
 def _safe_text(value: str) -> str | None:
@@ -163,14 +185,27 @@ def _copy_gap(gap: dict) -> dict:
     return out
 
 
-def report(plugin_id: str, key: str, message: str | None, *, label: str | None = None, action=None) -> None:
+def report(
+    plugin_id: str,
+    key: str,
+    message: str | None,
+    *,
+    label: str | None = None,
+    action=None,
+    generation: int | None = None,
+) -> None:
     """Set (``message``) or clear (``message=None`` / blank) one gap for a plugin.
     ``label`` is the plugin's display name for the banner; falls back to the id.
 
     ``action`` (optional) attaches a bounded, declarative remediation hint — a single
     action dict or a list — to the ACTIVE gap record. It is sanitized against the closed
     ``ACTION_KINDS`` vocabulary; anything unrecognized, oversized, or unsafe is silently
-    dropped (see ``_sanitize_action``). Ignored when the gap is being cleared."""
+    dropped (see ``_sanitize_action``). Ignored when the gap is being cleared.
+
+    ``generation`` (what ``generation(plugin_id)`` was when the reporting registry was built —
+    ``PluginRegistry`` passes it; host-side reports don't) makes this a no-op once the plugin
+    has been cleared since: a disabled / uninstalled / failed-to-reload plugin's late thread
+    can't bring a banner back."""
     pid = str(plugin_id or "").strip()
     k = str(key or "").strip()
     if not pid or not k:
@@ -180,6 +215,8 @@ def report(plugin_id: str, key: str, message: str | None, *, label: str | None =
         text = text[: MAX_MESSAGE_CHARS - 1] + "…"
     actions = _sanitize_actions(action, pid) if text else []
     with _LOCK:
+        if generation is not None and _GEN.get(pid, 0) != generation:
+            return  # a registry from before this plugin was cleared — its code is no longer live
         if text:
             if (pid, k) not in _GAPS and sum(1 for kk in _GAPS if kk[0] == pid) >= MAX_GAPS_PER_PLUGIN:
                 return  # a plugin keying gaps by timestamp must not flood the banner strip
@@ -194,25 +231,30 @@ def report(plugin_id: str, key: str, message: str | None, *, label: str | None =
 def clear_plugin(plugin_id: str) -> None:
     """Drop every gap a plugin reported — used when a plugin is unloaded/disabled so a
     stale banner can't outlive the plugin that raised it. Its setup steps go with it: a
-    disabled plugin's code must not stay reachable through a stale banner button."""
+    disabled plugin's code must not stay reachable through a stale banner button. And its
+    generation moves on, so nothing the old registry reports later brings a banner back."""
     pid = str(plugin_id or "").strip()
     with _LOCK:
         for k in [k for k in _GAPS if k[0] == pid]:
             _GAPS.pop(k, None)
         for k in [k for k in _STEPS if k[0] == pid]:
             _STEPS.pop(k, None)
+        _retire(pid)
 
 
 def retain(plugin_ids: set[str] | list[str]) -> None:
     """Drop gaps (and setup steps) from plugins that are no longer present at all
     (uninstalled between reloads) — the disabled-branch clear can't see a plugin the
-    loader never visits."""
+    loader never visits — and retire their generations, like ``clear_plugin``."""
     keep = {str(p) for p in plugin_ids}
     with _LOCK:
-        for k in [k for k in _GAPS if k[0] not in keep]:
+        gone = ({k[0] for k in _GAPS} | {k[0] for k in _STEPS} | set(_GEN)) - keep
+        for k in [k for k in _GAPS if k[0] in gone]:
             _GAPS.pop(k, None)
-        for k in [k for k in _STEPS if k[0] not in keep]:
+        for k in [k for k in _STEPS if k[0] in gone]:
             _STEPS.pop(k, None)
+        for pid in gone:
+            _retire(pid)
 
 
 # -- Setup STEPS: the server-side half of a ``plugin_setup`` action --------------------

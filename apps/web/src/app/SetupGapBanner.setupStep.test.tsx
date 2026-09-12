@@ -1,5 +1,5 @@
 // The `plugin_setup` setup-gap action: a banner button that runs a setup step the REPORTING
-// plugin registered (POST /api/plugins/<plugin>/setup-steps/<step> — graph/plugins/setup_gaps.py),
+// plugin registered (POST /api/plugin-setup/<plugin>/<step> — graph/plugins/setup_gaps.py),
 // and the runtime-status watch App keeps while a step it started runs server-side.
 // createRoot/act + the real uiStore, like SetupGapBanner.test.tsx — no testing-library dep.
 import { act, createElement as h } from "react";
