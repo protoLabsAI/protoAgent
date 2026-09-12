@@ -286,6 +286,36 @@ test("watches empty state offers the quick-add as its CTA, like every other card
   await expect(page.getByTestId("watch-create-dialog")).toBeVisible();
 });
 
+test("now-relative fixtures follow the request clock, not the moment the mock server booted", async ({
+  page,
+}) => {
+  // The flake this pins: the watch roster's timestamps were computed once, at fixture
+  // IMPORT, while the page computes "today" at render — so the pulse's "met today"
+  // fragment disappeared for any run where a local midnight fell in between. It did:
+  // work-overview went red at 00:02Z with the other 389 specs green, and the previous
+  // fix (clamping the offset into "today") couldn't help, because the day it clamped
+  // into was the day the server booted.
+  //
+  // Both clocks are pinned to ONE instant here — the page's via page.clock, the mock
+  // server's via `x-e2e-now` — so this asserts the fixture contract ("timestamps are
+  // built per request") instead of taking a 24-hourly coin flip. Against a build that
+  // freezes the roster at import, the served data belongs to whatever day that process
+  // started, never to this pinned one, and both assertions below fail.
+  const pinned = new Date("2026-03-04T12:00:00Z");
+  await page.clock.setFixedTime(pinned);
+  await page.setExtraHTTPHeaders({ "x-e2e-now": String(pinned.getTime()) });
+
+  await openWork(page);
+  const watches = page.getByTestId("work-card-watches");
+  await expect(watches.locator(".work-card-pulse")).toHaveText("1 watching · 1 met today");
+
+  // The same drift quietly ate the panel's lifetime line: a deadline frozen at import
+  // decays from "2h" toward "1h" while the suite runs.
+  await watches.click();
+  const meta = page.locator(".watch-row", { hasText: "CI is green on main" }).locator(".watch-row-meta");
+  await expect(meta).toContainText("expires in 2h");
+});
+
 test("the Watches panel shows a watch's cadence, expiry and stall threshold", async ({ page }) => {
   // #2325 gave the AGENT interval/expiry/stall and echoed them back through `list_watches`
   // and <working_state>; the operator's panel still rendered only `id · verifier · reason`,

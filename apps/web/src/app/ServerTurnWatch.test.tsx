@@ -35,7 +35,7 @@ vi.mock("../chat/chat-store", () => ({
   },
 }));
 
-import { parseServerTurnControl, ServerTurnWatch } from "./ServerTurnWatch";
+import { busMayFold, parseServerTurnControl, ServerTurnWatch } from "./ServerTurnWatch";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -204,7 +204,34 @@ describe("ServerTurnWatch control payload bridge", () => {
     act(() => root?.render(h(ServerTurnWatch)));
     act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1" }));
 
-    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", undefined);
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1");
+  });
+
+  it("an un-addressed finish does NOT clear the control while another server turn is still live", () => {
+    // Two nudges overlap on one session: the A2A server serializes the turns, but the
+    // second's control frame arrives while the first is still running, and an older server
+    // can't say WHICH turn just finished. Clearing whatever control is there dropped the
+    // LIVE turn's — and with it the operator's queued interjection, which then had nothing
+    // to settle it. The indicator's own ref-count is the guard.
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() => mocks.handlers.get("turn.started")?.({ session_id: "s1", origin: "background-resume" }));
+    act(() => mocks.handlers.get("turn.started")?.({ session_id: "s1", origin: "background-resume" }));
+
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1" }));
+    expect(mocks.clearServerTurnControl).not.toHaveBeenCalled();
+
+    // The last one out clears it.
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1" }));
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1");
+  });
+
+  it("an ADDRESSED finish clears only that turn's control, whoever else is live", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() => mocks.handlers.get("turn.started")?.({ session_id: "s1", origin: "background-resume" }));
+    act(() => mocks.handlers.get("turn.started")?.({ session_id: "s1", origin: "background-resume" }));
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1", task_id: "task-1" }));
+
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", "task-1");
   });
 
   it("keeps ordinary progress rendering intact", () => {
@@ -220,5 +247,23 @@ describe("ServerTurnWatch control payload bridge", () => {
 
     expect(mocks.updateMessages).toHaveBeenCalledOnce();
     expect(mocks.sessions[0].messages[0].content).toBe("working");
+  });
+});
+
+describe("busMayFold — one producer per bubble, with two exceptions", () => {
+  it("stands aside for a reattach on the frames a reattach also writes", () => {
+    expect(busMayFold("text", true)).toBe(false);
+    expect(busMayFold("tool", true)).toBe(false);
+    expect(busMayFold("text", false)).toBe(true);
+  });
+
+  it("always folds a consumed-interjection marker — no reattach ever places one", () => {
+    // The reattach stream drops steer markers (snapshot replay can't reconstruct the
+    // boundary), so if the bus stood aside here NOTHING would settle the operator's
+    // message and it would sit queued under an answer that had already used it.
+    expect(busMayFold("steer", true)).toBe(true);
+    expect(busMayFold("steer", false)).toBe(true);
+    // Same reasoning as the room bubble, which no reattach drives either.
+    expect(busMayFold("room", true)).toBe(true);
   });
 });

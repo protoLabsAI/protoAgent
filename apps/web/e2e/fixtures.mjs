@@ -13,6 +13,13 @@ export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
+export const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
+
+// The brief a DELEGATE_BG turn hands to `sonnet` — long on purpose: it is the wall of text the
+// delegation row keeps behind "Show brief" instead of rendering as a chat bubble.
+export const DELEGATE_BRIEF =
+  "Repo: protoLabsAI/joshmabry-portfolio at /Users/kj/dev/joshmabry-portfolio (Vite + React 19).\n\n" +
+  "THREE PHASES. Do them in order. Merge PR #13 into main, then close PR #12 with a comment explaining it was superseded.";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -386,54 +393,71 @@ export const GOAL_PLAN = [
 
 // Watches (ADR 0067) — varied statuses so the Work overview card renders an active
 // count, a met-today pulse fragment, and tinted status badges. Times are epoch SECONDS.
-// Mirror the controller's write order: the met path sets `finished_at` and skips the
-// `last_checked` update, so a finished watch's last_checked is the PREVIOUS check.
-// "met today" derives from finished_at on the local day of NOW, so a bare `now - 600`
-// lands on YESTERDAY in the first 10 minutes after local midnight and the pulse
-// fragment vanishes (work-overview.spec flaked exactly there) — clamp it into today.
-const NOW_SEC = Math.floor(Date.now() / 1000);
-const TODAY_START_SEC = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
-const MET_AT_SEC = Math.max(NOW_SEC - 600, TODAY_START_SEC);
-export const WATCHES = {
-  enabled: true,
-  watches: [
-    {
-      id: "watch-1",
-      condition: "CI is green on main",
-      status: "active",
-      verifier: { type: "llm" },
-      last_checked: NOW_SEC - 120,
-      // Lifetime knobs (ADR 0067 / #2325) so the panel's meta line is exercised. Relative
-      // to NOW so the rendered spans stay stable whenever the suite runs. Deliberately on
-      // the EXISTING active watch rather than a new row — an extra watch would shift the
-      // card's badge count and pulse, which other assertions in work-overview pin.
-      interval_s: 1800,
-      deadline: NOW_SEC + 7200,
-      stall_after: 3,
-    },
-    {
-      id: "watch-2",
-      condition: "The staging deploy finishes",
-      status: "met",
-      verifier: { type: "llm" },
-      last_checked: MET_AT_SEC - 300,
-      finished_at: MET_AT_SEC,
-      // Knobs deliberately SET on a terminal watch: the panel must suppress them (a met
-      // watch has nothing left to expire), so the spec proves suppression rather than
-      // just the absence of data.
-      interval_s: 600,
-      stall_after: 2,
-    },
-    {
-      id: "watch-3",
-      condition: "Inbox zero before Friday",
-      status: "expired",
-      verifier: { type: "llm" },
-      last_checked: Math.floor(Date.now() / 1000) - 7500,
-      finished_at: Math.floor(Date.now() / 1000) - 7200,
-    },
-  ],
-};
+/** The watches roster, with every timestamp relative to `nowMs` — built PER REQUEST.
+ *
+ * Never at module load. The mock server is one long-lived process, so a constant
+ * computed at import drifts from the browser's clock for as long as the run lasts: the
+ * panel's "expires in 2h" decays toward 1h, and once a real midnight falls between the
+ * import and the render, "met today" is simply gone. That is not hypothetical —
+ * work-overview.spec.ts went red at 00:02Z with 389 other specs passing, and the
+ * previous fix (clamping the offset into "today") could not help, because the day it
+ * clamped into was the day the module loaded, not the day the assertion runs.
+ *
+ * A spec pins both ends by sending `x-e2e-now` (see `nowFor` in mock-server.mjs) and
+ * setting the page clock to the same instant; without the header this is request time,
+ * which leaves only the response→render gap (milliseconds).
+ */
+export function buildWatches(nowMs = Date.now()) {
+  const nowSec = Math.floor(nowMs / 1000);
+  const dayStartSec = Math.floor(new Date(nowMs).setHours(0, 0, 0, 0) / 1000);
+  // Mirror the controller's write order: the met path sets `finished_at` and skips the
+  // `last_checked` update, so a finished watch's last_checked is the PREVIOUS check.
+  // "met today" derives from finished_at on the LOCAL day of the render, so the offset is
+  // clamped into that day — in the first 10 minutes after local midnight a bare
+  // `now - 600` lands on yesterday and the pulse fragment vanishes.
+  const metAtSec = Math.max(nowSec - 600, dayStartSec);
+  return {
+    enabled: true,
+    watches: [
+      {
+        id: "watch-1",
+        condition: "CI is green on main",
+        status: "active",
+        verifier: { type: "llm" },
+        last_checked: nowSec - 120,
+        // Lifetime knobs (ADR 0067 / #2325) so the panel's meta line is exercised.
+        // Relative to now so the rendered spans stay stable whenever the suite runs.
+        // Deliberately on the EXISTING active watch rather than a new row — an extra
+        // watch would shift the card's badge count and pulse, which other assertions in
+        // work-overview pin.
+        interval_s: 1800,
+        deadline: nowSec + 7200,
+        stall_after: 3,
+      },
+      {
+        id: "watch-2",
+        condition: "The staging deploy finishes",
+        status: "met",
+        verifier: { type: "llm" },
+        last_checked: metAtSec - 300,
+        finished_at: metAtSec,
+        // Knobs deliberately SET on a terminal watch: the panel must suppress them (a met
+        // watch has nothing left to expire), so the spec proves suppression rather than
+        // just the absence of data.
+        interval_s: 600,
+        stall_after: 2,
+      },
+      {
+        id: "watch-3",
+        condition: "Inbox zero before Friday",
+        status: "expired",
+        verifier: { type: "llm" },
+        last_checked: nowSec - 7500,
+        finished_at: nowSec - 7200,
+      },
+    ],
+  };
+}
 
 export const NOTES_WORKSPACE = {
   version: 1,
@@ -717,6 +741,24 @@ const DEFAULT_SEARCH_OUTPUT = [
 // matches the real starter-tool string format the per-tool renderer expects.
 function scenarioFor(prompt) {
   const t = (prompt || "").toUpperCase();
+  if (t.includes("DELEGATE_BG"))
+    // A BACKGROUND delegate_to: the server emits ONE outgoing-ask room frame carrying the
+    // lead's summary, the full brief and the job id — no tool card, no reply (that arrives
+    // later through the background drain, #3051).
+    return {
+      events: [],
+      room: [
+        {
+          addressed_to: "sonnet",
+          text: DELEGATE_BRIEF,
+          summary: "Land PR #13 and close #12",
+          background: true,
+          job_id: "bg-4109c71161eb",
+          ok: true,
+        },
+      ],
+      answer: "Started it — sonnet will report back.",
+    };
   if (t.includes("HITL_ASK"))
     // ask_human free-text interrupt: the turn parks input-required with a hitl-v1
     // DataPart carrying a plain `question` — the console shows the floating
@@ -826,14 +868,17 @@ function scenarioFor(prompt) {
     // Pre-tool narration (`preText`) streams as an answer artifact BEFORE the tool —
     // it must render ABOVE the tool card, with the final answer BELOW it (ordering fix).
     return {
-      preText: "Let me look that up. ",
+      preText: "Let me look that up.",
       name: "web_search",
       input: { query: "agent client protocol" },
       output: "1 result(s): Agent Client Protocol — https://agentclientprotocol.com",
-      // The executor streams the post-tool answer as deltas too — the terminal
-      // replace then matches the client's accumulation and keeps interleaving.
-      streamChunks: ["Found it — Agent Client Protocol."],
-      answer: "Found it — Agent Client Protocol.",
+      // The post-tool answer is the NEXT model call, so the server opens its first delta
+      // with a paragraph break (server/chat.py _run_turn_stream) and the terminal replace
+      // — the whole turn's text — carries the same break. The client's parts drop a
+      // run's leading whitespace, so that replace must still read as "nothing diverged"
+      // and keep the interleaving (parts.ts replaceText).
+      streamChunks: ["\n\nFound it — Agent Client Protocol."],
+      answer: "\n\nFound it — Agent Client Protocol.",
     };
   if (t.includes("SUBAGENT"))
     return {
@@ -1013,6 +1058,22 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));
+  }
+  // Room frames (room-v1, #3042): a delegation's outgoing ask / a participant's reply, each
+  // its own status frame carrying the room DataPart — decoded by roomReplyFromParts.
+  for (const room of scenario.room || []) {
+    frames.push(
+      wrap({
+        kind: "status-update",
+        taskId,
+        contextId,
+        status: {
+          state: "working",
+          message: { role: "agent", parts: [{ kind: "data", data: room, metadata: { mimeType: ROOM_MIME } }] },
+        },
+        final: false,
+      }),
+    );
   }
   // Inline component (component-v1, #1323): a status frame carrying the {component,props}
   // DataPart — decoded by componentFromParts → rendered by the console registry.

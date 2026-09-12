@@ -532,11 +532,12 @@ async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | No
 # streamed a frame and bumped ``last_updated``) before either window elapses, so the reaper
 # never preempts it. It only reaps a task whose producer is truly gone.
 #
-#  - BIRTH GRACE — a task still WORKING with EMPTY history AND EMPTY artifacts never
-#    produced anything: an orphan-at-birth whose producer died before streaming its first
-#    frame. Kept above the stall window so a genuinely-alive turn that is merely slow to its
-#    first frame is failed by the stall guard, not clobbered here. Shorter than IDLE (there
-#    is nothing productive to lose) but never shorter than the stall timeout.
+#  - BIRTH GRACE — a task still WORKING with no AGENT-authored history AND EMPTY artifacts
+#    never produced anything: an orphan-at-birth whose producer died before streaming its
+#    first frame. (Its history is not empty: it opens with the operator's prompt.) Kept
+#    above the stall window so a genuinely-alive turn that is merely slow to its first
+#    frame is failed by the stall guard, not clobbered here. Shorter than IDLE (there is
+#    nothing productive to lose) but never shorter than the stall timeout.
 #  - IDLE — a task that DID record history/artifacts but has since gone silent. Longer than
 #    the stall window for the same reason: the stall guard owns the live stream; this only
 #    backstops a producer that vanished WITHOUT tripping it.
@@ -566,6 +567,18 @@ def reap_thresholds_for(stall_timeout_s: float | None) -> tuple[int, int]:
         max(_DEFAULT_REAP_BIRTH_GRACE_S, int(stall_timeout_s * _REAP_BIRTH_GRACE_RATIO)),
         max(_DEFAULT_REAP_IDLE_S, int(stall_timeout_s * _REAP_IDLE_RATIO)),
     )
+
+
+def _produced_output(history, artifacts) -> bool:
+    """Whether a stored task row holds anything its PRODUCER emitted.
+
+    Not "any history": the executor opens every task's history with the operator's
+    prompt (ADR 0104 — the durable turn must say what was asked), so a producer that
+    died before its first frame still leaves that ``ROLE_USER`` message behind. Only an
+    artifact, or a history message the agent authored, is output."""
+    if artifacts:
+        return True
+    return any(not (isinstance(m, dict) and m.get("role") == "ROLE_USER") for m in history or ())
 
 
 def _row_age_anchor(last_updated, status_json) -> datetime | None:
@@ -605,12 +618,15 @@ async def reap_orphaned_working_tasks(
     The issue's discriminator, keyed on the persisted ``history``/``artifacts`` shape
     and the SDK ``last_updated`` column:
 
-      - a task still WORKING with NO history AND NO artifacts is an *orphan-at-birth*;
-        fail it once its age exceeds ``birth_grace_s``. Both defaults sit ABOVE the
-        executor stall window so ``_stall_guarded`` fails a genuinely-alive slow-first-frame
-        turn first; this only reaps a producer that left no live stream to trip the guard.
-      - a task that recorded history or artifacts is *productive*; fail it only once it
-        has been idle longer than ``idle_after_s`` (also longer than the stall window).
+      - a task still WORKING with NO agent-authored history AND NO artifacts is an
+        *orphan-at-birth* (the operator's prompt alone is not output — see
+        ``_produced_output``); fail it once its age exceeds ``birth_grace_s``. Both
+        defaults sit ABOVE the executor stall window so ``_stall_guarded`` fails a
+        genuinely-alive slow-first-frame turn first; this only reaps a producer that left
+        no live stream to trip the guard.
+      - a task that recorded agent history or artifacts is *productive*; fail it only
+        once it has been idle longer than ``idle_after_s`` (also longer than the stall
+        window).
 
     Only ``TASK_STATE_WORKING`` rows are considered. Terminal states and the resumable
     ``TASK_STATE_INPUT_REQUIRED`` / ``TASK_STATE_AUTH_REQUIRED`` pauses are never touched.
@@ -665,7 +681,7 @@ async def reap_orphaned_working_tasks(
             if lu is None:
                 continue
             age_s = (now - lu).total_seconds()
-            if history or artifacts:
+            if _produced_output(history, artifacts):
                 # Productive: the stall guard owns the live stream; only reap a producer
                 # that vanished and left the task idle past the (longer) idle threshold.
                 if not idle_after_s or age_s < idle_after_s:
@@ -675,12 +691,12 @@ async def reap_orphaned_working_tasks(
                     f"(no update for {int(age_s)}s, past the {idle_after_s}s idle threshold)."
                 )
             else:
-                # Orphan-at-birth: WORKING but never persisted a single history/artifact.
+                # Orphan-at-birth: WORKING but never persisted a frame or artifact of its own.
                 if not birth_grace_s or age_s < birth_grace_s:
                     continue
                 reason = (
                     "Task failed: it never produced any output "
-                    f"(no history or artifacts after {int(age_s)}s, past the {birth_grace_s}s "
+                    f"(no frames or artifacts after {int(age_s)}s, past the {birth_grace_s}s "
                     "startup grace) — its producer did not survive."
                 )
             # Compare-and-swap against the value we scanned, NOT just "still WORKING":

@@ -10,7 +10,8 @@ protoAgent's existing ``_chat_langgraph_stream`` event generator
 
 The producer-event contract (unchanged from the hand-rolled handler) is::
 
-    text            accumulated answer text (streamed)
+    text            answer text, streamed + accumulated verbatim (a producer puts
+                    any paragraph break between model calls INSIDE the delta)
     tool_start      a tool began      (dict {id,name,input} | str)
     tool_end        a tool finished   (dict {id,name,output} | str)
     delta           a worldstate-delta {domain,path,op,value}
@@ -41,7 +42,7 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import Part, Task, TaskState, TaskStatus
+from a2a.types import Message, Part, Task, TaskState, TaskStatus
 from google.protobuf import json_format, struct_pb2
 
 import protolabs_a2a as pa
@@ -387,6 +388,7 @@ class ProtoAgentExecutor(AgentExecutor):
         structured_finalizer: Callable[[str, str], Any] | None = None,
         context_meta_provider: Callable[[], dict[str, Any]] | None = None,
         stall_timeout_provider: Callable[[], float] | None = None,
+        server_fired_origin: Callable[[str], bool] | None = None,
     ) -> None:
         # ``stream_fn_factory(text, context_id, *, resume, caller_trace,
         # request_metadata)`` → async generator of (event_type, payload). This is
@@ -407,6 +409,23 @@ class ProtoAgentExecutor(AgentExecutor):
         # executor stays free of a config import, and read per turn so an operator's
         # change takes effect on the next turn rather than needing a restart.
         self._stall_timeout_provider = stall_timeout_provider
+        # ``server_fired_origin(origin)`` → whether a request's ``origin`` names a turn the
+        # SERVER fired (scheduler, watch, background-resume…) rather than one an operator
+        # sent: its prompt is machine text that was never a chat bubble, so the durable
+        # transcript keeps none (``_transcript_opening``). Injected by server.py
+        # (``server.chat.is_autonomous_origin``) — the executor cannot import server.
+        self._server_fired_origin = server_fired_origin
+
+    def _server_fired(self, origin: str) -> bool:
+        """Whether ``origin`` names a server-fired turn; False when unknown or on error —
+        at worst the transcript keeps a machine prompt, never breaks the turn."""
+        if not origin or self._server_fired_origin is None:
+            return False
+        try:
+            return bool(self._server_fired_origin(origin))
+        except Exception:  # noqa: BLE001 — the transcript must never break a turn
+            logger.debug("[a2a] server-fired-origin predicate failed", exc_info=True)
+            return False
 
     def _stall_timeout_seconds(self) -> float:
         """The configured stall window, or 0 (guard off) if unavailable.
@@ -446,26 +465,36 @@ class ProtoAgentExecutor(AgentExecutor):
         # initial Task before any TaskStatusUpdateEvent), then transitioned to
         # working.
         resume = bool(context.current_task and _is_input_required(context.current_task))
+        # Provenance for the Activity feed (ADR 0022): what triggered this turn.
+        _md = _request_metadata(context)
+        _origin = str(_md.get("origin", "") or "")
         if not resume:
             await event_queue.enqueue_event(
                 Task(
                     id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                    # The operator's message OPENS the task's durable history. The SDK
+                    # records the request message itself only when an agent's first
+                    # event is a status/artifact update; when the agent enqueues its own
+                    # Task, as this one must, the SDK saves that Task verbatim and drops
+                    # the message — assuming the Task already carries it, the way a2a's
+                    # `new_task(message)` helper builds one. A bare Task therefore stored
+                    # every turn without its prompt, and the session-turns reader (ADR
+                    # 0104) rebuilt chats as answers with no questions. (A HITL resume
+                    # skips this branch; the SDK appends that message on its own.)
+                    history=_transcript_opening(context.message, server_fired=self._server_fired(_origin)),
                 )
             )
         text = context.get_user_input()
         images = _extract_image_parts(context)
         caller_trace = _extract_caller_trace(context)
 
-        # Provenance for the Activity feed (ADR 0022): what triggered this turn.
-        _md = _request_metadata(context)
         # Thread the task id to in-graph middleware via the request-context
         # contextvar (ADR 0032) — PromptCapture keys snapshots by it (#2243);
         # it is request-scoped, not agent state, so metadata is the lane.
         if context.task_id:
             _md["a2a.task_id"] = context.task_id
-        _origin = str(_md.get("origin", "") or "")
         _priority = str(_md.get("priority", "") or "")
         _trigger = str(_md.get("trigger") or _md.get("scheduler_job_id") or _md.get("inbox_source") or "")
         # The stimulus = this turn's input text, kept as a truncated preview so the Activity
@@ -496,7 +525,6 @@ class ProtoAgentExecutor(AgentExecutor):
 
         started = time.monotonic()
         accumulated = ""
-        _text_after_tool = False
         deltas: list[dict] = []
         usage = {
             "input_tokens": 0,
@@ -746,9 +774,13 @@ class ProtoAgentExecutor(AgentExecutor):
                     await _flush_reasoning()
 
                 if event_type == "text":
-                    if _text_after_tool and accumulated:
-                        accumulated += "\n\n"
-                    _text_after_tool = False
+                    # Verbatim, never re-punctuated here: `accumulated` must stay the
+                    # exact string the stream carried. The console keeps a turn's
+                    # text-to-tool interleaving only while its own accumulation of these
+                    # frames matches the terminal text, so the executor adding a break
+                    # the stream never had would collapse it. Paragraph breaks between
+                    # model calls are the producer's to make, inside the delta itself
+                    # (server.chat._run_turn_stream).
                     accumulated += payload
                     _text_buf += payload
                     if _should_flush(_text_buf, _text_flushed_at):
@@ -787,7 +819,6 @@ class ProtoAgentExecutor(AgentExecutor):
                         # is the on_tool_start-had-no-run_id fallback, not a real
                         # sub-millisecond call (there's always at least async/model-loop
                         # overhead) — treated the same as "unmeasured", not "instant".
-                        _text_after_tool = True
                         if isinstance(payload, dict):
                             end_name = payload.get("name")
                             duration_ms = payload.get("duration_ms")
@@ -840,6 +871,18 @@ class ProtoAgentExecutor(AgentExecutor):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([_data_part_proto(payload, STEER_CONSUMED_MIME)]),
+                        )
+                        # A server-fired turn's stream is held by the server, so the
+                        # console that interjected into it never sees the frame above.
+                        # Mirror the boundary onto the progress hook — AFTER _flush_text
+                        # mirrored the text that preceded it — so the host can hand the
+                        # console the same acknowledgement a browser-owned stream carries
+                        # inline. Without it the operator's message sat "queued" under an
+                        # answer that had already used it.
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            {"phase": "steer_consumed", "items": payload.get("items") or [], "origin": _origin},
                         )
 
                 elif event_type == "component":
@@ -1037,6 +1080,122 @@ def _extract_image_parts(context: RequestContext) -> list[tuple[str, str]]:
         elif getattr(p, "url", ""):
             out.append((mt, p.url))
     return out
+
+
+# The most prompt text the durable transcript keeps. The SDK re-serializes the WHOLE task
+# on every save (each status frame and streamed answer chunk — hundreds a turn), so an
+# unbounded paste would be rewritten that many times; past this the rebuilt bubble ends
+# with a note. Far above anything typed — what it bounds is the pasted log.
+_TRANSCRIPT_PROMPT_MAX_CHARS = 16_000
+# The metadata the transcript reads back — a rebuilt tab's incognito, the no-bubble mark,
+# a form answer, where the message came from — and nothing else of the request's. Kept as
+# short bools/strings only, so a client's bulky (or non-finite: Python's json writes
+# Infinity) metadata can neither bloat every save nor fail it.
+_TRANSCRIPT_METADATA_KEYS = ("incognito", "hidden", "hitl_resume", "origin")
+_TRANSCRIPT_SHORT_MAX_CHARS = 256  # a kept metadata string, a filename, a media type
+_TRANSCRIPT_URL_MAX_CHARS = 2048  # a plain link is kept; anything longer is a payload
+
+
+def _transcript_opening(message: Message | None, *, server_fired: bool) -> list[Message]:
+    """What a task's durable history opens with: the operator's message AS THEY SAW IT —
+    the record a chat rebuilt from durable turns draws its user bubble from (ADR 0104) —
+    not the model-facing text the turn ran on (that is the live request, and the
+    checkpoint).
+
+    - Nothing for a server-fired turn: its prompt is machine text that was never a bubble.
+    - A text-less copy for a send the console marked ``hidden`` (an approval or dismissal
+      resume, a regenerate, a goal kickoff): no bubble to rebuild, but its metadata still
+      carries the per-message incognito stamp a rebuilt tab recovers.
+    - The bubble text for a send marked with ``display`` — the console prepended
+      attachment context for the model; the bubble showed the typed text + a 📎 list.
+    - Otherwise the message's text as sent.
+
+    Never raises: a message it cannot shape is simply not stored — the transcript must
+    never break a turn."""
+    if message is None or server_fired:
+        return []
+    try:
+        return [_transcript_copy(message)]
+    except Exception:  # noqa: BLE001 — the transcript must never break a turn
+        logger.warning("[a2a] could not shape the turn's durable prompt; storing none", exc_info=True)
+        return []
+
+
+def _hint(message: Message, key: str) -> bool | str | None:
+    """A bool or string from ``message``'s metadata, read without serializing it — one
+    non-finite number anywhere in the Struct makes ``MessageToDict`` raise."""
+    value = message.metadata.fields.get(key) if message.HasField("metadata") else None
+    if value is None:
+        return None
+    kind = value.WhichOneof("kind")
+    if kind == "bool_value":
+        return value.bool_value
+    if kind == "string_value":
+        return value.string_value
+    return None
+
+
+def _transcript_copy(message: Message) -> Message:
+    """The transcript's copy of ``message``, built field by field rather than copied, so
+    it is bounded and serializable whatever the client sent: ids and role, the metadata
+    keys the transcript reads, the (capped) text the operator saw, and a shell for each
+    attachment."""
+    kept = Message(
+        message_id=message.message_id,
+        context_id=message.context_id,
+        task_id=message.task_id,
+        role=message.role,
+    )
+    hints: dict[str, bool | str] = {}
+    for key in _TRANSCRIPT_METADATA_KEYS:
+        value = _hint(message, key)
+        if isinstance(value, bool):
+            hints[key] = value
+        elif isinstance(value, str) and value:
+            hints[key] = value[:_TRANSCRIPT_SHORT_MAX_CHARS]
+    if hints:
+        kept.metadata.update(hints)
+    if hints.get("hidden") is True:
+        return kept
+    display = _hint(message, "display")
+    texts = [display] if isinstance(display, str) else []
+    budget = _TRANSCRIPT_PROMPT_MAX_CHARS
+    for part in message.parts:
+        if part.WhichOneof("content") == "text":
+            if isinstance(display, str):
+                continue  # the bubble text stands in for every text the model was sent
+            texts.append(part.text)
+    for text in texts:
+        if len(text) > budget:
+            text = f"{text[:budget]}\n\n… [{len(text) - budget:,} more characters not kept]"
+            budget = 0
+        else:
+            budget -= len(text)
+        kept.parts.append(Part(text=text))
+    kept.parts.extend(_attachment_shell(p) for p in message.parts if p.WhichOneof("content") != "text")
+    return kept
+
+
+def _attachment_shell(part: Part) -> Part:
+    """An attachment as the transcript keeps it: its name, its type and a plain link —
+    never an inline payload (``raw`` bytes, a ``data:`` URL, a data blob). The SDK would
+    rewrite that on every save and nothing reads it back: the turn takes attachments off
+    the live request (``_extract_image_parts``), never off the stored copy. An elided
+    payload is recorded as ``omittedBytes``, so the history still says what was sent."""
+    shell = Part(
+        filename=part.filename[:_TRANSCRIPT_SHORT_MAX_CHARS],
+        media_type=part.media_type[:_TRANSCRIPT_SHORT_MAX_CHARS],
+    )
+    kind = part.WhichOneof("content")
+    if kind == "url" and not part.url.startswith("data:") and len(part.url) <= _TRANSCRIPT_URL_MAX_CHARS:
+        shell.url = part.url
+    elif kind == "raw":
+        shell.metadata.update({"omittedBytes": len(part.raw)})
+    elif kind == "url":
+        shell.metadata.update({"omittedBytes": len(part.url)})
+    elif kind == "data":
+        shell.metadata.update({"omittedBytes": part.data.ByteSize()})
+    return shell
 
 
 def _extract_skill_hint(context: RequestContext) -> str:

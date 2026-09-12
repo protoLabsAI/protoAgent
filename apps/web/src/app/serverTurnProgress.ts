@@ -18,7 +18,9 @@
 // bubble is worse than no live view, so this failure mode is covered by construction.
 
 import { liveMessageId } from "../chat/server-turn-store";
-import type { ChatMessage, ChatPart, ToolCall } from "../lib/types";
+import { placeServerTurnSteers } from "../chat/steerPlacement";
+import { delegationFromFrame } from "../lib/delegation";
+import type { ChatMessage, ChatPart, ConsumedSteer, Delegation, ToolCall } from "../lib/types";
 
 export type ChatProgressEvent = {
   session_id?: unknown;
@@ -33,6 +35,13 @@ export type ChatProgressEvent = {
   author?: unknown;
   from?: unknown;
   ok?: unknown;
+  items?: unknown;
+  // An outgoing delegation ask (#3042 → the delegation row): whom, the one-line summary,
+  // and for a background delegation its job id.
+  addressed_to?: unknown;
+  summary?: unknown;
+  background?: unknown;
+  job_id?: unknown;
 };
 
 /** A parsed frame, or null when the event is malformed / not for a session we track. */
@@ -56,6 +65,19 @@ export type ProgressFrame =
       author: string;
       text: string;
       ok: boolean;
+    }
+  /** The server folded queued operator interjections into this turn at a model-call
+   *  boundary — the acknowledgement that settles their queued bubbles. */
+  | { session: string; taskId: string; kind: "steer"; items: ConsumedSteer[] }
+  | {
+      // The lead's outgoing delegation ask, made during the server-fired turn.
+      session: string;
+      taskId: string;
+      kind: "ask";
+      id: string;
+      addressedTo: string;
+      text: string;
+      delegation?: Delegation;
     };
 
 export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
@@ -86,6 +108,18 @@ export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
   if (phase === "room_reply") {
     const id = String(data.message_id ?? "");
     const author = String(data.author ?? "");
+    const addressedTo = String(data.addressed_to ?? "");
+    if (id && !author && addressedTo) {
+      return {
+        session,
+        taskId,
+        kind: "ask",
+        id,
+        addressedTo,
+        text: String(data.text ?? ""),
+        delegation: delegationFromFrame(data),
+      };
+    }
     if (!id || !author) return null;
     return {
       session,
@@ -96,6 +130,19 @@ export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
       text: String(data.text ?? ""),
       ok: data.ok !== false,
     };
+  }
+  if (phase === "steer_consumed") {
+    // Same validation as the inline stream marker (api.ts consumedSteersFromParts): an
+    // item without an id can't be matched to its queued bubble, one without text has
+    // nothing to show.
+    const items = (Array.isArray(data.items) ? data.items : []).flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const row = item as { id?: unknown; text?: unknown };
+      return typeof row.id === "string" && row.id && typeof row.text === "string" && row.text
+        ? [{ id: row.id, text: row.text }]
+        : [];
+    });
+    return items.length ? { session, taskId, kind: "steer", items } : null;
   }
   return null;
 }
@@ -114,6 +161,37 @@ export { isLiveServerTurn, liveMessageId } from "../chat/server-turn-store";
  * above the tool it preceded — the same ordering contract the live stream path keeps.
  */
 export function applyProgressFrame(messages: ChatMessage[], frame: ProgressFrame): ChatMessage[] {
+  if (frame.kind === "steer") {
+    // The operator's interjection, settled at the boundary the agent read it: the preview
+    // is cut there exactly like a browser-owned stream cuts its own bubble, so what the
+    // agent said before stays above the message and what it says next streams below.
+    // The transcript is the one record of "settled" — ChatSurface drops a queued bubble
+    // the moment its id appears here. The frozen half's id is derived, not minted, so the
+    // reducer stays pure (one split per steer id; a repeat is a no-op by id).
+    const liveId = liveMessageId(frame.taskId, frame.session);
+    return placeServerTurnSteers(messages, frame.items, {
+      liveId,
+      exact: true,
+      frozenId: `${liveId}:before:${frame.items[0].id}`,
+      createdAt: Date.now(),
+    });
+  }
+  if (frame.kind === "ask") {
+    const id = `background-${frame.id}`;
+    if (messages.some((message) => message.id === id)) return messages;
+    return [
+      ...messages,
+      {
+        id,
+        role: "assistant",
+        content: frame.text,
+        addressedTo: frame.addressedTo,
+        ...(frame.delegation ? { delegation: frame.delegation } : {}),
+        createdAt: Date.now(),
+        status: "done",
+      },
+    ];
+  }
   if (frame.kind === "room") {
     const id = `background-room-${frame.id}`;
     if (messages.some((message) => message.id === id)) return messages;

@@ -459,6 +459,40 @@ def test_shell_delete_failure_flashes_on_the_button(monkeypatch, tmp_path):
     assert js.index('"Delete failed"') < js.index("selId=null; selVer=null; followNewest=true; saveSel(); poll();")
 
 
+def test_shell_download_acknowledges_a_started_download(monkeypatch, tmp_path):
+    """A successful Download must give transient, accessible feedback once ``saveBlob`` has
+    fired — for BOTH the generated-source path and the stored-file blob path. Because the
+    browser owns the save and completion isn't observable, the copy says the download STARTED
+    (never that a file reached disk), it restores the normal "Download" label after a flash,
+    and it announces the outcome on an aria-live status region. The failure path is preserved:
+    a non-2xx / thrown blob request still flashes a failure and shows NO success ack."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+
+    # an aria-live status region carries the outcome to AT (a bare button-label swap isn't announced).
+    assert 'id="dlstat"' in art._SHELL_HTML
+    assert 'role="status"' in art._SHELL_HTML
+    assert 'aria-live="polite"' in art._SHELL_HTML
+
+    # success copy says STARTED — the started-not-saved wording the acceptance criteria require.
+    assert 'dlFlash("Started","Download started")' in js
+    # BOTH download paths acknowledge: the stored-file blob path and the generated-source path.
+    assert js.count('dlFlash("Started"') == 2
+    # the file-blob ack sits INSIDE the try, AFTER the 2xx guard + saveBlob — so a non-2xx skips it.
+    assert js.index("if(!r.ok) throw 0;") < js.index("saveBlob(await r.blob()")
+    assert js.index("saveBlob(await r.blob()") < js.index('dlFlash("Started"')
+    # the generated-source path acks after its own saveBlob of the code blob.
+    assert js.index("saveBlob(new Blob([v.code]") < js.rindex('dlFlash("Started"')
+
+    # failure feedback preserved, shown on exactly the failing path, with no success ack there.
+    assert 'dlFlash("Failed","Download failed")' in js
+    assert js.count('dlFlash("Failed"') == 1
+    assert "catch(e){ dlFlash(" in js  # the failure branch is the only place a failure flashes
+
+    # both outcomes restore the normal Download label after the flash.
+    assert '$dl.textContent="Download"' in js
+
+
 def test_delete_route_removes_the_artifact(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 

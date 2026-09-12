@@ -201,7 +201,7 @@ export function PaletteChat({
             update((m) => ({
               ...m,
               content: append ? m.content + t : t,
-              parts: append ? appendText(m.parts, t, true) : replaceText(m.parts, t, m.content),
+              parts: append ? appendText(m.parts, t, true) : replaceText(m.parts, t),
             })),
           onReasoning: (d) =>
             update((m) => ({ ...m, reasoning: (m.reasoning ?? "") + d, parts: appendReasoning(m.parts, d) })),

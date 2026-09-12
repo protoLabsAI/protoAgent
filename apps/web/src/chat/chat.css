@@ -890,8 +890,118 @@
   background: var(--pl-color-bg-sunken, var(--pl-color-bg));
 }
 
-/* The lead's outgoing delegation ask (#3042) — a directed "→ @name" header, quieter than
-   a participant byline: it's the lead speaking to someone, not a new voice. */
-.chat-author--to {
-  opacity: 0.75;
+/* A delegation (the lead's outgoing ask, #3042): ONE quiet row, not a bubble. Same ground
+   as the chat around it (no tint), so a running delegation doesn't read as an alert and
+   nothing changes colour under the reader when it lands. The full prompt is behind the
+   toggle; the delegate's reply follows as its own message. */
+.chat-delegation-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  color: var(--pl-color-fg-muted);
+  border: 1px solid var(--pl-color-border);
+  border-radius: 8px;
+}
+.chat-delegation-icon {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+.chat-delegation-target {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+.chat-delegation-kind {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 0.72rem;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 999px;
+}
+.chat-delegation-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-delegation-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.chat-delegation-row--done .chat-delegation-status {
+  color: var(--pl-color-status-success);
+}
+.chat-delegation-row--failed .chat-delegation-status,
+.chat-delegation-error {
+  color: var(--pl-color-status-error);
+}
+.chat-delegation-toggle {
+  flex: 0 0 auto;
+  padding: 0;
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--pl-color-fg-subtle);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.chat-delegation-toggle:hover,
+.chat-delegation-toggle:focus-visible {
+  color: var(--pl-color-fg);
+  text-decoration: underline;
+}
+.chat-delegation-error {
+  margin: 4px 0 0 2px;
+  font-size: 0.78rem;
+}
+.chat-delegation-brief {
+  margin: 6px 0 0 12px;
+  padding-left: 10px;
+  font-size: 0.86rem;
+  border-left: 2px solid var(--pl-color-border);
+}
+
+/* Background work still running for THIS chat — beside the roster, above the composer, so
+   "is anything still going on here?" is answerable without opening a panel. */
+.chat-bgwork {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 2px 6px;
+  font-size: 0.78rem;
+  color: var(--pl-color-fg-muted);
+}
+.chat-bgwork-list {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-bgwork-open {
+  flex: 0 0 auto;
+  padding: 0;
+  font: inherit;
+  color: var(--pl-color-fg-subtle);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.chat-bgwork-open:hover,
+.chat-bgwork-open:focus-visible {
+  color: var(--pl-color-fg);
+  text-decoration: underline;
+}
+
+/* One activity cue per server-fired turn: its label rides the message's own spinner. */
+.chat-streaming-label {
+  margin-left: 6px;
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--pl-color-fg-muted);
 }

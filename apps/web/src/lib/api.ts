@@ -78,6 +78,7 @@ import type {
   VerifierCatalog,
   WorkflowSummary,
 } from "./types";
+import { delegationFromFrame } from "./delegation";
 
 import type { WatchCreateBody } from "../chat/watchForm";
 import { notifyAuthRequired } from "./auth";
@@ -629,7 +630,18 @@ export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
  *  `null` for every ordinary turn — the lead agent needs no attribution. */
 export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
   const d = dataByMime(parts, ROOM_MIME) as
-    | { author?: string; addressed_to?: string; from?: string; text?: string; ok?: boolean; stopped?: string }
+    | {
+        author?: string;
+        addressed_to?: string;
+        from?: string;
+        text?: string;
+        ok?: boolean;
+        stopped?: string;
+        summary?: string;
+        background?: boolean;
+        job_id?: string;
+        error?: string;
+      }
     | undefined;
   if (!d) return null;
   const addressedTo = typeof d.addressed_to === "string" && d.addressed_to ? d.addressed_to : undefined;
@@ -644,8 +656,10 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
     text: typeof d.text === "string" ? d.text : "",
     ok: d.ok !== false,
     stopped: typeof d.stopped === "string" ? d.stopped : undefined,
+    delegation: addressedTo ? delegationFromFrame(d) : undefined,
   };
 }
+
 
 /** Decode the exact model-call boundary where queued operator input was consumed. */
 export function consumedSteersFromParts(parts?: RawPart[]): ConsumedSteer[] | null {
@@ -807,7 +821,11 @@ export type TurnStreamHandlers = {
 // history's tool/reasoning/component frames — everything the agent did while
 // nobody was subscribed. A live SendStreamingMessage's initial Task frame is
 // bare (submitted; no artifacts, no history), so this is a no-op there.
-function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: TurnStreamHandlers): void {
+function replayTaskSnapshot(
+  task: NonNullable<A2AFrame["result"]>,
+  handlers: TurnStreamHandlers,
+  opts: { replaySteers?: boolean } = {},
+): void {
   const arts = (task as { artifacts?: Array<{ parts?: RawPart[]; metadata?: ExtMetadata }> }).artifacts || [];
   const accumulated = arts.map((a) => textFromParts(a.parts)).join("");
   const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
@@ -820,10 +838,17 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
     if (reasoning) handlers.onReasoning?.(reasoning);
     const component = componentFromParts(msg.parts);
     if (component) handlers.onComponent?.(component);
-    // Do not replay steer-consumed markers from task history: snapshot artifacts
-    // flatten all answer text into one accumulation, so the marker's position
-    // relative to that text cannot be reconstructed honestly. Turn-end queue
-    // reconciliation is the compatibility fallback for a client that missed it live.
+    // Steer-consumed markers replay only for a transcript being REBUILT from durable
+    // turns (`replaySteers`), never into a live bubble: a snapshot's artifacts flatten
+    // all answer text into one accumulation, so the marker's position relative to that
+    // TEXT cannot be reconstructed, and a live bubble already shows the interjection
+    // where it happened. A rebuild has no interjection at all unless it replays them, so
+    // it takes the position the history does give — after the work that preceded it —
+    // and lands the flattened answer below (see chat/sessionHydration.ts).
+    if (opts.replaySteers) {
+      const consumed = consumedSteersFromParts(msg.parts);
+      if (consumed) handlers.onSteerConsumed?.(consumed);
+    }
   }
   for (const artifact of arts) {
     const usage = costFromMeta(artifact.metadata);
@@ -841,7 +866,11 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
 
 // One A2A frame dispatcher for every streaming consumer — the live turn, the
 // reattach stream, and snapshot replays all decode frames identically.
-function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (frame: A2AFrame) => void {
+function makeA2ADispatcher(
+  sessionId: string,
+  handlers: TurnStreamHandlers,
+  opts: { replaySteers?: boolean } = {},
+): (frame: A2AFrame) => void {
   return (frame: A2AFrame) => {
     if (frame.error?.message) throw new Error(frame.error.message);
     const result = frame.result;
@@ -859,7 +888,7 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       // which for a terminal task IS the final answer. A live stream's initial
       // Task frame is bare (submitted, no artifacts/history), so it's a no-op.
       handlers.onTaskSnapshot?.();
-      replayTaskSnapshot(task, handlers);
+      replayTaskSnapshot(task, handlers, opts);
     }
     if (statusUpdate) {
       const state = statusUpdate.status?.state || "";
@@ -904,7 +933,9 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
 /** Replay one row from ADR 0104's durable-turn reader through the exact same
  * dispatcher as live and reattached A2A tasks. The history hydrator creates
  * the user bubble separately because snapshot replay intentionally ignores
- * ROLE_USER frames while rebuilding the assistant response. */
+ * ROLE_USER frames while rebuilding the assistant response — and, unlike a live
+ * replay, this one surfaces the turn's consumed interjections (`onSteerConsumed`)
+ * so a rebuilt transcript can show them where the agent read them. */
 export function replayDurableChatTurn(
   turn: DurableChatTurn,
   sessionId: string,
@@ -917,7 +948,7 @@ export function replayDurableChatTurn(
     artifacts: turn.artifacts ?? [],
     history: turn.history ?? [],
   };
-  makeA2ADispatcher(sessionId, handlers)({ result: { task } } as A2AFrame);
+  makeA2ADispatcher(sessionId, handlers, { replaySteers: true })({ result: { task } } as A2AFrame);
 }
 
 async function consumeSse(
@@ -2408,6 +2439,13 @@ export const api = {
       // fresh turn. Unmarked messages sent while a form is pending are held server-side
       // until the form resolves.
       hitlResume?: boolean;
+      // How this message showed in the transcript, when that is not simply its text. The
+      // server ignores both; they ride the message into the task's durable history so a
+      // chat rebuilt from it (ADR 0104) draws the same user bubble: `hidden` = none (an
+      // approval/dismissal resume, a regenerate, a goal kickoff), `display` = the bubble
+      // text when the sent text differs from it (attachment context prepended).
+      hidden?: boolean;
+      display?: string;
       // Stream to a SPECIFIC fleet member (Fleet Room DM) instead of THIS window's agent:
       // the turn runs on that member via the hub proxy (/agents/<slug>/a2a). "host" = this
       // instance. Omitted → normal chat with the focused agent (apiUrl slug-routing).
@@ -2437,7 +2475,14 @@ export const api = {
           // Per-turn overrides ride the A2A message metadata (server/chat.py reads them):
           // the tab's chosen model + the /effort reasoning level + incognito (ADR 0069 D3b —
           // per-message server-side, stamped on every send while the thread toggle is on).
-          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions || opts.incognito || opts.hitlResume)
+          // `hidden` / `display` are for the durable transcript only (see opts above).
+          ...((opts.model ||
+            opts.reasoningEffort ||
+            opts.bypassPermissions ||
+            opts.incognito ||
+            opts.hitlResume ||
+            opts.hidden ||
+            opts.display !== undefined)
             ? {
                 metadata: {
                   ...(opts.model ? { model: opts.model } : {}),
@@ -2445,6 +2490,8 @@ export const api = {
                   ...(opts.bypassPermissions ? { bypass_permissions: true } : {}),
                   ...(opts.incognito ? { incognito: true } : {}),
                   ...(opts.hitlResume ? { hitl_resume: true } : {}),
+                  ...(opts.hidden ? { hidden: true } : {}),
+                  ...(opts.display !== undefined ? { display: opts.display } : {}),
                 },
               }
             : {}),
@@ -2639,8 +2686,13 @@ export const api = {
   },
   // Items still queued for the session — read at turn-end: anything here arrived
   // after the turn's last model call and wasn't folded in (re-send as a new turn).
+  // `drained` names ids a turn actually folded in: absence from `pending` alone can't
+  // tell a message the agent READ from one that never arrived (the queue is in-memory,
+  // and the live boundary marker is best-effort), and the console must not guess between
+  // settling a message the agent never saw and re-offering one it already used. Absent
+  // from an older server, which reads as "can't say" rather than "not read".
   pendingSteer(sessionId: string) {
-    return request<{ pending: { id: string; text: string }[] }>(
+    return request<{ pending: { id: string; text: string }[]; drained?: string[] }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
     );
   },
@@ -2693,6 +2745,33 @@ export const api = {
     if (!task) return { state: "", text: "" };
     const state = (task.status?.state || "").toString();
     return { state, text: textFromTerminalTask(task) };
+  },
+
+  /** A turn's state plus the interjection ids its DURABLE history records as folded in.
+   *
+   *  The steering queue is in-memory (graph/steering.py), so "no longer queued" cannot tell
+   *  a message the agent read from one a restart dropped. The executor's steer-consumed
+   *  marker is written into the task's history, which survives both — so this is what lets
+   *  the console settle an interjection on proof instead of inference. One GetTask, because
+   *  the reconcile needs the state anyway. */
+  async taskSteerState(taskId: string): Promise<{ state: string; consumed: string[] }> {
+    const res = await request<A2AFrame>("/a2a", {
+      method: "POST",
+      headers: { "A2A-Version": "1.0" },
+      body: { jsonrpc: "2.0", id: `steer-get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
+    });
+    const result = res.result;
+    const task = (result?.task ?? (result?.kind === "task" ? result : result)) as
+      | NonNullable<A2AFrame["result"]>
+      | undefined;
+    if (!task) return { state: "", consumed: [] };
+    const history = ((task as { history?: Array<{ parts?: RawPart[] }> }).history || []) as Array<{
+      parts?: RawPart[];
+    }>;
+    return {
+      state: (task.status?.state || "").toString(),
+      consumed: history.flatMap((entry) => consumedSteersFromParts(entry.parts) ?? []).map((item) => item.id),
+    };
   },
 
   // Reattach to an IN-FLIGHT turn after an agent switch / reload (Swap & Resume
@@ -2924,7 +3003,12 @@ export const api = {
     return request<BrowseListing>(`/api/fs/browse${q ? `?${q}` : ""}`);
   },
   uninstallPlugin(id: string) {
-    return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
+    // `superseded_by_bundled` (the bundled version) = only the ignored old copy of a
+    // plugin that now ships with protoAgent was removed; the built-in keeps running.
+    return request<{ ok: boolean; superseded_by_bundled?: string; restart_recommended?: boolean }>(
+      `/api/plugins/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   },
   // Pip-install a plugin's declared requires_pip (the code-exec step `install`
   // deliberately skips) — previously CLI-only.
@@ -2995,10 +3079,11 @@ export const api = {
   },
   // Re-clone every locked plugin that's missing on disk (fresh clone / restored
   // data dir). Fetches at the lock's resolved_sha; already-enabled plugins come
-  // up live via the same hot-reload the enable toggle uses.
+  // up live via the same hot-reload the enable toggle uses. "superseded" = the locked
+  // copy's source is retired by a bundled plugin of the same id — nothing to fetch.
   syncPlugins() {
     return request<{
-      plugins: { id: string; status: "present" | "installed" | "failed"; error?: string }[];
+      plugins: { id: string; status: "present" | "installed" | "failed" | "superseded"; error?: string }[];
       reloaded: boolean;
       reload_error: string | null;
     }>("/api/plugins/sync", { method: "POST" });

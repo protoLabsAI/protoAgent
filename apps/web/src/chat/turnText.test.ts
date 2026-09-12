@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
 import { placeConsumedSteers } from "./steerPlacement";
-import { applyText } from "./turnReducers";
+import { applyText, applyToolEvent } from "./turnReducers";
 import {
   applyCanonicalTurnText,
-  canonicalRemainderIndex,
   repairDuplicatedTurnText,
   resetTurnForSnapshot,
   settleTurnBubbles,
@@ -44,32 +43,6 @@ const rendered = (messages: ChatMessage[]): string =>
     .filter((message) => message.role === "assistant")
     .map((message) => (message.parts?.length ? text(message) : message.content))
     .join("|");
-
-describe("canonicalRemainderIndex", () => {
-  it("returns where the canonical answer continues past what is already shown", () => {
-    expect(canonicalRemainderIndex("one two three", "one two")).toBe(7);
-    // The index lands just past the last matched character; the caller trims the
-    // whitespace that separated it from what follows.
-    expect("one two three".slice(7).trimStart()).toBe("three");
-  });
-
-  it("tolerates whitespace the two sides disagree about (the #3210 separator)", () => {
-    // Server injects a blank line between pre- and post-tool narration; the client's
-    // own delta accumulation never had one.
-    expect(canonicalRemainderIndex("Checking.\n\nHere it is.", "Checking.")).toBe(9);
-    expect(canonicalRemainderIndex("  Checking. Here", "Checking.")).toBe(11);
-  });
-
-  it("is -1 when the shown text is not a prefix at all", () => {
-    expect(canonicalRemainderIndex("a totally different answer", "Checking.")).toBe(-1);
-    expect(canonicalRemainderIndex("short", "a much longer prefix")).toBe(-1);
-  });
-
-  it("consumes the whole canonical answer when nothing followed", () => {
-    expect(canonicalRemainderIndex("all of it", "all of it")).toBe(9);
-    expect("all of it".slice(9)).toBe("");
-  });
-});
 
 describe("turnBubbleIndexes", () => {
   it("is just the anchor for an ordinary un-split turn", () => {
@@ -132,6 +105,49 @@ describe("applyCanonicalTurnText", () => {
     const messages = [user("hi"), live({ content: "partial" })];
     const out = applyCanonicalTurnText(messages, "A", "the whole answer");
     expect(out[1]).toEqual(applyText(messages[1], "the whole answer", false));
+  });
+
+  it("un-split tool turn: the terminal replace keeps narration above AND below the card", () => {
+    // Built from the frames the server streams for "narrate → tool → narrate": the
+    // post-tool delta opens with the paragraph break the canonical text also carries.
+    // The live terminal frame lands through here, and a byte compare against the text
+    // the parts render ("…first." + "It is noon.") moved all prose below the card.
+    let bubble = live();
+    bubble = applyText(bubble, "I'll check the time first.", true);
+    bubble = applyToolEvent(bubble, { id: "t1", name: "current_time", phase: "start" });
+    bubble = applyToolEvent(bubble, { id: "t1", name: "current_time", phase: "end", output: "12:00" });
+    bubble = applyText(bubble, "\n\nIt is noon.", true);
+    const out = applyCanonicalTurnText([user("hi"), bubble], "A", "I'll check the time first.\n\nIt is noon.");
+    expect(out[1].parts).toEqual([
+      { kind: "text", text: "I'll check the time first." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "It is noon." },
+    ]);
+    expect(out[1].content).toBe("I'll check the time first.\n\nIt is noon.");
+  });
+
+  it("un-split turn: the terminal replace heals a list whose line-break frame was lost", () => {
+    // The live path. A lone "\n" frame lost en route leaves "- one- two" in the run; the
+    // flat copy is repaired by the replace, and what the bubble RENDERS must be too.
+    let bubble = live();
+    bubble = applyText(bubble, "Steps:\n\n- one", true);
+    bubble = applyText(bubble, "- two", true);
+    const canonical = "Steps:\n\n- one\n- two";
+    const [, settled] = applyCanonicalTurnText([user("list"), bubble], "A", canonical);
+    expect(settled.content).toBe(canonical);
+    expect(text(settled)).toBe(canonical);
+  });
+
+  it("split turn: an earlier half whose run lost a line break is not trusted as a prefix", () => {
+    const messages = [
+      user("hi"),
+      frozen({ content: "Steps:\n- one- two", parts: [{ kind: "text", text: "Steps:\n- one- two" }] }),
+      user("steer", "s"),
+      live({ content: "Done.", parts: [{ kind: "text", text: "Done." }] }),
+    ];
+    const out = applyCanonicalTurnText(messages, "A", "Steps:\n- one\n- two\n\nDone.");
+    // The broken half's prose goes; the whole answer lands once, correctly, below.
+    expect(rendered(out)).toBe("Steps:\n- one\n- two\n\nDone.");
   });
 
   it("split turn: the continuation takes only what followed the split", () => {

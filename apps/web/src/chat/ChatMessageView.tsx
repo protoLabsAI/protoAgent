@@ -29,6 +29,8 @@ import { ToolCalls } from "./ToolCalls";
 import { WorkBlock } from "./WorkBlock";
 import { foldPlan, toolsForGroup } from "./parts";
 import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
+import { useBackgroundJob } from "./backgroundJobStore";
+import { STATE_LABEL, briefSummary, delegationState } from "./delegation";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
 // chat) and no actions render. Each callback is independently optional.
@@ -65,6 +67,7 @@ export function ChatMessageView({
   onCancelDelegation,
   onDismissToolCall,
   actions,
+  activityLabel,
 }: {
   message: ChatMessage;
   onCancelDelegation?: (id: string) => void;
@@ -73,6 +76,9 @@ export function ChatMessageView({
    *  cancelled delegations; when omitted, no dismiss affordance renders. */
   onDismissToolCall?: (id: string) => void;
   actions?: ChatMessageActions;
+  /** A server-fired turn's label ("responding to background reports…"), shown beside this
+   *  live message's own activity spinner — so the turn has ONE cue, not two. */
+  activityLabel?: string | null;
 }) {
   const streaming = message.status === "streaming";
   // Per-turn token/cost footer is an opt-out display pref (Settings ▸ Chat, #1372).
@@ -121,6 +127,14 @@ export function ChatMessageView({
   if (message.role === "assistant" && rendersAsResultCard(message.origin) && message.status !== "streaming") {
     return <ServerResultCard message={message} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />;
   }
+  // The lead's OUTGOING delegation ask (#3042) → ONE compact row: who, whether it runs in
+  // the background, the lead's one-line summary and its live status, with the full prompt
+  // behind "Show brief". The prompt is written for the delegate — it restates everything,
+  // because the delegate can't see this chat — so as a chat bubble it was a wall of text the
+  // operator didn't write and rarely needs. The delegate's REPLY stays its own message.
+  if (message.role === "assistant" && message.addressedTo && !message.author) {
+    return <DelegationRow message={message} />;
+  }
   return (
     <Message
       role={message.role}
@@ -144,15 +158,6 @@ export function ChatMessageView({
         <div className="chat-author">
           <Bot size={13} aria-hidden />
           <span className="chat-author-name">{message.author.name}</span>
-        </div>
-      ) : null}
-      {/* The lead's OUTGOING delegation ask (#3042): a `→ @name` header on an otherwise
-          ordinary lead bubble, so the operator sees what was delegated — the `lead → proto`
-          half of the exchange, distinct from a participant's reply above. */}
-      {message.role === "assistant" && message.addressedTo && !message.author ? (
-        <div className="chat-author chat-author--to">
-          <ArrowRight size={13} aria-hidden />
-          <span className="chat-author-name">@{message.addressedTo}</span>
         </div>
       ) : null}
       {message.reasoning && !(message.parts && message.parts.length) ? (
@@ -228,7 +233,13 @@ export function ChatMessageView({
       !(message.toolCalls && message.toolCalls.length) &&
       !(message.components && message.components.length) &&
       !message.reasoning ? (
-        <Spinner size={15} />
+        activityLabel ? (
+          <span className="chat-server-turn">
+            <Spinner size={15} /> {activityLabel}
+          </span>
+        ) : (
+          <Spinner size={15} />
+        )
       ) : null}
       {/* History fallback: a message persisted before component-parts existed renders its
           components here (after the answer). Live turns render them inline via ordered parts
@@ -245,6 +256,7 @@ export function ChatMessageView({
       {streaming && (message.parts?.length || message.content || message.toolCalls?.length) ? (
         <div className="chat-streaming-indicator">
           <Spinner size={12} />
+          {activityLabel ? <span className="chat-streaming-label">{activityLabel}</span> : null}
         </div>
       ) : null}
       {showChatUsage && message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
@@ -317,6 +329,50 @@ function useDismissedReports() {
     setDismissed(s);
   };
   return { dismissed, dismiss };
+}
+
+// A delegation, as the operator sees it (see the early return above). A background one
+// tracks its job: a spinner while it runs, ✓ / ✕ when it lands; its REPLY arrives later as
+// the delegate's own message, so this row is the only placeholder in between.
+function DelegationRow({ message }: { message: ChatMessage }) {
+  const d = message.delegation;
+  const job = useBackgroundJob(d?.background ? d.jobId : undefined);
+  const state = delegationState(d, job?.status);
+  const [open, setOpen] = useState(false);
+  const summary = d?.summary || briefSummary(message.content);
+  return (
+    <Message role="assistant" className="chat-delegation">
+      <div className={`chat-delegation-row chat-delegation-row--${state}`}>
+        <ArrowRight size={13} aria-hidden className="chat-delegation-icon" />
+        <span className="chat-delegation-target">@{message.addressedTo}</span>
+        {d?.background ? <span className="chat-delegation-kind">background</span> : null}
+        <span className="chat-delegation-summary" title={summary}>
+          {summary}
+        </span>
+        {state !== "sent" ? (
+          <span className="chat-delegation-status" role="img" aria-label={STATE_LABEL[state]} title={STATE_LABEL[state]}>
+            {state === "running" ? <Spinner size={12} /> : state === "done" ? <Check size={13} /> : <X size={13} />}
+          </span>
+        ) : null}
+        {message.content ? (
+          <button
+            type="button"
+            className="chat-delegation-toggle"
+            aria-expanded={open}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? "Hide brief" : "Show brief"}
+          </button>
+        ) : null}
+      </div>
+      {d?.error ? <p className="chat-delegation-error">{d.error}</p> : null}
+      {open ? (
+        <div className="chat-delegation-brief">
+          <Markdown>{message.content}</Markdown>
+        </div>
+      ) : null}
+    </Message>
+  );
 }
 
 // The background-report CHIP (#2923; supersedes the ADR 0070 D4 teaser card). A finished

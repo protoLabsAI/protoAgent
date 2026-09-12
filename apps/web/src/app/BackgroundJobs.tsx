@@ -10,6 +10,7 @@ import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
 import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
+import { useUI } from "../state/uiStore";
 import { applyProgress, byRecency, fmtElapsed, nowIso, unreadJobIds, type ProgressTool } from "./background-jobs";
 
 // Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
@@ -158,6 +159,14 @@ export function BackgroundJobs() {
       offDone();
     };
   }, [hydrate]);
+
+  // Opened from outside the pill — the chat's "background work" strip bumps this counter.
+  const openRequest = useUI((st) => st.backgroundJobsRequest);
+  useEffect(() => {
+    if (!openRequest) return;
+    setOpen(true);
+    hydrate();
+  }, [openRequest, hydrate]);
 
   const list = useMemo(() => Object.values(jobs).sort(byRecency), [jobs]);
   const running = list.filter((j) => j.status === "running").length;

@@ -16,7 +16,7 @@ export function applyText(message: ChatMessage, text: string, append: boolean): 
     // full canonical answer, preamble included) — replaceText keeps the
     // streamed interleaving when nothing diverged and rebuilds otherwise;
     // appendText's open-run rewrite would double a pre-tool preamble.
-    parts: append ? appendText(message.parts, text, true) : replaceText(message.parts, text, message.content),
+    parts: append ? appendText(message.parts, text, true) : replaceText(message.parts, text),
     status: "streaming",
   };
 }
