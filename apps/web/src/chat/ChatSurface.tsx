@@ -2327,11 +2327,13 @@ function ChatSessionSlot({
 
     const controller = new AbortController();
     abortRef.current = controller;
-    // Until `finally`, this session's "streaming" is this turn's, even while no bubble reads
-    // streaming: onDone settles the bubble before the post-stream GetTask reconcile below,
-    // and a pure fan-out folds the placeholder away. The reconciler must not idle it then:
-    // Send would come back mid-turn and start a second stream in this slot.
-    const endLocalTurn = beginLocalTurn(session.id);
+    // From the top of the `try` until `finally`, this session's "streaming" is this turn's,
+    // even while no bubble reads streaming: onDone settles the bubble before the post-stream
+    // GetTask reconcile below, and a pure fan-out folds the placeholder away. The reconciler
+    // must not idle it then, or Send comes back mid-turn and starts a second stream in this
+    // slot. It is claimed inside the `try` and released first in `finally`: a claim that
+    // outlived a throw would block the reconciler for this session for good.
+    let endLocalTurn: () => void = () => {};
 
     // Whether the stream delivered an AUTHORITATIVE full-turn text (a replace —
     // the terminal artifact's append:false canonical re-send, or a terminal task
@@ -2435,6 +2437,7 @@ function ChatSessionSlot({
     const clearWatchdog = () => watchdog.stop();
 
     try {
+      endLocalTurn = beginLocalTurn(session.id);
       bumpWatchdog();
       await api.streamChat(sent, session.id, {
         signal: controller.signal,
@@ -2797,6 +2800,8 @@ function ChatSessionSlot({
         return;
       }
     } finally {
+      // First, so nothing below can throw past it and leak the claim.
+      endLocalTurn();
       // Whatever path unwound (done / error / abort / watchdog), never strand
       // withheld text in the reveal queue. Already-settled bubbles keep their
       // terminal status (the apply's status guard).
@@ -2805,7 +2810,6 @@ function ChatSessionSlot({
       clearWatchdog();
       abortRef.current = null;
       setTaskId("");
-      endLocalTurn();
       // The stream's end: every exit above settles the status itself, so this is a no-op
       // unless something left "streaming" behind with nothing live to settle it.
       reconcileSessionStatus(session.id);

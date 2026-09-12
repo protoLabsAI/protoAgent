@@ -38,15 +38,14 @@ const seen = new Set<string>();
  * not open in this window.
  *
  * Settling a turn is one of the moments a session's "streaming" can be left with nothing
- * live to release it, so the session is reconciled right after (sessionLiveness.ts). The
- * slot's reattach effect covers the usual case, since settling the preview changes its
- * reattach key. Two cases it cannot cover:
- *   - a session whose slot is not mounted (only MAX_ACTIVE_SESSIONS mount);
- *   - a turn whose key had already moved on: a DIFFERENT task's `chat.resumed` with no
- *     preview is appended after the live preview, like a participant's row, and makes the
- *     slot cancel that preview's reattach mid-turn. When the preview's own turn then
- *     settles, the key does not change again, and no reattach is left to hand the session
- *     back.
+ * live to release it, so the session is reconciled right after (sessionLiveness.ts). For a
+ * mounted session, the slot's reattach effect covers it too: settling the preview changes
+ * the reattach key. A session whose slot is not mounted has only this, because only
+ * MAX_ACTIVE_SESSIONS slots mount. A sixth session's turn can end with no slot and no
+ * reattach to hand it back.
+ *
+ * An answer with no preview here (a DIFFERENT task's) is appended as `outOfBand`, so it
+ * never moves the reattach key off a turn that is still running (leadAssistantMessage).
  */
 export function landResumedTurn(render: ResumedTurnRender): boolean {
   const target = chatStore.getSnapshot().sessions.find((s) => s.id === render.session);

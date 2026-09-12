@@ -97,11 +97,18 @@ export function shouldReattach(
  *  as their own already-settled rows AFTER the live preview while the turn is still
  *  running, so "the last assistant row" named one of them and read the turn as over: the
  *  slot's reattach effect cancelled a live reattach, and when the turn really ended there
- *  was no reattach left to release the session — it sat "streaming" for good. */
+ *  was no reattach left to release the session — it sat "streaming" for good.
+ *
+ *  It also skips another turn's result that `chat.resumed` appended with no preview of its
+ *  own (`outOfBand`). That row lands after a still-running turn too, and naming it cancelled
+ *  that turn's reattach. For an operator turn, which never gets a `chat.resumed` of its
+ *  own, nothing then settled its bubble, and the session stayed "streaming". */
 export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatMessage | undefined {
   return [...(messages ?? [])]
     .reverse()
-    .find((message) => message.role === "assistant" && !message.author && !message.addressedTo);
+    .find(
+      (message) => message.role === "assistant" && !message.author && !message.addressedTo && !message.outOfBand,
+    );
 }
 
 /** Stable dependency key for the session slot's reattach effect. Hydration can

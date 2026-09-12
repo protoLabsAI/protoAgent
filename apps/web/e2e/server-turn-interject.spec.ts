@@ -847,7 +847,7 @@ test("a reload whose reattach loses the race to the turn's end still hands the s
   expect(h.deletes).toHaveLength(1);
 });
 
-test("another task's answer landing mid-reattach never idles the live turn, and the turn's own end does", async ({ page }) => {
+test("another task's answer landing mid-reattach leaves the live turn's reattach running, and the turn's own end idles", async ({ page }) => {
   const session = "chat-interject-other-task";
   const h = await openAttendedServerTurn(page, session);
 
@@ -860,23 +860,22 @@ test("another task's answer landing mid-reattach never idles the live turn, and 
   await expect(stop).toBeVisible();
 
   // A DIFFERENT task finishes in this chat (a scheduled fire) and has no preview here, so its
-  // answer is appended after the live preview like a participant's row. The slot reads the
-  // settled row as the lead turn and cancels the preview's reattach mid-turn.
+  // answer is appended after the live preview. It must not stand in for the live turn: the
+  // preview's reattach keeps running, and the session stays busy.
   const OTHER = "Nightly backup finished.";
   h.release([
     { topic: "chat.resumed", data: { session_id: session, task_id: TASK2, text: OTHER, state: "completed", origin: "scheduler" } },
   ]);
   await expect(page.locator(SLOT).getByText(OTHER)).toBeVisible();
-  await expect.poll(() => h.resubscribeAborts()).toBe(1);
-  // The preview's turn is still live, so the session must stay busy.
   await page.waitForTimeout(500);
+  expect(h.resubscribeAborts()).toBe(0);
   await expect(stop).toBeVisible();
 
-  // That turn now ends. Its `chat.resumed` settles the preview, but the slot's key had
-  // already moved on, so no reattach is left to hand the session back. THE BUG: Stop stayed
-  // up and Send stayed disabled for good.
+  // That turn now ends: its `chat.resumed` settles the preview, the slot lets go of its
+  // reattach, and the session is handed back.
   h.release(terminalFrames(session));
   await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
+  await expect.poll(() => h.resubscribeAborts()).toBe(1);
   await expect(stop).toHaveCount(0);
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
 });

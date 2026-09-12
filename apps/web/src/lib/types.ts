@@ -1118,6 +1118,14 @@ export type ChatMessage = {
    *  instead of a full-size assistant bubble. Persisted, so the card treatment survives reload;
    *  absent on operator-initiated turns, which stay full-size. */
   origin?: string;
+  /** A server turn's result that `chat.resumed` APPENDED, because this transcript had no
+   *  preview of that turn to replace: a scheduled fire or a watch reaction that landed while
+   *  some other turn here was still running. It is not that running turn's row. So the
+   *  reattach key (`leadAssistantMessage`) skips it, as it skips a participant's row.
+   *  Otherwise it would cancel the running turn's reattach, and an operator turn (which never
+   *  gets a `chat.resumed` of its own) would stay "streaming" for good. Persisted, so a reload
+   *  keys the same way. */
+  outOfBand?: boolean;
   /** Background-agent report (ADR 0050/0062): the spawning job's id + title. The bubble
    *  shows the server's preview; this lets the card open the FULL report in the document
    *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */

@@ -166,6 +166,10 @@ export function settleResumedTurn(
     // they differ, the authoritative `content` supersedes it and the message falls back
     // to the grouped tools→content layout history-loaded messages already use.
     ...(live && streamedTextIsFinal(live.parts, render.content) ? { parts: live.parts } : {}),
+    // No preview of this turn to replace, so the answer lands as its own row, possibly
+    // after another turn that is still running here. Marked so it never stands in for that
+    // turn's lead row (see ChatMessage.outOfBand).
+    ...(live ? {} : { outOfBand: true }),
   };
   return liveIdx >= 0 ? messages.map((m, i) => (i === liveIdx ? msg : m)) : [...messages, msg];
 }

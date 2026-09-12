@@ -409,7 +409,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     expect(sessionStatus(sessionId)).toBe("idle");
   });
 
-  it("a different task's answer landing with no preview never idles the live turn, and its end does", async () => {
+  it("a different task's answer landing with no preview leaves the live turn's reattach running, and its end idles", async () => {
     const { sessionId } = seedServerTurn();
     resumeTask.mockImplementation(() => new Promise<never>(() => {})); // the reattach is still waiting
     const slot = mountSlot(sessionId);
@@ -417,19 +417,48 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     expect(sessionStatus(sessionId)).toBe("streaming");
 
     // Another turn's `chat.resumed` (a scheduled fire in this chat) has no preview here, so
-    // it is appended after the live preview like a participant's row. The lead row is now a
-    // settled one, so the slot's key goes "" and it cancels the preview's reattach mid-turn.
+    // it is appended after the live preview. It is marked out of band, so the reattach key
+    // still names the preview and the slot does not cancel that turn's reattach.
     const other = resumedTurnRender({ session_id: sessionId, task_id: "t-other", text: "Backup done.", state: "completed" })!;
     expect(landResumedTurn(other)).toBe(true);
     slot.rerender();
+    await settle();
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    expect(resumeTask.mock.calls[0]?.[2]?.signal?.aborted).toBe(false);
     expect(sessionStatus(sessionId)).toBe("streaming"); // the preview is still live: never idled
 
-    // The preview's own turn ends. Its `chat.resumed` settles the preview, but the slot's key
-    // was already "" and does not change, so no effect runs and no reattach is left to hand
-    // the session back. THE BUG: it sat "streaming" for good.
+    // The preview's own turn ends: its `chat.resumed` settles the preview, and the session is
+    // handed back.
     const own = resumedTurnRender({ session_id: sessionId, task_id: TASK_ID, text: "Report is clean.", state: "completed" })!;
     landResumedTurn(own);
     slot.rerender();
+    expect(sessionStatus(sessionId)).toBe("idle");
+  });
+
+  it("another task's answer never strands a reattached OPERATOR turn", async () => {
+    // Reload mid operator turn: the slot reattaches to a1. An operator turn never gets a
+    // `chat.resumed` of its own, so only its reattach can settle it.
+    const sessionId = seedStuckSession();
+    const stream = deferred<void>();
+    resumeTask.mockReturnValue(stream.promise);
+    getTask.mockResolvedValue({ state: "completed", text: "Deployed." });
+    const slot = mountSlot(sessionId);
+    await settle();
+
+    // A scheduled fire's answer lands with no preview. THE BUG: it became the lead row, the
+    // key went "", and the slot cancelled a1's reattach. Nothing restarted it, and nothing
+    // else would settle a1, so the session stayed "streaming" for good.
+    landResumedTurn(resumedTurnRender({ session_id: sessionId, task_id: "t-other", text: "Backup done.", state: "completed" })!);
+    slot.rerender();
+    await settle();
+    expect(reattachKeyForMessages(messagesOf(sessionId))).toBe(`${ASSISTANT_ID}:${TASK_ID}`);
+    expect(resumeTask.mock.calls[0]?.[2]?.signal?.aborted).toBe(false);
+    expect(sessionStatus(sessionId)).toBe("streaming");
+
+    // a1's own task completes on the resubscribe stream, and the reattach settles it.
+    stream.resolve();
+    await settle();
+    expect(assistantMessage(sessionId)?.status).toBe("done");
     expect(sessionStatus(sessionId)).toBe("idle");
   });
 
