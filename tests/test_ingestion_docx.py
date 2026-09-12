@@ -579,6 +579,8 @@ def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
     behind them, so nothing forced one: six worst-case extractions grew RSS to ~900 MiB
     and stayed there. Extraction now collects after a big document, so the footprint is
     flat instead of per-upload."""
+    if sys.platform == "win32":  # no /proc and no ps to read resident size from
+        pytest.skip("resident-size probe is POSIX-only; the behaviour it guards is not platform-specific")
     _docx_lib()
     data = _worst_accepted_docx()
     # CURRENT RSS, not ru_maxrss: a high-water mark can't show memory coming back, and
