@@ -229,12 +229,11 @@ jobs:
         # tests/conftest.py's site.getsitepackages() reorder resolving (#175).
         # pytest is not a project dependency, so it is added separately — never
         # via `uv run pytest`, which falls back to a global binary when the venv
-        # has none. python-docx isn't one either (the desktop bundles it; a server
-        # answers 501 without it) — installed here so the .docx extraction tests
-        # (tests/test_ingestion_docx.py) gate instead of skipping.
+        # has none. (python-docx needs no separate install: it's a core dependency,
+        # so `uv sync` brings it and tests/test_ingestion_docx.py gates, never skips.)
         run: |
           uv sync --frozen --python 3.12
-          uv pip install pytest pytest-asyncio python-docx==1.2.0
+          uv pip install pytest pytest-asyncio
       - name: Run tests
         # Kept as a bare pytest call (not `python scripts/gate.py`) so lint and
         # tests stay separate jobs with parallel execution and clear failure
@@ -301,12 +300,12 @@ jobs:
           version: "0.11.29"
       - name: Install dependencies (from uv.lock)
         # Mirrors the Ubuntu tests job: pinned to the lock (see its note), plus
-        # the same test-only python-docx. pytest-split is CI-only and pinned; the
-        # committed duration seed balances the two isolated jobs.
+        # pytest. pytest-split is CI-only and pinned; the committed duration seed
+        # balances the two isolated jobs.
         shell: bash
         run: |
           uv sync --frozen --python 3.12
-          uv pip install pytest pytest-asyncio pytest-split==0.11.0 python-docx==1.2.0
+          uv pip install pytest pytest-asyncio pytest-split==0.11.0
       - name: Run full-suite shard ${{ matrix.group }}/2
         # tests/windows_native_exclusions.txt is the #2412 burndown: files that
         # failed natively at the 2026-08-08 baseline (currently empty). The two

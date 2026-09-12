@@ -7,8 +7,8 @@ file or URL into that text. Each format is a small extractor; the heavy ones
 friendly ``MissingDependency`` if it isn't installed, so the base import is light.
 
 Phase 1 (this module) covers the light, pure-Python formats: plain text,
-Markdown, HTML / web URLs, PDF, Word (.docx — python-docx, not a core dep, so a
-server without it answers with a ``MissingDependency``), and YouTube transcripts.
+Markdown, HTML / web URLs, PDF, Word (.docx — python-docx, a core dep; only a broken
+install lacks it, and that answers with a ``MissingDependency``), and YouTube transcripts.
 Audio/video (local ASR) is a deliberate Phase 2 — the gateway serves no
 transcription model.
 

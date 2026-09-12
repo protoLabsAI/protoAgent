@@ -683,9 +683,10 @@ def register_knowledge_routes(app) -> None:
           (``mode=indexed``). Cleaned up when the chat session is deleted.
 
         Returns the ready-to-prepend ``context`` block + a descriptor for the
-        composer chip. A format whose optional library is absent (``.docx`` without
-        python-docx) is a 501 naming the install; an unknown or legacy one (``.doc``)
-        is a 415; one over the extraction budget (a zip bomb) is a 413."""
+        composer chip. A format whose library won't import (``.docx`` without
+        python-docx — a core dep, so a broken install) is a 501 naming the fix; an
+        unknown or legacy one (``.doc``) is a 415; one over the extraction budget (a
+        zip bomb) is a 413."""
         if STATE.knowledge_store is None:
             return {"enabled": False}
         from ingestion import MissingDependency, SourceTooLarge, UnsupportedSource, extract_bytes

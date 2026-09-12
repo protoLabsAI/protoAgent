@@ -1,8 +1,9 @@
 """Source → text extractors for the ingestion engine (ADR 0021).
 
-Pure-Python, dependency-light. Network (URL fetch) and optional deps (pypdf,
-python-docx, youtube-transcript-api) are isolated to their own extractors so the
-parsing helpers (HTML→text, YouTube-id parsing, decode) stay unit-testable offline.
+Pure-Python, dependency-light. Network (URL fetch) and the format libraries (pypdf,
+python-docx, youtube-transcript-api — core deps, still lazy-imported) are isolated to
+their own extractors so the parsing helpers (HTML→text, YouTube-id parsing, decode) stay
+unit-testable offline.
 """
 
 from __future__ import annotations
@@ -43,7 +44,8 @@ class ExtractionError(IngestionError):
 
 
 class MissingDependency(IngestionError):
-    """A format needs an optional package that isn't installed."""
+    """A format's package isn't importable — an absent optional extra, or a broken install
+    missing a core dep such as python-docx. The routes answer 501."""
 
 
 class SourceTooLarge(ExtractionError):
@@ -65,8 +67,9 @@ _TEXT_EXTS = {".txt", ".text", ".log", ".rst", ".csv", ".tsv"}
 _MD_EXTS = {".md", ".markdown", ".mdown", ".mkd", ".mdx"}
 _HTML_EXTS = {".html", ".htm", ".xhtml"}
 _PDF_EXTS = {".pdf"}
-# Word → text via python-docx (lazy; NOT a core dep — the desktop bundles it, a bare
-# server may not have it, and a missing lib is a MissingDependency the routes map to 501).
+# Word → text via python-docx (a core dep, lazy-imported like pypdf). A missing lib now
+# means a broken install, not an absent extra — still a MissingDependency the routes map to
+# 501, kept as a defensive fallback so a broken env fails that one source, never the server.
 _DOCX_EXTS = {".docx"}
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 # Legacy binary Word (an OLE2 compound file) — nothing here reads it; refuse with the fix.
@@ -265,9 +268,10 @@ def _ole_word_refusal(data: bytes) -> UnsupportedSource:
     """The right refusal for an OLE2 Word file: encrypted .docx, else legacy .doc."""
     return UnsupportedSource(_ENCRYPTED_DOCX_HINT if _ENCRYPTED_OOXML_MARKER in data else _LEGACY_DOC_HINT)
 _DOCX_MISSING_HINT = (
-    "Word (.docx) files need the 'python-docx' package, which isn't installed in this "
-    "server's Python — install it there (pip install python-docx) and retry, or export "
-    "the document to PDF and attach that instead"
+    "Word (.docx) files need the 'python-docx' package — a core protoAgent dependency, so "
+    "this server's install is incomplete. Reinstall its dependencies (uv sync, or pip "
+    "install python-docx in the server's Python) and retry, or export the document to PDF "
+    "and attach that instead"
 )
 
 # WordprocessingML tags, in the Clark notation lxml reports (the walk below reads the raw
