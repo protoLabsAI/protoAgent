@@ -1,6 +1,6 @@
 id: artifact
 name: Artifact
-version: 0.17.0
+version: 0.18.0
 # Needs the host to serve the DS plugin-kit at /_ds/ (protoAgent #893, v0.34.0) —
 # the shell page links it for theming + the authed handshake, and artifacts inject it
 # so `.pl-*` design-system classes work inside the sandbox.
@@ -30,6 +30,7 @@ config:
   ask_system: ""
   history: 20
   max_versions: 50
+  max_pinned: 10
   max_code_kb: 512
   max_blob_kb: 25600
   max_preview_kb: 64
@@ -40,6 +41,7 @@ settings:
   - { key: ask_max_chars, label: "Ask prompt limit (chars)", type: number, description: "Max characters for an artifact's ask() prompt." }
   - { key: history, label: "Artifacts kept", type: number, description: "How many artifacts to keep in the panel; the oldest is evicted past this." }
   - { key: max_versions, label: "Versions per artifact", type: number, description: "Max edit-versions kept per artifact (oldest edits trimmed)." }
+  - { key: max_pinned, label: "Pinned artifacts", type: number, description: "Max artifacts the agent may pin (pin_artifact). Pinned artifacts are never evicted and don't count toward Artifacts kept; at this cap a new pin is refused. 0 disables pinning." }
   - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
   - { key: max_blob_kb, label: "Max file size (KB)", type: number, description: "Max size of a file saved via save_file_artifact (stored as a sidecar blob); a larger file is rejected." }
   - { key: max_preview_kb, label: "Max file preview (KB)", type: number, description: "Max extracted-text preview kept per file version (the diffable projection shown in the panel)." }

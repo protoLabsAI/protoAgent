@@ -26,6 +26,11 @@ log = logging.getLogger("protoagent.plugins.artifact")
 # show_artifact creates one; update_artifact/rewrite_artifact append a version (the
 # proven Claude "update vs rewrite" model — iterate the same artifact, don't spam the
 # panel with near-duplicates). The file is {"artifacts": [newest-first], "current": id}.
+#
+# An artifact may carry ``"pinned": true`` — it is then exempt from the history eviction in
+# _write_store (see _evict). The key is ABSENT on an unpinned artifact rather than false, so
+# a store that never pinned anything is byte-for-byte the pre-pin format, and an older
+# plugin reading a pinned store just ignores the key (it evicts by plain recency again).
 
 
 def _store_path() -> Path:
@@ -177,9 +182,39 @@ def _read_store() -> dict:
     return {"artifacts": [], "current": None}
 
 
+def _is_pinned(art: dict) -> bool:
+    """Pinned = exempt from history eviction. Strictly ``True`` — a hand-edited truthy
+    string must not silently pin an artifact past the ``max_pinned`` cap."""
+    return art.get("pinned") is True
+
+
+def _pinned(store: dict) -> list[dict]:
+    """The pinned artifacts, in store (most-recently-touched first) order."""
+    return [a for a in store.get("artifacts", []) if _is_pinned(a)]
+
+
+def _evict(arts: list[dict], keep: int) -> list[dict]:
+    """Keep every PINNED artifact plus the ``keep`` most-recently-touched unpinned ones, in
+    their existing newest-first order. Pins don't count toward ``keep``: with nothing pinned
+    this is exactly ``arts[:keep]``, the eviction point the store has always had. The number
+    of pins is bounded separately (``_config._max_pinned``, enforced by pin_artifact)."""
+    kept: list[dict] = []
+    unpinned = 0
+    for a in arts:
+        if _is_pinned(a):
+            kept.append(a)
+        elif unpinned < keep:
+            kept.append(a)
+            unpinned += 1
+    return kept
+
+
 def _write_store(store: dict) -> None:
     max_versions = _config._max_versions()
-    store["artifacts"] = store.get("artifacts", [])[: _config._max_history()]
+    store["artifacts"] = _evict(store.get("artifacts", []), _config._max_history())
+    # Version trimming applies to pinned artifacts too, deliberately: a pin keeps the artifact
+    # (its id keeps resolving), not every edit ever made to it — a long-lived document edited
+    # daily would otherwise grow history.json without bound, and it's read on every panel poll.
     for a in store["artifacts"]:
         if len(a.get("versions", [])) > max_versions:
             a["versions"] = a["versions"][-max_versions:]
