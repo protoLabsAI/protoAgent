@@ -167,13 +167,19 @@ def test_the_hold_spans_the_refresh_that_follows_pip(plugin, monkeypatch):
     assert _events(log).count("start") == 1
 
 
+# The ready file carries the child's OWN pid: the process that takes the lock. Never
+# compare Popen.pid, because on Windows a venv's python.exe is a launcher that runs the
+# real interpreter as its child, so Popen.pid names the launcher, not the lock holder.
 CHILD = """\
-import pathlib, sys, time
+import os, pathlib, sys, time
 ready, go = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 pip_argv = sys.argv[3:]
 from graph.plugins import installer
 installer._host_pip = lambda: list(pip_argv)
-ready.touch()
+tmp = ready.with_suffix(".tmp")
+tmp.write_text(str(os.getpid()), encoding="utf-8")
+tmp.rename(ready)  # appears complete, never half-written
+
 deadline = time.time() + 60
 while not go.exists():
     if time.time() > deadline:
@@ -246,5 +252,6 @@ def test_two_processes_on_one_environment_run_one_pip(plugin, monkeypatch):
     b_code, b_out, b_err = b.wait(60), *b.communicate()
 
     assert (a_code, b_code) == (0, 3), (a_out, a_err, b_out, b_err)
-    assert "already running" in b_out and f"pid {a.pid}" in b_out, b_out
+    holder_pid = int(ready_a.read_text(encoding="utf-8"))  # A's interpreter, as A reported it
+    assert "already running" in b_out and f"pid {holder_pid}" in b_out, b_out
     assert _events(log).count("start") == 1 and "OVERLAP" not in _events(log)
