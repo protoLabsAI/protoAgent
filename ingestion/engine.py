@@ -100,10 +100,12 @@ _DOCX_READ_CHUNK = 64 * 1024
 # always drains. Threading, not asyncio: this runs in worker threads, off the loop.
 _MAX_CONCURRENT_DOCX = 2
 _docx_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_DOCX)
-# A document that built a tree at least this big gets an explicit collect afterwards (see
+# Nodes that may go uncollected before extraction spends a collect (see
 # _release_docx_memory) — a tenth of the node budget, ~10× a résumé, so the common path
-# never pays for it.
+# rarely pays for it. Cumulative across documents, so no document size escapes it.
 _DOCX_GC_NODES = 100_000
+_docx_gc_debt = 0
+_docx_gc_lock = threading.Lock()
 # Audio → transcribed directly via the gateway STT endpoint.
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma", ".aiff", ".aif"}
 # Video → audio track extracted with ffmpeg, then transcribed.
@@ -565,30 +567,49 @@ def _extract_docx(data: bytes) -> str:
     if data[:8] == _OLE2_MAGIC:  # a password-protected .docx, or a legacy .doc renamed
         raise _ole_word_refusal(data)
     with _docx_slots:
-        text, nodes_used = _extract_docx_bounded(data)
-        # After the inner frame unwinds, so THIS document's tree is collectable too.
-        _release_docx_memory(nodes_used)
-        return text
+        # The repack reports the budget it spent BEFORE anything is parsed, so the reclaim
+        # below also covers the paths that RAISE. Failing late still leaves a full tree
+        # behind: a package whose main part is declared a header parses completely, wiring
+        # the cyclic graph, and is only then rejected on content type — a clean 415 that
+        # used to retain ~120 MiB a time (~750 MiB over six).
+        package, names, nodes_used = _repack_docx(data)  # python-docx never sees the original
+        try:
+            return _extract_docx_bounded(package, names)
+        finally:
+            _release_docx_memory(nodes_used)
 
 
 def _release_docx_memory(nodes_used: int) -> None:
-    """Reclaim a big document's tree before returning, instead of leaving it to chance.
+    """Reclaim abandoned document trees once enough have piled up.
 
     An OPC package's object graph is cyclic (package → rels → part → package, and
     ``Document`` ↔ ``DocumentPart``), so none of it — including the lxml trees, which are
     megabytes of C memory behind a handful of Python proxies — is freed by reference
-    counting. CPython's GC triggers on OBJECT COUNTS, not on those megabytes, so a burst of
-    uploads each left a whole tree uncollected: measured +130 MiB per extraction, ~900 MiB
-    over six, and flat (~230 MiB) once collected. A collect costs 30-50 ms after a document
-    that big, so only documents that built a big tree pay it. (Clearing the trees by hand
-    instead is not an option: with the package's own proxies still alive,
-    ``element.clear()`` takes lxml's per-node path — measured 60 SECONDS on that document.)"""
-    if nodes_used >= _DOCX_GC_NODES:
-        gc.collect()
+    counting. CPython's GC triggers on OBJECT COUNTS, not on those megabytes, so nothing
+    forces one: measured +130 MiB per extraction, ~900 MiB over six, flat once collected.
+
+    The debt is CUMULATIVE rather than per-document. A threshold on one document's size
+    left everything under it behaving exactly as before — ~95k units is an ordinary
+    ~50-page document (a 300-page report is ~560k), and a run of them retained ~12 MiB
+    apiece with no ceiling (388 MiB over thirty). Carrying the arrears means the common
+    path still skips the collect and the steady state is bounded at any document size.
+
+    Cost: a collect is 30-50 ms and holds the GIL, so it is stop-the-world — the event loop
+    feels it even though extraction runs in a worker thread (worst tick 25 ms → 53 ms).
+    Worth it against unbounded retention, but the cost is global, not confined to the
+    worker. (Clearing the trees by hand instead is not an option: with the package's own
+    proxies still alive, ``element.clear()`` takes lxml's per-node path — 60 SECONDS on the
+    same document.)"""
+    global _docx_gc_debt
+    with _docx_gc_lock:
+        _docx_gc_debt += max(0, nodes_used)
+        if _docx_gc_debt < _DOCX_GC_NODES:
+            return
+        _docx_gc_debt = 0
+    gc.collect()  # outside the lock: concurrent extractions needn't queue behind it
 
 
-def _extract_docx_bounded(data: bytes) -> tuple[str, int]:
-    package, names, nodes_used = _repack_docx(data)  # bounded; python-docx never sees the original
+def _extract_docx_bounded(package, names: set[str]) -> str:
     try:
         import docx  # python-docx
         from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -630,7 +651,7 @@ def _extract_docx_bounded(data: bytes) -> tuple[str, int]:
     except Exception as exc:  # noqa: BLE001 — python-docx / lxml raise a zoo of errors on bad files
         raise ExtractionError(f"could not parse DOCX: {exc}") from exc
     stories = [*margins[RT.HEADER], _docx_story(body_lines), *margins[RT.FOOTER]]
-    return "\n\n".join(s for s in stories if s), nodes_used
+    return "\n\n".join(s for s in stories if s)
 
 
 def _snippet_text(snippet) -> str:

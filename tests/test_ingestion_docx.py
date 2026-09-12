@@ -528,6 +528,84 @@ def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
     return int(done.stdout.split()[0])
 
 
+def _header_declared_docx() -> bytes:
+    """A package whose main part is declared a HEADER: python-docx parses it completely
+    (a header is an XmlPart), wiring the package's cyclic graph, and only then rejects it
+    on content type. So it fails cleanly — and late, with a full tree already built."""
+    header_ct = b"application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"
+    content_types = _CONTENT_TYPES.replace(
+        b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml", header_ct
+    )
+    body = _body(b"<w:p>" + b"x<w:i/>" * 480_000 + b"</w:p>")
+    return _bare_zip({"[Content_Types].xml": content_types, "_rels/.rels": _ROOT_RELS, "word/document.xml": body})
+
+
+def _ordinary_docx() -> bytes:
+    """~50 pages' worth of nodes: under the collect trigger on its own, the way an ordinary
+    document is — which is exactly why the trigger cannot be per-document."""
+    return _package(_body(b"<w:p><w:r><w:t>real text</w:t></w:r></w:p><w:p>" + b"x<w:i/>" * 47_000 + b"</w:p>"))
+
+
+def test_the_reclaim_runs_when_extraction_fails_late(monkeypatch):
+    """The reclaim used to sit after a successful return, so a package that parsed into a
+    full tree and was THEN rejected abandoned it — a clean 415 retaining ~120 MiB a time."""
+    _docx_lib()
+    released: list[int] = []
+    monkeypatch.setattr(engine, "_release_docx_memory", released.append)
+
+    with pytest.raises(UnsupportedSource):
+        extract_bytes("header.docx", _header_declared_docx())
+
+    assert len(released) == 1 and released[0] >= engine._DOCX_GC_NODES, released
+
+
+def test_the_collect_trigger_is_cumulative_across_documents(monkeypatch):
+    """A per-document threshold left every document under it collecting never. The debt
+    carries over, so small documents still skip the collect individually but can't pile up."""
+    collects: list[int] = []
+    monkeypatch.setattr(engine.gc, "collect", lambda *_a: collects.append(1) or 0)
+    monkeypatch.setattr(engine, "_docx_gc_debt", 0)
+    share = engine._DOCX_GC_NODES // 3 + 1  # three of these cross the trigger
+
+    engine._release_docx_memory(share)
+    engine._release_docx_memory(share)
+    assert collects == []  # the common path pays nothing
+    engine._release_docx_memory(share)
+    assert collects == [1]  # ...until the arrears cross it
+    engine._release_docx_memory(share)
+    assert collects == [1]  # and the debt was paid down, not left standing
+
+
+def test_failed_extractions_do_not_accumulate_memory(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("resident-size probe is POSIX-only; the behaviour it guards is not platform-specific")
+    _docx_lib()
+    data = _header_declared_docx()
+    assert len(data) < 16 * 1024  # a few KB on the wire
+
+    after_one = _rss_after_extractions(data, tmp_path, repeats=1)
+    after_six = _rss_after_extractions(data, tmp_path, repeats=6)
+
+    assert after_six <= 2 * after_one, (
+        f"six FAILED extractions left {after_six} MiB resident vs {after_one} MiB after one"
+    )
+
+
+def test_documents_under_the_collect_trigger_do_not_accumulate_memory(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("resident-size probe is POSIX-only; the behaviour it guards is not platform-specific")
+    _docx_lib()
+    data = _ordinary_docx()
+    assert engine._repack_docx(data)[2] < engine._DOCX_GC_NODES  # each one alone skips the collect
+
+    after_one = _rss_after_extractions(data, tmp_path, repeats=1)
+    after_thirty = _rss_after_extractions(data, tmp_path, repeats=30)
+
+    assert after_thirty <= 2 * after_one, (
+        f"thirty ordinary documents left {after_thirty} MiB resident vs {after_one} MiB after one"
+    )
+
+
 def test_the_node_budget_counts_text_runs_not_only_elements_and_attributes():
     """``x<w:i/>`` filler buys libxml2 a TEXT NODE per element for a single '<' of budget.
     Counting only elements and attributes let a package through with twice the intended
