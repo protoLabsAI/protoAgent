@@ -20,12 +20,22 @@ type InstalledRow = { id: string; deps_missing?: string[] | null; manifest?: { n
 type RuntimePluginRow = { id: string; name?: string; deps_missing?: string[] | null };
 
 /**
+ * The union of missing-dep lists, first-seen order, deduped. The inventory row reports
+ * the REQUIRED tier only while the runtime meta reports both tiers, so picking one list
+ * (as the first cut did, "installed wins when non-empty") silently dropped a git plugin's
+ * missing OPTIONAL names whenever it also had required ones missing.
+ */
+export function mergeDeps(...lists: (readonly string[] | null | undefined)[]): string[] {
+  return [...new Set(lists.flatMap((l) => l ?? []))];
+}
+
+/**
  * The just-enabled plugins that are missing declared pip deps, in `enabledIds` order.
  *
- * `installed` wins where a plugin appears in both (it is computed per request and
- * carries the manifest name); `runtime` is the only source for a bundled plugin. A
- * plugin the wizard did not just enable is never reported — the report exists to explain
- * what this setup run left half-provisioned, not to audit the instance.
+ * Deps are merged from both sources (`mergeDeps`); the name prefers the inventory's
+ * manifest name. `runtime` is the only source for a bundled plugin. A plugin the wizard
+ * did not just enable is never reported — the report exists to explain what this setup
+ * run left half-provisioned, not to audit the instance.
  */
 export function needyPlugins(
   enabledIds: readonly string[],
@@ -41,9 +51,9 @@ export function needyPlugins(
     seen.add(id);
     const inst = installedById.get(id);
     const meta = runtimeById.get(id);
-    const deps = (inst?.deps_missing?.length ? inst.deps_missing : meta?.deps_missing) ?? [];
+    const deps = mergeDeps(inst?.deps_missing, meta?.deps_missing);
     if (!deps.length) continue;
-    rows.push({ id, name: inst?.manifest?.name || meta?.name || id, deps: [...deps] });
+    rows.push({ id, name: inst?.manifest?.name || meta?.name || id, deps });
   }
   return rows;
 }

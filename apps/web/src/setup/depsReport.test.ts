@@ -3,7 +3,18 @@
 // let a fresh server finish setup "ready" with no document libraries installed.
 import { describe, expect, it } from "vitest";
 
-import { needyPlugins } from "./depsReport";
+import { mergeDeps, needyPlugins } from "./depsReport";
+
+describe("mergeDeps", () => {
+  it("unions the lists in first-seen order, deduped", () => {
+    expect(mergeDeps(["httpx"], ["httpx", "pillow"])).toEqual(["httpx", "pillow"]);
+  });
+
+  it("tolerates absent lists (a bundled plugin has no inventory row; an older backend has no runtime field)", () => {
+    expect(mergeDeps(undefined, ["pypdf"])).toEqual(["pypdf"]);
+    expect(mergeDeps(null, undefined)).toEqual([]);
+  });
+});
 
 describe("needyPlugins", () => {
   it("reports a bundled plugin from the runtime meta alone", () => {
@@ -19,6 +30,17 @@ describe("needyPlugins", () => {
       [{ id: "github", name: "github", deps_missing: ["httpx"] }],
     );
     expect(rows).toEqual([{ id: "github", name: "GitHub", deps: ["httpx"] }]);
+  });
+
+  it("merges a git plugin's required names (inventory) with its optional ones (runtime)", () => {
+    // The inventory reports the required tier only; the first cut let a non-empty
+    // inventory list win outright and silently dropped the optional names.
+    const rows = needyPlugins(
+      ["gp"],
+      [{ id: "gp", deps_missing: ["requests"], manifest: { name: "GP" } }],
+      [{ id: "gp", deps_missing: ["requests", "pillow"] }],
+    );
+    expect(rows).toEqual([{ id: "gp", name: "GP", deps: ["requests", "pillow"] }]);
   });
 
   it("skips plugins with nothing missing, and plugins this run didn't enable", () => {

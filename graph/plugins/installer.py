@@ -1618,11 +1618,17 @@ def recorded_source_url(plugin_id: str) -> str:
     return str((_lock_entry(plugin_id) or {}).get("source_url") or "")
 
 
-def install_deps(plugin_id: str) -> list[str]:
+def install_deps(plugin_id: str, *, failed: list[str] | None = None) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Optional deps (#1953)
     ride along best-effort: a failed optional install warns instead of failing
     the command. Returns the deps actually installed/satisfied.
+
+    ``failed`` (an optional out-parameter, #3450) collects the dist names of optional
+    deps that could NOT be installed. That failure used to live only in the log, so a
+    plugin whose deps are ALL optional (the cowork pack) got ``[]`` back — the same
+    answer as "nothing to install" — and callers reported success to an operator whose
+    install had actually failed (no pip in a uv-only venv, an unreachable index).
 
     Acts on the copy the loader RUNS (``effective_copies``) — not simply whichever
     folder exists: with a bundled copy superseding an old git install, the git copy's
@@ -1735,6 +1741,8 @@ def install_deps(plugin_id: str) -> list[str]:
                 ", ".join(soft_missing),
                 "; ".join(errors) or "no target",
             )
+            if failed is not None:
+                failed.extend(soft_missing)
             return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing]
         _audit("install_deps", {"id": plugin_id, "deps": to_install, "targets": targets_tried}, "ok")
         return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing or d in to_install_soft]
@@ -1766,10 +1774,18 @@ def install_deps(plugin_id: str) -> list[str]:
                 plugin_id,
                 (proc.stderr or proc.stdout).strip()[-400:],
             )
+            if failed is not None:
+                failed.extend(_dep_pkg_name(d) for d in optional)
         else:
             installed += optional
     _audit("install_deps", {"id": plugin_id, "deps": installed}, f"installed {len(installed)} dep(s)")
     log.info("[plugins] installed %d dep(s) for %s", len(installed), plugin_id)
+    if installed:
+        # A dist pip just wrote must be findable by THIS process's next dep check — the
+        # reload that clears the deps gap — without a restart: drop the finders' caches.
+        import importlib
+
+        importlib.invalidate_caches()
     return installed
 
 

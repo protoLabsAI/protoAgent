@@ -575,24 +575,21 @@ def _named(names: list[str]) -> str:
 
 
 def _deps_gap_message(plugin_id: str, hard: list[str], soft: list[str]) -> str | None:
-    """The operator-facing line for an enabled plugin whose declared pip deps are absent,
-    or ``None`` when nothing is missing. Reads as a continuation of the banner's
-    ``"<Plugin>: "`` prefix, like every other gap message."""
-    if not hard and not soft:
+    """The banner line for an enabled plugin whose REQUIRED pip deps are absent, or
+    ``None`` when none are. Reads as a continuation of the banner's ``"<Plugin>: "``
+    prefix, like every other gap message; missing optional deps ride along as a note.
+
+    Optional-only gaps get no banner on purpose: the optional tier's contract (#1954) is
+    "runs without them", and a warning banner that returns every session is heavier than
+    that. They stay visible where the operator installs things instead — the plugin's row
+    in Settings ▸ Plugins and the setup wizard's dependency report (both read
+    ``deps_missing``) — and in the log."""
+    if not hard:
         return None
-    parts = []
-    if hard:
-        parts.append(f"required: {_named(hard)}")
-    if soft:
-        parts.append(f"optional: {_named(soft)}")
-    lead = (
-        "needs Python packages that aren't installed"
-        if hard
-        else "is missing optional Python packages, so parts of it don't work"
-    )
+    also = f" (and optional {_named(soft)})" if soft else ""
     return (
-        f"{lead} — {'; '.join(parts)}. Install them in Settings ▸ Plugins or with "
-        f"`protoagent plugin install-deps {plugin_id}`."
+        f"can't run until its Python packages are installed: {_named(hard)}{also}. "
+        f"Install them from Settings ▸ Plugins or with `protoagent plugin install-deps {plugin_id}`."
     )
 
 
@@ -609,10 +606,12 @@ def _report_deps_gap(manifest: PluginManifest) -> list[str]:
     cowork (#3450) is both: bundled, and its document skills import the libraries inside
     ``execute_code`` rather than in-process. On a fresh server a Cowork-archetype first
     run therefore completed with the plugin enabled and four of five document libraries
-    absent, with no warning on any surface — the first symptom was an ImportError from
-    inside a code run, and the skill text then sent the operator to a console button that
-    had nothing to render. Both tiers are reported for the same reason: cowork's whole
-    stack is the OPTIONAL tier (#1954), so a hard-tier-only check would still say nothing.
+    absent, and the first symptom was an ImportError from inside a code run.
+
+    What is surfaced where: BOTH tiers go to the log and into the returned
+    ``deps_missing`` (the loader's runtime meta, which the Plugins row and the wizard's
+    report read — that is what makes a bundled plugin's gap visible at all). Only a
+    missing REQUIRED dep also raises the global banner; see ``_deps_gap_message``.
     """
     from graph.plugins import installer
     from graph.plugins import setup_gaps
@@ -625,7 +624,9 @@ def _report_deps_gap(manifest: PluginManifest) -> list[str]:
     hard_missing = installer._deps_satisfied(hard, scopes)[1] if hard else []
     soft_missing = installer._deps_satisfied(soft, scopes)[1] if soft else []
     message = _deps_gap_message(manifest.id, hard_missing, soft_missing)
-    if message:
+    # Logged for EITHER tier — independent of the banner, which only a required gap raises.
+    # An optional-only gap has no banner by design, so the log is one of its surfaces.
+    if hard_missing or soft_missing:
         log.warning(
             "[plugins] %s enabled but declared deps are missing (%s) — run: protoagent plugin install-deps %s",
             manifest.id,
@@ -637,9 +638,11 @@ def _report_deps_gap(manifest: PluginManifest) -> list[str]:
         DEPS_GAP_KEY,
         message,
         label=str(manifest.name or manifest.id),
-        # The one fix, as closed data: the plugin's own Settings section, where
-        # "Install deps" lives. Never a URL or a callback (setup_gaps.ACTION_KINDS).
-        action={"kind": "plugin_config"},
+        # The one fix, as closed data. NOT `plugin_config`: that opens the per-plugin
+        # Configure dialog, which renders the plugin's settings and has no deps UI. The
+        # "Install deps" button lives on the plugin's row in Settings ▸ Plugins, which is
+        # the `plugins` settings section. Never a URL or a callback (ACTION_KINDS).
+        action={"kind": "global_settings", "target": "plugins", "label": "Open Plugins"},
     )
     return sorted([*hard_missing, *soft_missing])
 

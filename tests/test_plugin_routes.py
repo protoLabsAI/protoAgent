@@ -216,7 +216,13 @@ def _deps_posture(monkeypatch, *, source_url, acked=(), trust_unverified=False, 
     )
     monkeypatch.setattr(installer, "recorded_source_url", lambda pid: source_url)
     calls: list[str] = []
-    monkeypatch.setattr(installer, "install_deps", lambda pid: calls.append(pid) or ["dep-a"])
+    monkeypatch.setattr(installer, "install_deps", lambda pid, **kw: calls.append(pid) or ["dep-a"])
+    # A successful install now reloads (#3450); never run the real hot-reload here. Set on
+    # the fake module `_wire` installed — a dotted-string target would re-import the real
+    # `server` package against that fake and fail.
+    import sys
+
+    monkeypatch.setattr(sys.modules["server.agent_init"], "_reload_langgraph_agent", lambda: (True, "stub"), raising=False)
     return calls
 
 
@@ -788,13 +794,17 @@ def test_install_deps_route_runs_installer(monkeypatch):
 
     calls: list[str] = []
 
-    def _fake_install_deps(pid):
+    def _fake_install_deps(pid, **kw):
         calls.append(pid)
         return ["python-docx", "openpyxl"]
 
+    reloads: list[int] = []
     monkeypatch.setattr(installer, "install_deps", _fake_install_deps)
+    monkeypatch.setattr("server.agent_init._reload_langgraph_agent", lambda: reloads.append(1) or (True, "ok"))
     body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
-    assert body == {"ok": True, "installed": ["python-docx", "openpyxl"]} and calls == ["cowork"]
+    assert body == {"ok": True, "installed": ["python-docx", "openpyxl"], "reloaded": True} and calls == ["cowork"]
+    # The deps gap is computed at load, and nothing else triggers one (#3450).
+    assert reloads == [1]
 
 
 def test_install_deps_route_requires_id():
@@ -804,12 +814,83 @@ def test_install_deps_route_requires_id():
 def test_install_deps_route_maps_install_error(monkeypatch):
     from graph.plugins import installer
 
-    def _boom(pid):
+    def _boom(pid, **kw):
         raise installer.InstallError("pip install failed")
 
     monkeypatch.setattr(installer, "install_deps", _boom)
     r = _client().post("/api/plugins/install-deps", json={"id": "cowork"})
     assert r.status_code == 400 and "pip install failed" in r.json()["detail"]
+
+
+def _deps_failing(monkeypatch, *, installed, failed):
+    from graph.plugins import installer
+
+    def _fake(pid, *, failed=None, _names=tuple(failed), _got=tuple(installed)):
+        failed.extend(_names)
+        return list(_got)
+
+    reloads: list[int] = []
+    monkeypatch.setattr(installer, "install_deps", _fake)
+    monkeypatch.setattr(installer, "effective_source_url", lambda pid: "")
+    monkeypatch.setattr("server.agent_init._reload_langgraph_agent", lambda: reloads.append(1) or (True, "ok"))
+    return reloads
+
+
+def test_install_deps_route_never_reports_success_when_nothing_landed(monkeypatch):
+    """All-optional deps fail SOFT in install_deps (no pip in a uv-only venv, an
+    unreachable index), so `[]` alone read exactly like "nothing to install" and the
+    wizard marked the row done (#3450). `failed` + `ok: false` tell them apart."""
+    reloads = _deps_failing(monkeypatch, installed=[], failed=["python-docx", "openpyxl"])
+    body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
+    assert body == {"ok": False, "installed": [], "reloaded": False, "failed": ["python-docx", "openpyxl"]}
+    assert reloads == []  # nothing changed, so nothing to reload
+
+
+def test_install_deps_route_partial_install_is_ok_but_names_what_failed(monkeypatch):
+    reloads = _deps_failing(monkeypatch, installed=["requests>=2"], failed=["pillow"])
+    body = _client().post("/api/plugins/install-deps", json={"id": "demo"}).json()
+    assert body == {"ok": True, "installed": ["requests>=2"], "reloaded": True, "failed": ["pillow"]}
+    assert reloads == [1]
+
+
+def test_install_deps_clears_the_deps_banner_without_a_restart(tmp_path, monkeypatch):
+    """End to end: the banner is up, the operator does what it says, and it's gone —
+    because the route reloads, which re-runs the loader's dep check. Before, it stayed
+    until the next restart."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import installer, loader, setup_gaps
+
+    d = tmp_path / "needsdep"
+    d.mkdir()
+    (d / "protoagent.plugin.yaml").write_text(
+        "id: needsdep\nname: Needs Dep\nversion: 0.1.0\nenabled: true\nrequires_pip: [nope-pkg-z]\n", encoding="utf-8"
+    )
+    (d / "__init__.py").write_text("def register(registry):\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [tmp_path])
+    present: set[str] = set()
+    monkeypatch.setattr(installer, "_importable", lambda pkg: pkg in present)
+    monkeypatch.setattr(installer, "effective_source_url", lambda pid: "")
+    setup_gaps.reset()
+
+    def _banner():
+        return [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
+
+    loader.load_plugins(LangGraphConfig())
+    assert _banner(), "precondition: the required dep is missing, so the banner is up"
+
+    def _fake_install(pid, **kw):
+        present.add("nope-pkg-z")  # pip succeeded
+        return ["nope-pkg-z"]
+
+    monkeypatch.setattr(installer, "install_deps", _fake_install)
+    # The real reload re-runs load_plugins; here that is exactly what it does.
+    monkeypatch.setattr(
+        "server.agent_init._reload_langgraph_agent", lambda: (loader.load_plugins(LangGraphConfig()), (True, "ok"))[1]
+    )
+    body = _client().post("/api/plugins/install-deps", json={"id": "needsdep"}).json()
+    assert body["ok"] and body["reloaded"]
+    assert not _banner()
+    setup_gaps.reset()
 
 
 def test_installed_carries_bundle_provenance(monkeypatch, tmp_path):

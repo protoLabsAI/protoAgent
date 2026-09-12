@@ -249,11 +249,28 @@ def register_plugin_routes(app) -> None:
             needs_ack = _consent_needs_ack(source_url)
             if needs_ack is not None:
                 return needs_ack
+        failed: list[str] = []
         try:
-            installed = await asyncio.to_thread(installer.install_deps, plugin_id)
+            installed = await asyncio.to_thread(installer.install_deps, plugin_id, failed=failed)
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "installed": installed}
+        reloaded = False
+        if installed:
+            # Reload so the loader re-checks deps (#3450): the deps banner and the
+            # `deps_missing` on the plugin's row are computed at load, and nothing else
+            # triggers one, so an operator who did exactly what the banner said kept
+            # seeing it until a restart. A failed reload doesn't un-install anything,
+            # so it's reported, not raised.
+            from server.agent_init import _reload_langgraph_agent
+
+            reloaded, _ = await asyncio.to_thread(_reload_langgraph_agent)
+        # All-optional deps fail soft in `install_deps`, so "nothing installed" can mean
+        # "nothing to do" or "everything failed". `failed` tells them apart, and `ok` is
+        # false when nothing landed at all, so a client never reports that as a success.
+        out: dict = {"ok": bool(installed) or not failed, "installed": installed, "reloaded": bool(reloaded)}
+        if failed:
+            out["failed"] = failed
+        return out
 
     @app.get("/api/plugins/catalog")
     async def _catalog():

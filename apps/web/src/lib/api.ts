@@ -2983,7 +2983,9 @@ export const api = {
   installPluginDeps(id: string) {
     // needs_ack (#2743): deps-install re-checks source trust like install does — the
     // caller renders the same confirm dialog and retries after POST /api/plugins/ack.
-    return request<{ ok?: boolean; installed?: string[]; needs_ack?: boolean; source?: string }>("/api/plugins/install-deps", {
+    // `failed` (#3450): optional deps that didn't install — they fail soft, so an empty
+    // `installed` alone can't distinguish "nothing to do" from "everything failed".
+    return request<{ ok?: boolean; installed?: string[]; failed?: string[]; reloaded?: boolean; needs_ack?: boolean; source?: string }>("/api/plugins/install-deps", {
       method: "POST",
       body: { id },
     });

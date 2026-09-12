@@ -350,15 +350,20 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print(f"  {r['id']}: {r['status']}{extra}")
             return 0
         if args.cmd == "install-deps":
-            deps = installer.install_deps(args.id)
+            failed: list[str] = []
+            deps = installer.install_deps(args.id, failed=failed)
             # "satisfied", not "installed": the function returns what ENDED UP available,
             # which includes deps that were already there and needed no install. Claiming
             # an install it didn't perform is how a no-op read as success (#2638).
-            print(
-                f"✓ {len(deps)} dep(s) satisfied for {args.id}: {', '.join(deps)}"
-                if deps
-                else f"{args.id} declares no deps"
-            )
+            if deps:
+                print(f"✓ {len(deps)} dep(s) satisfied for {args.id}: {', '.join(deps)}")
+            if failed:
+                # Optional deps fail soft, so this is the only place the failure shows
+                # (#3450). Nothing landed at all → non-zero, like any failed install.
+                print(f"✗ optional dep(s) failed to install for {args.id}: {', '.join(failed)}", file=sys.stderr)
+                return 0 if deps else 1
+            if not deps:
+                print(f"{args.id} declares no deps")
             return 0
     except installer.InstallError as exc:
         print(f"✗ {exc}", file=sys.stderr)

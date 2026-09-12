@@ -660,8 +660,13 @@ export function SetupWizard({
               // Both sources (#3450): /api/plugins/installed has no row for a BUNDLED
               // plugin, so the loader's runtime meta is the only place a bundled pack's
               // missing deps show up — which is the Cowork archetype's whole case.
-              const [inst, status] = await Promise.all([api.installedPlugins(), api.runtimeStatus()]);
-              const needy = needyPlugins(r.enabled, inst.plugins, status.plugins ?? []);
+              // allSettled: one source failing must not drop the rows the other still has.
+              const [inst, status] = await Promise.allSettled([api.installedPlugins(), api.runtimeStatus()]);
+              const needy = needyPlugins(
+                r.enabled,
+                inst.status === "fulfilled" ? inst.value.plugins : [],
+                status.status === "fulfilled" ? (status.value.plugins ?? []) : [],
+              );
               if (needy.length) {
                 setMessage("");
                 setPostInstall(needy.map((p) => ({ ...p, state: "pending" as const, error: "" })));
@@ -692,7 +697,14 @@ export function SetupWizard({
   async function installDepsFor(id: string) {
     setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "busy" as const } : r)) ?? null);
     try {
-      await api.installPluginDeps(id);
+      const res = await api.installPluginDeps(id);
+      // Optional deps fail soft server-side (#3450): an empty install is not "done".
+      const failed = res.failed ?? [];
+      if (res.ok === false || failed.length) {
+        const error = `${failed.join(", ") || "Nothing"} didn't install — check the server log (no pip, or the package index is unreachable).`;
+        setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "error" as const, error } : r)) ?? null);
+        return;
+      }
       setPostInstall((rows) => rows?.map((r) => (r.id === id ? { ...r, state: "done" as const } : r)) ?? null);
     } catch (exc) {
       setPostInstall(

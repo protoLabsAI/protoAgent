@@ -192,17 +192,23 @@ def test_an_enabled_plugins_missing_hard_deps_raise_a_setup_gap(tmp_path, monkey
     meta = next(m for m in res.meta if m["id"] == "hardp")
     assert meta["loaded"] and meta["deps_missing"] == ["nope-pkg-a", "nope-pkg-b"]
     [gap] = _deps_gaps()
-    assert "required: nope-pkg-a, nope-pkg-b" in gap["message"]
+    assert "can't run until its Python packages are installed: nope-pkg-a, nope-pkg-b" in gap["message"]
     assert "install-deps hardp" in gap["message"]
-    # The one fix, as closed declarative data — never a URL or a callback.
-    assert gap["actions"] == [{"kind": "plugin_config", "target": "hardp"}]
+    # The one fix, as closed declarative data, aimed where the Install deps button
+    # actually lives — the Plugins section — NOT the per-plugin Configure dialog, which
+    # renders the plugin's settings and has no deps UI at all.
+    assert gap["actions"] == [{"kind": "global_settings", "target": "plugins", "label": "Open Plugins"}]
     setup_gaps.reset()
 
 
-def test_the_optional_tier_is_reported_too_but_worded_as_degraded(tmp_path, monkeypatch) -> None:
-    """The tier a plugin that degrades gracefully uses (#1954) — and the one an
-    all-optional pack like cowork declares, so a hard-tier-only check would say nothing
-    at all about a knowledge-worker agent with no document libraries."""
+def test_missing_optional_deps_are_surfaced_but_raise_no_global_banner(tmp_path, monkeypatch, caplog) -> None:
+    """The optional tier's contract (#1954) is "runs without them", so a warning banner
+    that comes back every session is heavier than the tier. The gap stays visible where
+    the operator installs things — `deps_missing` feeds the Plugins row and the setup
+    wizard's report — and in the log. That is what still covers an all-optional pack
+    like cowork on a fresh server."""
+    import logging as _logging
+
     from graph.plugins import setup_gaps
 
     setup_gaps.reset()
@@ -213,12 +219,32 @@ def test_the_optional_tier_is_reported_too_but_worded_as_degraded(tmp_path, monk
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
     _absent(monkeypatch, "nope-pkg-c")
 
-    res = load_plugins(_cfg())
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        res = load_plugins(_cfg())
     assert next(m for m in res.meta if m["id"] == "softp")["deps_missing"] == ["nope-pkg-c"]
+    assert "nope-pkg-c" in caplog.text and "install-deps softp" in caplog.text
+    assert not _deps_gaps()
+    setup_gaps.reset()
+
+
+def test_a_required_gap_names_missing_optional_deps_once(tmp_path, monkeypatch) -> None:
+    """When the banner does fire, it mentions the optional stragglers too — once, not
+    as "missing optional … optional: …"."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(
+        tmp_path, "bothp", enabled=True,
+        manifest_extra='requires_pip:\n  - "nope-pkg-e"\n  - { pkg: "nope-pkg-f", optional: true }\n',
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    _absent(monkeypatch, "nope-pkg-e", "nope-pkg-f")
+
+    res = load_plugins(_cfg())
+    assert next(m for m in res.meta if m["id"] == "bothp")["deps_missing"] == ["nope-pkg-e", "nope-pkg-f"]
     [gap] = _deps_gaps()
-    assert "optional: nope-pkg-c" in gap["message"]
-    assert "parts of it don't work" in gap["message"]  # not "can't run"
-    assert "required:" not in gap["message"]
+    assert "installed: nope-pkg-e (and optional nope-pkg-f)" in gap["message"]
+    assert gap["message"].count("optional") == 1
     setup_gaps.reset()
 
 

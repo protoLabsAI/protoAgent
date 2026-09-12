@@ -232,7 +232,7 @@ def test_the_real_loader_discovers_the_pack_and_its_verifier(tmp_path, monkeypat
     assert not res.tools and not res.routers
 
 
-def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch):
+def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch, caplog):
     """The first-run exposure this pack is the poster case for (#3450).
 
     Its `requires_pip` is satisfied on the desktop app (the doc stack is frozen in), but
@@ -249,19 +249,24 @@ def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch
     monkeypatch.setattr(installer, "_importable", lambda pkg: False)  # nothing pip-installed
     monkeypatch.setattr(installer, "_frozen_like", lambda: False)  # a server, not the frozen app
 
-    res = loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        res = loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
     meta = next(m for m in res.meta if m["id"] == "cowork")
     assert meta["loaded"], "the pack still loads — a missing doc library must not disable it"
+    # What the Plugins row and the setup wizard's report read — the loader's runtime meta
+    # is the one place a BUNDLED plugin's gap exists, since the inventory has no row for it.
     assert meta["deps_missing"] == ["openpyxl", "pypdf", "python-docx", "python-pptx", "reportlab"]
-    [gap] = [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
-    assert gap["plugin"] == "cowork"
-    assert "install-deps cowork" in gap["message"]
-    assert "optional:" in gap["message"] and "required:" not in gap["message"]  # the whole stack is optional
-
-    # Provisioned (desktop, or a server after install-deps): no banner, no nag.
-    monkeypatch.setattr(installer, "_importable", lambda pkg: True)
-    loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
+    assert "install-deps cowork" in caplog.text  # …and the log names the fix
+    # No GLOBAL banner: every cowork dep is optional-tier, whose contract is "runs
+    # without them" — six of the ten skills need none of these libraries.
     assert not [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
+
+    # Provisioned (desktop, or a server after install-deps + the reload it triggers).
+    monkeypatch.setattr(installer, "_importable", lambda pkg: True)
+    res = loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
+    assert next(m for m in res.meta if m["id"] == "cowork")["deps_missing"] == []
     setup_gaps.reset()
 
 
@@ -392,7 +397,9 @@ NOT_TOOL_NAMES = frozenset(
     }
 )
 
-_WATCH_ARGS_THE_SKILLS_NAME = frozenset({"check", "check_args", "run_prompt", "interval_s", "expires_in_s"})
+# `on_change` is named as `on_change: true` in drop-folder, which no backtick sweep sees —
+# and it is the arg that makes a drop zone fire per change instead of once.
+_WATCH_ARGS_THE_SKILLS_NAME = frozenset({"check", "check_args", "run_prompt", "interval_s", "expires_in_s", "on_change"})
 
 
 def _in_tree_tool_names() -> set[str]:
@@ -423,10 +430,13 @@ def _in_tree_tool_names() -> set[str]:
     return names
 
 
-def _backticked_identifiers() -> set[str]:
+def _backticked_identifiers(root: Path = SKILLS) -> set[str]:
+    """Every file under the skills tree, not just each SKILL.md: a skill's reference
+    sub-files are loaded into the same context, so a stale tool name there misleads the
+    agent exactly as much."""
     out: set[str] = set()
-    for path in sorted(SKILLS.rglob("SKILL.md")):
-        text = path.read_text(encoding="utf-8")
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        text = path.read_text(encoding="utf-8", errors="replace")
         out |= set(re.findall(r"`([a-z_][a-z0-9_]*)`", text))
         out |= set(re.findall(r"`([a-z_][a-z0-9_]*)\(", text))
     return out
@@ -466,6 +476,29 @@ def test_the_watch_args_the_drop_folder_skill_names_are_real_create_watch_params
     assert _WATCH_ARGS_THE_SKILLS_NAME <= params, (
         f"the skills name create_watch args that no longer exist: {sorted(_WATCH_ARGS_THE_SKILLS_NAME - params)}"
     )
+    # Non-vacuous: every arg pinned here is one a skill really names.
+    skill_text = "\n".join(p.read_text(encoding="utf-8") for p in SKILLS.rglob("*.md"))
+    assert all(arg in skill_text for arg in _WATCH_ARGS_THE_SKILLS_NAME)
+
+
+def test_the_artifact_id_the_doc_skills_name_is_a_real_save_file_artifact_param():
+    """docx/xlsx/pptx/pdf tell the agent to pass the same `artifact_id` to save a v2/v3."""
+    tree = ast.parse((REPO / "plugins" / "artifact" / "_tools.py").read_text(encoding="utf-8"))
+    fn = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "save_file_artifact"
+    )
+    params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+    assert "artifact_id" in params, f"save_file_artifact lost the artifact_id param: {sorted(params)}"
+
+
+def test_the_backtick_sweep_reaches_skill_sub_files(tmp_path):
+    """A reference file beside a SKILL.md is swept too (the first cut read SKILL.md only)."""
+    (tmp_path / "pdf").mkdir()
+    (tmp_path / "pdf" / "SKILL.md").write_text("---\nname: pdf\n---\nuse `execute_code`\n", encoding="utf-8")
+    (tmp_path / "pdf" / "reference.md").write_text("then call `a_renamed_tool`\n", encoding="utf-8")
+    assert {"execute_code", "a_renamed_tool"} <= _backticked_identifiers(tmp_path)
 
 
 # ── cowork:folder_changed — fence-honest, glob-aware, change-visible ───────────

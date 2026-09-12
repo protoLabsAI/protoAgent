@@ -568,17 +568,49 @@ def test_install_deps_optional_pip_failure_warns_not_fails(env, monkeypatch, cap
     monkeypatch.setattr(
         installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1 if "pillow>=10" in cmd else 0)
     )
+    failed: list[str] = []
     with caplog.at_level(_logging.WARNING):
-        deps = installer.install_deps("demo_ext")  # no raise
+        deps = installer.install_deps("demo_ext", failed=failed)  # no raise
     assert deps == ["requests>=2"]  # only what actually installed
     assert "optional dep install failed" in caplog.text
+    assert failed == ["pillow"]  # …and named to the caller, not only the log (#3450)
 
 
 def test_install_deps_only_optional_failure_still_succeeds(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [{pkg: 'pillow>=10', optional: true}]\n")
     installer.install(str(repo))
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
-    assert installer.install_deps("demo_ext") == []  # warned, not raised
+    failed: list[str] = []
+    assert installer.install_deps("demo_ext", failed=failed) == []  # warned, not raised
+    # …but distinguishable from "nothing to install": an all-optional plugin (the cowork
+    # pack) whose install failed used to come back as exactly this `[]` (#3450).
+    assert failed == ["pillow"]
+
+
+def test_cli_install_deps_exits_nonzero_when_nothing_landed(monkeypatch, capsys):
+    from graph.plugins import cli as plugin_cli
+
+    def _all_failed(pid, *, failed=None):
+        failed.append("pillow")
+        return []
+
+    monkeypatch.setattr(installer, "install_deps", _all_failed)
+    assert plugin_cli.run_plugin_cli(["install-deps", "demo_ext"]) == 1
+    err = capsys.readouterr().err
+    assert "failed to install" in err and "pillow" in err
+
+
+def test_cli_install_deps_partial_install_names_the_failure_but_succeeds(monkeypatch, capsys):
+    from graph.plugins import cli as plugin_cli
+
+    def _partial(pid, *, failed=None):
+        failed.append("pillow")
+        return ["requests>=2"]
+
+    monkeypatch.setattr(installer, "install_deps", _partial)
+    assert plugin_cli.run_plugin_cli(["install-deps", "demo_ext"]) == 0
+    out = capsys.readouterr()
+    assert "requests>=2" in out.out and "pillow" in out.err
 
 
 def test_install_deps_hard_pip_failure_still_raises(env, monkeypatch):
