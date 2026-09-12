@@ -27,6 +27,11 @@ _VENDOR_FILES = {
 }
 
 
+def _is_int(x) -> bool:
+    """A JSON integer — not a bool (``True`` is an ``int`` in Python) and not a float."""
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
 def _build_view_router():
     """The shell PAGE — served under the PUBLIC ``/plugins/artifact`` prefix
     (plugin-view rule 2): a browser iframe page-load can't carry an Authorization
@@ -143,12 +148,15 @@ def _build_data_router():
         tools can surface render failures back to the agent. Best-effort: unknown id/version
         is a no-op (the panel may be a version behind), never an error.
 
-        ``version`` is the position the panel rendered; the shell also sends that version's
-        ``ts``, because at the max_versions cap a commit between the render and this POST trims
-        the front and shifts every version down a slot — position N then holds the NEXT edit,
-        which would be stamped with this verdict. With ``ts`` the verdict follows the version it
-        was rendered from (and is dropped if that version is gone); without it (an older shell)
-        it stamps by position as before."""
+        ``version`` is the position the panel rendered — and at the max_versions cap a commit
+        between the render and this POST trims the front and shifts every version down a slot,
+        so position N then holds the NEXT edit, which would be stamped with this verdict. So the
+        shell also sends the rendered version's identity: ``n``, its lifetime number, and its
+        ``ts`` — exactly the key ``_store._locate_version`` resolves, trim or no trim (``ts``
+        alone can't: two commits in one millisecond share it). The verdict lands on that version,
+        or is dropped if it's gone. Older cached shells degrade: ``ts`` without ``n`` matches by
+        ts (a same-millisecond pair can still be confused there), and a bare position stamps by
+        position as it always did."""
         art_id = str(body.get("id") or "")
         try:
             version = int(body.get("version") or 0)
@@ -158,8 +166,11 @@ def _build_data_router():
         art = _store._find(store, art_id)
         vers = (art or {}).get("versions") or []
         idx = version - 1 if 1 <= version <= len(vers) else None
-        ts = body.get("ts")
-        if isinstance(ts, int) and not isinstance(ts, bool) and (idx is None or vers[idx].get("ts") != ts):
+        ts, n = body.get("ts"), body.get("n")
+        if _is_int(ts) and _is_int(n):  # the current shell: resolve by identity, never by position
+            pos = _store._locate_version(art, (n, ts)) if art else None
+            idx = pos - 1 if pos else None
+        elif _is_int(ts) and (idx is None or vers[idx].get("ts") != ts):  # an older shell: ts only
             hits = [i for i, v in enumerate(vers) if v.get("ts") == ts]
             idx = hits[0] if len(hits) == 1 else None
         if idx is None:

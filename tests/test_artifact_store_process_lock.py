@@ -451,11 +451,81 @@ def test_a_verdict_posted_after_a_trim_shift_stamps_the_version_that_was_rendere
     assert all("render" not in v for v in art._find(art._read_store(), aid)["versions"])
 
 
+def test_a_same_millisecond_pair_across_a_trim_gets_the_right_verdict_or_none(art, monkeypatch):
+    """Two commits in one millisecond share a ts, so ts alone can't say which of them the panel
+    rendered once a trim has shifted positions. The shell also sends the lifetime number, and
+    with (n, ts) the verdict lands on the version that was rendered — or, once that version is
+    trimmed away, is dropped even though its same-ts twin survives."""
+    aid = _at_the_cap(art, monkeypatch)  # [v1, v2, v3]
+    client = _data_client(art)
+
+    def codes():
+        return [v["code"] for v in art._find(art._read_store(), aid)["versions"]]
+
+    monkeypatch.setattr(art._store, "_now", lambda: 1_000_000)  # every commit from here: one millisecond
+    art.rewrite_artifact.invoke({"code": "<p>A</p>", "artifact_id": aid})  # [v2, v3, A]
+    a = art._find(art._read_store(), aid)
+    rendered = {"version": 3, "n": a["version_count"], "ts": a["versions"][-1]["ts"]}  # the panel renders A @ 3
+    art.rewrite_artifact.invoke({"code": "<p>B</p>", "artifact_id": aid})  # [v3, A, B] — A shifted to 2
+    vers = art._find(art._read_store(), aid)["versions"]
+    assert codes() == ["<p>v3</p>", "<p>A</p>", "<p>B</p>"]
+    assert vers[1]["ts"] == vers[2]["ts"] == rendered["ts"]  # the ambiguity is real: ts can't tell A from B
+
+    r = client.post("/api/plugins/artifact/render-status", json={"id": aid, **rendered, "ok": False, "error": "A threw"})
+    assert r.json()["recorded"] is True
+    vers = art._find(art._read_store(), aid)["versions"]
+    assert vers[1]["code"] == "<p>A</p>" and vers[1]["render"]["error"] == "A threw"
+    assert "render" not in vers[2], "A's verdict landed on B, the newer same-ts version"
+
+    for code in ("<p>C</p>", "<p>D</p>"):  # trim A away, while its same-ts twin B survives
+        art.rewrite_artifact.invoke({"code": code, "artifact_id": aid})
+    assert codes() == ["<p>B</p>", "<p>C</p>", "<p>D</p>"]
+    late = client.post("/api/plugins/artifact/render-status", json={"id": aid, **rendered, "ok": False, "error": "A threw"})
+    assert late.json()["recorded"] is False
+    assert all("render" not in v for v in art._find(art._read_store(), aid)["versions"])
+
+
+def test_an_artifact_deleted_during_the_verdict_wait_returns_no_verdict(art, monkeypatch):
+    """A DELETE landing while a create/edit waits for its render verdict must end the wait with
+    no verdict — not an exception out of the tool that just succeeded."""
+    client = _data_client(art)
+    monkeypatch.setattr(art._render_status, "_RENDER_WAIT_MS", 5000)
+    monkeypatch.setattr(art._render_status, "_LAST_POLL_TS", art._now())  # a panel is polling
+    waiting = threading.Event()
+    real_await = art._render_status._await_render
+
+    def spy(*args, **kwargs):
+        waiting.set()
+        return real_await(*args, **kwargs)
+
+    monkeypatch.setattr(art._render_status, "_await_render", spy)
+    out: dict = {}
+
+    def create():
+        try:
+            out["reply"] = art.show_artifact.invoke({"kind": "react", "code": "x"})
+        except Exception as e:  # noqa: BLE001 — the regression surfaced as an AttributeError here
+            out["error"] = repr(e)
+
+    tool = threading.Thread(target=create)
+    tool.start()
+    assert waiting.wait(10)
+    aid = art._read_store()["current"]
+    assert client.delete(f"/api/plugins/artifact/artifact/{aid}").json()["deleted"] == aid
+    tool.join(10)
+    assert "error" not in out, out
+    assert out["reply"].startswith("Created react artifact") and "render" not in out["reply"], out
+    # and check_artifact's identity lookup copes with a missing artifact too
+    assert art._render_status._version_render(None, 1, (1, 0)) is None
+
+
 def test_the_panel_reports_which_version_it_rendered(art):
-    """The shell sends the rendered version's ts with its verdict, and re-renders when the
-    version in a slot changes — at the cap every new version lands in the SAME slot."""
+    """The shell sends the rendered version's identity (lifetime number + ts) with its verdict,
+    and re-renders when the version in a slot changes — at the cap every new version lands in
+    the SAME slot."""
     js = art._SHELL_JS
-    assert "ts:renderingTs" in js
+    assert "n:renderingN,ts:renderingTs" in js
+    assert "renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;" in js
     assert 'var key=a.id+"@"+vi+"@"+v.ts;' in js and "renderingTs=v.ts;" in js
 
 

@@ -38,7 +38,9 @@ def _version_render(art: dict | None, version: int, key: tuple[int, int] | None 
     """The stored render result for 1-based ``version`` of ``art`` (or None). With ``key``
     (``_store._version_key``) the version is found by identity instead — so a trim that shifted
     positions can't hand back ANOTHER version's verdict — and ``version`` is ignored."""
-    vers = (art or {}).get("versions") or []
+    if not art:
+        return None  # the artifact is gone (deleted meanwhile) — there's no verdict to report
+    vers = art.get("versions") or []
     if key is not None:
         version = _store._locate_version(art, key) or 0
     if 1 <= version <= len(vers):
@@ -62,11 +64,13 @@ def _await_render(art_id: str, version: int, key: tuple[int, int] | None = None)
     deadline = _store._now() + _RENDER_WAIT_MS
     while True:
         art = _store._find(_store._read_store(), art_id)
+        if art is None:
+            return None  # deleted while we waited: no verdict is coming
         r = _version_render(art, version, key)
         if r is not None:
             return r
         if key is not None:
-            pos = _store._locate_version(art, key) if art else None
+            pos = _store._locate_version(art, key)
             if pos is None or pos < len(art["versions"]):
                 return None
         if _store._now() >= deadline:

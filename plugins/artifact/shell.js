@@ -21,7 +21,9 @@
   // it auto-follows new versions). followNewest jumps to the newest artifact on create
   // unless the user navigated to an older one.
   var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "";
-  var renderingId = null, renderingVer = 0, renderingTs = 0;  // the (id, 1-based version, its ts) in the frame — for render-status (#1458)
+  // The version in the frame, for render-status (#1458): its id, 1-based position, and its identity —
+  // lifetime number + ts — which the route resolves even after a trim has shifted the position.
+  var renderingId = null, renderingVer = 0, renderingN = 0, renderingTs = 0;
   var EXT = { html: "html", svg: "svg", mermaid: "mmd", react: "jsx" };
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   // The NESTED artifact iframe (sandboxed, no stylesheet access) gets the live theme
@@ -336,6 +338,7 @@
     // so a position-only key never re-rendered past the cap.
     var key=a.id+"@"+vi+"@"+v.ts;
     if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
+      renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;  // lifetime number (_store._version_key)
       $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code); $frame.style.display="block"; }
   }
 
@@ -449,7 +452,7 @@
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
+      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
       return;
     }
     if(m.type!=="protoArtifact:ask") return;
