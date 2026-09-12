@@ -39,8 +39,8 @@ settings:
   - { key: ask_enabled, label: "Interactive artifacts", type: bool, description: "Let artifacts call back to the agent via window.protoArtifact.ask() — turns them into mini-apps (game NPCs, tutors, generators). Off by default: it lets artifact code trigger LLM calls." }
   - { key: ask_system, label: "Ask system instruction", type: string, description: "Optional system prompt wrapping every window.protoArtifact.ask() call (e.g. a persona or guardrails). Only used when interactive artifacts are on." }
   - { key: ask_max_chars, label: "Ask prompt limit (chars)", type: number, description: "Max characters for an artifact's ask() prompt." }
-  - { key: history, label: "Artifacts kept", type: number, description: "How many artifacts to keep in the panel; the oldest is evicted past this." }
-  - { key: max_versions, label: "Versions per artifact", type: number, description: "Max edit-versions kept per artifact (oldest edits trimmed)." }
+  - { key: history, label: "Artifacts kept", type: number, description: "How many unpinned artifacts to keep in the panel; the oldest is evicted past this. Pinned artifacts don't count toward it." }
+  - { key: max_versions, label: "Versions per artifact", type: number, description: "Max edit-versions kept per artifact, pinned or not (oldest edits trimmed)." }
   - { key: max_pinned, label: "Pinned artifacts", type: number, description: "Max artifacts the agent may pin (pin_artifact). Pinned artifacts are never evicted and don't count toward Artifacts kept; at this cap a new pin is refused. 0 refuses all new pins; existing pins stay protected until unpinned." }
   - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
   - { key: max_blob_kb, label: "Max file size (KB)", type: number, description: "Max size of a file saved via save_file_artifact (stored as a sidecar blob); a larger file is rejected." }
