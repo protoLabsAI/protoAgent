@@ -3029,6 +3029,15 @@ export const api = {
       body: { id },
     });
   },
+  // Run a setup STEP a plugin registered for its setup-gap banner — a `plugin_setup` action's
+  // button ("Download the CLI", "Install Chrome"). The host runs only the callable it holds for
+  // exactly this (plugin, step); `pending` means it started long work the gap reports on.
+  runPluginSetupStep(plugin: string, step: string) {
+    return request<{ ok: boolean; message?: string; pending?: boolean }>(
+      `/api/plugins/${encodeURIComponent(plugin)}/setup-steps/${encodeURIComponent(step)}`,
+      { method: "POST" },
+    );
+  },
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
   },

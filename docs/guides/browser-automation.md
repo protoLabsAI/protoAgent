@@ -11,43 +11,63 @@ It is a thin shell over
 Rust CLI/daemon that drives Chrome over CDP. protoAgent does not reimplement browser
 automation or a renderer — it wraps that CLI as tools, a skill, workflows and a view.
 
-**It ships disabled, and it needs one external binary.** Both on purpose: 17 tools and
-unrestricted network reach are a deliberate choice, and nothing in protoAgent installs a
-third-party native binary for you.
-
-## Install it
-
-```bash
-npm i -g agent-browser     # the CLI (Homebrew, Cargo, and the upstream release binaries work too)
-agent-browser install      # downloads Chrome for Testing — the browser the CLI drives
-agent-browser doctor       # sanity check: environment, Chrome, a live headless launch
-```
-
-Then turn the plugin on:
+**It ships disabled.** On purpose: 17 tools and unrestricted network reach are a deliberate
+choice. Turn it on:
 
 ```yaml
 plugins:
   enabled: [agent_browser]
 ```
 
-If the CLI or its Chrome is missing, the plugin says so where you'll see it: a **setup-gap
-banner** in the console's operator status (`GET /api/runtime/status` → `warnings[]`), with
-a separate line for each — "the CLI isn't on PATH" carries a link into the plugin's own
-settings so you can pin a full path, and "no Chrome to drive" tells you to run
-`agent-browser install`. Both are re-checked whenever a browser command runs, so once you
-fix the setup the next call clears the banner — no restart.
+## The CLI and its Chrome
+
+The plugin needs the `agent-browser` CLI and a Chrome for it to drive. You don't have to
+install either by hand.
+
+- **The CLI downloads itself.** With no `agent-browser` on PATH, the first browser command
+  (or the panel's Start button) downloads the pinned upstream release for your platform. It
+  is **v0.27.1**, the version the plugin is tested against, fetched from the
+  vercel-labs/agent-browser GitHub release. The download is **refused unless its SHA-256
+  matches the value pinned in the plugin**, then moved into place atomically, so a
+  corrupted or tampered download never becomes the binary that runs. It lands in the
+  machine-wide cache (`<box root>/cache/agent-browser/0.27.1/`, see
+  `protoagent config explain`), so every instance on the machine shares one copy. Builds
+  are pinned for macOS (arm64, x64), Linux (x64, arm64, glibc and musl) and Windows x64.
+  On any other platform the banner tells you to install it yourself. Turn
+  **Download the CLI on first use** (`cli_autofetch`) off to never download automatically.
+- **Chrome installs only when you ask.** It's a ~150 MB download into
+  `~/.agent-browser/browsers`, so no tool call ever starts it. The setup banner's
+  **Install Chrome** button runs the CLI's own `agent-browser install` for you. Chrome for
+  Testing has no Linux ARM64 build, so on that platform install Chromium from your package
+  manager instead.
+
+Anything still missing shows up as a **setup-gap banner** in the console, one per concern,
+each with a button that fixes it:
+
+- **"the CLI isn't on PATH"** has **Download agent-browser**, the same pinned download,
+  started now. While it runs the banner says so, and it clears once the CLI is verified.
+  A failed download says why and offers **Retry**. **Set the CLI path** opens the plugin's
+  settings.
+- **"no Chrome to drive"** has **Install Chrome**. The banner shows progress while the
+  install runs, clears when it finishes, and shows the CLI's own error with a Retry if it
+  fails.
+
+Both are also re-checked whenever a browser command runs, so a setup you fix by hand clears
+its banner on the next call, with no restart.
+
+**Your own install always wins.** A CLI on PATH (`npm i -g agent-browser`, Homebrew, Cargo)
+is used ahead of the download, and so is a path you set in the plugin's **`agent-browser`
+binary** setting. A download stands in only for the stock `agent-browser` command name.
 
 ::: tip The desktop app and PATH
-The desktop shell finds a CLI installed by **nvm** only because it inherits your login
-shell's PATH. If a terminal can run `agent-browser` but the desktop app reports the gap,
-set the plugin's **`agent-browser` binary** setting to the absolute path
-(`which agent-browser`).
+The desktop shell sees a CLI installed by **nvm** only because it inherits your login
+shell's PATH. If you'd rather use that install than the download, set the plugin's
+**`agent-browser` binary** setting to its absolute path (`which agent-browser`).
 :::
 
-A managed, pinned-and-checksummed download of the binary is deliberately **not** part of
-this plugin yet — fetching a third-party native binary at runtime is an architectural
-decision (and a policy one), so it's a separate slice behind an ADR. Until then the
-plugin is PATH-only plus that setup gap.
+```bash
+agent-browser doctor       # sanity check, whichever CLI you use: environment, Chrome, a live launch
+```
 
 ## How the agent uses it
 
@@ -149,6 +169,7 @@ Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:
 | Setting | What it does |
 |---|---|
 | `binary` | The `agent-browser` CLI. Override with an absolute path when PATH isn't enough. |
+| `cli_autofetch` | With no CLI on PATH, download the pinned, checksum-verified release on first use (default on). The banner's Download button works either way. |
 | `timeout_s` · `max_response_bytes` | Per-command subprocess timeout; the aggregate stdout+stderr byte cap. |
 | `home_url` | The page the panel opens to. Set it and the panel auto-opens it when nothing is open; blank gives a Start button. |
 | `stream_quality` | Panel JPEG quality (1–100). |
@@ -169,8 +190,12 @@ Start button gets the same flags as one the agent opens.
 Google, Reddit and Cloudflare-fronted sites detect and refuse automated browsers. The
 levers, weakest to strongest:
 
-- `stealth: true` — drops the `navigator.webdriver` automation flag and, when headless,
-  swaps the give-away `HeadlessChrome` User-Agent for a real desktop one;
+- `stealth: true` (off by default) drops the `navigator.webdriver` automation flag.
+  When headless it also swaps the give-away `HeadlessChrome` User-Agent for a real desktop
+  one. That User-Agent claims the **installed** Chrome's major version, as the CLI's doctor
+  reports it, in Chrome's own reduced form (`Chrome/151.0.0.0`), because a UA naming a
+  different Chrome than the one running the page is a tell of its own. If the version
+  can't be read, it falls back to `Chrome/149.0.0.0`;
 - `user_agent` / `browser_args` — the same thing by hand, for fine control;
 - `headed: true` **plus** a logged-in Chrome `profile` — much the most reliable, because
   it is a real window with real session state.
@@ -184,7 +209,10 @@ responsible for what the agent does on a site.
 |---|---|
 | `tools.py` | the 17 tools — subprocess wrappers, the byte cap, the fenced captures |
 | `storage.py` | the capture write fence |
-| `preflight.py` | the setup-gap probe (CLI on PATH, Chrome resolvable) |
+| `preflight.py` | the setup-gap probe (which CLI resolves, does it have a Chrome) and the banners' buttons |
+| `cli_fetch.py` | the pinned, SHA-256-verified CLI download: the pins, the atomic install, the cache |
+| `chrome_install.py` | `agent-browser install`, run only from the Install Chrome button |
+| `setup_steps.py` | what the Download agent-browser / Install Chrome buttons do |
 | `browser_panel.py` | the panel page + its gated nav / ticket / stream routes |
 | `browser_stream.py` | the CDP bridge — frames out, input in, resize + nav re-arm, the WS ticket |
 | `runtime.py` | the launch-flag builder shared by the tools and the panel |

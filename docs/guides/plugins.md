@@ -647,6 +647,21 @@ def _preflight(registry):
     fn("br", None if shutil.which("br") else "beads CLI 'br' not on PATH — install beads-rust and restart")
 ```
 
+**When the fix is a command, give the banner a button that runs it — `plugin_setup`.** A
+`plugin_config` action can only open a settings form; "download the CLI" or "install the
+browser" would still send the operator to a terminal. Register the command as a **setup
+step** with `registry.register_setup_step(step, fn)` and report the gap with
+`action={"kind": "plugin_setup", "step": step, "label": "Download the CLI"}`: the banner
+renders a button, a click POSTs `/api/plugins/<id>/setup-steps/<step>` (operator-bearer
+gated), and the host runs the `fn` it holds for exactly that plugin and step — the action
+is only the step's name. Start long work on a thread, re-report the gap with its progress
+and no action (so it can't be clicked twice), and return
+`{"ok": True, "pending": True, "message": …}`; the console keeps refreshing the banner
+while the step runs, and your re-report on completion clears it or shows the error with a
+Retry. [`register_setup_step()`](../reference/plugin-registry-api.md#registry-register-setup-step)
+has the contract; the bundled `agent_browser` plugin's Download agent-browser and Install
+Chrome buttons are the worked example.
+
 **Routes now hot-reload; surfaces still don't.** On a config reload a newly-enabled
 plugin's **routers, public paths, verifiers, hooks, tools, subagents, chat commands,
 and MCP servers re-apply** without a restart (#1752/#1890). A **surface** does not — the

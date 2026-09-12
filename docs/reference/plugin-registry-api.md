@@ -67,6 +67,7 @@ Host services (agent invoke + event bus) a surface/route can use — the server 
 | [`register_mcp_server()`](#registry-register-mcp-server) | Contribute a **managed MCP server** the agent connects to ([ADR 0019](/adr/0019-plugin-config-settings-secrets)) |
 | [`register_middleware()`](#registry-register-middleware) | Add a plugin-contributed LangGraph `AgentMiddleware` ([ADR 0032](/adr/0032-pluggable-middleware)) |
 | [`register_router()`](#registry-register-router) | Mount a FastAPI `APIRouter` on the server ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
+| [`register_setup_step()`](#registry-register-setup-step) | Register a SETUP STEP: the server-side half of a `plugin_setup` setup-gap action |
 | [`register_skill_dir()`](#registry-register-skill-dir) | Add a directory of `SKILL.md` skills bundled with the plugin |
 | [`register_subagent()`](#registry-register-subagent) | Add a `SubagentConfig` to `SUBAGENT_REGISTRY` ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
 | [`register_surface()`](#registry-register-surface) | Register a lifecycle-managed background surface ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
@@ -324,6 +325,35 @@ plugin-views.md, [ADR 0026](/adr/0026-plugin-contributed-console-surfaces)); a p
 [#1732](https://github.com/protoLabsAI/protoAgent/issues/1732)). The default-deny auth middleware guards all non-public paths
 regardless of prefix.
 
+### `registry.register_setup_step` {#registry-register-setup-step}
+
+```python
+registry.register_setup_step(step: str, fn) -> None
+```
+
+Register a SETUP STEP: the server-side half of a `plugin_setup` setup-gap action.
+
+For a fix that is a COMMAND rather than a setting — download a CLI, install a browser
+— which a banner would otherwise tell the operator to go and run in a terminal.
+Report the gap with `action={"kind": "plugin_setup", "step": step, "label":
+"Download the CLI"}` and the console renders a button on its banner; clicking it
+POSTs `/api/plugins/<this plugin>/setup-steps/<step>` (operator-bearer gated), and
+the host runs `fn()` off the event loop. Only the callable held for exactly this
+(plugin, step) pair ever runs — the action is data naming it, nothing more.
+
+`step` is one lowercase identifier (`[a-z0-9][a-z0-9_-]*`, at most 64 chars; a
+plugin may hold 8). `fn` takes no arguments and returns a short message string, or
+a dict `{"ok": bool, "message": str, "pending": bool}`. Long work belongs on a
+thread: start it, re-report the gap with its progress (and no action, so it can't be
+clicked twice), return `pending: True`, and clear or re-report the gap when it
+finishes — the console keeps refreshing runtime status while a step it started is
+pending. An exception becomes `ok: False` with its message, never a 500. Steps are
+dropped along with the plugin's gaps when it is disabled or uninstalled.
+`register_setup_step` arrived with the `plugin_setup` kind; a plugin that must
+also run on older hosts guards it with `getattr(registry, "register_setup_step",
+None)` — an older host drops the unknown action kind, so the banner degrades to its
+message.
+
 ### `registry.register_skill_dir` {#registry-register-skill-dir}
 
 ```python
@@ -464,7 +494,9 @@ single action dict or a list of them, e.g.
 is closed, server-validated DATA, never behavior — a fixed `kind` from
 `setup_gaps.ACTION_KINDS` (`"plugin_config"` opens THIS plugin's config section
 — the target is forced to this plugin, it can't aim at another;
-`"global_settings"` opens global settings at an optional section `target`) plus
+`"global_settings"` opens global settings at an optional section `target`;
+`"plugin_setup"` names a `step` THIS plugin registered with
+`register_setup_step` and renders as a button that runs it) plus
 optional bounded `label`/`fields` plain text; any other key is dropped. The host
 sanitizes on the way in: an unknown kind, a callback, an arbitrary URL, HTML, or an
 oversized payload is dropped, not stored, and a malformed action never raises into
