@@ -21,6 +21,7 @@ import hashlib
 import locale
 import logging
 import os
+import sys
 import re
 import tempfile
 from dataclasses import dataclass
@@ -464,6 +465,40 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+# Basenames that identify a protoAgent server binary in a command line, beyond the
+# source-checkout ``python -m server`` form: the frozen desktop sidecar
+# (``binaries/protoagent-server``, ``tauri.conf.json`` ``externalBin``) and the
+# ``protoagent`` console script (``protoagent serve`` / ``protoagent up``). Mirrors
+# ``graph/fleet/supervisor._server_binary_names`` — kept local because ``infra`` must
+# not import ``graph`` (graph imports this module at boot).
+_SERVER_BINARY_NAMES = frozenset(
+    n
+    for name in ("protoagent-server", "protoagent_server", "protoagent")
+    for n in (name, f"{name}.exe")
+)
+
+
+def _command_is_protoagent_server(out: str) -> bool:
+    """Whether a ``ps`` command line names a protoAgent server: the module form
+    (``… -m server …``), a python interpreter running something server-ish, or any
+    argv token whose basename is one of :data:`_SERVER_BINARY_NAMES` (the frozen
+    sidecar, the console script). #3482: the frozen ``protoagent-server`` matched
+    none of the old substrings, so every runtime-status poll pruned the desktop
+    fleet's live heartbeats as recycled pids."""
+    if "-m server" in out:
+        return True
+    low = out.lower()
+    if "python" in low and "server" in out:
+        return True
+    frozen_self = os.path.basename(sys.executable).lower() if getattr(sys, "frozen", False) else ""
+    for token in out.split():
+        # Split on either separator: a Windows sidecar path reads fine from any host.
+        base = token.strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if base in _SERVER_BINARY_NAMES or (frozen_self and base == frozen_self):
+            return True
+    return False
+
+
 def _is_protoagent_pid(pid: int) -> bool:
     """PID-reuse guard (the supervisor's #10 pattern): a heartbeat survives a crash, so a
     recycled pid could make a dead sibling look alive. Only trust a pid whose command line
@@ -477,7 +512,7 @@ def _is_protoagent_pid(pid: int) -> bool:
         return True
     if not out.strip():
         return False
-    return "-m server" in out or ("python" in out.lower() and "server" in out)
+    return _command_is_protoagent_server(out)
 
 
 def register_instance(port: int | None = None, identity: str = "") -> None:

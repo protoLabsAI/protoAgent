@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from infra import paths
 
 
@@ -145,6 +147,60 @@ def test_box_only_coresident_is_not_warned(monkeypatch, tmp_path):
     assert paths.colocated_instances()[0]["identity"] == "dev"
     # …but a DISTINCT instance_root is not a data-loss warning.
     assert paths.colocation_warning() is None
+
+
+@pytest.mark.parametrize(
+    "cmdline,expected",
+    [
+        # source checkout, module form
+        ("/Users/kj/.venv/bin/python -m server --port 7871 --ui none", True),
+        ("python3 /x/y/server/__main__.py", True),
+        # the frozen desktop sidecar (#3482) — the case that was pruned as stale
+        ("/Applications/protoAgent.app/Contents/MacOS/protoagent-server --ui console --port 7870", True),
+        ("/Applications/protoAgent.app/Contents/MacOS/protoagent-server --port 7875 --ui none", True),
+        (r"C:\Users\kj\AppData\Local\protoAgent\protoagent-server.exe --port 7870", True),
+        # the console script (`uv tool install`): `protoagent serve` — no "server" substring
+        ("/Users/kj/.local/bin/protoagent serve --port 7870", True),
+        ("/opt/venv/bin/python /opt/venv/bin/protoagent up", True),
+        # a recycled pid running something else entirely
+        ("/usr/bin/vim notes.md", False),
+        ("node /srv/app/server.js", False),  # "server" alone is not enough without python
+        ("/usr/bin/python3 -m http.server 8000", True),  # accepted: python + "server" (pre-existing lean-alive rule)
+    ],
+)
+def test_command_is_protoagent_server(cmdline, expected):
+    assert paths._command_is_protoagent_server(cmdline) is expected
+
+
+def test_frozen_desktop_heartbeat_is_not_pruned(monkeypatch, tmp_path):
+    """#3482: six desktop servers running, `.instances/` empty — the frozen binary's
+    command line matched neither `-m server` nor `python`, so every poll unlinked the
+    siblings' live heartbeats as recycled pids."""
+    import json
+    import subprocess
+
+    home = _home(monkeypatch, tmp_path)
+    d = home / ".instances"
+    d.mkdir()
+    (d / "15285.json").write_text(
+        json.dumps({"pid": 15285, "port": 7875, "identity": "protoEngineer", "instance_root": str(home / "ws" / "pe")})
+    )
+    (d / "999.json").write_text(json.dumps({"pid": 999, "port": 7899, "identity": "ghost", "instance_root": "/x"}))
+    monkeypatch.setattr(paths, "pid_alive", lambda pid: True)
+
+    def fake_ps(argv, **kw):
+        pid = argv[-1]
+        line = {
+            "15285": "/Applications/protoAgent.app/Contents/MacOS/protoagent-server --port 7875 --ui none\n",
+            "999": "/usr/bin/vim notes.md\n",
+        }[pid]
+        return subprocess.CompletedProcess(argv, 0, stdout=line, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_ps)
+    sibs = paths.colocated_instances()
+    assert [s["identity"] for s in sibs] == ["protoEngineer"]
+    assert (d / "15285.json").exists()  # a live frozen sibling keeps its heartbeat
+    assert not (d / "999.json").exists()  # a recycled pid is still pruned
 
 
 def test_stale_heartbeats_pruned(monkeypatch, tmp_path):
