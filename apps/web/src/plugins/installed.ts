@@ -136,6 +136,20 @@ export function uninstallConfirmText(
   return `"${name}" — this deletes its code from disk and removes it from plugins.lock. To keep it installed, Disable it instead.`;
 }
 
+/** Which plugin's dependency install is running: this tab's own request first, else the one
+ *  the server reports (`deps_installing`: another tab, the setup wizard). Null when none is. */
+export function depsInstallBusyId(pendingId?: string | null, serverId?: string | null): string | null {
+  return pendingId || serverId || null;
+}
+
+/** One row's Install deps button while an install may be running. The server runs one pip
+ *  per environment at a time and refuses a second with a 409, so the running row shows
+ *  installing and every other row waits rather than offering a click that can only be refused. */
+export function depsButtonState(rowId: string, busyId: string | null): "idle" | "installing" | "blocked" {
+  if (!busyId) return "idle";
+  return busyId === rowId ? "installing" : "blocked";
+}
+
 /** The toast after an enable/disable toggle. Enabling is the one UI moment to mention a
  *  plugin's missing Python packages (#3450): the operator is looking at the row that has
  *  the Install deps button. An enable written to YAML or by an agent has no such moment;

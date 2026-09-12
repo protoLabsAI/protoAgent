@@ -486,6 +486,27 @@ function handleApiGet(
             tagline: "Run your agent as a Discord bot.",
             bundled: false, installed: true, enabled: true,
           },
+          {
+            // Ships in core and is on: a state pill, never an Install button.
+            id: "cowork", name: "Cowork", category: "Knowledge work", official: true,
+            repo: "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/cowork",
+            tagline: "Office-document skills and knowledge-work habits.",
+            bundled: true, installed: false, enabled: true, enabled_by: [],
+          },
+          {
+            // On only because cowork's `enables:` turned it on (#3450).
+            id: "execute_code", name: "Execute Code", category: "Knowledge work", official: true,
+            repo: "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/execute_code",
+            tagline: "Run Python in a child process with a scrubbed environment and a timeout.",
+            bundled: true, installed: false, enabled: true, enabled_by: ["cowork"],
+          },
+          {
+            // Ships in core and is off by default.
+            id: "telegram", name: "Telegram", category: "Communication", official: true,
+            repo: "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/telegram",
+            tagline: "Chat with your agent from Telegram.",
+            bundled: true, installed: false, enabled: false, enabled_by: [],
+          },
         ],
       };
     case "/api/mcp/catalog": {

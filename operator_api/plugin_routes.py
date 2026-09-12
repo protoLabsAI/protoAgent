@@ -185,6 +185,26 @@ def _refresh_after_deps(plugin_id: str) -> str:
     return "plugin"
 
 
+def _install_deps_and_refresh(plugin_id: str) -> tuple[list[str], list[str], list[str], str]:
+    """One install-deps run: ``(satisfied, failed, newly installed, refresh)``.
+
+    The target environment is held for ALL of it: the pip run AND the refresh that
+    re-imports what pip wrote. Two installs at once could corrupt the environment. One
+    install racing another's refresh could have the reload import a half-written package.
+    So a second request that arrives during either part gets ``DepsInstallBusy`` (409),
+    not a second pip. The hold is reentrant, so ``install_deps`` taking it again inside is
+    a no-op."""
+    failed: list[str] = []
+    newly: list[str] = []
+    with installer.deps_install_lock(plugin_id):
+        satisfied = installer.install_deps(plugin_id, failed=failed, newly_installed=newly)
+        # The deps banner and the row's `deps_missing` are computed at load, so something
+        # has to recompute them once packages land (#3450) — see `_refresh_after_deps` for
+        # which something. Nothing newly landed → nothing changed → nothing to do.
+        refresh = _refresh_after_deps(plugin_id) if newly else "none"
+    return satisfied, failed, newly, refresh
+
+
 def register_plugin_routes(app) -> None:
     """Register `/api/plugins/installed`, `/install`, `/updates`, `/{id}/enabled`,
     `/{id}/update`, and DELETE `/{id}`."""
@@ -262,7 +282,10 @@ def register_plugin_routes(app) -> None:
                 _, missing = installer._deps_satisfied(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
                 item["deps_missing"] = missing
             out.append(item)
-        return {"plugins": out, "bundles": bundle_rows}
+        # The dependency install this server is running, if any: `{id, target, since}` or
+        # null. The console shows that row as installing and every other Install deps
+        # button as waiting, including for an install started in another tab.
+        return {"plugins": out, "bundles": bundle_rows, "deps_installing": installer.deps_install_running()}
 
     @app.post("/api/plugins/install-deps")
     async def _install_deps(body: dict | None = None):
@@ -285,16 +308,15 @@ def register_plugin_routes(app) -> None:
             needs_ack = _consent_needs_ack(source_url)
             if needs_ack is not None:
                 return needs_ack
-        failed: list[str] = []
-        newly: list[str] = []
         try:
-            satisfied = await asyncio.to_thread(installer.install_deps, plugin_id, failed=failed, newly_installed=newly)
+            satisfied, failed, newly, refresh = await asyncio.to_thread(_install_deps_and_refresh, plugin_id)
+        except installer.DepsInstallBusy as exc:
+            # One install per environment at a time. The second request is refused at once
+            # rather than queued behind a pip run that can take minutes (and might be for
+            # another plugin); the console shows the running one as busy and polls.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        # The deps banner and the row's `deps_missing` are computed at load, so something
-        # has to recompute them once packages land (#3450) — see `_refresh_after_deps`
-        # for which something. Nothing newly landed → nothing changed → nothing to do.
-        refresh = await asyncio.to_thread(_refresh_after_deps, plugin_id) if newly else "none"
         # `installed` is what NEWLY landed — a package that was already there isn't one.
         # All-optional deps fail soft, so an empty install can mean "nothing to do" or
         # "everything failed": `failed` tells them apart, and `ok` is false when nothing
@@ -358,22 +380,32 @@ def register_plugin_routes(app) -> None:
         installed = installer.list_installed()
         by_url = {_norm(e.get("source_url")): e["id"] for e in installed if e.get("source_url")}
         by_id = {e["id"] for e in installed}
-        enabled = {p["id"]: bool(p.get("enabled")) for p in (STATE.plugin_meta or [])}
+        meta_by_id = {p["id"]: p for p in (STATE.plugin_meta or []) if p.get("id")}
 
         out = []
         for entry in entries:
             eid = entry.get("id") or ""
             repo = entry.get("repo") or entry.get("install_url") or ""
-            # Bundled built-in (still in the repo's plugins/ tree) — already present, can't
-            # be git-installed over (the installer's built-in guard); show as "Bundled".
-            bundled = bool(eid) and (installer.bundled_plugins_dir() / eid).exists()
+            # Bundled built-in: it ships in core, so it can't be git-installed over. The
+            # installer's own built-in rule decides, so Discover and the installer agree:
+            # the id has a manifest in the bundled tree. A bare dir left over from a
+            # core→standalone extraction (#1731) isn't bundled, and a bundled manifest id is
+            # found whatever its folder is called. The card shows "bundled" and never Install.
+            bundled = bool(eid) and installer._is_builtin(eid)
             inst_id = by_url.get(_norm(repo)) or (eid if eid in by_id else None)
+            # On/off is the loader's answer for the copy that runs, bundled or installed.
+            # A bundled plugin is never "installed", but it IS on or off, and it may be on
+            # only because another bundled plugin's `enables:` turned it on (#3450:
+            # execute_code, by cowork). `enabled_by` says so.
+            mt = meta_by_id.get(eid if bundled else inst_id or "") or {}
+            on = bool(mt.get("enabled"))
             out.append(
                 {
                     **entry,
                     "bundled": bundled,
                     "installed": inst_id is not None,
-                    "enabled": enabled.get(inst_id, False) if inst_id else False,
+                    "enabled": on,
+                    "enabled_by": list(mt.get("enabled_by") or []) if on else [],
                 }
             )
         return {"plugins": out}

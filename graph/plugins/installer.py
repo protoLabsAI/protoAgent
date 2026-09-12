@@ -13,6 +13,7 @@ For *untrusted* code use MCP (out-of-process), not a git plugin.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -279,6 +280,12 @@ _lsremote_cache: dict[tuple[str, str], tuple[float, str]] = {}
 
 class InstallError(RuntimeError):
     """A plugin install/uninstall/sync failed (bad URL, manifest, git, collision)."""
+
+
+class DepsInstallBusy(InstallError):
+    """Another dependency install is already running into the same Python environment.
+    Refused at once rather than queued (see ``deps_install_lock``); the console route
+    answers it with a 409."""
 
 
 class BundleNotInstalledError(InstallError):
@@ -891,7 +898,9 @@ def _frozen_install_missing_deps(
             f"or Settings ▸ Tools), then retry."
         )
     try:
-        pi.install_requirements_into_managed_runtime(to_install)
+        # The same environment Install deps writes into, so the same one-at-a-time hold.
+        with deps_install_lock(pid):
+            pi.install_requirements_into_managed_runtime(to_install)
     except pi.PythonRuntimeError as exc:
         _audit(
             "install_deps",
@@ -1847,7 +1856,74 @@ def recorded_source_url(plugin_id: str) -> str:
     return str((_lock_entry(plugin_id) or {}).get("source_url") or "")
 
 
+def deps_install_target() -> tuple[Path, str]:
+    """The Python environment ``install_deps`` writes into, and its name for messages.
+
+    On the frozen desktop app that is the managed runtime (ADR 0094 P2). The runtime root,
+    not ``current/``, because a reprovision swaps ``current/`` out whole. The ADR 0093
+    wheel-deps dir is only ever filled within the same call, so it rides the same hold.
+    Anywhere else it is this server's own interpreter environment, ``sys.prefix``, which
+    is where ``sys.executable -m pip`` installs."""
+    if _frozen_like():
+        from infra.python_runtime import managed_python_root
+
+        return managed_python_root(), "the managed Python runtime"
+    return Path(sys.prefix), "this server's Python environment"
+
+
+@contextlib.contextmanager
+def deps_install_lock(plugin_id: str):
+    """Hold the deps target environment for one install, or raise :class:`DepsInstallBusy`
+    at once when an install into it is already running: in this process (a second click,
+    another tab, another plugin's Install deps) or in another one (a sibling instance on
+    the same venv, a fleet member on the same managed runtime, the CLI).
+
+    It refuses rather than queueing, because a queued HTTP request would sit behind a pip
+    run that can take minutes, and could be for a different plugin whose result it
+    couldn't share. Reentrant on the owning thread: the route holds it across install AND
+    refresh, and ``install_deps`` takes it again inside."""
+    from infra.install_lock import InstallBusy, install_lock
+
+    env, label = deps_install_target()
+    with contextlib.ExitStack() as stack:
+        try:
+            info = stack.enter_context(install_lock(env, label=label, what=plugin_id))
+        except InstallBusy as exc:
+            raise DepsInstallBusy(str(exc)) from exc
+        yield info
+
+
+def deps_install_running() -> dict | None:
+    """``{"id", "target", "since"}`` for the dependency install this process is running, or
+    None. The console uses it to show a busy row, including for an install started in
+    another tab. It only sees this process: see ``infra.install_lock.holder``."""
+    from infra.install_lock import holder
+
+    env, label = deps_install_target()
+    info = holder(env)
+    if info is None:
+        return None
+    return {"id": str(info.get("what") or ""), "target": label, "since": info.get("since")}
+
+
+def _host_pip() -> list[str]:
+    """The argv prefix for pip in THIS interpreter's environment, the target
+    ``deps_install_target`` names outside the frozen app. It is a seam so that a test can
+    stand a real pip-like process in for pip without touching an actual environment."""
+    return [sys.executable, "-m", "pip"]
+
+
 def install_deps(
+    plugin_id: str, *, failed: list[str] | None = None, newly_installed: list[str] | None = None
+) -> list[str]:
+    """``_install_deps`` holding the target environment (``deps_install_lock``), so two
+    installs never run pip into one environment at once. Raises :class:`DepsInstallBusy`
+    when one already is."""
+    with deps_install_lock(plugin_id):
+        return _install_deps(plugin_id, failed=failed, newly_installed=newly_installed)
+
+
+def _install_deps(
     plugin_id: str, *, failed: list[str] | None = None, newly_installed: list[str] | None = None
 ) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
@@ -1996,7 +2072,7 @@ def install_deps(
     newly: list[str] = []
     if to_pip:
         proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--", *to_pip],
+            [*_host_pip(), "install", "--", *to_pip],
             capture_output=True,
             text=True,
         )
@@ -2009,7 +2085,7 @@ def install_deps(
         # Best-effort (#1953): the plugin runs without these, so a failure is
         # audited + warned, never fatal — the hard deps above already landed.
         proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--", *to_pip_soft],
+            [*_host_pip(), "install", "--", *to_pip_soft],
             capture_output=True,
             text=True,
         )

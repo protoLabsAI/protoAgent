@@ -77,6 +77,31 @@ test("Discover cards show what a plugin adds and link its docs, like the website
   await expect(page.locator(".plugin-card", { hasText: "Artifact" })).toBeVisible();
 });
 
+test("Discover never offers Install for a bundled plugin, and shows its real on/off state", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
+  await page.locator(".pl-tabs").getByRole("tab", { name: "Discover", exact: true }).click();
+  // By the card's title, exactly: "cowork" also appears in Execute Code's reason line.
+  const card = (name: string) => page.locator(".plugin-card").filter({ has: page.getByText(name, { exact: true }) });
+  const install = (name: string) => card(name).getByRole("button", { name: "Install", exact: true });
+
+  // Ships in core and on.
+  await expect(card("Cowork").locator(".plugin-card-foot")).toContainText("bundled · on");
+  await expect(install("Cowork")).toHaveCount(0);
+  // On only because cowork enables it, and the card says so.
+  await expect(card("Execute Code").locator(".plugin-card-foot")).toContainText("bundled · on");
+  await expect(card("Execute Code").locator(".plugin-card-why")).toHaveText("on because cowork enables it");
+  await expect(install("Execute Code")).toHaveCount(0);
+  // Ships in core, off: still no Install. It's turned on from the Installed tab.
+  await expect(card("Telegram").locator(".plugin-card-foot")).toContainText("bundled · off");
+  await expect(card("Telegram").locator(".plugin-card-why")).toHaveCount(0);
+  await expect(install("Telegram")).toHaveCount(0);
+  // A git-installable plugin still offers Install; an installed one says it's on.
+  await expect(install("Artifact")).toBeVisible();
+  await expect(card("Discord").locator(".plugin-card-foot")).toContainText("installed · on");
+});
+
 test("Discover install → Configure dialog hydrates without a page refresh (#1643)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();

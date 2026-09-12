@@ -83,9 +83,9 @@ def test_identity_and_trust_defaults():
     # ON by default (Josh's call), like notes/docs/artifact/craft — every agent gets the
     # document skills; `plugins.disabled: [cowork]` is the off switch.
     assert m["enabled"] is True
-    assert isinstance(m["config_section"], str)
-    # One config key, declared with a default so Settings can render it.
-    assert m["config"] == {"output_dir": ""}
+    # No config. `output_dir` was declared through 0.4.0 and nothing ever read it; the
+    # skills pointed at a value the agent had no way to see.
+    assert "config" not in m and "config_section" not in m
 
 
 def test_supersedes_names_the_retired_standalone_repo():
@@ -311,6 +311,36 @@ def test_an_explicit_disable_contributes_nothing(tmp_path, monkeypatch):
     assert not res.skill_dirs and not res.goal_verifiers
 
 
+def test_a_config_that_still_sets_output_dir_is_silently_ignored(tmp_path, monkeypatch, caplog):
+    """`cowork.output_dir` shipped through 0.4.0 and was removed as dead config. An
+    instance whose YAML still sets it must load exactly as before: the pack runs, nothing
+    warns, no plugin claims the section (so no Settings group renders it), and nothing
+    resolves it into the plugin config a registry would read."""
+    import logging
+
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+    from graph.plugins.pconfig import discover_plugin_config
+
+    root = _isolated_bundled_root(tmp_path, monkeypatch)
+    cfg_file = tmp_path / "langgraph-config.yaml"
+    cfg_file.write_text("cowork:\n  output_dir: /somewhere/else\n", encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        config = LangGraphConfig.from_yaml(cfg_file)
+        res = loader.load_plugins(config)
+
+    meta = next(m for m in res.meta if m["id"] == "cowork")
+    assert meta["loaded"] and not meta.get("error")
+    assert "cowork" not in config.plugin_config
+    assert "cowork" not in {s.plugin_id for s in discover_plugin_config([root], set(), set())}
+    # Nothing about the stale key or the section. (The optional-deps warning a venv without
+    # the document libraries logs for cowork is unrelated, and fine.)
+    noise = [
+        m for m in (r.getMessage() for r in caplog.records) if "output_dir" in m or ("cowork" in m and "config" in m)
+    ]
+    assert not noise, noise
+
+
 def test_slash_tokens_not_shadowed_by_core_subagents():
     """On by default, `/daily-brief` and `/setup-cowork` reach every agent — and slash
     precedence puts subagents above skills, so a same-token core subagent would silently
@@ -412,7 +442,6 @@ NOT_TOOL_NAMES = frozenset(
         "interval_s",
         "expires_in_s",
         "artifact_id",  # save_file_artifact param
-        "output_dir",  # this plugin's config key
         "requires_pip",  # manifest field
         "csv",  # stdlib / libraries the skills' execute_code snippets use
         "openpyxl",

@@ -372,7 +372,11 @@ export type CatalogPlugin = {
   docs?: string;
   bundled: boolean;
   installed: boolean;
+  // The loader's on/off for the copy that runs, bundled or installed.
   enabled: boolean;
+  // Which bundled plugins' `enables:` turned this one on (#3450: cowork turns execute_code on).
+  // Empty when it's on by its own default or the operator's choice. Absent on older backends.
+  enabled_by?: string[];
 };
 
 // A value the operator must supply before a catalog server is added — a filesystem

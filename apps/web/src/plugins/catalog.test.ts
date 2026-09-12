@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { catalogCategories, filterCatalog } from "./catalog";
+import { catalogCardState, catalogCategories, filterCatalog } from "./catalog";
 import type { CatalogPlugin } from "../lib/types";
 
 const mk = (over: Partial<CatalogPlugin>): CatalogPlugin => ({
@@ -45,6 +45,45 @@ describe("filterCatalog", () => {
     expect(filterCatalog(CAT, "", "Product").map((p) => p.id)).toEqual(["pm"]);
     expect(filterCatalog(CAT, "chat", "Communication").map((p) => p.id)).toEqual(["discord"]);
     expect(filterCatalog(CAT, "chat", "Product")).toEqual([]);
+  });
+});
+
+describe("catalogCardState (the Discover card's action slot)", () => {
+  it("never offers Install for a plugin that ships in core, whether it's on or off", () => {
+    expect(catalogCardState(mk({ bundled: true, enabled: true })).kind).toBe("state");
+    expect(catalogCardState(mk({ bundled: true, enabled: false })).kind).toBe("state");
+    // A leftover superseded git copy can make a bundled row "installed" too: still no Install.
+    expect(catalogCardState(mk({ bundled: true, installed: true, enabled: true })).kind).toBe("state");
+  });
+
+  it("shows a bundled plugin's real on/off state, not a bare 'bundled'", () => {
+    expect(catalogCardState(mk({ name: "Cowork", bundled: true, enabled: true }))).toEqual({
+      kind: "state",
+      label: "bundled · on",
+      tone: "success",
+      title: "Cowork ships with protoAgent and is on.",
+      why: undefined,
+    });
+    expect(catalogCardState(mk({ name: "Telegram", bundled: true, enabled: false }))).toMatchObject({
+      label: "bundled · off",
+      tone: "muted",
+    });
+  });
+
+  it("says why a bundled plugin is on when another plugin's enables: turned it on (#3450)", () => {
+    const s = catalogCardState(mk({ name: "Execute Code", bundled: true, enabled: true, enabled_by: ["cowork"] }));
+    expect(s).toMatchObject({ kind: "state", label: "bundled · on", why: "on because cowork enables it" });
+    expect(catalogCardState(mk({ bundled: true, enabled: true, enabled_by: ["a", "b"] }))).toMatchObject({
+      why: "on because a, b enable it",
+    });
+    // An off plugin never claims a reason to be on (older backends may send a stale list).
+    expect(catalogCardState(mk({ bundled: true, enabled: false, enabled_by: ["cowork"] }))).not.toHaveProperty("why");
+  });
+
+  it("offers Install for a git-installable plugin, and says on/off once it's installed", () => {
+    expect(catalogCardState(mk({}))).toEqual({ kind: "install" });
+    expect(catalogCardState(mk({ installed: true, enabled: true }))).toMatchObject({ label: "installed · on", tone: "success" });
+    expect(catalogCardState(mk({ installed: true, enabled: false }))).toMatchObject({ label: "installed · off", tone: "muted" });
   });
 });
 

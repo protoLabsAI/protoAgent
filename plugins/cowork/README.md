@@ -4,8 +4,10 @@ The skill pack behind protoAgent's **Cowork archetype**
 ([ADR 0083](../../docs/adr/0083-cowork-mode-archetype.md)) — for knowledge workers
 graduating from Claude Cowork to a self-hosted agent whose deliverables are real files.
 
-Skills plus **one** goal/watch verifier (`cowork:folder_changed`) and one config key
-(`cowork.output_dir`): no tools, routes, views, surfaces, MCP servers, secrets, or events.
+Skills plus **one** goal/watch verifier (`cowork:folder_changed`): no tools, routes, views,
+surfaces, MCP servers, config, secrets, or events. Deliverables land in the operator's
+fenced work folders (Settings ▸ Tools). An old config that still sets `cowork.output_dir`
+is ignored: that key was never read, and it was removed after 0.4.0.
 
 ## Skills
 

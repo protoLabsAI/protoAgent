@@ -2936,9 +2936,13 @@ export const api = {
     // `bundles` = the lock's bundles[] registry verbatim (#2718) — the authoritative
     // installed-bundle list (a bundle whose members were all removed individually
     // still has a row and is still uninstallable). Optional: absent on older backends.
-    return request<{ plugins: InstalledPlugin[]; bundles?: { id: string; name?: string }[] }>(
-      "/api/plugins/installed",
-    );
+    // `deps_installing`: the dependency install this server is running (one per environment
+    // at a time), so every tab can show it busy. Null when idle; absent on older backends.
+    return request<{
+      plugins: InstalledPlugin[];
+      bundles?: { id: string; name?: string }[];
+      deps_installing?: { id: string; target?: string; since?: number } | null;
+    }>("/api/plugins/installed");
   },
   // The curated official-plugin directory (Discover, ADR 0059), merged with install
   // state. One-click install posts each entry's `repo` to installPlugin().

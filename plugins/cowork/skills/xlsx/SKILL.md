@@ -7,7 +7,7 @@ tools: [execute_code, save_file_artifact]
 # Spreadsheets with openpyxl
 
 Write the workbook with `execute_code` using `openpyxl`, save into the fenced
-project folder (or configured `output_dir`), report the path. Plain `.csv`
+project folder (if there are several, ask once which and remember it), report the path. Plain `.csv`
 /`.tsv` work uses the stdlib `csv` module — don't drag a workbook library
 into a text-file job.
 

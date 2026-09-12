@@ -7,8 +7,8 @@ tools: [execute_code, save_file_artifact]
 # Word documents with python-docx
 
 Deliverables are files: write the document with `execute_code` using
-`python-docx`, save it into the operator's fenced project folder (or the
-plugin's configured `output_dir`), and report the saved path. If the library
+`python-docx`, save it into the operator's fenced project folder (if there
+are several, ask once which and remember it), and report the saved path. If the library
 is missing, say so — it's declared in this plugin's `requires_pip` and the
 operator installs it once from the console.
 

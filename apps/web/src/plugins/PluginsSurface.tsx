@@ -19,7 +19,7 @@ import { PluginSettingsDialog } from "./PluginSettingsDialog";
 import { useTrustAck } from "./TrustAckDialog";
 import { PluginFreshness } from "./PluginFreshness";
 import { usePluginManage, usePluginRefresh } from "./usePluginManage";
-import { catalogCategories, filterCatalog } from "./catalog";
+import { catalogCardState, catalogCategories, filterCatalog } from "./catalog";
 import {
   bundleLabel,
   distinctBundles,
@@ -33,9 +33,9 @@ import {
   type InstalledSortKey,
   type InstalledStatus,
 } from "./installed";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { mergeDeps } from "../setup/depsReport";
-import { toggleToast } from "./installed";
+import { depsButtonState, depsInstallBusyId, toggleToast } from "./installed";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
 
 type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
@@ -71,6 +71,7 @@ function PluginRow({
   depsMissing,
   onInstallDeps,
   installingDeps,
+  depsBlockedBy,
 }: {
   p: Plugin;
   /** bundle provenance label (ADR 0040) — set when a bundle installed this plugin */
@@ -89,6 +90,8 @@ function PluginRow({
   depsMissing?: string[];
   onInstallDeps?: (p: Plugin) => void;
   installingDeps?: boolean;
+  /** another plugin's dependency install is running; one at a time, so this row waits */
+  depsBlockedBy?: string | null;
 }) {
   const on = p.enabled;
   const [configOpen, setConfigOpen] = useState(false);
@@ -166,8 +169,13 @@ function PluginRow({
               variant="default"
               size="sm"
               loading={installingDeps}
+              disabled={Boolean(depsBlockedBy)}
               onClick={() => onInstallDeps(p)}
-              title={`Install ${depsMissing.join(", ")}`}
+              title={
+                depsBlockedBy
+                  ? `Waiting: ${depsBlockedBy}'s dependencies are installing (one install at a time)`
+                  : `Install ${depsMissing.join(", ")}`
+              }
             >
               Install deps
             </Button>
@@ -360,8 +368,21 @@ function LocalTab() {
       }
       refreshAll();
     },
-    onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install deps", message: `${p.name}: ${errMsg(err)}` }),
+    onError: (err: unknown, p) => {
+      // One install per environment at a time: the server refused this one because another
+      // is running (another tab, the wizard, another plugin). Not a failure. Refreshing
+      // the inventory picks up the running install, and the rows show it until it ends.
+      if (err instanceof ApiError && err.status === 409) {
+        toast({ tone: "info", title: "A dependency install is already running", message: `${p.name}: ${err.message}` });
+        refreshAll();
+        return;
+      }
+      toast({ tone: "error", title: "Couldn't install deps", message: `${p.name}: ${errMsg(err)}` });
+    },
   });
+  // Which row's install is running: this tab's own request, else the one the server reports
+  // (the inventory polls while it does). Every other row's Install deps waits for it.
+  const depsBusy = depsInstallBusyId(installDeps.isPending ? installDeps.variables?.id : null, installed.data?.deps_installing?.id);
 
   // ── Bundle-level lifecycle (#2718, ADR 0049 D4) — the provenance chips' bundles,
   // now actionable: Update re-pins every member at the bundle's ref (retiring ones
@@ -509,7 +530,8 @@ function LocalTab() {
       removing={removingId === row.p.id}
       depsMissing={row.depsMissing}
       onInstallDeps={(pl) => installDeps.mutate(pl)}
-      installingDeps={installDeps.isPending && installDeps.variables?.id === row.p.id}
+      installingDeps={depsButtonState(row.p.id, depsBusy) === "installing"}
+      depsBlockedBy={depsButtonState(row.p.id, depsBusy) === "blocked" ? depsBusy : null}
     />
   );
 
@@ -687,6 +709,21 @@ function LocalTab() {
   );
 }
 
+// A Discover card's action slot: the state pill for a bundled or installed plugin, else
+// the Install button passed as children.
+function CatalogCardFoot({ state, children }: { state: ReturnType<typeof catalogCardState>; children: JSX.Element }) {
+  if (state.kind === "install") return children;
+  return (
+    <span className="plugin-card-state" title={state.title}>
+      <StatusPill label={state.label} tone={state.tone} />
+    </span>
+  );
+}
+
+function CatalogCardWhy({ state }: { state: ReturnType<typeof catalogCardState> }) {
+  return state.kind === "state" && state.why ? <p className="plugin-card-why">{state.why}</p> : null;
+}
+
 // Discover — the in-app official-plugin directory (ADR 0059): browse the curated
 // catalog + one-click install (runtime install, works on every surface incl. the
 // frozen desktop app via ADR 0058).
@@ -772,6 +809,8 @@ function DiscoverTab() {
                 {p.category ? <span className="plugin-chip">{p.category}</span> : null}
               </div>
               <p className="plugin-card-tagline">{p.tagline}</p>
+              {/* Why a bundled plugin is on when the operator didn't turn it on (#3450). */}
+              <CatalogCardWhy state={catalogCardState(p)} />
               {p.adds?.length ? (
                 <div className="plugin-card-adds" aria-label="adds">
                   {p.adds.map((a) => (
@@ -790,15 +829,13 @@ function DiscoverTab() {
                     </a>
                   ) : null}
                 </span>
-                {p.bundled ? (
-                  <StatusPill label="bundled" tone="muted" />
-                ) : p.installed ? (
-                  <StatusPill label={p.enabled ? "installed · on" : "installed"} tone="success" />
-                ) : (
+                {/* Something that ships in core is never offered Install: it shows its real
+                    on/off state instead, as does an installed plugin. */}
+                <CatalogCardFoot state={catalogCardState(p)}>
                   <Button type="button" loading={installingRepo === p.repo} disabled={install.isPending} onClick={() => install.mutate(p)}>
                     {installingRepo === p.repo ? null : <Download size={14} />} Install
                   </Button>
-                )}
+                </CatalogCardFoot>
               </div>
             </div>
           ))}
