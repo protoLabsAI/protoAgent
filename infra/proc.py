@@ -596,8 +596,8 @@ def _owner_alive(pid: int, recorded_start: float | None) -> bool:
         return False
     if recorded_start is None:
         return True
-    now = _proc_start(pid)
-    return now is None or abs(now - float(recorded_start)) <= _START_TOLERANCE
+    started = _proc_start(pid)
+    return started is None or abs(started - float(recorded_start)) <= _START_TOLERANCE
 
 
 def _is_that_group(pgid: int, tracked_at: float) -> bool:

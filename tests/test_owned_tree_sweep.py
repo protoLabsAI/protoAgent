@@ -13,6 +13,8 @@ SIGKILL is the point.
 
 from __future__ import annotations
 
+import ast
+import asyncio
 import inspect
 import json
 import os
@@ -230,12 +232,71 @@ def test_the_sweep_never_reads_its_own_record_as_a_dead_owner(box):
     untrack_tree(child.pid)
 
 
-def test_the_server_sweeps_at_boot_and_keeps_sweeping():
-    """Wiring: a boot sweep in startup, a periodic task after it, cancelled at shutdown."""
+def test_one_sweep_logs_what_it_reaped_and_never_raises(monkeypatch, caplog):
     import server
 
-    src = inspect.getsource(server)
-    assert "await asyncio.to_thread(sweep_orphaned_trees)" in src
-    assert "_ORPHAN_SWEEP_TASK = asyncio.create_task(_sweep_orphaned_trees_forever())" in src
-    assert "_ORPHAN_SWEEP_TASK.cancel()" in src
+    monkeypatch.setattr(proc_mod, "sweep_orphaned_trees", lambda **k: 3)
+    with caplog.at_level("WARNING", logger="protoagent.server"):
+        assert asyncio.run(server._sweep_orphaned_trees_once()) == 3
+    assert "reaped 3 orphaned process tree(s)" in caplog.text
+
+    def _boom(**k):
+        raise RuntimeError("ps exploded")
+
+    monkeypatch.setattr(proc_mod, "sweep_orphaned_trees", _boom)
+    assert asyncio.run(server._sweep_orphaned_trees_once()) == 0  # logged, not raised
+
+
+def test_the_periodic_sweep_keeps_ticking_through_a_failure_and_stops_on_cancel(monkeypatch):
+    import server
+
+    ticks: list[int] = []
+
+    def _sweep(**k):
+        ticks.append(1)
+        if len(ticks) == 2:
+            raise RuntimeError("one bad tick")
+        return 0
+
+    monkeypatch.setattr(proc_mod, "sweep_orphaned_trees", _sweep)
+
+    async def _run():
+        task = asyncio.create_task(server._sweep_orphaned_trees_forever(interval=0.01))
+        for _ in range(200):
+            if len(ticks) >= 4:
+                break
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+    assert len(ticks) >= 4, "the loop stopped after a failing tick"
+
+
+def _calls_in(func: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Call):
+            f = node.func
+            names.add(f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", ""))
+    return names
+
+
+def test_the_servers_startup_and_shutdown_hooks_run_the_sweep():
+    """The real handlers (nested in app construction, so no harness boots them) must
+    run a sweep, start the periodic task, and cancel it — checked on their parsed
+    bodies, so reformatting can't break this but dropping the wiring does."""
+    import server
+
+    tree = ast.parse(inspect.getsource(server))
+    hooks = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
+    startup, shutdown = hooks["_scheduler_startup"], hooks["_scheduler_shutdown"]
+    assert {"_sweep_orphaned_trees_once", "_sweep_orphaned_trees_forever", "create_task"} <= _calls_in(startup)
+    cancels = [
+        n for n in ast.walk(shutdown)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "cancel"
+        and isinstance(n.func.value, ast.Name) and n.func.value.id == "_ORPHAN_SWEEP_TASK"
+    ]
+    assert cancels, "shutdown no longer cancels the periodic sweep"
     assert server.ORPHAN_SWEEP_INTERVAL_S > 0

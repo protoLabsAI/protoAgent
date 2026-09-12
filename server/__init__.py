@@ -242,20 +242,28 @@ ORPHAN_SWEEP_INTERVAL_S = 600.0
 _ORPHAN_SWEEP_TASK: "asyncio.Task | None" = None
 
 
+async def _sweep_orphaned_trees_once() -> int:
+    """One orphaned-tree sweep (#3463), off the loop — it shells out to `ps` and waits a
+    grace before SIGKILL. Logs what it reaped; never raises. Returns the count."""
+    try:
+        from infra.proc import sweep_orphaned_trees
+
+        reaped = await asyncio.to_thread(sweep_orphaned_trees)
+    except Exception:  # noqa: BLE001 — housekeeping must never take a caller down
+        log.exception("[lifecycle] orphaned-tree sweep failed")
+        return 0
+    if reaped:
+        log.warning("[lifecycle] reaped %d orphaned process tree(s) a dead owner left running", reaped)
+    return reaped
+
+
 async def _sweep_orphaned_trees_forever(interval: float = ORPHAN_SWEEP_INTERVAL_S) -> None:
     """Re-run the orphaned-tree sweep every ``interval`` seconds for the life of the
     process (#3463): the boot sweep only reaches owners that died before this process
-    started. Off the loop; a failing tick is logged and the next one still runs."""
-    from infra.proc import sweep_orphaned_trees
-
+    started. A failing tick is logged and the next one still runs."""
     while True:
         await asyncio.sleep(interval)
-        try:
-            reaped = await asyncio.to_thread(sweep_orphaned_trees)
-            if reaped:
-                log.warning("[lifecycle] reaped %d orphaned process tree(s) a dead owner left running", reaped)
-        except Exception:  # noqa: BLE001 — housekeeping must never end the loop
-            log.exception("[lifecycle] orphaned-tree sweep failed")
+        await _sweep_orphaned_trees_once()
 
 
 def build_uvicorn_server(config: "uvicorn.Config") -> "uvicorn.Server":
@@ -825,16 +833,9 @@ def _main():
         # the #3428 teardown, so its ACP / shell trees still run at ppid=1. Sweep the
         # machine's records now, and keep sweeping — a sibling can die at any time. Off
         # the loop: the sweep shells out to `ps` and waits a grace before SIGKILL.
-        try:
-            from infra.proc import sweep_orphaned_trees
-
-            reaped = await asyncio.to_thread(sweep_orphaned_trees)
-            if reaped:
-                log.warning("[lifecycle] reaped %d orphaned process tree(s) a dead owner left running", reaped)
-            global _ORPHAN_SWEEP_TASK
-            _ORPHAN_SWEEP_TASK = asyncio.create_task(_sweep_orphaned_trees_forever())
-        except Exception:
-            log.exception("[lifecycle] orphaned-tree sweep failed")
+        global _ORPHAN_SWEEP_TASK
+        await _sweep_orphaned_trees_once()
+        _ORPHAN_SWEEP_TASK = asyncio.create_task(_sweep_orphaned_trees_forever())
 
         # First-boot-after-update reconcile (version-coherence P2): stamp this
         # boot's app version beside fleet.json and log the transition when it
