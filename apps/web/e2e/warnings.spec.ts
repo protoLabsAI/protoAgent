@@ -1,17 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { SETUP_GAPS_GOLDEN } from "./fixtures.mjs";
+import { routeSnapshot } from "./routeSnapshot";
 
 // Runtime-status `warnings` (#706 co-located instances etc.) render as a slim
 // alert strip under the topbar; server-driven, so no warnings → no strip.
 
 test("runtime warnings render as the shell alert strip", async ({ page }) => {
-  await page.route("**/api/runtime/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.warnings = ["Another running instance shares this agent's data (~/.protoagent): roxy (pid 12345, port 7871)."];
-    await route.fulfill({ json });
-  });
+  await routeStatus(page, () => ({
+    warnings: ["Another running instance shares this agent's data (~/.protoagent): roxy (pid 12345, port 7871)."],
+  }));
   await page.goto("/app/", { waitUntil: "load" });
 
   const banner = page.locator(".shell-warning-banner");
@@ -57,17 +55,15 @@ const NO_GAPS: GapFields = { warnings: [], setup_gaps: [] };
 /** Serve `fields(agent)` as each agent's runtime status — the hub (`"host"`) at
  *  /api/runtime/status, a fleet member at /agents/<slug>/api/runtime/status (what slug routing
  *  requests). The real status body is snapshotted ONCE, before routing, and fulfilled
- *  synthetically: proxying via `route.fetch()` inside the handler holds an APIResponse bound to
- *  the page lifecycle, and a `page.reload()` that supersedes an in-flight status poll disposes it
- *  mid-read ("Response has been disposed"). `fields` is read at call time, so a spec can change
- *  what the next poll/reload sees; a field set to `undefined` is omitted from the payload. */
+ *  synthetically (routeSnapshot.ts — a per-request `route.fetch()` proxy can have its body
+ *  disposed mid-read when the test tears down). `fields` is read at call time, so a spec can
+ *  change what the next poll/reload sees; a field set to `undefined` is omitted from the payload. */
 async function routeStatus(page: Page, fields: (agent: string) => Partial<GapFields>, omit: string[] = []) {
-  const base = await (await page.request.get("/api/runtime/status")).json();
-  for (const key of omit) delete base[key];
-  await page.route("**/api/runtime/status", async (route) => {
-    const member = /\/agents\/([^/]+)\/api\/runtime\/status/.exec(route.request().url());
+  await routeSnapshot(page, "/api/runtime/status", (base: Record<string, unknown>, request) => {
+    for (const key of omit) delete base[key];
+    const member = /\/agents\/([^/]+)\/api\/runtime\/status/.exec(request.url());
     const agent = member ? decodeURIComponent(member[1]) : "host";
-    await route.fulfill({ json: { ...base, ...fields(agent) } });
+    return { ...base, ...fields(agent) };
   });
 }
 
