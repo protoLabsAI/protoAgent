@@ -256,9 +256,10 @@ def run_plugin_cli(argv: list[str]) -> int:
                 # Only the ignored copy went — the bundled one keeps running, and nothing
                 # keyed by the id was touched.
                 print(
-                    f"  that was the superseded copy — {args.id} ships with protoAgent (bundled "
-                    f"v{rep['superseded_by_bundled']}) and keeps running; its enabled state, config "
-                    "and secrets are unchanged" + (" (--purge doesn't apply to them)." if args.purge else ".")
+                    f"  that was an installed copy the loader ignores — {args.id} ships with protoAgent "
+                    f"(bundled v{rep['superseded_by_bundled']}) and keeps running; its enabled state, "
+                    "config and secrets are unchanged"
+                    + (" (--purge doesn't apply to them)." if args.purge else ".")
                 )
                 # Out-of-process, this CLI can't see what a running server imported. A server
                 # that hasn't restarted since protoAgent began shipping the plugin may still

@@ -127,29 +127,54 @@ def superseding_plugin(url: str) -> PluginManifest | None:
     return next((m for m in _bundled_index().values() if m.supersedes and supersedes_source(m, url)), None)
 
 
+# config path → ((mtime, size), override). `live_plugins_dir()` resolves the override on
+# every call and a plugins request makes several, so parsing the YAML each time is real
+# work: 11.7 ms per call against a 30 KB config here, ~6 calls on GET /api/plugins/installed.
+_PLUGINS_DIR_CACHE: dict[str, tuple[tuple[int, int], str]] = {}
+
+
 def configured_plugins_dir() -> str:
     """``plugins.dir`` from the live config file — the operator's override of the live
     plugins root — read without a config object (the ``configured_allowlist`` pattern).
-    ``""`` when unset or unreadable."""
+    ``""`` when unset, unreadable, or refused (a relative value). Cached per config file
+    and re-read the moment it changes, like ``_bundled_index``."""
     try:
-        import yaml
-
         from graph.config_io import config_yaml_path
 
         cfg_path = config_yaml_path()
-        if not cfg_path.exists():
-            return ""
+        try:
+            stat = cfg_path.stat()
+        except OSError:
+            return ""  # no live config yet — the instance default applies
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        hit = _PLUGINS_DIR_CACHE.get(str(cfg_path))
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        import yaml
+
+        from graph.plugins.pconfig import valid_plugins_dir_override
+
         data = yaml.safe_load(cfg_path.read_text()) or {}
-        return str((data.get("plugins") or {}).get("dir") or "")
+        # Vetted by the one shared validator (a relative value is refused, with a reason)
+        # so the file read and the config-object read can't disagree.
+        value = valid_plugins_dir_override((data.get("plugins") or {}).get("dir"))
+        if len(_PLUGINS_DIR_CACHE) > 8:
+            _PLUGINS_DIR_CACHE.clear()  # one config per process in the field; a suite makes many
+        _PLUGINS_DIR_CACHE[str(cfg_path)] = (stamp, value)
+        return value
     except Exception:  # noqa: BLE001 — a config read must never break resolution
         return ""
 
 
-def _loader_roots() -> list[Path]:
+def loader_roots() -> list[Path]:
     """The roots the LOADER discovers, in its order: bundled tree first, then the live
     plugins dir — the same pair as ``loader._plugin_roots`` and
     ``pconfig.plugin_roots_from``, including the ``plugins.dir`` override that
-    ``live_plugins_dir`` now resolves."""
+    ``live_plugins_dir`` resolves.
+
+    Public because the loader itself needs it where it has no config object (the frozen
+    ``--mcp-plugin`` shim): the installer owns where installed copies live, so it answers
+    the question rather than a third copy of the pair drifting from the other two."""
     return [bundled_plugins_dir(), live_plugins_dir()]
 
 
@@ -175,7 +200,7 @@ def effective_copies() -> dict[str, PluginManifest]:
     version."""
     from graph.plugins.loader import discover_plugins
 
-    return {m.id: m for m in discover_plugins(_loader_roots())}
+    return {m.id: m for m in discover_plugins(loader_roots())}
 
 
 def effective_source_url(plugin_id: str) -> str:
@@ -192,7 +217,7 @@ def effective_source_url(plugin_id: str) -> str:
     would call it bundled)."""
     running = effective_copies().get(plugin_id)
     if running is not None:
-        bundled_root, live_root = _loader_roots()
+        bundled_root, live_root = loader_roots()
         if _same_dir(running.path.parent, bundled_root) and not _same_dir(bundled_root, live_root):
             return ""
     return recorded_source_url(plugin_id)
@@ -1385,11 +1410,21 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     Built-ins are refused; pip deps are NEVER auto-removed (shared venv) — they're
     returned for the operator to remove. Returns a report dict.
 
-    The one built-in id that IS accepted: a copy installed from a URL the bundled plugin
-    ``supersedes`` — see ``_uninstall_superseded``."""
+    A built-in id is accepted only when there is an installed copy of it to remove — one
+    the loader is ignoring in favour of the bundled copy (see ``_uninstall_superseded``):
+    either recorded from a URL the bundled manifest ``supersedes``, or UNTRACKED (no lock
+    row at all — a folder dropped in or symlinked by hand). Both used to be refused with
+    "is a built-in"; for the untracked one that was a regression the moment a plugin moved
+    into core, since removing it worked right up until then. A copy recorded from some
+    OTHER url — a deliberate fork override — is still refused: it is the running copy and
+    a recorded choice, not a leftover."""
     if _is_builtin(plugin_id):
-        bundled = bundled_superseding(plugin_id, recorded_source_url(plugin_id))
-        if bundled is None:
+        bundled = _bundled_manifest(plugin_id)
+        recorded = recorded_source_url(plugin_id)
+        displaced = bundled is not None and (
+            bundled_superseding(plugin_id, recorded) is not None or (not recorded and _installed_copy_exists(plugin_id))
+        )
+        if not displaced:
             raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
         return _uninstall_superseded(plugin_id, bundled, purge=purge)
     target = live_plugins_dir() / plugin_id
@@ -1449,7 +1484,9 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
 
 
 def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: bool) -> dict:
-    """Remove the IGNORED installed copy of a plugin that now ships with protoAgent.
+    """Remove the IGNORED installed copy of a plugin that now ships with protoAgent —
+    whether the bundled manifest superseded its source or #1574 demoted it (an untracked
+    copy, which has no lock row to remove and is often a symlinked dev checkout).
 
     Only that copy's files and its ``plugins.lock`` entry go. Everything keyed by the
     plugin id belongs to the bundled copy that is actually running, so it all stays —
@@ -1515,6 +1552,14 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
         "superseded_by_bundled": bundled.version,
         "was_loaded": was_loaded,
     }
+
+
+def _installed_copy_exists(plugin_id: str) -> bool:
+    """Is there a copy of ``plugin_id`` in the live plugins dir? A broken or live SYMLINK
+    counts (the #2298 dev-checkout workflow installs one), which ``exists()`` alone
+    misses — and that copy is exactly the one an operator needs to be able to remove."""
+    target = live_plugins_dir() / plugin_id
+    return target.exists() or target.is_symlink()
 
 
 def _discard(path: Path) -> None:
@@ -1825,18 +1870,22 @@ def list_installed() -> list[dict]:
         if pid not in on_disk:
             out.append({**locked, "present": False, "tracked": True})
 
-    # A copy installed from a URL the bundled plugin now supersedes is ignored by the
-    # loader — flag it, so an update path skips it and a UI can say why it's inert. The
-    # PLUGIN is present either way (it ships with protoAgent), so such a row never reads
-    # as "missing on disk — sync": sync can't fetch it, and nothing is missing.
-    # `copy_on_disk` keeps the disk truth about the ignored copy itself.
+    # Flag every row whose copy the LOADER ignores in favour of the bundled one — the
+    # resolver decides, so this covers both reasons: the bundled manifest supersedes the
+    # row's source, or (no lock row) #1574 demoted it on version. Update paths skip such a
+    # row and a UI can say why it's inert. The PLUGIN is present either way (it ships with
+    # protoAgent), so the row never reads as "missing on disk — sync": sync can't fetch it
+    # and nothing is missing. `copy_on_disk` keeps the disk truth about the copy itself.
+    running = effective_copies()
+    bundled_root, live_root = loader_roots()
     for row in out:
-        bundled = bundled_superseding(str(row.get("id") or ""), str(row.get("source_url") or ""))
-        if bundled is not None:
-            row["superseded"] = True
-            row["bundled_version"] = bundled.version
-            row["copy_on_disk"] = bool(row.get("present"))
-            row["present"] = True
+        run = running.get(str(row.get("id") or ""))
+        if run is None or _same_dir(bundled_root, live_root) or not _same_dir(run.path.parent, bundled_root):
+            continue
+        row["superseded"] = True
+        row["bundled_version"] = run.version
+        row["copy_on_disk"] = bool(row.get("present"))
+        row["present"] = True
     # Same answer for a row that was never an install: the ADR 0093 wheel-deps pins a
     # BUNDLED plugin gets are a lock row with no source_url and no folder of their own.
     # Nothing was fetched and nothing can be re-fetched (``sync`` says "present" too), so

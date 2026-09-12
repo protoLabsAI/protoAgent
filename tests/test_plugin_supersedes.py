@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import sys
 import types
@@ -349,12 +350,13 @@ def test_load_plugins_tells_the_operator_and_the_banner_leaves_with_the_copy(hos
     assert "ships with protoAgent" in gap["message"] and UPSTREAM in gap["message"]
     assert any(w.startswith("cowork plugin: now ships with protoAgent") for w in setup_gaps.warnings())
 
-    # A disabled plugin raises no banner (a disabled plugin's gaps never outlive it).
+    # An EXPLICIT `plugins.disabled` entry is the operator's own "leave this alone": the
+    # banner goes with the plugin's other gaps (#3445's rule). Merely-off is different —
+    # see test_a_bundled_copy_that_is_merely_off_still_reports_the_ignored_one.
     load_plugins(LangGraphConfig(plugins_disabled=["cowork"]))
     assert not _superseded_gaps()
 
-    # Enabled again → back; removing the ignored copy clears it at once, and a reload
-    # doesn't bring it back.
+    # Removing the ignored copy clears it at once, and a reload doesn't bring it back.
     load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
     assert _superseded_gaps()
     installer.uninstall("cowork")
@@ -1066,7 +1068,7 @@ async def test_devkit_uninstall_tool_leaves_the_running_bundled_copy_alone(host,
     _ship_bundled(host)
     running = _running_bundled_module(monkeypatch, host)
     out = await mod.uninstall_plugin.ainvoke({"plugin_id": "cowork"})
-    assert "removed the superseded copy" in out and "keeps running" in out
+    assert "removed the ignored copy" in out and "keeps running" in out
     assert applied == [] and sys.modules.get(MODULE) is running
     assert not (host.live / "cowork").exists()
 
@@ -1088,7 +1090,7 @@ def test_cli_reports_every_superseded_outcome(host, monkeypatch, capsys):
     _ship_bundled(host)  # …then upgrades
     assert cli.run_plugin_cli(["uninstall", "cowork"]) == 0
     out = capsys.readouterr().out
-    assert "that was the superseded copy" in out and "may still be running the removed copy" in out
+    assert "an installed copy the loader ignores" in out and "may still be running the removed copy" in out
 
 
 # ═══ Round-2 review follow-ups ════════════════════════════════════════════════════
@@ -1334,3 +1336,191 @@ def test_the_autoupdate_skip_log_redacts_the_install_url(host, monkeypatch, capl
         )
     assert updated == 0
     assert "ships with protoAgent now" in caplog.text and "SEKRET" not in caplog.text
+
+
+# ═══ Round-3: the configured root everywhere, and copies with no lock row ══════════
+
+
+def test_the_managed_mcp_entrypoint_uses_the_configured_root(host):
+    """`--mcp-plugin <id>` (the frozen managed-MCP subprocess) built its own roots from
+    the instance default, so with `plugins.dir` set it found no plugin and the server
+    never started — the one reader left ignoring the override."""
+    alt = host.home / "alt-plugins"
+    d = _write_plugin(alt / "mcpish", "mcpish", "1.0.0")
+    (d / "__init__.py").write_text(
+        "def register(registry):\n    pass\n\n\ndef mcp_main():\n    raise SystemExit(0)\n", encoding="utf-8"
+    )
+    _write_config(host, {"plugins": {"dir": str(alt)}})
+    with pytest.raises(SystemExit):  # found → its mcp_main() ran
+        loader.run_plugin_mcp_main("mcpish")
+    loader.purge_plugin_modules("mcpish")
+
+
+def test_a_relative_plugins_dir_is_refused_not_resolved_against_the_cwd(host, monkeypatch, tmp_path, caplog):
+    """A relative override resolves against the working directory of whichever process
+    asks, so the server and an out-of-process CLI would read different folders. Refused
+    with a reason (the call the fs fence makes for a relative project path), falling back
+    to the instance's own dir so the agent still boots on its normal plugins."""
+    _write_config(host, {"plugins": {"dir": "./relplugins"}})
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        monkeypatch.chdir(tmp_path)
+        from_cli = installer.live_plugins_dir()
+        monkeypatch.chdir(host.home)
+        from_server = installer.live_plugins_dir()
+    assert from_cli == from_server == host.live  # same answer, wherever it is asked from
+    assert "not absolute" in caplog.text and "./relplugins" in caplog.text
+
+    # …and the loader's config-object path agrees with the file-read path.
+    cfg = types.SimpleNamespace(plugins_dir="./relplugins")
+    assert loader._plugin_roots(cfg)[-1] == host.live
+
+
+def test_the_loader_and_the_installer_resolve_the_same_roots(host):
+    """One answer, whichever door you come through: the loader has a config object, the
+    installer reads the live YAML, and both must name the same pair."""
+    alt = host.home / "alt-plugins"
+    alt.mkdir()
+    _write_config(host, {"plugins": {"dir": str(alt)}})
+    cfg = types.SimpleNamespace(plugins_dir=str(alt))
+    assert loader._plugin_roots(cfg) == installer.loader_roots()
+    assert installer.loader_roots()[-1] == alt
+
+
+def test_a_failed_removal_is_a_400_not_a_500(host, monkeypatch):
+    """The rename guard, at the REST surface the operator actually touches."""
+    _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
+    _old_host_install(host)
+    _ship_bundled(host)
+    _write_config(host, {"plugins": {"enabled": ["cowork"]}})
+    _wire_routes(monkeypatch, enabled=["cowork"])
+    real = os.rename
+    monkeypatch.setattr(
+        os,
+        "rename",
+        lambda a, b: (_ for _ in ()).throw(OSError("Device or resource busy")) if "cowork" in str(a) else real(a, b),
+    )
+    resp = _client().delete("/api/plugins/cowork")
+    assert resp.status_code == 400 and "could not remove" in resp.json()["detail"]
+    assert (host.live / "cowork").exists() and installer._read_lock()["plugins"]  # nothing half-done
+
+
+# ── an UNTRACKED copy of a now-bundled id: seen, and removable ────────────────────
+
+
+def _untracked_copy(host, *, version: str = "0.6.5", bundled: str = "0.7.0") -> Path:
+    """A hand-placed copy — no lock row — of an id protoAgent now ships, older than the
+    bundled one, so #1574 demotes it."""
+    copy = _write_plugin(host.live / "agent_browser", "agent_browser", version)
+    _write_plugin(host.bundled / "agent_browser", "agent_browser", bundled)
+    return copy
+
+
+def test_an_untracked_copy_that_loses_on_version_says_so(host, monkeypatch):
+    """It went silent: no lock row means no `supersedes` match, and #1574 demoted it with
+    no banner, no log line and no flag on the inventory row — the operator's copy simply
+    stopped being what runs."""
+    from graph.config import LangGraphConfig
+
+    _untracked_copy(host)
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [host.bundled, host.live])
+    load_plugins(LangGraphConfig(plugins_enabled=["agent_browser"]))
+
+    [gap] = [g for g in setup_gaps.active() if g["key"] == loader.SUPERSEDED_GAP_KEY]
+    assert gap["plugin"] == "agent_browser"
+    assert "is older" in gap["message"] and "no plugins.lock entry" in gap["message"]
+    assert str(host.live / "agent_browser") in gap["message"]
+    [row] = [r for r in installer.list_installed() if r["id"] == "agent_browser"]
+    assert row["superseded"] is True and row["tracked"] is False and row["bundled_version"] == "0.7.0"
+
+
+def test_a_bundled_copy_that_is_merely_off_still_reports_the_ignored_one(host, monkeypatch, caplog):
+    """Both first-party moves ship `enabled: false`, so "off by default" is the common case —
+    and the disabled branch used to return before the report ran. Merely off → the banner
+    shows; an EXPLICIT `plugins.disabled` entry keeps it quiet (#3445), but the log line
+    names the ignored copy either way."""
+    from graph.config import LangGraphConfig
+
+    _untracked_copy(host)
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [host.bundled, host.live])
+    load_plugins(LangGraphConfig())  # neither enabled nor disabled: shipped off
+    assert [g for g in setup_gaps.active() if g["key"] == loader.SUPERSEDED_GAP_KEY]
+
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        load_plugins(LangGraphConfig(plugins_disabled=["agent_browser"]))
+    assert not [g for g in setup_gaps.active() if g["key"] == loader.SUPERSEDED_GAP_KEY]
+    assert str(host.live / "agent_browser") in caplog.text
+
+
+def test_an_untracked_copy_of_a_bundled_id_can_be_uninstalled(host):
+    """It could be removed right up until the plugin was bundled; then the built-in guard
+    started refusing, leaving no tool that could clear it."""
+    _untracked_copy(host)
+    _write_config(host, {"plugins": {"enabled": ["agent_browser"]}})
+    report = installer.uninstall("agent_browser")
+    assert report["superseded_by_bundled"] == "0.7.0" and report["removed"] == ["code"]  # no lock row to clear
+    assert not (host.live / "agent_browser").exists()
+    assert _read_config(host)["plugins"]["enabled"] == ["agent_browser"]  # the bundled copy keeps running
+
+
+def test_josh_shape_configured_dir_symlinked_checkout_no_lock_row(host):
+    """The live setup this protects: `plugins.dir` pointing at a repo's config dir, the
+    plugin a SYMLINK to a dev checkout, no lock row, enabled. The checkout must survive
+    (unlink, never follow), the banner must name the link, and the id stays enabled."""
+    alt = host.home / "leadEngineer" / "config" / "coding" / "plugins"
+    alt.mkdir(parents=True)
+    checkout = _write_plugin(host.home / "dev" / "agent-browser-plugin", "agent_browser", "0.6.5")
+    try:
+        (alt / "agent_browser").symlink_to(checkout, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform can't create directory symlinks here")
+    _write_plugin(host.bundled / "agent_browser", "agent_browser", "0.7.0")
+    _write_config(host, {"plugins": {"dir": str(alt), "enabled": ["agent_browser"]}})
+
+    notes: dict = {}
+    won = {m.id: m for m in discover_plugins(installer.loader_roots(), superseded=notes)}["agent_browser"]
+    assert won.path == host.bundled / "agent_browser"
+    assert notes["agent_browser"]["reason"] == "older"
+    assert notes["agent_browser"]["installed_path"] == str(alt / "agent_browser")
+
+    report = installer.uninstall("agent_browser")
+    assert report["superseded_by_bundled"] == "0.7.0"
+    assert not (alt / "agent_browser").exists() and not (alt / "agent_browser").is_symlink()
+    assert (checkout / "protoagent.plugin.yaml").exists()  # the dev's checkout is untouched
+    assert _read_config(host)["plugins"]["enabled"] == ["agent_browser"]
+    assert sorted(p.name for p in alt.iterdir()) == []  # no `.bak` left to load
+
+
+def test_a_fork_override_of_a_bundled_id_is_still_refused(host):
+    """Unchanged, deliberately: a copy RECORDED from another URL is a deliberate override,
+    not a leftover — uninstall keeps refusing it (remove the folder by hand to drop it)."""
+    _write_plugin(host.live / "cowork", "cowork", "0.9.0")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "cowork", "source_url": FORK}]}))
+    _ship_bundled(host)
+    with pytest.raises(installer.InstallError, match="built-in"):
+        installer.uninstall("cowork")
+    assert (host.live / "cowork").exists()
+
+
+def test_a_broken_symlink_left_by_a_moved_checkout_can_still_be_uninstalled(host):
+    """The dev moved or deleted the checkout the link pointed at. `exists()` follows the
+    link and says no, so without the symlink check the built-in guard refused the one
+    tool that could clear it."""
+    host.live.mkdir(parents=True, exist_ok=True)
+    try:
+        (host.live / "agent_browser").symlink_to(host.home / "gone" / "agent-browser-plugin", target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform can't create directory symlinks here")
+    _write_plugin(host.bundled / "agent_browser", "agent_browser", "0.7.0")
+    report = installer.uninstall("agent_browser")
+    assert report["removed"] == ["code"]
+    assert not (host.live / "agent_browser").is_symlink()
+
+
+def test_a_changed_plugins_dir_is_picked_up_without_a_restart(host):
+    """The override is cached per config file — and must be re-read the moment the file
+    changes, or an operator's edit silently doesn't apply until a restart."""
+    first, second = host.home / "alt-a", host.home / "alt-plugins-second"
+    _write_config(host, {"plugins": {"dir": str(first)}})
+    assert installer.live_plugins_dir() == first
+    _write_config(host, {"plugins": {"dir": str(second)}})
+    assert installer.live_plugins_dir() == second

@@ -51,10 +51,11 @@ export function PluginRailManage() {
       }}
       onClose={clearPluginUninstall}
     >
-      {/* The same text the Plugins table shows — including the "this removes the old
-          copy, the built-in keeps running" wording for a plugin that moved into core.
-          Unconditional on purpose: picking the generic destructive line while the
-          inventory is still loading would warn about deleting code that isn't going. */}
+      {/* The same text the Plugins table shows — including the "this removes the old copy,
+          the built-in keeps running" wording for a plugin that moved into core. Passed
+          unconditionally, row or no row: with the query still in flight there IS no row, and
+          the helper's no-row branch says what holds either way instead of warning about
+          deleting code that may not be going anywhere. */}
       {pluginUninstall ? uninstallConfirmText(pluginUninstall.name, pendingRow) : undefined}
     </ConfirmDialog>
   );

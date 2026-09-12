@@ -1178,7 +1178,7 @@ async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
         # (If THIS process was still running the removed copy — upgraded under it without
         # a restart — fall through: it lost its files and must be unloaded like any other.)
         return (
-            f"✓ removed the superseded copy of {plugin_id} — the bundled "
+            f"✓ removed the ignored copy of {plugin_id} — the bundled "
             f"v{report['superseded_by_bundled']} keeps running (enabled state and config unchanged)"
         )
     purge_plugin_modules(plugin_id)

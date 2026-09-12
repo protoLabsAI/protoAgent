@@ -124,17 +124,55 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
         return []
 
 
+# Bad `plugins.dir` values already warned about, so a refusal is said once per value and
+# not on every resolution (`live_plugins_dir` resolves the override on each call).
+_WARNED_PLUGIN_DIRS: set[str] = set()
+
+
+def valid_plugins_dir_override(raw: object) -> str:
+    """The usable ``plugins.dir`` override, or ``""`` — the ONE validator every reader
+    shares (the loader's roots, the installer's live dir, the config-schema discovery).
+
+    A RELATIVE value is refused, not anchored: it resolves against the working directory
+    of whichever process asks, so the server and an out-of-process CLI / fleet subprocess
+    would read different folders — the console would list plugins the agent never loads.
+    Same call the fs fence makes for a relative ``projects[].path`` (``graph/config.py``),
+    and the same shape of answer: warn with the value, then fall back to the default root
+    so the agent still boots on its normal plugins instead of an empty one."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    expanded = Path(text).expanduser()
+    # Absoluteness is judged on the EXPANDED-but-unresolved path: `.resolve()` makes every
+    # path absolute (against the CWD), which would swallow the input this refuses.
+    if expanded.is_absolute():
+        return str(expanded)
+    if text not in _WARNED_PLUGIN_DIRS:
+        _WARNED_PLUGIN_DIRS.add(text)
+        log.warning(
+            "[plugins] plugins.dir %r is not absolute — ignored, using the instance's own "
+            "plugins dir. A relative path resolves against the working directory of whatever "
+            "process reads it (the server, a CLI, a fleet subprocess), so they would not "
+            "agree on where plugins live. Set an absolute path.",
+            text,
+        )
+    return ""
+
+
 def plugin_roots_from(plugins_root: Path, dir_override: str = "") -> list[Path]:
     """Bundle + live plugin roots (no config object).
 
     ``plugins_root`` is the instance's live plugins dir (e.g.
-    ``instance_paths().plugins_dir``); a non-empty ``dir_override`` (config
-    ``plugins.dir``) wins over it. The bundle root ships in-tree under the app
-    root (``app_root/plugins``)."""
-    from infra.paths import instance_paths
+    ``instance_paths().plugins_dir``); a usable ``dir_override`` (config ``plugins.dir``,
+    vetted by :func:`valid_plugins_dir_override`) wins over it. The bundle root ships
+    in-tree under the app root (``app_root/plugins``)."""
+    from graph.plugins.installer import bundled_plugins_dir
 
-    live = Path(dir_override).expanduser() if dir_override else Path(plugins_root)
-    return [instance_paths().app_root / "plugins", live]
+    override = valid_plugins_dir_override(dir_override)
+    live = Path(override) if override else Path(plugins_root)
+    # `bundled_plugins_dir()` IS `app_root/plugins`; going through it keeps ONE
+    # expression for the bundled tree across the loader, the installer and here.
+    return [bundled_plugins_dir(), live]
 
 
 def live_plugin_config_schemas() -> list[PluginConfigSchema]:
