@@ -2,12 +2,111 @@
 
 from __future__ import annotations
 
+import functools
 import logging
+import os
 from pathlib import Path
+from urllib.parse import quote
 
 from . import _config, _render_status, _shell, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
+
+_BLOB_CHUNK = 64 * 1024  # bytes per body message when streaming a blob download
+_BLOB_RESOLVE_TRIES = 5  # store re-reads when the blob a read named was swept before it could be opened
+
+
+def _open_blob(art_id: str, version: int):
+    """Resolve a `file` artifact version to its sidecar blob and OPEN it: ``(file, meta, name)``.
+
+    The blob is opened HERE, before any byte is sent, and the download streams from that handle
+    (``_open_file_response``) — never re-opened by path at send time. The store is read without
+    the lock, so another process's eviction can orphan and sweep this blob at any moment. Once
+    it's open, that can't break the download: on POSIX the handle keeps reading the unlinked file;
+    on Windows the sweep's delete is refused while the handle is open, and it retries on its next
+    run (``_store._gc_blobs``). Serving by path instead — a check, then an open at send time —
+    let a sweep in between fail the download after its headers had gone out.
+
+    A blob swept between the store read and the open is not an error by itself: the store is
+    read again, so "latest" follows a newer version that replaced it; a blob the store STILL
+    names but that isn't on disk is a 404, as is a version that's gone."""
+    from fastapi import HTTPException
+
+    missing: set[str] = set()
+    for _ in range(_BLOB_RESOLVE_TRIES):
+        store = _store._read_store()
+        art = _store._find(store, art_id)
+        if art is None:
+            raise HTTPException(404, f"unknown artifact {art_id}")
+        vers = art.get("versions") or []
+        if not vers:
+            raise HTTPException(404, "no versions")
+        if version:  # an EXPLICIT version must be in range — don't silently fall back to latest
+            if not (1 <= version <= len(vers)):
+                raise HTTPException(404, f"no version {version} (have 1..{len(vers)})")
+            idx = version - 1
+        else:  # 0/absent → latest
+            idx = len(vers) - 1
+        v = vers[idx]
+        blob_name, meta = v.get("blob"), v.get("file") or {}
+        if not blob_name:
+            raise HTTPException(404, "not a file artifact / no stored blob")
+        if blob_name in missing:  # the store still names it, and it isn't on disk
+            break
+        f = _store._blob_path(art_id, blob_name)
+        try:
+            return _store._retry_denied(lambda: open(f, "rb")), meta, f.name  # closed by the response
+        except FileNotFoundError:
+            missing.add(blob_name)
+    raise HTTPException(404, "blob missing")
+
+
+def _attachment(filename: str) -> str:
+    """A download's Content-Disposition, built the way Starlette's FileResponse builds it."""
+    quoted = quote(filename)
+    if quoted != filename:
+        return f"attachment; filename*=utf-8''{quoted}"
+    return f'attachment; filename="{filename}"'
+
+
+@functools.cache
+def _open_file_response():
+    """The Response class that streams an ALREADY-OPEN file (built lazily, like the routers, so
+    importing the plugin doesn't import Starlette)."""
+    import anyio
+    from starlette.responses import Response
+
+    class OpenFileResponse(Response):
+        """Stream ``fh`` from where it is, then close it — however the send ends (a completed
+        download, a client that disconnected, an error), so a Windows handle never outlives
+        the send and keeps blocking the blob sweep."""
+
+        def __init__(self, fh, media_type: str, filename: str) -> None:
+            self.fh = fh
+            self.size = os.fstat(fh.fileno()).st_size
+            self.status_code = 200
+            self.media_type = media_type
+            self.background = None
+            self.init_headers({"content-length": str(self.size), "content-disposition": _attachment(filename)})
+
+        async def __call__(self, scope, receive, send) -> None:
+            try:
+                await send({"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers})
+                if scope.get("method", "").upper() == "HEAD":
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+                    return
+                left = self.size
+                while True:
+                    chunk = await anyio.to_thread.run_sync(self.fh.read, min(_BLOB_CHUNK, left)) if left else b""
+                    left -= len(chunk)
+                    more = bool(chunk) and left > 0
+                    await send({"type": "http.response.body", "body": chunk, "more_body": more})
+                    if not more:
+                        return
+            finally:
+                self.fh.close()
+
+    return OpenFileResponse
 
 _VENDOR_FILES = {
     # UMD (SRI-pinned in the shell's LIB map)
@@ -97,6 +196,19 @@ def _build_data_router():
 
     router = APIRouter()
 
+    def _busy_503(fn):
+        """A store that stays locked past its bound (``_store.StoreLockTimeout``, raised before the
+        route changed anything) is a 503 with Retry-After, not a 500 — a wedged holder elsewhere."""
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except _store.StoreLockTimeout as e:
+                raise HTTPException(503, str(e), headers={"Retry-After": "5"}) from None
+
+        return wrapper
+
     @router.get("/current")
     async def _current_artifact() -> dict:
         """The focused artifact's latest version (back-compat shape + version info)."""
@@ -138,6 +250,7 @@ def _build_data_router():
         return JSONResponse(_store._read_store(), headers={"ETag": etag})
 
     @router.post("/render-status")
+    @_busy_503
     @_store.serialized
     def _render_status_route(body: dict = Body(...)) -> dict:
         # Named *_route: a bare `_render_status` here would shadow the module import
@@ -216,6 +329,7 @@ def _build_data_router():
         return {"text": text}
 
     @router.put("/artifact/{art_id}")
+    @_busy_503
     @_store.serialized
     def _save_edit(art_id: str, body: dict = Body(...)) -> dict:
         """Save a USER edit (the panel's in-panel code editor) as a new version. Like the
@@ -238,36 +352,15 @@ def _build_data_router():
         """Serve a `file` artifact version's stored BYTES for download (ADR 0092 D2). The
         panel's Download button hits this with the operator bearer; ``version`` is 1-based
         (0/absent = latest). Returns the sidecar blob with its stored mime + an attachment
-        filename. 404 if the artifact/version/blob is missing or isn't a file artifact."""
-        from fastapi.responses import FileResponse
+        filename. 404 if the artifact/version/blob is missing or isn't a file artifact.
 
-        store = _store._read_store()
-        art = _store._find(store, art_id)
-        if art is None:
-            raise HTTPException(404, f"unknown artifact {art_id}")
-        vers = art.get("versions") or []
-        if not vers:
-            raise HTTPException(404, "no versions")
-        if version:  # an EXPLICIT version must be in range — don't silently fall back to latest
-            if not (1 <= version <= len(vers)):
-                raise HTTPException(404, f"no version {version} (have 1..{len(vers)})")
-            idx = version - 1
-        else:  # 0/absent → latest
-            idx = len(vers) - 1
-        v = vers[idx]
-        blob_name, meta = v.get("blob"), v.get("file") or {}
-        if not blob_name:
-            raise HTTPException(404, "not a file artifact / no stored blob")
-        f = _store._blob_path(art_id, blob_name)
-        if not f.exists():
-            raise HTTPException(404, "blob missing")
-        return FileResponse(
-            f,
-            media_type=meta.get("mime") or "application/octet-stream",
-            filename=meta.get("filename") or f.name,
-        )
+        Streamed from a handle opened before the response starts (``_open_blob``), so an
+        eviction in another process can't cut the download short once it's begun."""
+        fh, meta, name = _open_blob(art_id, version)
+        return _open_file_response()(fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name)
 
     @router.delete("/artifact/{art_id}")
+    @_busy_503
     @_store.serialized
     def _delete(art_id: str) -> dict:
         """Delete an artifact (the panel's trash button). Gated like the rest."""

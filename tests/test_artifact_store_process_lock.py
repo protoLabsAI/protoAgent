@@ -23,8 +23,10 @@ import importlib.util
 import json
 import multiprocessing
 import os
+import queue
 import sys
 import threading
+import time
 import traceback
 import types
 from pathlib import Path
@@ -121,6 +123,28 @@ def _op_rewrite_many(art, artifact_id, n, size):
     return n
 
 
+def _op_hold_lock(art, holding, release, max_hold_s):
+    """A holder wedged mid-save: take the store lock, read the store, say so, then sit on the lock
+    until released (or ``max_hold_s``) — and only then write back its by-now-stale snapshot plus
+    its own artifact, the way a real read-modify-write would."""
+    with art._store._store_lock():
+        store = art._store._read_store()
+        holding.set()
+        release.wait(max_hold_s)
+        v = {"code": "<p>held</p>", "ts": 1, "by": "agent"}
+        store["artifacts"].insert(
+            0, {"id": "a-held", "title": "held", "kind": "html", "versions": [v], "version_count": 1}
+        )
+        art._store._write_store(store)
+    return os.getpid()
+
+
+def _op_show_timed(art, code):
+    t0 = time.monotonic()
+    reply = art.show_artifact.invoke({"kind": "html", "code": code})
+    return reply, time.monotonic() - t0
+
+
 def _op_read_raw(art, stop, reading):
     """Read history.json the way every read-only path does — the plugin's own lock-free read,
     including its Windows handling — as fast as possible, and parse it STRICTLY
@@ -144,16 +168,21 @@ _OPS = {
     "worker": _op_worker,
     "rewrite_many": _op_rewrite_many,
     "read_raw": _op_read_raw,
+    "hold_lock": _op_hold_lock,
+    "show_timed": _op_show_timed,
 }
 
 
-def _child(env, op, args, gate, ready, go, out):
+def _child(env, op, args, gate, patch, ready, go, out):
     """One store client in its own process: load the plugin, arm the gate, report ready, and
-    run ``op`` once released — so process start-up never eats into a timed window."""
+    run ``op`` once released — so process start-up never eats into a timed window. ``patch``
+    sets ``_store`` module knobs (e.g. the lock bound) in this process."""
     try:
         os.environ.update(env)
         os.environ.pop("PROTOAGENT_INSTANCE", None)
         art = _import_plugin()
+        for name, value in (patch or {}).items():
+            setattr(art._store, name, value)
         if gate is not None:
             _install_gate(art, gate)
         ready.set()
@@ -166,9 +195,11 @@ def _child(env, op, args, gate, ready, go, out):
 
 
 class _Client:
-    def __init__(self, env, op, args, gate):
+    def __init__(self, env, op, args, gate, patch=None):
         self.ready, self.go, self.out = _CTX.Event(), _CTX.Event(), _CTX.Queue()
-        self.proc = _CTX.Process(target=_child, args=(env, op, args, gate, self.ready, self.go, self.out), daemon=True)
+        self.proc = _CTX.Process(
+            target=_child, args=(env, op, args, gate, patch, self.ready, self.go, self.out), daemon=True
+        )
         self.proc.start()
 
     def result(self):
@@ -190,8 +221,8 @@ def procs(tmp_path):
     """Start store clients in child processes sharing this test's store (and its env knobs)."""
     started: list[_Client] = []
 
-    def start(op, args, gate=None, **env):
-        c = _Client({"ARTIFACT_DIR": str(tmp_path / "artifact-store"), **env}, op, args, gate)
+    def start(op, args, gate=None, patch=None, **env):
+        c = _Client({"ARTIFACT_DIR": str(tmp_path / "artifact-store"), **env}, op, args, gate, patch)
         started.append(c)
         return c
 
@@ -679,3 +710,265 @@ def test_an_unlockable_filesystem_degrades_to_the_thread_lock_not_a_failed_write
     assert [a["id"] for a in art._read_store()["artifacts"]] == [a2, a1]
     assert sum("cross-process lock" in r.getMessage() for r in caplog.records) == 1
     assert (_FakeMsvcrt.LK_UNLCK, 1) not in fake.calls  # nothing was locked, so nothing unlocked
+
+
+def test_each_new_degrade_errno_is_warned_with_the_path_and_a_repeat_is_not_silent(art, monkeypatch, caplog):
+    """A degrade is warned once per errno, naming the errno and the lock path — not once per
+    process, which hid a DIFFERENT later failure (EBADF first, then ENOLCK on a remount) behind
+    the first one. A repeat of a known errno still logs, at debug: the store keeps writing
+    without cross-process exclusion, and that must never go quiet."""
+    fake = _FakeMsvcrt(fail_errno=errno.EBADF)
+    _as_windows(monkeypatch, art, fake)
+    with caplog.at_level("DEBUG", logger="protoagent.plugins.artifact"):
+        _show(art, "<p>1</p>")
+        _show(art, "<p>2</p>")  # the same errno again
+        fake.fail_errno = errno.ENOLCK
+        _show(art, "<p>3</p>")  # a new one
+    lock_path = str(art._store._lock_path())
+    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING" and "cross-process lock" in r.getMessage()]
+    assert len(warned) == 2, warned
+    assert "EBADF" in warned[0] and "ENOLCK" in warned[1], warned
+    assert all(lock_path in m for m in warned), warned
+    repeats = [r.getMessage() for r in caplog.records if r.levelname == "DEBUG" and "still unavailable" in r.getMessage()]
+    assert len(repeats) == 1 and "EBADF" in repeats[0] and lock_path in repeats[0], repeats
+    assert len(art._read_store()["artifacts"]) == 3  # every write still landed
+
+
+# ── a holder that never lets go ──────────────────────────────────────────────────────
+
+_BOUND_S = 1.5  # the writer's lock bound in the hung-holder test
+
+
+def test_a_hung_holder_makes_a_writer_give_up_at_its_bound_and_change_nothing(art, procs):
+    """A process wedged mid-save holds the store lock and never lets go. A writer in another
+    process must not wait forever: it gives up at its bound with a clear "busy" reply naming the
+    holder, and changes NOTHING. Degrading to "write anyway" would be worse than waiting: the
+    holder's eventual write-back of its stale snapshot silently erases what the writer wrote."""
+    before = _show(art, "<p>before</p>")
+    holding, release = _CTX.Event(), _CTX.Event()
+    holder = procs("hold_lock", {"holding": holding, "release": release, "max_hold_s": _START_S})
+    writer = procs("show_timed", {"code": "<p>writer</p>"}, patch={"_LOCK_TIMEOUT_S": _BOUND_S})
+    procs.wait_ready()
+    holder.go.set()
+    assert holding.wait(_START_S)  # the holder has the lock and has read the store
+    writer.go.set()
+    try:
+        status, value = writer.out.get(timeout=_BOUND_S + 20)
+    except queue.Empty:
+        pytest.fail("the writer was still blocked on the hung holder long past its bound")
+    finally:
+        release.set()  # un-wedge the holder, which now writes back its snapshot
+    assert status == "ok", value
+    reply, waited = value
+    assert reply.startswith("The artifact store is busy") and "Nothing was changed" in reply, reply
+    assert f"pid {holder.proc.pid}" in reply, reply
+    assert _BOUND_S <= waited < _BOUND_S + 15, waited
+    assert holder.result() == holder.proc.pid
+    store = art._read_store()
+    assert {a["id"] for a in store["artifacts"]} == {"a-held", before}
+    assert all(a["versions"][-1]["code"] != "<p>writer</p>" for a in store["artifacts"])
+
+
+def test_a_panel_write_that_outwaits_its_bound_is_a_503_not_a_500(art, monkeypatch):
+    """The panel's mutating routes turn a timed-out store lock into 503 + Retry-After — the
+    store is busy, nothing changed, try again — rather than a 500 from an unhandled exception."""
+    aid = _show(art, "<p>v1</p>")
+    client = _data_client(art)
+    monkeypatch.setattr(art._store, "_LOCK_TIMEOUT_S", 0.3)
+    holding, release = threading.Event(), threading.Event()
+
+    def hold():
+        with art._store._store_lock():
+            holding.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert holding.wait(10)
+        r = client.put(f"/api/plugins/artifact/artifact/{aid}", json={"code": "<p>v2</p>"})
+    finally:
+        release.set()
+        holder.join(10)
+    assert r.status_code == 503 and "busy" in r.json()["detail"], (r.status_code, r.text)
+    assert r.headers.get("retry-after") == "5"
+    assert [v["code"] for v in art._find(art._read_store(), aid)["versions"]] == ["<p>v1</p>"]
+
+
+def test_a_slow_live_holder_keeps_exclusion_and_the_writer_waits_its_turn(art, procs):
+    """The bound is for a holder that never lets go, not a slow one. A holder that takes a while
+    (1 s, well inside the writer's 20 s bound) keeps exclusion: the writer waits for it, and both
+    writes land — the writer's isn't erased by the holder's write-back."""
+    holding, release = _CTX.Event(), _CTX.Event()
+    holder = procs("hold_lock", {"holding": holding, "release": release, "max_hold_s": 1.0})
+    writer = procs("show_timed", {"code": "<p>writer</p>"}, patch={"_LOCK_TIMEOUT_S": 20.0})
+    procs.wait_ready()
+    holder.go.set()
+    assert holding.wait(_START_S)
+    writer.go.set()
+    reply, _waited = writer.result()
+    assert reply.startswith("Created html artifact"), reply
+    holder.result()
+    store = art._read_store()
+    assert "a-held" in {a["id"] for a in store["artifacts"]}
+    assert any(a["versions"][-1]["code"] == "<p>writer</p>" for a in store["artifacts"]), "the writer's create was lost"
+
+
+def test_a_dead_holder_leaves_no_stale_lock(art, procs):
+    """The stale-holder story needs no lock-breaking: the OS lock belongs to the holder's open
+    file, so a holder killed mid-save releases it with its process, and the next writer goes
+    straight in — well inside its bound, without anyone deciding the holder was "stale"."""
+    holding, release = _CTX.Event(), _CTX.Event()
+    holder = procs("hold_lock", {"holding": holding, "release": release, "max_hold_s": _START_S})
+    writer = procs("show_timed", {"code": "<p>writer</p>"}, patch={"_LOCK_TIMEOUT_S": 20.0})
+    procs.wait_ready()
+    holder.go.set()
+    assert holding.wait(_START_S)
+    holder.proc.kill()
+    holder.proc.join(_START_S)
+    writer.go.set()
+    reply, waited = writer.result()
+    assert reply.startswith("Created html artifact"), reply
+    assert waited < 20.0
+    assert "a-held" not in {a["id"] for a in art._read_store()["artifacts"]}  # the killed save wrote nothing
+
+
+# ── a blob download racing the eviction sweep ───────────────────────────────────────────
+
+
+def _saved_file_id(art, path):
+    return art.save_file_artifact.invoke({"path": str(path)}).split("Saved file artifact ")[1].split(" ")[0]
+
+
+def test_a_blob_evicted_mid_download_still_arrives_whole(art, procs, monkeypatch, tmp_path):
+    """On a real socket: a file artifact's download has passed every check and is about to send
+    when another PROCESS evicts the artifact and its sweep deletes the blob. The download must
+    still arrive complete and byte-identical: it streams from a handle opened before sending.
+    Served by path, the sweep landed between the headers and the open, and the client got a
+    Content-Length and then a dropped connection. On Windows the sweep can't delete a file the
+    download has open, so its store write must still succeed, and a later sweep removes it."""
+    import socket
+
+    import anyio
+    import httpx
+    import uvicorn
+    from fastapi import FastAPI
+
+    monkeypatch.setenv("ARTIFACT_HISTORY", "1")
+    payload = os.urandom(3 * 1024 * 1024 + 123)
+    src = tmp_path / "big.bin"
+    src.write_bytes(payload)
+    fid = _saved_file_id(art, src)
+    blob = art._blob_path(fid, art._find(art._read_store(), fid)["versions"][-1]["blob"])
+
+    at_start, swept = threading.Event(), threading.Event()
+    app = FastAPI()
+    app.include_router(art._build_data_router(), prefix="/api/plugins/artifact")
+
+    async def pausing(scope, receive, send):
+        async def paused_send(message):
+            if message["type"] == "http.response.start" and scope["path"].endswith("/blob"):
+                at_start.set()  # every check has passed; the body is next
+                await anyio.to_thread.run_sync(swept.wait, _START_S)
+            await send(message)
+
+        await app(scope, receive, paused_send)
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(pausing, log_level="warning", lifespan="off"))
+    serving = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    evictor = procs("show", {"code": "<p>evicts the file</p>"}, ARTIFACT_HISTORY="1")
+    got: dict = {}
+
+    def download():
+        try:
+            r = httpx.get(f"http://127.0.0.1:{port}/api/plugins/artifact/artifact/{fid}/blob", timeout=_START_S)
+            got.update(status=r.status_code, body=r.content)
+        except Exception as e:  # noqa: BLE001 — a dropped connection is the failure being tested
+            got.update(error=repr(e))
+
+    serving.start()
+    try:
+        procs.wait_ready()
+        deadline = time.monotonic() + _START_S
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.01)
+        dl = threading.Thread(target=download)
+        dl.start()
+        assert at_start.wait(_START_S), "the download never reached its send"
+        evictor.go.set()  # another process evicts the artifact now, its sweep deleting the blob
+        assert "Created html artifact" in evictor.result()
+        assert art._find(art._read_store(), fid) is None, "the file artifact wasn't evicted"
+        if sys.platform != "win32":
+            assert not blob.exists(), "the sweep didn't delete the blob mid-download"
+        swept.set()
+        dl.join(_START_S)
+    finally:
+        swept.set()
+        server.should_exit = True
+        serving.join(10)
+    assert "error" not in got, got["error"]
+    assert got["status"] == 200 and len(got["body"]) == len(payload)
+    assert got["body"] == payload, "the download arrived, but not byte-identical"
+    deadline = time.monotonic() + 10  # the download has let go: the next sweep takes the orphan
+    while (art._blob_root() / fid).exists() and time.monotonic() < deadline:
+        art._write_store(art._read_store())
+        time.sleep(0.05)
+    assert not (art._blob_root() / fid).exists()
+
+
+@pytest.mark.parametrize("race", ["replaced", "deleted"])
+def test_a_blob_swept_between_the_store_read_and_the_open_is_re_resolved(art, monkeypatch, tmp_path, race):
+    """The blob route reads the store without the lock, so a write can orphan and sweep the blob
+    it has just resolved before it opens it. "Latest" then follows the newer version that replaced
+    it (not a 404 for a file that exists), and an artifact that's gone is a clean 404."""
+    monkeypatch.setenv("ARTIFACT_MAX_VERSIONS", "1")
+    src = tmp_path / "doc.txt"
+    src.write_bytes(b"first")
+    fid = _saved_file_id(art, src)
+    client = _data_client(art)
+    real_read, fired = art._store._read_store, []
+
+    def racing_read():
+        snapshot = real_read()
+        if not fired:
+            fired.append(race)
+            if race == "replaced":
+                src.write_bytes(b"second")
+                art.save_file_artifact.invoke({"path": str(src), "artifact_id": fid})  # trims + sweeps v1's blob
+            else:
+                art.delete_artifact.invoke({"artifact_id": fid})
+        return snapshot
+
+    monkeypatch.setattr(art._store, "_read_store", racing_read)
+    r = client.get(f"/api/plugins/artifact/artifact/{fid}/blob")
+    assert fired == [race]
+    if race == "replaced":
+        assert r.status_code == 200 and r.content == b"second", (r.status_code, r.content)
+    else:
+        assert r.status_code == 404 and "unknown artifact" in r.text, (r.status_code, r.text)
+
+
+def test_a_blob_the_sweep_cannot_delete_yet_is_skipped_alone_and_retried(art, monkeypatch):
+    """Windows refuses to delete a file a download still has open (PermissionError). The sweep
+    must skip only that file, so every other orphan still goes and the store write doesn't fail.
+    The next sweep removes the skipped file once it's free."""
+    d = art._blob_root() / "a-gone"
+    d.mkdir(parents=True)
+    for name in ("0-downloading.bin", "1-orphan.bin", "2-orphan.bin"):
+        (d / name).write_bytes(b"x")
+    in_use, held, real_unlink = d / "0-downloading.bin", [True], Path.unlink
+
+    def unlink(self, missing_ok=False):
+        if self == in_use and held[0]:
+            raise PermissionError(errno.EACCES, "The process cannot access the file: it is being used")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    art._gc_blobs({"artifacts": []})
+    assert sorted(p.name for p in d.iterdir()) == ["0-downloading.bin"]
+    held[0] = False  # the download finished
+    art._gc_blobs({"artifacts": []})
+    assert not d.exists()
