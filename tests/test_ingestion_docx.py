@@ -385,6 +385,7 @@ def test_a_member_that_lies_about_its_size_yields_only_the_bytes_it_declared():
     the kept prefix, so a lie passes every check. Reading the parts in bounded steps is
     what makes the lie harmless: extraction returns the declared prefix and nothing more,
     while the ~1 GiB of padding behind it is never inflated."""
+    _docx_lib()  # it extracts through python-docx, like its siblings
     data = _lying_size_docx(1024 * 2**20, zipfile.ZIP_DEFLATED)
     assert sum(m.file_size for m in zipfile.ZipFile(io.BytesIO(data)).infolist()) < 64 * 1024
 
