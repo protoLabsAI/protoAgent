@@ -75,6 +75,8 @@ class Snapshot:
     host_version: str = ""
     rollups: dict[str, Rollup] = field(default_factory=dict)  # by slug
     warnings: list[str] = field(default_factory=list)
+    parked: dict[str, dict[str, tuple[str, str]]] | None = None  # slug → {session → (why it waits or "", latest task id)}; None = not probed this poll
+    parked_at: float = 0.0  # monotonic, when the probe read (a stale result must not undo what the bus said since)
     error: str = ""  # a failed poll keeps the previous roster and shows this
     fetched_at: float = field(default_factory=time.monotonic)
 
@@ -113,6 +115,13 @@ class Backend(Protocol):
     def sessions(self, agent: dict) -> list[dict]: ...
     def turns(self, agent: dict, session_id: str, limit: int = 50) -> list[dict]: ...
     def a2a(self, agent: dict) -> Any: ...
+    def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict: ...
+    def steer_pending(self, agent: dict, session_id: str) -> list[dict]: ...
+    def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool: ...
+    def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict: ...
+    def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool: ...
+    def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict: ...
+    def attend(self, agent: dict, session_id: str) -> Any: ...
     def close(self) -> None: ...
 
 
@@ -147,11 +156,13 @@ class LiveBackend:
     telemetry rollup, the hub's runtime warnings); extras failing never fail the poll."""
 
     mode = "live"
+    PARKED_PROBE_S = 30.0  # how often to ask every online member whether a turn is parked
 
     def __init__(self, conn: deckhub.Connection):
         self.conn = conn
         self.client = conn.client
         self._first = conn.roster
+        self._last_parked_probe = 0.0
 
     def snapshot(self) -> Snapshot:
         client = self.client
@@ -185,7 +196,48 @@ class LiveBackend:
             snap.warnings = [_warning_text(w) for w in (status.get("warnings") or []) if w]
         except deckhub.HubError:
             pass
+        now = time.monotonic()
+        if now - self._last_parked_probe >= self.PARKED_PROBE_S:
+            self._last_parked_probe = now
+            snap.parked_at = time.monotonic()
+            snap.parked = self._probe_parked(roster)
         return snap
+
+    PARKED_PROBE_ROWS = 25  # newest sessions per member the probe looks at
+
+    def _probe_parked(self, roster: list[dict]) -> dict[str, dict[str, tuple[str, str]]]:
+        """Which sessions of each online member wait on the operator, from the session
+        inventory (newest first, ``latest_task_state``): the catch-up for parks the bus
+        could not show us (from before the deck connected, or lost in a reconnect gap).
+        Per member: ``{session_id: (reason, latest_task_id)}`` for every session SEEN — a
+        "" reason means that session's latest task is not parked. Sessions outside the
+        window are not mentioned, so the activity model leaves them alone."""
+        parked: dict[str, dict[str, tuple[str, str]]] = {}
+        for a in roster:
+            if not a.get("running") or a.get("remote"):
+                continue
+            slug = slug_of(a)
+            try:
+                rows = self.client.diagnostics_sessions(slug, limit=self.PARKED_PROBE_ROWS).get("sessions") or []
+            except deckhub.HubError:
+                continue  # unknown, not "clean": leave what the deck already knows alone
+            seen: dict[str, tuple[str, str]] = {}
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                sid = str(r.get("session_id") or r.get("context_id") or "")
+                if not sid:
+                    continue
+                state = str(r.get("latest_task_state") or "").replace("TASK_STATE_", "").lower().replace("_", "-")
+                seen[sid] = ("waiting on you" if state == "input-required" else "", str(r.get("latest_task_id") or ""))
+            parked[slug] = seen
+        return parked
+
+    def fleet_events(self):
+        """The fan-in of every watched member's event bus (deck.events.FleetEvents)."""
+        from deck.events import FleetEvents
+
+        return FleetEvents(self.client, insecure_http=getattr(self.client, "insecure_http", False))
 
     def _label(self, roster: list[dict]) -> str:
         host = next((a for a in roster if a.get("host")), {})
@@ -247,6 +299,45 @@ class LiveBackend:
 
         return A2AClient.for_member(self.client, slug_of(agent))
 
+    # ── acting on a turn (#3470): the console's own routes, through the proxy ──
+
+    def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict:
+        """Queue a message into the RUNNING turn (folded in at its next model call)."""
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer", {"id": msg_id, "text": text})
+        return out if isinstance(out, dict) else {}
+
+    def steer_pending(self, agent: dict, session_id: str) -> list[dict]:
+        """Still-queued steers — what the turn ended without folding in."""
+        out = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer")
+        rows = out.get("pending") if isinstance(out, dict) else None
+        return [r for r in (rows or []) if isinstance(r, dict) and r.get("id")]
+
+    def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool:
+        """Drop a queued steer; False = already folded in (too late) or never queued."""
+        out = self.client.member_delete(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer/{_seg(msg_id)}")
+        return bool(isinstance(out, dict) and out.get("removed"))
+
+    def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict:
+        """Queue an operator interjection into an attended server-fired turn (by task id)."""
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/server-turns/{_seg(task_id)}/interject", {"id": msg_id, "text": text})
+        return out if isinstance(out, dict) else {}
+
+    def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool:
+        """Abort ONE running foreground delegation (a ``task`` card), not the turn."""
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/delegations/{_seg(delegation_id)}/cancel")
+        return bool(isinstance(out, dict) and out.get("cancelled"))
+
+    def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict:
+        """Redeem a plugin composer-form; ``{"form", "callback_id"}`` is the next step."""
+        out = self.client.member_post(slug_of(agent), "/api/chat/commands/submit", {"callback_id": callback_id, "session_id": session_id, "answers": answers})
+        return out if isinstance(out, dict) else {}
+
+    def attend(self, agent: dict, session_id: str):
+        """Mark the session attended for as long as the returned handle is open."""
+        from deck.events import Attendance
+
+        return Attendance(self.client.url, self.client._token, slug_of(agent), session_id, insecure_http=getattr(self.client, "insecure_http", False)).start()
+
     def close(self) -> None:
         self.client.close()
 
@@ -303,6 +394,14 @@ class OfflineBackend:
 
     def a2a(self, agent: dict):
         raise RuntimeError("offline — no hub to talk to this member through")
+
+    def _offline(self, *a, **kw):
+        raise RuntimeError("offline — no hub to reach this member through")
+
+    steer = steer_pending = steer_cancel = interject = delegation_cancel = submit_form = _offline
+
+    def attend(self, agent: dict, session_id: str):
+        return None
 
     def close(self) -> None:
         return None

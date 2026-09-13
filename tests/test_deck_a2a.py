@@ -484,3 +484,33 @@ def test_for_member_never_adopts_a_callers_transport():
     assert c._client._transport is not hub._client._transport
     c.close()
     assert hub.fleet() == []  # the hub's pool is untouched
+
+
+def test_a_json_answer_instead_of_a_stream_is_surfaced_not_swallowed():
+    """Live finding: SubscribeToTask on a task already in a terminal state answers 200 +
+    application/json {"error": …} — iter_lines on that yields no SSE frame, and the deck
+    showed an exchange that silently never finished."""
+    def refuse(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32602, "message": "Task t1 is in terminal state: 3"}})
+
+    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(refuse))
+    frames = list(c.subscribe("t1"))
+    assert len(frames) == 1 and frames[0]["error"]["message"].startswith("Task t1")
+    with pytest.raises(a2a.TurnError, match="terminal state"):
+        a2a.apply_frame(a2a.Turn(context_id=CID), frames[0])
+
+    def one_piece(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {"task": {"id": "t1", "contextId": CID, "status": {"state": "TASK_STATE_COMPLETED"}}}})
+
+    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(one_piece))
+    t = a2a.Turn(context_id=CID)
+    for f in c.stream("x", context_id=CID):
+        a2a.apply_frame(t, f)
+    assert t.done and t.task_id == "t1"
+
+    def garbage(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<h1>proxy</h1>")
+
+    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(garbage))
+    with pytest.raises(deckhub.HubRequestError, match="instead of a stream"):
+        list(c.stream("x", context_id=CID))

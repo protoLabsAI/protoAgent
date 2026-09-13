@@ -246,3 +246,24 @@ def test_a_session_id_from_the_member_is_encoded_as_one_path_segment():
     be.turns({"id": "x-1", "name": "x"}, "chat-1.2/3")
     assert seen[0].startswith("/agents/x-1/api/chat/sessions/%2E%2E%2F%2E%2E%2Fapi%2Fconfig/turns")
     assert seen[1].startswith("/agents/x-1/api/chat/sessions/chat-1%2E2%2F3/turns")
+
+
+def test_every_id_the_deck_puts_in_a_member_path_is_one_encoded_segment():
+    """The S3 routes too: session, message, task and delegation ids come from the member
+    (or its bus) — none may steer a request elsewhere."""
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.raw_path.decode()))
+        return httpx.Response(200, json={"ok": True, "pending": [], "removed": True, "cancelled": True})
+
+    be = deckdata.LiveBackend(_conn(handler))
+    a = {"id": "x-1", "name": "x"}
+    be.steer(a, "../s", "m/1", "hi")
+    be.steer_pending(a, "../s")
+    be.steer_cancel(a, "../s", "m/1")
+    be.interject(a, "../s", "t/1", "m", "hi")
+    be.delegation_cancel(a, "../s", "d/1")
+    paths = [p for _, p in seen]
+    assert all(p.startswith("/agents/x-1/api/chat/sessions/%2E%2E%2Fs/") for p in paths), paths
+    assert paths[2].endswith("/steer/m%2F1") and "/server-turns/t%2F1/interject" in paths[3] and "/delegations/d%2F1/cancel" in paths[4]

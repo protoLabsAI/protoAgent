@@ -356,6 +356,7 @@ def agent_name() -> str:
 # ``_event_bus`` / ``_bundle_root`` from this module — all defined above, so this
 # import is not a cycle.
 from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A surface
+    settle_plugin_form_task,
     _SKILL_SPECS,
     _a2a_card_url,
     _a2a_progress,
@@ -664,6 +665,7 @@ def _main():
         watch_update=_console._operator_watches_update,
         verifier_catalog=_console._operator_verifier_catalog,
         chat_commands=_console._operator_chat_commands,
+        form_task_settle=settle_plugin_form_task,
         events_subscribe=_event_bus.subscribe,
         events_publish=_event_bus.publish,
         activity_list=_console._operator_activity_list,

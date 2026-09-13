@@ -595,6 +595,8 @@ def apply_frame(turn: Turn, frame: dict) -> None:
             turn.state = state
         if is_paused(state):
             turn.hitl = hitl_from_parts(parts) or {"question": msg_text or "Input required."}
+        elif state:
+            turn.hitl = None  # answered (or dismissed): the turn is running or over
         if state == "failed":
             turn.failed = msg_text or "the turn failed"
         if su.get("final") or is_terminal(state):
@@ -771,6 +773,20 @@ class A2AClient:
                     if r.status_code >= 400:
                         r.read()
                         self._raise_for(r)
+                    if "text/event-stream" not in (r.headers.get("content-type") or ""):
+                        # A JSON-RPC answer instead of a stream: the server refused to stream
+                        # (SubscribeToTask on a task already in a terminal state answers 200 +
+                        # {"error": …}) or answered in one piece. Never a silent empty stream.
+                        r.read()
+                        try:
+                            body = r.json()
+                        except ValueError:
+                            body = None
+                        if isinstance(body, dict) and (body.get("error") or body.get("result") is not None):
+                            yield body  # apply_frame raises TurnError on the error shape
+                        else:
+                            raise deckhub.HubRequestError(self.base_url, r.status_code, f"{self.endpoint} answered {(r.headers.get('content-type') or 'nothing')!r} instead of a stream")
+                        return
                     yield from _parse_sse(r.iter_lines())
                 finally:
                     self._active = None

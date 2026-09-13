@@ -31,7 +31,9 @@ from textual.widgets import DataTable, Footer, RichLog, Static
 
 from deck import data as deckdata
 from deck.data import Backend, MemberDetail, Snapshot, display_name, presence_of, slug_of
+from deck.feed import FEED_CSS, Activity, WorkFeedScreen
 from deck.talk import TALK_CSS, ConversationScreen
+from deck.hitl import HITL_CSS
 
 POLL_S = 3.0
 LOG_POLL_S = 2.0
@@ -73,6 +75,7 @@ class RosterScreen(Screen):
         Binding("x", "stop", "stop", show=True),
         Binding("r", "restart", "restart", show=True),
         Binding("l", "logs", "logs", show=True),
+        Binding("w", "work", "work", show=True),
         Binding("o", "open_console", "console", show=True),
         Binding("slash", "filter", "filter", show=True, key_display="/"),
         Binding("escape", "clear_filter", "clear filter", show=False),
@@ -93,7 +96,7 @@ class RosterScreen(Screen):
         yield Static("protoagent fleet · connecting…", id="topbar")
         yield Static("", id="banner")
         table: DataTable = DataTable(id="roster", cursor_type="row", zebra_stripes=False)
-        table.add_columns("", "MEMBER", "STATE", "PORT", "VER", "PID", "SPEND/24H", "BUNDLE")
+        table.add_columns("", "MEMBER", "STATE", "TURN", "PORT", "VER", "PID", "SPEND/24H", "LAST ACTIVE", "BUNDLE")
         yield table
         yield Static("", id="status")
         yield Footer()
@@ -137,7 +140,9 @@ class RosterScreen(Screen):
             bundle = str(a.get("bundle") or "")
             if a.get("remote") and a.get("url"):
                 bundle = str(a["url"])
-            table.add_row(glyph, display_name(a), pres, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), bundle, key=key)
+            turn = app.activity.turn_cell(slug_of(a)) if pres in ("online", "host", "remote") else ""
+            turn_cell = Text(turn, style="bold yellow" if turn.startswith("⚑") else ("yellow" if turn.startswith("⟳") else "dim"))
+            table.add_row(glyph, display_name(a), pres, turn_cell, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), app.activity.last_active_cell(slug_of(a)), bundle, key=key)
         if rows:
             idx = next((i for i, a in enumerate(rows) if slug_of(a) == keep), 0)
             table.move_cursor(row=idx)
@@ -147,6 +152,10 @@ class RosterScreen(Screen):
         online = sum(1 for a in snap.roster if presence_of(a) in ("online", "remote"))
         stopped = sum(1 for a in snap.roster if presence_of(a) == "stopped")
         parts = [f"{online} online · {stopped} stopped"]
+        parked = [display_name(a) for a in snap.roster if app.activity.turn_cell(slug_of(a)).startswith("⚑")]
+        n_parked = sum(len(app.activity.parked_sessions(slug_of(a))) for a in snap.roster)
+        if parked:
+            parts.append(f"⚑ {n_parked} turn{'s' if n_parked != 1 else ''} parked on a question ({', '.join(parked)})")
         if snap.mode == "offline":
             parts.append("offline: only start/stop are available — start a hub for the rest")
         if self._filter:
@@ -279,6 +288,12 @@ class RosterScreen(Screen):
 
     def action_refresh(self) -> None:
         self.app.poll()  # type: ignore[attr-defined]
+
+    def action_work(self) -> None:
+        if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
+            self.notify("the work feed needs a running hub", severity="warning")
+            return
+        self.app.push_screen(WorkFeedScreen())
 
     def action_help(self) -> None:
         self.app.action_show_help_panel()
@@ -587,19 +602,71 @@ class FleetDeck(App[int]):
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
     #sessions { height: auto; max-height: 12; }
     #log { height: 1fr; }
-    """ + TALK_CSS
+    """ + TALK_CSS + FEED_CSS + HITL_CSS
 
-    def __init__(self, backend: Backend, *, poll_s: float = POLL_S) -> None:
+    def __init__(self, backend: Backend, *, poll_s: float = POLL_S, events: Any = None) -> None:
         super().__init__()
         self.backend = backend
         self.snapshot: Snapshot | None = None
         self._poll_s = poll_s
+        self.activity = Activity()
+        # The fan-in of every online member's event bus (live mode). Injectable for tests.
+        self.events = events
+        self._events_pending = events is None and backend.mode == "live" and hasattr(backend, "fleet_events")
 
     def on_mount(self) -> None:
         self.push_screen(RosterScreen())
+        if self._events_pending:
+            try:
+                self.events = self.backend.fleet_events()  # type: ignore[attr-defined]
+            except Exception as exc:  # noqa: BLE001 — the roster works without the feed
+                self.notify(f"live activity unavailable: {exc}", severity="warning")
         self.poll()
         if self._poll_s > 0:
             self.set_interval(self._poll_s, self.poll)
+        self.set_interval(0.5, self.drain_events)
+
+    def drain_events(self) -> None:
+        """Fold what the member buses sent since the last tick into the activity model;
+        re-render the roster's TURN column when anything changed; ring on a new park."""
+        if self.events is None:
+            return
+        evs = self.events.drain()
+        for ev in evs:
+            self.activity.apply(ev)
+        if not evs:
+            return
+        for scr in self.screen_stack:
+            if isinstance(scr, ConversationScreen):
+                scr.on_bus_events(evs)
+        self._ring_parks()
+        roster = self._roster_screen()
+        if roster is not None and self.snapshot is not None:
+            roster.render_snapshot(self.snapshot)
+
+    def _ring_parks(self) -> None:
+        """Announce the parks that appeared since the last drain — and are STILL parked."""
+        for slug, _session, prompt in self.activity.ring_due():
+            self.bell()
+            self.notify(f"{self.activity.names.get(slug, slug)} needs you: {prompt}", severity="warning", timeout=10)
+
+    def attached_count(self) -> int:
+        """Conversations currently streaming or attached to a live turn."""
+        return sum(1 for scr in self.screen_stack if isinstance(scr, ConversationScreen) and scr.convo.live is not None)
+
+    def open_member(self, slug: str, session_id: str | None = None) -> None:
+        """Open a member's conversation (from the work feed): at the given session, or its
+        latest. A stopped member cannot be talked to."""
+        if self.snapshot is None:
+            return
+        agent = next((a for a in self.snapshot.roster if slug_of(a) == slug), None)
+        if agent is None:
+            self.notify(f"{slug} is not in the roster any more", severity="warning")
+            return
+        if presence_of(agent) not in ("online", "host", "remote"):
+            self.notify(f"{display_name(agent)} is {presence_of(agent)}", severity="warning")
+            return
+        self.push_screen(ConversationScreen(agent, session_id=session_id))
 
     @work(thread=True, exclusive=True, group="poll")
     def poll(self) -> None:
@@ -612,6 +679,13 @@ class FleetDeck(App[int]):
 
     def _apply(self, snap: Snapshot) -> None:
         self.snapshot = snap
+        self.activity.names.update({slug_of(a): display_name(a) for a in snap.roster})
+        if self.events is not None:
+            self.events.watch([slug_of(a) for a in snap.roster if presence_of(a) in ("online", "host", "remote")])
+        if snap.parked is not None:
+            for slug, seen in snap.parked.items():  # only the members and sessions the probe actually saw
+                self.activity.probe(slug, seen, probed_at=snap.parked_at)
+            self._ring_parks()
         roster = self._roster_screen()
         if roster is not None:
             roster.render_snapshot(snap)
@@ -670,7 +744,13 @@ class FleetDeck(App[int]):
         self.exit(0)
 
     def on_unmount(self) -> None:
-        # Whatever ends the app (q, ctrl+q, an exception in run_test), the hub client is closed.
+        # Whatever ends the app (q, ctrl+q, an exception in run_test), every reader thread
+        # is stopped and the hub client is closed.
+        if self.events is not None:
+            try:
+                self.events.close()
+            except Exception:  # noqa: BLE001
+                pass
         self.backend.close()
 
 

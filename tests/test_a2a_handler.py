@@ -1462,3 +1462,4 @@ def test_task_id_from_response_reads_both_wire_shapes():
     assert task_id_from_response({"error": {"message": "nope"}}) == ""
     assert task_id_from_response(None) == ""
     assert task_id_from_response("not a dict") == ""
+

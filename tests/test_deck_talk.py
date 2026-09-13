@@ -57,10 +57,12 @@ class FakeA2A:
     `block=True` yields the first N frames then blocks until abort() and raises like a
     closed socket — the shape of a stalled/half-open stream."""
 
-    def __init__(self, frames=None, *, hang=False, block_after=None, task_state="TASK_STATE_COMPLETED"):
+    def __init__(self, frames=None, *, hang=False, block_after=None, task_state="TASK_STATE_COMPLETED", sub_frames=None):
         self.frames, self.hang, self.block_after = frames, hang, block_after
         self.task_state = task_state
+        self.sub_frames = sub_frames  # what SubscribeToTask replays (default: the canned turn)
         self.sent: list[dict] = []
+        self.subscribed: list[str] = []
         self.cancelled: list[str] = []
         self.aborted = False
         self.closed = False
@@ -89,6 +91,26 @@ class FakeA2A:
                     if not self._wait(lambda: self.cancelled or self.aborted):
                         raise AssertionError("hanging stream was never cancelled within 5s")
                     yield status("TASK_STATE_CANCELED", final=True, cid=context_id)
+                    return
+                yield f
+        finally:
+            self.exited = True
+
+    def subscribe(self, task_id):
+        """SubscribeToTask. With `hang=True` the last frame is held until cancel() (→ a
+        canceled frame) or abort() (→ raises like the shut socket it really is)."""
+        self.subscribed.append(task_id)
+        frames = self.sub_frames if self.sub_frames is not None else canned_frames("s")
+        try:
+            for f in frames:
+                if self.hang and f is frames[-1]:
+                    if not self._wait(lambda: self.cancelled or self.aborted):
+                        raise AssertionError("hanging subscription was never cancelled within 5s")
+                    if self.aborted and not self.cancelled:
+                        from deck import hub as deckhub
+
+                        raise deckhub.HubUnreachable("http://127.0.0.1:7870", "stream closed (abort)")
+                    yield status("TASK_STATE_CANCELED", final=True, cid="s")
                     return
                 yield f
         finally:
@@ -205,7 +227,9 @@ async def test_esc_cancels_a_running_turn_then_backs_out():
 
 
 @pytest.mark.asyncio
-async def test_a_second_message_while_working_is_refused_until_s3():
+async def test_a_second_message_while_working_steers_the_turn_not_a_new_one():
+    """A message typed while the member works is QUEUED into the running turn (#3470),
+    never sent as a competing turn; the transcript shows it queued."""
     fake = FakeA2A(hang=True)
     be = TalkBackend(a2a_client=fake)
     app = FleetDeck(be, poll_s=0)
@@ -217,8 +241,12 @@ async def test_a_second_message_while_working_is_refused_until_s3():
         await pilot.pause(0.3)
         comp.value = "two"
         await pilot.press("enter")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: any(c[0] == "steer" for c in be.calls))
         assert [s["text"] for s in fake.sent] == ["one"]
+        steer = next(c for c in be.calls if c[0] == "steer")
+        assert steer[1] == app.screen.convo.session_id and steer[3] == "two"
+        assert "queued" in str(app.screen.query(".steer-msg").first().content)
+        assert "1 queued" in str(app.screen.query_one("#talk-status", Static).content)
         await pilot.press("escape")
         await _settle(app, pilot)
 
@@ -314,7 +342,7 @@ async def test_a_parked_question_is_surfaced_in_the_status_line():
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "ship it")
         st = str(app.screen.query_one("#talk-status", Static).content)
-        assert "needs you: Merge this PR?" in st
+        assert "needs you (question): Merge this PR?" in st and "ctrl+r" in st
 
 
 @pytest.mark.asyncio
