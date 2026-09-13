@@ -50,6 +50,7 @@ def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
         **d,
     )
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting", **d)
+    p.add_argument("--all", dest="all_hubs", action="store_true", help="every hub on this box (and peers found on the network), not one hub's fleet", **d)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -354,6 +355,91 @@ def _cmd_down(args: argparse.Namespace) -> int:
 
 
 # ── the deck (bare `protoagent fleet`, or `protoagent top`) ──────────────────
+
+
+# ── every hub on the box (#3472) ─────────────────────────────────────────────
+
+
+def _discover_peers() -> list[dict]:
+    """Other protoAgents on the LAN / tailnet / local ports, via the fleet's own discovery
+    (``graph.fleet.discovery`` — the deck never imports ``graph``, so the CLI hands the
+    callable over). Best-effort, bounded by the discovery's own timeouts."""
+    import asyncio
+
+    from graph.fleet import discovery
+
+    try:
+        return asyncio.run(discovery.discover())
+    except Exception as exc:  # noqa: BLE001 — a network scan must not take the tree down
+        logging.getLogger("protoagent.fleet").debug("peer discovery failed: %s", exc)
+        return []
+
+
+def _launch_hub(row) -> None:
+    """``protoagent up`` for another instance root — the detached server the CLI's own
+    ``up`` starts, scoped by ``PROTOAGENT_HOME`` (the instance root) and never by this
+    shell's environment. Raises with the CLI's own message when it could not start."""
+    import os
+    import subprocess
+
+    if row.root is None:
+        raise RuntimeError("only a hub with an instance root on this box can be brought up")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PROTOAGENT_")}
+    env["PROTOAGENT_HOME"] = str(row.root)
+    # the frozen-aware base argv (as server/cli.py builds it — graph must not import server)
+    base = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "server"]
+    argv = [*base, "up"]
+    if row.port:
+        argv += ["--port", str(row.port)]
+    proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "").strip().splitlines()[-1] if (proc.stderr or proc.stdout).strip() else f"protoagent up exited {proc.returncode}")
+
+
+def _hub_row_dict(r) -> dict:
+    return {
+        "name": r.name,
+        "presence": r.presence,
+        "launcher": r.launcher,
+        "url": r.url,
+        "port": r.port,
+        "version": r.version,
+        "pid": r.pid,
+        "root": str(r.root) if r.root is not None else None,
+        "members": r.members,
+        "running": r.running,
+        "remotes": r.remotes,
+        "note": r.note,
+        "source": r.source,
+    }
+
+
+def _cmd_hubs(args: argparse.Namespace) -> int:
+    """``protoagent fleet --all``: every hub on this box, probed, plus peers."""
+    import importlib
+
+    hubs = importlib.import_module("deck.hubs")
+    rows = hubs.enumerate_hubs(peers=[] if args.offline else _discover_peers())
+    for r in rows:
+        if r.candidate is not None and not args.offline:
+            hubs.probe(r, token=args.token, insecure_http=args.insecure_http)
+    rows = hubs.reconcile(rows)
+    if args.as_json:
+        _emit({"mode": "hubs", "hubs": [_hub_row_dict(r) for r in rows]})
+        return 0
+    if not rows:
+        print("(no hubs found on this box)")
+        return 0
+    print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running")
+    for r in rows:
+        glyph = hubs.PRESENCE_GLYPH.get(r.presence, "·")
+        members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")
+        place = str(r.root) if r.root is not None else (deckhub.redact_url(r.url) if r.url else "")
+        where = f"{place} — {r.note}" if r.note and r.root is None else (r.note or place)
+        port = f":{r.port}" if r.port else "—"
+        ver = f"v{r.version}" if r.version else "—"
+        print(f"  {glyph} {r.name:<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {where}")
+    return 0
 
 
 # ── manage (#3471) ───────────────────────────────────────────────────────────
@@ -669,7 +755,16 @@ def _cmd_deck(args: argparse.Namespace) -> int:
         backend = deckdata.LiveBackend(conn)
     else:
         backend = _offline_backend("no hub answered")
-    return int(deckapp.run(backend))
+    return int(
+        deckapp.run(
+            backend,
+            peers=None if args.offline else _discover_peers,
+            launcher=_launch_hub,
+            token=args.token,
+            insecure_http=args.insecure_http,
+            start_on_hubs=bool(args.all_hubs),
+        )
+    )
 
 
 def run_deck_cli(argv: list[str]) -> int:
@@ -696,6 +791,8 @@ def run_fleet_cli(argv: list[str]) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         if args.cmd is None:
+            if args.all_hubs and (args.as_json or not (sys.stdout.isatty() and sys.stdin.isatty())):
+                return _cmd_hubs(args)  # the tree, non-interactively
             return _cmd_deck(args)
         if args.cmd == "up":
             return _cmd_up(args)

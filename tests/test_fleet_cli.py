@@ -175,11 +175,13 @@ def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     seen: dict = {}
+    seen_kw: dict = {}
     _live(monkeypatch, FakeClient())
 
     class FakeApp:
         @staticmethod
-        def run(backend):
+        def run(backend, **kw):
+            seen_kw.update(kw)
             seen["mode"] = backend.mode
             return 0
 
@@ -188,6 +190,7 @@ def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     real = importlib.import_module
     monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
     assert cli.run_fleet_cli([]) == 0
+    assert seen_kw["start_on_hubs"] is False and callable(seen_kw["launcher"]) and callable(seen_kw["peers"]) and seen_kw["token"] is None
     assert seen == {"mode": "live"}
     assert cli.run_deck_cli(["ls"]) == 0  # `top` strips a LEADING verb and opens the deck
     assert seen == {"mode": "live"}
@@ -703,3 +706,83 @@ def test_rm_json_keeps_stdout_clean_and_tells_scripts_about_yes(monkeypatch, cap
     assert cli.run_fleet_cli(["rm", "alpha", "--json"]) == 1
     body = json.loads(capsys.readouterr().out)
     assert body["mode"] == "aborted" and "--yes" in body["results"][0]["error"]
+
+
+# ── every hub on the box (#3472) ──
+
+
+def _tree_rows():
+    from pathlib import Path
+
+    from deck.hubs import HubRow
+
+    return [
+        HubRow(name="studio", root=Path("/tmp/desktop"), url="http://127.0.0.1:7870", port=7870, presence="running", launcher="desktop app", version="0.165.0", pid=222, source="heartbeat", members=13, running=5, remotes=0, candidate=deckhub.HubCandidate("http://127.0.0.1:7870", "heartbeat")),
+        HubRow(name="dev", root=Path("/tmp/dev"), url="http://127.0.0.1:7871", port=7871, presence="stopped", source="root", version="0.164.0", members=2, running=0, remotes=0),
+        HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer")),
+    ]
+
+
+def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, capsys):
+    from deck import hubs
+
+    probed: list = []
+    monkeypatch.setattr(hubs, "enumerate_hubs", lambda *, peers=None: (probed.append(("peers", peers)) or _tree_rows()))
+
+    def probe(row, *, token=None, insecure_http=False):
+        probed.append((row.name, token))
+        if row.name == "ava":
+            row.presence, row.note = "unauthorized", "answers, but every credential was refused — pass --token"
+        return row
+
+    monkeypatch.setattr(hubs, "probe", probe)
+    monkeypatch.setattr(cli, "_discover_peers", lambda: [{"name": "ava", "url": "https://ava.tail:7870"}])
+    assert cli.run_fleet_cli(["--all", "--json", "--token", "tok"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert body["mode"] == "hubs" and [h["name"] for h in body["hubs"]] == ["studio", "dev", "ava"]
+    assert [h["presence"] for h in body["hubs"]] == ["running", "stopped", "unauthorized"]
+    assert body["hubs"][0]["launcher"] == "desktop app" and body["hubs"][0]["members"] == 13 and body["hubs"][1]["root"] == "/tmp/dev"
+    assert ("peers", [{"name": "ava", "url": "https://ava.tail:7870"}]) in probed and ("studio", "tok") in probed and ("ava", "tok") in probed
+    assert not any(p[0] == "dev" for p in probed)  # a stopped hub has nothing to probe
+    # the human table, off a terminal
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert cli.run_fleet_cli(["--all"]) == 0
+    out = capsys.readouterr().out
+    assert "3 found · 1 running" in out and "unauthorized" in out and "pass --token" in out and "/tmp/dev" in out
+    # --offline: no peer scan, no probes
+    probed.clear()
+    assert cli.run_fleet_cli(["--all", "--offline", "--json"]) == 0
+    assert probed == [("peers", [])]
+
+
+def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope(monkeypatch):
+    from pathlib import Path
+
+    from deck.hubs import HubRow
+
+    seen: dict = {}
+
+    class P:
+        returncode = 0
+        stdout = "protoagent: started on http://127.0.0.1:7871 (pid 5)"
+        stderr = ""
+
+    def fake_run(argv, *, env, capture_output, text, timeout):
+        seen.update(argv=argv, env=env)
+        return P()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "somewhere-else")
+    monkeypatch.setenv("PROTOAGENT_HOME", "/nope")
+    cli._launch_hub(HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root"))
+    assert seen["argv"][-3:] == ["up", "--port", "7871"] and seen["env"]["PROTOAGENT_HOME"] == "/tmp/dev" and "PROTOAGENT_INSTANCE" not in seen["env"]
+
+    class Bad(P):
+        returncode = 1
+        stderr = "protoagent: port 7871 is held by a process `protoagent up` didn't start — free it, or pass --port\n"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: Bad())
+    with pytest.raises(RuntimeError, match="port 7871 is held"):
+        cli._launch_hub(HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root"))
+    with pytest.raises(RuntimeError, match="instance root"):
+        cli._launch_hub(HubRow(name="ava", root=None, url="https://ava:7870", port=7870, presence="unreachable", source="peer"))

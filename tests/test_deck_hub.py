@@ -626,3 +626,15 @@ def test_every_manage_path_encodes_its_id_as_one_segment_dots_included():
     paths = [p for _, p in seen]
     assert paths == ["/api/fleet/%2E%2E?purge=true", "/api/fleet/%2E", "/api/fleet/remotes/%2E%2E%2F%2E%2E", "/api/fleet/remotes/a%2Eb", "/api/fleet/%2E%2E/start"]
     assert hub.segment("chat-1.2/3") == "chat-1%2E2%2F3"
+
+
+def test_instance_root_comes_from_config_explain_and_is_none_when_missing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/config/explain":
+            return httpx.Response(200, json={"instance_id": "x", "box_root": "/b", "instance_root": "/b/dev", "paths": {}})
+        return httpx.Response(404)
+
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(handler))
+    assert c.instance_root() == "/b/dev"
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(404)))
+    assert c.instance_root() is None

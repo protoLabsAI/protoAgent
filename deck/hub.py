@@ -681,6 +681,17 @@ class HubClient:
     def runtime_status(self) -> dict:
         return _expect_dict(self.url, self._request("GET", "/api/runtime/status"), "runtime status")
 
+    def instance_root(self) -> str | None:
+        """The hub's own instance root, from ``GET /api/config/explain`` (which names both
+        roots) — how a listener found by port is matched to the root on disk it belongs to.
+        None when the route is missing (an older hub) or unreadable."""
+        try:
+            data = _expect_dict(self.url, self._request("GET", "/api/config/explain"), "config explain")
+        except HubError:
+            return None
+        root = data.get("instance_root")
+        return str(root) if isinstance(root, str) and root.strip() else None
+
     def telemetry_fleet(self) -> dict:
         """The hub-side rollup (spend / turns / flags per member, ADR 0006 fleet extension)."""
         return _expect_dict(self.url, self._request("GET", "/api/telemetry/fleet"), "telemetry")
