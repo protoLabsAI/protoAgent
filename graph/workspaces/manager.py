@@ -310,10 +310,54 @@ def _port_is_free(port: int) -> bool:
             return False
 
 
+def _ports_other_instances_record() -> set[int]:
+    """The ports every OTHER instance on this machine records for its members (each
+    member's ``workspace.yaml``). A STOPPED member holds no socket, so ``_port_is_free``
+    reads its port as free — yet the member binds it at its next start, and the two agents
+    then collide with ``EADDRINUSE`` (the dev hub handed its new member the desktop
+    instance's stopped ``designSystem`` port). Instances are each known box root and its
+    child instance roots; this instance's own members are :func:`list_workspaces`'s job."""
+    from infra.paths import known_box_roots
+
+    try:
+        own = workspaces_root().resolve()
+    except OSError:
+        own = workspaces_root()
+    ports: set[int] = set()
+    for box in known_box_roots():
+        try:
+            instances = [box, *sorted(p for p in box.iterdir() if p.is_dir() and not p.name.startswith("."))]
+        except OSError:
+            continue
+        for inst in instances:
+            ws = inst / "workspaces"
+            try:
+                if not ws.is_dir() or ws.resolve() == own:
+                    continue
+                members = [d for d in ws.iterdir() if d.is_dir()]
+            except OSError:
+                continue
+            for d in members:
+                rec = _read_record(d) or {}
+                try:
+                    port = int(rec.get("port") or 0)
+                except (TypeError, ValueError):
+                    port = 0
+                if port:
+                    ports.add(port)
+    return ports
+
+
 def _pick_port(explicit: int | None) -> int:
     if explicit:
         return int(explicit)
     used = {w["port"] for w in list_workspaces() if w.get("port")}
+    # …and every port ANOTHER instance on this machine records for a member: ports are
+    # box-global, and a stopped member's port reads free to the OS probe below.
+    try:
+        used |= _ports_other_instances_record()
+    except Exception:  # noqa: BLE001 — best-effort; an unreadable root must not block a create
+        pass
     # Don't collide with the HUB itself — the host instance (this process) self-registers as a
     # fleet agent on its own port but isn't a workspace, so it's invisible to list_workspaces().
     try:

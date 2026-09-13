@@ -654,6 +654,40 @@ def _box_root() -> Path:
     return Path(raw).expanduser() if raw else data_home()
 
 
+# The desktop app's bundle identifier: Tauri keeps its data dir (the desktop hub's box AND
+# instance root) under the platform's app-data dir by this name.
+DESKTOP_APP_ID = "studio.protolabs.protoagent"
+
+
+def desktop_box_roots() -> list[Path]:
+    """Where the desktop app keeps its box root on each platform (Tauri ``app_data_dir`` for
+    :data:`DESKTOP_APP_ID`). Existence is checked by the caller."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [home / "Library" / "Application Support" / DESKTOP_APP_ID]
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA", "").strip()
+        return [(Path(appdata) if appdata else home / "AppData" / "Roaming") / DESKTOP_APP_ID]
+    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
+    return [(Path(xdg) if xdg else home / ".local" / "share") / DESKTOP_APP_ID]
+
+
+def known_box_roots() -> list[Path]:
+    """Every box root this machine is known to use — this process's, the plain data home,
+    the desktop app's — existing dirs only, resolved and deduped in that order. Ports are
+    box-global: anything that hands one out has to look across all of them, not only at
+    the instance it runs in."""
+    seen: list[Path] = []
+    for p in [_box_root(), data_home(), *desktop_box_roots()]:
+        try:
+            rp = p.expanduser().resolve()
+        except OSError:
+            continue
+        if rp not in seen and rp.is_dir():
+            seen.append(rp)
+    return seen
+
+
 @dataclass(frozen=True)
 class InstancePaths:
     """Every on-disk location for one agent instance, resolved once from the

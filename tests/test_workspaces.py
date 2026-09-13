@@ -53,6 +53,40 @@ def test_pick_port_skips_os_occupied(root, monkeypatch):
     assert manager.create("alpha")["port"] == 7872
 
 
+def test_pick_port_skips_ports_other_instances_record_for_stopped_members(root, monkeypatch, tmp_path):
+    """The dev hub handed its new member :7874 — the port the desktop instance's STOPPED
+    designSystem member records. Nothing listens there, so the OS probe reads it free, yet
+    that member binds it at its next start. Every other instance's recorded member ports
+    on this machine are skipped: the desktop's, and a scoped instance's under the box."""
+    from infra import paths
+
+    desktop = tmp_path / "desktop"
+    (desktop / "workspaces" / "designSystem-9062").mkdir(parents=True)
+    (desktop / "workspaces" / "designSystem-9062" / "workspace.yaml").write_text("id: designSystem-9062\nname: designSystem\nport: 7871\n")
+    dev_member = tmp_path / "box-root" / "dev" / "workspaces" / "claudia-5d75"  # a scoped instance under the plain data home
+    dev_member.mkdir(parents=True)
+    (dev_member / "workspace.yaml").write_text("id: claudia-5d75\nname: claudia\nport: 7872\n")
+    monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop])
+    assert manager.create("alpha")["port"] == 7873
+    assert manager.create("beta")["port"] == 7874  # this instance's own records still count, as before
+
+
+def test_pick_port_is_unchanged_when_no_other_instance_exists(root):
+    """No other instance on the machine: the scan finds nothing and allocation is the old one."""
+    assert manager._ports_other_instances_record() == set()
+    assert manager.create("alpha")["port"] == 7871
+
+
+def test_known_box_roots_lists_each_existing_root_once(tmp_path, monkeypatch):
+    from infra import paths
+
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop, tmp_path / "missing"])
+    (tmp_path / "box-root").mkdir()
+    assert paths.known_box_roots() == [(tmp_path / "box-root").resolve(), desktop.resolve()]  # box root == data home here: listed once
+
+
 def test_pick_port_raises_when_range_saturated(root, monkeypatch):
     """A fully-occupied range fails loudly instead of looping forever."""
     monkeypatch.setattr(manager, "_port_is_free", lambda port: False)
