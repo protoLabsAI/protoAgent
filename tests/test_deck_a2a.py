@@ -456,3 +456,31 @@ def test_watchdog_finalizes_only_a_terminal_task_after_the_idle_window():
     assert a2a.stalled_turn_is_terminal(t, boom, now=200.0) is None  # unknown → re-arm
     t.done = True
     assert a2a.stalled_turn_is_terminal(t, lambda tid: {"status": {"state": "TASK_STATE_COMPLETED"}}, now=999.0) is None
+
+
+def test_a_resubscribe_snapshot_replaces_history_state_instead_of_doubling_it():
+    """CodeRabbit: the snapshot repeats every status message the live stream delivered."""
+    t = a2a.Turn(context_id=CID)
+    hist = [
+        {"role": "ROLE_USER", "parts": [{"text": "q"}]},
+        {"role": "ROLE_AGENT", "parts": [{"data": {"text": "thinking hard"}, "metadata": {"mimeType": a2a.REASONING_MIME}}]},
+        {"role": "ROLE_AGENT", "parts": [{"data": {"component": "table", "props": {"rows": []}}, "metadata": {"mimeType": a2a.COMPONENT_MIME}}]},
+        {"role": "ROLE_AGENT", "parts": [], "metadata": {a2a.TOOL_CALL_EXT_URI: {"toolCallId": "c1", "name": "run_command", "phase": "started", "args": "ls"}}},
+    ]
+    snap = {"id": "t1", "contextId": CID, "status": {"state": "TASK_STATE_WORKING"}, "history": hist, "artifacts": []}
+    a2a.apply_frame(t, {"result": {"task": snap}})
+    started = t.tool("c1").started_at
+    a2a.apply_frame(t, {"result": {"task": snap}})  # the resubscribe replays the same history
+    assert t.reasoning == "thinking hard" and len(t.components) == 1 and [c.id for c in t.tool_calls] == ["c1"]
+    assert t.tool("c1").started_at == started  # the card seen first keeps its timing
+    # a bare live Task frame (no history) leaves everything alone
+    a2a.apply_frame(t, {"result": {"task": {"id": "t1", "contextId": CID, "status": {"state": "TASK_STATE_WORKING"}}}})
+    assert t.reasoning == "thinking hard" and len(t.components) == 1
+
+
+def test_for_member_never_adopts_a_callers_transport():
+    hub = deckhub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"agents": []})))
+    c = a2a.A2AClient.for_member(hub, "x", transport=hub._client._transport)
+    assert c._client._transport is not hub._client._transport
+    c.close()
+    assert hub.fleet() == []  # the hub's pool is untouched

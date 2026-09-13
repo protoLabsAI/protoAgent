@@ -518,13 +518,34 @@ def replay_task_snapshot(turn: Turn, task: dict) -> None:
     bare (submitted; no history, no artifacts), so this is a no-op there."""
     if task.get("id"):
         turn.task_id = str(task["id"])
-    for msg in task.get("history") or []:
-        if not isinstance(msg, dict):
-            continue
-        role = str(msg.get("role") or "")
-        if "USER" in role.upper() and "AGENT" not in role.upper() or role == "user":
-            continue
-        _apply_status_message(turn, msg)
+    history = [m for m in (task.get("history") or []) if isinstance(m, dict)]
+    if history:
+        # Rebuild the history-derived state in a scratch turn and REPLACE it, never append:
+        # a resubscribe's snapshot repeats every status message the live stream already
+        # delivered (reasoning, components, room replies, consumed steers would double).
+        fresh = Turn(context_id=turn.context_id, task_id=turn.task_id)
+        for msg in history:
+            role = str(msg.get("role") or "")
+            if "USER" in role.upper() and "AGENT" not in role.upper() or role == "user":
+                continue
+            _apply_status_message(fresh, msg)
+        turn.reasoning = fresh.reasoning
+        turn.components = fresh.components
+        turn.room_replies = fresh.room_replies
+        turn.consumed_steers = fresh.consumed_steers
+        turn.parts = fresh.parts
+        known = {c.id: c for c in turn.tool_calls}
+        merged: list[ToolCall] = []
+        for c in fresh.tool_calls:  # a card seen live keeps its timing; new ones join in order
+            live = known.get(c.id)
+            if live is not None:
+                live.status, live.output, live.output_chars = c.status, c.output if c.output is not None else live.output, c.output_chars or live.output_chars
+                live.parent_id = live.parent_id or c.parent_id
+                merged.append(live)
+            else:
+                merged.append(c)
+        merged_ids = {c.id for c in merged}
+        turn.tool_calls = merged + [c for c in turn.tool_calls if c.id not in merged_ids]
     arts = [a for a in (task.get("artifacts") or []) if isinstance(a, dict)]
     accumulated = "".join(_text_from_parts(a.get("parts")) for a in arts)
     for a in arts:
@@ -678,7 +699,7 @@ class A2AClient:
         but its OWN connection pool — closing this client must never tear down the pool the
         roster poll, the detail reads, and an in-flight CancelTask are using (a shared
         transport's close() drops every pooled connection, in-flight ones included)."""
-        kw.setdefault("transport", None)
+        kw.pop("transport", None)  # never a caller's (shared) transport: this client's close() closes its pool
         return cls(hub_client.url, hub_client._token, slug=slug, **kw)
 
     @property

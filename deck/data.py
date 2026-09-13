@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Protocol
 
 from deck import hub as deckhub
@@ -113,6 +114,13 @@ class Backend(Protocol):
     def turns(self, agent: dict, session_id: str, limit: int = 50) -> list[dict]: ...
     def a2a(self, agent: dict) -> Any: ...
     def close(self) -> None: ...
+
+
+def _seg(value: Any) -> str:
+    """One path segment, fully encoded — a session id comes from the member's own list, and a
+    member (or a proxy in between) must not be able to steer a request elsewhere with a
+    ``..`` or a ``/`` (httpx collapses literal dot segments before sending)."""
+    return quote(str(value), safe="").replace(".", "%2E")
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -229,7 +237,7 @@ class LiveBackend:
     def turns(self, agent: dict, session_id: str, limit: int = 50) -> list[dict]:
         """``GET /agents/<slug>/api/chat/sessions/<id>/turns`` — the durable turns (ADR 0104),
         oldest first, each with the status / artifacts / history the reducer replays."""
-        data = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{session_id}/turns", limit=limit)
+        data = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/turns", limit=limit)
         rows = data.get("turns") if isinstance(data, dict) else None
         return [r for r in (rows or []) if isinstance(r, dict)]
 

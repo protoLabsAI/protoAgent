@@ -222,8 +222,11 @@ class RosterScreen(Screen):
             self.app.push_screen(DetailScreen(a))
 
     def action_talk(self) -> None:
-        a = self._detail_allowed()
+        a = self.selected()
         if a is None:
+            return
+        if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
+            self.notify("offline — no hub to talk to this member through", severity="warning")
             return
         if presence_of(a) not in ("online", "host", "remote"):
             self.notify(f"{display_name(a)} is {presence_of(a)} — start it first (s)", severity="warning")

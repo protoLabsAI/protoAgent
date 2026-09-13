@@ -5,6 +5,8 @@ the offline refusal."""
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from textual.widgets import Input, Markdown, Static, Tree
 
@@ -331,8 +333,10 @@ async def test_stall_finalizes_from_the_task_and_unblocks_the_reader(monkeypatch
         comp = app.screen.query_one("#composer", Input)
         comp.value = "go"
         await pilot.press("enter")
-        await pilot.pause(0.4)
-        assert app.screen.convo.live is not None
+        # the Task frame must have landed (task_id set) and the idle window elapsed, or the
+        # watchdog takes the no-frame branch instead of the durable-task one
+        assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1")
+        assert await _until(pilot, lambda: time.monotonic() - app.screen.convo.live.turn.last_frame_at >= talkmod.STALL_IDLE_S)
         app.screen._check_stall()  # the 5 s timer, driven by hand
         await _settle(app, pilot)
         ex = app.screen.convo.exchanges[-1]
