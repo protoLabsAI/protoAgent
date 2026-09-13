@@ -50,31 +50,57 @@ def canned_frames(cid: str) -> list[dict]:
 
 
 class FakeA2A:
-    def __init__(self, frames=None, *, hang=False):
-        self.frames, self.hang = frames, hang
+    """A canned A2A client. `hang=True` blocks before the last frame until cancel() or
+    abort() (bounded at 5 s so a regression fails instead of hanging the suite);
+    `block=True` yields the first N frames then blocks until abort() and raises like a
+    closed socket — the shape of a stalled/half-open stream."""
+
+    def __init__(self, frames=None, *, hang=False, block_after=None, task_state="TASK_STATE_COMPLETED"):
+        self.frames, self.hang, self.block_after = frames, hang, block_after
+        self.task_state = task_state
         self.sent: list[dict] = []
         self.cancelled: list[str] = []
+        self.aborted = False
         self.closed = False
+        self.exited = False
+
+    def _wait(self, until):
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while not until() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return until()
 
     def stream(self, text, *, context_id, task_id=None, metadata=None):
         self.sent.append({"text": text, "context_id": context_id, "task_id": task_id, "metadata": metadata})
         frames = self.frames if self.frames is not None else canned_frames(context_id)
-        for f in frames:
-            if self.hang and f is frames[-1]:
-                import time
+        try:
+            for i, f in enumerate(frames):
+                if self.block_after is not None and i == self.block_after:
+                    if self._wait(lambda: self.aborted):
+                        from deck import hub as deckhub
 
-                while not self.cancelled:
-                    time.sleep(0.02)
-                yield status("TASK_STATE_CANCELED", final=True, cid=context_id)
-                return
-            yield f
+                        raise deckhub.HubUnreachable("http://127.0.0.1:7870", "stream closed (abort)")
+                    raise AssertionError("blocked stream was never aborted within 5s")
+                if self.hang and f is frames[-1]:
+                    if not self._wait(lambda: self.cancelled or self.aborted):
+                        raise AssertionError("hanging stream was never cancelled within 5s")
+                    yield status("TASK_STATE_CANCELED", final=True, cid=context_id)
+                    return
+                yield f
+        finally:
+            self.exited = True
+
+    def abort(self):
+        self.aborted = True
 
     def cancel(self, task_id):
         self.cancelled.append(task_id)
         return {}
 
     def get_task(self, task_id):
-        return {"id": task_id, "status": {"state": "TASK_STATE_COMPLETED"}}
+        return {"id": task_id, "status": {"state": self.task_state}, "artifacts": [{"parts": [{"text": "finalized from the task"}]}]}
 
     def close(self):
         self.closed = True
@@ -91,8 +117,14 @@ class TalkBackend(FakeBackend):
     def sessions(self, agent):
         return list(self._sessions)
 
+    turns_delay: dict[str, float] = {}
+
     def turns(self, agent, session_id, limit=50):
+        import time
+
         self.turn_reads.append(session_id)
+        if session_id in self.turns_delay:
+            time.sleep(self.turns_delay[session_id])
         return list(self._turns.get(session_id, []))
 
     def a2a(self, agent):
@@ -126,7 +158,7 @@ async def test_enter_on_an_online_member_opens_the_conversation_and_streams_a_tu
         assert sent["text"] == "status?" and sent["context_id"] == app.screen.convo.session_id
         # transcript: the user line, the meta line (tools + folded thinking), the answer
         mds = app.screen.query(Markdown)
-        assert len(mds) == 1 and "Three PRs are open." in str(mds.first().source if hasattr(mds.first(), "source") else "Three PRs are open.")
+        assert len(mds) == 1 and "Three PRs are open." in str(mds.first().source)
         meta = str(app.screen.query(".turn-meta").first().content)
         assert "▸ thinking · 11 chars" in meta and "⚙ 1 tool call" in meta and "⟳" not in meta
         # work tree: the task card with its nested subagent call
@@ -261,8 +293,6 @@ async def test_talk_refuses_offline_and_stopped_members():
 
 @pytest.mark.asyncio
 async def test_a_parked_question_is_surfaced_in_the_status_line():
-    cid_frames = None
-
     class Parked(FakeA2A):
         def stream(self, text, *, context_id, task_id=None, metadata=None):
             yield status("TASK_STATE_INPUT_REQUIRED", parts=[{"text": "Merge this PR?"}, {"data": {"question": "Merge this PR?"}, "metadata": {"mimeType": a2a.HITL_MIME}}], cid=context_id)
@@ -274,7 +304,155 @@ async def test_a_parked_question_is_surfaced_in_the_status_line():
         await _send(app, pilot, "ship it")
         st = str(app.screen.query_one("#talk-status", Static).content)
         assert "needs you: Merge this PR?" in st
-        assert cid_frames is None
+
+
+@pytest.mark.asyncio
+async def test_stall_finalizes_from_the_task_and_unblocks_the_reader(monkeypatch):
+    """Review HIGH-1: the watchdog finalized the Turn but never closed the stream, so the
+    reader thread stayed blocked (and the process could not exit). Now the probe aborts
+    the stream first; the worker unwinds through its except path and the client closes."""
+    from deck import talk as talkmod
+
+    monkeypatch.setattr(talkmod, "STALL_IDLE_S", 0.2)
+    fake = FakeA2A(block_after=3)  # Task frame + reasoning + one tool start, then silence
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        comp = app.screen.query_one("#composer", Input)
+        comp.value = "go"
+        await pilot.press("enter")
+        await pilot.pause(0.4)
+        assert app.screen.convo.live is not None
+        app.screen._check_stall()  # the 5 s timer, driven by hand
+        await _settle(app, pilot)
+        ex = app.screen.convo.exchanges[-1]
+        assert fake.aborted and fake.exited and fake.closed
+        assert ex.turn.done and not ex.live and ex.error == ""
+        assert "finalized from the task" in ex.turn.content
+        assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
+
+
+@pytest.mark.asyncio
+async def test_a_member_that_sends_nothing_is_aborted_after_the_window(monkeypatch):
+    from deck import talk as talkmod
+
+    monkeypatch.setattr(talkmod, "STALL_IDLE_S", 0.2)
+    fake = FakeA2A(block_after=0, task_state="TASK_STATE_WORKING")  # accepted the POST, produced nothing
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        comp = app.screen.query_one("#composer", Input)
+        comp.value = "go"
+        await pilot.press("enter")
+        await pilot.pause(0.4)
+        app.screen._check_stall()
+        await _settle(app, pilot)
+        ex = app.screen.convo.exchanges[-1]
+        assert fake.aborted and fake.exited and not ex.live and ex.error
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_consults_the_task_before_failing():
+    """A half-open connection surfaces as StreamStalled from the client; the worker asks
+    GetTask and finalizes only if the server finished."""
+    from deck import a2a as a2amod
+
+    class Stalls(FakeA2A):
+        def stream(self, text, *, context_id, task_id=None, metadata=None):
+            self.sent.append({"text": text})
+            yield {"result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}}
+            raise a2amod.StreamStalled("http://127.0.0.1:7870", "no frame for 60s")
+
+    be = TalkBackend(a2a_client=Stalls())
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "go")
+        ex = app.screen.convo.exchanges[-1]
+        assert ex.turn.done and "finalized from the task" in ex.turn.content and not ex.error
+    be = TalkBackend(a2a_client=Stalls(task_state="TASK_STATE_WORKING"))
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "go")
+        ex = app.screen.convo.exchanges[-1]
+        assert not ex.turn.done and "timed out" in ex.error and not ex.live
+
+
+@pytest.mark.asyncio
+async def test_a_session_load_never_orphans_a_live_turn():
+    """Review HIGH-2: a slow turns() fetch landing after a send replaced the conversation,
+    the live exchange vanished (status "idle"), and a second stream could start."""
+    fake = FakeA2A(hang=True)
+    be = TalkBackend(a2a_client=fake)
+    be.turns_delay = {}
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        # while a session load is in flight, sending is refused
+        sid = app.screen.convo.session_id
+        be.turns_delay[sid] = 0.6
+        app.screen.load_session(sid)
+        await pilot.pause(0.1)
+        comp = app.screen.query_one("#composer", Input)
+        comp.value = "too early"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert fake.sent == []
+        await _settle(app, pilot)
+        # a load that lands while a turn streams is dropped, not applied
+        comp.value = "one"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert app.screen.convo.live is not None
+        app.screen._apply_session("chat-other", [], None)
+        assert app.screen.convo.live is not None and app.screen.convo.session_id == sid
+        assert "⟳" in str(app.screen.query_one("#talk-status", Static).content)
+        await pilot.press("escape")
+        await _settle(app, pilot)
+
+
+@pytest.mark.asyncio
+async def test_a_stale_session_load_is_ignored():
+    be = TalkBackend(turns={"chat-A": [], "chat-B": []})
+    be.turns_delay = {"chat-A": 0.5, "chat-B": 0.0}
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        app.screen.load_session("chat-A")
+        await pilot.pause(0.05)
+        app.screen.load_session("chat-B")
+        await _settle(app, pilot)
+        await pilot.pause(0.6)
+        await _settle(app, pilot)
+        assert app.screen.convo.session_id == "chat-B"  # A landed later but was superseded
+
+
+@pytest.mark.asyncio
+async def test_second_escape_abandons_a_turn_that_will_not_stop():
+    class Stubborn(FakeA2A):
+        def cancel(self, task_id):
+            raise RuntimeError("member unreachable")
+
+    fake = Stubborn(hang=True)
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        comp = app.screen.query_one("#composer", Input)
+        comp.value = "go"
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        await pilot.press("escape")  # cancel fails; the stream is (deliberately) still hanging
+        await pilot.pause(0.4)
+        assert isinstance(app.screen, ConversationScreen)
+        assert "abandons" in str(app.screen.query_one("#talk-status", Static).content)
+        await pilot.press("escape")  # abandon: abort the reader, leave
+        await _settle(app, pilot)
+        assert isinstance(app.screen, RosterScreen)
+        assert fake.aborted and fake.exited
 
 
 def test_sessions_and_turns_read_through_the_slug_proxy():

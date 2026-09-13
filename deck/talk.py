@@ -23,6 +23,7 @@ toast — but answering it, steering a running turn, and cancelling one delegati
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -87,6 +88,12 @@ class Exchange:
     live: bool = False
     widget_id: str = ""
     error: str = ""
+    started_at: float = field(default_factory=time.monotonic)
+    cancel_requested: bool = False
+    client: Any = None  # the A2AClient holding this exchange's stream (abort handle)
+    lock: threading.Lock = field(default_factory=threading.Lock)  # two workers, one Turn
+    last_body: str | None = None  # last markdown rendered, to skip no-op re-parses
+    last_work_sig: tuple | None = None  # last tool-tree signature, to skip no-op rebuilds
 
 
 @dataclass
@@ -180,8 +187,8 @@ class ConversationScreen(Screen):
         self.member_name = display_name(agent)
         self.convo = Conversation(session_id=session_id or a2a.new_session_id())
         self.show_reasoning = False
-        self._client: Any = None
         self._seq = 0
+        self._load_seq = 0  # stale session loads (a slow member, then a faster pick) are ignored
         self._watchdog: Any = None
 
     # ── layout ──
@@ -214,8 +221,15 @@ class ConversationScreen(Screen):
 
     # ── sessions ──
 
-    @work(thread=True, exclusive=True, group="talk-load")
+    def _loading(self) -> bool:
+        return any(w.group == "talk-load" and w.is_running for w in self.workers)
+
     def load_session(self, session_id: str) -> None:
+        self._load_seq += 1
+        self._load_session(session_id, self._load_seq)
+
+    @work(thread=True, exclusive=True, group="talk-load")
+    def _load_session(self, session_id: str, seq: int) -> None:
         backend = self.app.backend  # type: ignore[attr-defined]
         try:
             rows = backend.turns(self.agent, session_id)
@@ -223,9 +237,15 @@ class ConversationScreen(Screen):
             self.app.call_from_thread(self.notify, f"could not load {session_id}: {exc}", severity="error", timeout=8)
             rows = []
         exchanges = [Exchange(user=a2a.user_text_from_durable(r), turn=a2a.turn_from_durable(session_id, r)) for r in rows]
-        self.app.call_from_thread(self._apply_session, session_id, exchanges)
+        self.app.call_from_thread(self._apply_session, session_id, exchanges, seq)
 
-    def _apply_session(self, session_id: str, exchanges: list[Exchange]) -> None:
+    def _apply_session(self, session_id: str, exchanges: list[Exchange], seq: int | None = None) -> None:
+        if seq is not None and seq != self._load_seq:
+            return  # a newer load superseded this one (exclusive cannot stop a thread)
+        if self.convo.live is not None:
+            # A load landing while a turn streams must not orphan the live exchange (the
+            # status would read "idle" and a second stream could start on the same session).
+            return
         self.convo = Conversation(session_id=session_id, exchanges=exchanges)
         self._rebuild_transcript()
         self._render_work(self.convo.latest.turn if self.convo.latest else None)
@@ -275,6 +295,9 @@ class ConversationScreen(Screen):
         if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
             self.notify("offline — no hub to talk to this member through", severity="error")
             return
+        if self._loading():
+            self.notify("still loading this session — one moment", severity="warning")
+            return
         event.input.value = ""
         turn = a2a.Turn(context_id=self.convo.session_id)
         ex = Exchange(user=text, turn=turn, live=True)
@@ -293,72 +316,147 @@ class ConversationScreen(Screen):
         except Exception as exc:  # noqa: BLE001
             app.call_from_thread(self._finish, ex, str(exc))
             return
-        self._client = client
+        ex.client = client
         try:
             for frame in client.stream(text, context_id=self.convo.session_id):
-                try:
-                    a2a.apply_frame(ex.turn, frame)
-                except a2a.TurnError as exc:
-                    app.call_from_thread(self._finish, ex, str(exc))
-                    return
+                with ex.lock:
+                    if ex.turn.done:
+                        break  # the stall probe already finalized this turn
+                    try:
+                        a2a.apply_frame(ex.turn, frame)
+                    except a2a.TurnError as exc:
+                        app.call_from_thread(self._finish, ex, str(exc))
+                        return
                 app.call_from_thread(self._render_live, ex)
                 if ex.turn.done:
                     break
+        except a2a.StreamStalled:
+            # No frame for a minute: the connection may be half-open while the server
+            # finished. Ask the durable task before declaring anything.
+            self._settle_from_task(ex, "stream timed out — the member sent nothing for a minute")
+            return
         except Exception as exc:  # noqa: BLE001 — a broken stream is reported, the deck stays up
-            if not ex.turn.done:
+            if not ex.turn.done and not ex.error:
                 app.call_from_thread(self._finish, ex, str(exc))
                 return
+        finally:
+            client.close()
         app.call_from_thread(self._finish, ex, "")
+
+    def _settle_from_task(self, ex: Exchange, otherwise: str) -> None:
+        """From a worker: finalize the exchange from ``GetTask`` if the server finished,
+        else fail it with ``otherwise``. Never fabricates a completion."""
+        task = None
+        if ex.turn.task_id and ex.client is not None:
+            try:
+                task = ex.client.get_task(ex.turn.task_id)
+            except Exception:  # noqa: BLE001 — unknown; treat as not finished
+                task = None
+        state = a2a.norm_state(((task or {}).get("status") or {}).get("state")) if task is not None else ""
+        if task is not None and (not state or a2a.is_terminal(state)):
+            with ex.lock:
+                try:
+                    a2a.apply_frame(ex.turn, {"result": {"task": task}})
+                except a2a.TurnError:
+                    pass
+                ex.turn.done = True
+            self.app.call_from_thread(self._finish, ex, "")
+            self.app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
+        else:
+            self.app.call_from_thread(self._finish, ex, otherwise)
 
     def _finish(self, ex: Exchange, error: str) -> None:
         ex.live = False
         if error and not ex.turn.done:
             ex.error = error
+        if not self.is_attached:
+            return  # the screen was popped (abandon / quit) while the reader unwound
+        if ex.error and error:
             self.notify(f"turn failed: {error}", severity="error", timeout=8)
         self._render_live(ex)
+        self._render_work(ex.turn)  # the final state, whatever the last frame carried
         self._render_status()
         self._render_head()
 
     def _check_stall(self) -> None:
         ex = self.convo.live
-        if ex is None or not ex.turn.task_id or self._client is None:
+        if ex is None:
             return
-        if time.monotonic() - ex.turn.last_frame_at < STALL_IDLE_S:
+        idle = time.monotonic() - max(ex.turn.last_frame_at, ex.started_at)
+        if idle < STALL_IDLE_S:
+            return
+        if not ex.turn.task_id:
+            # Not even the initial Task frame in the whole window: the member accepted the
+            # POST and produced nothing. Abort the reader; the worker fails the exchange.
+            if ex.client is not None:
+                ex.client.abort()
             return
         self._stall_probe(ex)
 
     @work(thread=True, exclusive=True, group="talk-stall")
     def _stall_probe(self, ex: Exchange) -> None:
-        task = a2a.stalled_turn_is_terminal(ex.turn, self._client.get_task, idle_s=STALL_IDLE_S)
+        if ex.client is None:
+            return
+        task = a2a.stalled_turn_is_terminal(ex.turn, ex.client.get_task, idle_s=STALL_IDLE_S)
         if task is None:
             return
-        # The server finished but the stream tail was lost: finalize from the durable task.
-        try:
-            a2a.apply_frame(ex.turn, {"result": {"task": task}})
-        except a2a.TurnError:
-            pass
-        ex.turn.done = True
+        # The server finished but the stream tail was lost: unblock the reader FIRST (it
+        # exits through its except path, finding the turn already done), then finalize
+        # from the durable task under the exchange lock.
+        ex.client.abort()
+        with ex.lock:
+            try:
+                a2a.apply_frame(ex.turn, {"result": {"task": task}})
+            except a2a.TurnError:
+                pass
+            ex.turn.done = True
         self.app.call_from_thread(self._finish, ex, "")
         self.app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
 
     def action_esc(self) -> None:
         ex = self.convo.live
         if ex is not None:
+            if ex.cancel_requested:
+                # Second esc (or the cancel failed): abandon locally — abort the reader,
+                # settle the exchange, and leave. The server task is the server's.
+                self._abandon(ex)
+                return
+            ex.cancel_requested = True
+            self._render_status()
             self._cancel(ex)
             return
+        self._leave()
+
+    def _leave(self) -> None:
         if self._watchdog is not None:
             self._watchdog.stop()
         self.app.pop_screen()
 
+    def _abandon(self, ex: Exchange) -> None:
+        if ex.client is not None:
+            ex.client.abort()
+        ex.live = False
+        if not ex.turn.done:
+            ex.error = "abandoned — the server may still be working on it"
+        self._render_live(ex)
+        self._render_status()
+        self._leave()
+
+    def on_unmount(self) -> None:
+        # Whatever pops this screen, no reader thread is left blocked on a socket.
+        for ex in self.convo.exchanges:
+            if ex.live and ex.client is not None:
+                ex.client.abort()
+
     @work(thread=True, group="talk-cancel")
     def _cancel(self, ex: Exchange) -> None:
-        if not ex.turn.task_id or self._client is None:
-            self.app.call_from_thread(self.notify, "nothing to cancel yet", severity="warning")
+        if not ex.turn.task_id or ex.client is None:
+            self.app.call_from_thread(self.notify, "nothing to cancel yet — esc again to abandon", severity="warning")
             return
         try:
-            self._client.cancel(ex.turn.task_id)
+            ex.client.cancel(ex.turn.task_id)
         except Exception as exc:  # noqa: BLE001
-            self.app.call_from_thread(self.notify, f"cancel failed: {exc}", severity="error")
+            self.app.call_from_thread(self.notify, f"cancel failed: {exc} — esc again to abandon", severity="error")
             return
         self.app.call_from_thread(self.notify, "cancel requested")
 
@@ -381,6 +479,8 @@ class ConversationScreen(Screen):
         tr.scroll_end(animate=False)
 
     def _render_live(self, ex: Exchange) -> None:
+        if not self.is_attached:
+            return
         t = ex.turn
         try:
             meta = self.query_one(f"#{ex.widget_id}-meta", Static)
@@ -403,9 +503,16 @@ class ConversationScreen(Screen):
         body = t.content
         if self.show_reasoning and t.reasoning:
             body = f"> {t.reasoning.replace(chr(10), chr(10) + '> ')}\n\n{body}"
-        md.update(body)
+        if body != ex.last_body:  # Markdown.update re-parses the whole document — only on change
+            ex.last_body = body
+            md.update(body)
         if ex.live:
-            self._render_work(t)
+            sig = tuple((c.id, c.status) for c in t.tool_calls)
+            if sig != ex.last_work_sig:  # rebuild the tree on tool frames only
+                ex.last_work_sig = sig
+                self._render_work(t)
+            else:
+                self.query_one("#cost", Static).update(_cost_line(t))  # the cost lands on a text frame
             self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
             self._render_status()
 
@@ -441,6 +548,8 @@ class ConversationScreen(Screen):
             if t.hitl:
                 q = t.hitl.get("question") or t.hitl.get("title") or "input required"
                 st.update(f"⚑ {self.member_name} needs you: {q}  (answering arrives in S3 — use the console for now)")
+            elif live.cancel_requested:
+                st.update("⟳ cancelling…  ·  esc again abandons the turn locally")
             else:
                 st.update(f"⟳ {t.status_text or 'working'}  ·  esc stops")
         else:

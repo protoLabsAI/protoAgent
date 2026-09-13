@@ -70,7 +70,12 @@ DISMISS_SENTINEL = (
     "without it — proceed using your best judgment, or stop and explain what you need."
 )
 
-_STREAM_TIMEOUT = httpx.Timeout(None, connect=5.0)  # a turn can run for minutes; the watchdog owns stalls
+# A turn can run for minutes, but a HALF-OPEN connection (laptop sleep, a member host that
+# vanished, a proxy holding the socket) must not block the reader thread until the TCP
+# RTO: the read budget is the stall window plus a margin, and a ReadTimeout is the
+# caller's cue to consult GetTask (the console's watchdog does the same after 45 s).
+STREAM_READ_S = 60.0
+_STREAM_TIMEOUT = httpx.Timeout(STREAM_READ_S, connect=5.0)
 _RPC_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
 
@@ -281,6 +286,11 @@ class Turn:
 
 class TurnError(RuntimeError):
     """A JSON-RPC error frame — the server refused the turn."""
+
+
+class StreamStalled(deckhub.HubUnreachable):
+    """No frame within :data:`STREAM_READ_S` — the caller should consult ``GetTask``
+    rather than assume the turn died (the server may have finished and lost the tail)."""
 
 
 # ── frame decoding (apps/web/src/lib/api.ts) ──────────────────────────────────
@@ -660,6 +670,7 @@ class A2AClient:
         self._token = token or None
         deckhub.credential_allowed(self.base_url, self._token, insecure_http=insecure_http)
         self._client = httpx.Client(base_url=self.base_url, transport=transport, follow_redirects=False)
+        self._active: httpx.Response | None = None  # the open stream, for abort()
 
     @classmethod
     def for_member(cls, hub_client: deckhub.HubClient, slug: str, **kw: Any) -> A2AClient:
@@ -670,7 +681,18 @@ class A2AClient:
     def endpoint(self) -> str:
         return f"{self.base_url}{self.a2a_path}"
 
+    def abort(self) -> None:
+        """Close the open stream from ANOTHER thread: the reader's ``iter_lines`` raises and
+        the worker unwinds. Safe to call when nothing is open."""
+        resp = self._active
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 — closing a dead socket must never raise into the UI
+                pass
+
     def close(self) -> None:
+        self.abort()
         self._client.close()
 
     def _headers(self) -> dict[str, str]:
@@ -723,11 +745,17 @@ class A2AClient:
     def _sse(self, method: str, payload: dict) -> Iterator[dict]:
         try:
             with self._client.stream(method, self.a2a_path, headers=self._headers(), json=payload, timeout=_STREAM_TIMEOUT) as r:
-                if r.status_code >= 400:
-                    r.read()
-                    self._raise_for(r)
-                yield from _parse_sse(r.iter_lines())
-        except httpx.TransportError as exc:
+                self._active = r
+                try:
+                    if r.status_code >= 400:
+                        r.read()
+                        self._raise_for(r)
+                    yield from _parse_sse(r.iter_lines())
+                finally:
+                    self._active = None
+        except httpx.ReadTimeout as exc:
+            raise StreamStalled(self.base_url, f"no frame from {self.endpoint} for {STREAM_READ_S:g}s") from exc
+        except (httpx.TransportError, httpx.StreamError) as exc:
             raise deckhub.HubUnreachable(self.base_url, f"{self.base_url} stream broke ({type(exc).__name__})") from exc
 
     def _rpc(self, method: str, params: dict) -> dict:

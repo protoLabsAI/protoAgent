@@ -339,6 +339,18 @@ def test_get_task_reads_the_flat_1_0_result_and_cancel_posts_cancel_task():
     assert calls == ["GetTask", "CancelTask"]
 
 
+def test_read_timeout_on_the_stream_is_stream_stalled_and_abort_closes_the_response():
+    def slow(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("no frame", request=request)
+
+    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(slow))
+    with pytest.raises(a2a.StreamStalled):
+        list(c.stream("x", context_id=CID))
+    assert c._active is None
+    c.abort()  # nothing open → no-op, never raises
+    assert a2a.STREAM_READ_S >= 45
+
+
 def test_rpc_error_body_raises_turn_error():
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"error": {"code": -32001, "message": "TaskNotFound"}})))
     with pytest.raises(a2a.TurnError, match="TaskNotFound"):

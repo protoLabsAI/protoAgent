@@ -70,10 +70,15 @@ class FakeBackend:
 async def _settle(app: FleetDeck, pilot) -> None:
     """Wait for every thread worker (and the workers they chain) to finish, then let the
     UI loop apply the results — deterministic where a fixed pause would race."""
+    from textual.worker import WorkerCancelled
+
     for _ in range(20):
         if not app.workers:
             break
-        await app.workers.wait_for_complete()
+        try:
+            await app.workers.wait_for_complete()
+        except WorkerCancelled:
+            pass  # an exclusive worker superseded by a newer one — expected, keep draining
         await pilot.pause()
     await pilot.pause()
 
