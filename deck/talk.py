@@ -36,6 +36,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Input, ListItem, ListView, Markdown, Static, Tree
 
+from textual.css.query import NoMatches
+
 from deck import a2a
 from deck.data import display_name, presence_of, slug_of
 
@@ -64,6 +66,23 @@ def _pretty(v: Any) -> str:
 
 def _glyph(status: str) -> str:
     return {"running": "⟳", "done": "✓", "error": "✗"}.get(status, "·")
+
+
+def _ui_safe(fn):
+    """A render that lands after the screen was popped (a worker unwinding, a late
+    call_from_thread) finds no widgets: that is not an error, just nothing to draw."""
+
+    def wrapper(self, *a, **kw):
+        if not self.is_attached:
+            return None
+        try:
+            return fn(self, *a, **kw)
+        except NoMatches:
+            return None
+
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return wrapper
 
 
 def _cost_line(turn: a2a.Turn) -> str:
@@ -214,6 +233,7 @@ class ConversationScreen(Screen):
         self._watchdog = self.set_interval(5.0, self._check_stall)
         self.load_session(self.convo.session_id)
 
+    @_ui_safe
     def _render_head(self) -> None:
         pres = presence_of(self.agent)
         n = len(self.convo.exchanges)
@@ -239,6 +259,7 @@ class ConversationScreen(Screen):
         exchanges = [Exchange(user=a2a.user_text_from_durable(r), turn=a2a.turn_from_durable(session_id, r)) for r in rows]
         self.app.call_from_thread(self._apply_session, session_id, exchanges, seq)
 
+    @_ui_safe
     def _apply_session(self, session_id: str, exchanges: list[Exchange], seq: int | None = None) -> None:
         if seq is not None and seq != self._load_seq:
             return  # a newer load superseded this one (exclusive cannot stop a thread)
@@ -365,6 +386,7 @@ class ConversationScreen(Screen):
         else:
             self.app.call_from_thread(self._finish, ex, otherwise)
 
+    @_ui_safe
     def _finish(self, ex: Exchange, error: str) -> None:
         ex.live = False
         if error and not ex.turn.done:
@@ -462,12 +484,14 @@ class ConversationScreen(Screen):
 
     # ── rendering ──
 
+    @_ui_safe
     def _rebuild_transcript(self) -> None:
         tr = self.query_one("#transcript", VerticalScroll)
         tr.remove_children()
         for ex in self.convo.exchanges:
             self._append_exchange(ex)
 
+    @_ui_safe
     def _append_exchange(self, ex: Exchange) -> None:
         tr = self.query_one("#transcript", VerticalScroll)
         self._seq += 1
@@ -478,6 +502,7 @@ class ConversationScreen(Screen):
         self._render_live(ex)
         tr.scroll_end(animate=False)
 
+    @_ui_safe
     def _render_live(self, ex: Exchange) -> None:
         if not self.is_attached:
             return
@@ -516,6 +541,7 @@ class ConversationScreen(Screen):
             self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
             self._render_status()
 
+    @_ui_safe
     def _render_work(self, t: a2a.Turn | None) -> None:
         tree = self.query_one("#work-tree", Tree)
         tree.clear()
@@ -540,6 +566,7 @@ class ConversationScreen(Screen):
             add(tree.root, c)
         self.query_one("#cost", Static).update(_cost_line(t))
 
+    @_ui_safe
     def _render_status(self) -> None:
         live = self.convo.live
         st = self.query_one("#talk-status", Static)

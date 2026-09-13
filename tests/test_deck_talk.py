@@ -138,6 +138,18 @@ async def _open_talk(be, pilot, app):
     assert isinstance(app.screen, ConversationScreen)
 
 
+async def _until(pilot, cond, timeout=4.0):
+    """Poll the UI loop until `cond()` holds (a fixed pause races the worker threads)."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        await pilot.pause(0.05)
+    return cond()
+
+
 async def _send(app, pilot, text):
     comp = app.screen.query_one("#composer", Input)
     comp.focus()
@@ -181,13 +193,10 @@ async def test_esc_cancels_a_running_turn_then_backs_out():
         comp = app.screen.query_one("#composer", Input)
         comp.value = "go"
         await pilot.press("enter")
-        await pilot.pause(0.3)
-        assert app.screen.convo.live is not None
+        assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1")
         assert "⟳" in str(app.screen.query_one("#talk-status", Static).content)
         await pilot.press("escape")
-        await _settle(app, pilot)
-        assert fake.cancelled == ["t1"]
-        assert app.screen.convo.live is None
+        assert await _until(pilot, lambda: fake.cancelled == ["t1"] and app.screen.convo.live is None)
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, RosterScreen)
@@ -444,15 +453,13 @@ async def test_second_escape_abandons_a_turn_that_will_not_stop():
         comp = app.screen.query_one("#composer", Input)
         comp.value = "go"
         await pilot.press("enter")
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.turn.task_id == "t1")
         await pilot.press("escape")  # cancel fails; the stream is (deliberately) still hanging
-        await pilot.pause(0.4)
+        assert await _until(pilot, lambda: "abandons" in str(app.screen.query_one("#talk-status", Static).content))
         assert isinstance(app.screen, ConversationScreen)
-        assert "abandons" in str(app.screen.query_one("#talk-status", Static).content)
         await pilot.press("escape")  # abandon: abort the reader, leave
-        await _settle(app, pilot)
-        assert isinstance(app.screen, RosterScreen)
-        assert fake.aborted and fake.exited
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
+        assert await _until(pilot, lambda: fake.aborted and fake.exited)
 
 
 def test_sessions_and_turns_read_through_the_slug_proxy():
