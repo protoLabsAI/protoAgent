@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import json
 import queue
-import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -131,22 +130,11 @@ class MemberEvents:
         return h
 
     def stop(self) -> None:
-        """From another thread: end the stream now. A socket shutdown wakes a read blocked
-        in ``recv``; the response itself is closed by the reader as it unwinds — closing it
-        (the fd) here, right behind the shutdown, loses the wake-up on macOS and the reader
-        sleeps out the read timeout instead (see ``deck.a2a.A2AClient.abort``)."""
+        """From another thread: end the stream now. The reader is woken the way its
+        platform needs (:func:`deck.hub.wake_blocked_reader`) and closes the response as
+        it unwinds."""
         self._stop.set()
-        resp = self._active
-        if resp is not None:
-            try:
-                stream = resp.extensions.get("network_stream")
-                sock = stream.get_extra_info("socket") if stream is not None else None
-                if sock is not None:
-                    sock.shutdown(socket.SHUT_RDWR)
-                else:
-                    resp.close()
-            except Exception:  # noqa: BLE001
-                pass
+        deckhub.wake_blocked_reader(self._active)
 
     def close(self) -> None:
         self.stop()
