@@ -189,15 +189,17 @@ async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch
     attached: list = []
 
     class _Client:
-        url = "http://127.0.0.1:7872"
         _token = "t"
+
+        def __init__(self, url):
+            self.url = url
 
         def close(self):
             pass
 
     def fake_connect(*, candidates, token=None, insecure_http=False):
         attached.append((candidates[0].url, token))
-        return deckhub.Connection(client=_Client(), candidate=candidates[0], card={"name": "studio"}, roster=[{"name": "studio", "id": "studio", "host": True, "running": True, "port": 7872}])
+        return deckhub.Connection(client=_Client(candidates[0].url), candidate=candidates[0], card={"name": "studio"}, roster=[{"name": "studio", "id": "studio", "host": True, "running": True, "port": 7872}])
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
     swapped: list = []
@@ -227,17 +229,21 @@ async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch
         assert [str(table.get_row_at(i)[1]) for i in range(table.row_count)] == ["studio", "dev", "ava"]
         assert [str(table.get_row_at(i)[2]) for i in range(table.row_count)] == ["running", "stopped", "unauthorized"]
         assert "pass --token" in str(table.get_row_at(2)[7]) and "3 found · 1 running" in str(app.screen.query_one("#hubs-head", Static).content)
-        # the footer offers what applies
-        assert app.screen.check_action("attach", ()) is True and app.screen.check_action("bring_up", ()) is False
+        # the footer offers what applies — the RENDERED bindings, not just check_action
+        # (`enter` belongs to the focused table, whose row-selected event attaches; `u` is the screen's)
+        def footer_keys():
+            return {b.binding.action for b in app.screen.active_bindings.values() if b.enabled}
+
+        assert app.screen.check_action("attach", ()) is True and "bring_up" not in footer_keys()
         table.move_cursor(row=1)
-        await pilot.pause(0.1)
-        assert app.screen.check_action("attach", ()) is False and app.screen.check_action("bring_up", ()) is True
+        await pilot.pause(0.2)
+        assert "bring_up" in footer_keys() and app.screen.check_action("attach", ()) is False
         # u on the stopped hub: the launcher runs for its root, the port answers, the deck attaches
         await pilot.press("u")
         await _settle(app, pilot)
         assert launched == [Path("/tmp/dev")]
         assert attached and attached[-1][0] == "http://127.0.0.1:7871"
-        assert isinstance(app.screen, RosterScreen) and swapped and swapped[-1] == "http://127.0.0.1:7872"  # (the fake client always says 7872)
+        assert isinstance(app.screen, RosterScreen) and swapped and swapped[-1] == "http://127.0.0.1:7871"  # the roster polls the hub that was brought up
         assert be.closed  # the previous hub's client was closed on the switch
         # enter on a running hub from the tree attaches to it
         await pilot.press("H")
@@ -318,3 +324,69 @@ def test_a_listener_found_by_port_is_folded_into_the_root_it_runs_from_and_membe
     # a heartbeat-backed running row is never overwritten by its own listener
     running = next(r for r in rows if r.root == box["running"])
     assert running.presence == "running" and running.source == "heartbeat"
+
+
+@pytest.mark.asyncio
+async def test_a_rediscover_during_a_bring_up_keeps_the_starting_row_and_a_timeout_is_said(monkeypatch):
+    """Reviewer: `r` mid-launch replaced the row the launcher held — its outcome landed on an
+    orphan, the tree read `stopped` and offered a second launch."""
+    import threading
+
+    stopped = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
+    monkeypatch.setattr("deck.app._enumerate_hubs", lambda *, peers=None: [HubRow(**stopped.__dict__)])
+    monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: row)
+    monkeypatch.setattr("deck.app._wait_for_port", lambda url, **kw: False)  # it never answers
+    gate = threading.Event()
+    seen: list = []
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0, launcher=lambda row: gate.wait(5))
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        app.notify = lambda msg, **kw: seen.append((msg, kw.get("severity")))  # type: ignore[method-assign]
+        await pilot.press("H")
+        await _settle(app, pilot)
+        await pilot.press("u")
+        await pilot.pause(0.3)
+        table = app.screen.query_one("#hubs", DataTable)
+        assert str(table.get_row_at(0)[2]) == "starting" and app.screen.check_action("refresh", ()) is False
+        app.discover_hubs()  # a rediscover lands while the launcher is still out
+        await pilot.pause(0.5)
+        assert str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "starting"  # the in-flight row survives
+        assert app.screen.check_action("bring_up", ()) is False  # no second launch offered
+        gate.set()
+        await _settle(app, pilot)
+        assert str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "stopped"
+        assert "did not answer" in str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[7])
+        assert any("did not answer" in m and sev == "error" for m, sev in seen)
+
+
+@pytest.mark.asyncio
+async def test_reopening_the_tree_mid_discovery_still_says_working(monkeypatch):
+    import threading
+
+    gate = threading.Event()
+    row = HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"))
+    monkeypatch.setattr("deck.app._enumerate_hubs", lambda *, peers=None: [HubRow(**row.__dict__)])
+
+    def slow_probe(r, **kw):
+        gate.wait(5)
+        r.presence = "unauthorized"
+        return r
+
+    monkeypatch.setattr("deck.app._probe_hub", slow_probe)
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("H")
+        await pilot.pause(0.4)
+        assert isinstance(app.screen, HubTreeScreen) and "working" in str(app.screen.query_one("#hubs-head", Static).content)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        await pilot.press("H")
+        await pilot.pause(0.3)
+        assert "working" in str(app.screen.query_one("#hubs-head", Static).content)  # re-opened: still discovering
+        gate.set()
+        await _settle(app, pilot)
+        assert "working" not in str(app.screen.query_one("#hubs-head", Static).content)
+        assert str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "unauthorized"

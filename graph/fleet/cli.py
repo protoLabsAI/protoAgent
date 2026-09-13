@@ -452,12 +452,12 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
             hubs.probe(r, token=args.token, insecure_http=args.insecure_http)
     rows = hubs.reconcile(rows)
     if args.as_json:
-        _emit({"mode": "hubs", "hubs": [_hub_row_dict(r) for r in rows]})
+        _emit({"mode": "hubs", "offline": bool(args.offline), "hubs": [_hub_row_dict(r) for r in rows]})
         return 0
     if not rows:
         print("(no hubs found on this box)")
         return 0
-    print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running")
+    print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running" + (" · --offline: peers not scanned, hubs not probed" if args.offline else ""))
     for r in rows:
         glyph = hubs.PRESENCE_GLYPH.get(r.presence, "·")
         members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")

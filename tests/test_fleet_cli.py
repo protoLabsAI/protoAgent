@@ -752,7 +752,10 @@ def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, c
     # --offline: no peer scan, no probes
     probed.clear()
     assert cli.run_fleet_cli(["--all", "--offline", "--json"]) == 0
-    assert probed == [("peers", [])]
+    assert probed == [("peers", [])] and json.loads(capsys.readouterr().out)["offline"] is True
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert cli.run_fleet_cli(["--all", "--offline"]) == 0
+    assert "--offline: peers not scanned, hubs not probed" in capsys.readouterr().out
 
 
 def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope(monkeypatch):

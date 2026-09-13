@@ -356,10 +356,10 @@ class HubTreeScreen(Screen):
         Binding("k", "up", "up", show=False),
     ]
 
-    def __init__(self, rows: list[HubRow] | None = None) -> None:
+    def __init__(self, rows: list[HubRow] | None = None, *, busy: bool = False) -> None:
         super().__init__()
         self.rows: list[HubRow] = list(rows or [])
-        self.busy = False
+        self.busy = busy  # a discovery still probing (the screen was re-opened mid-way)
 
     def compose(self) -> ComposeResult:
         yield Static("hubs on this box · discovering…", id="hubs-head")
@@ -392,6 +392,10 @@ class HubTreeScreen(Screen):
         self.query_one("#hubs-head", Static).update(f"hubs on this box · {len(self.rows)} found · {n_run} running" + (" · working…" if self.busy else ""))
         if self.rows and cur is not None and cur < len(self.rows):
             table.move_cursor(row=cur)
+        self.refresh_bindings()  # the footer offers attach / bring up for THIS row, and only then
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        self.refresh_bindings()
 
     def selected(self) -> HubRow | None:
         table = self.query_one("#hubs", DataTable)
@@ -405,6 +409,8 @@ class HubTreeScreen(Screen):
             return r is not None and r.presence == "running"
         if action == "bring_up":
             return r is not None and r.presence == "stopped" and r.root is not None and self.app.can_bring_up  # type: ignore[attr-defined]
+        if action == "refresh":
+            return not self.app.bringing_up  # type: ignore[attr-defined]  # a rediscover mid-launch would lose the row being brought up
         return True
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

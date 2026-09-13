@@ -124,11 +124,12 @@ read-only here — change it in the hub's settings).
 
 **Every hub on the box.** `H` (or `protoagent fleet --all`) lists the hubs this machine
 runs — the desktop app's, `~/.protoagent`, each scoped instance under it — and peers found
-on the LAN or the tailnet: one row per hub with its state, how it was launched (desktop
+on this box's ports and the tailnet (and the LAN when `fleet.discovery.mdns` is on): one row per hub with its state, how it was launched (desktop
 app, `protoagent up`, foreground), port, version and member counts, then its instance
 root. Running hubs come from the `.instances/` heartbeats under every known box root;
 stopped ones from every instance root that carries a `workspaces/fleet.json` (a member's
-root is never a hub row). None of it depends on the shell's `PROTOAGENT_*` environment.
+root is never a hub row). This shell's own instance is one input among these, never the
+only one — what a shell "sees" is not what it inherited.
 A running hub is probed with its own fleet token: one that answers but refuses every
 credential reads `unauthorized` (pass `--token`), one that does not answer `unreachable`.
 `enter` attaches the deck to that hub — the roster, feed and conversations then belong to

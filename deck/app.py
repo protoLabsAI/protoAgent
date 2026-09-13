@@ -840,6 +840,10 @@ class FleetDeck(App[int]):
     def can_bring_up(self) -> bool:
         return self._launcher is not None
 
+    @property
+    def bringing_up(self) -> bool:
+        return any(w.group == "bring-up" and w.is_running for w in self.workers)
+
     def _hubs_screen(self) -> HubTreeScreen | None:
         for scr in self.screen_stack:
             if isinstance(scr, HubTreeScreen):
@@ -849,8 +853,9 @@ class FleetDeck(App[int]):
     def open_hubs(self) -> None:
         if self._hubs_screen() is not None:
             return
-        self.push_screen(HubTreeScreen(self.hub_rows))
-        if not self.hub_rows:
+        discovering = any(w.group == "hubs" and w.is_running for w in self.workers)
+        self.push_screen(HubTreeScreen(self.hub_rows, busy=discovering))  # re-opened mid-discovery: still working
+        if not self.hub_rows and not discovering:
             self.discover_hubs()
 
     def discover_hubs(self) -> None:
@@ -869,12 +874,21 @@ class FleetDeck(App[int]):
             except Exception as exc:  # noqa: BLE001 — the box's own hubs still show
                 self.call_from_thread(self.notify, f"peer discovery failed: {exc}", severity="warning", timeout=8)
         rows = _enumerate_hubs(peers=peers)
+        rows = self._keep_starting(rows)
         self.call_from_thread(self._show_hubs, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
         for r in rows:
             if r.presence in ("running", "unreachable") and r.candidate is not None:
                 _probe_hub(r, token=self._token, insecure_http=self._insecure_http)
-        rows = _reconcile_hubs(rows)
+        rows = self._keep_starting(_reconcile_hubs(rows))
         self.call_from_thread(self._show_hubs, rows, False)
+
+    def _keep_starting(self, rows: list[HubRow]) -> list[HubRow]:
+        """A rediscover must not replace the row a bring-up holds: the launcher's outcome
+        lands on that object, so it stays in the model (by root) until it settles."""
+        starting = {r.root: r for r in self.hub_rows if r.presence == "starting" and r.root is not None}
+        if not starting:
+            return rows
+        return [starting.get(r.root, r) if r.root is not None else r for r in rows]
 
     def _show_hubs(self, rows: list[HubRow], busy: bool) -> None:
         self.hub_rows = rows
@@ -963,6 +977,7 @@ class FleetDeck(App[int]):
             row.presence = "stopped"
             row.note = "started, but its port did not answer in time — see its server.log"
             self.call_from_thread(self._show_hubs, self.hub_rows, False)
+            self.call_from_thread(self.notify, f"{row.name}: started, but its port did not answer in time — see {row.root}/server.log", severity="error", timeout=10)
             return
         row.candidate = deckhub.HubCandidate(row.url, "pidfile", instance_root=row.root)
         row.presence = "running"
