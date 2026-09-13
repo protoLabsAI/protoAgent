@@ -353,7 +353,11 @@ def test_read_timeout_on_the_stream_is_stream_stalled_and_abort_closes_the_respo
 
 def test_abort_wakes_a_reader_blocked_on_a_real_socket():
     """Round-2 blocker: Response.close() from another thread does not wake a reader in
-    recv(); shutting the socket does. A real loopback server sends one frame then sleeps."""
+    recv(); shutting the socket does. And ONLY the shutdown: closing the response (the fd)
+    right behind it from the aborting thread races the wake-up on macOS — the poller finds
+    its fd gone and sleeps out the whole read timeout — about 1 abort in 14. So this runs
+    the abort many times against a real loopback server that sends one frame then sleeps;
+    a regression to shutdown+close fails it with ~90% probability."""
     import socketserver
     import threading
     import time
@@ -366,42 +370,49 @@ def test_abort_wakes_a_reader_blocked_on_a_real_socket():
             self.rfile.read(int(self.headers.get("Content-Length") or 0))
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")  # as uvicorn streams: EOF mid-body is an error, not a clean end
             self.end_headers()
-            self.wfile.write(b'data: {"result": {"task": {"id": "t1", "contextId": "s"}}}\n\n')
+            frame = b'data: {"result": {"task": {"id": "t1", "contextId": "s"}}}\n\n'
+            self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
             self.wfile.flush()
             release.wait(8.0)  # silence — the client must not have to wait for this
 
         def log_message(self, *a):  # quiet
             pass
 
-    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    class Server(socketserver.ThreadingTCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    srv = Server(("127.0.0.1", 0), Handler)
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        c = a2a.A2AClient(f"http://127.0.0.1:{port}")
-        got: list = []
-        err: list = []
+        for attempt in range(30):
+            c = a2a.A2AClient(f"http://127.0.0.1:{port}")
+            got: list = []
+            err: list = []
 
-        def reader():
-            try:
-                for f in c.stream("x", context_id="s"):
-                    got.append(f)
-            except Exception as exc:  # noqa: BLE001
-                err.append(exc)
+            def reader(c=c, got=got, err=err):
+                try:
+                    for f in c.stream("x", context_id="s"):
+                        got.append(f)
+                except Exception as exc:  # noqa: BLE001
+                    err.append(exc)
 
-        t = threading.Thread(target=reader)
-        t.start()
-        deadline = time.monotonic() + 3.0
-        while not got and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert got, "first frame never arrived"
-        t0 = time.monotonic()
-        c.abort()
-        t.join(3.0)
-        assert not t.is_alive(), "reader still blocked after abort()"
-        assert time.monotonic() - t0 < 2.0
-        assert err and isinstance(err[0], deckhub.HubUnreachable)
-        c.close()
+            t = threading.Thread(target=reader)
+            t.start()
+            deadline = time.monotonic() + 3.0
+            while not got and time.monotonic() < deadline:
+                time.sleep(0.005)
+            assert got, f"first frame never arrived (attempt {attempt})"
+            t0 = time.monotonic()
+            c.abort()
+            t.join(3.0)
+            assert not t.is_alive(), f"reader still blocked after abort() (attempt {attempt})"
+            assert time.monotonic() - t0 < 2.0
+            assert err and isinstance(err[0], deckhub.HubUnreachable)
+            c.close()
     finally:
         release.set()
         srv.shutdown()

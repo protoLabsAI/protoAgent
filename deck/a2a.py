@@ -690,7 +690,11 @@ class A2AClient:
         """Unblock a reader stuck in ``iter_lines`` from ANOTHER thread. ``Response.close()``
         alone does not wake a thread blocked in ``recv``; shutting the underlying socket
         does (the read returns, httpcore raises, the worker unwinds through
-        ``HubUnreachable``). Safe to call when nothing is open."""
+        ``HubUnreachable``). Only the shutdown happens here: closing the response too —
+        which closes the fd — right behind the shutdown races the wake-up on macOS (the
+        poller finds its fd gone and sleeps out the whole read timeout, ~7% of tries). The
+        reader owns the response and closes it as it unwinds. Safe to call when nothing is
+        open."""
         resp = self._active
         if resp is None:
             return
@@ -699,11 +703,9 @@ class A2AClient:
             sock = stream.get_extra_info("socket") if stream is not None else None
             if sock is not None:
                 sock.shutdown(socket.SHUT_RDWR)
+            else:  # no socket to shut (a mock transport): closing is the only lever there is
+                resp.close()
         except Exception:  # noqa: BLE001 — a dead socket must never raise into the UI
-            pass
-        try:
-            resp.close()
-        except Exception:  # noqa: BLE001
             pass
 
     def close(self) -> None:
