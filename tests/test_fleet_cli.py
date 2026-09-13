@@ -777,6 +777,7 @@ def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope
     monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "somewhere-else")
     monkeypatch.setenv("PROTOAGENT_HOME", "/nope")
+    monkeypatch.setattr("deck.hubs.instance_roots", lambda: [])  # nothing on disk owns a port here (this box's roots would)
     held = {7870, 7871}  # the desktop hub and something else hold these
     monkeypatch.setattr(cli, "_port_free", lambda port: port not in held)
     row = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
@@ -835,3 +836,139 @@ def test_launch_hub_gives_the_desktop_root_its_box_root_and_the_port_probe_sees_
     finally:
         srv.close()
     assert cli._port_free(port) is True
+
+
+# ── round 2 (#3472): the launcher's port and box root, `--all` on a refusing hub, discovery knobs ──
+
+
+class _Started:
+    returncode = 0
+    stdout = "protoagent: started"
+    stderr = ""
+
+
+def test_launch_hub_never_takes_a_port_another_hubs_member_owns_on_disk(tmp_path, monkeypatch):
+    """Round 2: a stopped member's fixed port is free right now and binds — the launched hub
+    took it, and that member died with EADDRINUSE at its next start."""
+    from deck import hubs
+
+    desktop = tmp_path / "desktop"
+    ws = desktop / "workspaces"
+    (ws / "m0").mkdir(parents=True)
+    (ws / "m0" / "workspace.yaml").write_text("id: m0\nname: m0\nport: 7871\n")
+    (ws / "fleet.json").write_text(json.dumps({"m0": {"pid": None, "port": 7871}}))  # stopped member on 7871
+    dev = tmp_path / "dev"
+    (dev / "workspaces").mkdir(parents=True)
+    (dev / "workspaces" / "fleet.json").write_text("{}")
+    (dev / "server.pid").write_text(json.dumps({"pid": 0, "port": 7873}))  # dev's own remembered port is never "taken" from itself
+    seen: dict = {}
+    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or _Started()))
+    monkeypatch.setattr(cli, "_port_free", lambda port: port != 7870)  # the desktop hub holds 7870; 7871 binds (its member is stopped)
+    monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
+    monkeypatch.setattr(hubs, "instance_roots", lambda: [desktop, dev])
+    cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))
+    assert seen["argv"][-3:] == ["up", "--port", "7872"]
+    cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=7871, presence="stopped", source="root"))
+    assert seen["argv"][-3:] == ["up", "--port", "7872"]  # a remembered port that a member owns is not honoured either
+    cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=7873, presence="stopped", source="root"))
+    assert seen["argv"][-3:] == ["up", "--port", "7873"]  # its own server.pid port is its to keep
+
+
+def test_launch_hub_keeps_the_box_root_of_a_scoped_instance_under_a_custom_box(tmp_path, monkeypatch):
+    """Round 2: the child got only PROTOAGENT_HOME, so a scoped instance under this shell's
+    PROTOAGENT_BOX_ROOT resolved its box to ~/.protoagent — wrong Host layer, commons,
+    credential store, and a heartbeat under the wrong .instances/."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from deck import hubs
+
+    box = tmp_path / "box"
+    home = tmp_path / "home"
+    home.mkdir()
+    dev = box / "dev"
+    (dev / "workspaces").mkdir(parents=True)
+    (dev / "workspaces" / "fleet.json").write_text("{}")
+    monkeypatch.setattr(deckhub, "known_box_roots", lambda: [box, home])
+    monkeypatch.setattr(deckhub, "data_home", lambda: home)
+    monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [tmp_path / "desktop-absent"])
+    monkeypatch.setattr(hubs, "instance_roots", lambda: [dev])
+    seen: dict = {}
+    real_run = subprocess.run
+    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or _Started()))
+    monkeypatch.setattr(cli, "_port_free", lambda port: True)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "dev")
+    cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))
+    env = dict(seen["env"])
+    assert env["PROTOAGENT_HOME"] == str(dev) and env["PROTOAGENT_BOX_ROOT"] == str(box) and "PROTOAGENT_INSTANCE" not in env
+    # what the CHILD resolves from that env — a real interpreter, this checkout, no server
+    repo = Path(__file__).resolve().parents[1]
+    env["PYTHONPATH"] = str(repo)
+    out = real_run([sys.executable, "-c", "from infra.paths import instance_paths as p; print(p().box_root); print(p().instance_root)"], env=env, capture_output=True, text=True, cwd=str(repo), timeout=60)
+    child_box, child_root = out.stdout.strip().splitlines()[-2:]
+    assert (Path(child_box), Path(child_root)) == (box, dev), out.stderr
+    # a scoped instance under the plain data home gets no box root: the default IS that home
+    seen.clear()
+    cli._launch_hub(hubs.HubRow(name="dev2", root=home / "dev2", url=None, port=None, presence="stopped", source="root"))
+    assert "PROTOAGENT_BOX_ROOT" not in seen["env"]
+
+
+def test_fleet_all_on_a_tty_opens_the_tree_even_when_a_hub_refuses_every_credential(monkeypatch, capsys):
+    """Round 2: `--all` is documented "never reads one hub's fleet", but the deck opened the
+    default hub first and a rejected credential was an error — the tree, the one view that
+    shows that hub as `unauthorized`, never opened."""
+    import importlib
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _offline(monkeypatch, unauthorized=["http://127.0.0.1:7870"])
+    opened: dict = {}
+
+    class FakeApp:
+        @staticmethod
+        def run(backend, **kw):
+            opened.update(kw, mode=backend.mode, label=backend.snapshot().label)
+            return 0
+
+    real = importlib.import_module
+    monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
+    rc = cli.run_fleet_cli(["--all"])
+    assert rc == 0 and opened.get("start_on_hubs") is True and opened["mode"] == "offline" and "rejected every credential" in opened["label"], capsys.readouterr().err
+    # without --all the rule stands: a hub that answered but refused is an error, not a fallback
+    opened.clear()
+    assert cli.run_fleet_cli([]) == 1 and not opened
+    # --offline reaches the deck as its own flag: the tree then lists disk and probes nothing
+    opened.clear()
+    assert cli.run_fleet_cli(["--all", "--offline"]) == 0 and opened.get("offline") is True and opened.get("peers") is None
+
+
+def test_discover_peers_honours_the_boxs_discovery_knobs(tmp_path, monkeypatch):
+    """Round 2: `discovery` reads `fleet.discovery.*` from the live server's STATE, which a
+    CLI process has none of — so `mdns: true` never opened the LAN channel and the port
+    range was always the default, whatever the docs promised."""
+    import os
+    from pathlib import Path
+
+    from graph.fleet import discovery
+
+    # the Host layer file the cascade reads (conftest points PROTOAGENT_HOST_CONFIG at a tmp one)
+    Path(os.environ["PROTOAGENT_HOST_CONFIG"]).write_text("fleet:\n  discovery:\n    mdns: true\n    port_min: 7870\n    port_max: 7872\n", encoding="utf-8")
+    calls: dict = {}
+
+    async def scan_local(port_range, skip):
+        calls["local_range"] = port_range
+        return []
+
+    async def scan_tailnet(port_range, known):
+        calls["tailnet_range"] = port_range
+        return []
+
+    monkeypatch.setattr(discovery, "_scan_local", scan_local)
+    monkeypatch.setattr(discovery, "_scan_tailnet", scan_tailnet)
+    monkeypatch.setattr(discovery, "_browse_mdns", lambda timeout: calls.setdefault("mdns", True) and [])
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "127.0.0.1")
+    assert cli._discover_peers() == []
+    assert discovery._cfg() is None  # no live config in a CLI process: the knobs came from the cascade
+    assert calls.get("mdns") is True and calls.get("local_range") == (7870, 7872), calls

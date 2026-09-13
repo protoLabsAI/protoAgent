@@ -111,6 +111,7 @@ def test_read_heartbeats_skips_dead_and_own_pid_and_never_unlinks(tmp_path, monk
     (d / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "port": 7903}))
     (d / "junk.json").write_text("{}")
     monkeypatch.setattr(hub, "pid_alive", lambda pid: pid == live)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == live)
     rows = hub.read_heartbeats(tmp_path)
     assert rows == [{"pid": live, "port": 7901, "identity": "ava", "instance_root": "/x/ava"}]
     # read-only: the stale record is still on disk (pruning is the owning server's job)
@@ -127,6 +128,7 @@ def test_discover_hubs_orders_pidfile_heartbeats_default_and_dedupes(tmp_path, m
 
     monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
     monkeypatch.setattr(hub, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: True)
     desktop = tmp_path / "desktop"
     (desktop / ".instances").mkdir(parents=True)
     (desktop / ".instances" / "222.json").write_text(
@@ -157,6 +159,7 @@ def test_discover_hubs_skips_member_heartbeats(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
     monkeypatch.setattr(hub, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: True)
     box = tmp_path / "box"
     member_root = box / "workspaces" / "killteamCoach-0416"
     member_root.mkdir(parents=True)
@@ -539,6 +542,7 @@ def test_connect_counts_a_live_pid_with_no_card_as_answered(tmp_path, monkeypatc
     is a RUNNING hub — the CLI must not read it as "nothing answered" and go to disk."""
     _no_disk_tokens(monkeypatch, tmp_path)
     monkeypatch.setattr(hub, "pid_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == 4242)
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("stalled", request=request)
@@ -674,3 +678,29 @@ def test_instance_root_comes_from_config_explain_and_is_none_when_missing():
     assert c.instance_root() == "/b/dev"
     c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(404)))
     assert c.instance_root() is None
+
+
+def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, monkeypatch):
+    """Round 2: a heartbeat / pidfile whose pid the OS has since handed to another program
+    painted a stopped hub `running` — then `unreachable` once its port did not answer — and
+    `u` was refused. Liveness is not evidence; being one of our processes is."""
+    root = tmp_path
+    (root / ".instances").mkdir()
+    (root / ".instances" / "1.json").write_text(json.dumps({"pid": 1, "port": 7871, "identity": "dev", "instance_root": str(root / "dev")}))
+    (root / ".instances" / "4242.json").write_text(json.dumps({"pid": 4242, "port": 7872, "identity": "ours", "instance_root": str(root / "ours")}))
+    monkeypatch.setattr(hub, "pid_alive", lambda pid: pid in (1, 4242))  # both alive …
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == 4242)  # … one is a protoAgent
+    assert [h["pid"] for h in hub.read_heartbeats(root)] == [4242]
+
+    inst = tmp_path / "inst"
+    inst.mkdir()
+
+    class _Paths:
+        instance_root = inst
+
+    monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
+    (inst / "server.pid").write_text(json.dumps({"pid": 1, "port": 7871}))
+    assert hub._pidfile_candidate() is None  # a stale pidfile names nothing
+    (inst / "server.pid").write_text(json.dumps({"pid": 4242, "port": 7871}))
+    cand = hub._pidfile_candidate()
+    assert cand is not None and cand.pid == 4242 and cand.url == "http://127.0.0.1:7871"

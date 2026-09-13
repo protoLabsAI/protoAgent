@@ -533,7 +533,10 @@ class DetailScreen(Screen):
     @work(thread=True, exclusive=True, group="detail")
     def refresh_detail(self) -> None:
         app: FleetDeck = self.app  # type: ignore[assignment]
-        detail = app.backend.detail(self.agent)
+        try:
+            detail = app.backend.detail(self.agent)
+        except Exception:  # noqa: BLE001 — the hub went away under us (an attach closed its client mid-read); the screen is being popped
+            return
         snap = app.snapshot
         detail.rollup = snap.rollups.get(self.slug) if snap else None
         app.call_from_thread(self.render_detail, detail)
@@ -714,6 +717,7 @@ class FleetDeck(App[int]):
         token: str | None = None,
         insecure_http: bool = False,
         start_on_hubs: bool = False,
+        offline: bool = False,
     ) -> None:
         super().__init__()
         self.backend = backend
@@ -730,6 +734,8 @@ class FleetDeck(App[int]):
         self._token = token  # an explicit --token, for peers and re-attaches
         self._insecure_http = insecure_http
         self._start_on_hubs = start_on_hubs
+        self._offline = offline  # `--offline`: the tree lists what disk says and probes nothing
+        self._attach_gen = 0  # the operator's LAST attach wins: an earlier, slower one is dropped when it lands
         self.hub_rows: list[HubRow] = []
         self.activity = Activity()
         # The fan-in of every online member's event bus (live mode). Injectable for tests.
@@ -885,6 +891,10 @@ class FleetDeck(App[int]):
                 self.call_from_thread(self.notify, f"peer discovery failed: {exc}", severity="warning", timeout=8)
         rows = _enumerate_hubs(peers=peers)
         rows = self._keep_starting(rows)
+        if self._offline:
+            # what disk says, unprobed — as `protoagent fleet --all --offline` prints it
+            self.call_from_thread(self._show_hubs, [r for r in rows if r.source != "local"], False)
+            return
         self.call_from_thread(self._show_hubs, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
         roots = _instance_roots()
         for r in rows:
@@ -917,10 +927,11 @@ class FleetDeck(App[int]):
             self.notify(f"{row.name} is {row.presence}", severity="warning")
             return
         self.notify(f"attaching to {row.name}…")
-        self._attach_hub(row)
+        self._attach_gen += 1
+        self._attach_hub(row, self._attach_gen)
 
     @work(thread=True, exclusive=True, group="attach")
-    def _attach_hub(self, row: HubRow) -> None:
+    def _attach_hub(self, row: HubRow, gen: int) -> None:
         from deck.data import LiveBackend
 
         try:
@@ -928,9 +939,18 @@ class FleetDeck(App[int]):
         except Exception as exc:  # noqa: BLE001
             self.call_from_thread(self.notify, f"could not attach to {row.name}: {exc}", severity="error", timeout=10)
             return
-        self.call_from_thread(self._switch_backend, LiveBackend(conn), row)
+        self.call_from_thread(self._switch_backend, LiveBackend(conn), row, gen)
 
-    def _switch_backend(self, backend: Backend, row: HubRow) -> None:
+    def _switch_backend(self, backend: Backend, row: HubRow, gen: int | None = None) -> None:
+        if gen is not None and gen != self._attach_gen:
+            # `exclusive` cancelled the awaiting task, not this thread's work: a slower attach
+            # the operator abandoned for another hub lands here after it — that hub is not
+            # the deck's; the one they chose last is
+            try:
+                backend.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
         old_events, old_backend = self.events, self.backend
         self.events = None
         self.backend = backend

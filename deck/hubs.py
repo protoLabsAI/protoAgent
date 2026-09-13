@@ -67,6 +67,7 @@ class HubRow:
     token: str | None = field(default=None, repr=False)  # the credential that opened it (never rendered)
     seen_root: Path | None = field(default=None, repr=False)  # the instance root a probed listener said it runs from
     drop: bool = field(default=False, repr=False)  # a listener that is not a hub row (a member, a non-hub service)
+    disowned_root: Path | None = field(default=None, repr=False)  # the root a heartbeat/pidfile claimed, when the listener said it runs from another
 
     @property
     def key(self) -> str:
@@ -393,9 +394,17 @@ def _probe_read(row: HubRow, conn: deckhub.Connection) -> HubRow:
         row.presence = "running"
         row.token = conn.client._token
         row.url = conn.client.url
-        if row.root is None and deckhub.is_loopback(row.url):
+        if deckhub.is_loopback(row.url):
             seen = conn.client.instance_root()
-            row.seen_root = _resolve(Path(seen)) if seen else None
+            seen_root = _resolve(Path(seen)) if seen else None
+            if row.root is None:
+                row.seen_root = seen_root
+            elif seen_root is not None and seen_root != _resolve(row.root):
+                # the heartbeat / pidfile that named this root points at a pid the OS has
+                # since handed to ANOTHER instance's hub: this listener is that hub, not this
+                # root's. Re-home the row so `reconcile` folds it into the root it named, and
+                # remember the root it wrongly wore so it is re-listed as stopped.
+                row.disowned_root, row.root, row.seen_root, row.source = row.root, None, seen_root, "local"
     finally:
         conn.client.close()
     return row
@@ -430,6 +439,15 @@ def reconcile(rows: list[HubRow]) -> list[HubRow]:
             if r.seen_root is not None and r.source == "local":
                 r.root = r.seen_root  # a hub on this box whose root we did not list (an unusual location)
         out.append(r)
+    # a root whose heartbeat turned out to be another instance's hub has no listener of its
+    # own: it is a stopped hub, and `u` must be able to bring it up
+    listed = {r.root for r in out if r.root is not None}
+    for r in rows:
+        d = r.disowned_root
+        if d is not None and not r.drop and d not in listed:
+            local, running, remotes = count_members(d)
+            out.append(HubRow(name=_root_name(d), root=d, url=None, port=None, presence="stopped", launcher="", source="root", members=local, running=running, remotes=remotes, note="its heartbeat named a pid that now runs another instance's hub"))
+            listed.add(d)
     return out
 
 

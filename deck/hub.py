@@ -304,9 +304,12 @@ def is_member_root(instance_root: Path | None) -> bool:
 
 
 def read_heartbeats(root: Path) -> list[dict]:
-    """The live ``.instances/<pid>.json`` records under ``root``. Dead pids are SKIPPED,
-    never unlinked — pruning is the owning server's job (``infra.paths.colocated_instances``);
-    a read-only CLI must not mutate another box root's state."""
+    """The live ``.instances/<pid>.json`` records under ``root``. Dead pids — and RECYCLED
+    ones, a pid the OS handed to some other program since the record was written — are
+    SKIPPED, never unlinked: pruning is the owning server's job
+    (``infra.paths.colocated_instances``); a read-only CLI must not mutate another box
+    root's state. A record whose pid is alive but not a protoAgent would otherwise paint a
+    stopped hub ``running`` (then ``unreachable`` once its port did not answer)."""
     d = root / ".instances"
     out: list[dict] = []
     if not d.is_dir():
@@ -316,7 +319,7 @@ def read_heartbeats(root: Path) -> list[dict]:
             pid = int(f.stem)
         except ValueError:
             continue
-        if pid == os.getpid() or not pid_alive(pid):
+        if pid == os.getpid() or not is_protoagent_pid(pid):
             continue
         try:
             rec = json.loads(f.read_text(encoding="utf-8"))
@@ -350,8 +353,8 @@ def _pidfile_candidate() -> HubCandidate | None:
         port = int(rec.get("port") or 0)
     except (TypeError, ValueError):
         return None
-    if port <= 0 or not pid_alive(pid):
-        return None
+    if port <= 0 or not is_protoagent_pid(pid):
+        return None  # a stale pidfile (a crash, a reboot, a recycled pid) names nothing
     return HubCandidate(_loopback(port), "pidfile", instance_root=root, pid=pid)
 
 

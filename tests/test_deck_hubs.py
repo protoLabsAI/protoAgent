@@ -6,6 +6,7 @@ conflict note, and the tree screen: attach, bring up."""
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -126,6 +127,9 @@ def test_probe_tells_unauthorized_from_unreachable_and_reads_a_hub(box, monkeypa
     class _Client:
         url = "http://127.0.0.1:7870"
         _token = "fleet-token"
+
+        def instance_root(self):
+            return None  # a hub that does not say (an older build): the row keeps its root
 
         def close(self):
             pass
@@ -514,3 +518,161 @@ async def test_a_poll_of_the_hub_the_deck_just_left_never_paints_the_new_roster(
         assert names == ["newhub", "nm"], names  # never protoEngineer/old/Cindi from the hub we left
         assert app.snapshot is not None and app.snapshot.roster[0]["id"] == "newhub"
         assert isinstance(deckdata, object)
+
+
+def test_a_listener_that_names_another_root_is_rehomed_and_the_disowned_root_reads_stopped(box, monkeypatch):
+    """Round 2: a heartbeat for `dev` whose pid the OS recycled to ANOTHER instance's hub
+    (one of ours, so the pid check passes) — the listener on that port is `other`'s hub.
+    Before: `dev`'s row wore `other`'s name, roster and credential, `other` read stopped,
+    and `u` on it would have started a second server for its root."""
+    home = box["home"]
+    other = _hub_root(home, "other", members=1)
+    (home / ".instances" / "100.json").write_text(json.dumps({"pid": 100, "port": 7877, "identity": "dev-hub", "instance_root": str(box["stopped"])}))
+    monkeypatch.setattr(deckhub, "pid_alive", lambda pid: pid in (100, 111, 222, 333, 4242))
+    monkeypatch.setattr(deckhub, "is_protoagent_pid", lambda pid: pid in (100, 111, 222, 333, 4242))
+    rows = hubs.enumerate_hubs()
+    dev = next(r for r in rows if r.root == box["stopped"].resolve())
+    assert dev.presence == "running" and dev.port == 7877  # the heartbeat's claim, before the probe
+
+    class _Client:
+        def __init__(self, url, root):
+            self.url, self._token, self._root = url, "token-other", root
+
+        def instance_root(self):
+            return self._root
+
+        def close(self):
+            pass
+
+    def fake_connect(*, candidates, token=None, insecure_http=False):
+        url = candidates[0].url
+        if url.endswith(":7877"):
+            roster = [{"name": "other-hub", "label": "other-hub", "id": "other-hub", "host": True, "running": True, "version": "0.165.0"}, {"name": "m", "id": "m-1", "running": True}]
+            return deckhub.Connection(client=_Client(url, str(other)), candidate=candidates[0], card={}, roster=roster)
+        if url.endswith(":7870") or url.endswith(":7872"):
+            return deckhub.Connection(client=_Client(url, None), candidate=candidates[0], card={}, roster=[{"name": "h", "id": "h", "host": True, "running": True}])
+        raise deckhub.NoHub([url], [], None, None)
+
+    monkeypatch.setattr(deckhub, "connect", fake_connect)
+    for r in rows:
+        if r.candidate is not None:
+            hubs.probe(r, roots=hubs.instance_roots())
+    rows = hubs.reconcile(rows)
+    by_root = {r.root.name: r for r in rows if r.root is not None}
+    assert (by_root["other"].presence, by_root["other"].name, by_root["other"].port, by_root["other"].token) == ("running", "other-hub", 7877, "token-other")
+    assert by_root["dev"].presence == "stopped" and "another instance" in by_root["dev"].note and by_root["dev"].members == 3
+    assert [r.root.name for r in rows if r.root is not None].count("dev") == 1
+
+
+@pytest.mark.asyncio
+async def test_member_detail_open_while_an_attach_lands_does_not_kill_the_deck(monkeypatch):
+    """Round 2: `_switch_backend` closes the old hub's client under the detail screen's
+    worker; the next proxied GET raises a plain RuntimeError (not a HubError) and, unguarded,
+    that worker's exception took the whole TUI down. Keystrokes: H, u, esc, i, hub comes up."""
+
+    class TornOld(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.gate = threading.Event()
+            self.raised = threading.Event()
+
+        def detail(self, agent):
+            self.gate.wait(5)
+            if self.closed:
+                self.raised.set()
+                raise RuntimeError("Cannot send a request, as the client has been closed.")
+            return super().detail(agent)
+
+        def close(self):
+            super().close()
+            self.gate.set()
+
+    old = TornOld()
+    new = FakeBackend(roster=[{"name": "newhub", "id": "newhub", "port": 7872, "pid": 9, "running": True, "host": True, "version": "0.165.0"}, {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"}])
+    app = FleetDeck(old, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("i")
+        await pilot.pause(0.3)  # the detail worker is out, blocked on the gate
+        row = HubRow(name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer")
+        app._switch_backend(new, row)  # the attach lands: closes `old` under that worker
+        for _ in range(20):
+            await pilot.pause(0.05)
+        assert old.raised.is_set() and isinstance(app.screen, RosterScreen) and app._exception is None
+        await _settle(app, pilot)
+        table = app.screen.query_one("#roster", DataTable)
+        assert [str(table.get_row_at(i)[1]) for i in range(table.row_count)] == ["newhub", "nm"]
+
+
+@pytest.mark.asyncio
+async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
+    """Round 2: `exclusive` cancels the awaiting task, not the thread — a slow attach to A,
+    abandoned for B, landed after B and replaced it (closing the hub the operator chose)."""
+    from deck import data as deckdata
+
+    gates = {"7871": threading.Event(), "7872": threading.Event()}
+    closed: list[str] = []
+
+    class _Client:
+        _token = "t"
+
+        def __init__(self, url):
+            self.url = url
+
+        def close(self):
+            closed.append(self.url)
+
+    def gated_connect(*, candidates, token=None, insecure_http=False):
+        url = candidates[0].url
+        gates[url[-4:]].wait(5)
+        return deckhub.Connection(client=_Client(url), candidate=candidates[0], card={}, roster=[{"name": f"hub{url[-4:]}", "id": f"hub{url[-4:]}", "host": True, "running": True, "port": int(url[-4:])}])
+
+    class _Live(deckdata.LiveBackend):
+        def snapshot(self):
+            return deckdata.Snapshot(mode="live", label=f"live · {self.conn.client.url}", roster=list(self.conn.roster))
+
+        def fleet_events(self):
+            return None
+
+        def warm_max(self):
+            return None
+
+    monkeypatch.setattr(deckhub, "connect", gated_connect)
+    monkeypatch.setattr(deckdata, "LiveBackend", _Live)
+    a = HubRow(name="A", root=None, url="http://127.0.0.1:7871", port=7871, presence="running", source="peer", candidate=deckhub.HubCandidate("http://127.0.0.1:7871", "peer"))
+    b = HubRow(name="B", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer", candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "peer"))
+    app = FleetDeck(FakeBackend(), poll_s=0)
+    notes: list[str] = []
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        app.notify = lambda msg, **kw: notes.append(msg)
+        app.attach_hub(a)  # slow
+        await pilot.pause(0.1)
+        app.attach_hub(b)  # the operator gave up on A
+        gates["7872"].set()
+        await pilot.pause(0.5)
+        assert app.backend.conn.client.url.endswith(":7872")
+        gates["7871"].set()  # A's connect returns late
+        await _settle(app, pilot)
+        await pilot.pause(0.3)
+        assert app.backend.conn.client.url.endswith(":7872"), notes  # B, the last choice, is the deck's hub
+        assert "http://127.0.0.1:7871" in closed and "http://127.0.0.1:7872" not in closed
+        assert [n for n in notes if n.startswith("attached to")] == ["attached to B (http://127.0.0.1:7872)"]
+
+
+@pytest.mark.asyncio
+async def test_offline_deck_tree_lists_disk_and_probes_nothing(monkeypatch):
+    """Round 2: `--offline` documented "skips the scan and the probes", but the deck's tree
+    still probed every running row with this box's fleet tokens."""
+    running = HubRow(name="studio", root=Path("/tmp/desktop"), url="http://127.0.0.1:7872", port=7872, presence="running", launcher="desktop app", source="heartbeat", candidate=deckhub.HubCandidate("http://127.0.0.1:7872", "heartbeat"))
+    probed: list = []
+    monkeypatch.setattr("deck.app._enumerate_hubs", lambda *, peers=None: [HubRow(**running.__dict__)])
+    monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: probed.append(row.url) or row)
+    monkeypatch.setattr("deck.app._instance_roots", lambda: [])
+    app = FleetDeck(FakeBackend(mode="offline"), poll_s=0, peers=None, launcher=lambda row: None, start_on_hubs=True, offline=True)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, HubTreeScreen) and not app.screen.busy
+        assert [(r.name, r.presence) for r in app.hub_rows] == [("studio", "running")]  # what disk says, unprobed
+    assert probed == []

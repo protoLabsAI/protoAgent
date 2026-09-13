@@ -368,8 +368,23 @@ def _discover_peers() -> list[dict]:
 
     from graph.fleet import discovery
 
+    # The discovery knobs (ADR 0047 D8 `fleet.discovery.mdns` / `port_min` / `port_max`)
+    # live in the Host layer; `discovery` reads them from the live server's STATE, which a
+    # CLI process does not have — resolve them from the cascade here or the LAN channel
+    # never opens and the range is always the default, whatever the box was told.
+    mdns: bool | None = None
+    port_range: tuple[int, int] | None = None
     try:
-        return asyncio.run(discovery.discover())
+        from graph.config import LangGraphConfig
+        from graph.config_io import config_yaml_path
+
+        cfg = LangGraphConfig.from_yaml(config_yaml_path())
+        mdns = bool(getattr(cfg, "discovery_mdns", False))
+        port_range = (int(getattr(cfg, "discovery_port_min", 7860)), int(getattr(cfg, "discovery_port_max", 7910)))
+    except Exception as exc:  # noqa: BLE001 — no readable config: the discovery's own defaults
+        logging.getLogger("protoagent.fleet").debug("discovery knobs unreadable, using defaults: %s", exc)
+    try:
+        return asyncio.run(discovery.discover(mdns=mdns, port_range=port_range))
     except Exception as exc:  # noqa: BLE001 — a network scan must not take the tree down
         logging.getLogger("protoagent.fleet").debug("peer discovery failed: %s", exc)
         return []
@@ -395,14 +410,16 @@ def _port_free(port: int) -> bool:
     return True
 
 
-def _pick_port(preferred: int | None, *, low: int = 7870, high: int = 7910) -> int:
+def _pick_port(preferred: int | None, *, taken: frozenset[int] | set[int] = frozenset(), low: int = 7870, high: int = 7910) -> int:
     """The port a stopped hub should come up on: the one it last used when nothing holds
     it, else the first free one in the fleet's range (ports are box-global: the desktop
-    hub usually holds 7870)."""
-    if preferred and _port_free(preferred):
+    hub usually holds 7870). ``taken`` are ports other hubs' records on disk own — a
+    stopped MEMBER's fixed port is free right now and must still not be taken, or that
+    member dies with EADDRINUSE at its next start."""
+    if preferred and preferred not in taken and _port_free(preferred):
         return preferred
     for p in range(low, high + 1):
-        if p != preferred and _port_free(p):
+        if p != preferred and p not in taken and _port_free(p):
             return p
     raise RuntimeError(f"no free port between {low} and {high} on this box")
 
@@ -422,8 +439,10 @@ def _launch_hub(row) -> None:
     shell's environment. A hub with no remembered port (no ``server.pid``: the desktop's,
     a dev instance last run in the foreground) gets the first free one in the fleet's
     range, and the row learns it. Raises with the CLI's own message when it could not start."""
+    import importlib
     import os
     import subprocess
+    from pathlib import Path
 
     if row.root is None:
         raise RuntimeError("only a hub with an instance root on this box can be brought up")
@@ -434,7 +453,18 @@ def _launch_hub(row) -> None:
         # started for that root must see the same Host layer, commons and credential
         # store, not this machine's plain ~/.protoagent
         env["PROTOAGENT_BOX_ROOT"] = str(row.root)
-    port = _pick_port(row.port)
+    else:
+        # a scoped instance under a box root that is not the plain data home (this shell's
+        # PROTOAGENT_BOX_ROOT, the desktop's): the child must resolve the SAME box — its Host
+        # layer, commons, credential store and the .instances/ its heartbeat lands in — not
+        # ~/.protoagent, which is what a stripped environment would give it
+        parent = Path(row.root).parent
+        if not _same_dir(parent, deckhub.data_home()) and any(_same_dir(parent, b) for b in deckhub.known_box_roots()):
+            env["PROTOAGENT_BOX_ROOT"] = str(parent)
+    hubs = importlib.import_module("deck.hubs")
+    member_ports, hub_ports = hubs._ports_on_disk(hubs.instance_roots())
+    taken = set(member_ports) | {p for p, r in hub_ports.items() if not _same_dir(r, row.root)}
+    port = _pick_port(row.port, taken=taken)
     row.port = port
     row.url = deckhub._loopback(port)
     # the frozen-aware base argv (as server/cli.py builds it — graph must not import server)
@@ -800,11 +830,21 @@ def _cmd_deck(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    conn = _open_hub(args)
+    reason = "no hub answered"
+    if args.all_hubs:
+        # `--all` opens on the tree, which is the one view that can SHOW a hub that answered
+        # but refused this shell's credentials — that must not be the error that keeps the
+        # tree from opening. The roster underneath starts offline and says why.
+        try:
+            conn = _open_hub(args)
+        except deckhub.HubError as exc:
+            conn, reason = None, str(exc)
+    else:
+        conn = _open_hub(args)
     if conn is not None:
         backend = deckdata.LiveBackend(conn)
     else:
-        backend = _offline_backend("no hub answered")
+        backend = _offline_backend(reason)
     return int(
         deckapp.run(
             backend,
@@ -813,6 +853,7 @@ def _cmd_deck(args: argparse.Namespace) -> int:
             token=args.token,
             insecure_http=args.insecure_http,
             start_on_hubs=bool(args.all_hubs),
+            offline=bool(args.offline),
         )
     )
 
