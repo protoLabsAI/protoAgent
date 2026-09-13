@@ -146,6 +146,10 @@
           "title": "Fleet (many agents on one host)"
         },
         {
+          "path": "guides/fleet-deck.md",
+          "title": "The fleet deck (the fleet in a terminal)"
+        },
+        {
           "path": "guides/portfolio.md",
           "title": "Portfolio (one PM across boards)"
         },

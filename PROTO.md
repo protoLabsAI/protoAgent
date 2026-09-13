@@ -4,8 +4,8 @@ The canonical instruction file for any agent (human or AI) working in this repo.
 `CLAUDE.md` / `AGENTS.md` are thin pointers here — edit **this** file.
 
 protoAgent is a LangGraph-based agent runtime with a FastAPI server, a React
-console (`apps/web`), a plugin system, and an A2A surface. Python is the core;
-TypeScript is the console.
+console (`apps/web`), a terminal fleet deck (`deck/`, Textual), a plugin system,
+and an A2A surface. Python is the core; TypeScript is the console.
 
 ---
 
@@ -425,6 +425,17 @@ These are the failures that actually recur — read them before you edit.
   **burndown list** of grandfathered violations — remove entries, never add to
   them. import-linter sees function-level (lazy) imports too, so you can't hide
   one inside a function.
+
+- **The fleet deck (`deck/`) is an HTTP client of the hub, never an importer of
+  the core.** It must not import `graph/`, `server/` or `operator_api/` (a
+  `lint-imports` contract); `graph/fleet/cli.py` imports the deck and hands it what
+  it needs from the core as callables (peer discovery, the hub launcher). Textual
+  is imported by name only when the deck opens — `--help` and every
+  non-interactive verb stay Textual-free (`tests/test_fleet_cli.py` asserts it per
+  verb), which is why the hub model shared with the CLI lives in the Textual-free
+  `deck/discovery.py`. Any hub- or member-authored string put into a widget must
+  be a `rich.text.Text`: Textual parses a plain `str` as markup, and a stray `[/]`
+  raises on the UI thread (`tests/test_deck_markup.py`).
 
 - **Module names.** It's `a2a_impl/` (NOT `a2a/` — that shadows the A2A SDK).
   Metrics live in `observability/` → `from observability import metrics`.

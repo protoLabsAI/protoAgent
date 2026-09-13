@@ -67,7 +67,7 @@ then exits:
 #### The fleet deck: `protoagent fleet` with no arguments
 
 Bare `protoagent fleet` (or `protoagent top`) opens an interactive terminal over the
-running hub — the **fleet deck**. The roster shows every member with the console's
+running hub — the **fleet deck** (a task-oriented walkthrough: [The fleet deck](./fleet-deck.md)). The roster shows every member with the console's
 presence words (host, online, remote, stopped, unreachable), version skew, spend over the
 last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` (or `c`) talk to the member, `i` member detail, `w` the work feed, `n` new
 member, `R` rename, `d` delete, `a` add a remote, `e` edit a remote, `J`/`K` move a row (with
@@ -136,8 +136,9 @@ credential reads `unauthorized` (pass `--token`), one that does not answer `unre
 A peer found on the network is never sent a credential — not `--token`, not the env — its
 name and url are its own claim; to open one with a bearer, name it: `--hub <url> --token`.
 `enter` attaches the deck to that hub — the roster, feed and conversations then belong to
-its fleet; `u` on a stopped hub runs `protoagent up` for that instance root and attaches
-once its port answers. Stopping a hub is not a deck action (`protoagent down` in that
+its fleet; `u` on a stopped hub runs `protoagent up` for that instance root — on the port it
+last used when that is free and no member of any instance records it, else the first such port
+from 7870 to 7910 — and attaches once its port answers. Stopping a hub is not a deck action (`protoagent down` in that
 instance). Two hubs claiming one port both say so — ports are box-global.
 
 **The work feed.** `w` lists what the fleet is doing — every member's server-fired turns,

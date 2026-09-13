@@ -13,6 +13,7 @@ primitives:
 | **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| **Fleet deck** | the same fleet in a terminal — roster, conversations, parked questions, management, every hub on the box ([guide](./fleet-deck.md)) | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 
 ## Quick start
 
@@ -31,6 +32,9 @@ python -m server fleet up
 python -m server fleet ls
 #   ● pm        :7871  pid 12345  [project-manager-archetype]
 #   ● scratch   :7872  pid 12346
+
+# …or open the fleet deck: the same fleet in a terminal (q quits; members keep running)
+python -m server fleet
 ```
 
 ## Workspaces — a named, isolated agent
@@ -50,7 +54,10 @@ workspace rm <name> [--purge] # --purge also deletes its scoped data
 ```
 
 `--from <dir>` clones an existing agent's config + secrets (re-stamping identity/instance);
-`--bundle <url>` installs a bundle into it (next section); `--port auto` picks a free port.
+`--bundle <url>` installs a bundle into it (next section); `--port auto` picks a port that is free
+and that no member of **any** instance on this machine records — ports are machine-wide, and a
+stopped member of another instance still owns its port (the pick and its record happen under one
+machine-wide lock, so two hubs creating members at once cannot collide).
 `--input KEY=VALUE` (repeatable, core ≥ 0.146, #2977) answers a bundle's `config_inputs`
 prompts — the required ones must be answered or the create is refused, a `KEY=VALUE`
 without `=` is a usage error, and a `type: delegate` answer is copied from the host config
@@ -336,7 +343,8 @@ the tool is absent from every surface — the local model's toolset, the resolve
 - Guides: [deploy with Docker](./deploy-docker.md) · [delegates](./delegates.md) ·
   [multi-instance scoping](./multi-instance.md) · [plugins](./plugins.md) ·
   [install & publish plugins](./plugin-registry.md) · [skills](./skills.md) ·
-  [operating a fleet (health, rollout, triage, recovery)](./operating-a-fleet.md)
+  [operating a fleet (health, rollout, triage, recovery)](./operating-a-fleet.md) ·
+  [the fleet deck (a terminal for the fleet)](./fleet-deck.md)
 
 ## What the box shares with every member
 
