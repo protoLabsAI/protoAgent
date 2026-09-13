@@ -239,3 +239,51 @@ def test_replayed_frames_are_flagged_and_a_member_stamp_is_carried():
     assert (out[0].replayed, out[0].ts) == (False, 1700000000.5)
     assert out[1].replayed and out[1].ts is None and out[2].replayed and out[2].ts is None
     m.close()
+
+
+def test_the_fleet_queue_is_bounded_and_never_drops_an_event(monkeypatch):
+    """CodeRabbit (epic, major): the fan-in queue was unbounded. It is bounded now, and a
+    full queue makes the reader WAIT — every event arrives, in each member's order."""
+    import time as _time
+
+    n = 60
+
+    def fake_events(self):
+        for i in range(n):
+            yield events.Event(slug=self.slug, topic="turn.usage", data={"i": i}, seq=i)
+
+    monkeypatch.setattr(events.MemberEvents, "events", fake_events)
+    fe = events.FleetEvents(deckhub.HubClient("http://127.0.0.1:7870", None), max_pending=5)
+    fe.watch(["a", "b"])
+    got: list = []
+    deadline = _time.monotonic() + 15
+    while len(got) < 2 * n and _time.monotonic() < deadline:
+        assert fe.queue.qsize() <= 5
+        got.extend(fe.drain(limit=3))
+        _time.sleep(0.005)
+    fe.close()
+    for slug in ("a", "b"):
+        assert [e.data["i"] for e in got if e.slug == slug] == list(range(n))
+
+
+def test_a_reader_waiting_on_a_full_queue_stops_promptly(monkeypatch):
+    """The wait for room honours stop(): closing the deck never hangs on a full queue."""
+    import time as _time
+
+    def endless(self):
+        i = 0
+        while True:
+            yield events.Event(slug=self.slug, topic="turn.usage", data={}, seq=i)
+            i += 1
+
+    monkeypatch.setattr(events.MemberEvents, "events", endless)
+    fe = events.FleetEvents(deckhub.HubClient("http://127.0.0.1:7870", None), max_pending=2)
+    fe.watch(["a"])
+    _, thread = fe._readers["a"]
+    deadline = _time.monotonic() + 5
+    while fe.queue.qsize() < 2 and _time.monotonic() < deadline:
+        _time.sleep(0.01)
+    assert fe.queue.qsize() == 2  # full: the reader is now waiting for room
+    t0 = _time.monotonic()
+    fe.close()
+    assert _time.monotonic() - t0 < 1.5 and not thread.is_alive()

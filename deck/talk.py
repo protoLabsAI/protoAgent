@@ -210,12 +210,12 @@ class SessionPicker(Screen[str | None]):
         self._name, self._sessions, self._current = name, sessions, current
 
     def compose(self) -> ComposeResult:
-        yield Static(f"{self._name} · sessions (newest first) · enter opens · ctrl+n new", id="picker-head")
+        yield Static(Text(f"{self._name} · sessions (newest first) · enter opens · ctrl+n new"), id="picker-head")
         items = []
         for s in self._sessions:
             sid = str(s.get("session_id"))
             mark = "▸ " if sid == self._current else "  "
-            items.append(ListItem(Static(f"{mark}{sid}   {s.get('turn_count', '?')} turns   {str(s.get('last_updated') or '')[:16].replace('T', ' ')}"), name=sid))
+            items.append(ListItem(Static(Text(f"{mark}{sid}   {s.get('turn_count', '?')} turns   {str(s.get('last_updated') or '')[:16].replace('T', ' ')}")), name=sid))
         if not items:
             items.append(ListItem(Static("  (no console sessions on this member yet — ctrl+n starts one)"), name=""))
         yield ListView(*items, id="picker")
@@ -306,7 +306,7 @@ class ConversationScreen(Screen):
     def _render_head(self) -> None:
         pres = presence_of(self.agent)
         n = len(self.convo.exchanges)
-        self.query_one("#talk-head", Static).update(f"◂ {self.member_name} · {self.convo.session_id} · {n} turn{'s' if n != 1 else ''}   {pres} · :{self.agent.get('port') or '—'}")
+        self.query_one("#talk-head", Static).update(Text(f"◂ {self.member_name} · {self.convo.session_id} · {n} turn{'s' if n != 1 else ''}   {pres} · :{self.agent.get('port') or '—'}"))
 
     # ── sessions ──
 
@@ -1137,7 +1137,7 @@ class ConversationScreen(Screen):
             bits.append(f"✗ {t.failed or ex.error}")
         elif t.hitl:
             bits.append("⚑ waiting for you")
-        meta.update("  ".join(bits))
+        meta.update(Text("  ".join(bits)))  # carries the origin and the failure text
         body = t.content
         if self.show_reasoning and t.reasoning:
             body = f"> {t.reasoning.replace(chr(10), chr(10) + '> ')}\n\n{body}"
@@ -1194,26 +1194,26 @@ class ConversationScreen(Screen):
         if live is not None:
             t = live.turn
             if live.cancel_requested:
-                st.update("⟳ cancelling…  ·  esc again abandons the turn locally")
+                st.update(Text("⟳ cancelling…  ·  esc again abandons the turn locally"))
             elif live.attached:
                 who = f"{live.origin} turn" if live.origin else "attached turn"
                 take = "type to interject" if live.controllable else "not taking messages"
-                st.update(f"⟳ {who} · {t.status_text or 'working'}  ·  {take}{queued}  ·  esc detaches")
+                st.update(Text(f"⟳ {who} · {t.status_text or 'working'}  ·  {take}{queued}  ·  esc detaches"))
             else:
-                st.update(f"⟳ {t.status_text or 'working'}  ·  type to steer{queued}  ·  esc stops")
+                st.update(Text(f"⟳ {t.status_text or 'working'}  ·  type to steer{queued}  ·  esc stops"))
             return
         parked = self.convo.parked
         if parked is not None:
             # the stream closed on input-required: the turn is PARKED, not over
             if parked.submitting:
-                st.update(f"⟳ submitting the form to {self.member_name}…{queued}")
+                st.update(Text(f"⟳ submitting the form to {self.member_name}…{queued}"))
                 return
             kind = deckhitl.kind_of(parked.turn.hitl)
             how = "type the answer, or ctrl+r" if kind == "question" else "enter / ctrl+r opens it"
-            st.update(f"⚑ {self.member_name} needs you ({kind}): {deckhitl.prompt_of(parked.turn.hitl)}  ·  {how}{queued}")
+            st.update(Text(f"⚑ {self.member_name} needs you ({kind}): {deckhitl.prompt_of(parked.turn.hitl)}  ·  {how}{queued}"))
             return
         latest = self.convo.latest
-        st.update("idle" + (f"  ·  last turn {_cost_line(latest.turn)}" if latest and latest.turn.usage else "") + queued)
+        st.update(Text("idle" + (f"  ·  last turn {_cost_line(latest.turn)}" if latest and latest.turn.usage else "") + queued))
 
     # ── keys ──
 

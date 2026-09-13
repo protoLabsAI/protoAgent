@@ -459,8 +459,11 @@ def apply_tool_event(turn: Turn, evt: ToolEvent) -> None:
         parent = evt.parent_id if evt.parent_id is not None else (open_task.id if open_task else None)
         card = ToolCall(id=evt.id, name=evt.name, input=evt.input, status="running", started_at=now, parent_id=parent)
         if idx is not None:
+            # a repeated start (a replay, a re-sent frame) sets what it knows and keeps the
+            # rest: its `None` output / chars / duration must not erase a recorded result
             old = turn.tool_calls[idx]
-            turn.tool_calls[idx] = ToolCall(**{**old.__dict__, **{k: v for k, v in card.__dict__.items()}})
+            fresh = {k: v for k, v in card.__dict__.items() if v is not None}
+            turn.tool_calls[idx] = ToolCall(**{**old.__dict__, **fresh})
         else:
             turn.tool_calls.append(card)
         if parent is None:

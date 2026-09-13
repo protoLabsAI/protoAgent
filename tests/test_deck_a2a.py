@@ -514,3 +514,16 @@ def test_a_json_answer_instead_of_a_stream_is_surfaced_not_swallowed():
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(garbage))
     with pytest.raises(deckhub.HubRequestError, match="instead of a stream"):
         list(c.stream("x", context_id=CID))
+
+
+def test_a_repeated_tool_start_keeps_the_recorded_result():
+    """CodeRabbit (epic): a live `started` reusing an id overwrote the output, chars and
+    duration with None. A start sets what it carries (status, input, started_at) and keeps
+    the rest — the console's reducer spreads only the keys a start has."""
+    t = fold(
+        status(metadata=tool("started", args='{"cmd": "ls"}')),
+        status(metadata=tool("completed", result="file.txt", outputChars=1234.0)),
+        status(metadata=tool("started", args='{"cmd": "ls"}')),
+    )
+    (c1,) = t.tool_calls
+    assert (c1.output, c1.output_chars, c1.status) == ("file.txt", 1234, "running") and c1.duration_ms is not None

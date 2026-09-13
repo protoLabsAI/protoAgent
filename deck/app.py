@@ -123,10 +123,10 @@ class RosterScreen(Screen):
 
     def render_snapshot(self, snap: Snapshot) -> None:
         app: FleetDeck = self.app  # type: ignore[assignment]
-        self.query_one("#topbar", Static).update(f"protoagent fleet · {snap.label}")
+        self.query_one("#topbar", Static).update(Text(f"protoagent fleet · {snap.label}"))
         banner = self.query_one("#banner", Static)
         if snap.warnings:
-            banner.update("⚠ " + "  ·  ".join(snap.warnings))
+            banner.update(Text("⚠ " + "  ·  ".join(snap.warnings)))  # hub-authored: text, never markup
             banner.display = True
         else:
             banner.update("")
@@ -187,7 +187,7 @@ class RosterScreen(Screen):
             parts.append(f"filter: {self._filter!r} (esc clears)")
         if snap.error:
             parts.append(f"⚠ last poll failed: {snap.error} (showing the previous roster)")
-        self.query_one("#status", Static).update("  ·  ".join(parts))
+        self.query_one("#status", Static).update(Text("  ·  ".join(parts)))  # carries display names and the poll error
         app.snapshot = snap
         self.refresh_bindings()
 
@@ -571,7 +571,7 @@ class DetailScreen(Screen):
         table = self.query_one("#sessions", DataTable)
         table.clear()
         if d.sessions_error:
-            self.query_one("#sessions-head", Static).update(f"SESSIONS  ⚠ {d.sessions_error}")
+            self.query_one("#sessions-head", Static).update(Text(f"SESSIONS  ⚠ {d.sessions_error}"))
         else:
             self.query_one("#sessions-head", Static).update(f"SESSIONS  newest first · {len(d.sessions)}")
             # GET /api/diagnostics/sessions rows (#3171): session_id, context_id,
@@ -596,7 +596,7 @@ class DetailScreen(Screen):
         log = self.query_one("#log", RichLog)
         head = self.query_one("#log-head", Static)
         if d.logs_error:
-            head.update(f"LOG  ⚠ {d.logs_error}")
+            head.update(Text(f"LOG  ⚠ {d.logs_error}"))
             return
         # The ring answers the NEWEST N records, so a count can't say what is new once the
         # window is full (review HIGH-1: the tail froze at 200 while the header said

@@ -395,4 +395,4 @@ def test_chat_form_submit_settles_the_parked_task_only_when_the_wizard_is_done(m
     done = client.post("/api/chat/commands/submit", json={"callback_id": "cb2", "session_id": "chat-1", "answers": {"b": 2}}).json()
     assert done == {"reply": "posted"} and settled == ["chat-1"]
     client.post("/api/chat/commands/submit", json={"callback_id": "cb3", "answers": {}})  # no session: nothing to settle
-    assert settled == ["chat-1"]
+    assert settled == ["chat-1"] and answers["n"] == 3  # all three submits ran; only the finished one with a session settled

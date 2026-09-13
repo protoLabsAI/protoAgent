@@ -27,6 +27,7 @@ import json
 import re
 from typing import Any
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -199,14 +200,14 @@ class ApprovalModal(OnceModal[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="hitl-box"):
-            yield Static(f"⚑ {self.member} asks for approval", classes="hitl-title")
-            yield Static(str(self.hitl.get("title") or "Approve?"), classes="hitl-sub")
+            yield Static(Text(f"⚑ {self.member} asks for approval"), classes="hitl-title")
+            yield Static(Text(str(self.hitl.get("title") or "Approve?")), classes="hitl-sub")  # member-authored: text, never markup
             detail = str(self.hitl.get("detail") or "")
             if detail:
                 with VerticalScroll(classes="hitl-detail"):
-                    yield Static(detail)
+                    yield Static(Text(detail))
             if self.hitl.get("project"):
-                yield Static(f"project: {self.hitl['project']}", classes="hitl-sub")
+                yield Static(Text(f"project: {self.hitl['project']}"), classes="hitl-sub")
             with Horizontal(classes="hitl-buttons"):
                 yield Button("Approve (a)", id="approve", variant="success")
                 yield Button("Deny (d)", id="deny", variant="error")
@@ -249,7 +250,7 @@ class QuestionModal(OnceModal[str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="hitl-box"):
-            yield Static(f"⚑ {self.member} asks", classes="hitl-title")
+            yield Static(Text(f"⚑ {self.member} asks"), classes="hitl-title")
             yield Markdown(prompt_of(self.hitl))
             yield Input(value=self.draft, placeholder="your answer… (enter sends)", id="answer", select_on_focus=False)
             with Horizontal(classes="hitl-buttons"):
@@ -324,8 +325,8 @@ class FormModal(OnceModal[dict | str | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="hitl-box"):
-            yield Static(f"⚑ {self.member} needs input", classes="hitl-title")
-            yield Static(str(self.hitl.get("title") or ""), classes="hitl-sub", id="form-title")
+            yield Static(Text(f"⚑ {self.member} needs input"), classes="hitl-title")
+            yield Static(Text(str(self.hitl.get("title") or "")), classes="hitl-sub", id="form-title")
             if self.hitl.get("description"):
                 yield Markdown(str(self.hitl["description"]))
             yield Static("", id="form-step-head", classes="hitl-sub")
@@ -350,10 +351,10 @@ class FormModal(OnceModal[dict | str | None]):
         n = len(self.steps)
         head = self.query_one("#form-step-head", Static)
         title = str(self.step.get("title") or "")
-        head.update((f"step {self.current + 1} / {n}" + (f" · {title}" if title else "")) if n > 1 else title)
+        head.update(Text((f"step {self.current + 1} / {n}" + (f" · {title}" if title else "")) if n > 1 else title))
         widgets: list = []
         if self.step.get("description"):
-            widgets.append(Static(str(self.step["description"]), classes="hitl-sub"))
+            widgets.append(Static(Text(str(self.step["description"])), classes="hitl-sub"))
         for key, schema, required in visible_fields_of(self.step, self.values):
             widgets.append(self._field_widget(key, schema, required))
         await box.mount_all(widgets)
@@ -371,17 +372,17 @@ class FormModal(OnceModal[dict | str | None]):
         value = self.values.get(key)
         opts = options_of(schema)
         slot = self._slot_of.get(key, key)
-        children: list = [] if schema.get("type") == "boolean" else [Label(label)]  # a checkbox carries its own label
+        children: list = [] if schema.get("type") == "boolean" else [Label(Text(label))]  # a checkbox carries its own label
         if schema.get("description"):
-            children.append(Static(str(schema["description"]), classes="hitl-sub"))
+            children.append(Static(Text(str(schema["description"])), classes="hitl-sub"))
         if is_multi(schema) and opts:
             chosen = set(value) if isinstance(value, list) else set()
-            children.append(SelectionList[str](*[(lab + (f" — {desc}" if desc else ""), val, val in chosen) for val, lab, desc in opts], id=f"in-{slot}"))
+            children.append(SelectionList[str](*[(Text(lab + (f" — {desc}" if desc else "")), val, val in chosen) for val, lab, desc in opts], id=f"in-{slot}"))  # option labels are member text too
         elif opts:
             known = {v for v, _, _ in opts}
-            children.append(Select[str]([(lab + (f" — {desc}" if desc else ""), val) for val, lab, desc in opts], value=str(value) if value is not None and str(value) in known else Select.NULL, allow_blank=True, id=f"in-{slot}"))
+            children.append(Select[str]([(Text(lab + (f" — {desc}" if desc else "")), val) for val, lab, desc in opts], value=str(value) if value is not None and str(value) in known else Select.NULL, allow_blank=True, id=f"in-{slot}"))
         elif schema.get("type") == "boolean":
-            children.append(Checkbox(label, value=bool(value), id=f"in-{slot}"))
+            children.append(Checkbox(Text(label), value=bool(value), id=f"in-{slot}"))  # Textual 8.2.8 builds a str label with Content.from_text, which PARSES markup
         elif schema.get("format") == "textarea":
             children.append(TextArea(str(value) if value is not None else "", id=f"in-{slot}"))
         else:
@@ -406,7 +407,7 @@ class FormModal(OnceModal[dict | str | None]):
             hint = f"required: {', '.join(missing)}  ·  " + hint
         if n > 1:
             hint = "ctrl+← / ctrl+→ steps  ·  " + hint
-        self.query_one("#form-hint", Static).update(hint)
+        self.query_one("#form-hint", Static).update(Text(hint))  # names member-authored field keys
 
     # ── values ──
 

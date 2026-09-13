@@ -48,6 +48,7 @@ from deck import hub as deckhub
 TOPICS = ("chat.progress", "turn.started", "turn.finished", "turn.usage", "turn.input_required", "turn.resumed", "chat.resumed")
 _READ_S = 60.0  # keepalives arrive every 15 s; a minute of silence means the socket is dead
 _BACKOFF_S = (1.0, 2.0, 5.0, 10.0, 20.0)
+_MAX_PENDING = 5000  # events awaiting the UI, which drains 500 every half second
 _REPLAY_WINDOW_S = 1.0  # after a reconnect with ?since=, the ring's catch-up arrives at once: those frames are REPLAYED, not live
 
 
@@ -137,6 +138,10 @@ class MemberEvents:
         if self.last_seq is not None:
             h["Last-Event-ID"] = str(self.last_seq)
         return h
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
 
     def stop(self) -> None:
         """From another thread: end the stream now. The reader is woken the way its
@@ -258,11 +263,16 @@ class FleetEvents:
     """One reader thread per member, one queue for the UI. ``watch(slugs)`` reconciles the
     set of members being followed (start the new, stop the gone)."""
 
-    def __init__(self, hub_client: deckhub.HubClient, *, insecure_http: bool = False, transport: httpx.BaseTransport | None = None):
+    def __init__(self, hub_client: deckhub.HubClient, *, insecure_http: bool = False, transport: httpx.BaseTransport | None = None, max_pending: int = _MAX_PENDING):
         self._hub = hub_client
         self._insecure = insecure_http
         self._transport = transport
-        self.queue: queue.Queue[Event] = queue.Queue()
+        # BOUNDED, and never lossy: a reader that finds the queue full WAITS (and still
+        # honours stop) instead of dropping. A dropped event would never come back — the
+        # reader's reconnect cursor has already passed it — and the park / resume / finish
+        # transitions it may carry are order-sensitive. The wait is backpressure on that
+        # member's stream; a disconnect it causes is healed by the ?since= replay.
+        self.queue: queue.Queue[Event] = queue.Queue(maxsize=max_pending)
         self._readers: dict[str, tuple[MemberEvents, threading.Thread]] = {}
         self._lock = threading.Lock()
 
@@ -272,7 +282,14 @@ class FleetEvents:
         def run() -> None:
             try:
                 for ev in reader.events():
-                    self.queue.put(ev)
+                    while not reader.stopped:
+                        try:
+                            self.queue.put(ev, timeout=0.25)
+                            break
+                        except queue.Full:
+                            continue  # the UI is behind: wait for room, never drop
+                    if reader.stopped:
+                        return
             finally:
                 reader.close()
 
