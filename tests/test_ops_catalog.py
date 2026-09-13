@@ -21,6 +21,13 @@ def test_load_all_registers_every_op_family():
         "fleet.up",
         "fleet.down",
         "fleet.status",
+        "fleet.create",
+        "fleet.remove",
+        "fleet.rename",
+        "fleet.remotes.add",
+        "fleet.remotes.update",
+        "fleet.remotes.remove",
+        "fleet.order",
     } <= names
 
 

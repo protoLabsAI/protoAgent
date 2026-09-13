@@ -100,6 +100,7 @@ dependencies = [
   # bounds worst-case time — was already present transitively (via tiktoken), promoted
   # to a direct pin so that stays true regardless of what pulls it in.
   "regex>=2024.11.6",
+  "textual>=8",
 ]
 
 # The `protoagent` command (ADR 0075 D1) — the terminal control plane: install /
@@ -131,6 +132,7 @@ packages = [
   "a2a_impl",
   "activity",
   "background",
+  "deck",
   "tasks",
   "enforcement",
   "evals",
@@ -177,6 +179,7 @@ package = false
 # tasklist C2, owns most of the burndown).
 root_packages = [
   "a2a_impl",
+  "deck",
   "events",
   "graph",
   "infra",
@@ -221,10 +224,19 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
+# The fleet deck is a separate process talking HTTP to the runtime it manages: it must
+# not import the runtime (graph) either, or the layering would be one lazy import from
+# collapsing. graph/fleet/cli.py imports deck; never the reverse.
+name = "deck does not import graph, server, or operator_api"
+type = "forbidden"
+source_modules = ["deck"]
+forbidden_modules = ["graph", "server", "operator_api"]
+
+[[tool.importlinter.contracts]]
 name = "infra packages do not import server or operator_api"
 type = "forbidden"
 source_modules = [
-  "a2a_impl", "events", "infra", "ingestion", "knowledge", "observability",
+  "a2a_impl", "deck", "events", "infra", "ingestion", "knowledge", "observability",
   "ops", "runtime", "scheduler", "security", "tools",
 ]
 forbidden_modules = ["server", "operator_api"]

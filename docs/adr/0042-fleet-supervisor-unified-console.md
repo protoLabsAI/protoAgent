@@ -233,6 +233,20 @@ Honest scope: this is **not built** — it's the designed-for next axis. The pro
 independent-endpoint + self-registration design were chosen so it's an extension, not a
 rewrite.
 
+> **Amendment (2026-09) — the fleet deck (#3466).** The fleet gained a terminal: bare
+> `protoagent fleet` / `protoagent top` opens a Textual deck over the running hub — the
+> roster with the console's presence words, member detail, a fleet-wide work feed, member
+> management (the REST-only create / remove / rename / remotes / order were promoted into
+> `ops/fleet.py` for it, ADR [0075](0075-external-interfaces-cli-mcp-api.md) D2), every hub
+> on the box (`--all`: heartbeats under every box root, instance roots with a fleet, listeners
+> by port, peers; attach, or bring a stopped hub up), and conversations with members —
+> steering, HITL answers, delegation cancel — over the same A2A / `/api` surface as the
+> console. It supersedes ADR 0075's "chat is `proto`'s job" for the fleet (amendment there)
+> and fixes the rule for a shell beside a running hub: **live hub first, badged disk
+> fallback** (0075 open question 2). Ports are box-global and every box root's heartbeats
+> are inputs — what a shell "sees" is no longer what it inherited from `PROTOAGENT_HOME`.
+> Guide: [the `protoagent` command → the fleet deck](../guides/cli.md).
+
 ## Options considered
 
 - **Separate consoles per agent** (ADR 0041 slice-4 simple) — navigate to each agent's own

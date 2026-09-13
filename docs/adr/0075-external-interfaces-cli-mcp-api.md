@@ -127,6 +127,24 @@ liveness) applied to the default instance — no new supervision primitive. Chat
 **absent**: it's `proto`'s job. `python -m server` keeps working as the internal module form
 (the frozen sidecar re-invokes it); `protoagent serve` is the friendly alias.
 
+> **Amendment (2026-09, fleet deck — #3466, [ADR 0042](0042-fleet-supervisor-unified-console.md)):**
+> "chat is absent, it's `proto`'s job" is **superseded for the fleet deck**. Bare
+> `protoagent fleet` (or `protoagent top`) opens the deck — the operator's terminal for the
+> **fleet**: the roster, every hub on the box (`--all`), the work feed, member management
+> (create / rename / delete / remotes / order, through the `ops/` layer, D2), and **talking to
+> members** — a conversation with tool cards, steering a running turn, answering the
+> question / form / approval a turn parked on, cancelling one delegation. That last part is
+> chat, and it belongs here because it is an *operator* act on a *fleet member* (attend a
+> session so a scheduled turn parks instead of auto-answering; interject into a server-fired
+> turn), not a coding-agent session. The division of labour is now: `proto` remains the
+> coding-agent client (A2A client + ACP server, ADR 0024/0025) that *is driven by* an agent;
+> the deck is the terminal that *runs* the fleet, members included. The two still meet at the
+> wire — the deck speaks the same A2A / `/api` the console does (`SubscribeToTask`, the
+> member bus, the HITL callbacks) and adds no surface of its own. Textual is imported only
+> when the deck opens, so `--help` and every non-interactive verb stay Textual-free; the
+> desktop sidecar bundles it (`--collect-all textual` + the `deck` package), so the frozen
+> binary opens the deck too. Open question 2 below is resolved by the same slice.
+
 ### B. The shared `ops/` layer
 
 A new `ops/` package: one module per domain, each a function that takes plain args + a context
@@ -258,6 +276,18 @@ Install/distribution (F) rides PR1 (binary + `uv tool`) and PR4 (the `install.sh
    live server (fleet status, hot config). Does the CLL auto-boot a transient server for
    live-only ops, or require `protoagent up` first? (Lean: disk ops work headless; live ops
    error with "run `protoagent up`" unless `--ensure-up`.)
+   *Resolved (2026-09, fleet deck S0 — #3467): **live hub first, badged disk fallback, never a
+   transient server.*** Every `fleet` verb and the deck look for a running hub first — this
+   instance's `server.pid`, then the `.instances/` heartbeats under every box root on the
+   machine (the desktop app's included), then `:7870` — and act through it. Only when
+   **nothing** answers do they read this instance's `fleet.json`, and the output is badged
+   `offline · reading <fleet.json>` so a shell can never mistake disk for the live fleet. A hub
+   that answered but could not be opened (rejected credential, timeout, 5xx, a member
+   answering as a fleet of itself) is an **error, not a fallback** — driving processes from
+   disk beside a running hub is the two-hubs bug the rule exists to prevent. The one place
+   the deck opens anyway is `fleet --all` (the hub tree is the view that *shows* a hub that
+   refused this shell); its roster is then the disk view, badged with the refusal, with
+   start/stop refused. No `--ensure-up`: `protoagent up` is the operator's explicit act.
 3. **`full` MCP profile blast radius.** A consented foreign brain doing `fleet up` / work
    assignment is powerful; do we cap it (rate/scope) beyond the consent ack, or trust the ADR
    0071 posture?

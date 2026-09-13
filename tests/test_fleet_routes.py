@@ -764,3 +764,11 @@ def test_fleet_list_reports_a_malformed_remote_instead_of_500ing(client):
     # and no ``a2a`` endpoint invented out of a missing url.
     assert row["id"] == "ava-1a2b" and row["name"] == "ava"
     assert row["running"] is False and row["url"] == "" and row["a2a"] is None
+
+
+def test_rename_with_a_null_name_is_400_not_the_string_none(client):
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    for body in ({"name": None}, {"name": "   "}, {}):
+        r = client.patch("/api/fleet/alpha", json=body)
+        assert r.status_code == 400 and "name is required" in r.json()["detail"], body
+    assert next(a for a in client.get("/api/fleet").json()["agents"] if a["id"].startswith("alpha"))["name"] == "alpha"

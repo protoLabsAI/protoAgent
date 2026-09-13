@@ -37,6 +37,8 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "workspace": ("graph.workspaces.cli", "run_workspace_cli"),
     "skills": ("graph.skills.cli", "run_skills_cli"),
     "fleet": ("graph.fleet.cli", "run_fleet_cli"),
+    # `top` = the fleet deck straight away (same as bare `fleet`); the TUI over the running hub.
+    "top": ("graph.fleet.cli", "run_deck_cli"),
     "config": ("graph.config_explain", "run_config_cli"),
     "model": ("graph.model_cli", "run_model_cli"),
     "reset": ("ops.reset", "run_reset_cli"),
@@ -59,7 +61,8 @@ _FORWARD_HELP = {
     "plugin": "Install / list / update / uninstall drop-in plugins (ADR 0027)",
     "workspace": "Create / list / run / remove isolated workspace agents (ADR 0041)",
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
-    "fleet": "Start / stop / list fleet MEMBER agents as background processes (ADR 0042)",
+    "fleet": "The fleet deck: bare = interactive TUI over the running hub; ls/up/down = non-interactive (ADR 0042)",
+    "top": "Open the fleet deck (alias for bare `protoagent fleet`)",
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
     "reset": "Factory-reset this instance, or the whole machine box for handoff",

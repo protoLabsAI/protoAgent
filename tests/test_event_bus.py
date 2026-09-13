@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+import json
 
 from events.bus import EventBus
 
@@ -104,7 +106,11 @@ def test_sse_event_stream_preamble_and_frame():
     assert preamble == ": connected\n\n"
     # Frame is an unnamed SSE event carrying the topic in the payload + the seq as the
     # SSE id (ADR 0039 — client routes by topic; id enables Last-Event-ID reconnect).
-    assert frame == ('id: 1\ndata: {"topic": "activity.message", "data": {"text": "hi"}, "seq": 1}\n\n')
+    assert frame.startswith("id: 1\ndata: ") and frame.endswith("\n\n")
+    body = json.loads(frame[len("id: 1\ndata: ") :])
+    ts = body.pop("ts")  # when it happened, for a replaying client (the deck's work feed)
+    assert isinstance(ts, float) and abs(time.time() - ts) < 60
+    assert body == {"topic": "activity.message", "data": {"text": "hi"}, "seq": 1}
 
 
 def test_sse_event_stream_emits_keepalive_when_idle():
