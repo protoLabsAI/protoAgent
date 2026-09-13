@@ -210,6 +210,10 @@ class HubCandidate:
     instance_root: Path | None = None
     identity: str = ""
     pid: int | None = None
+    # False for a listener that network discovery reported (its name and url are
+    # self-reported): it is never sent a credential — not --token, not the env. An operator
+    # who wants to open it with a bearer names it: ``protoagent fleet --hub <url> --token``.
+    trusted: bool = True
 
 
 _USERINFO_RE = re.compile(r"(?<=://)[^/@\s]*@")
@@ -415,8 +419,13 @@ def token_chain(cand: HubCandidate, *, explicit: str | None = None) -> Iterator[
     (open mode — an unset-auth instance accepts no bearer at all). Never logs a value.
 
     This box's fleet service tokens and its operator bearer are LOOPBACK-ONLY: a hub on
-    another host gets the explicit ``--token`` / ``PROTOAGENT_HUB_TOKEN`` and nothing else.
-    Anything that returns a 200 agent card must not be able to harvest local credentials."""
+    another host gets the explicit ``--token`` / ``PROTOAGENT_HUB_TOKEN`` and nothing else,
+    and a candidate the operator did not name (``trusted=False``: a peer that network
+    discovery reported) gets open mode only. Anything that returns a 200 agent card must not
+    be able to harvest credentials, local or explicit."""
+    if not cand.trusted:
+        yield None
+        return
     seen: set[str] = set()
 
     def once(tok: str | None) -> Iterator[str]:

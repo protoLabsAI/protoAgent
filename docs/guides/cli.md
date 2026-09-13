@@ -53,7 +53,8 @@ then exits:
 |---|---|---|
 | `protoagent plugin install <git-url>` · `list` · `update` · `uninstall` · `sync` | Manage drop-in plugins (pinned in `plugins.lock`). | [0027](../adr/0027-install-plugins-from-git-url.md) |
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
-| `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `order` · `--all` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
@@ -132,6 +133,8 @@ root is never a hub row). This shell's own instance is one input among these, ne
 only one — what a shell "sees" is not what it inherited.
 A running hub is probed with its own fleet token: one that answers but refuses every
 credential reads `unauthorized` (pass `--token`), one that does not answer `unreachable`.
+A peer found on the network is never sent a credential — not `--token`, not the env — its
+name and url are its own claim; to open one with a bearer, name it: `--hub <url> --token`.
 `enter` attaches the deck to that hub — the roster, feed and conversations then belong to
 its fleet; `u` on a stopped hub runs `protoagent up` for that instance root and attaches
 once its port answers. Stopping a hub is not a deck action (`protoagent down` in that

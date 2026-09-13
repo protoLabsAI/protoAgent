@@ -237,6 +237,42 @@ def test_token_chain_sends_no_local_credential_off_box(tmp_path, monkeypatch):
     assert list(hub.token_chain(local)) == ["from-env", "LOCAL-FLEET-SECRET", "LOCAL-OPERATOR-BEARER", None]
 
 
+def test_token_chain_sends_nothing_to_a_candidate_the_operator_did_not_name(tmp_path, monkeypatch):
+    """CodeRabbit (S5): `--all --token` handed the explicit token (and the env one) to every
+    peer discovery reported — a listener that only has to answer a 200 card to harvest it.
+    An untrusted candidate gets open mode and nothing else, whatever the shell holds."""
+    (tmp_path / "workspaces").mkdir()
+    (tmp_path / "workspaces" / hub.FLEET_TOKEN_FILE).write_text("LOCAL-FLEET-SECRET")
+
+    class _Paths:
+        instance_root = tmp_path
+
+    monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
+    monkeypatch.setattr(hub, "known_box_roots", lambda: [tmp_path])
+    monkeypatch.setenv(hub.ENV_OPERATOR_BEARER, "LOCAL-OPERATOR-BEARER")
+    monkeypatch.setenv(hub.ENV_TOKEN, "from-env")
+    peer = hub.HubCandidate("https://ava.tail:7870", "peer", trusted=False)
+    assert list(hub.token_chain(peer, explicit="explicit")) == [None]
+    # even a loopback listener, when it is untrusted, gets none of the box's tokens
+    assert list(hub.token_chain(hub.HubCandidate("http://127.0.0.1:7870", "peer", trusted=False), explicit="explicit")) == [None]
+
+    # and `connect` sends no Authorization header at all to it: the card is public, the
+    # roster is asked for once, in open mode, and its 401 ends the search
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("authorization")))
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json={"name": "ava", "version": "0.165.0"})
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(candidates=[peer], token="explicit", transport=_transport(handler))
+    assert ei.value.unauthorized == ["https://ava.tail:7870"]
+    assert [p for p, _ in seen] == ["/.well-known/agent-card.json", "/api/fleet"], seen
+    assert all(h is None for _, h in seen), seen
+
+
 def test_token_chain_without_any_source_is_open_mode_only(tmp_path, monkeypatch):
     class _Paths:
         instance_root = tmp_path

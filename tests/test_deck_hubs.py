@@ -84,6 +84,8 @@ def test_enumerate_finds_running_and_stopped_hubs_skips_members_and_counts_from_
     assert (dev.members, dev.running, dev.remotes) == (3, 0, 0) and dev.url == "http://127.0.0.1:7871"
     ava = by["ava"]
     assert (ava.presence, ava.launcher, ava.source, ava.root, ava.candidate.url) == ("unreachable", "peer", "peer", None, "https://ava.tail:7870")
+    assert ava.candidate.trusted is False  # an off-box peer discovery reported: never sent a credential
+    assert all(r.candidate.trusted for r in rows if r.candidate is not None and r is not ava)  # this box's own listeners are
     assert all(not r.note for r in rows)
 
 
@@ -319,6 +321,8 @@ def test_a_listener_found_by_port_is_folded_into_the_root_it_runs_from_and_membe
     assert ("protoagent", "running", "desktop app", 7872) in names  # the desktop root's row, now running, named by its identity
     assert not any(r.root is None and r.source == "local" for r in rows)  # every local listener was folded or dropped
     assert ("pve01", "unauthorized", "peer", 7880) in names
+    pve = next(r for r in rows if r.name == "pve01")
+    assert pve.candidate.trusted is False and "never sent a credential" in pve.note and "--hub <url> --token" in pve.note
     assert not any(n[0] in ("Roxy", "hermes") for n in names)
     desk = next(r for r in rows if r.root == desktop)
     assert (desk.members, desk.running, desk.version, desk.token, desk.url) == (1, 1, "0.165.0", "tok", "http://127.0.0.1:7872")

@@ -18,7 +18,8 @@ shell's own instance root to the search (the S0 finding: what a shell "sees" mus
 what it inherited). A running hub is probed for its version and member counts with that
 hub's OWN fleet token (``<root>/workspaces/.fleet-token``); one that answers but refuses
 every credential reads ``unauthorized``, one that does not answer ``unreachable`` — two
-different problems, two words. Bringing a hub up runs ``protoagent up`` for THAT instance
+different problems, two words. A peer that network discovery reported is never sent a
+credential (``HubCandidate.trusted=False``): its name is its own claim. Bringing a hub up runs ``protoagent up`` for THAT instance
 root (an injected launcher — the CLI supplies it); stopping a hub is not a deck action.
 """
 
@@ -282,7 +283,9 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
         # and is dropped there. A port a root's server.pid remembers names the root up front,
         # so that root's own fleet token is in the chain.
         known_root = hub_ports.get(port) if local and port else None
-        rows.append(HubRow(name=str(p.get("name") or p.get("host") or url), root=None, url=url, port=port, presence="unreachable", launcher="" if local else "peer", source="local" if local else "peer", candidate=deckhub.HubCandidate(url, "peer", instance_root=known_root), seen_root=known_root))
+        # An off-box peer that discovery reported is never sent a credential (its name is
+        # self-reported; a bearer belongs to a hub the operator names with --hub).
+        rows.append(HubRow(name=str(p.get("name") or p.get("host") or url), root=None, url=url, port=port, presence="unreachable", launcher="" if local else "peer", source="local" if local else "peer", candidate=deckhub.HubCandidate(url, "peer", instance_root=known_root, trusted=local), seen_root=known_root))
     by_port: dict[int, list[HubRow]] = {}
     for r in rows:
         if r.port and r.root is not None:
@@ -312,7 +315,8 @@ def _classify_failure(why: str) -> tuple[str, str, bool]:
 
 def probe(row: HubRow, *, token: str | None = None, insecure_http: bool = False, roots: list[Path] | None = None) -> HubRow:
     """Ask a running hub or a peer what it is: version and member counts through its own
-    fleet token (a peer only through ``token``). Sets ``presence`` to ``running`` /
+    fleet token (an off-box peer that discovery reported gets open mode only — never
+    ``token``; see ``HubCandidate.trusted``). Sets ``presence`` to ``running`` /
     ``unauthorized`` / ``insecure`` / ``unreadable`` / ``unreachable`` and keeps the
     connection's credential for a later attach. A loopback listener that refuses this
     shell's credentials is retried with every hub root's own fleet token (``roots``): a
@@ -355,7 +359,10 @@ def probe(row: HubRow, *, token: str | None = None, insecure_http: bool = False,
 def _probe_failed(row: HubRow, exc: deckhub.NoHub) -> HubRow:
     if exc.unauthorized:
         row.presence = "unauthorized"
-        row.note = row.note or "answers, but every credential was refused — pass --token"
+        if row.candidate is not None and not row.candidate.trusted:
+            row.note = row.note or "answers, but a discovered peer is never sent a credential — name it: protoagent fleet --hub <url> --token …"
+        else:
+            row.note = row.note or "answers, but every credential was refused — pass --token"
     elif exc.failed:
         presence, note, drop = _classify_failure(next(iter(exc.failed.values()), ""))
         row.presence = presence
@@ -488,7 +495,9 @@ class HubTreeScreen(Screen):
             members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")
             where = str(r.root) if r.root is not None else deckhub.redact_url(r.url) if r.url else ""
             note = f"{where} — {r.note}" if r.note and r.root is None else (r.note or where)
-            table.add_row(glyph, Text(r.name), r.presence, r.launcher, str(r.port or "—"), r.version or "—", members, Text(note, style="yellow" if r.note else "dim"), key=f"{r.key}#{i}")
+            # every str cell is a Text: a plain str is parsed for console markup, and the
+            # name, version and note come from the hub (a peer's are self-reported)
+            table.add_row(glyph, Text(r.name), Text(r.presence), Text(r.launcher), Text(str(r.port or "—")), Text(r.version or "—"), Text(members), Text(note, style="yellow" if r.note else "dim"), key=f"{r.key}#{i}")
         n_run = sum(1 for r in self.rows if r.presence == "running")
         self.query_one("#hubs-head", Static).update(f"hubs on this box · {len(self.rows)} found · {n_run} running" + (" · working…" if self.busy else ""))
         if self.rows and cur is not None and cur < len(self.rows):
