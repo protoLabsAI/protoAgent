@@ -31,6 +31,7 @@ from textual.widgets import DataTable, Footer, RichLog, Static
 
 from deck import data as deckdata
 from deck.data import Backend, MemberDetail, Snapshot, display_name, presence_of, slug_of
+from deck.talk import TALK_CSS, ConversationScreen
 
 POLL_S = 3.0
 LOG_POLL_S = 2.0
@@ -65,8 +66,9 @@ def _fmt_cost(r: deckdata.Rollup | None, pres: str) -> str:
 
 class RosterScreen(Screen):
     BINDINGS = [
-        Binding("enter", "detail", "detail", show=True),
-        Binding("i", "detail", "detail", show=False),
+        Binding("enter", "talk", "talk", show=True),
+        Binding("c", "talk", "talk", show=False),
+        Binding("i", "detail", "detail", show=True),
         Binding("s", "start", "start", show=True),
         Binding("x", "stop", "stop", show=True),
         Binding("r", "restart", "restart", show=True),
@@ -176,15 +178,15 @@ class RosterScreen(Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # The focused DataTable consumes Enter itself (its select-cursor binding wins over
-        # the screen's), so "enter = detail" arrives as this message, not as our action.
-        self.action_detail()
+        # the screen's), so "enter = talk" arrives as this message, not as our action.
+        self.action_talk()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Only the keys that apply to the selected row show in the footer."""
         a = self.selected()
         app: FleetDeck = self.app  # type: ignore[assignment]
         offline = app.backend.mode == "offline"
-        if action in ("detail", "logs", "open_console"):
+        if action in ("detail", "logs", "open_console", "talk"):
             return bool(a) and not offline
         if a is None:
             return action not in ("start", "stop", "restart")
@@ -218,6 +220,15 @@ class RosterScreen(Screen):
         a = self._detail_allowed()
         if a is not None:
             self.app.push_screen(DetailScreen(a))
+
+    def action_talk(self) -> None:
+        a = self._detail_allowed()
+        if a is None:
+            return
+        if presence_of(a) not in ("online", "host", "remote"):
+            self.notify(f"{display_name(a)} is {presence_of(a)} — start it first (s)", severity="warning")
+            return
+        self.app.push_screen(ConversationScreen(a))
 
     def action_logs(self) -> None:
         a = self._detail_allowed()
@@ -303,12 +314,20 @@ class FilterScreen(Screen[str]):
 class DetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "back", "back", show=True),
+        Binding("c", "talk", "talk", show=True),
         Binding("x", "stop", "stop", show=True),
         Binding("r", "restart", "restart", show=True),
         Binding("l", "toggle_follow", "pause follow", show=True),
         Binding("o", "open_console", "console", show=True),
         Binding("q", "quit", "quit", show=True),
     ]
+
+    def action_talk(self) -> None:
+        a = self._current()
+        if presence_of(a) not in ("online", "host", "remote"):
+            self.notify(f"{display_name(a)} is {presence_of(a)} — start it first", severity="warning")
+            return
+        self.app.push_screen(ConversationScreen(a))
 
     def __init__(self, agent: dict, *, focus_logs: bool = False) -> None:
         super().__init__()
@@ -565,7 +584,7 @@ class FleetDeck(App[int]):
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
     #sessions { height: auto; max-height: 12; }
     #log { height: 1fr; }
-    """
+    """ + TALK_CSS
 
     def __init__(self, backend: Backend, *, poll_s: float = POLL_S) -> None:
         super().__init__()
