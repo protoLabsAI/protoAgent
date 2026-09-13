@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from textual.widgets import Input, Markdown, Select, Static, TextArea, Tree
+from textual.widgets import Button, Input, Markdown, Select, Static, TextArea, Tree
 
 from deck import a2a
 from deck import hitl as deckhitl
@@ -73,6 +73,7 @@ def test_form_rules_mirror_the_console():
     assert deckhitl.kind_of({"kind": "approval", "title": "Approve?"}) == "approval"
     assert deckhitl.kind_of({"kind": "form", "steps": [STEP]}) == "form" and deckhitl.kind_of({"kind": "form", "steps": []}) == "question"
     assert deckhitl.kind_of({"plugin_callback_id": "cb", "steps": [STEP]}) == "form"
+    assert deckhitl.kind_of({"plugin_callback_id": "cb", "steps": []}) == "form"  # no fields: still a form to redeem ({}), never a question
     assert deckhitl.prompt_of({"kind": "approval", "title": "Approve?"}) == "Approve?" and deckhitl.prompt_of({}) == "input required"
     assert json.loads(deckhitl.answer_text("form", {"a": 1})) == {"a": 1} and deckhitl.answer_text("question", "yes") == "yes"
 
@@ -1012,3 +1013,23 @@ async def test_a_steer_whose_enqueue_is_in_flight_when_the_turn_ends_is_not_mark
         # the POST lands, the member now holds it, the turn is over → it becomes a turn of its own
         assert await _until(pilot, lambda: len(fake.sent) == 2, timeout=4)
         assert fake.sent[1]["text"] == "later" and not app.screen.query(".steer-msg")
+
+
+@pytest.mark.asyncio
+async def test_a_plugin_form_with_no_fields_is_redeemed_as_an_empty_form():
+    """CodeRabbit: `steps: []` used to open the question modal, whose typed text was
+    discarded and the callback redeemed with {} anyway — now it is the form it is."""
+    fake = Parking({"kind": "form", "title": "Confirm?", "plugin_callback_id": "cb1", "steps": []})
+    be = TalkBackend(a2a_client=fake)
+    be.form_result = {"reply": "done"}
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "confirm")
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, FormModal) and not app.screen.query(".hitl-field")
+        assert not app.screen.query_one("#submit", Button).disabled
+        await pilot.press("ctrl+s")
+        assert await _until(pilot, lambda: any(c[0] == "submit_form" and c[2] == "cb1" and c[3] == {} for c in be.calls))
+        assert len(fake.sent) == 1

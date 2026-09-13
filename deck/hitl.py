@@ -46,8 +46,8 @@ def kind_of(hitl: dict | None) -> str:
         return "approval"
     if hitl.get("kind") == "form" and isinstance(hitl.get("steps"), list) and hitl["steps"]:
         return "form"
-    if hitl.get("plugin_callback_id") and isinstance(hitl.get("steps"), list) and hitl["steps"]:
-        return "form"
+    if hitl.get("plugin_callback_id") and isinstance(hitl.get("steps"), list):
+        return "form"  # a plugin form with no fields is still redeemed as a form ({}), never typed at as a question
     return "question"
 
 

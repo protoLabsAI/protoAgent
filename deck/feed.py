@@ -269,9 +269,6 @@ class Activity:
         st = self.state.get(slug)
         return dict(st.server_turns[session_id]) if st is not None and session_id in st.server_turns else None
 
-    def note_fleet(self, slug: str, text: str) -> None:
-        self._add(Row(time.monotonic(), slug, self._name(slug), "fleet", "·", "fleet", text, at=time.time()))
-
     # ── roster helpers ──
 
     def turn_cell(self, slug: str) -> str:

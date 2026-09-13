@@ -1258,7 +1258,7 @@ async def settle_plugin_form_task(session_id: str) -> bool:
         log.info("[a2a] plugin form redeemed — completed its parked task %s in %s", task_id, sid)
         return True
     except Exception:  # noqa: BLE001 — a redeem must never fail on this bookkeeping
-        log.debug("[a2a] could not settle the plugin-form task for %s", sid, exc_info=True)
+        log.exception("[a2a] could not settle the plugin-form task for %s — it stays input_required", sid)
         return False
 
 
