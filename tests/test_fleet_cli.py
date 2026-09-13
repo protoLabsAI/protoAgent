@@ -725,10 +725,9 @@ def _tree_rows():
 
 
 def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, capsys):
-    from deck import hubs
 
     probed: list = []
-    monkeypatch.setattr(hubs, "enumerate_hubs", lambda *, peers=None: (probed.append(("peers", peers)) or _tree_rows()))
+    monkeypatch.setattr("deck.discovery.enumerate_hubs", lambda *, peers=None: (probed.append(("peers", peers)) or _tree_rows()))
 
     def probe(row, *, token=None, insecure_http=False, roots=None):
         probed.append((row.name, token))
@@ -736,7 +735,7 @@ def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, c
             row.presence, row.note = "unauthorized", "answers, but every credential was refused — pass --token"
         return row
 
-    monkeypatch.setattr(hubs, "probe", probe)
+    monkeypatch.setattr("deck.discovery.probe", probe)
     monkeypatch.setattr(cli, "_discover_peers", lambda: [{"name": "ava", "url": "https://ava.tail:7870"}])
     assert cli.run_fleet_cli(["--all", "--json", "--token", "tok"]) == 0
     body = json.loads(capsys.readouterr().out)
@@ -779,7 +778,7 @@ def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope
     monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setenv("PROTOAGENT_INSTANCE", "somewhere-else")
     monkeypatch.setenv("PROTOAGENT_HOME", "/nope")
-    monkeypatch.setattr("deck.hubs.instance_roots", lambda: [])  # nothing on disk owns a port here (this box's roots would)
+    monkeypatch.setattr("deck.discovery.instance_roots", lambda: [])  # nothing on disk owns a port here (this box's roots would)
     held = {7870, 7871}  # the desktop hub and something else hold these
     monkeypatch.setattr(cli, "_port_free", lambda port: port not in held)
     row = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
@@ -867,7 +866,7 @@ def test_launch_hub_never_takes_a_port_another_hubs_member_owns_on_disk(tmp_path
     monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or _Started()))
     monkeypatch.setattr(cli, "_port_free", lambda port: port != 7870)  # the desktop hub holds 7870; 7871 binds (its member is stopped)
     monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
-    monkeypatch.setattr(hubs, "instance_roots", lambda: [desktop, dev])
+    monkeypatch.setattr("deck.discovery.instance_roots", lambda: [desktop, dev])
     cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))
     assert seen["argv"][-3:] == ["up", "--port", "7872"]
     cli._launch_hub(hubs.HubRow(name="dev", root=dev, url=None, port=7871, presence="stopped", source="root"))
@@ -895,7 +894,7 @@ def test_launch_hub_keeps_the_box_root_of_a_scoped_instance_under_a_custom_box(t
     monkeypatch.setattr(deckhub, "known_box_roots", lambda: [box, home])
     monkeypatch.setattr(deckhub, "data_home", lambda: home)
     monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [tmp_path / "desktop-absent"])
-    monkeypatch.setattr(hubs, "instance_roots", lambda: [dev])
+    monkeypatch.setattr("deck.discovery.instance_roots", lambda: [dev])
     seen: dict = {}
     real_run = subprocess.run
     monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or _Started()))
@@ -931,13 +930,18 @@ def test_fleet_all_on_a_tty_opens_the_tree_even_when_a_hub_refuses_every_credent
     class FakeApp:
         @staticmethod
         def run(backend, **kw):
-            opened.update(kw, mode=backend.mode, label=backend.snapshot().label)
+            opened.update(kw, mode=backend.mode, label=backend.snapshot().label, lifecycle=getattr(backend, "lifecycle", True))
             return 0
 
     real = importlib.import_module
     monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
     rc = cli.run_fleet_cli(["--all"])
     assert rc == 0 and opened.get("start_on_hubs") is True and opened["mode"] == "offline" and "rejected every credential" in opened["label"], capsys.readouterr().err
+    assert opened["lifecycle"] is False and "start/stop refused" in opened["label"]  # a hub answered: nothing is driven from disk beside it
+    opened.clear()
+    _offline(monkeypatch)  # nothing answered at all: the disk view keeps start/stop
+    assert cli.run_fleet_cli(["--all"]) == 0 and opened["lifecycle"] is True
+    _offline(monkeypatch, unauthorized=["http://127.0.0.1:7870"])
     # without --all the rule stands: a hub that answered but refused is an error, not a fallback
     opened.clear()
     assert cli.run_fleet_cli([]) == 1 and not opened
@@ -984,9 +988,9 @@ def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkey
 
     evil = "evil\x1b[2J\x07\nhub"
     row = hubs.HubRow(name=evil, root=None, url="https://ava.tail:7870", port=7870, presence="unauthorized", launcher="peer", source="peer", version="1\x9b0", note="refused\x1b]0;pwned\x07")
-    monkeypatch.setattr(hubs, "enumerate_hubs", lambda *, peers=None: [row])
-    monkeypatch.setattr(hubs, "probe", lambda r, **kw: r)
-    monkeypatch.setattr(hubs, "reconcile", lambda rows: rows)
+    monkeypatch.setattr("deck.discovery.enumerate_hubs", lambda *, peers=None: [row])
+    monkeypatch.setattr("deck.discovery.probe", lambda r, **kw: r)
+    monkeypatch.setattr("deck.discovery.reconcile", lambda rows: rows)
     monkeypatch.setattr(cli, "_discover_peers", lambda: [])
     assert cli.run_fleet_cli(["--all"]) == 0
     out = capsys.readouterr().out
@@ -995,3 +999,21 @@ def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkey
     assert cli.run_fleet_cli(["--all", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)
     assert body["hubs"][0]["name"] == evil and body["hubs"][0]["version"] == "1\x9b0"  # raw, for scripts
+
+def test_the_non_interactive_verbs_never_load_textual(tmp_path):
+    """S6 (#3473): `fleet --all --json` reached the hub enumerator through `deck.hubs`, whose
+    module top imports the Textual screen — a frozen build without Textual would have died
+    with ModuleNotFoundError there instead of the documented hint, and every scripted
+    `--all --json` paid the import. The enumerator lives in `deck.discovery` now."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=str(repo), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
+    probe = "import sys; from graph.fleet import cli\ntry:\n    rc = cli.run_fleet_cli({argv!r})\nexcept SystemExit as e:\n    rc = e.code\nprint('textual' in sys.modules, 'deck.hubs' in sys.modules, rc)"
+    for argv in (["--all", "--offline", "--json"], ["ls", "--offline", "--json"], ["--help"]):
+        out = subprocess.run([sys.executable, "-c", probe.format(argv=argv)], env=env, capture_output=True, text=True, cwd=str(repo), timeout=120)
+        last = (out.stdout.strip().splitlines() or [""])[-1]
+        assert last.startswith("False False"), (argv, last, out.stderr[-500:])

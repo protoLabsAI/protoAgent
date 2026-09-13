@@ -389,14 +389,21 @@ class OfflineBackend:
         stop: Callable[[str], dict],
         fleet_json: Path,
         reason: str = "",
+        lifecycle: bool = True,
     ):
         self._status, self._start, self._stop = status, start, stop
         self.fleet_json = fleet_json
         self.reason = reason
+        # False when a hub ANSWERED but could not be opened (refused credential, 5xx, a
+        # member answering as a hub): the disk view is still shown, badged with why, but
+        # start/stop are refused — driving processes from disk beside a running hub is the
+        # two-hubs bug the live-first rule exists to prevent.
+        self.lifecycle = lifecycle
 
     def _label(self) -> str:
         why = f" · {self.reason}" if self.reason else ""
-        return f"offline{why} · reading {self.fleet_json}"
+        held = "" if self.lifecycle else " · start/stop refused beside it — attach (H) or pass --token"
+        return f"offline{why}{held} · reading {self.fleet_json}"
 
     def snapshot(self) -> Snapshot:
         try:
@@ -405,10 +412,16 @@ class OfflineBackend:
             return Snapshot(mode="offline", label=self._label(), error=str(exc))
         return Snapshot(mode="offline", label=self._label(), roster=rows)
 
+    _HELD = "a hub answered but could not be opened — attach to it (H) or pass --token; nothing is driven from disk beside it"
+
     def start(self, name: str) -> dict:
+        if not self.lifecycle:
+            return {"ok": False, "agent": {"name": name}, "reason": self._HELD}
         return self._start(name)
 
     def stop(self, name: str) -> dict:
+        if not self.lifecycle:
+            return {"ok": False, "agent": {"name": name}, "reason": self._HELD}
         return self._stop(name)
 
     def detail(self, agent: dict) -> MemberDetail:

@@ -461,7 +461,7 @@ def _launch_hub(row) -> None:
         parent = Path(row.root).parent
         if not _same_dir(parent, deckhub.data_home()) and any(_same_dir(parent, b) for b in deckhub.known_box_roots()):
             env["PROTOAGENT_BOX_ROOT"] = str(parent)
-    hubs = importlib.import_module("deck.hubs")
+    hubs = importlib.import_module("deck.discovery")  # Textual-free: the launcher never loads the screen
     member_ports, hub_ports = hubs._ports_on_disk(hubs.instance_roots())
     taken = set(member_ports) | {p for p, r in hub_ports.items() if not _same_dir(r, row.root)}
     port = _pick_port(row.port, taken=taken)
@@ -497,7 +497,7 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
     """``protoagent fleet --all``: every hub on this box, probed, plus peers."""
     import importlib
 
-    hubs = importlib.import_module("deck.hubs")
+    hubs = importlib.import_module("deck.discovery")  # NOT deck.hubs: the screen would load Textual for a --json run
     rows = hubs.enumerate_hubs(peers=[] if args.offline else _discover_peers())
     roots = hubs.instance_roots()
     for r in rows:
@@ -789,9 +789,11 @@ def _cmd_order(args: argparse.Namespace) -> int:
     return _finish(args, "offline", results)
 
 
-def _offline_backend(reason: str):
+def _offline_backend(reason: str, *, lifecycle: bool = True):
     """The disk backend, built here so ``deck`` never imports ``graph``: the supervisor's
-    callables are handed over, and its synthesized host row is dropped by the backend."""
+    callables are handed over, and its synthesized host row is dropped by the backend.
+    ``lifecycle=False`` when a hub ANSWERED but could not be opened: the roster is shown,
+    badged with why, and start/stop are refused (an error, not a fallback)."""
     import importlib
 
     from graph.workspaces import manager
@@ -803,6 +805,7 @@ def _offline_backend(reason: str):
         stop=lambda name: supervisor.stop(name),
         fleet_json=manager.workspaces_root() / "fleet.json",
         reason=reason,
+        lifecycle=lifecycle,
     )
 
 
@@ -829,21 +832,22 @@ def _cmd_deck(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    reason = "no hub answered"
+    reason, lifecycle = "no hub answered", True
     if args.all_hubs:
         # `--all` opens on the tree, which is the one view that can SHOW a hub that answered
         # but refused this shell's credentials — that must not be the error that keeps the
-        # tree from opening. The roster underneath starts offline and says why.
+        # tree from opening. The roster underneath is the disk view, badged with why, and
+        # drives nothing: a hub answered, so start/stop from disk beside it stay refused.
         try:
             conn = _open_hub(args)
         except deckhub.HubError as exc:
-            conn, reason = None, str(exc)
+            conn, reason, lifecycle = None, str(exc), False
     else:
         conn = _open_hub(args)
     if conn is not None:
         backend = deckdata.LiveBackend(conn)
     else:
-        backend = _offline_backend(reason)
+        backend = _offline_backend(reason, lifecycle=lifecycle)
     return int(
         deckapp.run(
             backend,

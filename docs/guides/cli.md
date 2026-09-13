@@ -146,10 +146,34 @@ buses into one time-ordered feed. `f` filters, `p` pauses, `enter` opens the mem
 conversation at that row's session. The roster's TURN column follows the same events, and
 the deck rings the bell when a member newly needs you.
 
-The deck follows the same live/offline rule as the verbs below: with no hub answering it
-shows this instance's `fleet.json` badged `offline`, and only start/stop are available.
+**Credentials.** The deck opens a hub exactly as the verbs do (below): `--token` /
+`PROTOAGENT_HUB_TOKEN` first, then the hub's own fleet service token, then
+`A2A_AUTH_TOKEN`, then no credential — local tokens go to loopback hubs only, nothing goes
+off-box in cleartext without `--insecure-http`, and a peer the network reported gets no
+credential at all. Conversations reuse the credential that opened the hub; a remote
+member's bearer stays on the hub and is attached by its proxy. Nothing is ever printed.
+
+**Offline.** The deck follows the same live/offline rule as the verbs below: with no hub
+answering it shows this instance's `fleet.json` badged `offline`, and only start/stop are
+available — `H` still lists every hub on the box, and `u` brings one up. `--all` opens the
+tree even when a hub answered but refused this shell's credentials; the roster beneath it is
+then the disk view, badged with the refusal, and start/stop are **not** offered there — attach
+to the hub (`enter` on its row) or pass `--token`. A `fleet --all --json` run never loads Textual.
+
+**From the desktop app.** The desktop sidecar bundles the deck, so `protoagent-server fleet`
+opens it from the frozen binary (a desktop-only install has no other `protoagent` on the box, so that is how the deck is reached there).
 Textual is imported only when the deck opens, so `--help` and the non-interactive verbs
 stay fast; a build without it prints a one-line hint and exits 2.
+
+**Screens and keys, at a glance.**
+
+| Screen | Keys |
+|---|---|
+| Roster | `enter`/`c` talk · `i` detail · `w` work feed · `H` hubs · `n` new · `R` rename · `d` delete · `a` add remote · `e` edit remote · `J`/`K` move · `s` start · `x` stop · `r` restart · `l` logs · `o` open in console · `/` filter · `F5` refresh · `?` help · `q` quit |
+| Conversation | type + `enter` send (steers a running turn) · `enter` on the empty composer / `ctrl+r` answer what the turn parked on · `esc` cancel or detach, then back · `ctrl+n` new session · `ctrl+s` sessions · `ctrl+z` unfold thinking · `tab` to the WORK pane · `ctrl+x` cancel the selected delegation · `up` edit the newest queued message |
+| Question / form / approval | `a` approve · `d` deny · `ctrl+→`/`ctrl+←` form steps · `ctrl+s` submit · `ctrl+d` dismiss · `esc` back |
+| Hubs | `enter` attach · `u` bring up · `r` rediscover · `esc` back |
+| Work feed | `f` filter · `p` pause · `enter` open that session · `esc` back |
 
 #### `fleet` talks to the running hub
 

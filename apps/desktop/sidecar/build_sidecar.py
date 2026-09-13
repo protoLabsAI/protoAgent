@@ -150,6 +150,16 @@ COLLECT_ALL = [
     # imported lazily inside wheel_installer, so collect the whole package (+ its
     # vendored parser data) to be safe rather than rely on the import-scan.
     "packaging",
+    # The fleet deck (#3473): `protoagent-server fleet` opens the Textual TUI from the desktop
+    # binary, and a desktop-only install has no other `protoagent` on the box. Textual resolves
+    # its widgets through a lazy `textual.widgets.__getattr__` (a static scan sees none of the
+    # widget modules the deck names) and its dist-info METADATA is read at import; `deck.app`
+    # and `deck.hubs` — the Textual screens, and everything they pull in — are reached only by
+    # name from `graph.fleet.cli` (importlib, so `--help` and the member verbs never load
+    # Textual), while `deck.hub` / `deck.data` / `deck.discovery` are its static, Textual-free
+    # imports. Collect both packages whole. (~2.4 MB compressed on a 74 MB binary.)
+    "textual",
+    "deck",
 ]
 
 # Google client libraries (ADR 0017) — bundled only when installed in the build
@@ -202,11 +212,12 @@ EXCLUDE = ["tkinter"]
 # runtime/operator-mcp, i.e. ACP). MUST stay in sync with `server.cli._FORWARD` — the
 # test `test_sidecar_bundles_every_forwarded_cli_module` fails if a new verb is added
 # without collecting it here. --hidden-import pulls the module + its static import chain.
-# NOTE (fleet deck, #3468 → #3473): `graph.fleet.cli` imports `deck.app` / `deck.data` BY NAME
-# (importlib) so the frozen sidecar does not pull Textual and its .tcss assets by accident;
-# in this build bare `protoagent fleet` / `top` print a one-line hint and exit 2. Bundling the
-# deck (`--collect-all textual` + these two modules) is S6's decision — do not add them here
-# piecemeal.
+# NOTE (fleet deck, #3468 → #3473): `graph.fleet.cli` imports the Textual screens (`deck.app`,
+# `deck.hubs`) BY NAME (importlib) so `protoagent --help` and the non-interactive verbs never
+# load Textual (`deck.hub` / `deck.data` / `deck.discovery` are static imports and Textual-free);
+# the deck and Textual are bundled through COLLECT_ALL above (S6's decision), not listed here —
+# `test_sidecar_bundles_the_fleet_deck` pins that. A build that drops them makes bare
+# `protoagent fleet` / `top` print the one-line "not available in this build" hint (exit 2).
 CLI_FORWARD_MODULES = [
     "graph.plugins.cli",
     "graph.workspaces.cli",
