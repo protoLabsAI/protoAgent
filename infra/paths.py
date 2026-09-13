@@ -654,22 +654,26 @@ def _box_root() -> Path:
     return Path(raw).expanduser() if raw else data_home()
 
 
-# The desktop app's bundle identifier: Tauri keeps its data dir (the desktop hub's box AND
-# instance root) under the platform's app-data dir by this name.
+# The desktop app's bundle identifier: Tauri names its config dir (the desktop hub's box AND
+# instance root) after it.
 DESKTOP_APP_ID = "studio.protolabs.protoagent"
 
 
 def desktop_box_roots() -> list[Path]:
-    """Where the desktop app keeps its box root on each platform (Tauri ``app_data_dir`` for
-    :data:`DESKTOP_APP_ID`). Existence is checked by the caller."""
+    """Where the desktop app keeps its box root on each platform: Tauri's
+    ``app_config_dir`` for :data:`DESKTOP_APP_ID`, which is where the desktop points the
+    sidecar's ``PROTOAGENT_HOME`` / ``PROTOAGENT_BOX_ROOT`` (``apps/desktop/src-tauri``).
+    On macOS and Windows that is the same dir as ``app_data_dir``; on Linux it is
+    ``$XDG_CONFIG_HOME`` (``~/.config``), not the data dir. Existence is checked by the
+    caller."""
     home = Path.home()
     if sys.platform == "darwin":
         return [home / "Library" / "Application Support" / DESKTOP_APP_ID]
     if os.name == "nt":
         appdata = os.environ.get("APPDATA", "").strip()
         return [(Path(appdata) if appdata else home / "AppData" / "Roaming") / DESKTOP_APP_ID]
-    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
-    return [(Path(xdg) if xdg else home / ".local" / "share") / DESKTOP_APP_ID]
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return [(Path(xdg) if xdg else home / ".config") / DESKTOP_APP_ID]
 
 
 def known_box_roots() -> list[Path]:

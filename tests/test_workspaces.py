@@ -87,6 +87,50 @@ def test_known_box_roots_lists_each_existing_root_once(tmp_path, monkeypatch):
     assert paths.known_box_roots() == [(tmp_path / "box-root").resolve(), desktop.resolve()]  # box root == data home here: listed once
 
 
+def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_path):
+    """Review: `_read_record` lets an OSError out, so one unreadable workspace.yaml in any
+    of the machine's instances aborted the whole scan and `_pick_port` fell back to its own
+    instance only. The unreadable record is skipped; every readable one still counts."""
+    from infra import paths
+
+    desktop = tmp_path / "desktop"
+    for name, port in (("bad-1", 7871), ("good-2", 7872)):
+        (desktop / "workspaces" / name).mkdir(parents=True)
+        (desktop / "workspaces" / name / "workspace.yaml").write_text(f"id: {name}\nname: {name}\nport: {port}\n")
+    monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop])
+    real = manager._read_record
+
+    def read(ws):
+        if ws.name == "bad-1":
+            raise PermissionError(13, "Permission denied", str(ws / "workspace.yaml"))
+        return real(ws)
+
+    monkeypatch.setattr(manager, "_read_record", read)
+    assert manager._ports_other_instances_record() == {7872}
+    assert manager.create("alpha")["port"] == 7871  # the unreadable member's port cannot be known
+    assert manager.create("beta")["port"] == 7873  # …but the readable one is still skipped
+
+
+def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
+    """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
+    `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir. (A fresh copy of the
+    module: conftest pins `desktop_box_roots` on the imported one.)"""
+    import importlib.util
+    import os
+    import sys
+
+    spec = importlib.util.find_spec("infra.paths")
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    assert fresh.desktop_box_roots() == [tmp_path / "cfg" / fresh.DESKTOP_APP_ID]
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert fresh.desktop_box_roots() == [tmp_path / "home" / ".config" / fresh.DESKTOP_APP_ID]
+
+
 def test_pick_port_raises_when_range_saturated(root, monkeypatch):
     """A fully-occupied range fails loudly instead of looping forever."""
     monkeypatch.setattr(manager, "_port_is_free", lambda port: False)
