@@ -128,6 +128,57 @@ def test_live_detail_reads_through_the_slug_proxy_and_degrades_per_pane():
     assert be.console_href(ROSTER[0]) == "http://127.0.0.1:7870/app/"
 
 
+def test_live_snapshot_survives_a_malformed_member_rollup_and_non_dict_telemetry():
+    """One member's bad telemetry stays local to that member (CodeRabbit Major)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p == "/api/fleet":
+            return httpx.Response(200, json={"agents": ROSTER})
+        if p == "/api/telemetry/fleet":
+            return httpx.Response(200, json={"members": {"protoEngineer-ba4c": {"reachable": True, "rollup": {"turns": "many", "cost_usd": None, "success_rate": "n/a"}}, "old-1": {"rollup": "nope"}, "Cindi-9f49": "garbage"}})
+        return httpx.Response(200, json={"warnings": []})
+
+    be = deckdata.LiveBackend(_conn(handler))
+    snap = be.snapshot()
+    assert not snap.error and len(snap.roster) == len(ROSTER)
+    assert snap.rollups["protoEngineer-ba4c"].turns == 0 and snap.rollups["protoEngineer-ba4c"].cost_usd == 0.0
+    assert snap.rollups["old-1"].cost_usd == 0.0
+
+    def handler_list(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/telemetry/fleet":
+            return httpx.Response(200, json=[1, 2, 3])
+        return handler(request)
+
+    be = deckdata.LiveBackend(_conn(handler_list))
+    be.snapshot()
+    snap = be.snapshot()
+    assert not snap.error and snap.rollups == {}
+
+
+def test_live_detail_notes_a_disabled_log_buffer_and_rejects_non_dict_bodies():
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p.endswith("/api/diagnostics/logs"):
+            return httpx.Response(200, json={"enabled": False, "lines": [], "returned": 0, "capacity": 0, "note": "log buffer disabled (LOG_BUFFER_LINES=0)"})
+        if p.endswith("/api/runtime/status"):
+            return httpx.Response(200, text="<html>proxy</html>")
+        return httpx.Response(200, json={"sessions": []})
+
+    be = deckdata.LiveBackend(_conn(handler))
+    d = be.detail(ROSTER[1])
+    assert d.logs == [] and d.logs_note == "log buffer disabled (LOG_BUFFER_LINES=0)" and not d.logs_error
+    assert "malformed" in d.runtime_error and d.runtime == {}
+
+    def handler_no_note(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/api/diagnostics/logs"):
+            return httpx.Response(200, json={"enabled": False, "lines": []})
+        return httpx.Response(200, json={"sessions": [], "warnings": []})
+
+    d = deckdata.LiveBackend(_conn(handler_no_note)).detail(ROSTER[1])
+    assert d.logs_note == "log buffer disabled on this member"
+
+
 def test_live_detail_host_reads_the_hub_directly_and_member_401_is_scoped():
     def handler(request: httpx.Request) -> httpx.Response:
         p = request.url.path
@@ -160,7 +211,7 @@ def test_offline_backend_drops_the_host_row_and_has_no_detail(tmp_path):
     )
     snap = be.snapshot()
     assert snap.mode == "offline" and [a["name"] for a in snap.roster] == ["alpha"]
-    assert snap.label == f"offline · reading {tmp_path / 'fleet.json'}"
+    assert snap.label == f"offline · no hub answered · reading {tmp_path / 'fleet.json'}"
     be.start("alpha")
     be.stop("alpha")
     assert calls == [("start", "alpha"), ("stop", "alpha")]

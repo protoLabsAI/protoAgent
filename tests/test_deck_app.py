@@ -67,6 +67,17 @@ class FakeBackend:
         self.closed = True
 
 
+async def _settle(app: FleetDeck, pilot) -> None:
+    """Wait for every thread worker (and the workers they chain) to finish, then let the
+    UI loop apply the results — deterministic where a fixed pause would race."""
+    for _ in range(20):
+        if not app.workers:
+            break
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    await pilot.pause()
+
+
 def _rows(app: FleetDeck) -> list[list[str]]:
     table = app.screen.query_one("#roster", DataTable)
     out = []
@@ -80,7 +91,7 @@ async def test_roster_renders_presence_words_skew_spend_and_topbar():
     be = FakeBackend(warnings=["1 fleet member(s) run a different protoAgent version"])
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         assert isinstance(app.screen, RosterScreen)
         assert "live · http://127.0.0.1:7870 · protoagent v0.165.0 · via heartbeat" in str(app.screen.query_one("#topbar", Static).content)
         assert "different protoAgent version" in str(app.screen.query_one("#banner", Static).content)
@@ -100,20 +111,20 @@ async def test_lifecycle_keys_route_to_the_backend_and_refuse_host_and_remote():
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         # cursor starts on the host row: x must refuse (the hub can't stop itself)
         await pilot.press("x")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)
         assert be.calls == []
         # down to protoEngineer (online) → x stops it
         await pilot.press("j")
         await pilot.press("x")
-        await pilot.pause(0.4)
+        await _settle(app, pilot)
         assert be.calls == [("stop", "protoEngineer")]
         # down to Cindi (stopped) → s starts it; the roster re-polls and shows it online
         await pilot.press("j", "j")
         await pilot.press("s")
-        await pilot.pause(0.4)
+        await _settle(app, pilot)
         assert be.calls[-1] == ("start", "Cindi")
         rows = _rows(app)
         assert rows[3][2] == "online"
@@ -127,7 +138,7 @@ async def test_lifecycle_keys_route_to_the_backend_and_refuse_host_and_remote():
         # so `r` is disabled there — restart `old` instead)
         await pilot.press("k", "k")  # back to old
         await pilot.press("r")
-        await pilot.pause(0.4)
+        await _settle(app, pilot)
         assert be.calls[-2:] == [("stop", "old"), ("start", "old")]
         # ...and on the stopped protoEngineer, r does nothing
         await pilot.press("k")
@@ -141,10 +152,10 @@ async def test_detail_screen_renders_runtime_logs_sessions_and_telemetry():
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         await pilot.press("j")  # protoEngineer
         await pilot.press("enter")
-        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert isinstance(app.screen, DetailScreen)
         head = str(app.screen.query_one("#detail-head", Static).content)
         assert "protoEngineer" in head and "online" in head and ":7875" in head
@@ -157,7 +168,7 @@ async def test_detail_screen_renders_runtime_logs_sessions_and_telemetry():
         tele = str(app.screen.query_one("#telemetry", Static).content)
         assert "turns 38" in tele and "$12.40" in tele and "cache hit 61%" in tele
         log_head = str(app.screen.query_one("#log-head", Static).content)
-        assert "● following" in log_head and "2 lines" in log_head
+        assert "● following" in log_head and "2 shown · window 2" in log_head
         await pilot.press("l")
         await pilot.pause(0.1)
         assert "○ paused" in str(app.screen.query_one("#log-head", Static).content)
@@ -251,6 +262,109 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
         app.screen.refresh_detail()
         await pilot.pause(0.5)
         assert len(log.lines) == 5 and "line 16" in str(log.lines[-1])
+        assert "5 shown · window 5" in str(app.screen.query_one("#log-head", Static).content)
+
+
+@pytest.mark.asyncio
+async def test_log_tail_anchors_on_seq_when_the_member_stamps_it_even_with_duplicate_records():
+    """CodeRabbit: identical (ts, logger, message) records defeat identity anchoring; the
+    ring now stamps `seq` and the tail anchors on it exactly. Also: an older member without
+    seq but with duplicated records still advances (trailing-run identity match)."""
+    be = FakeBackend()
+    ring: list[dict] = []
+    n = {"seq": 0}
+
+    def push(msg: str, *, seq: bool = True) -> None:
+        n["seq"] += 1
+        rec = {"ts": "2026-09-12T09:00:00+00:00", "level": "INFO", "logger": "t", "message": msg}
+        if seq:
+            rec["seq"] = n["seq"]
+        ring.append(rec)
+
+    def detail(agent):
+        d = deckdata.MemberDetail(slug=deckdata.slug_of(agent), name=agent["name"])
+        d.logs = list(ring[-6:])
+        return d
+
+    be.detail = detail  # type: ignore[assignment]
+    for _ in range(4):
+        push("same")  # four identical records, same second
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("j", "enter")
+        await _settle(app, pilot)
+        log = app.screen.query_one("#log", RichLog)
+        assert len(log.lines) == 4
+        push("same")
+        push("same")
+        app.screen.refresh_detail()
+        await _settle(app, pilot)
+        assert len(log.lines) == 6  # exactly the two new duplicates, no skip, no re-render
+        # a burst beyond the window → whole window re-rendered from seq
+        for _ in range(9):
+            push("burst")
+        app.screen.refresh_detail()
+        await _settle(app, pilot)
+        assert len(log.lines) == 6 and all("burst" in str(line) for line in log.lines)
+
+    # an older member: no seq, duplicated records — the trailing-run match still advances
+    ring.clear()
+    n["seq"] = 0
+    for _ in range(3):
+        push("dup", seq=False)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("j", "enter")
+        await _settle(app, pilot)
+        log = app.screen.query_one("#log", RichLog)
+        assert len(log.lines) == 3
+        push("dup", seq=False)
+        push("after", seq=False)
+        app.screen.refresh_detail()
+        await _settle(app, pilot)
+        # identity can't tell a 4th identical "dup" from the three shown (that is what seq
+        # is for) — but the tail ADVANCES and never re-renders or duplicates what it showed
+        assert "after" in str(log.lines[-1]) and 4 <= len(log.lines) <= 5
+
+
+@pytest.mark.asyncio
+async def test_roster_survives_duplicate_and_empty_ids():
+    """CodeRabbit Major: DataTable raises DuplicateKey on a repeated key; a malformed
+    roster must not abort the render on the UI thread."""
+    roster = [
+        {"name": "a", "id": "dup", "port": 1, "running": True},
+        {"name": "b", "id": "dup", "port": 2, "running": False},
+        {"port": 3, "running": False},  # no id, no name
+    ]
+    be = FakeBackend(roster=roster)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        assert [r[1] for r in _rows(app)] == ["a", "b", ""]
+        await pilot.press("j", "j")
+        await pilot.pause()
+        assert app.screen.selected() is roster[2] or app.screen.selected() == roster[2]
+
+
+def test_run_returns_textual_return_code_on_a_fatal_error(monkeypatch):
+    """CodeRabbit: `run()` must surface Textual's non-zero return_code, not the exit value."""
+    from deck import app as deckapp
+
+    class Double:
+        return_code = 1
+
+        def __init__(self, backend):
+            pass
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(deckapp, "FleetDeck", Double)
+    assert deckapp.run(FakeBackend()) == 1
+    Double.return_code = None
+    assert deckapp.run(FakeBackend()) == 0
 
 
 @pytest.mark.asyncio

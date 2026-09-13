@@ -111,6 +111,15 @@ class Backend(Protocol):
     def close(self) -> None: ...
 
 
+def _num(value: Any, default: float = 0.0) -> float:
+    """A rollup field as a float, or ``default`` — one member's malformed telemetry must
+    stay local to that member, never fail the whole poll."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _warning_text(w: Any) -> str:
     if isinstance(w, str):
         return w
@@ -145,17 +154,18 @@ class LiveBackend:
             for slug, entry in (fleet.get("members") or {}).items():
                 if not isinstance(entry, dict):
                     continue
-                r = entry.get("rollup") or {}
+                r = entry.get("rollup")
+                r = r if isinstance(r, dict) else {}
                 snap.rollups[str(slug)] = Rollup(
-                    turns=int(r.get("turns") or 0),
-                    cost_usd=float(r.get("cost_usd") or 0.0),
-                    success_rate=float(r.get("success_rate") or 0.0),
-                    cache_hit_ratio=float(r.get("cache_hit_ratio") or 0.0),
+                    turns=int(_num(r.get("turns"))),
+                    cost_usd=_num(r.get("cost_usd")),
+                    success_rate=_num(r.get("success_rate")),
+                    cache_hit_ratio=_num(r.get("cache_hit_ratio")),
                     reachable=bool(entry.get("reachable", True)),
                     enabled=bool(entry.get("telemetry_enabled", True)),
                 )
-        except deckhub.HubError:
-            pass
+        except (deckhub.HubError, AttributeError, TypeError, ValueError):
+            pass  # extras are best-effort; the roster is the poll
         try:
             status = client.runtime_status()
             snap.warnings = [_warning_text(w) for w in (status.get("warnings") or []) if w]
@@ -225,12 +235,16 @@ class OfflineBackend:
         self.fleet_json = fleet_json
         self.reason = reason
 
+    def _label(self) -> str:
+        why = f" · {self.reason}" if self.reason else ""
+        return f"offline{why} · reading {self.fleet_json}"
+
     def snapshot(self) -> Snapshot:
         try:
             rows = [a for a in self._status() if not a.get("host")]
         except Exception as exc:  # noqa: BLE001 — a poll must never take the deck down
-            return Snapshot(mode="offline", label=f"offline · reading {self.fleet_json}", error=str(exc))
-        return Snapshot(mode="offline", label=f"offline · reading {self.fleet_json}", roster=rows)
+            return Snapshot(mode="offline", label=self._label(), error=str(exc))
+        return Snapshot(mode="offline", label=self._label(), roster=rows)
 
     def start(self, name: str) -> dict:
         return self._start(name)

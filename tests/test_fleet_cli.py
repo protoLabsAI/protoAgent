@@ -152,8 +152,20 @@ def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
     assert cli.run_fleet_cli([]) == 0
     assert seen == {"mode": "live"}
-    assert cli.run_deck_cli(["ls"]) == 0  # `top` strips verbs and opens the deck
+    assert cli.run_deck_cli(["ls"]) == 0  # `top` strips a LEADING verb and opens the deck
     assert seen == {"mode": "live"}
+    # ...but never an option VALUE that happens to spell a verb (CodeRabbit)
+    seen.clear()
+    tokens: dict = {}
+
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
+        tokens["token"] = token
+        client = FakeClient()
+        return deckhub.Connection(client=client, candidate=deckhub.HubCandidate(client.url, "flag"), card={}, roster=list(client.roster))
+
+    monkeypatch.setattr(deckhub, "connect", fake_connect)
+    assert cli.run_deck_cli(["--token", "status"]) == 0
+    assert tokens == {"token": "status"}
 
 
 def test_flags_work_before_and_after_the_verb(monkeypatch, capsys):

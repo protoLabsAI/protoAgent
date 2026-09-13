@@ -37,6 +37,17 @@ LOG_POLL_S = 2.0
 _GLYPH = deckdata.PRESENCE_GLYPH
 
 
+def _rec_key(rec: dict) -> tuple:
+    return (str(rec.get("ts") or ""), str(rec.get("logger") or ""), str(rec.get("message") or ""))
+
+
+def _rec_seq(rec: dict) -> int | None:
+    try:
+        return int(rec["seq"]) if rec.get("seq") is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _fmt_cost(r: deckdata.Rollup | None, pres: str) -> str:
     """Spend for the row. A stopped member is not "unreachable" — it is stopped; the
     telemetry rollup only marks reachability for members it tried to read."""
@@ -105,7 +116,14 @@ class RosterScreen(Screen):
         keep = slug_of(cur) if cur is not None else self._selected_slug
         table.clear()
         self._rows = rows
-        for a in rows:
+        seen_keys: set[str] = set()
+        for i, a in enumerate(rows):
+            # DataTable keys must be unique and non-empty; a malformed roster (missing id,
+            # a duplicated id) must not abort the render on the UI thread.
+            key = slug_of(a) or f"row-{i}"
+            if key in seen_keys:
+                key = f"{key}#{i}"
+            seen_keys.add(key)
             pres = presence_of(a)
             ver = str(a.get("version") or "")
             ver_cell = Text(f"v{ver}{' !skew' if snap.skewed(a) else ''}" if ver else "—")
@@ -117,7 +135,7 @@ class RosterScreen(Screen):
             bundle = str(a.get("bundle") or "")
             if a.get("remote") and a.get("url"):
                 bundle = str(a["url"])
-            table.add_row(glyph, display_name(a), pres, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), bundle, key=slug_of(a))
+            table.add_row(glyph, display_name(a), pres, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), bundle, key=key)
         if rows:
             idx = next((i for i, a in enumerate(rows) if slug_of(a) == keep), 0)
             table.move_cursor(row=idx)
@@ -298,8 +316,11 @@ class DetailScreen(Screen):
         self.slug = slug_of(agent)
         self.following = True
         self._focus_logs = focus_logs
-        self._seen_logs = 0
-        self._last_rec: tuple | None = None
+        self._seen_logs = 0  # size of the last window (for the header)
+        self._rendered = 0  # lines written to the pane so far
+        self._rendered_any = False
+        self._tail: list[tuple] = []  # identity of the last rendered records (fallback anchor)
+        self._last_seq: int | None = None  # the exact anchor when the member stamps seq
         self._log_note = ""
         self._timer: Any = None
 
@@ -434,20 +455,15 @@ class DetailScreen(Screen):
             return
         # The ring answers the NEWEST N records, so a count can't say what is new once the
         # window is full (review HIGH-1: the tail froze at 200 while the header said
-        # "following"). Anchor on the last record we rendered, by identity; write what
-        # follows it; if it has rotated out of the window, re-render the whole window.
-        def _key(rec: dict) -> tuple:
-            return (str(rec.get("ts") or ""), str(rec.get("logger") or ""), str(rec.get("message") or ""))
-
-        new = d.logs
-        if self._last_rec is not None:
-            idx = next((i for i in range(len(d.logs) - 1, -1, -1) if _key(d.logs[i]) == self._last_rec), None)
-            if idx is None:
-                log.clear()
-            else:
-                new = d.logs[idx + 1 :]
-        elif self._seen_logs:
+        # "following"). Anchor on the last rendered record and write what follows it:
+        # by `seq` when the member stamps one (monotonic, never repeats), else by the
+        # identity of the trailing records (a member on an older build). If the anchor
+        # has rotated out of the window, re-render the whole window.
+        new = self._new_records(d.logs)
+        if new is None:
             log.clear()
+            self._rendered = 0
+            new = d.logs
         self._log_note = d.logs_note
         for rec in new:
             ts = str(rec.get("ts") or "")[11:19]
@@ -458,10 +474,39 @@ class DetailScreen(Screen):
             elif lvl == "WARNING":
                 line.stylize("yellow")
             log.write(line)
-        if d.logs:
-            self._last_rec = _key(d.logs[-1])
+            self._rendered += 1
+        self._tail = [_rec_key(r) for r in d.logs[-3:]]
+        self._last_seq = _rec_seq(d.logs[-1]) if d.logs else None
         self._seen_logs = len(d.logs)
+        self._rendered_any = True
         head.update(self._log_head())
+
+    def _new_records(self, logs: list[dict]) -> list[dict] | None:
+        """The records after the last rendered one, ``[]`` when nothing is new, or ``None``
+        when the anchor is gone (rotated out / first render / window shrank) and the whole
+        window must be re-rendered."""
+        if not self._rendered_any:
+            return None
+        if self._last_seq is not None:
+            seqs = [_rec_seq(r) for r in logs]
+            if all(q is not None for q in seqs) and logs:
+                if seqs[0] is not None and seqs[0] > self._last_seq:
+                    return None  # everything we had rotated out
+                return [r for r, q in zip(logs, seqs, strict=True) if q is not None and q > self._last_seq]
+        if not self._tail:
+            return None
+        keys = [_rec_key(r) for r in logs]
+        # Match the longest trailing run of rendered records still inside the window,
+        # newest occurrence first: a run beats a single (possibly duplicated) record, and a
+        # shorter run is tried when the window advanced past part of the longer one. The
+        # newest match can under-count an identical burst — invisible to the reader —
+        # where the oldest would re-render lines already shown. `seq` makes this exact.
+        for k in range(len(self._tail), 0, -1):
+            run = self._tail[-k:]
+            for end in range(len(keys), k - 1, -1):
+                if keys[end - k : end] == run:
+                    return logs[end:]
+        return None
 
     def action_back(self) -> None:
         if self._timer is not None:
@@ -474,7 +519,9 @@ class DetailScreen(Screen):
 
     def _log_head(self) -> str:
         state = "● following" if self.following else "○ paused"
-        return f"LOG  diagnostics/logs  {state}  {self._seen_logs} lines" + (f"  ({self._log_note})" if self._log_note else "")
+        return f"LOG  diagnostics/logs  {state}  {self._rendered} shown · window {self._seen_logs}" + (
+            f"  ({self._log_note})" if self._log_note else ""
+        )
 
     def action_stop(self) -> None:
         self.app.lifecycle("stop", self.agent)  # type: ignore[attr-defined]
@@ -578,7 +625,7 @@ class FleetDeck(App[int]):
             self.call_from_thread(self.notify, f"{verb} {name}: done")
         else:
             self.call_from_thread(self.notify, f"{verb} {name}: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
-        self.poll()
+        self.call_from_thread(self.poll)  # a @work method belongs to the app thread
 
     @work(thread=True, group="browser")
     def open_in_browser(self, href: str) -> None:

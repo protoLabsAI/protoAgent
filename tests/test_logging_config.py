@@ -114,6 +114,19 @@ def test_ring_buffer_snapshot_is_oldest_first_and_limited():
     assert buf.snapshot(0) == []
 
 
+def test_ring_buffer_stamps_a_monotonic_seq_that_survives_eviction():
+    """A newest-N reader (the fleet deck's log tail) anchors on `seq`: it never repeats,
+    even for two records with the same ts/logger/message, and eviction never resets it."""
+    from observability.logging_config import RingBufferHandler
+
+    buf = RingBufferHandler(3)
+    for _ in range(5):
+        _emit(buf, "same message")
+    seqs = [r["seq"] for r in buf.snapshot(10)]
+    assert seqs == [3, 4, 5]
+    assert len({(r["ts"], r["logger"], r["message"]) for r in buf.snapshot(10)}) <= 3  # identity CAN collide
+
+
 def test_ring_buffer_captures_exception_text():
     from observability.logging_config import RingBufferHandler
 

@@ -373,8 +373,13 @@ def _cmd_deck(args: argparse.Namespace) -> int:
 
 
 def run_deck_cli(argv: list[str]) -> int:
-    """``protoagent top`` — the deck, straight away (flags as for ``fleet``)."""
-    return run_fleet_cli([a for a in argv if a not in ("ls", "up", "down", "status")])
+    """``protoagent top`` — the deck, straight away (flags as for ``fleet``). A leading
+    verb is dropped for compatibility (`top ls` is still the deck); an option VALUE that
+    happens to spell a verb (`--token status`) is left alone."""
+    rest = list(argv)
+    if rest and rest[0] in ("ls", "up", "down", "status"):
+        rest = rest[1:]
+    return run_fleet_cli(rest)
 
 
 # ── entry ────────────────────────────────────────────────────────────────────

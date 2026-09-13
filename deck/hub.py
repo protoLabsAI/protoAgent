@@ -589,7 +589,7 @@ class HubClient:
 
     def telemetry_fleet(self) -> dict:
         """The hub-side rollup (spend / turns / flags per member, ADR 0006 fleet extension)."""
-        return self._request("GET", "/api/telemetry/fleet") or {}
+        return _expect_dict(self.url, self._request("GET", "/api/telemetry/fleet"), "telemetry")
 
     # ── per-member reads through the slug proxy (ADR 0042) ──
 
@@ -608,15 +608,15 @@ class HubClient:
         return self._request("GET", path)
 
     def member_runtime_status(self, slug: str) -> dict:
-        return self.member_get(slug, "/api/runtime/status") or {}
+        return _expect_dict(self.url, self.member_get(slug, "/api/runtime/status"), f"{slug} runtime status")
 
     def diagnostics_logs(self, slug: str, lines: int = 200) -> dict:
         """A bounded, redacted tail of the member's in-process log ring (#3168)."""
-        return self.member_get(slug, "/api/diagnostics/logs", lines=lines) or {}
+        return _expect_dict(self.url, self.member_get(slug, "/api/diagnostics/logs", lines=lines), f"{slug} logs")
 
     def diagnostics_sessions(self, slug: str, limit: int = 50) -> dict:
         """Newest-first session inventory from the member's task store (#3171 slice 1)."""
-        return self.member_get(slug, "/api/diagnostics/sessions", limit=limit) or {}
+        return _expect_dict(self.url, self.member_get(slug, "/api/diagnostics/sessions", limit=limit), f"{slug} sessions")
 
     def console_href(self, slug: str) -> str:
         """Where the browser console shows this member (slug routing, ADR 0042): the host
