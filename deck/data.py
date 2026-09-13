@@ -16,6 +16,7 @@ an ``httpx.MockTransport`` and nothing else.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -112,12 +113,14 @@ class Backend(Protocol):
 
 
 def _num(value: Any, default: float = 0.0) -> float:
-    """A rollup field as a float, or ``default`` — one member's malformed telemetry must
-    stay local to that member, never fail the whole poll."""
+    """A rollup field as a finite float, or ``default`` — one member's malformed telemetry
+    must stay local to that member, never fail the whole poll (``float("inf")`` parses, and
+    ``int(inf)`` then raises OverflowError; ``nan`` is no number either)."""
     try:
-        return float(value)
+        f = float(value)
     except (TypeError, ValueError):
         return default
+    return f if math.isfinite(f) else default
 
 
 def _warning_text(w: Any) -> str:

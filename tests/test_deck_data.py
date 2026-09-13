@@ -136,7 +136,7 @@ def test_live_snapshot_survives_a_malformed_member_rollup_and_non_dict_telemetry
         if p == "/api/fleet":
             return httpx.Response(200, json={"agents": ROSTER})
         if p == "/api/telemetry/fleet":
-            return httpx.Response(200, json={"members": {"protoEngineer-ba4c": {"reachable": True, "rollup": {"turns": "many", "cost_usd": None, "success_rate": "n/a"}}, "old-1": {"rollup": "nope"}, "Cindi-9f49": "garbage"}})
+            return httpx.Response(200, json={"members": {"protoEngineer-ba4c": {"reachable": True, "rollup": {"turns": "Infinity", "cost_usd": None, "success_rate": "NaN"}}, "old-1": {"rollup": "nope"}, "Cindi-9f49": "garbage"}})
         return httpx.Response(200, json={"warnings": []})
 
     be = deckdata.LiveBackend(_conn(handler))
@@ -144,6 +144,9 @@ def test_live_snapshot_survives_a_malformed_member_rollup_and_non_dict_telemetry
     assert not snap.error and len(snap.roster) == len(ROSTER)
     assert snap.rollups["protoEngineer-ba4c"].turns == 0 and snap.rollups["protoEngineer-ba4c"].cost_usd == 0.0
     assert snap.rollups["old-1"].cost_usd == 0.0
+    # non-finite numbers parse as floats but are no numbers: inf would overflow int(), nan is nan
+    assert deckdata._num("inf") == 0.0 and deckdata._num(float("nan")) == 0.0 and deckdata._num("-Infinity") == 0.0
+    assert deckdata._num("3.5") == 3.5 and deckdata._num(7) == 7.0
 
     def handler_list(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/telemetry/fleet":
