@@ -2,7 +2,7 @@
 
 > **Read-only surface.** The fleet telemetry rollup ([ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md)) is a **read-only observability window** — it reports what the fleet is doing, not what to do about it. Every corrective step in this guide is an explicit operator procedure that requires your approval before acting and a verification step before it is considered done. The hub never autonomously restarts or reconfigures a member.
 
-This guide assumes your fleet is running (see [Run a fleet](./fleet.md)) and your hub is on v0.132 or later (the fleet telemetry rollup ships with ADR 0006 Slices 1–2).
+This guide assumes your fleet is running (see [Run a fleet](./fleet.md)) and your hub is on v0.132 or later (the fleet telemetry rollup ships with ADR 0006 Slices 1–2). For an interactive view of the same fleet — presence, the TURN column, member detail with a live log tail, and the work feed — open the [fleet deck](./fleet-deck.md) (`protoagent fleet`).
 
 ---
 
@@ -209,6 +209,7 @@ Recovery procedures are explicit operator actions. Each one below names the appr
 | `running: true`, `reachable: false` | Member process may have crashed — check its logs, then restart |
 | `running: true`, `reachable: false` after restart | Network issue — check the member's bind address and the hub's proxy config ([ADR 0042](../adr/0042-fleet-supervisor-unified-console.md)) |
 | Version-skew badge present | Upgrade the lagging member (§2) |
+| Member exits at start with `EADDRINUSE` | Another instance's member records the same port — see [Port collision between instances](#port-collision-between-instances) |
 
 **Runbook — unreachable member:**
 
@@ -217,6 +218,20 @@ Recovery procedures are explicit operator actions. Each one below names the appr
 3. **Act:** Restart the member using your deployment method.
 4. **Verify it worked:** Poll until `reachable: true` (poll loop in §2). If it stays unreachable after 60 s, check the member's process logs before retrying.
 5. **Re-read the fleet:** Confirm `success_rate` and `flags` are at or below pre-incident levels.
+
+### Port collision between instances
+
+Ports are machine-wide: the desktop app's fleet, a scoped `dev` instance and any other instance
+on the same machine all hand out member ports from the same range. New members skip every port
+any instance records, but two members created before that check can still record the same
+port — whichever starts second exits with `EADDRINUSE`.
+
+1. **Read-only first:** find the duplicate — the `port:` in each member's
+   `<instance root>/workspaces/<id>/workspace.yaml`, across instances.
+2. **Approval required:** pick the member to move (a test instance's, usually) and a port that
+   is free and recorded by no member of any instance.
+3. **Act:** with that member **stopped**, change the `port:` line in its `workspace.yaml`.
+4. **Verify it worked:** start it; it binds the new port, and the other member starts too.
 
 ### Elevated flags on one member
 
@@ -246,5 +261,5 @@ The operator persona (how the hub decides to act on this information) is a fork 
   [0042 fleet supervisor & unified console](../adr/0042-fleet-supervisor-unified-console.md) ·
   [0072 fleet seed / team-via-config](../adr/0072-fleet-seed-team-via-config.md) ·
   [0089 intra-instance trust boundary](../adr/0089-intra-instance-trust-boundary.md)
-- Guides: [Run a fleet](./fleet.md) · [Wire Langfuse + Prometheus](./observability.md) ·
+- Guides: [Run a fleet](./fleet.md) · [The fleet deck](./fleet-deck.md) · [Wire Langfuse + Prometheus](./observability.md) ·
   [Delegates](./delegates.md) · [Multi-instance scoping](./multi-instance.md)

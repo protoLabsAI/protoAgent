@@ -141,6 +141,7 @@ export default defineConfig({
             { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
             { text: "Verifier-grounded coder (coder_solve)", link: "/guides/coder" },
             { text: "Fleet (many agents on one host)", link: "/guides/fleet" },
+            { text: "The fleet deck (the fleet in a terminal)", link: "/guides/fleet-deck" },
             { text: "Portfolio (one PM across boards)", link: "/guides/portfolio" },
             { text: "Build out your agent with a coding agent", link: "/guides/build-with-a-coding-agent" },
           ],

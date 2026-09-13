@@ -141,6 +141,17 @@ isolation: enable/config/secrets stay per-workspace.)
    **and** installs the bundle into its `config/plugins/` + pins it in the workspace's
    `plugins.lock`. Bundles = the capability stack; workspaces = the isolated instance.
 
+> **Amendment (2026-09) — ports are machine-wide (#3492).** Item 5 allocated from the
+> workspace's own registry plus an OS probe, so a stopped member of *another* instance on the
+> same machine (the desktop app's, a scoped `dev`) read as free, and two members could record
+> one port — whichever started second exited with `EADDRINUSE`. Allocation now also skips every
+> port any other instance on the machine records in its members' `workspace.yaml` (each known
+> box root — this process's, the plain data home, the desktop app's config dir — and its child
+> instance roots), and the pick plus the `workspace.yaml` reservation run under one
+> machine-wide lock (`<data home>/.port-allocation.lock`), so two hubs creating members at the
+> same moment cannot take the same port. Existing collisions are not renumbered; moving a
+> stopped member's `port:` is the operator's fix ([operating a fleet](../guides/operating-a-fleet.md#port-collision-between-instances)).
+
 ## Options considered
 
 - **Keep the env-knob status quo.** Works, but it's the footgun that caused the leak and has no
