@@ -97,3 +97,9 @@ markdown-it-py>=3.0           # Markdown → HTML for the `docs` plugin reader v
 # compiled and matched with a timeout= so catastrophic backtracking can't hang the
 # process. stdlib re has no timeout; regex is API-compatible and adds one.
 regex>=2024.11.6
+
+# The fleet deck (epic #3466) — `protoagent fleet` with no arguments opens a Textual TUI
+# over the running hub. A core dependency (operator decision 2026-09-11), lazy-imported by
+# the fleet dispatcher so `protoagent --help` and every non-interactive verb never pay for
+# it. Keep in step with pyproject.toml.
+textual>=8

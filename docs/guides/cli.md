@@ -63,6 +63,24 @@ then exits:
 | `protoagent runtime use <rt>` · `list` | Select the agent runtime. **`native` (LangGraph) is the supported value**; the `acp:*` runtimes are [deprecated](/guides/acp-runtime) — hand coding jobs to an [`acp` delegate](/guides/coding-agents) instead. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 | `protoagent hermes` | **Deprecated** ([#2633](https://github.com/protoLabsAI/protoAgent/issues/2633)) — the Hermes preset still works for existing installs but is no longer offered. Hand work to an external agent with [ACP delegates](delegates.md) instead. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 
+#### The fleet deck: `protoagent fleet` with no arguments
+
+Bare `protoagent fleet` (or `protoagent top`) opens an interactive terminal over the
+running hub — the **fleet deck**. The roster shows every member with the console's
+presence words (host, online, remote, stopped, unreachable), version skew, spend over the
+last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` member detail, `s`
+start, `x` stop, `r` restart, `l` follow logs, `o` open the member in the browser console,
+`/` filter, `?` help, `q` quit (members keep running). The footer lists only the keys that
+apply to the selected row. Member detail shows runtime status (model, identity, warnings),
+a following tail of the member's bounded, redacted log ring, the session inventory, and
+the telemetry rollup — each pane degrades on its own if that read fails.
+
+The deck follows the same live/offline rule as the verbs below: with no hub answering it
+shows this instance's `fleet.json` badged `offline`, and only start/stop are available.
+Textual is imported only when the deck opens, so `--help` and the non-interactive verbs
+stay fast; a build without it prints a one-line hint and exits 2. Talking to a member and
+watching its tool calls arrive in the next slices (#3469, #3470).
+
 #### `fleet` talks to the running hub
 
 `fleet ls` / `up` / `down` look for a **running hub** before they read anything from

@@ -24,53 +24,55 @@ import sys
 from typing import Any
 
 from deck import hub as deckhub
+from deck.data import PRESENCE_GLYPH as _PRESENCE_GLYPH
+from deck.data import presence_of  # one definition of the console's presence words (deck.data)
 from graph.fleet import supervisor
 
-_PRESENCE_GLYPH = {"host": "●", "online": "●", "remote": "●", "stopped": "○", "unreachable": "◌"}
+__all__ = ["presence_of", "run_deck_cli", "run_fleet_cli"]
 
 
-def presence_of(agent: dict) -> str:
-    """The console's presence vocabulary, exactly (apps/web/src/app/FleetRoom.tsx::presenceOf):
-    host · online · remote · stopped · unreachable. Two surfaces, one set of words."""
-    if agent.get("host"):
-        return "host"
-    if agent.get("running"):
-        return "remote" if agent.get("remote") else "online"
-    return "unreachable" if agent.get("remote") else "stopped"
-
-
-def _common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--hub", metavar="URL", default=None, help="hub to talk to (default: discover a running hub on this box)")
+def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
+    """The shared flags. They live on the top-level parser (real defaults) AND on every
+    subparser (``SUPPRESS`` defaults), so both ``fleet --json ls`` and ``fleet ls --json``
+    work: a subparser default would otherwise clobber a value given before the verb."""
+    d = {} if top else {"default": argparse.SUPPRESS}
+    p.add_argument("--hub", metavar="URL", help="hub to talk to (default: discover a running hub on this box)", **d)
     p.add_argument(
         "--token",
-        default=None,
         help=f"credential for --hub — a fleet token or operator bearer (env: {deckhub.ENV_TOKEN}); never printed",
+        **d,
     )
-    p.add_argument("--offline", action="store_true", help="read this instance's fleet.json instead of asking a hub")
+    p.add_argument("--offline", action="store_true", help="read this instance's fleet.json instead of asking a hub", **d)
     p.add_argument(
         "--insecure-http",
         action="store_true",
         help="allow sending a credential to a non-loopback http:// hub (only for a link you know is encrypted, e.g. a tailnet)",
+        **d,
     )
-    p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting")
+    p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting", **d)
 
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="protoagent fleet",
-        description="Run and inspect the fleet — live from the running hub, or from disk when none answers (ADR 0042).",
+        description=(
+            "The fleet deck. With no verb: an interactive terminal over the running hub "
+            "(roster, member detail, logs, lifecycle). With a verb: the non-interactive "
+            "commands — live from the hub, or from disk when none answers (ADR 0042)."
+        ),
     )
-    sub = p.add_subparsers(dest="cmd", required=True)
+    _common(p, top=True)
+    sub = p.add_subparsers(dest="cmd", required=False)
     pu = sub.add_parser("up", help="start agents — all stopped local members, or named")
     pu.add_argument("names", nargs="*")
-    _common(pu)
+    _common(pu, top=False)
     pd = sub.add_parser("down", help="stop agents — all running, or named")
     pd.add_argument("names", nargs="*")
-    _common(pd)
+    _common(pd, top=False)
     pl = sub.add_parser("ls", help="list members with live status")
-    _common(pl)
+    _common(pl, top=False)
     ps = sub.add_parser("status", help="alias for ls")
-    _common(ps)
+    _common(ps, top=False)
     return p
 
 
@@ -311,6 +313,67 @@ def _cmd_down(args: argparse.Namespace) -> int:
     return _finish(args, "offline", results)
 
 
+# ── the deck (bare `protoagent fleet`, or `protoagent top`) ──────────────────
+
+
+def _offline_backend(reason: str):
+    """The disk backend, built here so ``deck`` never imports ``graph``: the supervisor's
+    callables are handed over, and its synthesized host row is dropped by the backend."""
+    import importlib
+
+    from graph.workspaces import manager
+
+    deckdata = importlib.import_module("deck.data")
+    return deckdata.OfflineBackend(
+        status=supervisor.status,
+        start=lambda name: supervisor.start(name),
+        stop=lambda name: supervisor.stop(name),
+        fleet_json=manager.workspaces_root() / "fleet.json",
+        reason=reason,
+    )
+
+
+def _cmd_deck(args: argparse.Namespace) -> int:
+    """Open the interactive deck. Textual is imported by NAME here so the non-interactive
+    verbs and ``protoagent --help`` never load it, and a frozen build that does not bundle
+    it gets a one-line hint instead of a traceback (the sidecar decision is S6, #3473)."""
+    import importlib
+
+    if args.as_json:
+        # "fleet, as JSON" can only mean the roster — Textual against a pipe would hang.
+        return _cmd_ls(args)
+    if not (sys.stdout.isatty() and sys.stdin.isatty()):
+        # Checked BEFORE importing Textual: a redirected run should not load it just to say no.
+        print("✗ the deck needs a terminal — for scripts use `protoagent fleet ls --json`", file=sys.stderr)
+        return 2
+    try:
+        deckapp = importlib.import_module("deck.app")
+        deckdata = importlib.import_module("deck.data")
+    except ModuleNotFoundError as exc:
+        print(
+            f"✗ the fleet deck is not available in this build ({exc.name}) — use `protoagent fleet ls|up|down`, "
+            "or run from a source checkout / `uv tool install protolabs-agent`",
+            file=sys.stderr,
+        )
+        return 2
+    conn = _open_hub(args)
+    if conn is not None:
+        backend = deckdata.LiveBackend(conn)
+    else:
+        backend = _offline_backend("no hub answered")
+    return int(deckapp.run(backend))
+
+
+def run_deck_cli(argv: list[str]) -> int:
+    """``protoagent top`` — the deck, straight away (flags as for ``fleet``). A leading
+    verb is dropped for compatibility (`top ls` is still the deck); an option VALUE that
+    happens to spell a verb (`--token status`) is left alone."""
+    rest = list(argv)
+    if rest and rest[0] in ("ls", "up", "down", "status"):
+        rest = rest[1:]
+    return run_fleet_cli(rest)
+
+
 # ── entry ────────────────────────────────────────────────────────────────────
 
 
@@ -324,6 +387,8 @@ def run_fleet_cli(argv: list[str]) -> int:
     # so keep that out of the operator's face — errors still surface as typed HubErrors.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
+        if args.cmd is None:
+            return _cmd_deck(args)
         if args.cmd == "up":
             return _cmd_up(args)
         if args.cmd == "down":

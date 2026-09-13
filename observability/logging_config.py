@@ -113,6 +113,11 @@ class RingBufferHandler(logging.Handler):
     def __init__(self, capacity: int) -> None:
         super().__init__()
         self._records: deque[dict[str, Any]] = deque(maxlen=max(0, capacity))
+        # Monotonic per-handler sequence, stamped on every record: a tail reader that
+        # gets the newest-N window can anchor on it exactly (two records can share ts,
+        # logger, AND message; a sequence number never repeats). The ring is built once
+        # and only re-attached on a reconfigure, so the sequence never restarts.
+        self._seq = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         if self._records.maxlen == 0:
@@ -126,8 +131,10 @@ class RingBufferHandler(logging.Handler):
             if len(message) > _RING_MAX_MESSAGE_CHARS:
                 dropped = len(message) - _RING_MAX_MESSAGE_CHARS
                 message = f"{message[:_RING_MAX_MESSAGE_CHARS]}… [{dropped} more chars truncated]"
+            self._seq += 1
             self._records.append(
                 {
+                    "seq": self._seq,
                     "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
                     "level": record.levelname,
                     "logger": record.name,
