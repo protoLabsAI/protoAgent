@@ -54,6 +54,9 @@ _DEDUP_JACCARD = 0.85
 # "the incoming fact is newer by construction" — never an LLM freshness call
 # (Mem0's 2026 reversal + arXiv 2606.01435 are the ADR's basis for that rule).
 _SUPERSEDE_JACCARD = 0.6
+# Harvested facts carry an ``[as of YYYY-MM-DD]`` lead (the conversation's date, not the
+# harvest's). Similarity is measured on the text AFTER it, see ``_split_as_of``.
+_AS_OF_RE = re.compile(r"^\[as of (\d{4}-\d{2}-\d{2})\]\s*")
 
 _FACTS_PROMPT = (
     "Extract durable, reusable FACTS from this conversation — things worth "
@@ -152,18 +155,24 @@ def consolidate_and_store(
         # the exact row; id None means "nothing to invalidate" (batch-local
         # entries, and COMMONS rows on a layered store: ids are per-backend,
         # so the commons id would name an unrelated PRIVATE row).
-        candidates: list[tuple[int | None, set[str]]] = [_candidate(c) for c in existing]
+        candidates: list[tuple[int | None, set[str], str | None]] = [_candidate(c) for c in existing]
     except Exception:  # noqa: BLE001 — minimal stub or read failure ⇒ add-only
         candidates = []
 
     invalidate = getattr(knowledge_store, "invalidate_chunk", None)
     for fact in facts:
-        ft = _tokens(fact)
-        scored = [(_jaccard(ft, toks), i) for i, (_, toks) in enumerate(candidates)]
+        new_as_of, body = _split_as_of(fact)
+        ft = _tokens(body)
+        scored = [(_jaccard(ft, toks), i) for i, (_, toks, _) in enumerate(candidates)]
         best, best_idx = max(scored, default=(0.0, -1))
         if best >= _DEDUP_JACCARD:
-            counts["skipped"] += 1
-            continue
+            cand_id, _, cand_as_of = candidates[best_idx]
+            # Same fact. Keep the stored row unless this one carries a NEWER date (or the
+            # stored one has none): then fall through and supersede it, so the fact's date
+            # stays current. A commons row (id None) can't be invalidated here, so it dedups.
+            if cand_id is None or not _refreshes(new_as_of, cand_as_of):
+                counts["skipped"] += 1
+                continue
         # Revision of an existing fact (supersede band): remember the single best
         # match; it is invalidated only AFTER the new row has landed, so a failed
         # insert never loses the old fact (ADR 0108 D7.3).
@@ -192,19 +201,35 @@ def consolidate_and_store(
                     rid,
                     old_id,
                 )
-        candidates.append((rid, ft))  # dedup/supersede within this batch too
+        candidates.append((rid, ft, new_as_of))  # dedup/supersede within this batch too
     return counts
 
 
-def _candidate(row) -> tuple[int | None, set[str]]:
-    """``(id-to-invalidate, token set)`` for one existing fact. Rows are ``Chunk``
+def _split_as_of(text: str) -> tuple[str | None, str]:
+    """``("2026-08-11", body)`` for a fact stamped ``[as of …]``, else ``(None, text)``.
+
+    Similarity is measured on the body. The date lead adds about five tokens, which
+    would push an undated legacy row and its dated twin apart: 0.44 for a four-word
+    fact, below the supersede band, so the same fact would be stored twice."""
+    m = _AS_OF_RE.match(text or "")
+    return (m.group(1), text[m.end() :]) if m else (None, text or "")
+
+
+def _refreshes(new_as_of: str | None, old_as_of: str | None) -> bool:
+    """Does a near-identical incoming fact carry a newer date than the stored one?"""
+    return bool(new_as_of) and (old_as_of is None or new_as_of > old_as_of)
+
+
+def _candidate(row) -> tuple[int | None, set[str], str | None]:
+    """``(id-to-invalidate, token set, as-of date)`` for one existing fact. Rows are ``Chunk``
     objects on a plain store and — on a layered store — tier-tagged rows from BOTH
     tiers (``Chunk`` since #3245, dicts before it); a commons row keeps its content
     for dedup but gets id None so it is never invalidated through the private
     store."""
     get = row.get if isinstance(row, dict) else (lambda key, default=None: getattr(row, key, default))
     row_id = None if get("tier") == "commons" else get("id")
-    return (row_id, _tokens(get("content") or ""))
+    as_of, body = _split_as_of(get("content") or "")
+    return (row_id, _tokens(body), as_of)
 
 
 def _supersede(invalidate, old_id: int, new_id: int) -> bool:
@@ -225,10 +250,15 @@ async def extract_and_store_facts(
     namespace: str | None = None,
     source: str | None = None,
     extractor=_default_extractor,
+    as_of: str | None = None,
 ) -> dict:
     """Extract durable facts from ``transcript`` and consolidate them into the
     store. Never raises — fact capture is best-effort and must not block thread
-    retirement."""
+    retirement.
+
+    ``as_of`` (``YYYY-MM-DD``) is when the conversation happened. Each fact is
+    prefixed ``[as of …]`` so one harvested from an old thread reads as what was
+    true THEN, not as the current state."""
     if knowledge_store is None or not transcript.strip():
         return {"added": 0, "skipped": 0, "superseded": 0}
     try:
@@ -236,6 +266,8 @@ async def extract_and_store_facts(
     except Exception:  # noqa: BLE001
         log.exception("[memory] fact extraction failed")
         return {"added": 0, "skipped": 0, "superseded": 0}
+    if as_of:
+        facts = [f"[as of {as_of}] {f}" for f in facts]
     counts = consolidate_and_store(knowledge_store, facts, namespace=namespace, source=source)
     if counts["added"] or counts["skipped"]:
         log.info(

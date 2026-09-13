@@ -337,3 +337,37 @@ async def test_harvest_thread_raise_on_error_reraises(tmp_path):
     assert await harvest_thread("t-e", **kwargs) is None  # default: swallowed
     with _pytest.raises(RuntimeError):
         await harvest_thread("t-e", raise_on_error=True, **kwargs)
+
+
+def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path):
+    # Regression (2026-09-10): the TTL sweep retired August threads and stored their facts
+    # undated, so "the user runs model X" was recalled weeks later as the current setup.
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    db = str(tmp_path / "c.db")
+    _seed(db)
+    kb = _FakeKnowledge()
+
+    async def fake_summarizer(transcript, config):
+        return "User prefers teal."
+
+    async def fake_facts(transcript, config):
+        return ["The user prefers teal."]
+
+    asyncio.run(
+        harvest_thread(
+            "a2a:chat-1",
+            checkpointer=build_sqlite_checkpointer(db),
+            knowledge_store=kb,
+            config=SimpleNamespace(knowledge_facts=True),
+            summarizer=fake_summarizer,
+            fact_extractor=fake_facts,
+        )
+    )
+    day = datetime.now(UTC).date().isoformat()  # the seeded thread's last checkpoint
+    summary = kb.chunks[0]
+    assert summary["content"].startswith(f"[as of {day}] ")
+    assert summary["heading"].endswith(f", last active {day})")
+    facts = [c for c in kb.chunks if c["domain"] == "fact"]
+    assert facts and facts[0]["content"] == f"[as of {day}] The user prefers teal."

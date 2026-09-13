@@ -1064,6 +1064,32 @@ def _skill_index(
     return "\n".join(lines), listed, full_rows
 
 
+def _is_firing_now(job) -> bool:
+    """Is ``job`` the scheduler job that started the turn now running?
+
+    The scheduler deletes a one-shot only after its fire settles, i.e. after the whole
+    agent turn it started has returned. So during that turn the job is still in
+    ``list_jobs()``. Rendered as a plain pending schedule it looks like ANOTHER wake is
+    queued. An agent woken by a watch reaction read it that way and looped, re-checking
+    state it had already handled, until the stall guard stopped it.
+
+    Matched on the turn's own ``scheduler_job_id`` (request metadata the scheduler
+    stamps on every fire, read through the ADR 0032 request context), not on "due and
+    in this session": a ``wait`` resume for the same chat can come due while a
+    different turn is running, and that job really is still pending."""
+    try:
+        from graph.middleware.request_context import current_request_metadata
+
+        return bool(job.id) and current_request_metadata().get("scheduler_job_id") == job.id
+    except Exception:  # noqa: BLE001 — no request context (tests, headless): not this turn
+        return False
+
+
+def _schedule_line(job) -> str:
+    tag = " [FIRING NOW — this is the turn you are in, not another wake]" if _is_firing_now(job) else ""
+    return f"- {job.id}{tag} next={job.next_fire or '?'}: {(job.prompt or '')[:60]}"
+
+
 def working_state_block(state: dict | None) -> str:
     """The agent's own live commitments — active goal + plan(orient), open tasks, active
     watches, pending schedules — rendered as one compact ``<working_state>`` block so the
@@ -1146,7 +1172,7 @@ def working_state_block(state: dict | None) -> str:
         if sched is not None:
             jobs = list(sched.list_jobs())[:_WS_SCHED_CAP]
             if jobs:
-                lines = "\n".join(f"- {j.id} next={j.next_fire or '?'}: {(j.prompt or '')[:60]}" for j in jobs)
+                lines = "\n".join(_schedule_line(j) for j in jobs)
                 sections.append(f"PENDING SCHEDULES:\n{lines}")
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] schedule read failed: %s", exc)
