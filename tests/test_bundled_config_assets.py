@@ -317,14 +317,15 @@ def test_sidecar_bundles_every_forwarded_cli_module() -> None:
 def _sidecar_collect_all() -> set[str]:
     tree = ast.parse((ROOT / "apps" / "desktop" / "sidecar" / "build_sidecar.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "COLLECT_ALL" for t in node.targets):
-            return {el.value for el in node.value.elts}  # type: ignore[attr-defined]
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) and node.value is not None else []
+        if any(getattr(t, "id", "") == "COLLECT_ALL" for t in targets):
+            return {el.value for el in node.value.elts}  # type: ignore[attr-defined,union-attr]
     raise AssertionError("could not find COLLECT_ALL in build_sidecar.py")
 
 
 def test_sidecar_bundles_the_fleet_deck() -> None:
     """The fleet deck ships in the desktop binary (#3473): `protoagent-server fleet` opens
-    the TUI, and on Windows that binary is the box's `protoagent`. Textual's widgets are
+    the TUI, and a desktop-only install has no other `protoagent` on the box. Textual's widgets are
     resolved through a lazy module `__getattr__` and the `deck` package is imported by name
     from `graph.fleet.cli` (so `--help` never loads Textual) — a static scan collects
     neither, and without `--collect-all` for both the verb dies with the "not available

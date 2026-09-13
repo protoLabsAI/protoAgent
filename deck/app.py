@@ -36,12 +36,13 @@ from deck.data import Backend, MemberDetail, Snapshot, display_name, presence_of
 from deck.feed import FEED_CSS, Activity, WorkFeedScreen
 from deck.talk import TALK_CSS, ConversationScreen
 from deck.hitl import HITL_CSS
-from deck.hubs import HUBS_CSS, HubRow, HubTreeScreen
-from deck.hubs import enumerate_hubs as _enumerate_hubs
-from deck.hubs import instance_roots as _instance_roots
-from deck.hubs import probe as _probe_hub
-from deck.hubs import reconcile as _reconcile_hubs
-from deck.hubs import wait_for_port as _wait_for_port
+from deck.discovery import HubRow
+from deck.discovery import enumerate_hubs as _enumerate_hubs
+from deck.discovery import instance_roots as _instance_roots
+from deck.discovery import probe as _probe_hub
+from deck.discovery import reconcile as _reconcile_hubs
+from deck.discovery import wait_for_port as _wait_for_port
+from deck.hubs import HUBS_CSS, HubTreeScreen
 from deck.manage import MANAGE_CSS, DeleteModal, NewAgentModal, RemoteModal, RenameModal
 
 POLL_S = 3.0
@@ -178,7 +179,10 @@ class RosterScreen(Screen):
         if app.warm_max is not None:
             parts.append(f"warm cap {app.warm_max or 'unlimited'}")
         if snap.mode == "offline":
-            parts.append("offline: only start/stop are available — start a hub for the rest")
+            if getattr(app.backend, "lifecycle", True) is False:
+                parts.append("offline beside a hub that answered: nothing is driven from disk — attach to it (H) or pass --token")
+            else:
+                parts.append("offline: only start/stop are available — start a hub for the rest")
         if self._filter:
             parts.append(f"filter: {self._filter!r} (esc clears)")
         if snap.error:
@@ -234,6 +238,8 @@ class RosterScreen(Screen):
             return True
         if a is None:
             return action not in ("start", "stop", "restart")
+        if action in ("start", "stop", "restart") and getattr(app.backend, "lifecycle", True) is False:
+            return False  # a hub answered but could not be opened: driving processes from disk beside it is the two-hubs bug
         pres = presence_of(a)
         if action == "start":
             return pres == "stopped"

@@ -284,8 +284,10 @@ Install/distribution (F) rides PR1 (binary + `uv tool`) and PR4 (the `install.sh
    `offline · reading <fleet.json>` so a shell can never mistake disk for the live fleet. A hub
    that answered but could not be opened (rejected credential, timeout, 5xx, a member
    answering as a fleet of itself) is an **error, not a fallback** — driving processes from
-   disk beside a running hub is the two-hubs bug the rule exists to prevent. No `--ensure-up`:
-   `protoagent up` is the operator's explicit act.
+   disk beside a running hub is the two-hubs bug the rule exists to prevent. The one place
+   the deck opens anyway is `fleet --all` (the hub tree is the view that *shows* a hub that
+   refused this shell); its roster is then the disk view, badged with the refusal, with
+   start/stop refused. No `--ensure-up`: `protoagent up` is the operator's explicit act.
 3. **`full` MCP profile blast radius.** A consented foreign brain doing `fleet up` / work
    assignment is powerful; do we cap it (rate/scope) beyond the consent ack, or trust the ADR
    0071 posture?

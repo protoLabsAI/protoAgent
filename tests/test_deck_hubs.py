@@ -735,3 +735,26 @@ async def test_a_superseded_discovery_never_paints_over_the_newer_one(monkeypatc
         await _settle(app, pilot)
         await pilot.pause(0.3)
         assert [r.name for r in app.hub_rows] == ["fresh-peer"] and not app.screen.busy
+
+@pytest.mark.asyncio
+async def test_a_roster_built_beside_a_hub_that_answered_drives_nothing_from_disk():
+    """S6 (#3473): `fleet --all` opens the tree past a hub that refused this shell — the
+    roster beneath it must not offer start/stop from disk beside that hub (the two-hubs
+    bug ADR 0075's live-first rule exists to prevent). The badge says why and what to do."""
+    from deck import data as deckdata
+
+    calls: list = []
+    be = deckdata.OfflineBackend(status=lambda: [{"name": "scout", "id": "scout-1", "port": 7901, "pid": None, "running": False}], start=lambda n: calls.append(("start", n)), stop=lambda n: calls.append(("stop", n)), fleet_json=Path("/tmp/fleet.json"), reason="a hub answered at http://127.0.0.1:7870 but rejected every credential", lifecycle=False)
+    assert be.start("scout") == {"ok": False, "agent": {"name": "scout"}, "reason": deckdata.OfflineBackend._HELD} and calls == []
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        scr = app.screen
+        assert isinstance(scr, RosterScreen) and scr.selected() is not None and scr.selected()["name"] == "scout"
+        assert scr.check_action("start", ()) is False and scr.check_action("stop", ()) is False and scr.check_action("restart", ()) is False
+        assert "start/stop refused" in app.snapshot.label and "rejected every credential" in app.snapshot.label
+        status = str(scr.query_one("#status", Static).content)
+        assert "nothing is driven from disk" in status and "only start/stop are available" not in status
+        await pilot.press("s")
+        await _settle(app, pilot)
+        assert calls == []  # the hidden key never runs the action either

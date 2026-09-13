@@ -155,10 +155,13 @@ member's bearer stays on the hub and is attached by its proxy. Nothing is ever p
 
 **Offline.** The deck follows the same live/offline rule as the verbs below: with no hub
 answering it shows this instance's `fleet.json` badged `offline`, and only start/stop are
-available — `H` still lists every hub on the box, and `u` brings one up.
+available — `H` still lists every hub on the box, and `u` brings one up. `--all` opens the
+tree even when a hub answered but refused this shell's credentials; the roster beneath it is
+then the disk view, badged with the refusal, and start/stop are **not** offered there — attach
+to the hub (`enter` on its row) or pass `--token`. A `fleet --all --json` run never loads Textual.
 
 **From the desktop app.** The desktop sidecar bundles the deck, so `protoagent-server fleet`
-opens it from the frozen binary (on Windows that binary is the box's `protoagent`).
+opens it from the frozen binary (a desktop-only install has no other `protoagent` on the box, so that is how the deck is reached there).
 Textual is imported only when the deck opens, so `--help` and the non-interactive verbs
 stay fast; a build without it prints a one-line hint and exits 2.
 
