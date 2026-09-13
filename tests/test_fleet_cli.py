@@ -8,6 +8,7 @@ What is under test is the CLI's choice of path (hub REST vs disk), what it print
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -741,14 +742,15 @@ def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, c
     body = json.loads(capsys.readouterr().out)
     assert body["mode"] == "hubs" and [h["name"] for h in body["hubs"]] == ["studio", "dev", "ava"]
     assert [h["presence"] for h in body["hubs"]] == ["running", "stopped", "unauthorized"]
-    assert body["hubs"][0]["launcher"] == "desktop app" and body["hubs"][0]["members"] == 13 and body["hubs"][1]["root"] == "/tmp/dev"
+    dev_root = str(Path("/tmp/dev"))  # rendered the platform's way (backslashes on Windows)
+    assert body["hubs"][0]["launcher"] == "desktop app" and body["hubs"][0]["members"] == 13 and body["hubs"][1]["root"] == dev_root
     assert ("peers", [{"name": "ava", "url": "https://ava.tail:7870"}]) in probed and ("studio", "tok") in probed and ("ava", "tok") in probed
     assert not any(p[0] == "dev" for p in probed)  # a stopped hub has nothing to probe
     # the human table, off a terminal
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     assert cli.run_fleet_cli(["--all"]) == 0
     out = capsys.readouterr().out
-    assert "3 found · 1 running" in out and "unauthorized" in out and "pass --token" in out and "/tmp/dev" in out
+    assert "3 found · 1 running" in out and "unauthorized" in out and "pass --token" in out and dev_root in out
     # --offline: no peer scan, no probes
     probed.clear()
     assert cli.run_fleet_cli(["--all", "--offline", "--json"]) == 0
