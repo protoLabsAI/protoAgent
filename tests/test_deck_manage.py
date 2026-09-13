@@ -38,7 +38,10 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         await pilot.press("n")
         assert await _until(pilot, lambda: isinstance(app.screen, NewAgentModal))
         modal = app.screen
-        assert modal.query_one("#archetype", Select).value == "basic" and [a["id"] for a in modal.archetypes] == ["basic", "pm"]
+        # the Select applies its initial value as it mounts: on a slow runner (Windows CI) the
+        # modal is the active screen a beat before that, and an immediate read sees Select.NULL
+        assert await _until(pilot, lambda: modal.query_one("#archetype", Select).value == "basic"), modal.query_one("#archetype", Select).value
+        assert [a["id"] for a in modal.archetypes] == ["basic", "pm"]
         await pilot.press("ctrl+s")  # no name yet: refused, stays open
         await pilot.pause(0.1)
         assert isinstance(app.screen, NewAgentModal) and "name is required" in str(modal.query_one("#hint", Static).content)
