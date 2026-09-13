@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import yaml
 
@@ -51,6 +53,134 @@ def test_pick_port_skips_os_occupied(root, monkeypatch):
     # 7871 is "occupied" by something outside the fleet registry → must be skipped.
     monkeypatch.setattr(manager, "_port_is_free", lambda port: port != 7871)
     assert manager.create("alpha")["port"] == 7872
+
+
+def test_pick_port_skips_ports_other_instances_record_for_stopped_members(root, monkeypatch, tmp_path):
+    """Found live: a dev hub handed its new member a port the desktop instance's STOPPED
+    designSystem member records. Nothing listens there, so the OS probe reads it free, yet
+    that member binds it at its next start. Here the desktop's stopped member records 7871
+    and a scoped dev instance's records 7872; both are skipped, so this instance's first
+    member gets 7873 and its second 7874."""
+    from infra import paths
+
+    desktop = tmp_path / "desktop"
+    (desktop / "workspaces" / "designSystem-9062").mkdir(parents=True)
+    (desktop / "workspaces" / "designSystem-9062" / "workspace.yaml").write_text("id: designSystem-9062\nname: designSystem\nport: 7871\n")
+    dev_member = tmp_path / "box-root" / "dev" / "workspaces" / "claudia-5d75"  # a scoped instance under the plain data home
+    dev_member.mkdir(parents=True)
+    (dev_member / "workspace.yaml").write_text("id: claudia-5d75\nname: claudia\nport: 7872\n")
+    monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop])
+    assert manager.create("alpha")["port"] == 7873
+    assert manager.create("beta")["port"] == 7874  # this instance's own records still count, as before
+
+
+def test_pick_port_is_unchanged_when_no_other_instance_exists(root):
+    """No other instance on the machine: the scan finds nothing and allocation is the old one."""
+    assert manager._ports_other_instances_record() == set()
+    assert manager.create("alpha")["port"] == 7871
+
+
+def test_known_box_roots_lists_each_existing_root_once(tmp_path, monkeypatch):
+    from infra import paths
+
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop, tmp_path / "missing"])
+    (tmp_path / "box-root").mkdir()
+    assert paths.known_box_roots() == [(tmp_path / "box-root").resolve(), desktop.resolve()]  # box root == data home here: listed once
+
+
+def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_path):
+    """Review: `_read_record` lets an OSError out, so one unreadable workspace.yaml in any
+    of the machine's instances aborted the whole scan and `_pick_port` fell back to its own
+    instance only. The unreadable record is skipped; every readable one still counts."""
+    from infra import paths
+
+    desktop = tmp_path / "desktop"
+    for name, port in (("bad-1", 7871), ("good-2", 7872)):
+        (desktop / "workspaces" / name).mkdir(parents=True)
+        (desktop / "workspaces" / name / "workspace.yaml").write_text(f"id: {name}\nname: {name}\nport: {port}\n")
+    monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop])
+    real = manager._read_record
+
+    def read(ws):
+        if ws.name == "bad-1":
+            raise PermissionError(13, "Permission denied", str(ws / "workspace.yaml"))
+        return real(ws)
+
+    monkeypatch.setattr(manager, "_read_record", read)
+    assert manager._ports_other_instances_record() == {7872}
+    assert manager.create("alpha")["port"] == 7871  # the unreadable member's port cannot be known
+    assert manager.create("beta")["port"] == 7873  # …but the readable one is still skipped
+
+
+@pytest.mark.skipif(os.name == "nt", reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS")
+def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
+    """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
+    `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir. (A fresh copy of the
+    module: conftest pins `desktop_box_roots` on the imported one.)"""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.find_spec("infra.paths")
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    assert fresh.desktop_box_roots() == [tmp_path / "cfg" / fresh.DESKTOP_APP_ID]
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert fresh.desktop_box_roots() == [tmp_path / "home" / ".config" / fresh.DESKTOP_APP_ID]
+
+
+def test_create_chooses_and_records_its_port_under_the_machine_wide_lock(root, monkeypatch):
+    """CodeRabbit (#3492): the cross-instance scan is only a snapshot — two instances creating
+    members at the same moment could both read a port as free and both record it. The pick
+    and the workspace.yaml reservation happen while the machine-wide lock is held."""
+    from filelock import FileLock, Timeout
+
+    from infra import paths
+
+    lock_path = paths.data_home() / manager._PORT_LOCK_NAME
+    real_pick = manager._pick_port
+    seen: dict = {}
+
+    def pick(explicit):
+        probe = FileLock(str(lock_path))
+        try:
+            probe.acquire(timeout=0)
+        except Timeout:
+            seen["held"] = True
+        else:
+            probe.release()
+            seen["held"] = False
+        return real_pick(explicit)
+
+    monkeypatch.setattr(manager, "_pick_port", pick)
+    assert manager.create("alpha")["port"] == 7871
+    assert seen == {"held": True}
+
+
+def test_a_create_that_cannot_get_the_port_lock_fails_cleanly(root, monkeypatch):
+    """Another create holding the lock past the timeout: a clear error, no half-made
+    workspace left behind, and the next create goes through."""
+    from filelock import FileLock
+
+    from infra import paths
+
+    monkeypatch.setattr(manager, "_PORT_LOCK_TIMEOUT_S", 0.2)
+    paths.data_home().mkdir(parents=True, exist_ok=True)
+    holder = FileLock(str(paths.data_home() / manager._PORT_LOCK_NAME))
+    holder.acquire()
+    try:
+        with pytest.raises(manager.WorkspaceError, match="another agent is being created"):
+            manager.create("alpha")
+    finally:
+        holder.release()
+    assert not [p for p in root.iterdir() if p.name.startswith("alpha")] if root.exists() else True
+    assert manager.list_workspaces() == []
+    assert manager.create("alpha")["port"] == 7871
 
 
 def test_pick_port_raises_when_range_saturated(root, monkeypatch):

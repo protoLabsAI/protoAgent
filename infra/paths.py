@@ -654,6 +654,44 @@ def _box_root() -> Path:
     return Path(raw).expanduser() if raw else data_home()
 
 
+# The desktop app's bundle identifier: Tauri names its config dir (the desktop hub's box AND
+# instance root) after it.
+DESKTOP_APP_ID = "studio.protolabs.protoagent"
+
+
+def desktop_box_roots() -> list[Path]:
+    """Where the desktop app keeps its box root on each platform: Tauri's
+    ``app_config_dir`` for :data:`DESKTOP_APP_ID`, which is where the desktop points the
+    sidecar's ``PROTOAGENT_HOME`` / ``PROTOAGENT_BOX_ROOT`` (``apps/desktop/src-tauri``).
+    On macOS and Windows that is the same dir as ``app_data_dir``; on Linux it is
+    ``$XDG_CONFIG_HOME`` (``~/.config``), not the data dir. Existence is checked by the
+    caller."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [home / "Library" / "Application Support" / DESKTOP_APP_ID]
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA", "").strip()
+        return [(Path(appdata) if appdata else home / "AppData" / "Roaming") / DESKTOP_APP_ID]
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return [(Path(xdg) if xdg else home / ".config") / DESKTOP_APP_ID]
+
+
+def known_box_roots() -> list[Path]:
+    """Every box root this machine is known to use — this process's, the plain data home,
+    the desktop app's — existing dirs only, resolved and deduped in that order. Ports are
+    box-global: anything that hands one out has to look across all of them, not only at
+    the instance it runs in."""
+    seen: list[Path] = []
+    for p in [_box_root(), data_home(), *desktop_box_roots()]:
+        try:
+            rp = p.expanduser().resolve()
+        except OSError:
+            continue
+        if rp not in seen and rp.is_dir():
+            seen.append(rp)
+    return seen
+
+
 @dataclass(frozen=True)
 class InstancePaths:
     """Every on-disk location for one agent instance, resolved once from the

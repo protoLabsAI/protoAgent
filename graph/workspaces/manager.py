@@ -14,6 +14,7 @@ format. ``run`` returns the env + argv for the CLI to ``exec`` the normal server
 
 from __future__ import annotations
 
+import contextlib
 import copy as _copy
 import os
 import re
@@ -310,10 +311,82 @@ def _port_is_free(port: int) -> bool:
             return False
 
 
+_PORT_LOCK_NAME = ".port-allocation.lock"
+_PORT_LOCK_TIMEOUT_S = 10.0
+
+
+@contextlib.contextmanager
+def _port_allocation_lock():
+    """One lock every instance on this machine shares, held while a create chooses its port
+    and records it in ``workspace.yaml``: two hubs creating members at the same moment
+    would otherwise both read a port as free and both record it. It lives in the plain data
+    home — the one path every process of this user agrees on, whatever its box root (the
+    dir is created if missing). An OS file lock: a crashed holder releases it."""
+    from filelock import FileLock, Timeout
+
+    from infra.paths import data_home
+
+    home = data_home()
+    home.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(str(home / _PORT_LOCK_NAME))
+    try:
+        lock.acquire(timeout=_PORT_LOCK_TIMEOUT_S)
+    except Timeout as exc:
+        raise WorkspaceError("another agent is being created on this machine right now — try again in a moment") from exc
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def _ports_other_instances_record() -> set[int]:
+    """The ports every OTHER instance on this machine records for its members (each
+    member's ``workspace.yaml``). A STOPPED member holds no socket, so ``_port_is_free``
+    reads its port as free — yet the member binds it at its next start, and the two agents
+    then collide with ``EADDRINUSE`` (the dev hub handed its new member the desktop
+    instance's stopped ``designSystem`` port). Instances are each known box root and its
+    child instance roots; this instance's own members are :func:`list_workspaces`'s job."""
+    from infra.paths import known_box_roots
+
+    try:
+        own = workspaces_root().resolve()
+    except OSError:
+        own = workspaces_root()
+    ports: set[int] = set()
+    for box in known_box_roots():
+        try:
+            instances = [box, *sorted(p for p in box.iterdir() if p.is_dir() and not p.name.startswith("."))]
+        except OSError:
+            continue
+        for inst in instances:
+            ws = inst / "workspaces"
+            try:
+                if not ws.is_dir() or ws.resolve() == own:
+                    continue
+                members = [d for d in ws.iterdir() if d.is_dir()]
+            except OSError:
+                continue
+            for d in members:
+                try:  # one unreadable record must not void every other instance's ports
+                    rec = _read_record(d) or {}
+                    port = int(rec.get("port") or 0)
+                except (AttributeError, OSError, TypeError, ValueError):
+                    continue
+                if port:
+                    ports.add(port)
+    return ports
+
+
 def _pick_port(explicit: int | None) -> int:
     if explicit:
         return int(explicit)
     used = {w["port"] for w in list_workspaces() if w.get("port")}
+    # …and every port ANOTHER instance on this machine records for a member: ports are
+    # box-global, and a stopped member's port reads free to the OS probe below.
+    try:
+        used |= _ports_other_instances_record()
+    except Exception:  # noqa: BLE001 — best-effort; an unreadable root must not block a create
+        pass
     # Don't collide with the HUB itself — the host instance (this process) self-registers as a
     # fleet agent on its own port but isn't a workspace, so it's invisible to list_workspaces().
     try:
@@ -486,28 +559,36 @@ def create(
 
     import yaml
 
-    assigned = _pick_port(port)
-    rec = {
-        "id": wid,
-        "name": name,
-        # The user-facing display label, verbatim (#2520). Same as `name` at create
-        # (creation names are charset-checked); an identity rename may diverge them.
-        "label": name,
-        "port": assigned,
-        "created": datetime.now(timezone.utc).isoformat(),
-        "bundle": bundle or "",
-    }
-    # The archetype's capability contract (#2277): the tools its persona commits to
-    # performing. Recorded here because the member's instance root IS this workspace, so
-    # it can read its own contract at boot and check it against what actually got bound —
-    # the only place both the doctrine and the live tool set are knowable at once.
-    if requires_tools:
-        rec["requires_tools"] = [str(t) for t in requires_tools if str(t).strip()]
-    # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
-    # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
-    # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
-    # workspace that's invisible in the list (no workspace.yaml).
-    atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
+    # Choose the port and reserve it (workspace.yaml) under ONE lock every instance on this
+    # machine shares: a scan alone is a snapshot, and two hubs creating members at the same
+    # moment could both read a port as free. Nothing reserved → no half-made workspace left.
+    try:
+        with _port_allocation_lock():
+            assigned = _pick_port(port)
+            rec = {
+                "id": wid,
+                "name": name,
+                # The user-facing display label, verbatim (#2520). Same as `name` at create
+                # (creation names are charset-checked); an identity rename may diverge them.
+                "label": name,
+                "port": assigned,
+                "created": datetime.now(timezone.utc).isoformat(),
+                "bundle": bundle or "",
+            }
+            # The archetype's capability contract (#2277): the tools its persona commits to
+            # performing. Recorded here because the member's instance root IS this workspace, so
+            # it can read its own contract at boot and check it against what actually got bound —
+            # the only place both the doctrine and the live tool set are knowable at once.
+            if requires_tools:
+                rec["requires_tools"] = [str(t) for t in requires_tools if str(t).strip()]
+            # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
+            # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
+            # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
+            # workspace that's invisible in the list (no workspace.yaml).
+            atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
+    except BaseException:
+        shutil.rmtree(ws, ignore_errors=True)
+        raise
     installed: list[str] = []
     oauth_warnings: list[str] = []
     try:

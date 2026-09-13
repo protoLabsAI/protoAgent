@@ -57,6 +57,10 @@ def _isolate_instance_roots(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
     box = tmp_path / "box-root"
     monkeypatch.setattr(_paths, "data_home", lambda: box)
+    # The desktop app's box root is found by platform path, not by env — pin it too, or a
+    # developer's real desktop fleet (its members' recorded ports) leaks into every test
+    # that allocates a port. A test that wants one patches it back.
+    monkeypatch.setattr(_paths, "desktop_box_roots", lambda: [])
 
 
 @pytest.fixture(autouse=True)
