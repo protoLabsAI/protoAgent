@@ -103,9 +103,10 @@ async def test_roster_renders_presence_words_skew_spend_and_topbar():
         rows = _rows(app)
         assert [r[1] for r in rows] == ["protoagent", "protoEngineer", "old", "Cindi", "ava"]
         assert [r[2] for r in rows] == ["host", "online", "online", "stopped", "unreachable"]
-        assert rows[2][4] == "v0.164.0 !skew" and rows[1][4] == "v0.165.0"
-        assert rows[1][6] == "$12.40" and rows[3][6] == "—"
-        assert rows[4][7] == "https://ava.tail:7870"
+        assert rows[2][5] == "v0.164.0 !skew" and rows[1][5] == "v0.165.0"
+        assert rows[1][7] == "$12.40" and rows[3][7] == "—"
+        assert rows[4][9] == "https://ava.tail:7870"
+        assert rows[1][3] == "idle" and rows[3][3] == ""  # TURN: online members idle, stopped blank
         assert "2 online · 1 stopped" in str(app.screen.query_one("#status", Static).content)
         await pilot.press("q")
     assert be.closed

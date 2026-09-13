@@ -129,7 +129,10 @@ class MemberEvents:
         return h
 
     def stop(self) -> None:
-        """From another thread: end the stream now (socket shutdown wakes a blocked read)."""
+        """From another thread: end the stream now. A socket shutdown wakes a read blocked
+        in ``recv``; the response itself is closed by the reader as it unwinds — closing it
+        (the fd) here, right behind the shutdown, loses the wake-up on macOS and the reader
+        sleeps out the read timeout instead (see ``deck.a2a.A2AClient.abort``)."""
         self._stop.set()
         resp = self._active
         if resp is not None:
@@ -138,10 +141,8 @@ class MemberEvents:
                 sock = stream.get_extra_info("socket") if stream is not None else None
                 if sock is not None:
                     sock.shutdown(socket.SHUT_RDWR)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                resp.close()
+                else:
+                    resp.close()
             except Exception:  # noqa: BLE001
                 pass
 

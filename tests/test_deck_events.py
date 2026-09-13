@@ -84,6 +84,10 @@ def test_member_events_refuses_a_credential_over_plain_http_off_box():
 
 
 def test_stop_wakes_a_reader_blocked_on_a_real_socket():
+    """``stop()`` shuts the socket and ONLY that: closing the response (the fd) behind it
+    from the stopping thread races the wake-up on macOS and the reader sleeps out the whole
+    read window (~1 in 14). Many stops against a chunked loopback stream — as uvicorn
+    streams — so a regression fails with ~90% probability."""
     import socketserver
     from http.server import BaseHTTPRequestHandler
 
@@ -93,30 +97,37 @@ def test_stop_wakes_a_reader_blocked_on_a_real_socket():
         def do_GET(self):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
-            self.wfile.write(b'id: 1\ndata: {"topic": "turn.usage", "data": {}, "seq": 1}\n\n')
+            frame = b'id: 1\ndata: {"topic": "turn.usage", "data": {}, "seq": 1}\n\n'
+            self.wfile.write(f"{len(frame):x}\r\n".encode() + frame + b"\r\n")
             self.wfile.flush()
             release.wait(8.0)
 
         def log_message(self, *a):
             pass
 
-    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    class Server(socketserver.ThreadingTCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    srv = Server(("127.0.0.1", 0), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        m = events.MemberEvents(f"http://127.0.0.1:{srv.server_address[1]}", None, "host")
-        got: list = []
-        t = threading.Thread(target=lambda: got.extend(m.events()))
-        t.start()
-        deadline = time.monotonic() + 3.0
-        while not got and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert got and got[0].topic == "turn.usage"
-        t0 = time.monotonic()
-        m.stop()
-        t.join(3.0)
-        assert not t.is_alive() and time.monotonic() - t0 < 2.0
-        m.close()
+        for attempt in range(30):
+            m = events.MemberEvents(f"http://127.0.0.1:{srv.server_address[1]}", None, "host")
+            got: list = []
+            t = threading.Thread(target=lambda m=m, got=got: got.extend(m.events()))
+            t.start()
+            deadline = time.monotonic() + 3.0
+            while not got and time.monotonic() < deadline:
+                time.sleep(0.005)
+            assert got and got[0].topic == "turn.usage", f"attempt {attempt}"
+            t0 = time.monotonic()
+            m.stop()
+            t.join(3.0)
+            assert not t.is_alive() and time.monotonic() - t0 < 2.0, f"reader still blocked after stop() (attempt {attempt})"
+            m.close()
     finally:
         release.set()
         srv.shutdown()

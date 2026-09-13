@@ -114,6 +114,7 @@ class Exchange:
     lock: threading.Lock = field(default_factory=threading.Lock)  # two workers, one Turn
     last_body: str | None = None  # last markdown rendered, to skip no-op re-parses
     last_work_sig: tuple | None = None  # last tool-tree signature, to skip no-op rebuilds
+    reported: set = field(default_factory=set)  # (tool_id, status) already told to the activity feed
 
 
 @dataclass
@@ -408,6 +409,9 @@ class ConversationScreen(Screen):
         ex.live = False
         if error and not ex.turn.done:
             ex.error = error
+        act = getattr(self.app, "activity", None) if self.is_attached else None
+        if act is not None:
+            act.note_live(self.slug, ex.turn.task_id, False)
         self._finish_render(ex, error)
 
     @_ui_safe
@@ -516,10 +520,33 @@ class ConversationScreen(Screen):
         self._render_live(ex)
         tr.scroll_end(animate=False)
 
+    def _report(self, ex: Exchange) -> None:
+        """Tell the fleet activity model about this (deck-originated) turn: the bus never
+        republishes it, so the roster's TURN column and the work feed rely on this."""
+        act = getattr(self.app, "activity", None)
+        if act is None:
+            return
+        t = ex.turn
+        act.note_live(self.slug, t.task_id, ex.live and not t.done)
+        for c in t.tool_calls:
+            key = (c.id, c.status)
+            if key in ex.reported:
+                continue
+            ex.reported.add(key)
+            if c.status == "running":
+                act.note_tool(self.slug, t.context_id, t.task_id, c.id, c.name, done=False)
+            else:
+                act.note_tool(self.slug, t.context_id, t.task_id, c.id, c.name, done=True, output=str(c.output or "")[:120], error=c.status == "error")
+        if t.hitl and not t.done:
+            act.set_parked(self.slug, str(t.hitl.get("question") or t.hitl.get("title") or "input required"))
+        elif t.done:
+            act.set_parked(self.slug, "")
+
     @_ui_safe
     def _render_live(self, ex: Exchange) -> None:
         if not self.is_attached:
             return
+        self._report(ex)
         t = ex.turn
         try:
             meta = self.query_one(f"#{ex.widget_id}-meta", Static)

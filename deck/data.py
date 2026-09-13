@@ -75,6 +75,7 @@ class Snapshot:
     host_version: str = ""
     rollups: dict[str, Rollup] = field(default_factory=dict)  # by slug
     warnings: list[str] = field(default_factory=list)
+    parked: dict[str, str] | None = None  # slug → why it waits on the operator (None = not probed this poll)
     error: str = ""  # a failed poll keeps the previous roster and shows this
     fetched_at: float = field(default_factory=time.monotonic)
 
@@ -147,11 +148,13 @@ class LiveBackend:
     telemetry rollup, the hub's runtime warnings); extras failing never fail the poll."""
 
     mode = "live"
+    PARKED_PROBE_S = 30.0  # how often to ask every online member whether a turn is parked
 
     def __init__(self, conn: deckhub.Connection):
         self.conn = conn
         self.client = conn.client
         self._first = conn.roster
+        self._last_parked_probe = 0.0
 
     def snapshot(self) -> Snapshot:
         client = self.client
@@ -185,7 +188,40 @@ class LiveBackend:
             snap.warnings = [_warning_text(w) for w in (status.get("warnings") or []) if w]
         except deckhub.HubError:
             pass
+        now = time.monotonic()
+        if now - self._last_parked_probe >= self.PARKED_PROBE_S:
+            self._last_parked_probe = now
+            snap.parked = self._probe_parked(roster)
         return snap
+
+    def _probe_parked(self, roster: list[dict]) -> dict[str, str]:
+        """Which online members have a turn waiting on the operator. The executor's pause
+        is not republished on the bus, so the session inventory (newest first) is the
+        cheap, uniform source: a latest task in ``input-required`` is a parked turn."""
+        parked: dict[str, str] = {}  # only members actually probed: "" = clean, else the reason
+        for a in roster:
+            if not a.get("running") or a.get("remote"):
+                continue
+            slug = slug_of(a)
+            try:
+                rows = self.client.diagnostics_sessions(slug, limit=8).get("sessions") or []
+            except deckhub.HubError:
+                continue  # unknown, not "clean": leave what the deck already knows alone
+            parked[slug] = ""
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                state = str(r.get("latest_task_state") or "").replace("TASK_STATE_", "").lower().replace("_", "-")
+                if state == "input-required":
+                    parked[slug] = f"waiting on you in {r.get('session_id') or r.get('context_id') or 'a session'}"
+                    break
+        return parked
+
+    def fleet_events(self):
+        """The fan-in of every watched member's event bus (deck.events.FleetEvents)."""
+        from deck.events import FleetEvents
+
+        return FleetEvents(self.client)
 
     def _label(self, roster: list[dict]) -> str:
         host = next((a for a in roster if a.get("host")), {})
