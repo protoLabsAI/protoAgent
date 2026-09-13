@@ -250,7 +250,7 @@ class QuestionModal(ModalScreen[str | None]):
         with Vertical(classes="hitl-box"):
             yield Static(f"⚑ {self.member} asks", classes="hitl-title")
             yield Markdown(prompt_of(self.hitl))
-            yield Input(value=self.draft, placeholder="your answer… (enter sends)", id="answer")
+            yield Input(value=self.draft, placeholder="your answer… (enter sends)", id="answer", select_on_focus=False)
             with Horizontal(classes="hitl-buttons"):
                 yield Button("Answer", id="send", variant="primary")
                 yield Button("Dismiss (ctrl+d)", id="dismiss")
@@ -354,7 +354,7 @@ class FormModal(ModalScreen[dict | str | None]):
         label = f"{schema.get('title') or key}{' *' if required else ''}"
         value = self.values.get(key)
         opts = options_of(schema)
-        children: list = [Label(label)]
+        children: list = [] if schema.get("type") == "boolean" else [Label(label)]  # a checkbox carries its own label
         if schema.get("description"):
             children.append(Static(str(schema["description"]), classes="hitl-sub"))
         if is_multi(schema) and opts:
@@ -369,7 +369,9 @@ class FormModal(ModalScreen[dict | str | None]):
             children.append(TextArea(str(value) if value is not None else "", id=f"in-{key}"))
         else:
             hint = "number" if schema.get("type") in ("number", "integer") else ""
-            children.append(Input(value=str(value) if value is not None else "", placeholder=hint, id=f"in-{key}"))
+            # select_on_focus=False: a visibility re-render re-focuses the successor Input, and
+            # Textual's focus-selects-all would make the next keystroke REPLACE what was typed
+            children.append(Input(value=str(value) if value is not None else "", placeholder=hint, id=f"in-{key}", select_on_focus=False))
         return Vertical(*children, classes="hitl-field", id=f"field-{key}")
 
     def _render_buttons(self) -> None:
@@ -409,7 +411,17 @@ class FormModal(ModalScreen[dict | str | None]):
         visible_now = {k for k, _, _ in visible_fields_of(self.step, self.values)}
         shown = {w.id[6:] for w in self.query(".hitl-field") if w.id}
         if visible_now != shown:
+            # the re-render replaces the widget being edited: put focus (and the caret)
+            # back on its successor of the same id, or the operator's next keystrokes go
+            # to the scroll container
+            focused_id = getattr(self.focused, "id", None)
             await self._render_step()
+            if focused_id:
+                for w in self.query(f"#{focused_id}"):
+                    w.focus()
+                    if isinstance(w, Input):
+                        w.cursor_position = len(w.value)
+                    break
         else:
             self._render_buttons()
 

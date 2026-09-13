@@ -75,7 +75,8 @@ class Snapshot:
     host_version: str = ""
     rollups: dict[str, Rollup] = field(default_factory=dict)  # by slug
     warnings: list[str] = field(default_factory=list)
-    parked: dict[str, str] | None = None  # slug → why it waits on the operator (None = not probed this poll)
+    parked: dict[str, dict[str, str]] | None = None  # slug → {session → why it waits ("" = clean)}; None = not probed this poll
+    parked_at: float = 0.0  # monotonic, when the probe read (a stale result must not undo what the bus said since)
     error: str = ""  # a failed poll keeps the previous roster and shows this
     fetched_at: float = field(default_factory=time.monotonic)
 
@@ -198,30 +199,38 @@ class LiveBackend:
         now = time.monotonic()
         if now - self._last_parked_probe >= self.PARKED_PROBE_S:
             self._last_parked_probe = now
+            snap.parked_at = time.monotonic()
             snap.parked = self._probe_parked(roster)
         return snap
 
-    def _probe_parked(self, roster: list[dict]) -> dict[str, str]:
-        """Which online members have a turn waiting on the operator. The executor's pause
-        is not republished on the bus, so the session inventory (newest first) is the
-        cheap, uniform source: a latest task in ``input-required`` is a parked turn."""
-        parked: dict[str, str] = {}  # only members actually probed: "" = clean, else the reason
+    PARKED_PROBE_ROWS = 25  # newest sessions per member the probe looks at
+
+    def _probe_parked(self, roster: list[dict]) -> dict[str, dict[str, str]]:
+        """Which sessions of each online member wait on the operator, from the session
+        inventory (newest first, ``latest_task_state``): the catch-up for parks the bus
+        could not show us (from before the deck connected, or lost in a reconnect gap).
+        Per member: ``{session_id: reason}`` for every session SEEN — "" means that
+        session's latest task is not parked. Sessions outside the window are not
+        mentioned, so the activity model leaves them alone."""
+        parked: dict[str, dict[str, str]] = {}
         for a in roster:
             if not a.get("running") or a.get("remote"):
                 continue
             slug = slug_of(a)
             try:
-                rows = self.client.diagnostics_sessions(slug, limit=8).get("sessions") or []
+                rows = self.client.diagnostics_sessions(slug, limit=self.PARKED_PROBE_ROWS).get("sessions") or []
             except deckhub.HubError:
                 continue  # unknown, not "clean": leave what the deck already knows alone
-            parked[slug] = ""
+            seen: dict[str, str] = {}
             for r in rows:
                 if not isinstance(r, dict):
                     continue
+                sid = str(r.get("session_id") or r.get("context_id") or "")
+                if not sid:
+                    continue
                 state = str(r.get("latest_task_state") or "").replace("TASK_STATE_", "").lower().replace("_", "-")
-                if state == "input-required":
-                    parked[slug] = f"waiting on you in {r.get('session_id') or r.get('context_id') or 'a session'}"
-                    break
+                seen[sid] = "waiting on you" if state == "input-required" else ""
+            parked[slug] = seen
         return parked
 
     def fleet_events(self):

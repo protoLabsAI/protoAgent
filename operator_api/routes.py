@@ -117,6 +117,8 @@ async def _sse_event_stream(
             frame = {"topic": evt["event"], "data": evt["data"]}
             if seq is not None:
                 frame["seq"] = seq
+            if isinstance(evt.get("ts"), (int, float)):
+                frame["ts"] = evt["ts"]  # when it happened — a replaying client must not stamp it "now"
             yield f"{prefix}data: {json.dumps(frame)}\n\n"
     finally:
         await agen.aclose()

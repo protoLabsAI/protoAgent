@@ -56,21 +56,82 @@ def test_activity_own_turns_and_parking():
     act.note_tool("r", "s", "t1", "c1", "current_time", done=False)
     act.note_tool("r", "s", "t1", "c1", "current_time", done=True, output="02:07")
     assert [r.label for r in act.rows] == ["current_time", "current_time"] and act.rows[-1].detail.startswith("02:07")
-    act.set_parked("r", "Merge this PR?")
-    assert act.turn_cell("r") == "⚑ needs you" and act.newly_parked == ["r"] and act.rows[-1].kind == "needs-you"
-    act.set_parked("r", "Merge this PR?")  # unchanged → no second bell
-    assert act.newly_parked == ["r"]
+    act.park("r", "s", "Merge this PR?", task_id="t1")
+    assert act.turn_cell("r") == "⚑ needs you" and act.rows[-1].kind == "needs-you" and act.rows[-1].session == "s"
+    act.park("r", "s", "Merge this PR?", task_id="t1")  # unchanged → no second row, no second ring
+    assert [r.kind for r in act.rows].count("needs-you") == 1
+    assert act.ring_due() == [("r", "s", "Merge this PR?")] and act.ring_due() == []
     act.apply(ev("r", "turn.resumed", task_id="t1", context_id="s"))
-    assert act.turn_cell("r") == "⟳ running" and act.state["r"].parked == ""
+    assert act.turn_cell("r") == "⟳ running" and act.state["r"].parked == {}
     act.note_live("r", "t1", False)
     assert act.turn_cell("r") == "idle"
 
 
-def test_stale_open_tool_stops_counting_as_running():
+def test_stale_open_tool_and_a_turn_whose_end_was_lost_stop_counting_as_running():
     act = feed.Activity()
     act.note_tool("x", "s", "t", "c", "slow", done=False)
-    act.state["x"].open_tools["c"] = ("slow", time.monotonic() - feed.RUNNING_TTL_S - 1)
+    act.state["x"].open_tools["c"] = ("slow", time.monotonic() - feed.RUNNING_TTL_S - 1, "t")
     assert act.turn_cell("x") == "idle"
+    act.apply(ev("x", "turn.started", session_id="chat-1", origin="scheduler"))  # its turn.finished never comes
+    assert act.turn_cell("x") == "⟳ running"
+    act.state["x"].running["chat-1"] -= feed.TURN_TTL_S + 1
+    assert act.turn_cell("x") == "idle"
+    # a frame for a task refreshes it: a long turn that keeps talking never ages out
+    act.apply(ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="tool_start", tool="t", tool_call_id="c2"))
+    act.state["x"].running["t2"] -= feed.TURN_TTL_S + 1
+    act.state["x"].open_tools["c2"] = ("t", time.monotonic() - feed.RUNNING_TTL_S - 1, "t2")
+    assert act.turn_cell("x") == "idle"
+    act.apply(ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="text", text="still here"))
+    assert act.turn_cell("x") == "⟳ running"
+
+
+def test_parks_are_per_session_and_the_three_writers_merge():
+    """Reviewer finding: one park slot per member let the probe, the bus, and the deck's own
+    conversation overwrite each other (a bell every 30 s, or "idle" while a human is needed)."""
+    act = feed.Activity()
+    t0 = time.monotonic()
+    act.apply(ev("x", "turn.input_required", context_id="chat-A", task_id="tA", prompt="Approve?"))
+    # the deck talks in ANOTHER session: its bookkeeping must not clear A's park
+    act.unpark("x", "chat-B")
+    act.park("x", "chat-B", "Which branch?", task_id="tB", source="deck")
+    assert act.parked_sessions("x") == ["chat-A", "chat-B"] and act.turn_cell("x") == "⚑ needs you"
+    act.unpark("x", "chat-B")
+    assert act.parked_sessions("x") == ["chat-A"]
+    # a probe that did not SEE session A leaves it alone; one that saw it clean clears it
+    act.probe("x", {"chat-C": ""}, probed_at=time.monotonic())
+    assert act.parked_sessions("x") == ["chat-A"]
+    # a probe read BEFORE the bus parked A is stale: it must not clear the park…
+    act.probe("x", {"chat-A": ""}, probed_at=t0 - 1)
+    assert act.parked_sessions("x") == ["chat-A"]
+    # …and a probe read before the bus answered it must not re-park
+    act.apply(ev("x", "turn.resumed", context_id="chat-A", task_id="tA"))
+    assert act.parked_sessions("x") == []
+    act.probe("x", {"chat-A": "waiting on you"}, probed_at=t0)
+    assert act.parked_sessions("x") == []
+    # a fresh probe is authoritative for what it saw
+    act.probe("x", {"chat-A": "waiting on you"}, probed_at=time.monotonic())
+    assert act.parked_sessions("x") == ["chat-A"] and act.state["x"].parked["chat-A"].source == "probe"
+    act.probe("x", {"chat-A": ""}, probed_at=time.monotonic())
+    assert act.parked_sessions("x") == []
+    # the bell re-checks: a park answered within the same drain never rings
+    act.apply(ev("x", "turn.input_required", context_id="chat-A", task_id="tA", prompt="Approve?"))
+    act.apply(ev("x", "turn.resumed", context_id="chat-A", task_id="tA"))
+    assert act.ring_due() == []
+
+
+def test_replayed_events_carry_no_time_unless_the_member_stamped_them():
+    act = feed.Activity()
+    act.apply(deckevents.Event(slug="x", topic="turn.usage", data={"task_id": "t", "context_id": "s", "state": "TASK_STATE_COMPLETED", "cost_usd": 1}, seq=1, replayed=True))
+    assert act.rows[-1].at is None and act.last_active_cell("x") == ""
+    act.apply(deckevents.Event(slug="x", topic="turn.usage", data={"task_id": "t2", "context_id": "s", "state": "TASK_STATE_COMPLETED"}, seq=2, replayed=True, ts=time.time() - 7200))
+    assert act.rows[-1].at is not None and act.last_active_cell("x") == "2h ago"
+    act.apply(ev("x", "turn.usage", task_id="t3", context_id="s", state="TASK_STATE_COMPLETED"))
+    assert act.last_active_cell("x") == "0s ago"
+    # usage for ONE task closes only that task's tools
+    act.apply(ev("x", "chat.progress", session_id="s1", task_id="a", phase="tool_start", tool="t", tool_call_id="ca"))
+    act.apply(ev("x", "chat.progress", session_id="s2", task_id="b", phase="tool_start", tool="t", tool_call_id="cb"))
+    act.apply(ev("x", "turn.usage", task_id="a", context_id="s1", state="TASK_STATE_COMPLETED"))
+    assert list(act.state["x"].open_tools) == ["cb"]
 
 
 class FakeEvents:
@@ -112,17 +173,23 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         await pilot.pause(0.7)
         assert str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "idle"
         assert "ago" in str(app.screen.query_one("#roster", DataTable).get_row_at(1)[8])
-        # a parked probe result from the poll
-        app.activity.set_parked("protoEngineer-ba4c", "Merge?")
-        app.activity.newly_parked.clear()
+        # a park on the bus rings once, through the drain
+        rings.clear()
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-1", task_id="t9", prompt="Merge?"))
+        await pilot.pause(0.7)
+        assert rings == [1] and str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⚑ needs you"
+        # a parked probe result from the poll: a session it saw parked rings; protoEngineer's
+        # own park (a session the probe did not see) is untouched
         rings.clear()
         snap = be.snapshot()
-        snap.parked = {"old-1": "waiting on you in chat-9"}  # protoEngineer not probed → untouched
+        snap.parked = {"old-1": {"chat-9": "waiting on you"}}
+        snap.parked_at = time.monotonic()
         app._apply(snap)
         await pilot.pause(0.2)
         assert rings == [1]
         assert "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content)
-        snap.parked = {"old-1": "", "protoEngineer-ba4c": ""}  # both probed clean
+        snap.parked = {"old-1": {"chat-9": ""}, "protoEngineer-ba4c": {"chat-1": ""}}  # both seen clean
+        snap.parked_at = time.monotonic()
         app._apply(snap)
         await pilot.pause(0.2)
         assert "parked" not in str(app.screen.query_one("#status", Static).content)

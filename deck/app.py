@@ -638,13 +638,16 @@ class FleetDeck(App[int]):
         for scr in self.screen_stack:
             if isinstance(scr, ConversationScreen):
                 scr.on_bus_events(evs)
-        for slug in self.activity.newly_parked:
-            self.bell()
-            self.notify(f"{self.activity.names.get(slug, slug)} needs you", severity="warning", timeout=10)
-        self.activity.newly_parked.clear()
+        self._ring_parks()
         roster = self._roster_screen()
         if roster is not None and self.snapshot is not None:
             roster.render_snapshot(self.snapshot)
+
+    def _ring_parks(self) -> None:
+        """Announce the parks that appeared since the last drain — and are STILL parked."""
+        for slug, _session, prompt in self.activity.ring_due():
+            self.bell()
+            self.notify(f"{self.activity.names.get(slug, slug)} needs you: {prompt}", severity="warning", timeout=10)
 
     def attached_count(self) -> int:
         """Conversations currently streaming or attached to a live turn."""
@@ -679,12 +682,9 @@ class FleetDeck(App[int]):
         if self.events is not None:
             self.events.watch([slug_of(a) for a in snap.roster if presence_of(a) in ("online", "host", "remote")])
         if snap.parked is not None:
-            for slug, why in snap.parked.items():  # only the members the probe actually reached
-                self.activity.set_parked(slug, why)
-            for slug in self.activity.newly_parked:
-                self.bell()
-                self.notify(f"{self.activity.names.get(slug, slug)} needs you", severity="warning", timeout=10)
-            self.activity.newly_parked.clear()
+            for slug, seen in snap.parked.items():  # only the members and sessions the probe actually saw
+                self.activity.probe(slug, seen, probed_at=snap.parked_at)
+            self._ring_parks()
         roster = self._roster_screen()
         if roster is not None:
             roster.render_snapshot(snap)

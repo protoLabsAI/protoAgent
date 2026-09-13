@@ -177,3 +177,65 @@ def test_parse_progress_mirrors_the_console():
     assert s.kind == "steer" and s.items == [{"id": "s1", "text": "go"}]
     assert events.parse_progress({**base, "phase": "steer_consumed", "items": []}) is None
     assert events.parse_progress({**base, "phase": "turn_started"}) is None
+
+
+def test_a_redirect_or_an_error_body_is_an_error_not_a_clean_empty_stream(monkeypatch):
+    """Reviewer findings: a 3xx (an http→https front) read as a clean close and reconnected
+    every second forever; a 4xx raised ResponseNotRead from `r.text` on the unread stream,
+    hiding the real status."""
+    monkeypatch.setattr(events, "_BACKOFF_S", (0.01, 0.01))
+    calls = {"n": 0}
+
+    def redirect_then_ok(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(302, headers={"location": "https://hub/agents/x/api/events"})
+        if calls["n"] == 2:
+            return httpx.Response(409, json={"detail": "agent is not running"})
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 1}))
+
+    m = events.MemberEvents("http://127.0.0.1:7870", "tok", "x", transport=httpx.MockTransport(redirect_then_ok))
+    got = []
+    for ev in m.events():
+        got.append(ev)
+        m.stop()
+    assert calls["n"] == 3 and len(got) == 1
+    assert "409" in m.last_error and "agent is not running" in m.last_error and not m.gave_up
+    m.close()
+
+
+def test_attendance_gives_up_on_a_member_without_the_route_and_holds_otherwise():
+    calls = {"n": 0}
+
+    def missing(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        assert request.url.path == "/agents/x/api/chat/attend" and request.url.params.get("session") == "chat-1"
+        assert request.headers.get("Accept") == "text/event-stream" and request.headers.get("Authorization") == "Bearer tok"
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    a = events.Attendance("http://127.0.0.1:7870", "tok", "x", "chat-1", transport=httpx.MockTransport(missing)).start()
+    a._thread.join(3.0)
+    assert not a._thread.is_alive() and calls["n"] == 1 and a.gave_up and "404" in a.last_error
+    a.close()
+
+
+def test_replayed_frames_are_flagged_and_a_member_stamp_is_carried():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:  # first connect: no replay
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 5, "ts": 1700000000.5}))
+        # the reconnect with ?since= replays the ring at once
+        assert request.url.params.get("since") == "5"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse({"topic": "turn.usage", "data": {}, "seq": 6}, {"topic": "turn.usage", "data": {}, "seq": 7, "ts": "not-a-number"}))
+
+    m = events.MemberEvents("http://127.0.0.1:7870", "tok", "x", transport=httpx.MockTransport(handler))
+    out = []
+    for ev in m.events():
+        out.append(ev)
+        if len(out) == 3:
+            m.stop()
+    assert (out[0].replayed, out[0].ts) == (False, 1700000000.5)
+    assert out[1].replayed and out[1].ts is None and out[2].replayed and out[2].ts is None
+    m.close()

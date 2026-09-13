@@ -126,6 +126,8 @@ class Exchange:
     reported: set = field(default_factory=set)  # (tool_id, status) already told to the activity feed
     attached: bool = False  # a turn somebody else started (scheduler, inbox…) that we subscribed to
     detached: bool = False  # we stopped watching an attached turn; the member goes on with it
+    finished: bool = False  # _finish ran for this life of the exchange (the stall probe and the reader both reach it)
+    generation: int = 0  # bumped each time the exchange lives again (a resume, a re-attach): stale async results are dropped
     origin: str = ""  # who started an attached turn
     controllable: bool = False  # an attached server turn that takes interjections
 
@@ -251,6 +253,7 @@ class ConversationScreen(Screen):
         self._watchdog: Any = None
         self.reconnects = 0  # SubscribeToTask re-attachments after a silent stretch
         self._attendance: Any = None  # the open /api/chat/attend stream for this session
+        self._attend_warned = False
         self._steer_seq = 0
 
     # ── layout ──
@@ -283,6 +286,7 @@ class ConversationScreen(Screen):
         """Hold the session attended while this screen shows it (a server-fired turn in it
         then parks for us instead of auto-answering, and takes interjections)."""
         self._unattend()
+        self._attend_warned = False
         try:
             self._attendance = self.app.backend.attend(self.agent, session_id)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001 — presence is best effort
@@ -333,7 +337,8 @@ class ConversationScreen(Screen):
             return
         if session_id != self.convo.session_id or self._attendance is None:
             self._attend(session_id)
-        self.convo = Conversation(session_id=session_id, exchanges=exchanges)
+        steers = list(self.convo.steers) if session_id == self.convo.session_id else []  # a reload of the same session keeps what is queued
+        self.convo = Conversation(session_id=session_id, exchanges=exchanges, steers=steers)
         self._rebuild_transcript()
         self._render_work(self.convo.latest.turn if self.convo.latest else None)
         self._render_status()
@@ -366,6 +371,8 @@ class ConversationScreen(Screen):
         except Exception as exc:  # noqa: BLE001
             self.app.call_from_thread(self.notify, f"could not list sessions: {exc}", severity="error", timeout=8)
             return
+        if not self.is_attached:
+            return  # esc won the race: nothing to pick for
         self.app.call_from_thread(self.app.push_screen, SessionPicker(self.member_name, sessions, self.convo.session_id), self._picked)
 
     def _picked(self, sid: str | None) -> None:
@@ -417,6 +424,10 @@ class ConversationScreen(Screen):
         self._send(text)
 
     def _send(self, text: str) -> None:
+        if self.convo.live is not None:
+            self.notify("a turn is running — the message was queued instead", severity="warning")
+            self._queue_steer(text)
+            return
         turn = a2a.Turn(context_id=self.convo.session_id)
         ex = Exchange(user=text, turn=turn, live=True)
         self.convo.exchanges.append(ex)
@@ -440,9 +451,26 @@ class ConversationScreen(Screen):
             pass
         deckhitl.open_prompt(self.app, self.member_name, parked.turn.hitl or {}, lambda result: self._answered(parked, result), draft=draft)
 
+    def _current(self, ex: Exchange) -> Exchange | None:
+        """The exchange as this conversation holds it NOW — a modal's callback captured an
+        object that a session switch or reload may have replaced (same task → the new one)."""
+        if ex in self.convo.exchanges:
+            return ex
+        if ex.turn.task_id:
+            return next((e for e in self.convo.exchanges if e.turn.task_id == ex.turn.task_id), None)
+        return None
+
     def _answered(self, parked: Exchange, result: Any) -> None:
         if result is None:
             return  # closed — still parked
+        current = self._current(parked)
+        if current is None:
+            self.notify("that question belongs to a session that is no longer open here", severity="warning")
+            return
+        if current is not parked:
+            current.turn.hitl = current.turn.hitl or parked.turn.hitl
+            parked = current
+        self._set_composer("")
         hitl = parked.turn.hitl or {}
         if hitl.get("plugin_callback_id"):
             if result == "__dismiss__":
@@ -475,6 +503,8 @@ class ConversationScreen(Screen):
         ex.turn.done = False
         ex.error = ""
         ex.live = True
+        ex.finished = False
+        ex.generation += 1
         ex.cancel_requested = False
         ex.started_at = time.monotonic()
         ex.turn.last_frame_at = ex.started_at
@@ -484,7 +514,7 @@ class ConversationScreen(Screen):
         self._render_work(ex.turn)
         self._render_status()
         self._render_head()
-        self._stream(ex, text=text, task_id=task_id, metadata={"hitl_resume": True})
+        self._stream(ex, text=text, task_id=task_id, metadata={"hitl_resume": True, **({"hidden": True} if hidden else {})})
 
     @_ui_safe
     def _mount_answer(self, ex: Exchange, text: str) -> None:
@@ -506,10 +536,7 @@ class ConversationScreen(Screen):
         form = out.get("form") if isinstance(out.get("form"), dict) else None
         if form is not None:
             nxt = {**form, "plugin_callback_id": out.get("callback_id") or callback_id}
-            with parked.lock:
-                parked.turn.hitl = nxt  # the next step of the wizard
-            app.call_from_thread(self._render_status)
-            app.call_from_thread(self.action_respond)
+            app.call_from_thread(self._next_form_step, parked, nxt)
             return
         with parked.lock:
             parked.turn.hitl = None
@@ -518,6 +545,14 @@ class ConversationScreen(Screen):
         app.call_from_thread(self._render_status)
         if reply:
             app.call_from_thread(self.notify, str(reply), timeout=8)
+
+    def _next_form_step(self, parked: Exchange, nxt: dict) -> None:
+        """A wizard's next step, on the exchange this conversation holds now."""
+        current = self._current(parked) or parked
+        with current.lock:
+            current.turn.hitl = nxt
+        self._render_status()
+        self.action_respond()
 
     # ── attaching to a turn somebody else started ──
 
@@ -529,12 +564,15 @@ class ConversationScreen(Screen):
         label = f"({origin}{f' · {trigger}' if trigger else ''} turn)"
         if replace is not None:
             ex = replace
+            ex.turn = a2a.Turn(context_id=self.convo.session_id, task_id=task_id)  # the snapshot replays it all; the durable copy would double it
+            ex.last_body = ex.last_work_sig = None
             ex.live = True
+            ex.finished = False
+            ex.generation += 1
             ex.attached = True
             ex.origin = origin
             ex.controllable = controllable
             ex.started_at = time.monotonic()
-            ex.turn.last_frame_at = ex.started_at
         else:
             ex = Exchange(user=label, turn=a2a.Turn(context_id=self.convo.session_id, task_id=task_id), live=True, attached=True, origin=origin, controllable=controllable)
             self.convo.exchanges.append(ex)
@@ -545,15 +583,17 @@ class ConversationScreen(Screen):
         self._stream(ex, subscribe=task_id)
 
     def on_bus_events(self, evs: list) -> None:
-        """Bus events the deck drained (all members): a server-fired turn starting in THIS
-        session is attached; a park landing here while nothing is attached reloads the
-        durable turns so the prompt shows."""
+        """Bus events the deck drained (all members): a server-fired turn running in THIS
+        session is attached — from its ``chat.progress`` frames, which carry the task id
+        and the control block (the scheduler's ``turn.started`` names only the session);
+        a park landing here while nothing is attached reloads the durable turns so the
+        prompt shows."""
         sid = self.convo.session_id
         for ev in evs:
             if ev.slug != self.slug:
                 continue
             d = ev.data
-            if ev.topic in ("turn.started", "chat.progress") and str(d.get("session_id") or "") == sid:
+            if ev.topic == "chat.progress" and str(d.get("session_id") or "") == sid:
                 tid = str(d.get("task_id") or "")
                 live = self.convo.live
                 if tid and live is None and self.convo.parked is None:
@@ -564,8 +604,11 @@ class ConversationScreen(Screen):
                     if ctl is not None:
                         live.controllable = bool(ctl.get("operator_controllable"))
                         self._render_status()
-            elif ev.topic == "turn.input_required" and str(d.get("context_id") or "") == sid and self.convo.live is None and not self._loading():
-                self.load_session(sid)
+            elif ev.topic == "turn.input_required" and str(d.get("context_id") or "") == sid:
+                tid = str(d.get("task_id") or "")
+                known = any(e.turn.task_id == tid for e in self.convo.exchanges) if tid else False
+                if self.convo.live is None and self.convo.parked is None and not known and not self._loading() and self.app.screen is self:
+                    self.load_session(sid)  # a park we did not watch happen: show it
 
     # ── steering a running turn ──
 
@@ -669,27 +712,39 @@ class ConversationScreen(Screen):
         interjections into a server-fired turn are simply reported as unread (this screen
         never starts a turn in a session on the server's behalf)."""
         app = self.app
-        queued = [st for st in self.convo.steers if not st.consumed]
+        convo, gen = self.convo, ex.generation  # what this reconcile is FOR; both may have moved on when the answer lands
+        queued = [st for st in convo.steers if not st.consumed]
         if not queued:
             return
         try:
-            pending = {r["id"] for r in app.backend.steer_pending(self.agent, self.convo.session_id)}  # type: ignore[attr-defined]
+            pending = {r["id"] for r in app.backend.steer_pending(self.agent, convo.session_id)}  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 — cannot tell consumed from not: leave them queued
             return
+        app.call_from_thread(self._reconcile_landed, convo, ex, gen, queued, pending)
+
+    @_ui_safe
+    def _reconcile_landed(self, convo: Conversation, ex: Exchange, gen: int, queued: list[Steer], pending: set[str]) -> None:
+        """On the UI thread, against the state that exists NOW: the session may have been
+        switched, an answer may have resumed the turn (its own end reconciles again), a
+        new turn may be streaming."""
+        if convo is not self.convo or ex.generation != gen:
+            return  # a different session, or the turn lived again since we asked: this answer is stale
         for st in queued:
             if st.id not in pending:
                 st.consumed = True
-                app.call_from_thread(self._render_steer, st)
+                self._render_steer(st)
         left = [st for st in queued if st.id in pending]
-        if not left or ex.turn.hitl:
+        if not left:
             return
+        if ex.turn.hitl or self.convo.parked is not None or self.convo.live is not None:
+            return  # the server keeps holding them (a park), or a turn is running again: they fold in there
         for st in left:
-            app.call_from_thread(self._drop_steer, st)
+            self._drop_steer(st)
         own = [st for st in left if not st.interjection]
         if len(own) < len(left):
-            app.call_from_thread(self.notify, f"{len(left) - len(own)} interjection(s) arrived after the turn's last model call and were not read", severity="warning", timeout=8)
+            self.notify(f"{len(left) - len(own)} interjection(s) arrived after the turn's last model call and were not read", severity="warning", timeout=8)
         if own:
-            app.call_from_thread(self._send, "\n\n".join(st.text for st in own))
+            self._send("\n\n".join(st.text for st in own))
 
     # ── cancelling one delegation ──
 
@@ -812,6 +867,9 @@ class ConversationScreen(Screen):
     def _finish(self, ex: Exchange, error: str) -> None:
         # State first, always — even after the screen was popped (abandon / quit), so
         # `convo.live` can never stay truthy on an exchange whose reader has unwound.
+        if ex.finished:
+            return  # the stall probe finalized it and the reader then unwound: once is enough
+        ex.finished = True
         ex.live = False
         if error and not ex.turn.done:
             ex.error = error
@@ -832,6 +890,10 @@ class ConversationScreen(Screen):
         self._render_head()
 
     def _check_stall(self) -> None:
+        h = self._attendance
+        if h is not None and getattr(h, "gave_up", False) and not self._attend_warned:
+            self._attend_warned = True
+            self.notify(f"this session is NOT attended — a scheduled turn here will answer itself: {getattr(h, 'last_error', '')}", severity="warning", timeout=10)
         ex = self.convo.live
         if ex is None:
             return
@@ -854,11 +916,20 @@ class ConversationScreen(Screen):
         task = a2a.stalled_turn_is_terminal(ex.turn, ex.client.get_task, idle_s=STALL_IDLE_S)
         if task is None:
             return
-        # The server finished but the stream tail was lost: unblock the reader FIRST (it
-        # exits through its except path, finding the turn already done), then finalize
-        # from the durable task under the exchange lock.
+        # The server finished but the stream tail was lost. Mark the turn done from the
+        # durable task FIRST (under the lock), THEN wake the reader: whichever thread runs
+        # next, the reader finds `done` and unwinds without failing the exchange.
+        with ex.lock:
+            if ex.turn.done:
+                return  # the stream finished on its own while we asked
+            try:
+                a2a.apply_frame(ex.turn, {"result": {"task": task}})
+            except a2a.TurnError:
+                pass
+            ex.turn.done = True
         ex.client.abort()
-        self._finalize_from(ex, task, app)
+        app.call_from_thread(self._finish, ex, "")
+        app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
 
     def action_esc(self) -> None:
         ex = self.convo.live
@@ -947,6 +1018,11 @@ class ConversationScreen(Screen):
         if act is None:
             return
         t = ex.turn
+        if ex.attached and ex.origin != "in flight":
+            # a server-fired turn is already on the bus (its own frames feed the model);
+            # only the park is ours to say, below
+            self._report_park(act, ex)
+            return
         act.note_live(self.slug, t.task_id, ex.live and not t.done)
         for c in t.tool_calls:
             key = (c.id, c.status)
@@ -957,10 +1033,15 @@ class ConversationScreen(Screen):
                 act.note_tool(self.slug, t.context_id, t.task_id, c.id, c.name, done=False)
             else:
                 act.note_tool(self.slug, t.context_id, t.task_id, c.id, c.name, done=True, output=str(c.output or "")[:120], error=c.status == "error")
-        if t.hitl and not t.done:
-            act.set_parked(self.slug, deckhitl.prompt_of(t.hitl), session=t.context_id, task_id=t.task_id)
-        elif t.done or ex.live:
-            act.set_parked(self.slug, "")
+        self._report_park(act, ex)
+
+    def _report_park(self, act, ex: Exchange) -> None:
+        t = ex.turn
+        if ex is self.convo.latest:  # only the newest exchange speaks for the session's park
+            if t.hitl and not t.done:
+                act.park(self.slug, t.context_id, deckhitl.prompt_of(t.hitl), task_id=t.task_id, source="deck")
+            else:
+                act.unpark(self.slug, t.context_id)
 
     @_ui_safe
     def _render_live(self, ex: Exchange) -> None:

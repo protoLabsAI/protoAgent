@@ -32,6 +32,7 @@ is dropped with a warning (matches the no-bus-wired semantics elsewhere).
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 from collections import deque
 from collections.abc import AsyncIterator, Callable
@@ -115,7 +116,7 @@ class EventBus:
 
     def _publish_on_loop(self, event: str, data: dict[str, Any] | None, retain: bool = True) -> None:
         self._seq += 1
-        payload = {"event": event, "data": data or {}, "seq": self._seq}
+        payload = {"event": event, "data": data or {}, "seq": self._seq, "ts": time.time()}
         # seq still advances for an unretained event: it is a global publish counter the
         # SSE stream reports, not a ring index, so a client's `since` cursor stays honest
         # about what it has already seen rather than silently rewinding.

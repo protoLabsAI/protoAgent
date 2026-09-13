@@ -109,10 +109,12 @@ async def _type(app, pilot, text, wait=0.3):
     await pilot.pause(wait)
 
 
-def _resume_call(fake: FakeA2A) -> dict:
+def _resume_call(fake: FakeA2A, *, hidden: bool = False) -> dict:
+    """The resume goes to the parked task with the console's metadata: `hitl_resume`, plus
+    `hidden` for a silent (approval / dismiss) resume."""
     assert len(fake.sent) == 2, fake.sent
     call = fake.sent[1]
-    assert call["task_id"] == "t1" and call["metadata"] == {"hitl_resume": True}
+    assert call["task_id"] == "t1" and call["metadata"] == ({"hitl_resume": True, "hidden": True} if hidden else {"hitl_resume": True})
     return call
 
 
@@ -138,7 +140,7 @@ async def test_approval_modal_resumes_the_parked_task_silently():
         await pilot.press("a")
         await _settle(app, pilot)
         assert isinstance(app.screen, ConversationScreen)
-        assert _resume_call(fake)["text"] == "approved"
+        assert _resume_call(fake, hidden=True)["text"] == "approved"
         assert await _until(pilot, lambda: app.screen.convo.live is None)
         # silent: the same exchange continued, no answer line, one markdown body
         assert len(app.screen.query(Markdown)) == 1 and not app.screen.query(".answer-msg")
@@ -165,7 +167,7 @@ async def test_deny_and_escape_in_the_approval_modal():
         await pilot.pause(0.2)
         await pilot.press("d")
         await _settle(app, pilot)
-        assert _resume_call(fake)["text"] == "denied"
+        assert _resume_call(fake, hidden=True)["text"] == "denied"
 
 
 @pytest.mark.asyncio
@@ -202,7 +204,7 @@ async def test_question_modal_carries_the_draft_and_ctrl_d_dismisses_with_the_se
         assert app.screen.query_one("#answer", Input).value == "mai"
         await pilot.press("ctrl+d")
         await _settle(app, pilot)
-        assert _resume_call(fake)["text"] == a2a.DISMISS_SENTINEL
+        assert _resume_call(fake, hidden=True)["text"] == a2a.DISMISS_SENTINEL
         assert not app.screen.query(".answer-msg")  # a dismissal is not conversation
 
 
@@ -371,7 +373,12 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
         fake.sub_frames[-1]["result"]["statusUpdate"]["taskId"] = "t7"
         for f in fake.sub_frames[1:]:
             f["result"]["statusUpdate"]["taskId"] = "t7"
-        fe.pending.append(ev("protoEngineer-ba4c", "turn.started", session_id=sid, task_id="t7", origin="scheduler", trigger="daily-report"))
+        # the scheduler's own turn.started names only the session (no task id) — nothing to attach to yet
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.started", session_id=sid, origin="scheduler", trigger="daily-report"))
+        await pilot.pause(0.7)
+        assert fake.subscribed == [] and app.screen.convo.live is None
+        # the chat.progress `turn_started` frame carries the task id and the control block: attach
+        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily-report"}))
         assert await _until(pilot, lambda: fake.subscribed == ["t7"])
         assert await _until(pilot, lambda: app.screen.convo.live is not None and app.screen.convo.live.attached)
         live = app.screen.convo.live
@@ -396,7 +403,7 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
         assert "interjection" in app.screen.query(".steer-msg").first().render().plain
         await pilot.press("escape")  # detach (abort the subscription) — the server's turn goes on
         await _settle(app, pilot)
-        assert fake.cancelled == [] and fake.aborted  # never CancelTask somebody else's turn
+        assert fake.cancelled == [] and fake.aborted and live.detached and not live.live  # never CancelTask somebody else's turn
         assert not isinstance(app.screen, ConversationScreen)
 
 
@@ -526,21 +533,286 @@ async def test_offline_conversation_cannot_be_opened_so_nothing_to_act_on():
 
 def test_activity_tracks_parks_from_the_bus_and_the_live_server_turn_per_session():
     act = Activity({"x": "X"})
-    act.apply(ev("x", "turn.started", session_id="chat-1", task_id="t1", origin="scheduler", trigger="daily"))
+    # the scheduler's turn.started names only the session; the task id and the control
+    # block arrive on the chat.progress `turn_started` frame (server/a2a.py)
+    act.apply(ev("x", "turn.started", session_id="chat-1", origin="scheduler", trigger="daily"))
+    assert act.server_turn("x", "chat-1") is None and act.turn_cell("x") == "⟳ running"
+    act.apply(ev("x", "chat.progress", session_id="chat-1", task_id="t1", phase="turn_started", control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily"}))
     assert act.server_turn("x", "chat-1") == {"task_id": "t1", "origin": "scheduler", "trigger": "daily", "controllable": False}
     act.apply(ev("x", "chat.progress", session_id="chat-1", task_id="t1", phase="tool_start", tool="t", tool_call_id="c", control={"operator_controllable": True, "origin": "scheduler", "trigger": "daily"}))
     assert act.server_turn("x", "chat-1")["controllable"] is True
     act.apply(ev("x", "turn.input_required", context_id="chat-1", task_id="t1", prompt="Approve shell command?"))
-    assert act.turn_cell("x") == "⚑ needs you" and act.state["x"].parked_session == "chat-1" and act.state["x"].parked_task == "t1"
+    assert act.turn_cell("x") == "⚑ needs you" and act.state["x"].parked["chat-1"].task_id == "t1"
     assert act.server_turn("x", "chat-1") is None  # parked → not addressable any more
-    assert act.rows[-1].kind == "needs-you" and act.rows[-1].session == "chat-1" and act.newly_parked == ["x"]
+    assert act.rows[-1].kind == "needs-you" and act.rows[-1].session == "chat-1" and act.ring_due() == [("x", "chat-1", "Approve shell command?")]
     act.apply(ev("x", "turn.resumed", context_id="chat-1", task_id="t1"))
-    assert act.turn_cell("x") == "⟳ running" and act.state["x"].parked == ""  # answered: running again
+    assert act.turn_cell("x") == "⟳ running" and act.state["x"].parked == {}  # answered: running again
     act.apply(ev("x", "turn.usage", task_id="t1", context_id="chat-1", state="TASK_STATE_COMPLETED"))
     assert act.turn_cell("x") == "idle"
-    act.apply(ev("x", "turn.started", session_id="chat-2", task_id="t2", origin="inbox"))
+    act.apply(ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="turn_started", control={"origin": "inbox"}))
     act.apply(ev("x", "turn.usage", task_id="t2", context_id="chat-2", state="TASK_STATE_COMPLETED"))
     assert act.server_turn("x", "chat-2") is None
-    act.apply(ev("x", "turn.started", session_id="chat-3", task_id="t3", origin="watch"))
+    act.apply(ev("x", "chat.progress", session_id="chat-3", task_id="t3", phase="turn_started", control={"origin": "watch"}))
     act.apply(ev("x", "turn.finished", session_id="chat-3", task_id="t3", ok=True))
     assert act.server_turn("x", "chat-3") is None and act.server_turn("nobody", "chat-3") is None
+
+
+# ── round-1 review reproducers (state-machine races) ──
+
+
+@pytest.mark.asyncio
+async def test_the_decks_own_park_on_the_bus_does_not_reload_the_session_under_the_modal():
+    """Blocker: `turn.input_required` is published for EVERY context, the deck's own turn
+    included. Reloading the durable turns then swapped the exchange out from under the open
+    modal — the answer resumed an orphan, the screen stayed "needs you", and a second
+    hitl_resume was one keypress away."""
+    import time as _t
+
+    fake = Parking({"kind": "approval", "title": "Approve?"})
+    be = TalkBackend(a2a_client=fake)
+    fe = FakeEvents()
+    app = FleetDeck(be, poll_s=0, events=fe)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        sid = app.screen.convo.session_id
+        be._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Input required."}, {"data": {"kind": "approval", "title": "Approve?"}, "metadata": {"mimeType": a2a.HITL_MIME}}]}}, "history": [{"role": "ROLE_USER", "parts": [{"text": "clean"}]}], "artifacts": []}]
+        await _send(app, pilot, "clean")
+        convo_screen = app.screen
+        old = convo_screen.convo.parked
+        reads = len(be.turn_reads)
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ApprovalModal)
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t1", prompt="Approve?"))
+        await pilot.pause(0.8)
+        assert convo_screen.convo.parked is old and len(be.turn_reads) == reads  # known park: no reload
+        await pilot.press("a")
+        assert await _until(pilot, lambda: len(fake.sent) == 2)
+        assert await _until(pilot, lambda: convo_screen.convo.live is None and convo_screen.convo.parked is None)
+        assert "idle" in str(convo_screen.query_one("#talk-status", Static).content)
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ConversationScreen) and len(fake.sent) == 2  # nothing to answer twice
+        # a park we did NOT watch happen (another client's turn in this session) still reloads
+        be._turns[sid].append({"task_id": "t2", "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Which?"}]}}, "history": [{"role": "ROLE_USER", "parts": [{"text": "from the console"}]}], "artifacts": []})
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t2", prompt="Which?"))
+        assert await _until(pilot, lambda: len(be.turn_reads) == reads + 1)
+        assert await _until(pilot, lambda: app.screen.convo.parked is not None and app.screen.convo.parked.turn.task_id == "t2")
+        _t.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_stall_finalize_finishes_once_and_resends_an_unread_steer_once(monkeypatch):
+    """Major: the stall probe and the unwinding reader both reached `_finish`; each ran the
+    steer reconcile, so an unread steer was re-sent twice as two turns."""
+    from deck import talk as talkmod
+
+    monkeypatch.setattr(talkmod, "STALL_IDLE_S", 0.2)
+    fake = FakeA2A(block_after=3)
+    be = TalkBackend(a2a_client=fake)
+    finishes: list = []
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        scr = app.screen
+        orig = scr._finish_render
+        scr._finish_render = lambda ex, err: (finishes.append(err), orig(ex, err))  # type: ignore[method-assign]
+        await _type(app, pilot, "go")
+        await _type(app, pilot, "later")
+        assert await _until(pilot, lambda: any(c[0] == "steer" for c in be.calls))
+        st_id = [c[2] for c in be.calls if c[0] == "steer"][0]
+        be.pending_steers = [{"id": st_id, "text": "later"}]
+        await pilot.pause(0.3)
+        fake.block_after = None
+        scr._check_stall()
+        await _settle(app, pilot)
+        await pilot.pause(0.8)
+        await _settle(app, pilot)
+        assert [s["text"] for s in fake.sent] == ["go", "later"]
+        assert sum(1 for c in be.calls if c[0] == "steer_pending") == 1
+        assert finishes.count("") >= 1 and len(scr.convo.exchanges) == 2
+        assert not scr.convo.exchanges[0].error  # #4: the reader must not fail a turn the probe finalized
+
+
+@pytest.mark.asyncio
+async def test_a_stall_finalize_marks_the_turn_done_before_waking_the_reader(monkeypatch):
+    """Major: abort() before `done` let the reader win the race and end a completed turn as
+    "✗ stream closed". Slowing the finalizer forces that ordering."""
+    import time as _t
+
+    from deck import talk as talkmod
+
+    monkeypatch.setattr(talkmod, "STALL_IDLE_S", 0.2)
+    orig_abort = FakeA2A.abort
+
+    def slow_abort(self):
+        orig_abort(self)
+        _t.sleep(0.15)  # the reader gets the GIL first — the ordering the old code assumed it never loses
+
+    monkeypatch.setattr(FakeA2A, "abort", slow_abort)
+    fake = FakeA2A(block_after=3)
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _type(app, pilot, "go", wait=0.4)
+        app.screen._check_stall()
+        await _settle(app, pilot)
+        await pilot.pause(0.5)
+        ex = app.screen.convo.exchanges[-1]
+        assert ex.turn.done and not ex.error and "✗" not in str(app.screen.query(".turn-meta").first().content)
+
+
+@pytest.mark.asyncio
+async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_nothing():
+    """Major: the turn-end reconcile re-sent leftover steers into whatever session existed
+    when its roundtrip returned — the NEW session after ctrl+n, or as a second turn while a
+    typed answer had already resumed the parked one."""
+    import time as _t
+
+    fake = FakeA2A(hang=True)
+    be = TalkBackend(a2a_client=fake)
+    orig = be.steer_pending
+
+    def slow_pending(agent, sid):
+        _t.sleep(0.6)
+        return orig(agent, sid)
+
+    be.steer_pending = slow_pending
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _type(app, pilot, "one")
+        await _type(app, pilot, "two")
+        assert await _until(pilot, lambda: any(c[0] == "steer" for c in be.calls))
+        ids = [c[2] for c in be.calls if c[0] == "steer"]
+        be.pending_steers = [{"id": ids[0], "text": "two"}]
+        fake.hang = False
+        await pilot.press("escape")
+        assert await _until(pilot, lambda: app.screen.convo.live is None)
+        await pilot.press("ctrl+n")
+        await pilot.pause(0.1)
+        await pilot.pause(1.0)
+        assert len(fake.sent) == 1  # nothing re-sent into the new session
+    # …and an answer typed inside the roundtrip: the stale reconcile is dropped; the resumed
+    # turn folds the held steer in (the server's queue drains at its next model call)
+    be2 = TalkBackend()
+
+    class ParksAfterASteer(Parking):
+        def stream(self, text, *, context_id, task_id=None, metadata=None):
+            self.sent.append({"text": text, "context_id": context_id, "task_id": task_id, "metadata": metadata})
+            if metadata and metadata.get("hitl_resume"):
+                yield from canned_frames(context_id)
+                return
+            yield {"result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}}
+            assert self._wait(lambda: any(c[0] == "steer" for c in be2.calls)), "the steer never arrived"
+            yield park_frame(context_id, self.hitl)
+
+    fake2 = ParksAfterASteer({"question": "and now?"})
+    be2._a2a = fake2
+
+    def slow_pending2(agent, sid):
+        _t.sleep(0.6)
+        answered = any(s["metadata"] for s in fake2.sent)
+        return [] if answered else [{"id": c[2], "text": c[3]} for c in be2.calls if c[0] == "steer"]
+
+    be2.steer_pending = slow_pending2
+    app2 = FleetDeck(be2, poll_s=0)
+    async with app2.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be2, pilot, app2)
+        await _type(app2, pilot, "go", wait=0.1)
+        await _type(app2, pilot, "faster", wait=0.1)  # queued into the running turn, which then parks
+        assert await _until(pilot, lambda: app2.screen.convo.parked is not None)
+        await _type(app2, pilot, "yes", wait=0.1)  # answers while reconcile #1's roundtrip is still out
+        await pilot.pause(1.5)
+        assert [s["text"] for s in fake2.sent] == ["go", "yes"]  # "faster" was never re-sent as a turn of its own
+        assert [st.consumed for st in app2.screen.convo.steers] == [True]  # reconcile #2 found it folded in
+
+
+@pytest.mark.asyncio
+async def test_a_form_field_that_reveals_a_sibling_keeps_focus_and_the_caret():
+    """Major: revealing a `showWhen` sibling re-rendered the step and dropped focus onto
+    the scroll container — every following keystroke was lost."""
+    steps = [{"schema": {"properties": {"name": {"type": "string"}, "tag": {"type": "string", "showWhen": {"field": "name"}}}, "required": ["name"]}}]
+    fake = Parking({"kind": "form", "title": "F", "steps": steps})
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "go")
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.3)
+        modal = app.screen
+        assert isinstance(modal, FormModal) and getattr(modal.focused, "id", None) == "in-name"
+        await pilot.press("b")
+        await pilot.pause(0.3)
+        assert getattr(modal.focused, "id", None) == "in-name" and modal.query("#field-tag")
+        await pilot.press(*"ob")
+        await pilot.pause(0.2)
+        assert modal.query_one("#in-name", Input).value == "bob" and modal.values["name"] == "bob"
+        await pilot.press("ctrl+s")
+        await _settle(app, pilot)
+        assert json.loads(_resume_call(fake)["text"]) == {"name": "bob"}
+
+
+@pytest.mark.asyncio
+async def test_an_attached_server_turn_is_not_reported_twice_to_the_feed_and_a_replaced_attach_replays_once():
+    fake = FakeA2A()
+    be = TalkBackend(a2a_client=fake)
+    fe = FakeEvents()
+    app = FleetDeck(be, poll_s=0, events=fe)
+    TOOL = a2a.TOOL_CALL_EXT_URI
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        sid = app.screen.convo.session_id
+
+        def su(meta=None, state="TASK_STATE_WORKING", final=False):
+            msg = {"role": "ROLE_AGENT", "messageId": "m", "parts": []}
+            if meta:
+                msg["metadata"] = meta
+            return {"result": {"statusUpdate": {"taskId": "t7", "contextId": sid, "status": {"state": state, "message": msg}, "final": final}}}
+
+        fake.sub_frames = [
+            {"result": {"task": {"id": "t7", "contextId": sid, "status": {"state": "TASK_STATE_WORKING"}}}},
+            su({TOOL: {"toolCallId": "c1", "name": "read_board", "phase": "started", "args": "x"}}),
+            su({TOOL: {"toolCallId": "c1", "name": "read_board", "phase": "completed", "result": "ok"}}),
+            su(state="TASK_STATE_COMPLETED", final=True),
+        ]
+        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"origin": "scheduler"}))
+        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_start", tool="read_board", tool_call_id="c1", control={"origin": "scheduler"}))
+        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_end", tool="read_board", tool_call_id="c1", output="ok", control={"origin": "scheduler"}))
+        assert await _until(pilot, lambda: app.screen.convo.latest is not None and app.screen.convo.latest.turn.done)
+        await pilot.pause(0.3)
+        assert [(r.glyph, r.label) for r in app.activity.rows if r.tool_id == "c1"] == [("⟳", "read_board"), ("✓", "read_board")]
+    # a turn in flight when the session opens: the durable copy is replaced by the snapshot, not doubled
+    sid2 = "chat-1700000000000-abc"
+    hist = [{"role": "ROLE_USER", "parts": [{"text": "q"}]}, {"role": "ROLE_AGENT", "parts": [{"data": {"text": "thinking hard"}, "metadata": {"mimeType": a2a.REASONING_MIME}}]}]
+    row = {"task_id": "t9", "status": {"state": "TASK_STATE_WORKING"}, "history": hist, "artifacts": []}
+    sub = [
+        {"result": {"task": {"id": "t9", "contextId": sid2, "status": {"state": "TASK_STATE_WORKING"}, "history": hist, "artifacts": []}}},
+        {"result": {"statusUpdate": {"taskId": "t9", "contextId": sid2, "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}}},
+    ]
+    fake2 = FakeA2A(sub_frames=sub)
+    be2 = TalkBackend(a2a_client=fake2, turns={sid2: [row]})
+    app2 = FleetDeck(be2, poll_s=0)
+    async with app2.run_test(size=(120, 36)) as pilot:
+        await _settle(app2, pilot)
+        app2.open_member("protoEngineer-ba4c", sid2)
+        await _settle(app2, pilot)
+        assert await _until(pilot, lambda: app2.screen.convo.latest is not None and app2.screen.convo.latest.turn.done)
+        assert app2.screen.convo.latest.turn.reasoning == "thinking hard"
+
+
+@pytest.mark.asyncio
+async def test_attendance_that_gave_up_is_said_once():
+    be = TalkBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        h = [c for c in be.calls if c[0] == "attend"][-1][2]
+        h.gave_up, h.last_error = True, "HTTP 404: Not Found"
+        seen: list = []
+        app.screen.notify = lambda msg, **kw: seen.append(msg)  # type: ignore[method-assign]
+        app.screen._check_stall()
+        app.screen._check_stall()
+        assert len([m for m in seen if "NOT attended" in m]) == 1

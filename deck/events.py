@@ -48,6 +48,7 @@ from deck import hub as deckhub
 TOPICS = ("chat.progress", "turn.started", "turn.finished", "turn.usage", "turn.input_required", "turn.resumed", "chat.resumed")
 _READ_S = 60.0  # keepalives arrive every 15 s; a minute of silence means the socket is dead
 _BACKOFF_S = (1.0, 2.0, 5.0, 10.0, 20.0)
+_REPLAY_WINDOW_S = 1.0  # after a reconnect with ?since=, the ring's catch-up arrives at once: those frames are REPLAYED, not live
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,8 @@ class Event:
     data: dict
     seq: int | None
     received_at: float = field(default_factory=time.monotonic)
+    ts: float | None = None  # the member's own wall-clock stamp (epoch), when it sends one
+    replayed: bool = False  # a reconnect's catch-up, not a live event: its time is unknown unless stamped
 
 
 def parse_sse(lines: Iterator[str]) -> Iterator[tuple[int | None, dict]]:
@@ -120,8 +123,14 @@ class MemberEvents:
         self.last_seq: int | None = None
         self.connected = False
         self.last_error = ""
+        self.gave_up = False  # a final refusal (401/403, or a route the member does not have)
+
+    _FINAL_STATUSES: tuple[int, ...] = ()  # HTTP statuses that end the loop for good (per stream kind)
 
     def _headers(self) -> dict[str, str]:
+        # Accept is not decoration: the hub proxy puts a request on its unbounded stream
+        # lane by this header (graph/fleet/proxy.py) — without it a long-lived stream would
+        # hit the proxy's read timeout
         h = {"Accept": "text/event-stream"}
         if self._token:
             h["Authorization"] = f"Bearer {self._token}"
@@ -144,14 +153,21 @@ class MemberEvents:
         return {"since": self.last_seq} if self.last_seq is not None else None
 
     def _once(self) -> Iterator[Event]:
-        with self._client.stream("GET", self.path, headers=self._headers(), params=self._params(), timeout=httpx.Timeout(_READ_S, connect=5.0)) as r:
+        params = self._params()
+        replaying = bool(params and "since" in params)
+        with self._client.stream("GET", self.path, headers=self._headers(), params=params, timeout=httpx.Timeout(_READ_S, connect=5.0)) as r:
             self._active = r
             try:
+                if self._stop.is_set():
+                    return  # stop() landed while we were connecting: nothing to wake, just leave
                 if r.status_code in (401, 403):
                     raise deckhub.MemberUnauthorized(self.base_url, self.slug, f"member {self.slug!r} rejected the credential the hub attached")
-                if r.status_code >= 400:
-                    raise deckhub.HubRequestError(self.base_url, r.status_code, (r.text or "")[:200] if r.status_code != 200 else "")
+                if r.status_code >= 300:
+                    r.read()  # a streaming response must be read before its text is available
+                    detail = f"redirect to {r.headers.get('location', '?')!r} not followed" if r.status_code < 400 else (r.text or "")[:200]
+                    raise deckhub.HubRequestError(self.base_url, r.status_code, detail)
                 self.connected = True
+                opened = time.monotonic()
                 for seq, frame in parse_sse(r.iter_lines()):
                     if self._stop.is_set():
                         return
@@ -160,7 +176,15 @@ class MemberEvents:
                     if seq is not None:
                         self.last_seq = seq
                     if topic:
-                        yield Event(slug=self.slug, topic=topic, data=data, seq=seq)
+                        ts = frame.get("ts")
+                        yield Event(
+                            slug=self.slug,
+                            topic=topic,
+                            data=data,
+                            seq=seq,
+                            ts=float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else None,
+                            replayed=replaying and time.monotonic() - opened < _REPLAY_WINDOW_S,
+                        )
             finally:
                 self._active = None
                 self.connected = False
@@ -177,7 +201,15 @@ class MemberEvents:
                 attempt = 0  # a clean close (server restart): reconnect promptly
             except deckhub.MemberUnauthorized as exc:
                 self.last_error = str(exc)
+                self.gave_up = True
                 return
+            except deckhub.HubRequestError as exc:
+                if self._stop.is_set():
+                    return
+                self.last_error = str(exc)
+                if exc.status in self._FINAL_STATUSES:
+                    self.gave_up = True
+                    return
             except (httpx.TransportError, httpx.StreamError, deckhub.HubError) as exc:
                 if self._stop.is_set():
                     return
@@ -194,6 +226,8 @@ class Attendance(MemberEvents):
     in it parks on a question instead of auto-answering, and accepts an operator's
     interjection. Presence fails back to unattended the moment the socket drops, which is
     also what :meth:`stop` does. The stream carries keepalive comments only."""
+
+    _FINAL_STATUSES = (404,)  # a member without the route (an older version): retrying will not grow one
 
     def __init__(self, hub_url: str, token: str | None, slug: str, session_id: str, *, transport: httpx.BaseTransport | None = None, insecure_http: bool = False):
         super().__init__(hub_url, token, slug, transport=transport, insecure_http=insecure_http)

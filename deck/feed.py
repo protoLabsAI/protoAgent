@@ -3,19 +3,26 @@
 The model (:class:`Activity`) folds the fan-in's bus events into two things the UI reads:
 
 - a bounded, time-ordered list of :class:`Row` — one per tool start/end, turn start/finish,
-  room reply, spend line, resume — across every watched member;
-- per-member :class:`TurnState` — is a turn running, is one parked on a question, when
-  was the member last active, what did the last turn cost — which drives the roster's
-  TURN column and the bell.
+  room reply, spend line, park, resume — across every watched member;
+- per-member :class:`TurnState` — is a turn running, is one parked on a question (per
+  session), when was the member last active, what did the last turn cost — which drives
+  the roster's TURN column and the bell.
 
-Two sources feed it. Server-fired turns (scheduler, watch, inbox, webhook, background, a
-delegate's result) publish ``chat.progress`` + ``turn.started``/``turn.finished`` on the
-member's bus. Turns a console or the deck streams itself are NOT republished (they would
-render twice there), so for those the deck's own conversations report into the same model
-(``Activity.note_live`` / ``note_tool``), and ``turn.usage`` — published for EVERY terminal
-turn — closes them. A parked question is found by a low-frequency probe of each online
-member's session inventory (``diagnostics/sessions``: ``latest_task_state`` of
-``input-required``), because the executor's pause is not republished on the bus.
+Three sources feed it, and they MERGE rather than overwrite. Server-fired turns
+(scheduler, watch, inbox, webhook, background, a delegate's result) publish
+``chat.progress`` + ``turn.started``/``turn.finished`` on the member's bus, and EVERY turn
+publishes ``turn.usage`` at its end and ``turn.input_required`` when it parks. Turns a
+console or the deck streams itself are not republished (they would render twice there),
+so the deck's own conversations report into the same model (``note_live`` / ``note_tool`` /
+``park``). And a low-frequency probe of each member's session inventory
+(``diagnostics/sessions``) catches the parks the bus could not show us — a park from before
+the deck connected, or lost in a reconnect gap: it only speaks for the sessions it saw.
+
+Bookkeeping never rings the bell: a park is announced only if it is STILL parked when the
+UI drains. Nothing on the bus is trusted to arrive: a running turn whose end was lost ages
+out (:data:`TURN_TTL_S`), an open tool without its end likewise (:data:`RUNNING_TTL_S`).
+Replayed events (a reconnect's ``?since=`` catch-up) carry no wall-clock time unless the
+member stamps one, so they never pretend to be "now".
 
 Pure Python; the screen lives at the bottom and only renders this model.
 """
@@ -35,12 +42,13 @@ from textual.widgets import DataTable, Footer, Input, Static
 from deck import events as deckevents
 
 MAX_ROWS = 500
-RUNNING_TTL_S = 15 * 60  # a `tool_start` with no end in this long is assumed dead (a lost turn.finished)
+RUNNING_TTL_S = 15 * 60  # a `tool_start` with no end in this long is assumed dead
+TURN_TTL_S = 60 * 60  # a turn with no frame at all in this long is assumed over (its turn.finished was lost)
 
 
 @dataclass
 class Row:
-    ts: float
+    ts: float  # monotonic, arrival order
     slug: str
     member: str
     kind: str  # tool | turn | usage | room | resume | needs-you | fleet
@@ -52,26 +60,34 @@ class Row:
     tool_id: str = ""
     error: bool = False
     controllable: bool = False  # a server-fired turn the operator may interject into
+    at: float | None = None  # wall clock (epoch) when known; None for a replayed event without a stamp
+
+
+@dataclass
+class Park:
+    prompt: str
+    task_id: str = ""
+    source: str = "bus"  # bus | probe | deck
+    since: float = field(default_factory=time.monotonic)
 
 
 @dataclass
 class TurnState:
-    running: set[str] = field(default_factory=set)  # task ids (or session ids) in flight
-    open_tools: dict[str, tuple[str, float]] = field(default_factory=dict)  # tool_id → (name, started)
-    parked: str = ""  # the question / title when a turn waits on the operator
-    parked_session: str = ""  # where it waits (the feed's enter opens it there)
-    parked_task: str = ""
+    running: dict[str, float] = field(default_factory=dict)  # task id (or session id) → last frame heard, monotonic
+    open_tools: dict[str, tuple[str, float, str]] = field(default_factory=dict)  # tool_id → (name, started, task_id)
+    parked: dict[str, Park] = field(default_factory=dict)  # session → the turn waiting on the operator there
+    unparked: dict[str, float] = field(default_factory=dict)  # session → when the bus/deck last cleared it (monotonic)
     server_turns: dict[str, dict] = field(default_factory=dict)  # session → {task_id, origin, trigger, controllable}: a live server-fired turn
-    last_active: float | None = None  # monotonic
+    last_active: float | None = None  # epoch
     last_cost_usd: float | None = None
     last_model: str = ""
 
     @property
     def is_running(self) -> bool:
-        if self.running:
-            return True
         now = time.monotonic()
-        return any(now - started < RUNNING_TTL_S for _, started in self.open_tools.values())
+        if any(now - heard < TURN_TTL_S for heard in self.running.values()):
+            return True
+        return any(now - started < RUNNING_TTL_S for _, started, _ in self.open_tools.values())
 
 
 class Activity:
@@ -79,7 +95,7 @@ class Activity:
         self.rows: deque[Row] = deque(maxlen=MAX_ROWS)
         self.state: dict[str, TurnState] = {}
         self.names: dict[str, str] = dict(names or {})  # slug → display name
-        self.newly_parked: list[str] = []  # slugs that became parked since the last drain (bell)
+        self._new_parks: list[tuple[str, str]] = []  # (slug, session) parked since the last ring_due()
 
     def _st(self, slug: str) -> TurnState:
         return self.state.setdefault(slug, TurnState())
@@ -90,112 +106,155 @@ class Activity:
     def _add(self, row: Row) -> None:
         self.rows.append(row)
         st = self._st(row.slug)
-        if row.kind != "needs-you":
-            st.last_active = row.ts
+        if row.kind != "needs-you" and row.at is not None:
+            st.last_active = max(st.last_active or 0.0, row.at)
 
     # ── bus events ──
 
     def apply(self, ev: deckevents.Event) -> None:
         slug, d, now = ev.slug, ev.data, ev.received_at
+        at = ev.ts if ev.ts is not None else (None if ev.replayed else time.time())
         st = self._st(slug)
+        name = self._name(slug)
         if ev.topic == "chat.progress":
+            # the control block and the task id ride EVERY frame (the console lifts them
+            # off before parsing too): the first frame of a server turn is `turn_started`,
+            # which carries nothing else worth a row
+            sid, tid = str(d.get("session_id") or ""), str(d.get("task_id") or "")
+            ctl = d.get("control") if isinstance(d.get("control"), dict) else None
+            if tid:
+                st.running[tid] = now
+            if ctl and tid and sid:
+                st.server_turns[sid] = {"task_id": tid, "origin": str(ctl.get("origin") or ""), "trigger": str(ctl.get("trigger") or ""), "controllable": bool(ctl.get("operator_controllable"))}
             p = deckevents.parse_progress(d)
             if p is None:
                 return
-            controllable = bool((p.control or {}).get("operator_controllable"))
-            if p.task_id:
-                st.running.add(p.task_id)
-            if p.control and p.task_id:
-                st.server_turns[p.session] = {"task_id": p.task_id, "origin": str(p.control.get("origin") or ""), "trigger": str(p.control.get("trigger") or ""), "controllable": controllable}
+            controllable = bool((ctl or {}).get("operator_controllable"))
             if p.kind == "tool":
                 if p.done:
-                    started = st.open_tools.pop(p.tool_id, (p.name, None))[1]
+                    started = st.open_tools.pop(p.tool_id, (p.name, None, ""))[1]
                     dur = f"  {now - started:.1f}s" if started else ""
-                    self._add(Row(now, slug, self._name(slug), "tool", "✗" if p.error else "✓", p.name or "tool", (_clip(p.output) + dur).strip(), p.session, p.task_id, p.tool_id, p.error, controllable))
+                    self._add(Row(now, slug, name, "tool", "✗" if p.error else "✓", p.name or "tool", (_clip(p.output) + dur).strip(), p.session, p.task_id, p.tool_id, p.error, controllable, at))
                 else:
-                    st.open_tools[p.tool_id] = (p.name, now)
-                    self._add(Row(now, slug, self._name(slug), "tool", "⟳", p.name or "tool", "", p.session, p.task_id, p.tool_id, False, controllable))
+                    st.open_tools[p.tool_id] = (p.name, now, p.task_id)
+                    self._add(Row(now, slug, name, "tool", "⟳", p.name or "tool", "", p.session, p.task_id, p.tool_id, False, controllable, at))
             elif p.kind == "room":
-                self._add(Row(now, slug, self._name(slug), "room", "✓" if p.ok else "✗", f"@{p.author} replied", _clip(p.text), p.session, p.task_id))
+                self._add(Row(now, slug, name, "room", "✓" if p.ok else "✗", f"@{p.author} replied", _clip(p.text), p.session, p.task_id, at=at))
             elif p.kind == "ask":
-                self._add(Row(now, slug, self._name(slug), "room", "⟳", f"asked @{p.addressed_to}", _clip(p.text), p.session, p.task_id))
+                self._add(Row(now, slug, name, "room", "⟳", f"asked @{p.addressed_to}", _clip(p.text), p.session, p.task_id, at=at))
             elif p.kind == "steer":
-                self._add(Row(now, slug, self._name(slug), "turn", "·", "steer folded in", _clip("; ".join(i["text"] for i in p.items)), p.session, p.task_id))
+                self._add(Row(now, slug, name, "turn", "·", "steer folded in", _clip("; ".join(i["text"] for i in p.items)), p.session, p.task_id, at=at))
             # text frames are the transcript's business, not the feed's
         elif ev.topic == "turn.started":
             sid = str(d.get("session_id") or "")
-            st.running.add(sid)
-            if d.get("task_id"):
-                st.server_turns[sid] = {"task_id": str(d["task_id"]), "origin": str(d.get("origin") or ""), "trigger": str(d.get("trigger") or ""), "controllable": bool(st.server_turns.get(sid, {}).get("controllable"))}
-            self._add(Row(now, slug, self._name(slug), "turn", "⟳", "turn started", f"{d.get('origin', '')} · {d.get('trigger', '')}".strip(" ·"), sid, str(d.get("task_id") or "")))
+            st.running[sid] = now  # the scheduler's own event: session-keyed, no task id yet
+            self._add(Row(now, slug, name, "turn", "⟳", "turn started", f"{d.get('origin', '')} · {d.get('trigger', '')}".strip(" ·"), sid, at=at))
         elif ev.topic == "turn.finished":
-            sid = str(d.get("session_id") or "")
-            st.running.discard(sid)
+            sid, tid = str(d.get("session_id") or ""), str(d.get("task_id") or "")
+            st.running.pop(sid, None)
+            st.running.pop(tid, None)
             st.server_turns.pop(sid, None)
-            if d.get("task_id"):
-                st.running.discard(str(d["task_id"]))
+            self.unpark(slug, sid)
             ok = d.get("ok")
-            self._add(Row(now, slug, self._name(slug), "turn", "✓" if ok is not False else "✗", "turn finished", f"{d.get('origin', '')}".strip(), sid, str(d.get("task_id") or ""), error=ok is False))
+            self._add(Row(now, slug, name, "turn", "✓" if ok is not False else "✗", "turn finished", f"{d.get('origin', '')}".strip(), sid, tid, error=ok is False, at=at))
         elif ev.topic == "turn.usage":
-            tid = str(d.get("task_id") or "")
-            st.running.discard(tid)
-            for sid in [k for k, v in st.server_turns.items() if v.get("task_id") == tid]:
-                st.server_turns.pop(sid, None)
-            st.open_tools.clear()  # a terminal turn ends every tool it had open
+            tid, sid = str(d.get("task_id") or ""), str(d.get("context_id") or "")
+            st.running.pop(tid, None)
+            for tool_id in [k for k, v in st.open_tools.items() if v[2] == tid]:
+                st.open_tools.pop(tool_id, None)  # a terminal turn ends every tool IT had open
+            for k in [k for k, v in st.server_turns.items() if v.get("task_id") == tid]:
+                st.server_turns.pop(k, None)
             cost = _num(d.get("cost_usd"))
             st.last_cost_usd = cost
             st.last_model = str(d.get("model") or "")
-            if st.parked and _state(d.get("state")) != "input-required":
-                st.parked = ""
             state = _state(d.get("state"))
-            self._add(Row(now, slug, self._name(slug), "usage", "$", f"turn {state or 'done'}", f"${cost:,.4f} · {int(_num(d.get('input_tokens'))):,} in · {int(_num(d.get('output_tokens'))):,} out" + (f" · {st.last_model}" if st.last_model else ""), str(d.get("context_id") or ""), tid, error=state == "failed"))
+            if sid and state != "input-required":
+                self.unpark(slug, sid)
+            self._add(Row(now, slug, name, "usage", "$", f"turn {state or 'done'}", f"${cost:,.4f} · {int(_num(d.get('input_tokens'))):,} in · {int(_num(d.get('output_tokens'))):,} out" + (f" · {st.last_model}" if st.last_model else ""), sid, tid, error=state == "failed", at=at))
         elif ev.topic == "turn.input_required":
             sid, tid = str(d.get("context_id") or ""), str(d.get("task_id") or "")
-            st.running.discard(tid)
-            st.running.discard(sid)
+            st.running.pop(tid, None)
+            st.running.pop(sid, None)
             st.server_turns.pop(sid, None)  # a parked server turn is no longer addressable
-            self.set_parked(slug, str(d.get("prompt") or "input required"), session=sid, task_id=tid)
+            self.park(slug, sid, str(d.get("prompt") or "input required"), task_id=tid, source="bus", at=at)
         elif ev.topic == "turn.resumed":
-            st.parked = ""
-            if d.get("task_id"):
-                st.running.add(str(d["task_id"]))  # answered: the turn is running again
-            self._add(Row(now, slug, self._name(slug), "resume", "⚑", "question answered", "", str(d.get("context_id") or ""), str(d.get("task_id") or "")))
+            sid, tid = str(d.get("context_id") or ""), str(d.get("task_id") or "")
+            self.unpark(slug, sid)
+            if tid:
+                st.running[tid] = now  # answered: the turn is running again
+            self._add(Row(now, slug, name, "resume", "⚑", "question answered", "", sid, tid, at=at))
         elif ev.topic == "chat.resumed":
             sid = str(d.get("session_id") or "")
-            st.running.discard(sid)
-            self._add(Row(now, slug, self._name(slug), "turn", "✗" if d.get("error") else "✓", "settled", _clip(str(d.get("text") or d.get("error") or "")), sid, str(d.get("task_id") or ""), error=bool(d.get("error"))))
+            st.running.pop(sid, None)
+            self._add(Row(now, slug, name, "turn", "✗" if d.get("error") else "✓", "settled", _clip(str(d.get("text") or d.get("error") or "")), sid, str(d.get("task_id") or ""), error=bool(d.get("error")), at=at))
 
     # ── the deck's own conversations ──
 
     def note_live(self, slug: str, task_id: str, running: bool) -> None:
         st = self._st(slug)
         if running and task_id:
-            st.running.add(task_id)
+            st.running[task_id] = time.monotonic()
         elif task_id:
-            st.running.discard(task_id)
+            st.running.pop(task_id, None)
         if running:
-            st.last_active = time.monotonic()
+            st.last_active = time.time()
 
     def note_tool(self, slug: str, session: str, task_id: str, tool_id: str, name: str, *, done: bool, output: str = "", error: bool = False) -> None:
         now = time.monotonic()
         st = self._st(slug)
         if done:
-            started = st.open_tools.pop(tool_id, (name, None))[1]
+            started = st.open_tools.pop(tool_id, (name, None, task_id))[1]
             dur = f"  {now - started:.1f}s" if started else ""
-            self._add(Row(now, slug, self._name(slug), "tool", "✗" if error else "✓", name, (_clip(output) + dur).strip(), session, task_id, tool_id, error))
+            self._add(Row(now, slug, self._name(slug), "tool", "✗" if error else "✓", name, (_clip(output) + dur).strip(), session, task_id, tool_id, error, at=time.time()))
         else:
-            st.open_tools[tool_id] = (name, now)
-            self._add(Row(now, slug, self._name(slug), "tool", "⟳", name, "", session, task_id, tool_id))
+            st.open_tools[tool_id] = (name, now, task_id)
+            self._add(Row(now, slug, self._name(slug), "tool", "⟳", name, "", session, task_id, tool_id, at=time.time()))
 
-    def set_parked(self, slug: str, question: str, *, session: str = "", task_id: str = "") -> None:
+    # ── parks: one per (member, session), three writers that merge ──
+
+    def park(self, slug: str, session: str, prompt: str, *, task_id: str = "", source: str = "deck", at: float | None = None, probed_at: float | None = None) -> None:
+        """A turn waits on the operator in ``session``. A probe result older than the
+        bus's or the deck's own clearing of that session is stale and ignored."""
         st = self._st(slug)
-        was = st.parked
-        st.parked = question
-        st.parked_session = session if question else ""
-        st.parked_task = task_id if question else ""
-        if question and not was:
-            self.newly_parked.append(slug)
-            self._add(Row(time.monotonic(), slug, self._name(slug), "needs-you", "⚑", "needs you", _clip(question), session, task_id))
+        if probed_at is not None and st.unparked.get(session, -1.0) > probed_at:
+            return
+        was = st.parked.get(session)
+        st.parked[session] = Park(prompt, task_id or (was.task_id if was else ""), source, was.since if was else time.monotonic())
+        if was is None:
+            self._new_parks.append((slug, session))
+            self._add(Row(time.monotonic(), slug, self._name(slug), "needs-you", "⚑", "needs you", _clip(prompt), session, task_id, at=at if at is not None else time.time()))
+
+    def unpark(self, slug: str, session: str, *, probed_at: float | None = None) -> None:
+        """The turn in ``session`` no longer waits. A probe result older than the park it
+        would clear is stale and ignored."""
+        st = self._st(slug)
+        park = st.parked.get(session)
+        if park is None:
+            return
+        if probed_at is not None and park.since > probed_at:
+            return
+        st.parked.pop(session, None)
+        st.unparked[session] = time.monotonic()
+
+    def probe(self, slug: str, seen: dict[str, str], *, probed_at: float) -> None:
+        """Fold one member's session-inventory probe: for every session it SAW, park
+        (reason) or clear (""); sessions outside its window are left alone."""
+        for session, reason in seen.items():
+            if reason:
+                self.park(slug, session, reason, source="probe", probed_at=probed_at)
+            else:
+                self.unpark(slug, session, probed_at=probed_at)
+
+    def ring_due(self) -> list[tuple[str, str, str]]:
+        """``(slug, session, prompt)`` for parks that appeared since the last call AND are
+        still parked now — a park answered within the same drain never rings."""
+        due = []
+        for slug, session in self._new_parks:
+            park = self.state.get(slug, TurnState()).parked.get(session)
+            if park is not None and (slug, session) not in [(a, b) for a, b, _ in due]:
+                due.append((slug, session, park.prompt))
+        self._new_parks.clear()
+        return due
 
     def server_turn(self, slug: str, session_id: str) -> dict | None:
         """The live server-fired turn in this session, if the bus has shown one."""
@@ -203,7 +262,7 @@ class Activity:
         return dict(st.server_turns[session_id]) if st is not None and session_id in st.server_turns else None
 
     def note_fleet(self, slug: str, text: str) -> None:
-        self._add(Row(time.monotonic(), slug, self._name(slug), "fleet", "·", "fleet", text))
+        self._add(Row(time.monotonic(), slug, self._name(slug), "fleet", "·", "fleet", text, at=time.time()))
 
     # ── roster helpers ──
 
@@ -217,12 +276,16 @@ class Activity:
             return "⟳ running"
         return "idle"
 
+    def parked_sessions(self, slug: str) -> list[str]:
+        st = self.state.get(slug)
+        return list(st.parked) if st is not None else []
+
     def last_active_cell(self, slug: str, now: float | None = None) -> str:
         st = self.state.get(slug)
         if st is None or st.last_active is None:
             return ""
-        now = time.monotonic() if now is None else now
-        s = int(now - st.last_active)
+        now = time.time() if now is None else now
+        s = max(0, int(now - st.last_active))
         if s < 60:
             return f"{s}s ago"
         if s < 3600:
@@ -306,9 +369,8 @@ class WorkFeedScreen(Screen):
         self._shown = rows
         at_end = table.cursor_row is None or table.cursor_row >= table.row_count - 1
         table.clear()
-        base = time.time() - time.monotonic()
         for r in rows:
-            wall = time.strftime("%H:%M:%S", time.localtime(base + r.ts))
+            wall = time.strftime("%H:%M:%S", time.localtime(r.at)) if r.at is not None else "  —  ·  "  # a replayed event without a stamp
             glyph = Text(r.glyph, style={"⟳": "yellow", "✓": "green", "✗": "red", "⚑": "bold yellow", "$": "cyan"}.get(r.glyph, "dim"))
             what = Text(r.label, style="red" if r.error else "")
             table.add_row(wall, r.member, glyph, what, r.detail, key=str(id(r)))

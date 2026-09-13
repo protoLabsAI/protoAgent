@@ -68,7 +68,7 @@ then exits:
 Bare `protoagent fleet` (or `protoagent top`) opens an interactive terminal over the
 running hub — the **fleet deck**. The roster shows every member with the console's
 presence words (host, online, remote, stopped, unreachable), version skew, spend over the
-last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` member detail, `s`
+last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` (or `c`) talk to the member, `i` member detail, `w` the work feed, `s`
 start, `x` stop, `r` restart, `l` follow logs, `o` open the member in the browser console,
 `/` filter, `?` help, `q` quit (members keep running). The footer lists only the keys that
 apply to the selected row. Member detail shows runtime status (model, identity, warnings),
@@ -99,8 +99,9 @@ running `task` card — that one delegation, not the turn. While a conversation 
 session is *attended*: a scheduled or inbox turn in it parks on a question instead of
 auto-answering, and the deck attaches to it as it runs (a turn already running when you
 open a session is attached too); when the member says the turn is operator-controllable,
-the composer interjects into it. `esc` on an attached turn detaches — it never cancels
-somebody else's turn.
+the composer interjects into it. `esc` on an attached turn detaches and backs out — it
+never cancels somebody else's turn. (`ctrl+x` is the composer's *cut* while the composer
+has focus; `tab` to the WORK pane first.)
 
 **The work feed.** `w` lists what the fleet is doing — every member's server-fired turns,
 tool calls, room replies, spend, and parked questions, folded from the members' event
