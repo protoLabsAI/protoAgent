@@ -230,14 +230,40 @@ def instance_roots() -> list[Path]:
     return out
 
 
+def _record_ports(workspaces: Path) -> list[int]:
+    """The port each member's ``workspace.yaml`` records under ``<root>/workspaces``. A
+    STOPPED member is usually absent from ``fleet.json`` (the supervisor lists what it
+    started), yet its port is still its own: the member binds it at its next start."""
+    import yaml
+
+    try:
+        dirs = sorted(d for d in workspaces.iterdir() if d.is_dir())
+    except OSError:
+        return []
+    out: list[int] = []
+    for d in dirs:
+        try:
+            rec = yaml.safe_load((d / "workspace.yaml").read_text(encoding="utf-8")) or {}
+            port = int(rec.get("port") or 0) if isinstance(rec, dict) else 0
+        except (OSError, ValueError, TypeError, yaml.YAMLError):
+            continue
+        if port:
+            out.append(port)
+    return out
+
+
 def _ports_on_disk(roots: list[Path]) -> tuple[dict[int, Path], dict[int, Path]]:
     """``(member ports, hub ports)`` every hub root on this box records: members from each
-    root's ``fleet.json`` (the supervisor writes their ports), the hub itself from its
-    ``server.pid``. A local listener is matched here BEFORE any request — a member is
-    then a row under its hub, never a hub row, whatever credential it would refuse."""
+    root's ``fleet.json`` AND from every member's ``workspace.yaml`` (a stopped member is
+    usually only there), the hub itself from its ``server.pid``. A local listener is
+    matched here BEFORE any request — a member is then a row under its hub, never a hub
+    row, whatever credential it would refuse — and a hub brought up never takes a port a
+    member of any instance records."""
     members: dict[int, Path] = {}
     hubs_: dict[int, Path] = {}
     for root in roots:
+        for port in _record_ports(root / "workspaces"):
+            members.setdefault(port, root)
         try:
             fleet = json.loads((root / "workspaces" / FLEET_JSON).read_text(encoding="utf-8"))
         except (OSError, ValueError):

@@ -1017,3 +1017,29 @@ def test_the_non_interactive_verbs_never_load_textual(tmp_path):
         out = subprocess.run([sys.executable, "-c", probe.format(argv=argv)], env=env, capture_output=True, text=True, cwd=str(repo), timeout=120)
         last = (out.stdout.strip().splitlines() or [""])[-1]
         assert last.startswith("False False"), (argv, last, out.stderr[-500:])
+
+
+def test_launch_hub_never_takes_a_stopped_members_port_that_only_its_workspace_yaml_records(tmp_path, monkeypatch):
+    """Integrated test on the epic (live): the dev hub came up on :7871, which the desktop's
+    STOPPED killteamCoach member records in its workspace.yaml — `fleet.json` lists only the
+    members the supervisor started, so the check that read it alone passed falsely."""
+    from deck import discovery
+
+    desktop = tmp_path / "desktop"
+    (desktop / "workspaces" / "killteam-0416").mkdir(parents=True)
+    (desktop / "workspaces" / "killteam-0416" / "workspace.yaml").write_text("id: killteam-0416\nname: killteam\nport: 7871\n")
+    (desktop / "workspaces" / "roxy-e815").mkdir(parents=True)
+    (desktop / "workspaces" / "roxy-e815" / "workspace.yaml").write_text("id: roxy-e815\nname: roxy\nport: 7872\n")
+    (desktop / "workspaces" / "fleet.json").write_text(json.dumps({"roxy-e815": {"pid": 7, "port": 7872}}))  # only the RUNNING member
+    dev = tmp_path / "dev"
+    (dev / "workspaces").mkdir(parents=True)
+    (dev / "workspaces" / "fleet.json").write_text("{}")
+    members, _ = discovery._ports_on_disk([desktop, dev])
+    assert {7871, 7872} <= set(members)  # the stopped member's port is known from its record
+    seen: dict = {}
+    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv) or _Started()))
+    monkeypatch.setattr(cli, "_port_free", lambda port: port != 7870)  # the desktop hub holds 7870; 7871 and 7872 bind (7871's member is stopped)
+    monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
+    monkeypatch.setattr("deck.discovery.instance_roots", lambda: [desktop, dev])
+    cli._launch_hub(discovery.HubRow(name="dev", root=dev, url=None, port=None, presence="stopped", source="root"))
+    assert seen["argv"][-3:] == ["up", "--port", "7873"]
