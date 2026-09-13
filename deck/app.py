@@ -736,6 +736,7 @@ class FleetDeck(App[int]):
         self._start_on_hubs = start_on_hubs
         self._offline = offline  # `--offline`: the tree lists what disk says and probes nothing
         self._attach_gen = 0  # the operator's LAST attach wins: an earlier, slower one is dropped when it lands
+        self._discover_gen = 0  # likewise a rediscover: `exclusive` cancels the task, not the thread, so an older discovery's rows are dropped when they land
         self.hub_rows: list[HubRow] = []
         self.activity = Activity()
         # The fan-in of every online member's event bus (live mode). Injectable for tests.
@@ -879,10 +880,11 @@ class FleetDeck(App[int]):
         if scr is not None:
             scr.busy = True
             scr.render_rows()
-        self._discover_hubs()
+        self._discover_gen += 1
+        self._discover_hubs(self._discover_gen)
 
     @work(thread=True, exclusive=True, group="hubs")
-    def _discover_hubs(self) -> None:
+    def _discover_hubs(self, gen: int) -> None:
         peers: list[dict] = []
         if self._peers is not None:
             try:
@@ -893,15 +895,20 @@ class FleetDeck(App[int]):
         rows = self._keep_starting(rows)
         if self._offline:
             # what disk says, unprobed — as `protoagent fleet --all --offline` prints it
-            self.call_from_thread(self._show_hubs, [r for r in rows if r.source != "local"], False)
+            self.call_from_thread(self._show_discovery, gen, [r for r in rows if r.source != "local"], False)
             return
-        self.call_from_thread(self._show_hubs, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
+        self.call_from_thread(self._show_discovery, gen, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
         roots = _instance_roots()
         for r in rows:
             if r.presence in ("running", "unreachable") and r.candidate is not None:
                 _probe_hub(r, token=self._token, insecure_http=self._insecure_http, roots=roots)
         rows = self._keep_starting(_reconcile_hubs(rows))
-        self.call_from_thread(self._show_hubs, rows, False)
+        self.call_from_thread(self._show_discovery, gen, rows, False)
+
+    def _show_discovery(self, gen: int, rows: list[HubRow], busy: bool) -> None:
+        if gen != self._discover_gen:
+            return  # a rediscover superseded this one: its rows (stale peers, stale state words) must not paint over the newer
+        self._show_hubs(rows, busy)
 
     def _keep_starting(self, rows: list[HubRow]) -> list[HubRow]:
         """A rediscover must not replace the row a bring-up holds: the launcher's outcome

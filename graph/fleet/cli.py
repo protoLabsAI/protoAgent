@@ -511,14 +511,13 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
         print("(no hubs found on this box)")
         return 0
     print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running" + (" · --offline: peers not scanned, hubs not probed" if args.offline else ""))
+    plain = hubs.plain  # a peer names itself and a hub reports its version: no control character reaches the terminal
     for r in rows:
         glyph = hubs.PRESENCE_GLYPH.get(r.presence, "·")
-        members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")
-        place = str(r.root) if r.root is not None else (deckhub.redact_url(r.url) if r.url else "")
-        where = f"{place} — {r.note}" if r.note and r.root is None else (r.note or place)
+        members, where = hubs.row_text(r)
         port = f":{r.port}" if r.port else "—"
-        ver = f"v{r.version}" if r.version else "—"
-        print(f"  {glyph} {r.name:<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {where}")
+        ver = f"v{plain(r.version)}" if r.version else "—"
+        print(f"  {glyph} {plain(r.name):<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {plain(where)}")
     return 0
 
 

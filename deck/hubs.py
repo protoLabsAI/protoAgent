@@ -25,8 +25,11 @@ root (an injected launcher — the CLI supplies it); stopping a hub is not a dec
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 import time
+from urllib.parse import urlsplit
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +47,39 @@ from deck import hub as deckhub
 FLEET_JSON = "fleet.json"
 REMOTES_JSON = "remotes.json"
 PRESENCE_GLYPH = {"running": "●", "unauthorized": "◐", "insecure": "◐", "unreadable": "◐", "unreachable": "◌", "stopped": "○", "starting": "◍"}
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def plain(value: object) -> str:
+    """A remotely supplied string (a peer's name, a hub's version, a note built from either)
+    with every C0 / C1 control character removed, for a terminal's stdout: a newline breaks
+    the row, an ESC or an OSC sequence can clear or rewrite the screen. JSON output keeps the
+    raw value; the deck's cells are rich ``Text``, which strips control codes itself."""
+    return _CONTROL_RE.sub("", str(value))
+
+
+def row_text(r: HubRow) -> tuple[str, str]:
+    """The two derived cells the CLI table and the deck's tree both show: ``members``
+    (``2/3 up · 1 remote``) and ``where`` (the instance root, or the redacted url — with
+    the note folded in for a row that has no root). One place, so they cannot drift."""
+    members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")
+    place = str(r.root) if r.root is not None else (deckhub.redact_url(r.url) if r.url else "")
+    where = f"{place} — {r.note}" if r.note and r.root is None else (r.note or place)
+    return members, where
+
+
+def _peer_destination_ok(url: str) -> bool:
+    """A destination policy for peers that discovery REPORTED: an mDNS advert on an untrusted
+    LAN can name any address, so only a unicast address a hub could plausibly listen on is
+    probed — loopback (this box), private, tailnet or public — never link-local (the cloud
+    metadata range lives there), multicast, unspecified or reserved. A hostname is left to
+    DNS; either way a discovered peer is sent no credential (``HubCandidate.trusted``)."""
+    host = (urlsplit(url).hostname or "").strip("[]")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return bool(host)
+    return not (ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved)
 
 
 @dataclass
@@ -268,7 +304,7 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
             url = deckhub.normalize_url(str(p["url"]))
         except ValueError:
             continue
-        if url in seen_urls:
+        if url in seen_urls or not _peer_destination_ok(url):
             continue
         seen_urls.add(url)
         try:
@@ -510,9 +546,7 @@ class HubTreeScreen(Screen):
         table.clear()
         for i, r in enumerate(self.rows):
             glyph = Text(PRESENCE_GLYPH.get(r.presence, "·"), style={"running": "green", "unauthorized": "yellow", "unreachable": "red", "starting": "yellow"}.get(r.presence, "dim"))
-            members = "—" if r.members is None else (f"{r.running}/{r.members} up" if r.running is not None else f"{r.members}") + (f" · {r.remotes} remote" if r.remotes else "")
-            where = str(r.root) if r.root is not None else deckhub.redact_url(r.url) if r.url else ""
-            note = f"{where} — {r.note}" if r.note and r.root is None else (r.note or where)
+            members, note = row_text(r)
             # every str cell is a Text: a plain str is parsed for console markup, and the
             # name, version and note come from the hub (a peer's are self-reported)
             table.add_row(glyph, Text(r.name), Text(r.presence), Text(r.launcher), Text(str(r.port or "—")), Text(r.version or "—"), Text(members), Text(note, style="yellow" if r.note else "dim"), key=f"{r.key}#{i}")

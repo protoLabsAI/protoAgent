@@ -974,3 +974,24 @@ def test_discover_peers_honours_the_boxs_discovery_knobs(tmp_path, monkeypatch):
     assert cli._discover_peers() == []
     assert discovery._cfg() is None  # no live config in a CLI process: the knobs came from the cascade
     assert calls.get("mdns") is True and calls.get("local_range") == (7870, 7872), calls
+
+
+def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkeypatch, capsys):
+    """CodeRabbit (S5): a discovered peer controls its name and a hub its version/note; both
+    flowed into print() — a newline breaks the row, an ESC or OSC sequence can rewrite the
+    screen. The table strips C0/C1; `--json` keeps the raw value."""
+    from deck import hubs
+
+    evil = "evil\x1b[2J\x07\nhub"
+    row = hubs.HubRow(name=evil, root=None, url="https://ava.tail:7870", port=7870, presence="unauthorized", launcher="peer", source="peer", version="1\x9b0", note="refused\x1b]0;pwned\x07")
+    monkeypatch.setattr(hubs, "enumerate_hubs", lambda *, peers=None: [row])
+    monkeypatch.setattr(hubs, "probe", lambda r, **kw: r)
+    monkeypatch.setattr(hubs, "reconcile", lambda rows: rows)
+    monkeypatch.setattr(cli, "_discover_peers", lambda: [])
+    assert cli.run_fleet_cli(["--all"]) == 0
+    out = capsys.readouterr().out
+    assert "evil[2Jhub" in out and "v10" in out and "pwned" in out
+    assert not any(ord(ch) < 32 and ch != "\n" or 0x7F <= ord(ch) <= 0x9F for ch in out)
+    assert cli.run_fleet_cli(["--all", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert body["hubs"][0]["name"] == evil and body["hubs"][0]["version"] == "1\x9b0"  # raw, for scripts

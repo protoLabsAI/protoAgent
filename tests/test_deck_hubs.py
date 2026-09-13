@@ -676,3 +676,62 @@ async def test_offline_deck_tree_lists_disk_and_probes_nothing(monkeypatch):
         assert isinstance(app.screen, HubTreeScreen) and not app.screen.busy
         assert [(r.name, r.presence) for r in app.hub_rows] == [("studio", "running")]  # what disk says, unprobed
     assert probed == []
+
+
+def test_a_discovered_peer_is_probed_only_at_a_plausible_unicast_destination():
+    """CodeRabbit (S5): an mDNS advert on an untrusted LAN names any address — a link-local
+    (the cloud metadata range), multicast or unspecified one must never be probed; a
+    private, tailnet or public address may be (it still gets no credential)."""
+    peers = [
+        {"name": "meta", "url": "http://169.254.169.254:80"},
+        {"name": "mcast", "url": "http://224.0.0.1:7870"},
+        {"name": "any", "url": "http://0.0.0.0:7870"},
+        {"name": "v6ll", "url": "http://[fe80::1]:7870"},
+        {"name": "lan", "url": "http://192.168.1.9:7870"},
+        {"name": "tail", "url": "http://100.101.1.2:7870"},
+        {"name": "named", "url": "https://ava.tail:7870"},
+    ]
+    rows = hubs.enumerate_hubs(peers=peers)
+    assert [r.name for r in rows if r.source == "peer"] == ["lan", "tail", "named"]
+    assert all(not r.candidate.trusted for r in rows if r.source == "peer")
+
+
+def test_row_text_is_the_one_place_the_cli_and_the_tree_derive_their_cells():
+    """QA panel (S5, minor): the members/where formatting was duplicated verbatim between
+    `_cmd_hubs` and `HubTreeScreen.render_rows`. One helper now; and every control
+    character a peer or hub can plant is stripped before the CLI prints it."""
+    r = HubRow(name="x", root=None, url="https://user:s3cret@ava.tail:7870", port=7870, presence="unauthorized", source="peer", members=3, running=1, remotes=2, note="refused")
+    assert hubs.row_text(r) == ("1/3 up · 2 remote", "https://***@ava.tail:7870 — refused")
+    r2 = HubRow(name="y", root=Path("/tmp/dev"), url=None, port=None, presence="stopped", source="root", members=2)
+    assert hubs.row_text(r2) == ("2", str(Path("/tmp/dev")))
+    assert hubs.plain("evil\x1b[2J\x07hub\nname\x9btail") == "evil[2Jhubnametail"
+
+
+@pytest.mark.asyncio
+async def test_a_superseded_discovery_never_paints_over_the_newer_one(monkeypatch):
+    """CodeRabbit (S5): `exclusive` cancels the awaiting task, not the thread — a slower
+    first discovery landing after a rediscover restored its stale peers and state words."""
+    gate = threading.Event()
+    calls: list[int] = []
+
+    def enumerate(*, peers=None):
+        n = len(calls) + 1
+        calls.append(n)
+        if n == 1:
+            gate.wait(5)  # the first discovery is slow…
+            return [HubRow(name="stale-peer", root=None, url="https://old.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer")]
+        return [HubRow(name="fresh-peer", root=None, url="https://new.tail:7870", port=7870, presence="unreachable", launcher="peer", source="peer")]
+
+    monkeypatch.setattr("deck.app._enumerate_hubs", enumerate)
+    monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: row)
+    monkeypatch.setattr("deck.app._instance_roots", lambda: [])
+    app = FleetDeck(FakeBackend(), poll_s=0, peers=lambda: [], start_on_hubs=True)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause(0.3)  # discovery #1 is out, blocked
+        app.discover_hubs()  # …the operator presses r: discovery #2
+        await pilot.pause(0.3)
+        assert [r.name for r in app.hub_rows] == ["fresh-peer"]
+        gate.set()  # #1 lands late
+        await _settle(app, pilot)
+        await pilot.pause(0.3)
+        assert [r.name for r in app.hub_rows] == ["fresh-peer"] and not app.screen.busy
