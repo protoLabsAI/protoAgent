@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import yaml
 
@@ -111,12 +113,12 @@ def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_pat
     assert manager.create("beta")["port"] == 7873  # …but the readable one is still skipped
 
 
+@pytest.mark.skipif(os.name == "nt", reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS")
 def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
     """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
     `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir. (A fresh copy of the
     module: conftest pins `desktop_box_roots` on the imported one.)"""
     import importlib.util
-    import os
     import sys
 
     spec = importlib.util.find_spec("infra.paths")
