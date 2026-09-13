@@ -76,6 +76,10 @@ def test_stale_open_tool_and_a_turn_whose_end_was_lost_stop_counting_as_running(
     assert act.turn_cell("x") == "⟳ running"
     act.state["x"].running["chat-1"] -= feed.TURN_TTL_S + 1
     assert act.turn_cell("x") == "idle"
+    # a lost turn.finished but a turn.usage that did arrive: the session marker goes too
+    act.apply(ev("x", "turn.started", session_id="chat-9", origin="scheduler"))
+    act.apply(ev("x", "turn.usage", task_id="t9", context_id="chat-9", state="TASK_STATE_COMPLETED"))
+    assert act.turn_cell("x") == "idle"
     # a frame for a task refreshes it: a long turn that keeps talking never ages out
     act.apply(ev("x", "chat.progress", session_id="chat-2", task_id="t2", phase="tool_start", tool="t", tool_call_id="c2"))
     act.state["x"].running["t2"] -= feed.TURN_TTL_S + 1
@@ -193,6 +197,13 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-1", task_id="t9", prompt="Merge?"))
         await pilot.pause(0.7)
         assert rings == [1] and str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⚑ needs you"
+        # the status counts parked TURNS: a second session of the same member is a second turn
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-2", task_id="t10", prompt="Deploy?"))
+        await pilot.pause(0.7)
+        assert "⚑ 2 turns parked on a question (protoEngineer)" in str(app.screen.query_one("#status", Static).content)
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.resumed", context_id="chat-2", task_id="t10"))
+        await pilot.pause(0.7)
+        assert "⚑ 1 turn parked" in str(app.screen.query_one("#status", Static).content)
         # a parked probe result from the poll: a session it saw parked rings; protoEngineer's
         # own park (a session the probe did not see) is untouched
         rings.clear()

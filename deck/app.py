@@ -153,8 +153,9 @@ class RosterScreen(Screen):
         stopped = sum(1 for a in snap.roster if presence_of(a) == "stopped")
         parts = [f"{online} online · {stopped} stopped"]
         parked = [display_name(a) for a in snap.roster if app.activity.turn_cell(slug_of(a)).startswith("⚑")]
+        n_parked = sum(len(app.activity.parked_sessions(slug_of(a))) for a in snap.roster)
         if parked:
-            parts.append(f"⚑ {len(parked)} turn{'s' if len(parked) != 1 else ''} parked on a question ({', '.join(parked)})")
+            parts.append(f"⚑ {n_parked} turn{'s' if n_parked != 1 else ''} parked on a question ({', '.join(parked)})")
         if snap.mode == "offline":
             parts.append("offline: only start/stop are available — start a hub for the rest")
         if self._filter:

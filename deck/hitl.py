@@ -24,6 +24,7 @@ visibility, ``default`` as an answer, required-gating per step.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from textual import on
@@ -303,6 +304,21 @@ class FormModal(ModalScreen[dict | str | None]):
         self.values: dict = seed_defaults(self.steps)
         self.current = 0
         self._plugin = bool(hitl.get("plugin_callback_id"))
+        # a schema key is any string; a Textual id is [A-Za-z_][A-Za-z0-9_-]*: every key gets
+        # a stable safe slot (readable when the key already is one) and a reverse lookup
+        self._slot_of: dict[str, str] = {}
+        self._key_of: dict[str, str] = {}
+        for step in self.steps:
+            for key, _, _ in fields_of(step):
+                if key not in self._slot_of:
+                    base = re.sub(r"[^A-Za-z0-9_-]", "_", key) or "field"
+                    if not re.match(r"[A-Za-z_]", base):
+                        base = f"f_{base}"
+                    slot, n = base, 1
+                    while slot in self._key_of:
+                        n += 1
+                        slot = f"{base}-{n}"
+                    self._slot_of[key], self._key_of[slot] = slot, key
 
     # ── layout ──
 
@@ -354,25 +370,26 @@ class FormModal(ModalScreen[dict | str | None]):
         label = f"{schema.get('title') or key}{' *' if required else ''}"
         value = self.values.get(key)
         opts = options_of(schema)
+        slot = self._slot_of.get(key, key)
         children: list = [] if schema.get("type") == "boolean" else [Label(label)]  # a checkbox carries its own label
         if schema.get("description"):
             children.append(Static(str(schema["description"]), classes="hitl-sub"))
         if is_multi(schema) and opts:
             chosen = set(value) if isinstance(value, list) else set()
-            children.append(SelectionList[str](*[(lab + (f" — {desc}" if desc else ""), val, val in chosen) for val, lab, desc in opts], id=f"in-{key}"))
+            children.append(SelectionList[str](*[(lab + (f" — {desc}" if desc else ""), val, val in chosen) for val, lab, desc in opts], id=f"in-{slot}"))
         elif opts:
             known = {v for v, _, _ in opts}
-            children.append(Select[str]([(lab + (f" — {desc}" if desc else ""), val) for val, lab, desc in opts], value=str(value) if value is not None and str(value) in known else Select.NULL, allow_blank=True, id=f"in-{key}"))
+            children.append(Select[str]([(lab + (f" — {desc}" if desc else ""), val) for val, lab, desc in opts], value=str(value) if value is not None and str(value) in known else Select.NULL, allow_blank=True, id=f"in-{slot}"))
         elif schema.get("type") == "boolean":
-            children.append(Checkbox(label, value=bool(value), id=f"in-{key}"))
+            children.append(Checkbox(label, value=bool(value), id=f"in-{slot}"))
         elif schema.get("format") == "textarea":
-            children.append(TextArea(str(value) if value is not None else "", id=f"in-{key}"))
+            children.append(TextArea(str(value) if value is not None else "", id=f"in-{slot}"))
         else:
             hint = "number" if schema.get("type") in ("number", "integer") else ""
             # select_on_focus=False: a visibility re-render re-focuses the successor Input, and
             # Textual's focus-selects-all would make the next keystroke REPLACE what was typed
-            children.append(Input(value=str(value) if value is not None else "", placeholder=hint, id=f"in-{key}", select_on_focus=False))
-        return Vertical(*children, classes="hitl-field", id=f"field-{key}")
+            children.append(Input(value=str(value) if value is not None else "", placeholder=hint, id=f"in-{slot}", select_on_focus=False))
+        return Vertical(*children, classes="hitl-field", id=f"field-{slot}")
 
     def _render_buttons(self) -> None:
         n = len(self.steps)
@@ -409,7 +426,7 @@ class FormModal(ModalScreen[dict | str | None]):
             self.values[key] = value
         # a sibling's visibility may depend on this answer
         visible_now = {k for k, _, _ in visible_fields_of(self.step, self.values)}
-        shown = {w.id[6:] for w in self.query(".hitl-field") if w.id}
+        shown = {self._key_of.get(w.id[6:], w.id[6:]) for w in self.query(".hitl-field") if w.id}
         if visible_now != shown:
             # the re-render replaces the widget being edited: put focus (and the caret)
             # back on its successor of the same id, or the operator's next keystrokes go
@@ -428,28 +445,28 @@ class FormModal(ModalScreen[dict | str | None]):
     @on(Input.Changed)
     async def _input_changed(self, event: Input.Changed) -> None:
         if event.input.id and event.input.id.startswith("in-"):
-            await self._set(event.input.id[3:], event.value)
+            await self._set(self._key_of.get(event.input.id[3:], event.input.id[3:]), event.value)
 
     @on(TextArea.Changed)
     async def _textarea_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id and event.text_area.id.startswith("in-"):
-            await self._set(event.text_area.id[3:], event.text_area.text)
+            await self._set(self._key_of.get(event.text_area.id[3:], event.text_area.id[3:]), event.text_area.text)
 
     @on(Checkbox.Changed)
     async def _checkbox_changed(self, event: Checkbox.Changed) -> None:
         if event.checkbox.id and event.checkbox.id.startswith("in-"):
-            await self._set(event.checkbox.id[3:], event.value)
+            await self._set(self._key_of.get(event.checkbox.id[3:], event.checkbox.id[3:]), event.value)
 
     @on(Select.Changed)
     async def _select_changed(self, event: Select.Changed) -> None:
         if event.select.id and event.select.id.startswith("in-"):
-            await self._set(event.select.id[3:], None if event.value is Select.NULL else event.value)
+            await self._set(self._key_of.get(event.select.id[3:], event.select.id[3:]), None if event.value is Select.NULL else event.value)
 
     @on(SelectionList.SelectedChanged)
     async def _selection_changed(self, event: SelectionList.SelectedChanged) -> None:
         sl = event.selection_list
         if sl.id and sl.id.startswith("in-"):
-            await self._set(sl.id[3:], list(sl.selected))
+            await self._set(self._key_of.get(sl.id[3:], sl.id[3:]), list(sl.selected))
 
     @on(Input.Submitted)
     async def _input_submitted(self, event: Input.Submitted) -> None:

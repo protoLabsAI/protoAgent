@@ -141,6 +141,7 @@ class Steer:
     text: str
     consumed: bool = False
     interjection: bool = False  # into a server-fired turn (a different route, same queue)
+    queued: bool = False  # the member accepted it (the POST returned); until then a turn-end reconcile cannot judge it
 
 
 @dataclass
@@ -255,7 +256,6 @@ class ConversationScreen(Screen):
         self.reconnects = 0  # SubscribeToTask re-attachments after a silent stretch
         self._attendance: Any = None  # the open /api/chat/attend stream for this session
         self._attend_warned = False
-        self._steer_seq = 0
 
     # ── layout ──
 
@@ -670,7 +670,6 @@ class ConversationScreen(Screen):
     # ── steering a running turn ──
 
     def _queue_steer(self, text: str, *, interjection: bool = False, task_id: str = "") -> None:
-        self._steer_seq += 1
         st = Steer(id=f"{uuid.uuid4().hex}", text=text, interjection=interjection)
         self.convo.steers.append(st)
         self._mount_steer(st)
@@ -685,7 +684,7 @@ class ConversationScreen(Screen):
 
     @staticmethod
     def _steer_text(st: Steer) -> Text:
-        tag = "folded in" if st.consumed else ("queued — interjection" if st.interjection else "queued — folds in at the next model call · up to take it back")
+        tag = "folded in" if st.consumed else ("sending…" if not st.queued else ("queued — interjection" if st.interjection else "queued — folds in at the next model call · up to take it back"))
         t = Text(f"you ›  {st.text}", style="" if st.consumed else "dim")
         t.append(f"   ({tag})", style="dim italic")
         return t
@@ -720,6 +719,19 @@ class ConversationScreen(Screen):
         except Exception as exc:  # noqa: BLE001
             app.call_from_thread(self._drop_steer, st)
             app.call_from_thread(self.notify, f"could not queue the message: {exc}", severity="error", timeout=8)
+            return
+        st.queued = True
+        app.call_from_thread(self._enqueued, st)
+
+    @_ui_safe
+    def _enqueued(self, st: Steer) -> None:
+        """The member holds it now. If the turn it was meant for already ended while the
+        POST was out, judge it against the member's queue — it may need a turn of its own."""
+        self._render_steer(st)
+        self._render_status()
+        latest = self.convo.latest
+        if self.convo.live is None and latest is not None and latest.finished and st in self.convo.steers:
+            self._reconcile_steers(latest)
 
     def on_key(self, event) -> None:
         # up on the EMPTY composer: pull the newest queued steer back into it to edit
@@ -770,7 +782,7 @@ class ConversationScreen(Screen):
         never starts a turn in a session on the server's behalf)."""
         app = self.app
         convo, gen = self.convo, ex.generation  # what this reconcile is FOR; both may have moved on when the answer lands
-        queued = [st for st in convo.steers if not st.consumed]
+        queued = [st for st in convo.steers if not st.consumed and st.queued]  # an enqueue still in flight cannot be judged yet
         if not queued:
             return
         try:
@@ -934,7 +946,7 @@ class ConversationScreen(Screen):
         if act is not None:
             act.note_live(self.slug, ex.turn.task_id, False)
         self._finish_render(ex, error)
-        if self.is_attached and self.convo.queued:
+        if self.is_attached and any(st.queued for st in self.convo.queued):
             self._reconcile_steers(ex)
 
     @_ui_safe

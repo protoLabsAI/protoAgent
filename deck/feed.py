@@ -161,6 +161,7 @@ class Activity:
         elif ev.topic == "turn.usage":
             tid, sid = str(d.get("task_id") or ""), str(d.get("context_id") or "")
             st.running.pop(tid, None)
+            st.running.pop(sid, None)  # turn.started keyed the session; its turn.finished may have been lost
             for tool_id in [k for k, v in st.open_tools.items() if v[2] == tid]:
                 st.open_tools.pop(tool_id, None)  # a terminal turn ends every tool IT had open
             for k in [k for k, v in st.server_turns.items() if v.get("task_id") == tid]:

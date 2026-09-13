@@ -951,3 +951,64 @@ async def test_a_plugin_form_cannot_be_reopened_while_its_submit_is_in_flight():
         assert await _until(pilot, lambda: app.screen.convo.parked is None, timeout=3)
         assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
         assert len([c for c in be.calls if c[0] == "submit_form"]) == 1 and len(fake.sent) == 1
+
+
+
+@pytest.mark.asyncio
+async def test_form_keys_that_are_not_valid_widget_ids_still_render_and_round_trip():
+    """CodeRabbit: a schema key with a dot, a colon, a space or a leading digit is not a
+    Textual id — the modal must not raise, and the answers keep the original keys."""
+    steps = [{"schema": {"properties": {"user.name": {"type": "string"}, "1st": {"type": "string"}, "a b": {"type": "boolean"}, "x:y": {"enum": ["p", "q"]}}, "required": ["user.name"]}}]
+    fake = Parking({"kind": "form", "title": "Odd keys", "steps": steps})
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "go")
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.3)
+        modal = app.screen
+        assert isinstance(modal, FormModal) and len(modal.query(".hitl-field")) == 4
+        assert modal.query_one("#in-user_name", Input) and modal.query_one("#in-f_1st", Input)
+        modal.query_one("#in-user_name", Input).focus()
+        await pilot.press(*"kj")
+        modal.query_one("#in-f_1st", Input).focus()
+        await pilot.press("z")
+        modal.query_one("#in-x_y", Select).value = "q"
+        await pilot.pause(0.2)
+        await pilot.press("ctrl+s")
+        await _settle(app, pilot)
+        assert json.loads(_resume_call(fake)["text"]) == {"user.name": "kj", "1st": "z", "x:y": "q"}
+
+
+@pytest.mark.asyncio
+async def test_a_steer_whose_enqueue_is_in_flight_when_the_turn_ends_is_not_marked_folded_in():
+    """CodeRabbit: the reconcile ran before the steer POST returned, found it absent from the
+    member's queue and marked it consumed — while the POST then queued it after the turn.
+    An in-flight enqueue is not judged; once accepted it is reconciled on its own."""
+    import time as _t
+
+    fake = FakeA2A(hang=True)
+    be = TalkBackend(a2a_client=fake)
+    orig_steer = be.steer
+
+    def slow_steer(agent, sid, msg_id, text):
+        _t.sleep(0.7)
+        return orig_steer(agent, sid, msg_id, text)
+
+    be.steer = slow_steer  # type: ignore[method-assign]
+    be.steer_pending = lambda agent, sid: [{"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"]  # the member holds whatever was accepted
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _type(app, pilot, "go", wait=0.2)
+        await _type(app, pilot, "later", wait=0.1)  # its POST is out for 0.7 s
+        assert "sending" in app.screen.query(".steer-msg").first().render().plain
+        fake.hang = False
+        await pilot.press("escape")  # the turn ends while the enqueue is still out
+        assert await _until(pilot, lambda: app.screen.convo.live is None)
+        assert not any(c[0] == "steer_pending" for c in be.calls)  # nothing to judge yet
+        assert "folded in" not in app.screen.query(".steer-msg").first().render().plain
+        # the POST lands, the member now holds it, the turn is over → it becomes a turn of its own
+        assert await _until(pilot, lambda: len(fake.sent) == 2, timeout=4)
+        assert fake.sent[1]["text"] == "later" and not app.screen.query(".steer-msg")
