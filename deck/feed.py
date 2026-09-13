@@ -219,7 +219,9 @@ class Activity:
         bus's or the deck's own clearing of that session is stale and ignored, and so is
         a probe naming a task the deck itself settled."""
         st = self._st(slug)
-        if probed_at is not None and (st.unparked.get(session, -1.0) > probed_at or (task_id and task_id in st.settled_tasks)):
+        # >= : a clearing stamped in the same clock tick as the probe's read (Windows'
+        # monotonic clock ticks every ~16 ms) is the newer information, not the older
+        if probed_at is not None and (st.unparked.get(session, -1.0) >= probed_at or (task_id and task_id in st.settled_tasks)):
             return
         was = st.parked.get(session)
         st.parked[session] = Park(prompt, task_id or (was.task_id if was else ""), source, was.since if was else time.monotonic())
@@ -236,8 +238,8 @@ class Activity:
         if settle_task:
             st.settled_tasks.add(settle_task)
         park = st.parked.get(session)
-        if park is not None and probed_at is not None and park.since > probed_at:
-            return
+        if park is not None and probed_at is not None and park.since >= probed_at:
+            return  # parked in the same tick the probe read, or after: the probe did not see it
         if probed_at is None:
             st.unparked[session] = time.monotonic()  # stamp even when already clear: a probe that read before now must not re-park
         st.parked.pop(session, None)
