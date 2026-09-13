@@ -111,6 +111,7 @@ def test_read_heartbeats_skips_dead_and_own_pid_and_never_unlinks(tmp_path, monk
     (d / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "port": 7903}))
     (d / "junk.json").write_text("{}")
     monkeypatch.setattr(hub, "pid_alive", lambda pid: pid == live)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == live)
     rows = hub.read_heartbeats(tmp_path)
     assert rows == [{"pid": live, "port": 7901, "identity": "ava", "instance_root": "/x/ava"}]
     # read-only: the stale record is still on disk (pruning is the owning server's job)
@@ -127,6 +128,7 @@ def test_discover_hubs_orders_pidfile_heartbeats_default_and_dedupes(tmp_path, m
 
     monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
     monkeypatch.setattr(hub, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: True)
     desktop = tmp_path / "desktop"
     (desktop / ".instances").mkdir(parents=True)
     (desktop / ".instances" / "222.json").write_text(
@@ -157,6 +159,7 @@ def test_discover_hubs_skips_member_heartbeats(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
     monkeypatch.setattr(hub, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: True)
     box = tmp_path / "box"
     member_root = box / "workspaces" / "killteamCoach-0416"
     member_root.mkdir(parents=True)
@@ -235,6 +238,42 @@ def test_token_chain_sends_no_local_credential_off_box(tmp_path, monkeypatch):
     assert list(hub.token_chain(remote, explicit="explicit")) == ["explicit", "from-env", None]
     local = hub.HubCandidate("http://127.0.0.1:7870", "default")
     assert list(hub.token_chain(local)) == ["from-env", "LOCAL-FLEET-SECRET", "LOCAL-OPERATOR-BEARER", None]
+
+
+def test_token_chain_sends_nothing_to_a_candidate_the_operator_did_not_name(tmp_path, monkeypatch):
+    """CodeRabbit (S5): `--all --token` handed the explicit token (and the env one) to every
+    peer discovery reported — a listener that only has to answer a 200 card to harvest it.
+    An untrusted candidate gets open mode and nothing else, whatever the shell holds."""
+    (tmp_path / "workspaces").mkdir()
+    (tmp_path / "workspaces" / hub.FLEET_TOKEN_FILE).write_text("LOCAL-FLEET-SECRET")
+
+    class _Paths:
+        instance_root = tmp_path
+
+    monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
+    monkeypatch.setattr(hub, "known_box_roots", lambda: [tmp_path])
+    monkeypatch.setenv(hub.ENV_OPERATOR_BEARER, "LOCAL-OPERATOR-BEARER")
+    monkeypatch.setenv(hub.ENV_TOKEN, "from-env")
+    peer = hub.HubCandidate("https://ava.tail:7870", "peer", trusted=False)
+    assert list(hub.token_chain(peer, explicit="explicit")) == [None]
+    # even a loopback listener, when it is untrusted, gets none of the box's tokens
+    assert list(hub.token_chain(hub.HubCandidate("http://127.0.0.1:7870", "peer", trusted=False), explicit="explicit")) == [None]
+
+    # and `connect` sends no Authorization header at all to it: the card is public, the
+    # roster is asked for once, in open mode, and its 401 ends the search
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request):
+        seen.append((request.url.path, request.headers.get("authorization")))
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json={"name": "ava", "version": "0.165.0"})
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(candidates=[peer], token="explicit", transport=_transport(handler))
+    assert ei.value.unauthorized == ["https://ava.tail:7870"]
+    assert [p for p, _ in seen] == ["/.well-known/agent-card.json", "/api/fleet"], seen
+    assert all(h is None for _, h in seen), seen
 
 
 def test_token_chain_without_any_source_is_open_mode_only(tmp_path, monkeypatch):
@@ -503,6 +542,7 @@ def test_connect_counts_a_live_pid_with_no_card_as_answered(tmp_path, monkeypatc
     is a RUNNING hub — the CLI must not read it as "nothing answered" and go to disk."""
     _no_disk_tokens(monkeypatch, tmp_path)
     monkeypatch.setattr(hub, "pid_alive", lambda pid: pid == 4242)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == 4242)
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("stalled", request=request)
@@ -626,3 +666,41 @@ def test_every_manage_path_encodes_its_id_as_one_segment_dots_included():
     paths = [p for _, p in seen]
     assert paths == ["/api/fleet/%2E%2E?purge=true", "/api/fleet/%2E", "/api/fleet/remotes/%2E%2E%2F%2E%2E", "/api/fleet/remotes/a%2Eb", "/api/fleet/%2E%2E/start"]
     assert hub.segment("chat-1.2/3") == "chat-1%2E2%2F3"
+
+
+def test_instance_root_comes_from_config_explain_and_is_none_when_missing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/config/explain":
+            return httpx.Response(200, json={"instance_id": "x", "box_root": "/b", "instance_root": "/b/dev", "paths": {}})
+        return httpx.Response(404)
+
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(handler))
+    assert c.instance_root() == "/b/dev"
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(404)))
+    assert c.instance_root() is None
+
+
+def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, monkeypatch):
+    """Round 2: a heartbeat / pidfile whose pid the OS has since handed to another program
+    painted a stopped hub `running` — then `unreachable` once its port did not answer — and
+    `u` was refused. Liveness is not evidence; being one of our processes is."""
+    root = tmp_path
+    (root / ".instances").mkdir()
+    (root / ".instances" / "1.json").write_text(json.dumps({"pid": 1, "port": 7871, "identity": "dev", "instance_root": str(root / "dev")}))
+    (root / ".instances" / "4242.json").write_text(json.dumps({"pid": 4242, "port": 7872, "identity": "ours", "instance_root": str(root / "ours")}))
+    monkeypatch.setattr(hub, "pid_alive", lambda pid: pid in (1, 4242))  # both alive …
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: pid == 4242)  # … one is a protoAgent
+    assert [h["pid"] for h in hub.read_heartbeats(root)] == [4242]
+
+    inst = tmp_path / "inst"
+    inst.mkdir()
+
+    class _Paths:
+        instance_root = inst
+
+    monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
+    (inst / "server.pid").write_text(json.dumps({"pid": 1, "port": 7871}))
+    assert hub._pidfile_candidate() is None  # a stale pidfile names nothing
+    (inst / "server.pid").write_text(json.dumps({"pid": 4242, "port": 7871}))
+    cand = hub._pidfile_candidate()
+    assert cand is not None and cand.pid == 4242 and cand.url == "http://127.0.0.1:7871"

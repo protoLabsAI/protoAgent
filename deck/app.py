@@ -31,10 +31,17 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, RichLog, Static
 
 from deck import data as deckdata
+from deck import hub as deckhub
 from deck.data import Backend, MemberDetail, Snapshot, display_name, presence_of, slug_of
 from deck.feed import FEED_CSS, Activity, WorkFeedScreen
 from deck.talk import TALK_CSS, ConversationScreen
 from deck.hitl import HITL_CSS
+from deck.hubs import HUBS_CSS, HubRow, HubTreeScreen
+from deck.hubs import enumerate_hubs as _enumerate_hubs
+from deck.hubs import instance_roots as _instance_roots
+from deck.hubs import probe as _probe_hub
+from deck.hubs import reconcile as _reconcile_hubs
+from deck.hubs import wait_for_port as _wait_for_port
 from deck.manage import MANAGE_CSS, DeleteModal, NewAgentModal, RemoteModal, RenameModal
 
 POLL_S = 3.0
@@ -78,6 +85,7 @@ class RosterScreen(Screen):
         Binding("r", "restart", "restart", show=True),
         Binding("l", "logs", "logs", show=True),
         Binding("w", "work", "work", show=True),
+        Binding("H", "hubs", "hubs", show=True),
         Binding("o", "open_console", "console", show=True),
         Binding("slash", "filter", "filter", show=True, key_display="/"),
         Binding("escape", "clear_filter", "clear filter", show=False),
@@ -377,6 +385,9 @@ class RosterScreen(Screen):
     def action_refresh(self) -> None:
         self.app.poll()  # type: ignore[attr-defined]
 
+    def action_hubs(self) -> None:
+        self.app.open_hubs()  # type: ignore[attr-defined]
+
     def action_work(self) -> None:
         if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
             self.notify("the work feed needs a running hub", severity="warning")
@@ -522,7 +533,10 @@ class DetailScreen(Screen):
     @work(thread=True, exclusive=True, group="detail")
     def refresh_detail(self) -> None:
         app: FleetDeck = self.app  # type: ignore[assignment]
-        detail = app.backend.detail(self.agent)
+        try:
+            detail = app.backend.detail(self.agent)
+        except Exception:  # noqa: BLE001 — the hub went away under us (an attach closed its client mid-read); the screen is being popped
+            return
         snap = app.snapshot
         detail.rollup = snap.rollups.get(self.slug) if snap else None
         app.call_from_thread(self.render_detail, detail)
@@ -690,9 +704,21 @@ class FleetDeck(App[int]):
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
     #sessions { height: auto; max-height: 12; }
     #log { height: 1fr; }
-    """ + TALK_CSS + FEED_CSS + HITL_CSS + MANAGE_CSS
+    """ + TALK_CSS + FEED_CSS + HITL_CSS + MANAGE_CSS + HUBS_CSS
 
-    def __init__(self, backend: Backend, *, poll_s: float = POLL_S, events: Any = None) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        *,
+        poll_s: float = POLL_S,
+        events: Any = None,
+        peers: Any = None,
+        launcher: Any = None,
+        token: str | None = None,
+        insecure_http: bool = False,
+        start_on_hubs: bool = False,
+        offline: bool = False,
+    ) -> None:
         super().__init__()
         self.backend = backend
         self.snapshot: Snapshot | None = None
@@ -701,6 +727,17 @@ class FleetDeck(App[int]):
         self._order_seq = 0  # …numbered per press on the UI thread…
         self._order_sent = 0  # …and a press older than the newest on the hub is dropped
         self.warm_max: int | None = None  # the hub's fleet.warm.max, read once (read-only here)
+        # the hub tree (#3472): peers come from the CLI (graph.fleet.discovery runs there),
+        # so does the launcher that brings a stopped hub up (`protoagent up` for its root)
+        self._peers = peers  # Callable[[], list[dict]] | None
+        self._launcher = launcher  # Callable[[HubRow], None] | None
+        self._token = token  # an explicit --token, for peers and re-attaches
+        self._insecure_http = insecure_http
+        self._start_on_hubs = start_on_hubs
+        self._offline = offline  # `--offline`: the tree lists what disk says and probes nothing
+        self._attach_gen = 0  # the operator's LAST attach wins: an earlier, slower one is dropped when it lands
+        self._discover_gen = 0  # likewise a rediscover: `exclusive` cancels the task, not the thread, so an older discovery's rows are dropped when they land
+        self.hub_rows: list[HubRow] = []
         self.activity = Activity()
         # The fan-in of every online member's event bus (live mode). Injectable for tests.
         self.events = events
@@ -708,6 +745,8 @@ class FleetDeck(App[int]):
 
     def on_mount(self) -> None:
         self.push_screen(RosterScreen())
+        if self._start_on_hubs:
+            self.push_screen(HubTreeScreen())
         if self._events_pending:
             try:
                 self.events = self.backend.fleet_events()  # type: ignore[attr-defined]
@@ -722,14 +761,20 @@ class FleetDeck(App[int]):
 
     @work(thread=True, group="warm")
     def _read_warm_max(self) -> None:
+        backend = self.backend
         try:
-            v = self.backend.warm_max()
+            v = backend.warm_max()
         except Exception:  # noqa: BLE001 — a footer figure, never fatal
             return
+        self.call_from_thread(self._set_warm_max, v, backend)
+
+    def _set_warm_max(self, v: int | None, backend: Any) -> None:
+        if backend is not self.backend:
+            return  # the deck attached to another hub while this read was out
         self.warm_max = v
         roster = self._roster_screen()
         if roster is not None and self.snapshot is not None:
-            self.call_from_thread(roster.render_snapshot, self.snapshot)
+            roster.render_snapshot(self.snapshot)  # read on the UI thread: a snapshot captured in the worker could be the "attaching" placeholder the first poll has since replaced
 
     def drain_events(self) -> None:
         """Fold what the member buses sent since the last tick into the activity model;
@@ -775,14 +820,17 @@ class FleetDeck(App[int]):
 
     @work(thread=True, exclusive=True, group="poll")
     def poll(self) -> None:
-        snap = self.backend.snapshot()
+        backend = self.backend  # the hub this poll is FOR — `exclusive` cancels the task, not the thread
+        snap = backend.snapshot()
         if snap.error and self.snapshot is not None:
             # keep the last good roster, surface the failure
             keep = self.snapshot
             snap = Snapshot(mode=keep.mode, label=keep.label, roster=keep.roster, host_version=keep.host_version, rollups=keep.rollups, warnings=keep.warnings, error=snap.error)
-        self.call_from_thread(self._apply, snap)
+        self.call_from_thread(self._apply, snap, backend)
 
-    def _apply(self, snap: Snapshot) -> None:
+    def _apply(self, snap: Snapshot, backend: Any = None) -> None:
+        if backend is not None and backend is not self.backend:
+            return  # a poll of the hub the deck just left: its fleet must not paint the new hub's roster
         self.snapshot = snap
         self.activity.names.update({slug_of(a): display_name(a) for a in snap.roster})
         if self.events is not None:
@@ -802,6 +850,181 @@ class FleetDeck(App[int]):
             if isinstance(scr, RosterScreen):
                 return scr
         return None
+
+    # ── the hub tree (#3472): every hub on the box, attach, bring up ──
+
+    @property
+    def can_bring_up(self) -> bool:
+        return self._launcher is not None
+
+    @property
+    def bringing_up(self) -> bool:
+        return any(w.group == "bring-up" and w.is_running for w in self.workers)
+
+    def _hubs_screen(self) -> HubTreeScreen | None:
+        for scr in self.screen_stack:
+            if isinstance(scr, HubTreeScreen):
+                return scr
+        return None
+
+    def open_hubs(self) -> None:
+        if self._hubs_screen() is not None:
+            return
+        discovering = any(w.group == "hubs" and w.is_running for w in self.workers)
+        self.push_screen(HubTreeScreen(self.hub_rows, busy=discovering))  # re-opened mid-discovery: still working
+        if not self.hub_rows and not discovering:
+            self.discover_hubs()
+
+    def discover_hubs(self) -> None:
+        scr = self._hubs_screen()
+        if scr is not None:
+            scr.busy = True
+            scr.render_rows()
+        self._discover_gen += 1
+        self._discover_hubs(self._discover_gen)
+
+    @work(thread=True, exclusive=True, group="hubs")
+    def _discover_hubs(self, gen: int) -> None:
+        peers: list[dict] = []
+        if self._peers is not None:
+            try:
+                peers = list(self._peers() or [])
+            except Exception as exc:  # noqa: BLE001 — the box's own hubs still show
+                self.call_from_thread(self.notify, f"peer discovery failed: {exc}", severity="warning", timeout=8)
+        rows = _enumerate_hubs(peers=peers)
+        rows = self._keep_starting(rows)
+        if self._offline:
+            # what disk says, unprobed — as `protoagent fleet --all --offline` prints it
+            self.call_from_thread(self._show_discovery, gen, [r for r in rows if r.source != "local"], False)
+            return
+        self.call_from_thread(self._show_discovery, gen, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
+        roots = _instance_roots()
+        for r in rows:
+            if r.presence in ("running", "unreachable") and r.candidate is not None:
+                _probe_hub(r, token=self._token, insecure_http=self._insecure_http, roots=roots)
+        rows = self._keep_starting(_reconcile_hubs(rows))
+        self.call_from_thread(self._show_discovery, gen, rows, False)
+
+    def _show_discovery(self, gen: int, rows: list[HubRow], busy: bool) -> None:
+        if gen != self._discover_gen:
+            return  # a rediscover superseded this one: its rows (stale peers, stale state words) must not paint over the newer
+        self._show_hubs(rows, busy)
+
+    def _keep_starting(self, rows: list[HubRow]) -> list[HubRow]:
+        """A rediscover must not replace the row a bring-up holds: the launcher's outcome
+        lands on that object, so it stays in the model (by root) until it settles."""
+        starting = {r.root: r for r in self.hub_rows if r.presence == "starting" and r.root is not None}
+        if not starting:
+            return rows
+        return [starting.get(r.root, r) if r.root is not None else r for r in rows]
+
+    def _show_hubs(self, rows: list[HubRow], busy: bool) -> None:
+        self.hub_rows = rows
+        scr = self._hubs_screen()
+        if scr is not None:
+            scr.rows = rows
+            scr.busy = busy
+            scr.render_rows()
+
+    def attach_hub(self, row: HubRow) -> None:
+        """Point the deck at another hub: a fresh backend and event fan-in over that hub's
+        client (its own credential), the activity model reset — the roster then shows that
+        fleet. The previous hub's readers are stopped first."""
+        if row.candidate is None or row.presence != "running":
+            self.notify(f"{row.name} is {row.presence}", severity="warning")
+            return
+        self.notify(f"attaching to {row.name}…")
+        self._attach_gen += 1
+        self._attach_hub(row, self._attach_gen)
+
+    @work(thread=True, exclusive=True, group="attach")
+    def _attach_hub(self, row: HubRow, gen: int) -> None:
+        from deck.data import LiveBackend
+
+        try:
+            conn = deckhub.connect(candidates=[row.candidate], token=row.token or self._token, insecure_http=self._insecure_http)
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"could not attach to {row.name}: {exc}", severity="error", timeout=10)
+            return
+        self.call_from_thread(self._switch_backend, LiveBackend(conn), row, gen)
+
+    def _switch_backend(self, backend: Backend, row: HubRow, gen: int | None = None) -> None:
+        if gen is not None and gen != self._attach_gen:
+            # `exclusive` cancelled the awaiting task, not this thread's work: a slower attach
+            # the operator abandoned for another hub lands here after it — that hub is not
+            # the deck's; the one they chose last is
+            try:
+                backend.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        old_events, old_backend = self.events, self.backend
+        self.events = None
+        self.backend = backend
+        self.snapshot = None
+        self.activity = Activity()
+        self.warm_max = None
+        if old_events is not None:
+            try:
+                old_events.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            old_backend.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.events = backend.fleet_events()  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"live activity unavailable: {exc}", severity="warning")
+        # back to the roster, whatever was above it
+        while not isinstance(self.screen, RosterScreen) and len(self.screen_stack) > 1:
+            self.pop_screen()
+        roster = self._roster_screen()
+        if roster is not None:
+            roster.render_snapshot(Snapshot(mode="live", label=f"attaching to {row.name} · {row.url}", roster=[]))
+        self.notify(f"attached to {row.name} ({row.url})")
+        self.poll()
+        self._read_warm_max()
+
+    def bring_up(self, row: HubRow) -> None:
+        if self._launcher is None:
+            self.notify("bringing a hub up needs the CLI's launcher — run the deck with `protoagent fleet`", severity="warning")
+            return
+        if row.root is None or row.presence != "stopped":
+            return
+        row.presence = "starting"
+        row.note = f"protoagent up for {row.root}"
+        self._show_hubs(self.hub_rows, True)
+        self.notify(f"bringing {row.name} up…")
+        self._bring_up(row)
+
+    @work(thread=True, group="bring-up")
+    def _bring_up(self, row: HubRow) -> None:
+        try:
+            self._launcher(row)  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001
+            row.presence = "stopped"
+            row.note = f"could not start: {exc}"
+            self.call_from_thread(self._show_hubs, self.hub_rows, False)
+            self.call_from_thread(self.notify, f"{row.name}: {exc}", severity="error", timeout=10)
+            return
+        if not row.url and row.port:
+            row.url = deckhub._loopback(row.port)
+        if not row.url or not _wait_for_port(row.url):
+            row.presence = "stopped"
+            row.note = "started, but its port did not answer in time — see its server.log"
+            self.call_from_thread(self._show_hubs, self.hub_rows, False)
+            self.call_from_thread(self.notify, f"{row.name}: started, but its port did not answer in time — see {row.root}/server.log", severity="error", timeout=10)
+            return
+        row.candidate = deckhub.HubCandidate(row.url, "pidfile", instance_root=row.root)
+        row.presence = "running"
+        row.launcher = "protoagent up"  # that is what the launcher ran; the next discovery reads it from the pidfile
+        row.note = ""
+        _probe_hub(row, token=self._token, insecure_http=self._insecure_http)
+        self.call_from_thread(self._show_hubs, self.hub_rows, False)
+        if row.presence == "running":
+            self.call_from_thread(self.attach_hub, row)
 
     # ── manage (#3471): mutations by immutable id, through the hub ──
 
@@ -951,10 +1174,11 @@ class FleetDeck(App[int]):
         self.backend.close()
 
 
-def run(backend: Backend) -> int:
+def run(backend: Backend, **kw: Any) -> int:
     """Run the deck to completion and return an exit code. A fatal error inside the app
-    (Textual sets ``return_code``) must not read as a clean exit."""
-    app = FleetDeck(backend)
+    (Textual sets ``return_code``) must not read as a clean exit. ``kw`` are
+    :class:`FleetDeck`'s keyword options (peers / launcher / token / start_on_hubs…)."""
+    app = FleetDeck(backend, **kw)
     code = app.run()
     if app.return_code:
         return int(app.return_code)

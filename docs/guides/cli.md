@@ -54,6 +54,7 @@ then exits:
 | `protoagent plugin install <git-url>` · `list` · `update` · `uninstall` · `sync` | Manage drop-in plugins (pinned in `plugins.lock`). | [0027](../adr/0027-install-plugins-from-git-url.md) |
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
@@ -70,7 +71,7 @@ running hub — the **fleet deck**. The roster shows every member with the conso
 presence words (host, online, remote, stopped, unreachable), version skew, spend over the
 last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` (or `c`) talk to the member, `i` member detail, `w` the work feed, `n` new
 member, `R` rename, `d` delete, `a` add a remote, `e` edit a remote, `J`/`K` move a row (with
-no filter active), `F5` refresh, `s`
+no filter active), `H` every hub on the box, `F5` refresh, `s`
 start, `x` stop, `r` restart, `l` follow logs, `o` open the member in the browser console,
 `/` filter, `?` help, `q` quit (members keep running). The footer lists only the keys that
 apply to the selected row. Member detail shows runtime status (model, identity, warnings),
@@ -122,6 +123,23 @@ other, not both); `d` on a remote only unregisters it. An unreachable remote rea
 of member ids. The status line shows the hub's warm-agent cap (`fleet.warm.max`;
 read-only here — change it in the hub's settings).
 
+**Every hub on the box.** `H` (or `protoagent fleet --all`) lists the hubs this machine
+runs — the desktop app's, `~/.protoagent`, each scoped instance under it — and peers found
+on this box's ports and the tailnet (and the LAN when `fleet.discovery.mdns` is on): one row per hub with its state, how it was launched (desktop
+app, `protoagent up`, foreground), port, version and member counts, then its instance
+root. Running hubs come from the `.instances/` heartbeats under every known box root;
+stopped ones from every instance root that carries a `workspaces/fleet.json` (a member's
+root is never a hub row). This shell's own instance is one input among these, never the
+only one — what a shell "sees" is not what it inherited.
+A running hub is probed with its own fleet token: one that answers but refuses every
+credential reads `unauthorized` (pass `--token`), one that does not answer `unreachable`.
+A peer found on the network is never sent a credential — not `--token`, not the env — its
+name and url are its own claim; to open one with a bearer, name it: `--hub <url> --token`.
+`enter` attaches the deck to that hub — the roster, feed and conversations then belong to
+its fleet; `u` on a stopped hub runs `protoagent up` for that instance root and attaches
+once its port answers. Stopping a hub is not a deck action (`protoagent down` in that
+instance). Two hubs claiming one port both say so — ports are box-global.
+
 **The work feed.** `w` lists what the fleet is doing — every member's server-fired turns,
 tool calls, room replies, spend, and parked questions, folded from the members' event
 buses into one time-ordered feed. `f` filters, `p` pauses, `enter` opens the member's
@@ -161,6 +179,7 @@ protoagent fleet rm scout --purge               # asks you to type the name; --y
 protoagent fleet remote add ava https://ava.tail:7870 --bearer-stdin < token.txt
 protoagent fleet remote edit ava --url https://ava2.tail:7870 --clear-bearer
 protoagent fleet order protoagent scout-1a2b r-ava   # every member id, in the order wanted
+protoagent fleet --all                          # every hub on this box (and peers), probed; --json for scripts
 protoagent fleet ls --hub https://ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an explicit --hub that fails is an error, not a fallback)
 protoagent fleet ls --hub http://100.119.239.8:7870 --token "$TOKEN" --insecure-http   # a tailnet peer: http, but encrypted underneath
 protoagent fleet ls --offline             # this instance's fleet.json, no probe

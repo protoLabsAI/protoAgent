@@ -50,6 +50,7 @@ def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
         **d,
     )
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting", **d)
+    p.add_argument("--all", dest="all_hubs", action="store_true", help="every hub on this box (and peers found on the network), not one hub's fleet", **d)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -354,6 +355,170 @@ def _cmd_down(args: argparse.Namespace) -> int:
 
 
 # ── the deck (bare `protoagent fleet`, or `protoagent top`) ──────────────────
+
+
+# ── every hub on the box (#3472) ─────────────────────────────────────────────
+
+
+def _discover_peers() -> list[dict]:
+    """Other protoAgents on the LAN / tailnet / local ports, via the fleet's own discovery
+    (``graph.fleet.discovery`` — the deck never imports ``graph``, so the CLI hands the
+    callable over). Best-effort, bounded by the discovery's own timeouts."""
+    import asyncio
+
+    from graph.fleet import discovery
+
+    # The discovery knobs (ADR 0047 D8 `fleet.discovery.mdns` / `port_min` / `port_max`)
+    # live in the Host layer; `discovery` reads them from the live server's STATE, which a
+    # CLI process does not have — resolve them from the cascade here or the LAN channel
+    # never opens and the range is always the default, whatever the box was told.
+    mdns: bool | None = None
+    port_range: tuple[int, int] | None = None
+    try:
+        from graph.config import LangGraphConfig
+        from graph.config_io import config_yaml_path
+
+        cfg = LangGraphConfig.from_yaml(config_yaml_path())
+        mdns = bool(getattr(cfg, "discovery_mdns", False))
+        port_range = (int(getattr(cfg, "discovery_port_min", 7860)), int(getattr(cfg, "discovery_port_max", 7910)))
+    except Exception as exc:  # noqa: BLE001 — no readable config: the discovery's own defaults
+        logging.getLogger("protoagent.fleet").debug("discovery knobs unreadable, using defaults: %s", exc)
+    try:
+        return asyncio.run(discovery.discover(mdns=mdns, port_range=port_range))
+    except Exception as exc:  # noqa: BLE001 — a network scan must not take the tree down
+        logging.getLogger("protoagent.fleet").debug("peer discovery failed: %s", exc)
+        return []
+
+
+def _port_free(port: int) -> bool:
+    """Nothing answers on the port AND it binds: a wildcard (0.0.0.0) listener lets a
+    loopback bind succeed on macOS, so the connect probe (as ``server/cli.py::_port_open``
+    does) is what catches it."""
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return False  # something answers there
+    except OSError:
+        pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _pick_port(preferred: int | None, *, taken: frozenset[int] | set[int] = frozenset(), low: int = 7870, high: int = 7910) -> int:
+    """The port a stopped hub should come up on: the one it last used when nothing holds
+    it, else the first free one in the fleet's range (ports are box-global: the desktop
+    hub usually holds 7870). ``taken`` are ports other hubs' records on disk own — a
+    stopped MEMBER's fixed port is free right now and must still not be taken, or that
+    member dies with EADDRINUSE at its next start."""
+    if preferred and preferred not in taken and _port_free(preferred):
+        return preferred
+    for p in range(low, high + 1):
+        if p != preferred and p not in taken and _port_free(p):
+            return p
+    raise RuntimeError(f"no free port between {low} and {high} on this box")
+
+
+def _same_dir(a, b) -> bool:
+    from pathlib import Path
+
+    try:
+        return Path(a).expanduser().resolve() == Path(b).expanduser().resolve()
+    except OSError:
+        return False
+
+
+def _launch_hub(row) -> None:
+    """``protoagent up`` for another instance root — the detached server the CLI's own
+    ``up`` starts, scoped by ``PROTOAGENT_HOME`` (the instance root) and never by this
+    shell's environment. A hub with no remembered port (no ``server.pid``: the desktop's,
+    a dev instance last run in the foreground) gets the first free one in the fleet's
+    range, and the row learns it. Raises with the CLI's own message when it could not start."""
+    import importlib
+    import os
+    import subprocess
+    from pathlib import Path
+
+    if row.root is None:
+        raise RuntimeError("only a hub with an instance root on this box can be brought up")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PROTOAGENT_")}
+    env["PROTOAGENT_HOME"] = str(row.root)
+    if any(_same_dir(row.root, d) for d in deckhub.desktop_box_roots()):
+        # the desktop app runs its hub with the box root AT its instance root; a server
+        # started for that root must see the same Host layer, commons and credential
+        # store, not this machine's plain ~/.protoagent
+        env["PROTOAGENT_BOX_ROOT"] = str(row.root)
+    else:
+        # a scoped instance under a box root that is not the plain data home (this shell's
+        # PROTOAGENT_BOX_ROOT, the desktop's): the child must resolve the SAME box — its Host
+        # layer, commons, credential store and the .instances/ its heartbeat lands in — not
+        # ~/.protoagent, which is what a stripped environment would give it
+        parent = Path(row.root).parent
+        if not _same_dir(parent, deckhub.data_home()) and any(_same_dir(parent, b) for b in deckhub.known_box_roots()):
+            env["PROTOAGENT_BOX_ROOT"] = str(parent)
+    hubs = importlib.import_module("deck.hubs")
+    member_ports, hub_ports = hubs._ports_on_disk(hubs.instance_roots())
+    taken = set(member_ports) | {p for p, r in hub_ports.items() if not _same_dir(r, row.root)}
+    port = _pick_port(row.port, taken=taken)
+    row.port = port
+    row.url = deckhub._loopback(port)
+    # the frozen-aware base argv (as server/cli.py builds it — graph must not import server)
+    base = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "server"]
+    argv = [*base, "up", "--port", str(port)]
+    proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "").strip().splitlines()[-1] if (proc.stderr or proc.stdout).strip() else f"protoagent up exited {proc.returncode}")
+
+
+def _hub_row_dict(r) -> dict:
+    return {
+        "name": r.name,
+        "presence": r.presence,
+        "launcher": r.launcher,
+        "url": r.url,
+        "port": r.port,
+        "version": r.version,
+        "pid": r.pid,
+        "root": str(r.root) if r.root is not None else None,
+        "members": r.members,
+        "running": r.running,
+        "remotes": r.remotes,
+        "note": r.note,
+        "source": r.source,
+    }
+
+
+def _cmd_hubs(args: argparse.Namespace) -> int:
+    """``protoagent fleet --all``: every hub on this box, probed, plus peers."""
+    import importlib
+
+    hubs = importlib.import_module("deck.hubs")
+    rows = hubs.enumerate_hubs(peers=[] if args.offline else _discover_peers())
+    roots = hubs.instance_roots()
+    for r in rows:
+        if r.candidate is not None and not args.offline:
+            hubs.probe(r, token=args.token, insecure_http=args.insecure_http, roots=roots)
+    rows = hubs.reconcile(rows)
+    if args.as_json:
+        _emit({"mode": "hubs", "offline": bool(args.offline), "hubs": [_hub_row_dict(r) for r in rows]})
+        return 0
+    if not rows:
+        print("(no hubs found on this box)")
+        return 0
+    print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running" + (" · --offline: peers not scanned, hubs not probed" if args.offline else ""))
+    plain = hubs.plain  # a peer names itself and a hub reports its version: no control character reaches the terminal
+    for r in rows:
+        glyph = hubs.PRESENCE_GLYPH.get(r.presence, "·")
+        members, where = hubs.row_text(r)
+        port = f":{r.port}" if r.port else "—"
+        ver = f"v{plain(r.version)}" if r.version else "—"
+        print(f"  {glyph} {plain(r.name):<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {plain(where)}")
+    return 0
 
 
 # ── manage (#3471) ───────────────────────────────────────────────────────────
@@ -664,12 +829,32 @@ def _cmd_deck(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    conn = _open_hub(args)
+    reason = "no hub answered"
+    if args.all_hubs:
+        # `--all` opens on the tree, which is the one view that can SHOW a hub that answered
+        # but refused this shell's credentials — that must not be the error that keeps the
+        # tree from opening. The roster underneath starts offline and says why.
+        try:
+            conn = _open_hub(args)
+        except deckhub.HubError as exc:
+            conn, reason = None, str(exc)
+    else:
+        conn = _open_hub(args)
     if conn is not None:
         backend = deckdata.LiveBackend(conn)
     else:
-        backend = _offline_backend("no hub answered")
-    return int(deckapp.run(backend))
+        backend = _offline_backend(reason)
+    return int(
+        deckapp.run(
+            backend,
+            peers=None if args.offline else _discover_peers,
+            launcher=_launch_hub,
+            token=args.token,
+            insecure_http=args.insecure_http,
+            start_on_hubs=bool(args.all_hubs),
+            offline=bool(args.offline),
+        )
+    )
 
 
 def run_deck_cli(argv: list[str]) -> int:
@@ -696,6 +881,8 @@ def run_fleet_cli(argv: list[str]) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         if args.cmd is None:
+            if args.all_hubs and (args.as_json or not (sys.stdout.isatty() and sys.stdin.isatty())):
+                return _cmd_hubs(args)  # the tree, non-interactively
             return _cmd_deck(args)
         if args.cmd == "up":
             return _cmd_up(args)

@@ -104,6 +104,14 @@ def data_home() -> Path:
     return _paths.data_home()
 
 
+def is_protoagent_pid(pid: int) -> bool:
+    """A live pid that is one of ours (a recycled pid is not)."""
+    try:
+        return pid_alive(pid) and bool(_paths._is_protoagent_pid(pid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def pid_alive(pid: int) -> bool:
     return _paths.pid_alive(pid)
 
@@ -202,6 +210,10 @@ class HubCandidate:
     instance_root: Path | None = None
     identity: str = ""
     pid: int | None = None
+    # False for a listener that network discovery reported (its name and url are
+    # self-reported): it is never sent a credential — not --token, not the env. An operator
+    # who wants to open it with a bearer names it: ``protoagent fleet --hub <url> --token``.
+    trusted: bool = True
 
 
 _USERINFO_RE = re.compile(r"(?<=://)[^/@\s]*@")
@@ -292,9 +304,12 @@ def is_member_root(instance_root: Path | None) -> bool:
 
 
 def read_heartbeats(root: Path) -> list[dict]:
-    """The live ``.instances/<pid>.json`` records under ``root``. Dead pids are SKIPPED,
-    never unlinked — pruning is the owning server's job (``infra.paths.colocated_instances``);
-    a read-only CLI must not mutate another box root's state."""
+    """The live ``.instances/<pid>.json`` records under ``root``. Dead pids — and RECYCLED
+    ones, a pid the OS handed to some other program since the record was written — are
+    SKIPPED, never unlinked: pruning is the owning server's job
+    (``infra.paths.colocated_instances``); a read-only CLI must not mutate another box
+    root's state. A record whose pid is alive but not a protoAgent would otherwise paint a
+    stopped hub ``running`` (then ``unreachable`` once its port did not answer)."""
     d = root / ".instances"
     out: list[dict] = []
     if not d.is_dir():
@@ -304,7 +319,7 @@ def read_heartbeats(root: Path) -> list[dict]:
             pid = int(f.stem)
         except ValueError:
             continue
-        if pid == os.getpid() or not pid_alive(pid):
+        if pid == os.getpid() or not is_protoagent_pid(pid):
             continue
         try:
             rec = json.loads(f.read_text(encoding="utf-8"))
@@ -338,8 +353,8 @@ def _pidfile_candidate() -> HubCandidate | None:
         port = int(rec.get("port") or 0)
     except (TypeError, ValueError):
         return None
-    if port <= 0 or not pid_alive(pid):
-        return None
+    if port <= 0 or not is_protoagent_pid(pid):
+        return None  # a stale pidfile (a crash, a reboot, a recycled pid) names nothing
     return HubCandidate(_loopback(port), "pidfile", instance_root=root, pid=pid)
 
 
@@ -407,8 +422,13 @@ def token_chain(cand: HubCandidate, *, explicit: str | None = None) -> Iterator[
     (open mode — an unset-auth instance accepts no bearer at all). Never logs a value.
 
     This box's fleet service tokens and its operator bearer are LOOPBACK-ONLY: a hub on
-    another host gets the explicit ``--token`` / ``PROTOAGENT_HUB_TOKEN`` and nothing else.
-    Anything that returns a 200 agent card must not be able to harvest local credentials."""
+    another host gets the explicit ``--token`` / ``PROTOAGENT_HUB_TOKEN`` and nothing else,
+    and a candidate the operator did not name (``trusted=False``: a peer that network
+    discovery reported) gets open mode only. Anything that returns a 200 agent card must not
+    be able to harvest credentials, local or explicit."""
+    if not cand.trusted:
+        yield None
+        return
     seen: set[str] = set()
 
     def once(tok: str | None) -> Iterator[str]:
@@ -680,6 +700,17 @@ class HubClient:
 
     def runtime_status(self) -> dict:
         return _expect_dict(self.url, self._request("GET", "/api/runtime/status"), "runtime status")
+
+    def instance_root(self) -> str | None:
+        """The hub's own instance root, from ``GET /api/config/explain`` (which names both
+        roots) — how a listener found by port is matched to the root on disk it belongs to.
+        None when the route is missing (an older hub) or unreadable."""
+        try:
+            data = _expect_dict(self.url, self._request("GET", "/api/config/explain"), "config explain")
+        except HubError:
+            return None
+        root = data.get("instance_root")
+        return str(root) if isinstance(root, str) and root.strip() else None
 
     def telemetry_fleet(self) -> dict:
         """The hub-side rollup (spend / turns / flags per member, ADR 0006 fleet extension)."""
