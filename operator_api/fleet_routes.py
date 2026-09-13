@@ -26,6 +26,7 @@ def register_fleet_routes(app) -> None:
 
     from graph.fleet import proxy, supervisor
     from graph.workspaces import manager
+    from ops import fleet as fleet_ops
 
     @app.get("/api/fleet")
     async def _list_fleet():
@@ -45,7 +46,7 @@ def register_fleet_routes(app) -> None:
         subsequent GET /api/fleet reads return members in this order, reconciled as members are
         later added or removed. Hub-only — a member's ``roster.json`` is its own."""
         try:
-            order = await asyncio.to_thread(supervisor.set_roster_order, (req or {}).get("order"))
+            order = await fleet_ops.order((req or {}).get("order"))
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
         return {"ok": True, "order": order}
@@ -56,17 +57,14 @@ def register_fleet_routes(app) -> None:
         slug window like a local peer, with this hub reverse-proxying its console + A2A. An
         optional bearer ``token`` is stored for the proxy to attach (never returned)."""
         try:
-            rec = supervisor.add_remote(
+            # The op registers AND probes (off the loop) so the response can warn at register
+            # time; an unreachable peer is not rejected — deferred registration is intentional.
+            out = await fleet_ops.remotes_add(
                 str((req or {}).get("name", "")),
                 str((req or {}).get("url", "")),
-                token=str((req or {}).get("token", "") or ""),
+                str((req or {}).get("token", "") or ""),
             )
-            # Probe the new remote's agent card immediately (off the loop — it's a network
-            # call) so the response can warn at register time. We DON'T reject an unreachable
-            # peer — deferred registration is intentional (it can come online later); the
-            # caller just learns `reachable:false` now instead of waiting for the next poll.
-            reachable, version = await asyncio.to_thread(supervisor.probe_remote, rec["id"])
-            return {"ok": True, "agent": rec, "reachable": reachable, "version": version}
+            return {"ok": True, **out}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
@@ -80,15 +78,8 @@ def register_fleet_routes(app) -> None:
         reports fresh reachability, same shape as add. 400 on a bad url/name/collision."""
         body = req or {}
         try:
-            rec = await asyncio.to_thread(
-                supervisor.update_remote,
-                ident,
-                name=body.get("name"),
-                url=body.get("url"),
-                token=body.get("token"),
-            )
-            reachable, version = await asyncio.to_thread(supervisor.probe_remote, rec["id"])
-            return {"ok": True, "agent": rec, "reachable": reachable, "version": version}
+            out = await fleet_ops.remotes_update(ident, name=body.get("name"), url=body.get("url"), token=body.get("token"))
+            return {"ok": True, **out}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
@@ -96,7 +87,7 @@ def register_fleet_routes(app) -> None:
     async def _remove_remote(ident: str):
         """Unregister a remote member (the remote agent itself is untouched)."""
         try:
-            return {"ok": True, **supervisor.remove_remote(ident)}
+            return {"ok": True, **await fleet_ops.remotes_remove(ident)}
         except supervisor.FleetError as exc:
             raise HTTPException(400, str(exc))
 
@@ -220,43 +211,23 @@ def register_fleet_routes(app) -> None:
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
-        # Carry the host's model CONNECTIONS so a new agent works immediately without
-        # inheriting its plugins — only when the host is configured.
-        inherit_model = None
-        if bool(body.get("inherit_config", True)):
-            from graph.config_io import config_yaml_path
-
-            cfg_yaml = config_yaml_path()
-            if cfg_yaml.exists():
-                inherit_model = str(cfg_yaml.parent)
         try:
-            # create() may overlay the host model + install a bundle (subprocess) — off the loop.
-            ws = await asyncio.to_thread(
-                manager.create,
+            # The op carries the orchestration (host model overlay + create + start), off the
+            # loop — the offline CLI verb and this route share it (#3471).
+            out = await fleet_ops.create(
                 name,
                 bundle=bundle,
-                port=port,
-                shared_skills=shared,
-                inherit_model=inherit_model,
                 soul=soul,
+                port=port,
+                start=start,
+                shared_skills=shared,
+                inherit_config=bool(body.get("inherit_config", True)),
                 inputs=inputs,
                 secrets=secrets,
                 config_inputs=config_inputs,
                 requires_tools=requires_tools,
             )
-            agent = (
-                (await asyncio.to_thread(supervisor.start, name))
-                if start
-                else {"name": name, "id": ws["id"], "port": ws["port"], "running": False}
-            )
-            # A credential store that could not join the shared box tier is a note on a
-            # SUCCESSFUL create, not a 400 — the agent runs on the machine-wide login.
-            return {
-                "ok": True,
-                "agent": agent,
-                "installed": ws.get("installed", []),
-                **({"warnings": ws["warnings"]} if ws.get("warnings") else {}),
-            }
+            return {"ok": True, **out}
         except (manager.WorkspaceError, supervisor.FleetError) as exc:
             raise HTTPException(400, str(exc))
 
@@ -291,23 +262,16 @@ def register_fleet_routes(app) -> None:
         """Rename an agent's DISPLAY name (by id or current name). The id — and so the
         URL slug, the workspace dir and the data scope — never changes; open windows
         and checkpoints survive. A running agent re-reads its identity on restart."""
-        new_name = str((req or {}).get("name", "")).strip()
-        if not new_name:
-            raise HTTPException(400, "name is required")
         try:
-            return {"ok": True, **manager.rename(name, new_name)}
+            return {"ok": True, **await fleet_ops.rename(name, str((req or {}).get("name", "")))}
         except manager.WorkspaceError as exc:
             raise HTTPException(400, str(exc))
 
     @app.delete("/api/fleet/{name}")
     async def _remove_agent(name: str, purge: bool = False):
         try:
-            try:
-                await asyncio.to_thread(supervisor.stop, name)  # stop if running (#6)
-            except supervisor.FleetError:
-                pass
-            # remove() rmtree's the workspace (purge) — also blocking.
-            return {"ok": True, **await asyncio.to_thread(manager.remove, name, purge=purge)}
+            # stop if running, then retire or purge (rmtree) — all blocking, in the op
+            return {"ok": True, **await fleet_ops.remove(name, purge=purge)}
         except manager.WorkspaceBusy as exc:
             # Partial, retryable: the member IS stopped, only its workspace survived (#2583).
             # 409, not the 500 an escaping OSError used to produce and not the 400 a rejected

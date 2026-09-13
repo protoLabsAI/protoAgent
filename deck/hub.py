@@ -606,6 +606,61 @@ class HubClient:
         res = self._request("POST", f"/api/fleet/{quote(name, safe='')}/stop", timeout=_LIFECYCLE_TIMEOUT)
         return _expect_dict(self.url, res, "stop")
 
+    # ── manage (#3471): the console's own routes, same bodies ──
+
+    def create(self, body: dict) -> dict:
+        """``POST /api/fleet`` — create (blank Basic, or from a bundle archetype) and start
+        unless ``start: false``. A create may clone a bundle: the lifecycle budget applies."""
+        return _expect_dict(self.url, self._request("POST", "/api/fleet", json_body=dict(body), timeout=_LIFECYCLE_TIMEOUT), "create")
+
+    def rename(self, ident: str, name: str) -> dict:
+        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/{quote(ident, safe='')}", json_body={"name": name}), "rename")
+
+    def remove(self, ident: str, *, purge: bool = False) -> dict:
+        """``DELETE /api/fleet/<id>[?purge=true]`` — stops the member first. A 409
+        (``HubRequestError.status == 409``) means it stopped but its workspace survived:
+        partial and retryable, not a failure (#2583)."""
+        path = f"/api/fleet/{quote(ident, safe='')}" + ("?purge=true" if purge else "")
+        return _expect_dict(self.url, self._request("DELETE", path, timeout=_LIFECYCLE_TIMEOUT), "remove")
+
+    def remote_add(self, name: str, url: str, token: str = "") -> dict:
+        body: dict[str, Any] = {"name": name, "url": url}
+        if token:
+            body["token"] = token  # sent once; the hub never returns it
+        return _expect_dict(self.url, self._request("POST", "/api/fleet/remotes", json_body=body), "remote add")
+
+    def remote_update(self, ident: str, **fields: Any) -> dict:
+        """Only the fields given change; ``token=""`` clears the stored bearer."""
+        body = {k: v for k, v in fields.items() if v is not None}
+        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/remotes/{quote(ident, safe='')}", json_body=body), "remote edit")
+
+    def remote_remove(self, ident: str) -> dict:
+        return _expect_dict(self.url, self._request("DELETE", f"/api/fleet/remotes/{quote(ident, safe='')}"), "remote remove")
+
+    def set_order(self, ids: list[str]) -> dict:
+        """``PUT /api/fleet/order`` — a COMPLETE permutation of the current member ids."""
+        return _expect_dict(self.url, self._request("PUT", "/api/fleet/order", json_body={"order": list(ids)}), "order")
+
+    def archetypes(self) -> list[dict]:
+        data = _expect_dict(self.url, self._request("GET", "/api/archetypes"), "archetypes")
+        rows = data.get("archetypes")
+        return [a for a in (rows or []) if isinstance(a, dict) and a.get("id")] if isinstance(rows, list) else []
+
+    def warm_max(self) -> int | None:
+        """The hub's warm-agent cap (``fleet.warm.max``; 0 = unlimited), or None when the
+        config route does not say."""
+        try:
+            data = _expect_dict(self.url, self._request("GET", "/api/config"), "config")
+        except HubError:
+            return None
+        cfg = data.get("config") if isinstance(data.get("config"), dict) else {}
+        warm = (cfg.get("fleet") or {}).get("warm") if isinstance(cfg.get("fleet"), dict) else None
+        v = warm.get("max") if isinstance(warm, dict) else None
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def down(self, running: int = 0) -> dict:
         """Stop every running member. The hub stops them one after another, each with
         its own grace window, so the read budget scales with how many are up."""

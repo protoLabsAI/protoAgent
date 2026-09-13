@@ -49,6 +49,43 @@ class FakeClient:
         self.calls.append(("down", running))
         return self._down()
 
+    # ── manage (#3471) ──
+    remove_status: int | None = None  # a HubRequestError status to raise on remove
+
+    def archetypes(self):
+        self.calls.append(("archetypes",))
+        return [{"id": "basic", "label": "Basic", "bundle": None, "soul": ""}, {"id": "pm", "label": "PM", "bundle": "https://github.com/x/pm-archetype", "soul": "You are a PM.", "requires_tools": ["github.write"]}]
+
+    def create(self, body):
+        self.calls.append(("create", dict(body)))
+        return {"ok": True, "agent": {"name": body["name"], "id": f"{body['name']}-1", "port": body.get("port") or 7999, "pid": 4242 if body.get("start", True) else None, "running": body.get("start", True)}, "installed": ["pm"] if body.get("bundle") else [], "warnings": ["credential store stayed local"] if body.get("bundle") else []}
+
+    def rename(self, ident, name):
+        self.calls.append(("rename", ident, name))
+        return {"ok": True, "id": "alpha-1", "name": name}
+
+    def remove(self, ident, *, purge=False):
+        self.calls.append(("remove", ident, purge))
+        if self.remove_status:
+            raise deckhub.HubRequestError(self.url, self.remove_status, "workspace busy" if self.remove_status == 409 else "no such member")
+        return {"ok": True, "name": ident, "removed": ["workspace"] if purge else []}
+
+    def remote_add(self, name, url, token=""):
+        self.calls.append(("remote_add", name, url, token))
+        return {"ok": True, "agent": {"id": f"r-{name}", "name": name, "url": url, "remote": True}, "reachable": False, "version": ""}
+
+    def remote_update(self, ident, **fields):
+        self.calls.append(("remote_update", ident, fields))
+        return {"ok": True, "agent": {"id": ident, "name": "ava", "url": fields.get("url", "https://ava.tail:7870"), "remote": True}, "reachable": True, "version": "0.165.0"}
+
+    def remote_remove(self, ident):
+        self.calls.append(("remote_remove", ident))
+        return {"ok": True, "id": ident, "name": "ava", "removed": ["remote"]}
+
+    def set_order(self, ids):
+        self.calls.append(("set_order", list(ids)))
+        return {"ok": True, "order": list(ids)}
+
     def close(self):
         self.closed = True
 
@@ -446,3 +483,174 @@ def test_down_offline_honours_a_survivor_and_an_unknown_name(monkeypatch, capsys
     assert "✗ alpha" in captured.err and "still alive after SIGKILL" in captured.err
     assert "✗ ghost" in captured.err
     assert "✓" not in captured.out
+
+
+# ── manage verbs (#3471): live through the hub, offline through the ops, --json on each ──
+
+
+def test_new_live_resolves_an_archetype_on_the_hub_and_posts_the_consoles_body(monkeypatch, capsys):
+    client = FakeClient()
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["new", "scout", "--archetype", "pm", "--no-start", "--port", "7911", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    create = next(c for c in client.calls if c[0] == "create")[1]
+    assert create == {"name": "scout", "start": False, "inherit_config": True, "port": 7911, "bundle": "https://github.com/x/pm-archetype", "soul": "You are a PM.", "requires_tools": ["github.write"]}
+    assert body["mode"] == "live" and body["results"][0]["ok"] and body["results"][0]["installed"] == ["pm"] and body["results"][0]["agent"]["running"] is False
+    # an unknown archetype is refused before anything is created
+    client.calls.clear()
+    assert cli.run_fleet_cli(["new", "scout", "--archetype", "nope"]) == 1
+    assert not any(c[0] == "create" for c in client.calls) and "no archetype 'nope'" in capsys.readouterr().err
+    # a blank member, no inheritance
+    assert cli.run_fleet_cli(["new", "blank", "--no-inherit"]) == 0
+    assert next(c for c in client.calls if c[0] == "create")[1] == {"name": "blank", "start": True, "inherit_config": False}
+    assert "started (:7999, pid 4242) via hub" in capsys.readouterr().out
+
+
+def test_new_offline_runs_the_op_and_refuses_an_archetype(monkeypatch, capsys):
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    seen: dict = {}
+
+    async def fake_create(name, **kw):
+        seen.update(name=name, **kw)
+        return {"agent": {"name": name, "id": "b-1", "port": 7902, "running": False}, "installed": []}
+
+    monkeypatch.setattr(fleet_ops, "create", fake_create)
+    assert cli.run_fleet_cli(["new", "beta", "--bundle", "https://github.com/x/y", "--no-start", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert seen == {"name": "beta", "bundle": "https://github.com/x/y", "port": None, "start": False, "inherit_config": True}
+    assert body["mode"] == "offline" and body["results"][0]["ok"]
+    assert cli.run_fleet_cli(["new", "beta", "--archetype", "pm"]) == 1
+    assert "--archetype needs a running hub" in capsys.readouterr().err
+
+
+def test_rm_needs_yes_off_a_terminal_and_a_409_is_retryable(monkeypatch, capsys):
+    client = FakeClient()
+    _live(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli.run_fleet_cli(["rm", "alpha"]) == 1
+    assert "--yes" in capsys.readouterr().err and not any(c[0] == "remove" for c in client.calls)
+    assert cli.run_fleet_cli(["rm", "alpha", "--yes", "--purge", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert ("remove", "alpha", True) in client.calls and body["results"][0]["removed"] == ["workspace"]
+    client.remove_status = 409
+    assert cli.run_fleet_cli(["rm", "alpha", "--yes", "--json"]) == 1
+    body = json.loads(capsys.readouterr().out)
+    assert body["results"][0]["retryable"] is True and "repeat to finish" in body["results"][0]["error"]
+    client.remove_status = 400
+    assert cli.run_fleet_cli(["rm", "alpha", "--yes"]) == 1
+    assert "no such member" in capsys.readouterr().err
+    # the interactive path: the typed name is the confirm
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "alpha")
+    client.remove_status = None
+    assert cli.run_fleet_cli(["rm", "alpha"]) == 0
+    monkeypatch.setattr("builtins.input", lambda prompt="": "nope")
+    assert cli.run_fleet_cli(["rm", "alpha"]) == 1
+    assert "aborted" in capsys.readouterr().err
+
+
+def test_rm_offline_runs_the_op_and_a_busy_workspace_is_retryable(monkeypatch, capsys):
+    _offline(monkeypatch)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    async def busy(ident, *, purge=False):
+        raise manager.WorkspaceBusy("workspace survived")
+
+    monkeypatch.setattr(fleet_ops, "remove", busy)
+    assert cli.run_fleet_cli(["rm", "alpha", "--yes", "--purge", "--json"]) == 1
+    body = json.loads(capsys.readouterr().out)
+    assert body["mode"] == "offline" and body["results"][0]["retryable"] is True
+
+    async def ok(ident, *, purge=False):
+        return {"name": ident, "removed": []}
+
+    monkeypatch.setattr(fleet_ops, "remove", ok)
+    assert cli.run_fleet_cli(["rm", "alpha", "--yes"]) == 0
+    assert "removed (data kept) via disk (offline)" in capsys.readouterr().out
+
+
+def test_rename_live_and_offline(monkeypatch, capsys):
+    client = FakeClient()
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["rename", "alpha", "Alpha Prime", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert ("rename", "alpha", "Alpha Prime") in client.calls and body["results"][0]["new_name"] == "Alpha Prime" and body["results"][0]["id"] == "alpha-1"
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    async def fake(ident, new_name):
+        return {"id": "alpha-1", "name": new_name}
+
+    monkeypatch.setattr(fleet_ops, "rename", fake)
+    assert cli.run_fleet_cli(["rename", "alpha", "Beta"]) == 0
+    assert "renamed to Beta (id alpha-1 unchanged) via disk (offline)" in capsys.readouterr().out
+
+
+def test_remote_add_edit_rm_live_with_the_bearer_from_stdin(monkeypatch, capsys):
+    import io
+
+    client = FakeClient()
+    _live(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", io.StringIO("s3cret\n"))
+    assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo.tail:7870", "--bearer-stdin", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert ("remote_add", "bo", "https://bo.tail:7870", "s3cret") in client.calls
+    assert "s3cret" not in json.dumps(body) and body["results"][0]["reachable"] is False  # never echoed; unreachable is not an error
+    assert cli.run_fleet_cli(["remote", "edit", "bo", "--url", "https://bo2.tail:7870"]) == 0
+    assert ("remote_update", "bo", {"url": "https://bo2.tail:7870"}) in client.calls
+    assert "reachable, v0.165.0" in capsys.readouterr().out
+    assert cli.run_fleet_cli(["remote", "edit", "bo", "--clear-bearer"]) == 0
+    assert ("remote_update", "bo", {"token": ""}) in client.calls
+    assert cli.run_fleet_cli(["remote", "edit", "bo"]) == 1
+    assert "nothing to change" in capsys.readouterr().err
+    assert cli.run_fleet_cli(["remote", "rm", "bo", "--json"]) == 0
+    assert ("remote_remove", "bo") in client.calls and json.loads(capsys.readouterr().out)["results"][0]["id"] == "bo"
+
+
+def test_remote_offline_runs_the_ops(monkeypatch, capsys):
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    seen: list = []
+
+    async def add(name, url, token=""):
+        seen.append(("add", name, url, token))
+        return {"agent": {"id": "r-1", "name": name, "url": url}, "reachable": False, "version": ""}
+
+    async def update(ident, *, name=None, url=None, token=None):
+        seen.append(("update", ident, name, url, token))
+        return {"agent": {"id": ident, "name": name or "bo", "url": url or "u"}, "reachable": True, "version": "0.1"}
+
+    async def remove(ident):
+        seen.append(("remove", ident))
+        return {"id": ident, "name": "bo", "removed": ["remote"]}
+
+    monkeypatch.setattr(fleet_ops, "remotes_add", add)
+    monkeypatch.setattr(fleet_ops, "remotes_update", update)
+    monkeypatch.setattr(fleet_ops, "remotes_remove", remove)
+    assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo:7870", "--bearer", "t"]) == 0
+    assert cli.run_fleet_cli(["remote", "edit", "bo", "--name", "bob", "--clear-bearer"]) == 0
+    capsys.readouterr()  # the human-mode lines of the first two
+    assert cli.run_fleet_cli(["remote", "rm", "bo", "--json"]) == 0
+    assert seen == [("add", "bo", "https://bo:7870", "t"), ("update", "bo", "bob", None, ""), ("remove", "bo")]
+    assert json.loads(capsys.readouterr().out)["mode"] == "offline"
+
+
+def test_order_live_and_offline(monkeypatch, capsys):
+    client = FakeClient()
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["order", "protoagent", "old-1", "protoEngineer-ba4c", "Cindi-9f49", "r-ava", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert ("set_order", ["protoagent", "old-1", "protoEngineer-ba4c", "Cindi-9f49", "r-ava"]) in client.calls and body["results"][0]["order"][1] == "old-1"
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    async def bad(order):
+        raise cli.supervisor.FleetError("roster order is missing current member(s): main")
+
+    monkeypatch.setattr(fleet_ops, "order", bad)
+    assert cli.run_fleet_cli(["order", "alpha-1"]) == 1
+    assert "missing current member" in capsys.readouterr().err
