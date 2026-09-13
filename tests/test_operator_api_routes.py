@@ -358,3 +358,41 @@ def test_workflows_plugin_router_save_validates_and_deletes(tmp_path, monkeypatc
 
     assert client.delete("/api/plugins/workflows/demo").json()["deleted"] is True
     assert client.delete("/api/plugins/workflows/demo").json()["deleted"] is False
+
+
+def test_chat_form_submit_settles_the_parked_task_only_when_the_wizard_is_done(monkeypatch) -> None:
+    """#3470: a plugin form's A2A task parks in input_required to deliver the card; the
+    redeem route ends it once the plugin answered with a reply — never mid-wizard."""
+    from graph import slash_commands
+
+    settled: list[str] = []
+
+    async def settle(session_id: str) -> bool:
+        settled.append(session_id)
+        return True
+
+    answers = {"n": 0}
+
+    async def fake_submit(callback_id, values, session_id):
+        answers["n"] += 1
+        if callback_id == "cb1":
+            return slash_commands.PluginFormRequest(form={"title": "step 2", "steps": []}, callback_id="cb2")
+        return "posted"
+
+    monkeypatch.setattr(slash_commands, "submit_plugin_form", fake_submit)
+    app = FastAPI()
+    register_operator_routes(
+        app,
+        runtime_status=lambda: {},
+        subagent_list=lambda: [],
+        subagent_run=lambda r: None,
+        subagent_batch=lambda r: None,
+        form_task_settle=settle,
+    )
+    client = TestClient(app)
+    step = client.post("/api/chat/commands/submit", json={"callback_id": "cb1", "session_id": "chat-1", "answers": {"a": 1}}).json()
+    assert step == {"form": {"title": "step 2", "steps": []}, "callback_id": "cb2"} and settled == []
+    done = client.post("/api/chat/commands/submit", json={"callback_id": "cb2", "session_id": "chat-1", "answers": {"b": 2}}).json()
+    assert done == {"reply": "posted"} and settled == ["chat-1"]
+    client.post("/api/chat/commands/submit", json={"callback_id": "cb3", "answers": {}})  # no session: nothing to settle
+    assert settled == ["chat-1"]

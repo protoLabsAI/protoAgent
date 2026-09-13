@@ -128,6 +128,7 @@ class Exchange:
     detached: bool = False  # we stopped watching an attached turn; the member goes on with it
     finished: bool = False  # _finish ran for this life of the exchange (the stall probe and the reader both reach it)
     generation: int = 0  # bumped each time the exchange lives again (a resume, a re-attach): stale async results are dropped
+    submitting: bool = False  # a plugin form's answers are on their way to the member; the prompt must not reopen meanwhile
     origin: str = ""  # who started an attached turn
     controllable: bool = False  # an attached server turn that takes interjections
 
@@ -347,8 +348,10 @@ class ConversationScreen(Screen):
         act = getattr(self.app, "activity", None)
         server = act.server_turn(self.slug, session_id) if act is not None else None
         if server is not None:
-            # the bus has shown a server-fired turn running in this session: watch it
-            self._attach_turn(server["task_id"], origin=server.get("origin") or "server", trigger=server.get("trigger") or "", controllable=bool(server.get("controllable")))
+            # the bus has shown a server-fired turn running in this session: watch it (its
+            # durable row, if the turns read already has it, is the exchange to continue)
+            same = latest if latest is not None and latest.turn.task_id == server["task_id"] else None
+            self._attach_turn(server["task_id"], origin=server.get("origin") or "server", trigger=server.get("trigger") or "", controllable=bool(server.get("controllable")), replace=same)
         elif latest is not None and latest.turn.task_id and not latest.turn.done and latest.turn.state in ("working", "submitted"):
             # a turn still running when the session was opened (the console, a schedule…)
             self._attach_turn(latest.turn.task_id, origin="in flight", replace=latest)
@@ -444,12 +447,16 @@ class ConversationScreen(Screen):
         if parked is None:
             self.notify("nothing is waiting for you here", severity="warning")
             return
+        if parked.submitting:
+            self.notify("the form is being submitted — one moment", severity="warning")
+            return
         draft = ""
         try:
             draft = self.query_one("#composer", Input).value.strip()
         except NoMatches:
             pass
-        deckhitl.open_prompt(self.app, self.member_name, parked.turn.hitl or {}, lambda result: self._answered(parked, result), draft=draft)
+        opened = dict(parked.turn.hitl or {})  # the prompt this modal answers; a different one by the time it closes is refused
+        deckhitl.open_prompt(self.app, self.member_name, opened, lambda result: self._answered(parked, result, opened=opened), draft=draft)
 
     def _current(self, ex: Exchange) -> Exchange | None:
         """The exchange as this conversation holds it NOW — a modal's callback captured an
@@ -460,24 +467,35 @@ class ConversationScreen(Screen):
             return next((e for e in self.convo.exchanges if e.turn.task_id == ex.turn.task_id), None)
         return None
 
-    def _answered(self, parked: Exchange, result: Any) -> None:
+    def _answered(self, parked: Exchange, result: Any, *, opened: dict | None = None) -> None:
         if result is None:
             return  # closed — still parked
         current = self._current(parked)
         if current is None:
             self.notify("that question belongs to a session that is no longer open here", severity="warning")
             return
-        if current is not parked:
-            current.turn.hitl = current.turn.hitl or parked.turn.hitl
-            parked = current
+        parked = current
+        hitl = parked.turn.hitl
+        if not hitl or parked.turn.done or parked.live:
+            # answered elsewhere (the console, another deck) while the modal was open — the
+            # bus told us and the exchange moved on; this answer would be an ordinary turn
+            self.notify("that prompt was already answered elsewhere — the member has moved on", severity="warning", timeout=8)
+            if isinstance(result, str) and result != "__dismiss__":
+                self._set_composer(result)
+            return
+        if opened is not None and (opened.get("plugin_callback_id") or "") != (hitl.get("plugin_callback_id") or ""):
+            self.notify("the form changed while you were answering — open it again (ctrl+r)", severity="warning", timeout=8)
+            return
         self._set_composer("")
-        hitl = parked.turn.hitl or {}
         if hitl.get("plugin_callback_id"):
             if result == "__dismiss__":
                 parked.turn.hitl = None  # a plugin form has no parked graph: just close it
+                self._settle_form(parked)
                 self._render_live(parked)
                 self._render_status()
                 return
+            parked.submitting = True
+            self._render_status()
             self._submit_plugin_form(parked, str(hitl["plugin_callback_id"]), result if isinstance(result, dict) else {})
             return
         if result == "__dismiss__":
@@ -531,6 +549,8 @@ class ConversationScreen(Screen):
         try:
             out = app.backend.submit_form(self.agent, self.convo.session_id, callback_id, answers)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001
+            parked.submitting = False
+            app.call_from_thread(self._render_status)
             app.call_from_thread(self.notify, f"form submit failed: {exc}", severity="error", timeout=8)
             return
         form = out.get("form") if isinstance(out.get("form"), dict) else None
@@ -538,19 +558,33 @@ class ConversationScreen(Screen):
             nxt = {**form, "plugin_callback_id": out.get("callback_id") or callback_id}
             app.call_from_thread(self._next_form_step, parked, nxt)
             return
-        with parked.lock:
-            parked.turn.hitl = None
-        reply = out.get("reply")
-        app.call_from_thread(self._render_live, parked)
-        app.call_from_thread(self._render_status)
+        app.call_from_thread(self._form_landed, parked, str(out.get("reply") or ""))
+
+    @_ui_safe
+    def _form_landed(self, parked: Exchange, reply: str) -> None:
+        current = self._current(parked) or parked
+        with current.lock:
+            current.turn.hitl = None
+        current.submitting = False
+        self._settle_form(current)
+        self._render_live(current)
+        self._render_status()
         if reply:
-            app.call_from_thread(self.notify, str(reply), timeout=8)
+            self.notify(reply, timeout=8)
+
+    def _settle_form(self, ex: Exchange) -> None:
+        """A redeemed (or closed) plugin form is over for good — but a member that does not
+        complete the form's task keeps reporting it parked; the roster must not re-park it."""
+        act = getattr(self.app, "activity", None)
+        if act is not None:
+            act.unpark(self.slug, ex.turn.context_id, settle_task=ex.turn.task_id)
 
     def _next_form_step(self, parked: Exchange, nxt: dict) -> None:
         """A wizard's next step, on the exchange this conversation holds now."""
         current = self._current(parked) or parked
         with current.lock:
             current.turn.hitl = nxt
+        current.submitting = False
         self._render_status()
         self.action_respond()
 
@@ -609,6 +643,29 @@ class ConversationScreen(Screen):
                 known = any(e.turn.task_id == tid for e in self.convo.exchanges) if tid else False
                 if self.convo.live is None and self.convo.parked is None and not known and not self._loading() and self.app.screen is self:
                     self.load_session(sid)  # a park we did not watch happen: show it
+            elif ev.topic in ("turn.resumed", "turn.usage", "turn.finished", "chat.resumed"):
+                # a park WE hold, answered or ended elsewhere (the console, another deck): the
+                # prompt is gone — follow the continued turn, or show how it ended
+                parked = self.convo.parked
+                tid = str(d.get("task_id") or "")
+                ev_sid = str(d.get("context_id") or d.get("session_id") or "")
+                if parked is None or ev_sid != sid or not tid or parked.turn.task_id != tid:
+                    continue
+                if ev.topic == "turn.usage" and str(d.get("state") or "").replace("TASK_STATE_", "").lower().replace("_", "-") == "input-required":
+                    continue  # the park leg's own spend line: still parked
+                parked.turn.hitl = None
+                if ev.topic == "turn.resumed":
+                    self._render_live(parked)
+                    self._render_status()
+                    if self.app.screen is self:
+                        self.notify("answered elsewhere — following the turn", timeout=6)
+                    self._attach_turn(tid, origin="answered elsewhere", replace=parked)
+                else:
+                    parked.turn.done = True
+                    self._render_live(parked)
+                    self._render_status()
+                    if not self._loading() and self.app.screen is self:
+                        self.load_session(sid)  # the durable record has how it ended
 
     # ── steering a running turn ──
 
@@ -1136,6 +1193,9 @@ class ConversationScreen(Screen):
         parked = self.convo.parked
         if parked is not None:
             # the stream closed on input-required: the turn is PARKED, not over
+            if parked.submitting:
+                st.update(f"⟳ submitting the form to {self.member_name}…{queued}")
+                return
             kind = deckhitl.kind_of(parked.turn.hitl)
             how = "type the answer, or ctrl+r" if kind == "question" else "enter / ctrl+r opens it"
             st.update(f"⚑ {self.member_name} needs you ({kind}): {deckhitl.prompt_of(parked.turn.hitl)}  ·  {how}{queued}")

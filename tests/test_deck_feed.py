@@ -98,20 +98,35 @@ def test_parks_are_per_session_and_the_three_writers_merge():
     act.unpark("x", "chat-B")
     assert act.parked_sessions("x") == ["chat-A"]
     # a probe that did not SEE session A leaves it alone; one that saw it clean clears it
-    act.probe("x", {"chat-C": ""}, probed_at=time.monotonic())
+    act.probe("x", {"chat-C": ("", "tC")}, probed_at=time.monotonic())
     assert act.parked_sessions("x") == ["chat-A"]
     # a probe read BEFORE the bus parked A is stale: it must not clear the park…
-    act.probe("x", {"chat-A": ""}, probed_at=t0 - 1)
+    act.probe("x", {"chat-A": ("", "tA")}, probed_at=t0 - 1)
     assert act.parked_sessions("x") == ["chat-A"]
     # …and a probe read before the bus answered it must not re-park
     act.apply(ev("x", "turn.resumed", context_id="chat-A", task_id="tA"))
     assert act.parked_sessions("x") == []
-    act.probe("x", {"chat-A": "waiting on you"}, probed_at=t0)
+    act.probe("x", {"chat-A": ("waiting on you", "tA")}, probed_at=t0)
     assert act.parked_sessions("x") == []
     # a fresh probe is authoritative for what it saw
-    act.probe("x", {"chat-A": "waiting on you"}, probed_at=time.monotonic())
+    act.probe("x", {"chat-A": ("waiting on you", "tA")}, probed_at=time.monotonic())
     assert act.parked_sessions("x") == ["chat-A"] and act.state["x"].parked["chat-A"].source == "probe"
-    act.probe("x", {"chat-A": ""}, probed_at=time.monotonic())
+    act.probe("x", {"chat-A": ("", "tA")}, probed_at=time.monotonic())
+    assert act.parked_sessions("x") == []
+    # a task the deck SETTLED (a redeemed plugin form the member keeps reporting parked) is
+    # never re-parked by a probe, however many cycles later; a NEW task in that session is
+    act.apply(ev("x", "turn.input_required", context_id="chat-F", task_id="tF", prompt="hello form"))
+    act.unpark("x", "chat-F", settle_task="tF")
+    for k in range(1, 6):
+        act.probe("x", {"chat-F": ("waiting on you", "tF")}, probed_at=time.monotonic() + 30 * k)
+        assert act.parked_sessions("x") == [] and act.ring_due() == [], f"cycle {k}"
+    act.probe("x", {"chat-F": ("waiting on you", "tG")}, probed_at=time.monotonic() + 200)
+    assert act.parked_sessions("x") == ["chat-F"]
+    # clearing an already-clear session still stamps it: a probe that read before now cannot re-park
+    act.unpark("x", "chat-F")
+    act.unpark("x", "chat-F")
+    stamp = act.state["x"].unparked["chat-F"]
+    act.probe("x", {"chat-F": ("waiting on you", "tH")}, probed_at=stamp - 0.001)
     assert act.parked_sessions("x") == []
     # the bell re-checks: a park answered within the same drain never rings
     act.apply(ev("x", "turn.input_required", context_id="chat-A", task_id="tA", prompt="Approve?"))
@@ -182,13 +197,13 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         # own park (a session the probe did not see) is untouched
         rings.clear()
         snap = be.snapshot()
-        snap.parked = {"old-1": {"chat-9": "waiting on you"}}
+        snap.parked = {"old-1": {"chat-9": ("waiting on you", "t9")}}
         snap.parked_at = time.monotonic()
         app._apply(snap)
         await pilot.pause(0.2)
         assert rings == [1]
         assert "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content)
-        snap.parked = {"old-1": {"chat-9": ""}, "protoEngineer-ba4c": {"chat-1": ""}}  # both seen clean
+        snap.parked = {"old-1": {"chat-9": ("", "t9")}, "protoEngineer-ba4c": {"chat-1": ("", "t9")}}  # both seen clean
         snap.parked_at = time.monotonic()
         app._apply(snap)
         await pilot.pause(0.2)

@@ -75,7 +75,7 @@ class Snapshot:
     host_version: str = ""
     rollups: dict[str, Rollup] = field(default_factory=dict)  # by slug
     warnings: list[str] = field(default_factory=list)
-    parked: dict[str, dict[str, str]] | None = None  # slug → {session → why it waits ("" = clean)}; None = not probed this poll
+    parked: dict[str, dict[str, tuple[str, str]]] | None = None  # slug → {session → (why it waits or "", latest task id)}; None = not probed this poll
     parked_at: float = 0.0  # monotonic, when the probe read (a stale result must not undo what the bus said since)
     error: str = ""  # a failed poll keeps the previous roster and shows this
     fetched_at: float = field(default_factory=time.monotonic)
@@ -205,14 +205,14 @@ class LiveBackend:
 
     PARKED_PROBE_ROWS = 25  # newest sessions per member the probe looks at
 
-    def _probe_parked(self, roster: list[dict]) -> dict[str, dict[str, str]]:
+    def _probe_parked(self, roster: list[dict]) -> dict[str, dict[str, tuple[str, str]]]:
         """Which sessions of each online member wait on the operator, from the session
         inventory (newest first, ``latest_task_state``): the catch-up for parks the bus
         could not show us (from before the deck connected, or lost in a reconnect gap).
-        Per member: ``{session_id: reason}`` for every session SEEN — "" means that
-        session's latest task is not parked. Sessions outside the window are not
-        mentioned, so the activity model leaves them alone."""
-        parked: dict[str, dict[str, str]] = {}
+        Per member: ``{session_id: (reason, latest_task_id)}`` for every session SEEN — a
+        "" reason means that session's latest task is not parked. Sessions outside the
+        window are not mentioned, so the activity model leaves them alone."""
+        parked: dict[str, dict[str, tuple[str, str]]] = {}
         for a in roster:
             if not a.get("running") or a.get("remote"):
                 continue
@@ -221,7 +221,7 @@ class LiveBackend:
                 rows = self.client.diagnostics_sessions(slug, limit=self.PARKED_PROBE_ROWS).get("sessions") or []
             except deckhub.HubError:
                 continue  # unknown, not "clean": leave what the deck already knows alone
-            seen: dict[str, str] = {}
+            seen: dict[str, tuple[str, str]] = {}
             for r in rows:
                 if not isinstance(r, dict):
                     continue
@@ -229,7 +229,7 @@ class LiveBackend:
                 if not sid:
                     continue
                 state = str(r.get("latest_task_state") or "").replace("TASK_STATE_", "").lower().replace("_", "-")
-                seen[sid] = "waiting on you" if state == "input-required" else ""
+                seen[sid] = ("waiting on you" if state == "input-required" else "", str(r.get("latest_task_id") or ""))
             parked[slug] = seen
         return parked
 
@@ -303,28 +303,28 @@ class LiveBackend:
 
     def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict:
         """Queue a message into the RUNNING turn (folded in at its next model call)."""
-        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{session_id}/steer", {"id": msg_id, "text": text})
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer", {"id": msg_id, "text": text})
         return out if isinstance(out, dict) else {}
 
     def steer_pending(self, agent: dict, session_id: str) -> list[dict]:
         """Still-queued steers — what the turn ended without folding in."""
-        out = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{session_id}/steer")
+        out = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer")
         rows = out.get("pending") if isinstance(out, dict) else None
         return [r for r in (rows or []) if isinstance(r, dict) and r.get("id")]
 
     def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool:
         """Drop a queued steer; False = already folded in (too late) or never queued."""
-        out = self.client.member_delete(slug_of(agent), f"/api/chat/sessions/{session_id}/steer/{msg_id}")
+        out = self.client.member_delete(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/steer/{_seg(msg_id)}")
         return bool(isinstance(out, dict) and out.get("removed"))
 
     def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict:
         """Queue an operator interjection into an attended server-fired turn (by task id)."""
-        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{session_id}/server-turns/{task_id}/interject", {"id": msg_id, "text": text})
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/server-turns/{_seg(task_id)}/interject", {"id": msg_id, "text": text})
         return out if isinstance(out, dict) else {}
 
     def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool:
         """Abort ONE running foreground delegation (a ``task`` card), not the turn."""
-        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{session_id}/delegations/{delegation_id}/cancel")
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{_seg(session_id)}/delegations/{_seg(delegation_id)}/cancel")
         return bool(isinstance(out, dict) and out.get("cancelled"))
 
     def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict:

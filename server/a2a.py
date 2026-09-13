@@ -19,6 +19,7 @@ import hashlib
 import logging
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 from events import ACTIVITY_CONTEXT
 from graph.output_format import extract_output
@@ -1183,6 +1184,82 @@ def _is_recent(last_updated, now, window_s: int) -> bool:
     if getattr(last_updated, "tzinfo", None) is None:
         last_updated = last_updated.replace(tzinfo=UTC)
     return (now - last_updated).total_seconds() <= window_s
+
+
+def _plugin_form_callback_in(status_json: Any) -> str:
+    """The ``plugin_callback_id`` a parked task's status message carries, or "". The store
+    keeps the status as proto JSON; the hitl-v1 DataPart's payload sits under ``data``
+    (nested once more under a ``DataPart``-shaped encoding), so both spellings are read."""
+    if not isinstance(status_json, dict):
+        return ""
+    message = status_json.get("message")
+    parts = message.get("parts") if isinstance(message, dict) else None
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        data = p.get("data")
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+        if isinstance(data, dict) and data.get("plugin_callback_id"):
+            return str(data["plugin_callback_id"])
+    return ""
+
+
+async def settle_plugin_form_task(session_id: str) -> bool:
+    """Complete the task a plugin composer-form parked (#1701 Slice 2, #3470).
+
+    The form rides the same ``input_required`` frame the agent HITL uses so the console
+    renders the card, but it is not a graph interrupt: its answers go to
+    ``POST /api/chat/commands/submit``, which never touched the A2A task. Left in
+    ``input_required`` (a state the TTL sweep deliberately skips) the session's latest task
+    read as "waiting on the operator" forever — a fleet roster parked the member on every
+    probe. The executor cannot finish it itself (the SDK's consumer treats input_required
+    as the stream's final event), so the redeem route calls this once the wizard is done.
+    A direct row update, like the store's own reapers: the SDK store scopes ``get``/``save``
+    by the request's owner, which the redeem route does not have. The status message (the
+    card) stays in the record; only the state and its timestamp move. Best-effort: returns
+    whether a parked plugin-form task was completed."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    sid = str(session_id or "").strip()
+    if engine is None or not sid:
+        return False
+    try:
+        from a2a.server.tasks.database_task_store import TaskModel
+        from sqlalchemy import select, update
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        session_maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_maker() as session:
+            row = (
+                await session.execute(
+                    select(TaskModel.id, TaskModel.status)
+                    .where(TaskModel.context_id == sid)
+                    .order_by(TaskModel.last_updated.desc())
+                    .limit(1)
+                )
+            ).first()
+            if row is None:
+                return False
+            task_id, status_json = row
+            if not isinstance(status_json, dict) or str(status_json.get("state") or "") != "TASK_STATE_INPUT_REQUIRED":
+                return False
+            if not _plugin_form_callback_in(status_json):
+                return False  # a real HITL pause: the operator's answer resumes it, nothing else may end it
+            now = datetime.now(UTC)
+            blob = {**status_json, "state": "TASK_STATE_COMPLETED", "timestamp": now.isoformat().replace("+00:00", "Z")}
+            result = await session.execute(
+                update(TaskModel)
+                .where(TaskModel.id == task_id, TaskModel.status["state"].as_string() == "TASK_STATE_INPUT_REQUIRED")
+                .values(status=blob, last_updated=now)
+            )
+            await session.commit()
+        if not (result.rowcount or 0):
+            return False
+        log.info("[a2a] plugin form redeemed — completed its parked task %s in %s", task_id, sid)
+        return True
+    except Exception:  # noqa: BLE001 — a redeem must never fail on this bookkeeping
+        log.debug("[a2a] could not settle the plugin-form task for %s", sid, exc_info=True)
+        return False
 
 
 async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULED_STALE_WINDOW_S) -> bool:

@@ -204,6 +204,7 @@ def register_operator_routes(
     watch_update: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     verifier_catalog: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     chat_commands: Callable[[], dict[str, Any]] | None = None,
+    form_task_settle: Callable[[str], Awaitable[bool]] | None = None,
     events_subscribe: Callable[..., AsyncIterator[dict[str, Any]]] | None = None,
     events_publish: Callable[[str, dict[str, Any]], None] | None = None,
     activity_list: Callable[[], Awaitable[dict[str, Any]]] | None = None,
@@ -633,6 +634,13 @@ def register_operator_routes(
         # A multi-step wizard returns the next form; anything else is a reply note.
         if isinstance(result, PluginFormRequest):
             return {"form": result.form, "callback_id": result.callback_id}
+        if form_task_settle is not None and req.session_id:
+            # the form's A2A task parked in input_required to deliver the card; the wizard
+            # is done, so end it — or the session reads "waiting on the operator" forever
+            try:
+                await form_task_settle(req.session_id)
+            except Exception:  # noqa: BLE001 — bookkeeping never fails the redeem
+                pass
         return {"reply": result if isinstance(result, str) else None}
 
     # --- Workflows -----------------------------------------------------------

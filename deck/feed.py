@@ -77,6 +77,7 @@ class TurnState:
     open_tools: dict[str, tuple[str, float, str]] = field(default_factory=dict)  # tool_id → (name, started, task_id)
     parked: dict[str, Park] = field(default_factory=dict)  # session → the turn waiting on the operator there
     unparked: dict[str, float] = field(default_factory=dict)  # session → when the bus/deck last cleared it (monotonic)
+    settled_tasks: set[str] = field(default_factory=set)  # tasks the deck answered whose park the member's store may still show (a redeemed plugin form on an older member)
     server_turns: dict[str, dict] = field(default_factory=dict)  # session → {task_id, origin, trigger, controllable}: a live server-fired turn
     last_active: float | None = None  # epoch
     last_cost_usd: float | None = None
@@ -214,9 +215,10 @@ class Activity:
 
     def park(self, slug: str, session: str, prompt: str, *, task_id: str = "", source: str = "deck", at: float | None = None, probed_at: float | None = None) -> None:
         """A turn waits on the operator in ``session``. A probe result older than the
-        bus's or the deck's own clearing of that session is stale and ignored."""
+        bus's or the deck's own clearing of that session is stale and ignored, and so is
+        a probe naming a task the deck itself settled."""
         st = self._st(slug)
-        if probed_at is not None and st.unparked.get(session, -1.0) > probed_at:
+        if probed_at is not None and (st.unparked.get(session, -1.0) > probed_at or (task_id and task_id in st.settled_tasks)):
             return
         was = st.parked.get(session)
         st.parked[session] = Park(prompt, task_id or (was.task_id if was else ""), source, was.since if was else time.monotonic())
@@ -224,24 +226,27 @@ class Activity:
             self._new_parks.append((slug, session))
             self._add(Row(time.monotonic(), slug, self._name(slug), "needs-you", "⚑", "needs you", _clip(prompt), session, task_id, at=at if at is not None else time.time()))
 
-    def unpark(self, slug: str, session: str, *, probed_at: float | None = None) -> None:
+    def unpark(self, slug: str, session: str, *, probed_at: float | None = None, settle_task: str = "") -> None:
         """The turn in ``session`` no longer waits. A probe result older than the park it
-        would clear is stale and ignored."""
+        would clear is stale and ignored. ``settle_task`` names a task whose park the
+        member's store may keep reporting although it is over for good (a redeemed plugin
+        form on a member that does not complete the task): probes naming it are ignored."""
         st = self._st(slug)
+        if settle_task:
+            st.settled_tasks.add(settle_task)
         park = st.parked.get(session)
-        if park is None:
+        if park is not None and probed_at is not None and park.since > probed_at:
             return
-        if probed_at is not None and park.since > probed_at:
-            return
+        if probed_at is None:
+            st.unparked[session] = time.monotonic()  # stamp even when already clear: a probe that read before now must not re-park
         st.parked.pop(session, None)
-        st.unparked[session] = time.monotonic()
 
-    def probe(self, slug: str, seen: dict[str, str], *, probed_at: float) -> None:
+    def probe(self, slug: str, seen: dict[str, tuple[str, str]], *, probed_at: float) -> None:
         """Fold one member's session-inventory probe: for every session it SAW, park
-        (reason) or clear (""); sessions outside its window are left alone."""
-        for session, reason in seen.items():
+        (reason, latest task) or clear (""); sessions outside its window are left alone."""
+        for session, (reason, task_id) in seen.items():
             if reason:
-                self.park(slug, session, reason, source="probe", probed_at=probed_at)
+                self.park(slug, session, reason, task_id=task_id, source="probe", probed_at=probed_at)
             else:
                 self.unpark(slug, session, probed_at=probed_at)
 

@@ -816,3 +816,138 @@ async def test_attendance_that_gave_up_is_said_once():
         app.screen._check_stall()
         app.screen._check_stall()
         assert len([m for m in seen if "NOT attended" in m]) == 1
+
+
+
+# ── round-2 review reproducers ──
+
+
+@pytest.mark.asyncio
+async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_stale_resume():
+    """Blocker: the deck kept its own park after the bus said the console answered it; the
+    operator then sent a hitl_resume to a task no longer parked (an ordinary turn on the
+    server) and every re-render re-parked the roster and re-rang the bell."""
+    fake = Parking({"kind": "approval", "title": "Approve shell command?"})
+    be = TalkBackend(a2a_client=fake)
+    fe = FakeEvents()
+    app = FleetDeck(be, poll_s=0, events=fe)
+    rings: list = []
+    app.bell = lambda: rings.append(1)  # type: ignore[method-assign]
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        sid = app.screen.convo.session_id
+        fake.sub_frames = [json.loads(json.dumps(f).replace('"s"', f'"{sid}"')) for f in canned_frames("s")]
+        await _send(app, pilot, "clean the build")
+        assert app.screen.convo.parked is not None and app.activity.turn_cell("protoEngineer-ba4c") == "⚑ needs you"
+        rings.clear()
+        # the console answers the same park: the member publishes turn.resumed for t1 and runs on
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.resumed", context_id=sid, task_id="t1"))
+        assert await _until(pilot, lambda: fake.subscribed == ["t1"])  # the deck follows the continued turn
+        assert await _until(pilot, lambda: app.screen.convo.live is None and app.screen.convo.latest.turn.done)
+        assert app.screen.convo.parked is None and "idle" in str(app.screen.query_one("#talk-status", Static).content)
+        assert "Three PRs are open." in str(app.screen.query(Markdown).first().source)
+        await pilot.press("ctrl+z")  # a re-render must not re-park the roster
+        fe.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t1", context_id=sid, state="TASK_STATE_COMPLETED"))
+        await pilot.pause(0.8)
+        assert app.activity.turn_cell("protoEngineer-ba4c") == "idle" and rings == []
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ConversationScreen) and len(fake.sent) == 1  # nothing to answer, nothing sent
+    # …and a park that ENDED elsewhere (terminal usage / finished) shows how it ended
+    fake2 = Parking({"question": "Merge?"})
+    be2 = TalkBackend(a2a_client=fake2)
+    fe2 = FakeEvents()
+    app2 = FleetDeck(be2, poll_s=0, events=fe2)
+    async with app2.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be2, pilot, app2)
+        sid = app2.screen.convo.session_id
+        await _send(app2, pilot, "ship it")
+        assert app2.screen.convo.parked is not None
+        be2._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "history": [{"role": "ROLE_USER", "parts": [{"text": "ship it"}]}], "artifacts": [{"parts": [{"text": "Shipped from the console."}]}]}]
+        fe2.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t1", context_id=sid, state="TASK_STATE_COMPLETED", cost_usd=0.1))
+        assert await _until(pilot, lambda: app2.screen.convo.parked is None and app2.screen.convo.latest is not None and app2.screen.convo.latest.turn.done)
+        assert await _until(pilot, lambda: "Shipped from the console." in str(app2.screen.query(Markdown).first().source))
+        assert len(fake2.sent) == 1
+        # a modal that was open across the answer refuses to send and hands the text back
+        fake3 = Parking({"question": "Which?"})
+        be3 = TalkBackend(a2a_client=fake3)
+    fe3 = FakeEvents()
+    app3 = FleetDeck(be3, poll_s=0, events=fe3)
+    async with app3.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be3, pilot, app3)
+        sid = app3.screen.convo.session_id
+        await _send(app3, pilot, "pick")
+        convo_screen = app3.screen
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.2)
+        assert isinstance(app3.screen, QuestionModal)
+        await pilot.press(*"main")
+        be3._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "history": [], "artifacts": [{"parts": [{"text": "took develop"}]}]}]
+        fe3.pending.append(ev("protoEngineer-ba4c", "turn.finished", session_id=sid, task_id="t1", ok=True))
+        await pilot.pause(0.8)
+        await pilot.press("enter")
+        await _settle(app3, pilot)
+        assert len(fake3.sent) == 1 and convo_screen.query_one("#composer", Input).value == "main"
+
+
+@pytest.mark.asyncio
+async def test_a_server_turn_the_bus_showed_continues_its_in_flight_durable_row():
+    sid = "chat-1700000000000-srv"
+    row = {"task_id": "t7", "status": {"state": "TASK_STATE_WORKING"}, "history": [{"role": "ROLE_USER", "parts": [{"text": "daily report"}]}], "artifacts": [{"parts": [{"text": "so far"}]}]}
+    sub = [
+        {"result": {"task": {"id": "t7", "contextId": sid, "status": {"state": "TASK_STATE_WORKING"}, "history": row["history"], "artifacts": row["artifacts"]}}},
+        {"result": {"artifactUpdate": {"taskId": "t7", "contextId": sid, "artifact": {"artifactId": "a", "parts": [{"text": "so far, and done."}]}, "lastChunk": True}}},
+        {"result": {"statusUpdate": {"taskId": "t7", "contextId": sid, "status": {"state": "TASK_STATE_COMPLETED"}, "final": True}}},
+    ]
+    fake = FakeA2A(sub_frames=sub)
+    be = TalkBackend(a2a_client=fake, turns={sid: [row]})
+    fe = FakeEvents()
+    app = FleetDeck(be, poll_s=0, events=fe)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"origin": "scheduler", "trigger": "daily", "operator_controllable": True}))
+        await pilot.pause(0.7)
+        app.open_member("protoEngineer-ba4c", sid)
+        await _settle(app, pilot)
+        assert await _until(pilot, lambda: fake.subscribed == ["t7"] and app.screen.convo.live is None)
+        exs = app.screen.convo.exchanges
+        assert [e.turn.task_id for e in exs] == ["t7"] and exs[0].turn.done and exs[0].controllable
+        assert "1 turn" in str(app.screen.query_one("#talk-head", Static).content) and len(app.screen.query(Markdown)) == 1
+        assert "so far, and done." in str(app.screen.query(Markdown).first().source)
+
+
+@pytest.mark.asyncio
+async def test_a_plugin_form_cannot_be_reopened_while_its_submit_is_in_flight():
+    """Blocker: re-opening the form during the submit roundtrip lost the second set of
+    answers and sent them to the A2A task as a hitl_resume carrying a dict repr."""
+    import time as _t
+
+    fake = Parking({"kind": "form", "title": "Post?", "plugin_callback_id": "cb1", "steps": [{"schema": {"properties": {"text": {"type": "string"}}, "required": ["text"]}}]})
+    be = TalkBackend(a2a_client=fake)
+    orig = be.submit_form
+
+    def slow_submit(agent, sid, cb, answers):
+        _t.sleep(0.9)
+        return orig(agent, sid, cb, answers)
+
+    be.submit_form = slow_submit  # type: ignore[method-assign]
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "post the update")
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, FormModal)
+        app.screen.query_one("#in-text", Input).focus()
+        await pilot.press(*"hello", "ctrl+s")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ConversationScreen) and "submitting the form" in str(app.screen.query_one("#talk-status", Static).content)
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConversationScreen)  # refused while in flight
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ConversationScreen)
+        assert await _until(pilot, lambda: app.screen.convo.parked is None, timeout=3)
+        assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
+        assert len([c for c in be.calls if c[0] == "submit_form"]) == 1 and len(fake.sent) == 1
