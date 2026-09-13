@@ -704,3 +704,15 @@ def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, 
     (inst / "server.pid").write_text(json.dumps({"pid": 4242, "port": 7871}))
     cand = hub._pidfile_candidate()
     assert cand is not None and cand.pid == 4242 and cand.url == "http://127.0.0.1:7871"
+
+
+def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
+    """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
+    `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir."""
+    monkeypatch.setattr(hub.sys, "platform", "linux")
+    monkeypatch.setattr(hub.os, "name", "posix")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    assert hub.desktop_box_roots() == [tmp_path / "cfg" / hub.DESKTOP_APP_ID]
+    monkeypatch.delenv("XDG_CONFIG_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert hub.desktop_box_roots() == [tmp_path / "home" / ".config" / hub.DESKTOP_APP_ID]

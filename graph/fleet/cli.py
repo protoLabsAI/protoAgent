@@ -462,7 +462,7 @@ def _launch_hub(row) -> None:
         if not _same_dir(parent, deckhub.data_home()) and any(_same_dir(parent, b) for b in deckhub.known_box_roots()):
             env["PROTOAGENT_BOX_ROOT"] = str(parent)
     discovery = importlib.import_module("deck.discovery")  # Textual-free: the launcher never loads the screen
-    member_ports, hub_ports = discovery._ports_on_disk(discovery.instance_roots())
+    member_ports, hub_ports = discovery._ports_on_disk(discovery.instance_roots(), records=True)  # a stopped member's recorded port is still its own
     taken = set(member_ports) | {p for p, r in hub_ports.items() if not _same_dir(r, row.root)}
     port = _pick_port(row.port, taken=taken)
     row.port = port

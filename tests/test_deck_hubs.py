@@ -758,3 +758,18 @@ async def test_a_roster_built_beside_a_hub_that_answered_drives_nothing_from_dis
         await pilot.press("s")
         await _settle(app, pilot)
         assert calls == []  # the hidden key never runs the action either
+
+
+def test_a_listener_on_a_stopped_members_recorded_port_is_still_probed(box):
+    """Review (epic): feeding `workspace.yaml` ports into the tree's listener skip hid a
+    heartbeat-less HUB that listens on a port a stopped member records (scripts/dev.sh
+    defaults to :7871; the desktop's stopped killteamCoach records 7871) — its root then
+    read `stopped` and `u` would start a second server on it. A listener on a stopped
+    member's port can never be that member: it is probed like any other listener. A
+    started member's port (fleet.json) is still skipped."""
+    rows = hubs.enumerate_hubs(peers=[
+        {"name": "hub-on-a-recorded-port", "url": "http://127.0.0.1:7902", "host": "127.0.0.1", "port": 7902},  # dev's m2 records 7902, stopped
+        {"name": "a-started-member", "url": "http://127.0.0.1:7900", "host": "127.0.0.1", "port": 7900},  # main's m0 runs on 7900 (fleet.json)
+    ])
+    local = {r.port for r in rows if r.source == "local"}
+    assert 7902 in local and 7900 not in local

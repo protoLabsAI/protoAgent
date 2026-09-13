@@ -252,18 +252,22 @@ def _record_ports(workspaces: Path) -> list[int]:
     return out
 
 
-def _ports_on_disk(roots: list[Path]) -> tuple[dict[int, Path], dict[int, Path]]:
+def _ports_on_disk(roots: list[Path], *, records: bool = False) -> tuple[dict[int, Path], dict[int, Path]]:
     """``(member ports, hub ports)`` every hub root on this box records: members from each
-    root's ``fleet.json`` AND from every member's ``workspace.yaml`` (a stopped member is
-    usually only there), the hub itself from its ``server.pid``. A local listener is
-    matched here BEFORE any request — a member is then a row under its hub, never a hub
-    row, whatever credential it would refuse — and a hub brought up never takes a port a
-    member of any instance records."""
+    root's ``fleet.json`` (the members its supervisor started), the hub itself from its
+    ``server.pid``. A local listener is matched here BEFORE any request — a member is then
+    a row under its hub, never a hub row, whatever credential it would refuse.
+
+    ``records=True`` adds every member's ``workspace.yaml`` port (a STOPPED member is
+    usually only there) — for a caller about to TAKE a port, i.e. bringing a hub up. The
+    tree's listener skip must not use it: a listener on a stopped member's port can never
+    be that member, so skipping it could only hide a real hub found by the port scan."""
     members: dict[int, Path] = {}
     hubs_: dict[int, Path] = {}
     for root in roots:
-        for port in _record_ports(root / "workspaces"):
-            members.setdefault(port, root)
+        if records:
+            for port in _record_ports(root / "workspaces"):
+                members.setdefault(port, root)
         try:
             fleet = json.loads((root / "workspaces" / FLEET_JSON).read_text(encoding="utf-8"))
         except (OSError, ValueError):

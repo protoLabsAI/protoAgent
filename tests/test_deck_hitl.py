@@ -425,12 +425,14 @@ async def test_opening_a_session_with_a_turn_in_flight_attaches_to_it():
         await _settle(app, pilot)
         assert isinstance(app.screen, ConversationScreen)
         assert await _until(pilot, lambda: fake.subscribed == ["t9"])
-        assert await _until(pilot, lambda: app.screen.convo.latest is not None and app.screen.convo.latest.turn.done)
+        # `turn.done` flips in the stream reader BEFORE the UI thread's finish step renders the
+        # status — wait for that step (`finished`), then for the render, never a fixed moment
+        assert await _until(pilot, lambda: app.screen.convo.latest is not None and app.screen.convo.latest.turn.done and app.screen.convo.latest.finished)
         ex = app.screen.convo.latest
         assert ex.attached and ex.origin == "in flight" and ex.user == "from the console"
         assert "Three PRs are open." in str(app.screen.query(Markdown).first().source)
         assert "◇ in flight" in str(app.screen.query(".turn-meta").first().content)
-        assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
+        assert await _until(pilot, lambda: "idle" in str(app.screen.query_one("#talk-status", Static).content)), str(app.screen.query_one("#talk-status", Static).content)
 
 
 @pytest.mark.asyncio

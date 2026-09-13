@@ -264,8 +264,11 @@ def _loopback(port: int) -> str:
 
 
 def desktop_box_roots() -> list[Path]:
-    """Where the desktop app keeps its box root on each platform (Tauri ``app_data_dir``
-    for :data:`DESKTOP_APP_ID`). Existence is checked by the caller."""
+    """Where the desktop app keeps its box root on each platform: Tauri's
+    ``app_config_dir`` for :data:`DESKTOP_APP_ID`, which is where the desktop points the
+    sidecar's ``PROTOAGENT_HOME`` / ``PROTOAGENT_BOX_ROOT``. On macOS and Windows that is
+    the same dir as ``app_data_dir``; on Linux it is ``$XDG_CONFIG_HOME`` (``~/.config``),
+    not the data dir. Existence is checked by the caller."""
     home = Path.home()
     if sys.platform == "darwin":
         return [home / "Library" / "Application Support" / DESKTOP_APP_ID]
@@ -273,8 +276,8 @@ def desktop_box_roots() -> list[Path]:
         appdata = os.environ.get("APPDATA", "").strip()
         base = Path(appdata) if appdata else home / "AppData" / "Roaming"
         return [base / DESKTOP_APP_ID]
-    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
-    base = Path(xdg) if xdg else home / ".local" / "share"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(xdg) if xdg else home / ".config"
     return [base / DESKTOP_APP_ID]
 
 

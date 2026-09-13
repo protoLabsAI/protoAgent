@@ -1034,8 +1034,9 @@ def test_launch_hub_never_takes_a_stopped_members_port_that_only_its_workspace_y
     dev = tmp_path / "dev"
     (dev / "workspaces").mkdir(parents=True)
     (dev / "workspaces" / "fleet.json").write_text("{}")
-    members, _ = discovery._ports_on_disk([desktop, dev])
+    members, _ = discovery._ports_on_disk([desktop, dev], records=True)
     assert {7871, 7872} <= set(members)  # the stopped member's port is known from its record
+    assert set(discovery._ports_on_disk([desktop, dev])[0]) == {7872}  # the tree's listener skip: started members only
     seen: dict = {}
     monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv) or _Started()))
     monkeypatch.setattr(cli, "_port_free", lambda port: port != 7870)  # the desktop hub holds 7870; 7871 and 7872 bind (7871's member is stopped)
