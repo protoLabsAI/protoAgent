@@ -42,6 +42,7 @@ from deck import a2a
 from deck.data import display_name, presence_of, slug_of
 
 STALL_IDLE_S = 45.0
+MAX_RECONNECTS = 10  # 10 silent windows ≈ 10 minutes of a tool call that says nothing
 _PREVIEW = 60
 
 
@@ -209,6 +210,7 @@ class ConversationScreen(Screen):
         self._seq = 0
         self._load_seq = 0  # stale session loads (a slow member, then a faster pick) are ignored
         self._watchdog: Any = None
+        self.reconnects = 0  # SubscribeToTask re-attachments after a silent stretch
 
     # ── layout ──
 
@@ -277,6 +279,7 @@ class ConversationScreen(Screen):
         if self.convo.live:
             self.notify("a turn is running — esc stops it first", severity="warning")
             return
+        self._load_seq += 1  # an in-flight load must not land over the fresh session
         self._apply_session(a2a.new_session_id(), [])
         self.notify("new session")
 
@@ -338,24 +341,39 @@ class ConversationScreen(Screen):
             app.call_from_thread(self._finish, ex, str(exc))
             return
         ex.client = client
+        frames = client.stream(text, context_id=self.convo.session_id)
         try:
-            for frame in client.stream(text, context_id=self.convo.session_id):
-                with ex.lock:
-                    if ex.turn.done:
-                        break  # the stall probe already finalized this turn
-                    try:
-                        a2a.apply_frame(ex.turn, frame)
-                    except a2a.TurnError as exc:
-                        app.call_from_thread(self._finish, ex, str(exc))
+            for attempt in range(MAX_RECONNECTS + 1):
+                try:
+                    for frame in frames:
+                        with ex.lock:
+                            if ex.turn.done:
+                                break  # the stall probe already finalized this turn
+                            try:
+                                a2a.apply_frame(ex.turn, frame)
+                            except a2a.TurnError as exc:
+                                app.call_from_thread(self._finish, ex, str(exc))
+                                return
+                        app.call_from_thread(self._render_live, ex)
+                        if ex.turn.done:
+                            break
+                    break  # the stream closed (or the turn is done)
+                except a2a.StreamStalled:
+                    # No frame in the read window. The server may have finished and lost
+                    # the tail, or it may be deep in a silent tool call. Ask the durable
+                    # task: terminal → finalize from it; still working → re-attach with
+                    # SubscribeToTask (a snapshot, then the live frames) and carry on.
+                    task = self._task_or_none(ex)
+                    state = a2a.norm_state(((task or {}).get("status") or {}).get("state")) if task is not None else ""
+                    if task is not None and (not state or a2a.is_terminal(state)):
+                        self._finalize_from(ex, task, app)
                         return
-                app.call_from_thread(self._render_live, ex)
-                if ex.turn.done:
-                    break
-        except a2a.StreamStalled:
-            # No frame for a minute: the connection may be half-open while the server
-            # finished. Ask the durable task before declaring anything.
-            self._settle_from_task(ex, "stream timed out — the member sent nothing for a minute")
-            return
+                    if not ex.turn.task_id or attempt >= MAX_RECONNECTS:
+                        app.call_from_thread(self._finish, ex, "stream timed out — the member sent nothing and could not be re-attached")
+                        return
+                    self.reconnects += 1
+                    app.call_from_thread(self.notify, f"quiet for {a2a.STREAM_READ_S:g}s — re-attached to the running turn", severity="warning")
+                    frames = client.subscribe(ex.turn.task_id)
         except Exception as exc:  # noqa: BLE001 — a broken stream is reported, the deck stays up
             if not ex.turn.done and not ex.error:
                 app.call_from_thread(self._finish, ex, str(exc))
@@ -364,35 +382,36 @@ class ConversationScreen(Screen):
             client.close()
         app.call_from_thread(self._finish, ex, "")
 
-    def _settle_from_task(self, ex: Exchange, otherwise: str) -> None:
-        """From a worker: finalize the exchange from ``GetTask`` if the server finished,
-        else fail it with ``otherwise``. Never fabricates a completion."""
-        task = None
-        if ex.turn.task_id and ex.client is not None:
-            try:
-                task = ex.client.get_task(ex.turn.task_id)
-            except Exception:  # noqa: BLE001 — unknown; treat as not finished
-                task = None
-        state = a2a.norm_state(((task or {}).get("status") or {}).get("state")) if task is not None else ""
-        if task is not None and (not state or a2a.is_terminal(state)):
-            with ex.lock:
-                try:
-                    a2a.apply_frame(ex.turn, {"result": {"task": task}})
-                except a2a.TurnError:
-                    pass
-                ex.turn.done = True
-            self.app.call_from_thread(self._finish, ex, "")
-            self.app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
-        else:
-            self.app.call_from_thread(self._finish, ex, otherwise)
+    def _task_or_none(self, ex: Exchange) -> dict | None:
+        if not ex.turn.task_id or ex.client is None:
+            return None
+        try:
+            return ex.client.get_task(ex.turn.task_id)
+        except Exception:  # noqa: BLE001 — unknown; treat as not finished
+            return None
 
-    @_ui_safe
+    def _finalize_from(self, ex: Exchange, task: dict, app) -> None:
+        """From a worker: the server finished but the stream tail was lost — finalize
+        the exchange from the durable task. Never fabricates a completion."""
+        with ex.lock:
+            try:
+                a2a.apply_frame(ex.turn, {"result": {"task": task}})
+            except a2a.TurnError:
+                pass
+            ex.turn.done = True
+        app.call_from_thread(self._finish, ex, "")
+        app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
+
     def _finish(self, ex: Exchange, error: str) -> None:
+        # State first, always — even after the screen was popped (abandon / quit), so
+        # `convo.live` can never stay truthy on an exchange whose reader has unwound.
         ex.live = False
         if error and not ex.turn.done:
             ex.error = error
-        if not self.is_attached:
-            return  # the screen was popped (abandon / quit) while the reader unwound
+        self._finish_render(ex, error)
+
+    @_ui_safe
+    def _finish_render(self, ex: Exchange, error: str) -> None:
         if ex.error and error:
             self.notify(f"turn failed: {error}", severity="error", timeout=8)
         self._render_live(ex)
@@ -417,6 +436,7 @@ class ConversationScreen(Screen):
 
     @work(thread=True, exclusive=True, group="talk-stall")
     def _stall_probe(self, ex: Exchange) -> None:
+        app = self.app  # captured on the worker's way in: a popped screen has no app
         if ex.client is None:
             return
         task = a2a.stalled_turn_is_terminal(ex.turn, ex.client.get_task, idle_s=STALL_IDLE_S)
@@ -426,14 +446,7 @@ class ConversationScreen(Screen):
         # exits through its except path, finding the turn already done), then finalize
         # from the durable task under the exchange lock.
         ex.client.abort()
-        with ex.lock:
-            try:
-                a2a.apply_frame(ex.turn, {"result": {"task": task}})
-            except a2a.TurnError:
-                pass
-            ex.turn.done = True
-        self.app.call_from_thread(self._finish, ex, "")
-        self.app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
+        self._finalize_from(ex, task, app)
 
     def action_esc(self) -> None:
         ex = self.convo.live
@@ -472,15 +485,16 @@ class ConversationScreen(Screen):
 
     @work(thread=True, group="talk-cancel")
     def _cancel(self, ex: Exchange) -> None:
+        app = self.app
         if not ex.turn.task_id or ex.client is None:
-            self.app.call_from_thread(self.notify, "nothing to cancel yet — esc again to abandon", severity="warning")
+            app.call_from_thread(self.notify, "nothing to cancel yet — esc again to abandon", severity="warning")
             return
         try:
             ex.client.cancel(ex.turn.task_id)
         except Exception as exc:  # noqa: BLE001
-            self.app.call_from_thread(self.notify, f"cancel failed: {exc} — esc again to abandon", severity="error")
+            app.call_from_thread(self.notify, f"cancel failed: {exc} — esc again to abandon", severity="error")
             return
-        self.app.call_from_thread(self.notify, "cancel requested")
+        app.call_from_thread(self.notify, "cancel requested")
 
     # ── rendering ──
 

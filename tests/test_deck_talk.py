@@ -374,6 +374,11 @@ async def test_read_timeout_consults_the_task_before_failing():
             yield {"result": {"task": {"id": "t1", "contextId": context_id, "status": {"state": "TASK_STATE_SUBMITTED"}}}}
             raise a2amod.StreamStalled("http://127.0.0.1:7870", "no frame for 60s")
 
+        def subscribe(self, task_id):
+            # still silent after re-attaching: every window stalls again
+            raise a2amod.StreamStalled("http://127.0.0.1:7870", "no frame for 60s")
+            yield  # pragma: no cover — makes this a generator
+
     be = TalkBackend(a2a_client=Stalls())
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
@@ -381,13 +386,59 @@ async def test_read_timeout_consults_the_task_before_failing():
         await _send(app, pilot, "go")
         ex = app.screen.convo.exchanges[-1]
         assert ex.turn.done and "finalized from the task" in ex.turn.content and not ex.error
+    # a task that is WORKING but never produces a frame: re-attach up to the cap, then fail
+    from deck import talk as talkmod
+
     be = TalkBackend(a2a_client=Stalls(task_state="TASK_STATE_WORKING"))
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "go")
         ex = app.screen.convo.exchanges[-1]
+        assert app.screen.reconnects == talkmod.MAX_RECONNECTS
         assert not ex.turn.done and "timed out" in ex.error and not ex.live
+
+
+@pytest.mark.asyncio
+async def test_a_silent_stretch_on_a_working_turn_re_attaches_instead_of_failing():
+    """Round-2 note: a >60 s silent tool call must not fail the exchange while the server
+    keeps working — the deck re-attaches with SubscribeToTask and carries on."""
+    from deck import a2a as a2amod
+
+    class Quiet(FakeA2A):
+        def __init__(self):
+            super().__init__()
+            self.subscribed: list[str] = []
+
+        def stream(self, text, *, context_id, task_id=None, metadata=None):
+            self.sent.append({"text": text})
+            frames = canned_frames(context_id)
+            yield frames[0]  # the Task frame (task_id known)
+            yield frames[2]  # a tool started…
+            raise a2amod.StreamStalled("http://127.0.0.1:7870", "no frame for 60s")
+
+        def get_task(self, task_id):
+            return {"id": task_id, "status": {"state": "TASK_STATE_WORKING"}}
+
+        def subscribe(self, task_id):
+            self.subscribed.append(task_id)
+            frames = canned_frames("s")
+            # the snapshot first (history so far), then the rest of the live frames
+            yield {"result": {"task": {"id": task_id, "contextId": self.sent and self.sent[-1].get("cid") or "s", "status": {"state": "TASK_STATE_WORKING"}, "history": [], "artifacts": []}}}
+            yield from frames[3:]
+
+    fake = Quiet()
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        # the fake's subscribe frames carry contextId "s"; make the session match
+        app.screen._apply_session("s", [], None)
+        await _send(app, pilot, "go")
+        ex = app.screen.convo.exchanges[-1]
+        assert fake.subscribed == ["t1"] and app.screen.reconnects == 1
+        assert ex.turn.done and not ex.error and "Three PRs are open." in ex.turn.content
+        assert [c.name for c in ex.turn.tool_calls] == ["task", "run_command"]
 
 
 @pytest.mark.asyncio

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -674,22 +675,36 @@ class A2AClient:
 
     @classmethod
     def for_member(cls, hub_client: deckhub.HubClient, slug: str, **kw: Any) -> A2AClient:
-        """A member's A2A behind an already-opened hub connection (same credential + transport)."""
-        return cls(hub_client.url, hub_client._token, slug=slug, transport=hub_client._client._transport, **kw)
+        """A member's A2A behind an already-opened hub connection: same URL and credential,
+        but its OWN connection pool — closing this client must never tear down the pool the
+        roster poll, the detail reads, and an in-flight CancelTask are using (a shared
+        transport's close() drops every pooled connection, in-flight ones included)."""
+        kw.setdefault("transport", None)
+        return cls(hub_client.url, hub_client._token, slug=slug, **kw)
 
     @property
     def endpoint(self) -> str:
         return f"{self.base_url}{self.a2a_path}"
 
     def abort(self) -> None:
-        """Close the open stream from ANOTHER thread: the reader's ``iter_lines`` raises and
-        the worker unwinds. Safe to call when nothing is open."""
+        """Unblock a reader stuck in ``iter_lines`` from ANOTHER thread. ``Response.close()``
+        alone does not wake a thread blocked in ``recv``; shutting the underlying socket
+        does (the read returns, httpcore raises, the worker unwinds through
+        ``HubUnreachable``). Safe to call when nothing is open."""
         resp = self._active
-        if resp is not None:
-            try:
-                resp.close()
-            except Exception:  # noqa: BLE001 — closing a dead socket must never raise into the UI
-                pass
+        if resp is None:
+            return
+        try:
+            stream = resp.extensions.get("network_stream")
+            sock = stream.get_extra_info("socket") if stream is not None else None
+            if sock is not None:
+                sock.shutdown(socket.SHUT_RDWR)
+        except Exception:  # noqa: BLE001 — a dead socket must never raise into the UI
+            pass
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     def close(self) -> None:
         self.abort()

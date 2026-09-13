@@ -351,6 +351,71 @@ def test_read_timeout_on_the_stream_is_stream_stalled_and_abort_closes_the_respo
     assert a2a.STREAM_READ_S >= 45
 
 
+def test_abort_wakes_a_reader_blocked_on_a_real_socket():
+    """Round-2 blocker: Response.close() from another thread does not wake a reader in
+    recv(); shutting the socket does. A real loopback server sends one frame then sleeps."""
+    import socketserver
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler
+
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'data: {"result": {"task": {"id": "t1", "contextId": "s"}}}\n\n')
+            self.wfile.flush()
+            release.wait(8.0)  # silence — the client must not have to wait for this
+
+        def log_message(self, *a):  # quiet
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = a2a.A2AClient(f"http://127.0.0.1:{port}")
+        got: list = []
+        err: list = []
+
+        def reader():
+            try:
+                for f in c.stream("x", context_id="s"):
+                    got.append(f)
+            except Exception as exc:  # noqa: BLE001
+                err.append(exc)
+
+        t = threading.Thread(target=reader)
+        t.start()
+        deadline = time.monotonic() + 3.0
+        while not got and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert got, "first frame never arrived"
+        t0 = time.monotonic()
+        c.abort()
+        t.join(3.0)
+        assert not t.is_alive(), "reader still blocked after abort()"
+        assert time.monotonic() - t0 < 2.0
+        assert err and isinstance(err[0], deckhub.HubUnreachable)
+        c.close()
+    finally:
+        release.set()
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_for_member_owns_its_transport_so_close_never_drains_the_hubs_pool():
+    hub = deckhub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    c = a2a.A2AClient.for_member(hub, "protoEngineer-ba4c")
+    assert c._client._transport is not hub._client._transport
+    c.close()  # the hub's transport is untouched
+    assert hub.agent_card() is not None or hub._client._transport is not None  # the hub client still works
+
+
 def test_rpc_error_body_raises_turn_error():
     c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"error": {"code": -32001, "message": "TaskNotFound"}})))
     with pytest.raises(a2a.TurnError, match="TaskNotFound"):
