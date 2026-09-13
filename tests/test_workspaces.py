@@ -134,6 +134,55 @@ def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
     assert fresh.desktop_box_roots() == [tmp_path / "home" / ".config" / fresh.DESKTOP_APP_ID]
 
 
+def test_create_chooses_and_records_its_port_under_the_machine_wide_lock(root, monkeypatch):
+    """CodeRabbit (#3492): the cross-instance scan is only a snapshot — two instances creating
+    members at the same moment could both read a port as free and both record it. The pick
+    and the workspace.yaml reservation happen while the machine-wide lock is held."""
+    from filelock import FileLock, Timeout
+
+    from infra import paths
+
+    lock_path = paths.data_home() / manager._PORT_LOCK_NAME
+    real_pick = manager._pick_port
+    seen: dict = {}
+
+    def pick(explicit):
+        probe = FileLock(str(lock_path))
+        try:
+            probe.acquire(timeout=0)
+        except Timeout:
+            seen["held"] = True
+        else:
+            probe.release()
+            seen["held"] = False
+        return real_pick(explicit)
+
+    monkeypatch.setattr(manager, "_pick_port", pick)
+    assert manager.create("alpha")["port"] == 7871
+    assert seen == {"held": True}
+
+
+def test_a_create_that_cannot_get_the_port_lock_fails_cleanly(root, monkeypatch):
+    """Another create holding the lock past the timeout: a clear error, no half-made
+    workspace left behind, and the next create goes through."""
+    from filelock import FileLock
+
+    from infra import paths
+
+    monkeypatch.setattr(manager, "_PORT_LOCK_TIMEOUT_S", 0.2)
+    paths.data_home().mkdir(parents=True, exist_ok=True)
+    holder = FileLock(str(paths.data_home() / manager._PORT_LOCK_NAME))
+    holder.acquire()
+    try:
+        with pytest.raises(manager.WorkspaceError, match="another agent is being created"):
+            manager.create("alpha")
+    finally:
+        holder.release()
+    assert not [p for p in root.iterdir() if p.name.startswith("alpha")] if root.exists() else True
+    assert manager.list_workspaces() == []
+    assert manager.create("alpha")["port"] == 7871
+
+
 def test_pick_port_raises_when_range_saturated(root, monkeypatch):
     """A fully-occupied range fails loudly instead of looping forever."""
     monkeypatch.setattr(manager, "_port_is_free", lambda port: False)
