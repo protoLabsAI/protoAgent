@@ -21,7 +21,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote
 from typing import Any, Protocol
 
 from deck import hub as deckhub
@@ -122,14 +121,19 @@ class Backend(Protocol):
     def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool: ...
     def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict: ...
     def attend(self, agent: dict, session_id: str) -> Any: ...
+    def create(self, body: dict) -> dict: ...
+    def rename(self, agent: dict, name: str) -> dict: ...
+    def remove(self, agent: dict, *, purge: bool = False) -> dict: ...
+    def remote_add(self, name: str, url: str, token: str = "") -> dict: ...
+    def remote_update(self, agent: dict, **fields: Any) -> dict: ...
+    def remote_remove(self, agent: dict) -> dict: ...
+    def set_order(self, ids: list[str]) -> dict: ...
+    def archetypes(self) -> list[dict]: ...
+    def warm_max(self) -> int | None: ...
     def close(self) -> None: ...
 
 
-def _seg(value: Any) -> str:
-    """One path segment, fully encoded — a session id comes from the member's own list, and a
-    member (or a proxy in between) must not be able to steer a request elsewhere with a
-    ``..`` or a ``/`` (httpx collapses literal dot segments before sending)."""
-    return quote(str(value), safe="").replace(".", "%2E")
+_seg = deckhub.segment  # one path-segment encoder for the whole deck (dots included)
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -338,6 +342,35 @@ class LiveBackend:
 
         return Attendance(self.client.url, self.client._token, slug_of(agent), session_id, insecure_http=getattr(self.client, "insecure_http", False)).start()
 
+    # ── manage (#3471): live mutations go through the hub, by immutable id ──
+
+    def create(self, body: dict) -> dict:
+        return self.client.create(body)
+
+    def rename(self, agent: dict, name: str) -> dict:
+        return self.client.rename(slug_of(agent), name)
+
+    def remove(self, agent: dict, *, purge: bool = False) -> dict:
+        return self.client.remove(slug_of(agent), purge=purge)
+
+    def remote_add(self, name: str, url: str, token: str = "") -> dict:
+        return self.client.remote_add(name, url, token)
+
+    def remote_update(self, agent: dict, **fields: Any) -> dict:
+        return self.client.remote_update(slug_of(agent), **fields)
+
+    def remote_remove(self, agent: dict) -> dict:
+        return self.client.remote_remove(slug_of(agent))
+
+    def set_order(self, ids: list[str]) -> dict:
+        return self.client.set_order(ids)
+
+    def archetypes(self) -> list[dict]:
+        return self.client.archetypes()
+
+    def warm_max(self) -> int | None:
+        return self.client.warm_max()
+
     def close(self) -> None:
         self.client.close()
 
@@ -399,6 +432,13 @@ class OfflineBackend:
         raise RuntimeError("offline — no hub to reach this member through")
 
     steer = steer_pending = steer_cancel = interject = delegation_cancel = submit_form = _offline
+    create = rename = remove = remote_add = remote_update = remote_remove = set_order = _offline  # the CLI's offline verbs go through the ops; the deck stays start/stop
+
+    def archetypes(self) -> list[dict]:
+        return []
+
+    def warm_max(self) -> int | None:
+        return None
 
     def attend(self, agent: dict, session_id: str):
         return None

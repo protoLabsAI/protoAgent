@@ -31,7 +31,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
+from deck.modal import OnceModal
 from textual.widgets import Button, Checkbox, Input, Label, Markdown, Select, SelectionList, Static, TextArea
 
 # ── the prompt ────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ HITL_CSS = """
 """
 
 
-class ApprovalModal(ModalScreen[str | None]):
+class ApprovalModal(OnceModal[str | None]):
     """Approve / deny a gated tool call. Returns ``"approved"``, ``"denied"``, the dismiss
     marker ``"__dismiss__"``, or ``None`` (closed — the turn stays parked)."""
 
@@ -233,7 +233,7 @@ class ApprovalModal(ModalScreen[str | None]):
         self.dismiss({"approve": "approved", "deny": "denied", "dismiss": "__dismiss__"}.get(event.button.id or "", None))
 
 
-class QuestionModal(ModalScreen[str | None]):
+class QuestionModal(OnceModal[str | None]):
     """A free-text answer to ``ask_human``. Returns the text, ``"__dismiss__"``, or ``None``."""
 
     BINDINGS = [
@@ -283,7 +283,7 @@ class QuestionModal(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class FormModal(ModalScreen[dict | str | None]):
+class FormModal(OnceModal[dict | str | None]):
     """``request_user_input`` (or a plugin form): a stepped wizard, one step per screen with
     Back / Next and a step indicator; every step's answers submit together. Returns the
     answers dict, ``"__dismiss__"``, or ``None``."""

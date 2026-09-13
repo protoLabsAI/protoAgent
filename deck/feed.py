@@ -378,7 +378,7 @@ class WorkFeedScreen(Screen):
             wall = time.strftime("%H:%M:%S", time.localtime(r.at)) if r.at is not None else "  —  ·  "  # a replayed event without a stamp
             glyph = Text(r.glyph, style={"⟳": "yellow", "✓": "green", "✗": "red", "⚑": "bold yellow", "$": "cyan"}.get(r.glyph, "dim"))
             what = Text(r.label, style="red" if r.error else "")
-            table.add_row(wall, r.member, glyph, what, r.detail, key=str(id(r)))
+            table.add_row(wall, Text(r.member), glyph, what, Text(r.detail), key=str(id(r)))  # tool output is text, never markup
         if rows and at_end:
             table.move_cursor(row=len(rows) - 1)
 

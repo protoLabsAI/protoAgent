@@ -18,6 +18,7 @@ gets a one-line hint instead of a traceback.
 
 from __future__ import annotations
 
+import threading
 import webbrowser
 from typing import Any
 
@@ -34,6 +35,7 @@ from deck.data import Backend, MemberDetail, Snapshot, display_name, presence_of
 from deck.feed import FEED_CSS, Activity, WorkFeedScreen
 from deck.talk import TALK_CSS, ConversationScreen
 from deck.hitl import HITL_CSS
+from deck.manage import MANAGE_CSS, DeleteModal, NewAgentModal, RemoteModal, RenameModal
 
 POLL_S = 3.0
 LOG_POLL_S = 2.0
@@ -79,7 +81,14 @@ class RosterScreen(Screen):
         Binding("o", "open_console", "console", show=True),
         Binding("slash", "filter", "filter", show=True, key_display="/"),
         Binding("escape", "clear_filter", "clear filter", show=False),
-        Binding("R", "refresh", "refresh", show=False),
+        Binding("f5", "refresh", "refresh", show=False),
+        Binding("n", "new_member", "new", show=True),
+        Binding("R", "rename", "rename", show=True),
+        Binding("d", "delete", "delete", show=True),
+        Binding("a", "add_remote", "add remote", show=True),
+        Binding("e", "edit_remote", "edit remote", show=True),
+        Binding("J", "move_down", "move ↓", show=False),
+        Binding("K", "move_up", "move ↑", show=False),
         Binding("question_mark", "help", "help", show=True, key_display="?"),
         Binding("q", "quit", "quit", show=True),
         Binding("j", "cursor_down", "down", show=False),
@@ -142,7 +151,9 @@ class RosterScreen(Screen):
                 bundle = str(a["url"])
             turn = app.activity.turn_cell(slug_of(a)) if pres in ("online", "host", "remote") else ""
             turn_cell = Text(turn, style="bold yellow" if turn.startswith("⚑") else ("yellow" if turn.startswith("⟳") else "dim"))
-            table.add_row(glyph, display_name(a), pres, turn_cell, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), app.activity.last_active_cell(slug_of(a)), bundle, key=key)
+            # every operator- or member-authored string is a Text, never markup: a label
+            # like "Coach [/]" would otherwise raise on the UI thread
+            table.add_row(glyph, Text(display_name(a)), pres, turn_cell, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), app.activity.last_active_cell(slug_of(a)), Text(bundle) if isinstance(bundle, str) else bundle, key=key)
         if rows:
             idx = next((i for i, a in enumerate(rows) if slug_of(a) == keep), 0)
             table.move_cursor(row=idx)
@@ -156,6 +167,8 @@ class RosterScreen(Screen):
         n_parked = sum(len(app.activity.parked_sessions(slug_of(a))) for a in snap.roster)
         if parked:
             parts.append(f"⚑ {n_parked} turn{'s' if n_parked != 1 else ''} parked on a question ({', '.join(parked)})")
+        if app.warm_max is not None:
+            parts.append(f"warm cap {app.warm_max or 'unlimited'}")
         if snap.mode == "offline":
             parts.append("offline: only start/stop are available — start a hub for the rest")
         if self._filter:
@@ -197,6 +210,20 @@ class RosterScreen(Screen):
         offline = app.backend.mode == "offline"
         if action in ("detail", "logs", "open_console", "talk"):
             return bool(a) and not offline
+        if action in ("new_member", "add_remote"):
+            return not offline  # live mutations go through the hub
+        if action in ("rename", "delete", "edit_remote", "move_down", "move_up"):
+            # False HIDES the key and Textual never runs the action: the footer is the
+            # only refusal these need
+            if a is None or offline:
+                return False
+            if action in ("move_down", "move_up"):
+                return not self._filter  # a move under a filter would swap with a hidden neighbour
+            if a.get("host"):
+                return False  # the hub's name is its identity; it cannot delete itself
+            if action == "edit_remote":
+                return bool(a.get("remote"))
+            return True
         if a is None:
             return action not in ("start", "stop", "restart")
         pres = presence_of(a)
@@ -271,6 +298,67 @@ class RosterScreen(Screen):
             self.notify("no console URL in offline mode", severity="warning")
             return
         self.app.open_in_browser(href)  # type: ignore[attr-defined]
+
+    # ── manage (#3471) ──
+
+    # (`check_action` above hides each key where it does not apply — offline, the host row,
+    # a local row for `e` — and Textual then never runs the action, so none of these needs
+    # its own refusal)
+
+    def action_new_member(self) -> None:
+        self.app.new_member()  # type: ignore[attr-defined]
+
+    def action_rename(self) -> None:
+        a = self.selected()
+        if a is None or a.get("host"):
+            return
+        # a remote is renamed through its own record (PATCH /api/fleet/remotes/<id>); the
+        # workspace rename route does not know it
+        verb = "remote_update" if a.get("remote") else "rename"
+        self.app.push_screen(RenameModal(display_name(a)), lambda name: self.app.manage(verb, a, {"name": name}) if name else None)  # type: ignore[attr-defined]
+
+    def action_delete(self) -> None:
+        a = self.selected()
+        if a is None or a.get("host"):
+            return
+        remote = bool(a.get("remote"))
+        self.app.push_screen(DeleteModal(display_name(a), remote=remote), lambda res: self.app.manage("remote_remove" if remote else "remove", a, res) if res is not None else None)  # type: ignore[attr-defined]
+
+    def action_add_remote(self) -> None:
+        self.app.push_screen(RemoteModal(), lambda res: self.app.manage("remote_add", None, res) if res else None)  # type: ignore[attr-defined]
+
+    def action_edit_remote(self) -> None:
+        a = self.selected()
+        if a is None or not a.get("remote"):
+            return
+        self.app.push_screen(RemoteModal(a), lambda res: self.app.manage("remote_update", a, res) if res else None)  # type: ignore[attr-defined]
+
+    def _move(self, delta: int) -> None:
+        a = self.selected()
+        app: FleetDeck = self.app  # type: ignore[assignment]
+        if a is None or app.snapshot is None or self._filter:
+            return
+        roster = app.snapshot.roster
+        ids = [str(r.get("id") or slug_of(r)) for r in roster]  # the hub's order, complete, by immutable id (the host's is its own id, not the `host` slug)
+        me = str(a.get("id") or slug_of(a))
+        if me not in ids:
+            return
+        i = ids.index(me)
+        j = i + delta
+        if j < 0 or j >= len(ids):
+            return
+        # optimistic: the roster shows the move at once and a second press computes from
+        # the NEW order, not the order before the hub answered; the post-PUT poll reconciles
+        roster[i], roster[j] = roster[j], roster[i]
+        ids[i], ids[j] = ids[j], ids[i]
+        self.render_snapshot(app.snapshot)
+        app.set_order(ids)
+
+    def action_move_down(self) -> None:
+        self._move(1)
+
+    def action_move_up(self) -> None:
+        self._move(-1)
 
     def action_filter(self) -> None:
         self.app.push_screen(FilterScreen(self._filter), self._set_filter)
@@ -472,7 +560,7 @@ class DetailScreen(Screen):
                 sid = str(s.get("session_id") or s.get("context_id") or "")
                 short = sid if len(sid) <= 26 else f"{sid[:12]}…{sid[-8:]}"
                 state = str(s.get("latest_task_state") or s.get("status") or "").replace("TASK_STATE_", "").lower()
-                table.add_row(short, state, str(s.get("last_activity") or "")[:16].replace("T", " "))
+                table.add_row(Text(str(short)), Text(str(state)), str(s.get("last_activity") or "")[:16].replace("T", " "))
 
         r = d.rollup
         if r is None:
@@ -602,13 +690,17 @@ class FleetDeck(App[int]):
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
     #sessions { height: auto; max-height: 12; }
     #log { height: 1fr; }
-    """ + TALK_CSS + FEED_CSS + HITL_CSS
+    """ + TALK_CSS + FEED_CSS + HITL_CSS + MANAGE_CSS
 
     def __init__(self, backend: Backend, *, poll_s: float = POLL_S, events: Any = None) -> None:
         super().__init__()
         self.backend = backend
         self.snapshot: Snapshot | None = None
         self._poll_s = poll_s
+        self._order_lock = threading.Lock()  # roster-order writes go out one at a time…
+        self._order_seq = 0  # …numbered per press on the UI thread…
+        self._order_sent = 0  # …and a press older than the newest on the hub is dropped
+        self.warm_max: int | None = None  # the hub's fleet.warm.max, read once (read-only here)
         self.activity = Activity()
         # The fan-in of every online member's event bus (live mode). Injectable for tests.
         self.events = events
@@ -625,6 +717,19 @@ class FleetDeck(App[int]):
         if self._poll_s > 0:
             self.set_interval(self._poll_s, self.poll)
         self.set_interval(0.5, self.drain_events)
+        if self.backend.mode == "live":
+            self._read_warm_max()
+
+    @work(thread=True, group="warm")
+    def _read_warm_max(self) -> None:
+        try:
+            v = self.backend.warm_max()
+        except Exception:  # noqa: BLE001 — a footer figure, never fatal
+            return
+        self.warm_max = v
+        roster = self._roster_screen()
+        if roster is not None and self.snapshot is not None:
+            self.call_from_thread(roster.render_snapshot, self.snapshot)
 
     def drain_events(self) -> None:
         """Fold what the member buses sent since the last tick into the activity model;
@@ -697,6 +802,98 @@ class FleetDeck(App[int]):
             if isinstance(scr, RosterScreen):
                 return scr
         return None
+
+    # ── manage (#3471): mutations by immutable id, through the hub ──
+
+    def new_member(self) -> None:
+        self.notify("reading the archetype catalog…")
+        self._new_member()
+
+    @work(thread=True, group="manage")
+    def _new_member(self) -> None:
+        try:
+            archetypes = self.backend.archetypes()
+        except Exception as exc:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"could not read the archetypes: {exc}", severity="error", timeout=8)
+            return
+        self.call_from_thread(self.push_screen, NewAgentModal(archetypes), lambda body: self.manage("create", None, body) if body else None)
+
+    def manage(self, verb: str, agent: dict | None, payload: dict | None) -> None:
+        who = display_name(agent) if agent else str((payload or {}).get("name") or "")
+        self.notify(f"{verb.replace('_', ' ')} {who}…")
+        self._manage(verb, agent, payload or {})
+
+    @work(thread=True, group="manage")
+    def _manage(self, verb: str, agent: dict | None, payload: dict) -> None:
+        who = display_name(agent) if agent else str(payload.get("name") or "")
+        try:
+            if verb == "create":
+                res = self.backend.create(payload)
+                a = res.get("agent") or {}
+                extra = f" (:{a.get('port')}" + (f", pid {a.get('pid')})" if a.get("pid") else ", not started)")
+                if res.get("installed"):
+                    extra += f" · installed {', '.join(str(x) for x in res['installed'])}"
+                if res.get("warnings"):
+                    self.call_from_thread(self.notify, "; ".join(str(w) for w in res["warnings"]), severity="warning", timeout=10)
+                done = f"created {who}{extra}"
+            elif verb == "rename":
+                res = self.backend.rename(agent or {}, str(payload.get("name") or ""))
+                done = f"renamed to {res.get('name') or payload.get('name')}"
+            elif verb == "remove":
+                res = self.backend.remove(agent or {}, purge=bool(payload.get("purge")))
+                done = f"deleted {who}" + (" — workspace and data purged" if "workspace" in (res.get("removed") or []) else " — data kept")
+            elif verb == "remote_add":
+                res = self.backend.remote_add(str(payload.get("name") or ""), str(payload.get("url") or ""), str(payload.get("token") or ""))
+                done = f"added remote {who}" + (f" · reachable, v{res.get('version')}" if res.get("reachable") else " · unreachable for now — it will show up when it answers")
+            elif verb == "remote_update":
+                res = self.backend.remote_update(agent or {}, **payload)
+                done = f"updated remote {who}" + (" · reachable" if res.get("reachable") else " · unreachable for now")
+            elif verb == "remote_remove":
+                res = self.backend.remote_remove(agent or {})
+                done = f"removed remote {who} (the agent itself is untouched)"
+            else:
+                return
+        except Exception as exc:  # noqa: BLE001 — surfaced as a toast, the deck stays up
+            status = getattr(exc, "status", None)
+            if verb == "remove" and status == 409:
+                # partial, retryable: the member IS stopped, only its workspace survived (#2583)
+                self.call_from_thread(self.notify, f"{who}: stopped, but its workspace survived — repeat the delete to finish", severity="warning", timeout=10)
+            else:
+                detail = getattr(exc, "detail", None) or str(exc)
+                self.call_from_thread(self.notify, f"{verb.replace('_', ' ')} {who}: {detail}", severity="error", timeout=10)
+            self.call_from_thread(self.poll)
+            return
+        if res.get("ok", True):
+            self.call_from_thread(self.notify, done)
+        else:
+            self.call_from_thread(self.notify, f"{verb.replace('_', ' ')} {who}: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
+        self.call_from_thread(self.poll)
+
+    def set_order(self, ids: list[str]) -> None:
+        """Persist the roster order. Presses are numbered on the UI thread and written one
+        at a time: a press older than one already on the hub is dropped, so two quick moves
+        can never commit in the wrong order and the next poll cannot revert the roster."""
+        self._order_seq += 1
+        self._set_order(list(ids), self._order_seq)
+
+    @work(thread=True, group="order")
+    def _set_order(self, ids: list[str], seq: int) -> None:
+        with self._order_lock:
+            if seq <= self._order_sent:
+                return  # a newer order is already on the hub — the poll shows it
+            try:
+                res = self.backend.set_order(ids)
+            except Exception as exc:  # noqa: BLE001 — surfaced as a toast, the hub's order wins back on the poll
+                detail = getattr(exc, "detail", None) or str(exc)
+                self.call_from_thread(self.notify, f"set order: {detail}", severity="error", timeout=10)
+                self.call_from_thread(self.poll)
+                return
+            self._order_sent = seq
+        if res.get("ok", True):
+            self.call_from_thread(self.notify, "order saved")
+        else:
+            self.call_from_thread(self.notify, f"set order: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
+        self.call_from_thread(self.poll)
 
     def lifecycle(self, verb: str, agent: dict) -> None:
         if agent.get("host"):

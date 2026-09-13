@@ -73,6 +73,46 @@ def _build_parser() -> argparse.ArgumentParser:
     _common(pl, top=False)
     ps = sub.add_parser("status", help="alias for ls")
     _common(ps, top=False)
+    # ── manage (#3471): the same operations the deck and the console drive ──
+    pn = sub.add_parser("new", help="create a member — blank, or from an archetype / bundle — and start it")
+    pn.add_argument("name")
+    pn.add_argument("--archetype", metavar="ID", help="an archetype id from the hub's catalog (live mode)")
+    pn.add_argument("--bundle", metavar="GIT_URL", help="a bundle to install into the new member")
+    pn.add_argument("--port", type=int)
+    pn.add_argument("--no-start", dest="start", action="store_false", help="create only; do not start it")
+    pn.add_argument("--no-inherit", dest="inherit", action="store_false", help="a fully blank agent — no model connections or credentials from the hub")
+    _common(pn, top=False)
+    pr = sub.add_parser("rm", help="remove a member (stops it first); its data is kept unless --purge")
+    pr.add_argument("name")
+    pr.add_argument("--purge", action="store_true", help="also delete its workspace and data — cannot be undone")
+    pr.add_argument("--yes", action="store_true", help="do not ask; required when stdin is not a terminal")
+    _common(pr, top=False)
+    prn = sub.add_parser("rename", help="change a member's display name (its id, slug and data never change)")
+    prn.add_argument("name")
+    prn.add_argument("new_name")
+    _common(prn, top=False)
+    prm = sub.add_parser("remote", help="remote members: add | edit | rm")
+    rsub = prm.add_subparsers(dest="remote_cmd", required=True)
+    ra = rsub.add_parser("add", help="register a remote protoAgent as a fleet member")
+    ra.add_argument("name")
+    ra.add_argument("url")
+    ra.add_argument("--bearer", help="the remote's bearer (prefer --bearer-stdin: argv is visible to other processes and shell history); --token is the HUB's credential")
+    ra.add_argument("--bearer-stdin", action="store_true", help="read the remote's bearer from stdin (one line)")
+    _common(ra, top=False)
+    re_ = rsub.add_parser("edit", help="change a remote's name, url or token in place")
+    re_.add_argument("name")
+    re_.add_argument("--name", dest="new_name")
+    re_.add_argument("--url")
+    re_.add_argument("--bearer", help="a new bearer for the remote (--token is the HUB's credential)")
+    re_.add_argument("--bearer-stdin", action="store_true", help="read the new bearer from stdin (one line)")
+    re_.add_argument("--clear-bearer", action="store_true", help="forget the stored bearer")
+    _common(re_, top=False)
+    rr = rsub.add_parser("rm", help="unregister a remote member (the remote agent itself is untouched)")
+    rr.add_argument("name")
+    _common(rr, top=False)
+    po = sub.add_parser("order", help="persist the roster's display order: every member id, in the order wanted")
+    po.add_argument("ids", nargs="+", metavar="ID")
+    _common(po, top=False)
     return p
 
 
@@ -316,6 +356,274 @@ def _cmd_down(args: argparse.Namespace) -> int:
 # ── the deck (bare `protoagent fleet`, or `protoagent top`) ──────────────────
 
 
+# ── manage (#3471) ───────────────────────────────────────────────────────────
+
+
+class _BearerError(ValueError):
+    """A bearer flag combination or source that must not silently do the wrong thing."""
+
+
+def _read_bearer(args: argparse.Namespace) -> str | None:
+    """The REMOTE's bearer from ``--bearer`` or ``--bearer-stdin`` (one line of a pipe, or
+    a no-echo prompt on a terminal); None when neither. (``--token`` is the hub credential
+    every verb takes.) An EMPTY bearer is an error, never "clear it": an upstream ``pass
+    show`` that failed must not wipe a stored credential with exit 0."""
+    argv_bearer = getattr(args, "bearer", None)
+    from_stdin = bool(getattr(args, "bearer_stdin", False))
+    clear = bool(getattr(args, "clear_bearer", False))
+    if sum(1 for x in (argv_bearer is not None, from_stdin, clear) if x) > 1:
+        raise _BearerError("pass ONE of --bearer, --bearer-stdin, --clear-bearer")
+    if from_stdin:
+        if sys.stdin.isatty():
+            import getpass
+
+            line = getpass.getpass("remote bearer (not echoed): ")
+        else:
+            line = sys.stdin.readline().rstrip("\r\n")
+        if not line.strip():
+            raise _BearerError("--bearer-stdin read an empty line — nothing sent (to forget a stored bearer, pass --clear-bearer)")
+        return line
+    if argv_bearer is not None and not argv_bearer.strip():
+        raise _BearerError("--bearer is empty — nothing sent (to forget a stored bearer, pass --clear-bearer)")
+    return argv_bearer
+
+
+def _hub_detail(exc: Exception) -> str:
+    return exc.detail if isinstance(exc, deckhub.HubRequestError) else str(exc)
+
+
+def _run_op(coro_fn, *a, **kw):
+    """Run one op to completion off any loop (the CLI has none)."""
+    import asyncio
+
+    return asyncio.run(coro_fn(*a, **kw))
+
+
+def _cmd_new(args: argparse.Namespace) -> int:
+    results: list[dict] = []
+    if args.archetype and args.bundle:
+        _row_fail(args.name, args, results, "pass --archetype OR --bundle, not both (an archetype names its own bundle)")
+        return _finish(args, "error", results)
+    conn = _open_hub(args)
+    body: dict[str, Any] = {"name": args.name, "start": args.start, "inherit_config": args.inherit}
+    if args.port:
+        body["port"] = args.port
+    if args.bundle:
+        body["bundle"] = args.bundle
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            if args.archetype:
+                arch = next((a for a in conn.client.archetypes() if str(a.get("id")) == args.archetype), None)
+                if arch is None:
+                    _row_fail(args.name, args, results, f"no archetype {args.archetype!r} on the hub (see the deck's n, or GET /api/archetypes)")
+                    return _finish(args, "live", results, hub_url)
+                if arch.get("bundle"):
+                    body["bundle"] = arch["bundle"]
+                if arch.get("soul"):
+                    body["soul"] = arch["soul"]
+                if arch.get("requires_tools"):
+                    body["requires_tools"] = list(arch["requires_tools"])
+            try:
+                res = conn.client.create(body)
+            except deckhub.HubError as exc:
+                _row_fail(args.name, args, results, _hub_detail(exc))
+                return _finish(args, "live", results, hub_url)
+            agent = res.get("agent") or {}
+            state = f"started (:{agent.get('port')}, pid {agent.get('pid')})" if agent.get("running") else f"created (:{agent.get('port')}, not started)"
+            for w in res.get("warnings") or []:
+                _note(f"note: {w}", args)
+            _row_ok(args.name, args, results, f"{state} via hub {hub_url}", agent=agent, installed=res.get("installed", []), warnings=res.get("warnings", []))
+        finally:
+            conn.client.close()
+        return _finish(args, "live", results, hub_url)
+    if args.archetype:
+        _row_fail(args.name, args, results, "--archetype needs a running hub (its catalog lives there); offline, pass --bundle <git-url> or nothing for a blank member")
+        return _finish(args, "offline", results)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    try:
+        res = _run_op(fleet_ops.create, args.name, bundle=args.bundle, port=args.port, start=args.start, inherit_config=args.inherit)
+    except (manager.WorkspaceError, supervisor.FleetError) as exc:
+        _row_fail(args.name, args, results, str(exc))
+        return _finish(args, "offline", results)
+    agent = res.get("agent") or {}
+    state = f"started (:{agent.get('port')}, pid {agent.get('pid')})" if agent.get("running") else f"created (:{agent.get('port')}, not started)"
+    _row_ok(args.name, args, results, f"{state} via disk (offline)", agent=agent, installed=res.get("installed", []), warnings=res.get("warnings", []))
+    return _finish(args, "offline", results)
+
+
+def _confirm_remove(args: argparse.Namespace) -> str:
+    """"" when confirmed; else why not. The prompt goes to STDERR: ``rm … --json | jq`` keeps
+    stdin on the terminal and stdout on the pipe, and a prompt on stdout would sit
+    invisibly ahead of the JSON."""
+    if args.yes:
+        return ""
+    if not sys.stdin.isatty():
+        return "not confirmed — pass --yes when stdin is not a terminal"
+    what = "DELETE its workspace and data" if args.purge else "remove it from the fleet (its data is kept)"
+    print(f"  this will stop {args.name} and {what} — type the name to confirm: ", end="", file=sys.stderr, flush=True)
+    try:
+        typed = input()
+    except EOFError:
+        return "not confirmed — no input"
+    return "" if typed.strip() == args.name else "not confirmed — the typed name did not match"
+
+
+def _cmd_rm(args: argparse.Namespace) -> int:
+    results: list[dict] = []
+    why = _confirm_remove(args)
+    if why:
+        if not args.as_json:
+            print(f"  aborted: {why}", file=sys.stderr)
+        return _finish(args, "aborted", [{"name": args.name, "ok": False, "error": why}])
+    conn = _open_hub(args)
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            res = conn.client.remove(args.name, purge=args.purge)
+        except deckhub.HubRequestError as exc:
+            if exc.status == 409:
+                # partial, retryable: the member IS stopped, only its workspace survived (#2583)
+                _row_fail(args.name, args, results, "stopped, but its workspace survived — repeat to finish", retryable=True)
+            else:
+                _row_fail(args.name, args, results, exc.detail)
+            return _finish(args, "live", results, hub_url)
+        except deckhub.HubError as exc:
+            _row_fail(args.name, args, results, str(exc))
+            return _finish(args, "live", results, hub_url)
+        finally:
+            conn.client.close()
+        _row_ok(args.name, args, results, ("purged" if "workspace" in (res.get("removed") or []) else "removed (data kept)") + f" via hub {hub_url}", removed=res.get("removed", []))
+        return _finish(args, "live", results, hub_url)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    try:
+        res = _run_op(fleet_ops.remove, args.name, purge=args.purge)
+    except manager.WorkspaceBusy as exc:
+        _row_fail(args.name, args, results, f"{exc} — repeat to finish", retryable=True)
+        return _finish(args, "offline", results)
+    except (manager.WorkspaceError, supervisor.FleetError) as exc:
+        _row_fail(args.name, args, results, str(exc))
+        return _finish(args, "offline", results)
+    _row_ok(args.name, args, results, ("purged" if "workspace" in (res.get("removed") or []) else "removed (data kept)") + " via disk (offline)", removed=res.get("removed", []))
+    return _finish(args, "offline", results)
+
+
+def _cmd_rename(args: argparse.Namespace) -> int:
+    conn = _open_hub(args)
+    results: list[dict] = []
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            res = conn.client.rename(args.name, args.new_name)
+        except deckhub.HubError as exc:
+            _row_fail(args.name, args, results, _hub_detail(exc))
+            return _finish(args, "live", results, hub_url)
+        finally:
+            conn.client.close()
+        _row_ok(args.name, args, results, f"renamed to {res.get('name')} (id {res.get('id')} unchanged) via hub {hub_url}", id=res.get("id"), new_name=res.get("name"))
+        return _finish(args, "live", results, hub_url)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    try:
+        res = _run_op(fleet_ops.rename, args.name, args.new_name)
+    except manager.WorkspaceError as exc:
+        _row_fail(args.name, args, results, str(exc))
+        return _finish(args, "offline", results)
+    _row_ok(args.name, args, results, f"renamed to {res.get('name')} (id {res.get('id')} unchanged) via disk (offline)", id=res.get("id"), new_name=res.get("name"))
+    return _finish(args, "offline", results)
+
+
+def _remote_text(res: dict) -> str:
+    agent = res.get("agent") or {}
+    reach = f"reachable, v{res.get('version')}" if res.get("reachable") else "unreachable for now (registered anyway)"
+    return f"{agent.get('url', '')} · {reach}"
+
+
+def _cmd_remote(args: argparse.Namespace) -> int:
+    results: list[dict] = []
+    name = args.name
+    token: str | None = None
+    if args.remote_cmd in ("add", "edit"):
+        try:
+            token = _read_bearer(args)
+        except _BearerError as exc:
+            _row_fail(name, args, results, str(exc))
+            return _finish(args, "error", results)
+        if args.remote_cmd == "edit" and args.clear_bearer:
+            token = ""
+    conn = _open_hub(args)
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            if args.remote_cmd == "add":
+                res = conn.client.remote_add(name, args.url, token or "")
+                _row_ok(name, args, results, f"added: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+            elif args.remote_cmd == "edit":
+                fields = {k: v for k, v in (("name", args.new_name), ("url", args.url), ("token", token)) if v is not None}
+                if not fields:
+                    _row_fail(name, args, results, "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer")
+                    return _finish(args, "live", results, hub_url)
+                res = conn.client.remote_update(name, **fields)
+                _row_ok(name, args, results, f"updated: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+            else:
+                res = conn.client.remote_remove(name)
+                _row_ok(name, args, results, f"unregistered via hub {hub_url} (the remote agent itself is untouched)", id=res.get("id"))
+        except deckhub.HubError as exc:
+            _row_fail(name, args, results, _hub_detail(exc))
+        finally:
+            conn.client.close()
+        return _finish(args, "live", results, hub_url)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    try:
+        if args.remote_cmd == "add":
+            res = _run_op(fleet_ops.remotes_add, name, args.url, token or "")
+            _row_ok(name, args, results, f"added: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+        elif args.remote_cmd == "edit":
+            if args.new_name is None and args.url is None and token is None:
+                _row_fail(name, args, results, "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer")
+                return _finish(args, "offline", results)
+            res = _run_op(fleet_ops.remotes_update, name, name=args.new_name, url=args.url, token=token)
+            _row_ok(name, args, results, f"updated: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+        else:
+            res = _run_op(fleet_ops.remotes_remove, name)
+            _row_ok(name, args, results, "unregistered via disk (offline)", id=res.get("id"))
+    except (supervisor.FleetError, manager.WorkspaceError) as exc:
+        _row_fail(name, args, results, str(exc))
+    return _finish(args, "offline", results)
+
+
+def _cmd_order(args: argparse.Namespace) -> int:
+    conn = _open_hub(args)
+    results: list[dict] = []
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            res = conn.client.set_order(list(args.ids))
+        except deckhub.HubError as exc:
+            _row_fail("order", args, results, _hub_detail(exc))
+            return _finish(args, "live", results, hub_url)
+        finally:
+            conn.client.close()
+        _row_ok("order", args, results, f"saved: {' › '.join(res.get('order') or args.ids)} via hub {hub_url}", order=res.get("order"))
+        return _finish(args, "live", results, hub_url)
+    from ops import fleet as fleet_ops
+
+    try:
+        order = _run_op(fleet_ops.order, list(args.ids))
+    except supervisor.FleetError as exc:
+        _row_fail("order", args, results, str(exc))
+        return _finish(args, "offline", results)
+    _row_ok("order", args, results, f"saved: {' › '.join(order)} via disk (offline)", order=order)
+    return _finish(args, "offline", results)
+
+
 def _offline_backend(reason: str):
     """The disk backend, built here so ``deck`` never imports ``graph``: the supervisor's
     callables are handed over, and its synthesized host row is dropped by the backend."""
@@ -393,6 +701,16 @@ def run_fleet_cli(argv: list[str]) -> int:
             return _cmd_up(args)
         if args.cmd == "down":
             return _cmd_down(args)
+        if args.cmd == "new":
+            return _cmd_new(args)
+        if args.cmd == "rm":
+            return _cmd_rm(args)
+        if args.cmd == "rename":
+            return _cmd_rename(args)
+        if args.cmd == "remote":
+            return _cmd_remote(args)
+        if args.cmd == "order":
+            return _cmd_order(args)
         return _cmd_ls(args)
     except ValueError as exc:  # a malformed --hub (deck.hub.normalize_url)
         if args.as_json:

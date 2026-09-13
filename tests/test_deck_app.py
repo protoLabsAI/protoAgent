@@ -101,6 +101,69 @@ class FakeBackend:
         self.calls.append(("attend", session_id, h))
         return h
 
+    # ── manage (#3471) ──
+    archetype_rows = [
+        {"id": "basic", "label": "Basic", "blurb": "a blank agent", "bundle": None, "soul": "", "tier": "standard"},
+        {"id": "pm", "label": "Project manager", "blurb": "runs a board", "bundle": "https://github.com/x/pm-archetype", "soul": "You are a PM.", "tier": "standard", "requires_tools": ["github.write"]},
+    ]
+    warm = 3
+    remove_error: Exception | None = None
+
+    def _manage(self, verb, *a, **kw):
+        if self.mode == "offline":
+            raise RuntimeError("offline — no hub to reach this member through")
+        self.calls.append((verb, *a, kw) if kw else (verb, *a))
+
+    def create(self, body):
+        self._manage("create", dict(body))
+        row = {"name": body["name"], "id": f"{body['name']}-new1", "port": 7999, "pid": 4242 if body.get("start", True) else None, "running": bool(body.get("start", True)), "version": "0.165.0"}
+        self.roster.append(row)
+        return {"ok": True, "agent": row, "installed": ["hello"] if body.get("bundle") else []}
+
+    def rename(self, agent, name):
+        self._manage("rename", deckdata.slug_of(agent), name)
+        for a in self.roster:
+            if deckdata.slug_of(a) == deckdata.slug_of(agent):
+                a["name"] = a["label"] = name
+        return {"ok": True, "id": deckdata.slug_of(agent), "name": name}
+
+    def remove(self, agent, *, purge=False):
+        self._manage("remove", deckdata.slug_of(agent), purge=purge)
+        if self.remove_error is not None:
+            for a in self.roster:  # the hub stopped it before its workspace refused to go
+                if deckdata.slug_of(a) == deckdata.slug_of(agent):
+                    a["pid"], a["running"] = None, False
+            raise self.remove_error
+        self.roster = [a for a in self.roster if deckdata.slug_of(a) != deckdata.slug_of(agent)]
+        return {"ok": True, "name": agent.get("name"), "removed": ["workspace"] if purge else []}
+
+    def remote_add(self, name, url, token=""):
+        self._manage("remote_add", name, url, token)
+        row = {"name": name, "id": f"r-{name}", "port": None, "pid": None, "running": False, "remote": True, "url": url}
+        self.roster.append(row)
+        return {"ok": True, "agent": row, "reachable": False, "version": ""}
+
+    def remote_update(self, agent, **fields):
+        self._manage("remote_update", deckdata.slug_of(agent), **fields)
+        return {"ok": True, "agent": {**agent, **{k: v for k, v in fields.items() if k in ("name", "url")}}, "reachable": True, "version": "0.165.0"}
+
+    def remote_remove(self, agent):
+        self._manage("remote_remove", deckdata.slug_of(agent))
+        self.roster = [a for a in self.roster if deckdata.slug_of(a) != deckdata.slug_of(agent)]
+        return {"ok": True, "id": deckdata.slug_of(agent), "name": agent.get("name"), "removed": ["remote"]}
+
+    def set_order(self, ids):
+        self._manage("set_order", list(ids))
+        by = {str(a.get("id")): a for a in self.roster}
+        self.roster = [by[i] for i in ids if i in by] + [a for a in self.roster if str(a.get("id")) not in ids]
+        return {"ok": True, "order": list(ids)}
+
+    def archetypes(self):
+        return [] if self.mode == "offline" else [dict(a) for a in self.archetype_rows]
+
+    def warm_max(self):
+        return None if self.mode == "offline" else self.warm
+
     def close(self):
         self.closed = True
 
