@@ -669,14 +669,15 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
     """Major: the turn-end reconcile re-sent leftover steers into whatever session existed
     when its roundtrip returned — the NEW session after ctrl+n, or as a second turn while a
     typed answer had already resumed the parked one."""
-    import time as _t
+    import threading
 
     fake = FakeA2A(hang=True)
     be = TalkBackend(a2a_client=fake)
     orig = be.steer_pending
+    roundtrip = threading.Event()  # the reconcile's read returns only when the test says so — a fixed sleep lost the race on a starved Windows runner
 
     def slow_pending(agent, sid):
-        _t.sleep(0.6)
+        roundtrip.wait(5)
         return orig(agent, sid)
 
     be.steer_pending = slow_pending
@@ -691,9 +692,11 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
         fake.hang = False
         await pilot.press("escape")
         assert await _until(pilot, lambda: app.screen.convo.live is None)
-        await pilot.press("ctrl+n")
+        await pilot.press("ctrl+n")  # the session switches while the reconcile's roundtrip is still out…
         await pilot.pause(0.1)
-        await pilot.pause(1.0)
+        roundtrip.set()  # …and only now does it return
+        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert len(fake.sent) == 1  # nothing re-sent into the new session
     # …and an answer typed inside the roundtrip: the stale reconcile is dropped; the resumed
     # turn folds the held steer in (the server's queue drains at its next model call)
@@ -712,8 +715,10 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
     fake2 = ParksAfterASteer({"question": "and now?"})
     be2._a2a = fake2
 
+    answered_evt = threading.Event()  # reconcile #1's roundtrip returns only after the answer was typed
+
     def slow_pending2(agent, sid):
-        _t.sleep(0.6)
+        answered_evt.wait(5)
         answered = any(s["metadata"] for s in fake2.sent)
         return [] if answered else [{"id": c[2], "text": c[3]} for c in be2.calls if c[0] == "steer"]
 
@@ -725,7 +730,10 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
         await _type(app2, pilot, "faster", wait=0.1)  # queued into the running turn, which then parks
         assert await _until(pilot, lambda: app2.screen.convo.parked is not None)
         await _type(app2, pilot, "yes", wait=0.1)  # answers while reconcile #1's roundtrip is still out
-        await pilot.pause(1.5)
+        assert await _until(pilot, lambda: any(s["metadata"] for s in fake2.sent))  # the resume went out…
+        answered_evt.set()  # …and only now does reconcile #1 return (stale) and reconcile #2 run
+        await pilot.pause(1.0)
+        await _settle(app2, pilot)
         assert [s["text"] for s in fake2.sent] == ["go", "yes"]  # "faster" was never re-sent as a turn of its own
         assert [st.consumed for st in app2.screen.convo.steers] == [True]  # reconcile #2 found it folded in
 
