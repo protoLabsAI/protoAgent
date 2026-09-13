@@ -1064,6 +1064,39 @@ def _skill_index(
     return "\n".join(lines), listed, full_rows
 
 
+def _is_firing_now(job, session_id: str) -> bool:
+    """Is ``job`` the one-shot that started the turn now running in ``session_id``?
+
+    The scheduler deletes a one-shot only after its fire settles, i.e. after the whole
+    agent turn it started has returned. So during that turn the job is still in
+    ``list_jobs()``: due, in this session, not yet deleted. Rendered as a plain pending
+    schedule it looks like ANOTHER wake is queued. An agent woken by a watch reaction read
+    it that way and looped: it re-checked and re-cleared state it had already handled
+    until the stall guard stopped it."""
+    if not session_id or getattr(job, "context_id", None) != session_id:
+        return False
+    try:
+        from datetime import UTC, datetime
+
+        from scheduler.interface import is_cron
+
+        if is_cron(job.schedule or "") or not job.next_fire:
+            return False
+        due = datetime.fromisoformat(str(job.next_fire).replace("Z", "+00:00"))
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=UTC)
+        return due <= datetime.now(UTC)
+    except Exception:  # noqa: BLE001 — unparseable schedule: render it plainly
+        return False
+
+
+def _schedule_line(job, session_id: str) -> str:
+    prompt = (job.prompt or "")[:60]
+    if _is_firing_now(job, session_id):
+        return f"- {job.id} [FIRING NOW — this is the turn you are in, not another wake]: {prompt}"
+    return f"- {job.id} next={job.next_fire or '?'}: {prompt}"
+
+
 def working_state_block(state: dict | None) -> str:
     """The agent's own live commitments — active goal + plan(orient), open tasks, active
     watches, pending schedules — rendered as one compact ``<working_state>`` block so the
@@ -1146,7 +1179,7 @@ def working_state_block(state: dict | None) -> str:
         if sched is not None:
             jobs = list(sched.list_jobs())[:_WS_SCHED_CAP]
             if jobs:
-                lines = "\n".join(f"- {j.id} next={j.next_fire or '?'}: {(j.prompt or '')[:60]}" for j in jobs)
+                lines = "\n".join(_schedule_line(j, session_id) for j in jobs)
                 sections.append(f"PENDING SCHEDULES:\n{lines}")
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] schedule read failed: %s", exc)

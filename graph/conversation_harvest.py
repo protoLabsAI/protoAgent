@@ -69,6 +69,14 @@ async def _default_summarizer(transcript: str, config) -> str:
     return extract_output(str(resp.content)).strip() or str(resp.content).strip()
 
 
+def _as_of(tup) -> str:
+    """``YYYY-MM-DD`` of the thread's last checkpoint (its last activity), or ``""``."""
+    import re
+
+    ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
+    return ts[:10] if re.match(r"\d{4}-\d{2}-\d{2}", ts) else ""
+
+
 async def harvest_thread(
     thread_id: str,
     *,
@@ -124,6 +132,13 @@ async def harvest_thread(
         summary = await summarizer(transcript, config)
         if not summary.strip():
             return None
+        # Date what we store to when the conversation happened, not when it retired. The
+        # TTL sweep retires threads weeks after their last turn. Undated, an August
+        # "the user runs model X" landed as a present-tense fact stamped with the harvest
+        # day (2026-09-10) and was recalled as the current setup.
+        as_of = _as_of(tup)
+        if as_of:
+            summary = f"[as of {as_of}] {summary}"
         # A summary is document-sized — chunk it so each passage gets its own
         # embedding instead of one diluted whole-summary vector (ADR 0021).
         # Offloaded: add_document does blocking gateway work per chunk (embed +
@@ -141,7 +156,7 @@ async def harvest_thread(
             knowledge_store,
             summary,
             domain="conversation",
-            heading=f"Conversation summary ({thread_id})",
+            heading=f"Conversation summary ({thread_id}" + (f", last active {as_of})" if as_of else ")"),
             source=thread_id,
             source_type="harvest",
             namespace=namespace,
@@ -163,6 +178,7 @@ async def harvest_thread(
                 "config": config,
                 "namespace": namespace,
                 "source": thread_id,
+                "as_of": as_of,
             }
             if fact_extractor is not None:
                 kwargs["extractor"] = fact_extractor

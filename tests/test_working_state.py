@@ -126,3 +126,43 @@ def test_read_failure_is_skipped_not_raised(clear_state, monkeypatch):
     )
     block = _mw()._working_state_block({"session_id": "s"})
     assert "task-2" in block and "GOAL" not in block
+
+
+# ── the job that started THIS turn is not "another wake" ─────────────────────
+
+
+def _job(jid, schedule, next_fire, context_id="gh-alerts"):
+    return SimpleNamespace(
+        id=jid, schedule=schedule, next_fire=next_fire, context_id=context_id, prompt="A GitHub item you were watching"
+    )
+
+
+def test_firing_one_shot_is_marked_as_this_turn(clear_state, monkeypatch):
+    # Regression (2026-09-09): the scheduler deletes a one-shot only after the turn it
+    # started returns, so the job is still listed during that turn. Unmarked, the agent
+    # read it as a second queued wake and looped until the stall guard fired.
+    past = "2026-09-09T14:47:14+00:00"
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("watch-gh-x", past, past)]), raising=False)
+    block = _mw()._working_state_block({"session_id": "gh-alerts"})
+    assert "watch-gh-x [FIRING NOW — this is the turn you are in, not another wake]" in block
+
+
+def test_future_one_shot_stays_pending(clear_state, monkeypatch):
+    fut = "2999-01-01T00:00:00+00:00"
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("later", fut, fut)]), raising=False)
+    block = _mw()._working_state_block({"session_id": "gh-alerts"})
+    assert "FIRING NOW" not in block and f"later next={fut}" in block
+
+
+def test_due_one_shot_in_another_session_is_not_this_turn(clear_state, monkeypatch):
+    past = "2026-09-09T14:47:14+00:00"
+    jobs = [_job("other", past, past, context_id="someone-else")]
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
+    assert "FIRING NOW" not in _mw()._working_state_block({"session_id": "gh-alerts"})
+
+
+def test_cron_job_is_never_marked_firing(clear_state, monkeypatch):
+    past = "2026-09-09T14:47:14+00:00"
+    jobs = [_job("digest", "0 9 * * 1", past)]
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
+    assert "FIRING NOW" not in _mw()._working_state_block({"session_id": "gh-alerts"})

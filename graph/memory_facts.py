@@ -225,10 +225,15 @@ async def extract_and_store_facts(
     namespace: str | None = None,
     source: str | None = None,
     extractor=_default_extractor,
+    as_of: str | None = None,
 ) -> dict:
     """Extract durable facts from ``transcript`` and consolidate them into the
     store. Never raises — fact capture is best-effort and must not block thread
-    retirement."""
+    retirement.
+
+    ``as_of`` (``YYYY-MM-DD``) is when the conversation happened. Each fact is
+    prefixed ``[as of …]`` so one harvested from an old thread reads as what was
+    true THEN, not as the current state."""
     if knowledge_store is None or not transcript.strip():
         return {"added": 0, "skipped": 0, "superseded": 0}
     try:
@@ -236,6 +241,8 @@ async def extract_and_store_facts(
     except Exception:  # noqa: BLE001
         log.exception("[memory] fact extraction failed")
         return {"added": 0, "skipped": 0, "superseded": 0}
+    if as_of:
+        facts = [f"[as of {as_of}] {f}" for f in facts]
     counts = consolidate_and_store(knowledge_store, facts, namespace=namespace, source=source)
     if counts["added"] or counts["skipped"]:
         log.info(
