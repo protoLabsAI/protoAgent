@@ -230,3 +230,19 @@ def test_offline_snapshot_status_failure_is_reported(tmp_path):
     be = deckdata.OfflineBackend(status=boom, start=lambda n: {}, stop=lambda n: {}, fleet_json=Path("/x/fleet.json"))
     snap = be.snapshot()
     assert snap.roster == [] and "unreadable" in snap.error
+
+
+def test_a_session_id_from_the_member_is_encoded_as_one_path_segment():
+    """CodeRabbit (security): a member's session list is data; `../..` in it must not steer
+    the turns read to another hub path with the fleet credential."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path.decode())
+        return httpx.Response(200, json={"turns": []})
+
+    be = deckdata.LiveBackend(_conn(handler))
+    be.turns({"id": "x-1", "name": "x"}, "../../api/config")
+    be.turns({"id": "x-1", "name": "x"}, "chat-1.2/3")
+    assert seen[0].startswith("/agents/x-1/api/chat/sessions/%2E%2E%2F%2E%2E%2Fapi%2Fconfig/turns")
+    assert seen[1].startswith("/agents/x-1/api/chat/sessions/chat-1%2E2%2F3/turns")

@@ -75,11 +75,22 @@ apply to the selected row. Member detail shows runtime status (model, identity, 
 a following tail of the member's bounded, redacted log ring, the session inventory, and
 the telemetry rollup — each pane degrades on its own if that read fails.
 
+**Talking to a member.** `enter` (or `c`) on an online member opens a conversation.
+The transcript streams your messages and the member's answers; the WORK pane lists every
+tool call of the current turn as it happens — a subagent's own calls nested under its
+`task` card — with args, result, and duration; `enter` on a card shows the full args and
+result. Thinking folds behind a one-line count (`ctrl+z` unfolds). `esc` cancels a running
+turn (then backs out); `ctrl+n` starts a new session; `ctrl+s` lists the member's console
+sessions and replays one, tool cards included. Sessions use the console's own id shape,
+so a conversation started here is waiting in the browser and vice versa. A stream that
+goes silent for 45 s is checked against the member's durable task and finalized from it
+only if the server already finished — never fabricated. Answering a parked question,
+steering a running turn, and cancelling one delegation arrive in the next slice (#3470).
+
 The deck follows the same live/offline rule as the verbs below: with no hub answering it
 shows this instance's `fleet.json` badged `offline`, and only start/stop are available.
 Textual is imported only when the deck opens, so `--help` and the non-interactive verbs
-stay fast; a build without it prints a one-line hint and exits 2. Talking to a member and
-watching its tool calls arrive in the next slices (#3469, #3470).
+stay fast; a build without it prints a one-line hint and exits 2.
 
 #### `fleet` talks to the running hub
 

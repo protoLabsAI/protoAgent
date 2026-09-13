@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -438,6 +439,33 @@ class InsecureHub(HubError):
     """A credential would travel in cleartext: a non-loopback ``http://`` hub with a
     bearer set. Refused unless the operator opted in (``--insecure-http``, e.g. a tailnet
     URL that is encrypted underneath but cannot be told apart from a LAN one)."""
+
+
+def wake_blocked_reader(resp: Any) -> None:
+    """From ANOTHER thread, unblock a reader stuck in ``recv`` on this streaming response.
+
+    Platforms disagree, and the wrong move on either side hangs the reader for the whole
+    read timeout: on POSIX ``shutdown(SHUT_RDWR)`` wakes it and closing the fd right behind
+    the shutdown RACES the wake-up (macOS: the poller finds its fd gone and sleeps on, ~1 in
+    14) — so only the shutdown happens and the reader closes the response as it unwinds.
+    On Windows ``shutdown`` does not wake a blocked ``recv`` at all; only ``closesocket``
+    does — so there the response is closed too. A mock transport has no socket: closing is
+    the only lever. Never raises."""
+    if resp is None:
+        return
+    sock = None
+    try:
+        stream = resp.extensions.get("network_stream")
+        sock = stream.get_extra_info("socket") if stream is not None else None
+        if sock is not None:
+            sock.shutdown(socket.SHUT_RDWR)
+    except Exception:  # noqa: BLE001 — a dead socket must never raise into the UI
+        pass
+    if sock is None or sys.platform == "win32":
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def credential_allowed(url: str, token: str | None, *, insecure_http: bool) -> None:

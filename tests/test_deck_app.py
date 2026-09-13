@@ -70,10 +70,15 @@ class FakeBackend:
 async def _settle(app: FleetDeck, pilot) -> None:
     """Wait for every thread worker (and the workers they chain) to finish, then let the
     UI loop apply the results — deterministic where a fixed pause would race."""
+    from textual.worker import WorkerCancelled
+
     for _ in range(20):
         if not app.workers:
             break
-        await app.workers.wait_for_complete()
+        try:
+            await app.workers.wait_for_complete()
+        except WorkerCancelled:
+            pass  # an exclusive worker superseded by a newer one — expected, keep draining
         await pilot.pause()
     await pilot.pause()
 
@@ -154,7 +159,7 @@ async def test_detail_screen_renders_runtime_logs_sessions_and_telemetry():
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
         await pilot.press("j")  # protoEngineer
-        await pilot.press("enter")
+        await pilot.press("i")
         await _settle(app, pilot)
         assert isinstance(app.screen, DetailScreen)
         head = str(app.screen.query_one("#detail-head", Static).content)
@@ -224,6 +229,9 @@ async def test_offline_mode_is_badged_and_hides_hub_only_keys():
         await pilot.press("enter")
         await pilot.pause(0.2)
         assert isinstance(app.screen, RosterScreen)  # enter does nothing offline
+        await pilot.press("i")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, RosterScreen)  # nor does detail
 
 
 @pytest.mark.asyncio
@@ -242,7 +250,7 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause(0.3)
-        await pilot.press("j", "enter")
+        await pilot.press("j", "i")
         await pilot.pause(0.5)
         assert isinstance(app.screen, DetailScreen)
         log = app.screen.query_one("#log", RichLog)
@@ -292,7 +300,7 @@ async def test_log_tail_anchors_on_seq_when_the_member_stamps_it_even_with_dupli
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
-        await pilot.press("j", "enter")
+        await pilot.press("j", "i")
         await _settle(app, pilot)
         log = app.screen.query_one("#log", RichLog)
         assert len(log.lines) == 4
@@ -316,7 +324,7 @@ async def test_log_tail_anchors_on_seq_when_the_member_stamps_it_even_with_dupli
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
-        await pilot.press("j", "enter")
+        await pilot.press("j", "i")
         await _settle(app, pilot)
         log = app.screen.query_one("#log", RichLog)
         assert len(log.lines) == 3
@@ -349,7 +357,7 @@ async def test_log_tail_re_renders_when_the_member_restarts_and_seq_starts_over(
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await _settle(app, pilot)
-        await pilot.press("j", "enter")
+        await pilot.press("j", "i")
         await _settle(app, pilot)
         log = app.screen.query_one("#log", RichLog)
         assert len(log.lines) == 3
@@ -414,7 +422,7 @@ async def test_detail_head_and_keys_follow_the_current_roster_row():
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause(0.3)
-        await pilot.press("j", "enter")  # protoEngineer, online
+        await pilot.press("j", "i")  # protoEngineer, online
         await pilot.pause(0.5)
         assert app.screen.check_action("stop", ()) is True
         await pilot.press("x")
@@ -430,7 +438,7 @@ async def test_narrow_terminal_stacks_the_detail_panes():
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(80, 24)) as pilot:
         await pilot.pause(0.3)
-        await pilot.press("j", "enter")
+        await pilot.press("j", "i")
         await pilot.pause(0.5)
         assert app.screen.query_one("#detail-body").has_class("narrow")
 
