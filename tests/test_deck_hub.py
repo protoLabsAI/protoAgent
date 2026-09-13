@@ -706,6 +706,7 @@ def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, 
     assert cand is not None and cand.pid == 4242 and cand.url == "http://127.0.0.1:7871"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS")
 def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
     """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
     `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir."""
