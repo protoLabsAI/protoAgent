@@ -24,19 +24,11 @@ import sys
 from typing import Any
 
 from deck import hub as deckhub
+from deck.data import PRESENCE_GLYPH as _PRESENCE_GLYPH
+from deck.data import presence_of  # one definition of the console's presence words (deck.data)
 from graph.fleet import supervisor
 
-_PRESENCE_GLYPH = {"host": "●", "online": "●", "remote": "●", "stopped": "○", "unreachable": "◌"}
-
-
-def presence_of(agent: dict) -> str:
-    """The console's presence vocabulary, exactly (apps/web/src/app/FleetRoom.tsx::presenceOf):
-    host · online · remote · stopped · unreachable. Two surfaces, one set of words."""
-    if agent.get("host"):
-        return "host"
-    if agent.get("running"):
-        return "remote" if agent.get("remote") else "online"
-    return "unreachable" if agent.get("remote") else "stopped"
+__all__ = ["presence_of", "run_deck_cli", "run_fleet_cli"]
 
 
 def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
