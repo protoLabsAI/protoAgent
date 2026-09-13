@@ -341,7 +341,7 @@ def _ports_other_instances_record() -> set[int]:
                 try:  # one unreadable record must not void every other instance's ports
                     rec = _read_record(d) or {}
                     port = int(rec.get("port") or 0)
-                except (OSError, TypeError, ValueError):
+                except (AttributeError, OSError, TypeError, ValueError):
                     continue
                 if port:
                     ports.add(port)

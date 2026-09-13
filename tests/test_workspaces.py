@@ -56,10 +56,11 @@ def test_pick_port_skips_os_occupied(root, monkeypatch):
 
 
 def test_pick_port_skips_ports_other_instances_record_for_stopped_members(root, monkeypatch, tmp_path):
-    """The dev hub handed its new member :7874 — the port the desktop instance's STOPPED
+    """Found live: a dev hub handed its new member a port the desktop instance's STOPPED
     designSystem member records. Nothing listens there, so the OS probe reads it free, yet
-    that member binds it at its next start. Every other instance's recorded member ports
-    on this machine are skipped: the desktop's, and a scoped instance's under the box."""
+    that member binds it at its next start. Here the desktop's stopped member records 7871
+    and a scoped dev instance's records 7872; both are skipped, so this instance's first
+    member gets 7873 and its second 7874."""
     from infra import paths
 
     desktop = tmp_path / "desktop"
