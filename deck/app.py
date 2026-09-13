@@ -33,6 +33,7 @@ from deck import data as deckdata
 from deck.data import Backend, MemberDetail, Snapshot, display_name, presence_of, slug_of
 from deck.feed import FEED_CSS, Activity, WorkFeedScreen
 from deck.talk import TALK_CSS, ConversationScreen
+from deck.hitl import HITL_CSS
 
 POLL_S = 3.0
 LOG_POLL_S = 2.0
@@ -600,7 +601,7 @@ class FleetDeck(App[int]):
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
     #sessions { height: auto; max-height: 12; }
     #log { height: 1fr; }
-    """ + TALK_CSS + FEED_CSS
+    """ + TALK_CSS + FEED_CSS + HITL_CSS
 
     def __init__(self, backend: Backend, *, poll_s: float = POLL_S, events: Any = None) -> None:
         super().__init__()
@@ -634,6 +635,9 @@ class FleetDeck(App[int]):
             self.activity.apply(ev)
         if not evs:
             return
+        for scr in self.screen_stack:
+            if isinstance(scr, ConversationScreen):
+                scr.on_bus_events(evs)
         for slug in self.activity.newly_parked:
             self.bell()
             self.notify(f"{self.activity.names.get(slug, slug)} needs you", severity="warning", timeout=10)

@@ -20,6 +20,8 @@ What the deck listens for:
 - ``turn.usage`` — EVERY terminal turn's spend (``{task_id, context_id, state, model,
   input_tokens, output_tokens, cost_usd, duration_ms}``), whoever started it: the roster's
   "last active" and per-turn spend signal.
+- ``turn.input_required`` — ANY turn parked on a question / form / approval
+  (``{task_id, context_id, prompt}``, retained): the roster's "needs you" without polling.
 - ``turn.resumed`` / ``chat.resumed`` — a parked question answered; a server-fired turn
   settled with its text.
 
@@ -44,7 +46,7 @@ import httpx
 
 from deck import hub as deckhub
 
-TOPICS = ("chat.progress", "turn.started", "turn.finished", "turn.usage", "turn.resumed", "chat.resumed")
+TOPICS = ("chat.progress", "turn.started", "turn.finished", "turn.usage", "turn.input_required", "turn.resumed", "chat.resumed")
 _READ_S = 60.0  # keepalives arrive every 15 s; a minute of silence means the socket is dead
 _BACKOFF_S = (1.0, 2.0, 5.0, 10.0, 20.0)
 
@@ -150,9 +152,11 @@ class MemberEvents:
         self.stop()
         self._client.close()
 
+    def _params(self) -> dict | None:
+        return {"since": self.last_seq} if self.last_seq is not None else None
+
     def _once(self) -> Iterator[Event]:
-        params = {"since": self.last_seq} if self.last_seq is not None else None
-        with self._client.stream("GET", self.path, headers=self._headers(), params=params, timeout=httpx.Timeout(_READ_S, connect=5.0)) as r:
+        with self._client.stream("GET", self.path, headers=self._headers(), params=self._params(), timeout=httpx.Timeout(_READ_S, connect=5.0)) as r:
             self._active = r
             try:
                 if r.status_code in (401, 403):
@@ -194,6 +198,38 @@ class MemberEvents:
             attempt += 1
             if self._stop.wait(delay):
                 return
+
+
+class Attendance(MemberEvents):
+    """Hold ``GET /agents/<slug>/api/chat/attend?session=<id>`` open: for as long as the
+    connection lives the member treats the session as ATTENDED (#3110) — a server-fired turn
+    in it parks on a question instead of auto-answering, and accepts an operator's
+    interjection. Presence fails back to unattended the moment the socket drops, which is
+    also what :meth:`stop` does. The stream carries keepalive comments only."""
+
+    def __init__(self, hub_url: str, token: str | None, slug: str, session_id: str, *, transport: httpx.BaseTransport | None = None, insecure_http: bool = False):
+        super().__init__(hub_url, token, slug, transport=transport, insecure_http=insecure_http)
+        self.session_id = session_id
+        self.path = deckhub.HubClient.member_path(slug, "/api/chat/attend")
+        self._thread: threading.Thread | None = None
+
+    def _params(self) -> dict | None:
+        return {"session": self.session_id}
+
+    def start(self) -> Attendance:
+        def run() -> None:
+            try:
+                for _ in self.events():
+                    pass
+            finally:
+                self._client.close()
+
+        self._thread = threading.Thread(target=run, name=f"deck-attend-{self.slug}", daemon=True)
+        self._thread.start()
+        return self
+
+    def close(self) -> None:
+        self.stop()  # the reader thread closes the client on its way out
 
 
 class FleetEvents:

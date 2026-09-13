@@ -510,6 +510,7 @@ class HubClient:
         self.url = normalize_url(url)
         self._token = token or None
         credential_allowed(self.url, self._token, insecure_http=insecure_http)
+        self.insecure_http = insecure_http  # the member streams (events, attendance) inherit the opt-in
         self._client = httpx.Client(base_url=self.url, timeout=timeout, transport=transport, follow_redirects=False)
 
     @property
@@ -634,6 +635,12 @@ class HubClient:
         if params:
             path = f"{path}?{'&'.join(f'{quote(str(k), safe=chr(0))}={quote(str(v), safe=chr(0))}' for k, v in params.items())}"
         return self._request("GET", path)
+
+    def member_post(self, slug: str, rel: str, body: Any = None) -> Any:
+        return self._request("POST", self.member_path(slug, rel), json_body=body if body is not None else {})
+
+    def member_delete(self, slug: str, rel: str) -> Any:
+        return self._request("DELETE", self.member_path(slug, rel))
 
     def member_runtime_status(self, slug: str) -> dict:
         return _expect_dict(self.url, self.member_get(slug, "/api/runtime/status"), f"{slug} runtime status")

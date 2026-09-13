@@ -59,6 +59,9 @@ class TurnState:
     running: set[str] = field(default_factory=set)  # task ids (or session ids) in flight
     open_tools: dict[str, tuple[str, float]] = field(default_factory=dict)  # tool_id → (name, started)
     parked: str = ""  # the question / title when a turn waits on the operator
+    parked_session: str = ""  # where it waits (the feed's enter opens it there)
+    parked_task: str = ""
+    server_turns: dict[str, dict] = field(default_factory=dict)  # session → {task_id, origin, trigger, controllable}: a live server-fired turn
     last_active: float | None = None  # monotonic
     last_cost_usd: float | None = None
     last_model: str = ""
@@ -102,6 +105,8 @@ class Activity:
             controllable = bool((p.control or {}).get("operator_controllable"))
             if p.task_id:
                 st.running.add(p.task_id)
+            if p.control and p.task_id:
+                st.server_turns[p.session] = {"task_id": p.task_id, "origin": str(p.control.get("origin") or ""), "trigger": str(p.control.get("trigger") or ""), "controllable": controllable}
             if p.kind == "tool":
                 if p.done:
                     started = st.open_tools.pop(p.tool_id, (p.name, None))[1]
@@ -120,10 +125,13 @@ class Activity:
         elif ev.topic == "turn.started":
             sid = str(d.get("session_id") or "")
             st.running.add(sid)
+            if d.get("task_id"):
+                st.server_turns[sid] = {"task_id": str(d["task_id"]), "origin": str(d.get("origin") or ""), "trigger": str(d.get("trigger") or ""), "controllable": bool(st.server_turns.get(sid, {}).get("controllable"))}
             self._add(Row(now, slug, self._name(slug), "turn", "⟳", "turn started", f"{d.get('origin', '')} · {d.get('trigger', '')}".strip(" ·"), sid, str(d.get("task_id") or "")))
         elif ev.topic == "turn.finished":
             sid = str(d.get("session_id") or "")
             st.running.discard(sid)
+            st.server_turns.pop(sid, None)
             if d.get("task_id"):
                 st.running.discard(str(d["task_id"]))
             ok = d.get("ok")
@@ -131,6 +139,8 @@ class Activity:
         elif ev.topic == "turn.usage":
             tid = str(d.get("task_id") or "")
             st.running.discard(tid)
+            for sid in [k for k, v in st.server_turns.items() if v.get("task_id") == tid]:
+                st.server_turns.pop(sid, None)
             st.open_tools.clear()  # a terminal turn ends every tool it had open
             cost = _num(d.get("cost_usd"))
             st.last_cost_usd = cost
@@ -139,8 +149,16 @@ class Activity:
                 st.parked = ""
             state = _state(d.get("state"))
             self._add(Row(now, slug, self._name(slug), "usage", "$", f"turn {state or 'done'}", f"${cost:,.4f} · {int(_num(d.get('input_tokens'))):,} in · {int(_num(d.get('output_tokens'))):,} out" + (f" · {st.last_model}" if st.last_model else ""), str(d.get("context_id") or ""), tid, error=state == "failed"))
+        elif ev.topic == "turn.input_required":
+            sid, tid = str(d.get("context_id") or ""), str(d.get("task_id") or "")
+            st.running.discard(tid)
+            st.running.discard(sid)
+            st.server_turns.pop(sid, None)  # a parked server turn is no longer addressable
+            self.set_parked(slug, str(d.get("prompt") or "input required"), session=sid, task_id=tid)
         elif ev.topic == "turn.resumed":
             st.parked = ""
+            if d.get("task_id"):
+                st.running.add(str(d["task_id"]))  # answered: the turn is running again
             self._add(Row(now, slug, self._name(slug), "resume", "⚑", "question answered", "", str(d.get("context_id") or ""), str(d.get("task_id") or "")))
         elif ev.topic == "chat.resumed":
             sid = str(d.get("session_id") or "")
@@ -169,13 +187,20 @@ class Activity:
             st.open_tools[tool_id] = (name, now)
             self._add(Row(now, slug, self._name(slug), "tool", "⟳", name, "", session, task_id, tool_id))
 
-    def set_parked(self, slug: str, question: str) -> None:
+    def set_parked(self, slug: str, question: str, *, session: str = "", task_id: str = "") -> None:
         st = self._st(slug)
         was = st.parked
         st.parked = question
+        st.parked_session = session if question else ""
+        st.parked_task = task_id if question else ""
         if question and not was:
             self.newly_parked.append(slug)
-            self._add(Row(time.monotonic(), slug, self._name(slug), "needs-you", "⚑", "needs you", _clip(question)))
+            self._add(Row(time.monotonic(), slug, self._name(slug), "needs-you", "⚑", "needs you", _clip(question), session, task_id))
+
+    def server_turn(self, slug: str, session_id: str) -> dict | None:
+        """The live server-fired turn in this session, if the bus has shown one."""
+        st = self.state.get(slug)
+        return dict(st.server_turns[session_id]) if st is not None and session_id in st.server_turns else None
 
     def note_fleet(self, slug: str, text: str) -> None:
         self._add(Row(time.monotonic(), slug, self._name(slug), "fleet", "·", "fleet", text))

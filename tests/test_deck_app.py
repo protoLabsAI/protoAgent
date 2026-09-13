@@ -63,6 +63,53 @@ class FakeBackend:
     def console_href(self, agent):
         return None if self.mode == "offline" else f"http://127.0.0.1:7870/app/agent/{deckdata.slug_of(agent)}/"
 
+    # ── acting on a turn (#3470): every call recorded; canned answers per test ──
+    steer_removed = True  # DELETE steer → removed?
+    pending_steers: list[dict] = []  # GET steer → still queued at turn end
+    delegation_cancelled = True
+    form_result: dict = {"reply": "thanks"}
+    interject_result: dict = {"ok": True, "pending": 1}
+
+    def steer(self, agent, session_id, msg_id, text):
+        self.calls.append(("steer", session_id, msg_id, text))
+        return {"ok": True, "id": msg_id, "pending": 1}
+
+    def steer_pending(self, agent, session_id):
+        self.calls.append(("steer_pending", session_id))
+        return list(self.pending_steers)
+
+    def steer_cancel(self, agent, session_id, msg_id):
+        self.calls.append(("steer_cancel", session_id, msg_id))
+        return self.steer_removed
+
+    def interject(self, agent, session_id, task_id, msg_id, text):
+        self.calls.append(("interject", session_id, task_id, msg_id, text))
+        return dict(self.interject_result)
+
+    def delegation_cancel(self, agent, session_id, delegation_id):
+        self.calls.append(("delegation_cancel", session_id, delegation_id))
+        return self.delegation_cancelled
+
+    def submit_form(self, agent, session_id, callback_id, answers):
+        self.calls.append(("submit_form", session_id, callback_id, answers))
+        return dict(self.form_result)
+
+    def attend(self, agent, session_id):
+        if self.mode == "offline":
+            return None
+        h = FakeAttendance(session_id)
+        self.calls.append(("attend", session_id, h))
+        return h
+
+    def close(self):
+        self.closed = True
+
+
+class FakeAttendance:
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.closed = False
+
     def close(self):
         self.closed = True
 

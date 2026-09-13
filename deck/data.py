@@ -114,6 +114,13 @@ class Backend(Protocol):
     def sessions(self, agent: dict) -> list[dict]: ...
     def turns(self, agent: dict, session_id: str, limit: int = 50) -> list[dict]: ...
     def a2a(self, agent: dict) -> Any: ...
+    def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict: ...
+    def steer_pending(self, agent: dict, session_id: str) -> list[dict]: ...
+    def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool: ...
+    def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict: ...
+    def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool: ...
+    def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict: ...
+    def attend(self, agent: dict, session_id: str) -> Any: ...
     def close(self) -> None: ...
 
 
@@ -221,7 +228,7 @@ class LiveBackend:
         """The fan-in of every watched member's event bus (deck.events.FleetEvents)."""
         from deck.events import FleetEvents
 
-        return FleetEvents(self.client)
+        return FleetEvents(self.client, insecure_http=getattr(self.client, "insecure_http", False))
 
     def _label(self, roster: list[dict]) -> str:
         host = next((a for a in roster if a.get("host")), {})
@@ -283,6 +290,45 @@ class LiveBackend:
 
         return A2AClient.for_member(self.client, slug_of(agent))
 
+    # ── acting on a turn (#3470): the console's own routes, through the proxy ──
+
+    def steer(self, agent: dict, session_id: str, msg_id: str, text: str) -> dict:
+        """Queue a message into the RUNNING turn (folded in at its next model call)."""
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{session_id}/steer", {"id": msg_id, "text": text})
+        return out if isinstance(out, dict) else {}
+
+    def steer_pending(self, agent: dict, session_id: str) -> list[dict]:
+        """Still-queued steers — what the turn ended without folding in."""
+        out = self.client.member_get(slug_of(agent), f"/api/chat/sessions/{session_id}/steer")
+        rows = out.get("pending") if isinstance(out, dict) else None
+        return [r for r in (rows or []) if isinstance(r, dict) and r.get("id")]
+
+    def steer_cancel(self, agent: dict, session_id: str, msg_id: str) -> bool:
+        """Drop a queued steer; False = already folded in (too late) or never queued."""
+        out = self.client.member_delete(slug_of(agent), f"/api/chat/sessions/{session_id}/steer/{msg_id}")
+        return bool(isinstance(out, dict) and out.get("removed"))
+
+    def interject(self, agent: dict, session_id: str, task_id: str, msg_id: str, text: str) -> dict:
+        """Queue an operator interjection into an attended server-fired turn (by task id)."""
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{session_id}/server-turns/{task_id}/interject", {"id": msg_id, "text": text})
+        return out if isinstance(out, dict) else {}
+
+    def delegation_cancel(self, agent: dict, session_id: str, delegation_id: str) -> bool:
+        """Abort ONE running foreground delegation (a ``task`` card), not the turn."""
+        out = self.client.member_post(slug_of(agent), f"/api/chat/sessions/{session_id}/delegations/{delegation_id}/cancel")
+        return bool(isinstance(out, dict) and out.get("cancelled"))
+
+    def submit_form(self, agent: dict, session_id: str, callback_id: str, answers: dict) -> dict:
+        """Redeem a plugin composer-form; ``{"form", "callback_id"}`` is the next step."""
+        out = self.client.member_post(slug_of(agent), "/api/chat/commands/submit", {"callback_id": callback_id, "session_id": session_id, "answers": answers})
+        return out if isinstance(out, dict) else {}
+
+    def attend(self, agent: dict, session_id: str):
+        """Mark the session attended for as long as the returned handle is open."""
+        from deck.events import Attendance
+
+        return Attendance(self.client.url, self.client._token, slug_of(agent), session_id, insecure_http=getattr(self.client, "insecure_http", False)).start()
+
     def close(self) -> None:
         self.client.close()
 
@@ -339,6 +385,14 @@ class OfflineBackend:
 
     def a2a(self, agent: dict):
         raise RuntimeError("offline — no hub to talk to this member through")
+
+    def _offline(self, *a, **kw):
+        raise RuntimeError("offline — no hub to reach this member through")
+
+    steer = steer_pending = steer_cancel = interject = delegation_cancel = submit_form = _offline
+
+    def attend(self, agent: dict, session_id: str):
+        return None
 
     def close(self) -> None:
         return None

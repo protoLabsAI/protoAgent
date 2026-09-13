@@ -15,9 +15,16 @@ One reducer for everything (``deck.a2a``): the live stream, a session replay, an
 stall watchdog's ``GetTask`` finalize all fold through :func:`deck.a2a.apply_frame`. All
 network I/O runs in thread workers; the UI thread only ever renders a :class:`Turn`.
 
-A parked question (``input-required``) is surfaced — the prompt in the status line and a
-toast — but answering it, steering a running turn, and cancelling one delegation are S3
-(#3470).
+Acting on a turn (#3470): a parked question / form / approval opens as a modal (``enter`` on
+the empty composer, or ``ctrl+r``) and the answer resumes the parked task the way the console
+does (``metadata.hitl_resume``); typing while the member works STEERS the running turn (the
+message folds in at its next model call — ``up`` on the empty composer pulls the newest
+queued one back); ``ctrl+x`` on a running ``task`` card cancels that one delegation. While
+this screen is open the session is ATTENDED (``/api/chat/attend``), so a scheduled turn in
+it parks on a question instead of auto-answering — and it shows up here: the screen
+attaches to a server-fired turn the bus announces (``SubscribeToTask``), and to a turn still
+running when a session is opened; an attended server turn takes interjections from the
+composer too.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,6 +47,7 @@ from textual.widgets import Footer, Input, ListItem, ListView, Markdown, Static,
 from textual.css.query import NoMatches
 
 from deck import a2a
+from deck import hitl as deckhitl
 from deck.data import display_name, presence_of, slug_of
 
 STALL_IDLE_S = 45.0
@@ -115,6 +124,20 @@ class Exchange:
     last_body: str | None = None  # last markdown rendered, to skip no-op re-parses
     last_work_sig: tuple | None = None  # last tool-tree signature, to skip no-op rebuilds
     reported: set = field(default_factory=set)  # (tool_id, status) already told to the activity feed
+    attached: bool = False  # a turn somebody else started (scheduler, inbox…) that we subscribed to
+    detached: bool = False  # we stopped watching an attached turn; the member goes on with it
+    origin: str = ""  # who started an attached turn
+    controllable: bool = False  # an attached server turn that takes interjections
+
+
+@dataclass
+class Steer:
+    """A message queued into the running turn, until the member folds it in."""
+
+    id: str
+    text: str
+    consumed: bool = False
+    interjection: bool = False  # into a server-fired turn (a different route, same queue)
 
 
 @dataclass
@@ -123,6 +146,19 @@ class Conversation:
 
     session_id: str
     exchanges: list[Exchange] = field(default_factory=list)
+    steers: list[Steer] = field(default_factory=list)
+
+    @property
+    def parked(self) -> Exchange | None:
+        """The exchange waiting on the operator (input-required), if any."""
+        if self.live is not None:
+            return None
+        ex = self.latest
+        return ex if ex is not None and ex.turn.hitl and not ex.turn.done else None
+
+    @property
+    def queued(self) -> list[Steer]:
+        return [st for st in self.steers if not st.consumed]
 
     @property
     def live(self) -> Exchange | None:
@@ -198,6 +234,8 @@ class ConversationScreen(Screen):
         Binding("ctrl+n", "new_session", "new session", show=True, priority=True),
         Binding("ctrl+s", "sessions", "sessions", show=True, priority=True),
         Binding("ctrl+z", "fold", "thinking", show=True, priority=True),
+        Binding("ctrl+r", "respond", "answer", show=True, priority=True),
+        Binding("ctrl+x", "cancel_delegation", "cancel delegation", show=True),  # the composer's ctrl+x (cut) wins while it has focus
         Binding("q", "quit", "quit", show=False),
     ]
 
@@ -212,6 +250,8 @@ class ConversationScreen(Screen):
         self._load_seq = 0  # stale session loads (a slow member, then a faster pick) are ignored
         self._watchdog: Any = None
         self.reconnects = 0  # SubscribeToTask re-attachments after a silent stretch
+        self._attendance: Any = None  # the open /api/chat/attend stream for this session
+        self._steer_seq = 0
 
     # ── layout ──
 
@@ -235,6 +275,27 @@ class ConversationScreen(Screen):
         self.query_one("#composer", Input).focus()
         self._watchdog = self.set_interval(5.0, self._check_stall)
         self.load_session(self.convo.session_id)
+        self._attend(self.convo.session_id)
+
+    # ── attendance ──
+
+    def _attend(self, session_id: str) -> None:
+        """Hold the session attended while this screen shows it (a server-fired turn in it
+        then parks for us instead of auto-answering, and takes interjections)."""
+        self._unattend()
+        try:
+            self._attendance = self.app.backend.attend(self.agent, session_id)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 — presence is best effort
+            self._attendance = None
+            self.notify(f"could not mark the session attended: {exc}", severity="warning")
+
+    def _unattend(self) -> None:
+        h, self._attendance = self._attendance, None
+        if h is not None:
+            try:
+                h.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     @_ui_safe
     def _render_head(self) -> None:
@@ -270,11 +331,22 @@ class ConversationScreen(Screen):
             # A load landing while a turn streams must not orphan the live exchange (the
             # status would read "idle" and a second stream could start on the same session).
             return
+        if session_id != self.convo.session_id or self._attendance is None:
+            self._attend(session_id)
         self.convo = Conversation(session_id=session_id, exchanges=exchanges)
         self._rebuild_transcript()
         self._render_work(self.convo.latest.turn if self.convo.latest else None)
         self._render_status()
         self._render_head()
+        latest = self.convo.latest
+        act = getattr(self.app, "activity", None)
+        server = act.server_turn(self.slug, session_id) if act is not None else None
+        if server is not None:
+            # the bus has shown a server-fired turn running in this session: watch it
+            self._attach_turn(server["task_id"], origin=server.get("origin") or "server", trigger=server.get("trigger") or "", controllable=bool(server.get("controllable")))
+        elif latest is not None and latest.turn.task_id and not latest.turn.done and latest.turn.state in ("working", "submitted"):
+            # a turn still running when the session was opened (the console, a schedule…)
+            self._attach_turn(latest.turn.task_id, origin="in flight", replace=latest)
 
     def action_new_session(self) -> None:
         if self.convo.live:
@@ -311,19 +383,40 @@ class ConversationScreen(Screen):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
-        if not text:
-            return
-        if self.convo.live:
-            # Steering a running turn is S3 (#3470); until then a second message waits.
-            self.notify("a turn is running — wait for it, or esc to stop (steering arrives in S3)", severity="warning")
-            return
         if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
             self.notify("offline — no hub to talk to this member through", severity="error")
+            return
+        parked = self.convo.parked
+        if parked is not None:
+            # the member is waiting on us: a plain question takes the typed text as the
+            # answer; a form or an approval needs its modal (typed text stays in the composer)
+            if text and deckhitl.kind_of(parked.turn.hitl) == "question":
+                event.input.value = ""
+                self._answer(parked, text)
+            else:
+                self.action_respond()
+            return
+        if not text:
+            return
+        live = self.convo.live
+        if live is not None:
+            event.input.value = ""
+            if live.attached:
+                if live.controllable:
+                    self._queue_steer(text, interjection=True, task_id=live.turn.task_id)
+                else:
+                    self.notify(f"this turn was started by the {live.origin or 'server'} and is not taking messages", severity="warning")
+                    event.input.value = text
+            else:
+                self._queue_steer(text)
             return
         if self._loading():
             self.notify("still loading this session — one moment", severity="warning")
             return
         event.input.value = ""
+        self._send(text)
+
+    def _send(self, text: str) -> None:
         turn = a2a.Turn(context_id=self.convo.session_id)
         ex = Exchange(user=text, turn=turn, live=True)
         self.convo.exchanges.append(ex)
@@ -331,10 +424,307 @@ class ConversationScreen(Screen):
         self._render_work(turn)
         self._render_status()
         self._render_head()
-        self._stream(text, ex)
+        self._stream(ex, text=text)
+
+    # ── answering a parked turn ──
+
+    def action_respond(self) -> None:
+        parked = self.convo.parked
+        if parked is None:
+            self.notify("nothing is waiting for you here", severity="warning")
+            return
+        draft = ""
+        try:
+            draft = self.query_one("#composer", Input).value.strip()
+        except NoMatches:
+            pass
+        deckhitl.open_prompt(self.app, self.member_name, parked.turn.hitl or {}, lambda result: self._answered(parked, result), draft=draft)
+
+    def _answered(self, parked: Exchange, result: Any) -> None:
+        if result is None:
+            return  # closed — still parked
+        hitl = parked.turn.hitl or {}
+        if hitl.get("plugin_callback_id"):
+            if result == "__dismiss__":
+                parked.turn.hitl = None  # a plugin form has no parked graph: just close it
+                self._render_live(parked)
+                self._render_status()
+                return
+            self._submit_plugin_form(parked, str(hitl["plugin_callback_id"]), result if isinstance(result, dict) else {})
+            return
+        if result == "__dismiss__":
+            self._resume(parked, a2a.DISMISS_SENTINEL, hidden=True)
+            return
+        kind = deckhitl.kind_of(hitl)
+        self._resume(parked, deckhitl.answer_text(kind, result), hidden=kind == "approval")
+
+    def _answer(self, parked: Exchange, text: str) -> None:
+        self._resume(parked, text, hidden=False)
+
+    def _resume(self, parked: Exchange, text: str, *, hidden: bool) -> None:
+        """Resume the parked task with the answer (``metadata.hitl_resume``). The exchange
+        continues — the resumed stream replays the task snapshot, so a second exchange would
+        show the pre-park text twice. An approval or a dismissal is silent (its outcome shows
+        on the tool card); a question's or form's answer is conversation and gets a line."""
+        task_id = parked.turn.task_id
+        if self.convo.live is not None:
+            self.notify("a turn is running", severity="warning")
+            return
+        ex = parked
+        ex.turn.hitl = None
+        ex.turn.done = False
+        ex.error = ""
+        ex.live = True
+        ex.cancel_requested = False
+        ex.started_at = time.monotonic()
+        ex.turn.last_frame_at = ex.started_at
+        if not hidden:
+            self._mount_answer(ex, text)
+        self._render_live(ex)
+        self._render_work(ex.turn)
+        self._render_status()
+        self._render_head()
+        self._stream(ex, text=text, task_id=task_id, metadata={"hitl_resume": True})
+
+    @_ui_safe
+    def _mount_answer(self, ex: Exchange, text: str) -> None:
+        tr = self.query_one("#transcript", VerticalScroll)
+        try:
+            md = self.query_one(f"#{ex.widget_id}-md", Markdown)
+        except NoMatches:
+            return
+        tr.mount(Static(Text(f"you ›  {_preview(text, 200)}", style="bold"), classes="answer-msg"), before=md)
+
+    @work(thread=True, group="talk-form")
+    def _submit_plugin_form(self, parked: Exchange, callback_id: str, answers: dict) -> None:
+        app = self.app
+        try:
+            out = app.backend.submit_form(self.agent, self.convo.session_id, callback_id, answers)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            app.call_from_thread(self.notify, f"form submit failed: {exc}", severity="error", timeout=8)
+            return
+        form = out.get("form") if isinstance(out.get("form"), dict) else None
+        if form is not None:
+            nxt = {**form, "plugin_callback_id": out.get("callback_id") or callback_id}
+            with parked.lock:
+                parked.turn.hitl = nxt  # the next step of the wizard
+            app.call_from_thread(self._render_status)
+            app.call_from_thread(self.action_respond)
+            return
+        with parked.lock:
+            parked.turn.hitl = None
+        reply = out.get("reply")
+        app.call_from_thread(self._render_live, parked)
+        app.call_from_thread(self._render_status)
+        if reply:
+            app.call_from_thread(self.notify, str(reply), timeout=8)
+
+    # ── attaching to a turn somebody else started ──
+
+    def _attach_turn(self, task_id: str, *, origin: str, trigger: str = "", controllable: bool = False, replace: Exchange | None = None) -> None:
+        """Watch a running turn we did not start: subscribe to its task (a snapshot, then
+        the live frames) and render it like our own."""
+        if self.convo.live is not None:
+            return
+        label = f"({origin}{f' · {trigger}' if trigger else ''} turn)"
+        if replace is not None:
+            ex = replace
+            ex.live = True
+            ex.attached = True
+            ex.origin = origin
+            ex.controllable = controllable
+            ex.started_at = time.monotonic()
+            ex.turn.last_frame_at = ex.started_at
+        else:
+            ex = Exchange(user=label, turn=a2a.Turn(context_id=self.convo.session_id, task_id=task_id), live=True, attached=True, origin=origin, controllable=controllable)
+            self.convo.exchanges.append(ex)
+            self._append_exchange(ex)
+        self._render_work(ex.turn)
+        self._render_status()
+        self._render_head()
+        self._stream(ex, subscribe=task_id)
+
+    def on_bus_events(self, evs: list) -> None:
+        """Bus events the deck drained (all members): a server-fired turn starting in THIS
+        session is attached; a park landing here while nothing is attached reloads the
+        durable turns so the prompt shows."""
+        sid = self.convo.session_id
+        for ev in evs:
+            if ev.slug != self.slug:
+                continue
+            d = ev.data
+            if ev.topic in ("turn.started", "chat.progress") and str(d.get("session_id") or "") == sid:
+                tid = str(d.get("task_id") or "")
+                live = self.convo.live
+                if tid and live is None and self.convo.parked is None:
+                    ctl = d.get("control") if isinstance(d.get("control"), dict) else {}
+                    self._attach_turn(tid, origin=str(d.get("origin") or ctl.get("origin") or "server"), trigger=str(d.get("trigger") or ctl.get("trigger") or ""), controllable=bool(ctl.get("operator_controllable")))
+                elif live is not None and live.attached and live.turn.task_id == tid:
+                    ctl = d.get("control") if isinstance(d.get("control"), dict) else None
+                    if ctl is not None:
+                        live.controllable = bool(ctl.get("operator_controllable"))
+                        self._render_status()
+            elif ev.topic == "turn.input_required" and str(d.get("context_id") or "") == sid and self.convo.live is None and not self._loading():
+                self.load_session(sid)
+
+    # ── steering a running turn ──
+
+    def _queue_steer(self, text: str, *, interjection: bool = False, task_id: str = "") -> None:
+        self._steer_seq += 1
+        st = Steer(id=f"{uuid.uuid4().hex}", text=text, interjection=interjection)
+        self.convo.steers.append(st)
+        self._mount_steer(st)
+        self._post_steer(st, task_id)
+
+    @_ui_safe
+    def _mount_steer(self, st: Steer) -> None:
+        tr = self.query_one("#transcript", VerticalScroll)
+        tr.mount(Static(self._steer_text(st), id=f"steer-{st.id}", classes="steer-msg"))
+        tr.scroll_end(animate=False)
+        self._render_status()
+
+    @staticmethod
+    def _steer_text(st: Steer) -> Text:
+        tag = "folded in" if st.consumed else ("queued — interjection" if st.interjection else "queued — folds in at the next model call · up to take it back")
+        t = Text(f"you ›  {st.text}", style="" if st.consumed else "dim")
+        t.append(f"   ({tag})", style="dim italic")
+        return t
+
+    @_ui_safe
+    def _render_steer(self, st: Steer) -> None:
+        try:
+            self.query_one(f"#steer-{st.id}", Static).update(self._steer_text(st))
+        except NoMatches:
+            pass
+
+    @_ui_safe
+    def _drop_steer(self, st: Steer) -> None:
+        if st in self.convo.steers:
+            self.convo.steers.remove(st)
+        try:
+            self.query_one(f"#steer-{st.id}", Static).remove()
+        except NoMatches:
+            pass
+        self._render_status()
+
+    @work(thread=True, group="talk-steer")
+    def _post_steer(self, st: Steer, task_id: str) -> None:
+        app = self.app
+        try:
+            if st.interjection:
+                out = app.backend.interject(self.agent, self.convo.session_id, task_id, st.id, st.text)  # type: ignore[attr-defined]
+                if not out.get("ok", True):
+                    raise RuntimeError(str(out.get("reason") or "refused"))
+            else:
+                app.backend.steer(self.agent, self.convo.session_id, st.id, st.text)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            app.call_from_thread(self._drop_steer, st)
+            app.call_from_thread(self.notify, f"could not queue the message: {exc}", severity="error", timeout=8)
+
+    def on_key(self, event) -> None:
+        # up on the EMPTY composer: pull the newest queued steer back into it to edit
+        if event.key != "up":
+            return
+        try:
+            comp = self.query_one("#composer", Input)
+        except NoMatches:
+            return
+        if self.focused is not comp or comp.value:
+            return
+        queued = self.convo.queued
+        if not queued:
+            return
+        event.stop()
+        self._unqueue_steer(queued[-1])
+
+    @work(thread=True, group="talk-steer")
+    def _unqueue_steer(self, st: Steer) -> None:
+        app = self.app
+        try:
+            removed = app.backend.steer_cancel(self.agent, self.convo.session_id, st.id)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            app.call_from_thread(self.notify, f"could not take the message back: {exc}", severity="error", timeout=8)
+            return
+        if removed:
+            app.call_from_thread(self._drop_steer, st)
+            app.call_from_thread(self._set_composer, st.text)
+        else:
+            st.consumed = True
+            app.call_from_thread(self._render_steer, st)
+            app.call_from_thread(self.notify, "too late — the member already read it (it is in the composer to send again if you want)", severity="warning", timeout=8)
+            app.call_from_thread(self._set_composer, st.text)
+
+    @_ui_safe
+    def _set_composer(self, text: str) -> None:
+        comp = self.query_one("#composer", Input)
+        comp.value = text
+        comp.cursor_position = len(text)
+        comp.focus()
+
+    @work(thread=True, group="talk-steer-reconcile")
+    def _reconcile_steers(self, ex: Exchange) -> None:
+        """At turn end: the steers the member folded in settle; the ones still queued
+        arrived after its last model call. Ours are re-sent as a fresh turn — unless the
+        turn parked, in which case the server keeps holding them for after the answer;
+        interjections into a server-fired turn are simply reported as unread (this screen
+        never starts a turn in a session on the server's behalf)."""
+        app = self.app
+        queued = [st for st in self.convo.steers if not st.consumed]
+        if not queued:
+            return
+        try:
+            pending = {r["id"] for r in app.backend.steer_pending(self.agent, self.convo.session_id)}  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — cannot tell consumed from not: leave them queued
+            return
+        for st in queued:
+            if st.id not in pending:
+                st.consumed = True
+                app.call_from_thread(self._render_steer, st)
+        left = [st for st in queued if st.id in pending]
+        if not left or ex.turn.hitl:
+            return
+        for st in left:
+            app.call_from_thread(self._drop_steer, st)
+        own = [st for st in left if not st.interjection]
+        if len(own) < len(left):
+            app.call_from_thread(self.notify, f"{len(left) - len(own)} interjection(s) arrived after the turn's last model call and were not read", severity="warning", timeout=8)
+        if own:
+            app.call_from_thread(self._send, "\n\n".join(st.text for st in own))
+
+    # ── cancelling one delegation ──
+
+    def action_cancel_delegation(self) -> None:
+        """The selected running ``task`` card — or the only one, when nothing is selected."""
+        live = self.convo.live
+        if live is None:
+            self.notify("no turn is running", severity="warning")
+            return
+        try:
+            node = self.query_one("#work-tree", Tree).cursor_node
+        except NoMatches:
+            node = None
+        call = node.data if node is not None else None
+        if not (isinstance(call, a2a.ToolCall) and call.name == "task" and call.status == "running"):
+            running = [c for c in live.turn.tool_calls if c.name == "task" and c.status == "running"]
+            if node is not None or len(running) != 1:
+                # a selected card that is not a running delegation is an explicit choice: refuse
+                self.notify("select the running task card to cancel in the WORK pane (tab, ↓)" if running else "no delegation is running", severity="warning")
+                return
+            call = running[0]
+        self._cancel_delegation(call)
+
+    @work(thread=True, group="talk-delegation")
+    def _cancel_delegation(self, call: a2a.ToolCall) -> None:
+        app = self.app
+        try:
+            cancelled = app.backend.delegation_cancel(self.agent, self.convo.session_id, call.id)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            app.call_from_thread(self.notify, f"cancel failed: {exc}", severity="error", timeout=8)
+            return
+        app.call_from_thread(self.notify, f"delegation {_preview(call.input, 30) or call.id} cancelled — the lead continues" if cancelled else "too late — that delegation already finished", severity="information" if cancelled else "warning")
 
     @work(thread=True, group="talk-stream")
-    def _stream(self, text: str, ex: Exchange) -> None:
+    def _stream(self, ex: Exchange, *, text: str | None = None, task_id: str | None = None, metadata: dict | None = None, subscribe: str | None = None) -> None:
         app = self.app
         try:
             client = app.backend.a2a(self.agent)  # type: ignore[attr-defined]
@@ -342,19 +732,31 @@ class ConversationScreen(Screen):
             app.call_from_thread(self._finish, ex, str(exc))
             return
         ex.client = client
-        frames = client.stream(text, context_id=self.convo.session_id)
+        frames = client.subscribe(subscribe) if subscribe else client.stream(text or "", context_id=self.convo.session_id, task_id=task_id, metadata=metadata)
         try:
             for attempt in range(MAX_RECONNECTS + 1):
                 try:
                     for frame in frames:
+                        refused: a2a.TurnError | None = None
                         with ex.lock:
                             if ex.turn.done:
                                 break  # the stall probe already finalized this turn
                             try:
                                 a2a.apply_frame(ex.turn, frame)
                             except a2a.TurnError as exc:
-                                app.call_from_thread(self._finish, ex, str(exc))
+                                refused = exc
+                        if refused is not None:
+                            # The server refused: for a task we know, ask the durable record
+                            # first — "already in a terminal state" on a (re)subscribe means
+                            # it finished, not that it failed. (Outside the lock: the
+                            # finalizer takes it.)
+                            task = self._task_or_none(ex) if ex.turn.task_id else None
+                            state = a2a.norm_state(((task or {}).get("status") or {}).get("state")) if task else ""
+                            if task and a2a.is_terminal(state):
+                                self._finalize_from(ex, task, app, note="")
                                 return
+                            app.call_from_thread(self._finish, ex, str(refused))
+                            return
                         app.call_from_thread(self._render_live, ex)
                         if ex.turn.done:
                             break
@@ -376,6 +778,9 @@ class ConversationScreen(Screen):
                     app.call_from_thread(self.notify, f"quiet for {a2a.STREAM_READ_S:g}s — re-attached to the running turn", severity="warning")
                     frames = client.subscribe(ex.turn.task_id)
         except Exception as exc:  # noqa: BLE001 — a broken stream is reported, the deck stays up
+            if ex.detached:
+                app.call_from_thread(self._finish, ex, "")
+                return
             if not ex.turn.done and not ex.error:
                 app.call_from_thread(self._finish, ex, str(exc))
                 return
@@ -391,7 +796,7 @@ class ConversationScreen(Screen):
         except Exception:  # noqa: BLE001 — unknown; treat as not finished
             return None
 
-    def _finalize_from(self, ex: Exchange, task: dict, app) -> None:
+    def _finalize_from(self, ex: Exchange, task: dict, app, note: str = "stream stalled — finalized from the durable task") -> None:
         """From a worker: the server finished but the stream tail was lost — finalize
         the exchange from the durable task. Never fabricates a completion."""
         with ex.lock:
@@ -401,7 +806,8 @@ class ConversationScreen(Screen):
                 pass
             ex.turn.done = True
         app.call_from_thread(self._finish, ex, "")
-        app.call_from_thread(self.notify, "stream stalled — finalized from the durable task", severity="warning")
+        if note:
+            app.call_from_thread(self.notify, note, severity="warning")
 
     def _finish(self, ex: Exchange, error: str) -> None:
         # State first, always — even after the screen was popped (abandon / quit), so
@@ -413,6 +819,8 @@ class ConversationScreen(Screen):
         if act is not None:
             act.note_live(self.slug, ex.turn.task_id, False)
         self._finish_render(ex, error)
+        if self.is_attached and self.convo.queued:
+            self._reconcile_steers(ex)
 
     @_ui_safe
     def _finish_render(self, ex: Exchange, error: str) -> None:
@@ -455,6 +863,14 @@ class ConversationScreen(Screen):
     def action_esc(self) -> None:
         ex = self.convo.live
         if ex is not None:
+            if ex.attached:
+                # Somebody else's turn: stop WATCHING it — never CancelTask a schedule's work
+                ex.detached = True
+                ex.live = False
+                if ex.client is not None:
+                    ex.client.abort()
+                self._leave()
+                return
             if ex.cancel_requested:
                 # Second esc (or the cancel failed): abandon locally — abort the reader,
                 # settle the exchange, and leave. The server task is the server's.
@@ -469,6 +885,7 @@ class ConversationScreen(Screen):
     def _leave(self) -> None:
         if self._watchdog is not None:
             self._watchdog.stop()
+        self._unattend()
         self.app.pop_screen()
 
     def _abandon(self, ex: Exchange) -> None:
@@ -486,6 +903,7 @@ class ConversationScreen(Screen):
         for ex in self.convo.exchanges:
             if ex.live and ex.client is not None:
                 ex.client.abort()
+        self._unattend()
 
     @work(thread=True, group="talk-cancel")
     def _cancel(self, ex: Exchange) -> None:
@@ -508,13 +926,15 @@ class ConversationScreen(Screen):
         tr.remove_children()
         for ex in self.convo.exchanges:
             self._append_exchange(ex)
+        for st in self.convo.steers:
+            self._mount_steer(st)
 
     @_ui_safe
     def _append_exchange(self, ex: Exchange) -> None:
         tr = self.query_one("#transcript", VerticalScroll)
         self._seq += 1
         ex.widget_id = f"ex-{self._seq}"
-        tr.mount(Static(Text(f"you  {ex.user}", style="bold"), classes="user-msg"))
+        tr.mount(Static(Text(f"{'' if ex.attached else 'you  '}{ex.user}", style="dim italic" if ex.attached else "bold"), classes="user-msg"))
         tr.mount(Static("", id=f"{ex.widget_id}-meta", classes="turn-meta"))
         tr.mount(Markdown(ex.turn.content or "", id=f"{ex.widget_id}-md", classes="assistant-msg"))
         self._render_live(ex)
@@ -538,8 +958,8 @@ class ConversationScreen(Screen):
             else:
                 act.note_tool(self.slug, t.context_id, t.task_id, c.id, c.name, done=True, output=str(c.output or "")[:120], error=c.status == "error")
         if t.hitl and not t.done:
-            act.set_parked(self.slug, str(t.hitl.get("question") or t.hitl.get("title") or "input required"))
-        elif t.done:
+            act.set_parked(self.slug, deckhitl.prompt_of(t.hitl), session=t.context_id, task_id=t.task_id)
+        elif t.done or ex.live:
             act.set_parked(self.slug, "")
 
     @_ui_safe
@@ -554,6 +974,8 @@ class ConversationScreen(Screen):
         except Exception:  # noqa: BLE001 — the transcript was rebuilt underneath
             return
         bits = [f"{self.member_name}"]
+        if ex.attached and ex.origin:
+            bits.append(f"◇ {ex.origin}" + (" · detached, still running on the member" if ex.detached and not t.done else ""))
         if t.reasoning:
             bits.append(f"▸ thinking · {len(t.reasoning):,} chars" if not self.show_reasoning else "▾ thinking")
         n_tools = len(t.top_level_tools())
@@ -572,6 +994,12 @@ class ConversationScreen(Screen):
         if body != ex.last_body:  # Markdown.update re-parses the whole document — only on change
             ex.last_body = body
             md.update(body)
+        if t.consumed_steers:
+            ids = {str(s.get("id")) for s in t.consumed_steers}
+            for st in self.convo.steers:
+                if not st.consumed and st.id in ids:
+                    st.consumed = True
+                    self._render_steer(st)
         if ex.live:
             sig = tuple((c.id, c.status) for c in t.tool_calls)
             if sig != ex.last_work_sig:  # rebuild the tree on tool frames only
@@ -611,23 +1039,28 @@ class ConversationScreen(Screen):
     def _render_status(self) -> None:
         live = self.convo.live
         st = self.query_one("#talk-status", Static)
+        n_q = len(self.convo.queued)
+        queued = f"  ·  {n_q} queued" if n_q else ""
         if live is not None:
             t = live.turn
-            if t.hitl:
-                q = t.hitl.get("question") or t.hitl.get("title") or "input required"
-                st.update(f"⚑ {self.member_name} needs you: {q}  (answering arrives in S3 — use the console for now)")
-            elif live.cancel_requested:
+            if live.cancel_requested:
                 st.update("⟳ cancelling…  ·  esc again abandons the turn locally")
+            elif live.attached:
+                who = f"{live.origin} turn" if live.origin else "attached turn"
+                take = "type to interject" if live.controllable else "not taking messages"
+                st.update(f"⟳ {who} · {t.status_text or 'working'}  ·  {take}{queued}  ·  esc detaches")
             else:
-                st.update(f"⟳ {t.status_text or 'working'}  ·  esc stops")
-        else:
-            latest = self.convo.latest
-            if latest is not None and latest.turn.hitl and not latest.turn.done:
-                # the stream closed on input-required: the turn is PARKED, not over
-                q = latest.turn.hitl.get("question") or latest.turn.hitl.get("title") or "input required"
-                st.update(f"⚑ {self.member_name} needs you: {q}  (answering arrives in S3 — use the console for now)")
-                return
-            st.update("idle" + (f"  ·  last turn {_cost_line(latest.turn)}" if latest and latest.turn.usage else ""))
+                st.update(f"⟳ {t.status_text or 'working'}  ·  type to steer{queued}  ·  esc stops")
+            return
+        parked = self.convo.parked
+        if parked is not None:
+            # the stream closed on input-required: the turn is PARKED, not over
+            kind = deckhitl.kind_of(parked.turn.hitl)
+            how = "type the answer, or ctrl+r" if kind == "question" else "enter / ctrl+r opens it"
+            st.update(f"⚑ {self.member_name} needs you ({kind}): {deckhitl.prompt_of(parked.turn.hitl)}  ·  {how}{queued}")
+            return
+        latest = self.convo.latest
+        st.update("idle" + (f"  ·  last turn {_cost_line(latest.turn)}" if latest and latest.turn.usage else "") + queued)
 
     # ── keys ──
 
@@ -658,6 +1091,8 @@ TALK_CSS = """
 #talk-status { height: 1; padding: 0 1; color: $text-muted; }
 #composer { margin: 0 1; }
 .user-msg { margin: 1 0 0 0; }
+.steer-msg { margin: 1 0 0 0; }
+.answer-msg { margin: 1 0 0 0; }
 .turn-meta { color: $text-muted; }
 .assistant-msg { margin: 0 0 1 0; }
 #pager-head { height: 1; padding: 0 1; text-style: bold; background: $surface; }

@@ -84,8 +84,29 @@ turn (then backs out); `ctrl+n` starts a new session; `ctrl+s` lists the member'
 sessions and replays one, tool cards included. Sessions use the console's own id shape,
 so a conversation started here is waiting in the browser and vice versa. A stream that
 goes silent for 45 s is checked against the member's durable task and finalized from it
-only if the server already finished — never fabricated. Answering a parked question,
-steering a running turn, and cancelling one delegation arrive in the next slice (#3470).
+only if the server already finished — never fabricated.
+
+**Acting on a turn.** When the member parks on a question, a form, or an approval, the
+status line says so; `enter` on the empty composer (or `ctrl+r`) opens it — a plain
+question also takes whatever you type as the answer. Approvals are `a` / `d`; a form is a
+stepped wizard (`ctrl+→` / `ctrl+←`, `ctrl+s` submits) with the console's own rules for
+required fields, choices, and conditional fields; `ctrl+d` dismisses a request the way the
+console does, so the turn never stays parked forever. Typing while the member is working
+STEERS the running turn: the message queues and folds in at the member's next model call;
+`up` on the empty composer pulls the newest queued message back to edit, and anything the
+turn ended without reading is re-sent as a fresh turn. `ctrl+x` cancels the selected
+running `task` card — that one delegation, not the turn. While a conversation is open the
+session is *attended*: a scheduled or inbox turn in it parks on a question instead of
+auto-answering, and the deck attaches to it as it runs (a turn already running when you
+open a session is attached too); when the member says the turn is operator-controllable,
+the composer interjects into it. `esc` on an attached turn detaches — it never cancels
+somebody else's turn.
+
+**The work feed.** `w` lists what the fleet is doing — every member's server-fired turns,
+tool calls, room replies, spend, and parked questions, folded from the members' event
+buses into one time-ordered feed. `f` filters, `p` pauses, `enter` opens the member's
+conversation at that row's session. The roster's TURN column follows the same events, and
+the deck rings the bell when a member newly needs you.
 
 The deck follows the same live/offline rule as the verbs below: with no hub answering it
 shows this instance's `fleet.json` badged `offline`, and only start/stop are available.
