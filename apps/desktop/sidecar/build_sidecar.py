@@ -212,9 +212,10 @@ EXCLUDE = ["tkinter"]
 # runtime/operator-mcp, i.e. ACP). MUST stay in sync with `server.cli._FORWARD` — the
 # test `test_sidecar_bundles_every_forwarded_cli_module` fails if a new verb is added
 # without collecting it here. --hidden-import pulls the module + its static import chain.
-# NOTE (fleet deck, #3468 → #3473): `graph.fleet.cli` imports the Textual screens (`deck.app`,
-# `deck.hubs`) BY NAME (importlib) so `protoagent --help` and the non-interactive verbs never
-# load Textual (`deck.hub` / `deck.data` / `deck.discovery` are static imports and Textual-free);
+# NOTE (fleet deck, #3468 → #3473): `graph.fleet.cli` imports `deck.app` (the Textual deck, which
+# pulls `deck.hubs` and the other screens) and `deck.discovery` BY NAME (importlib), so
+# `protoagent --help` and the non-interactive verbs never load Textual (`deck.hub` / `deck.data`
+# are its static imports; `deck.discovery` is Textual-free by contract);
 # the deck and Textual are bundled through COLLECT_ALL above (S6's decision), not listed here —
 # `test_sidecar_bundles_the_fleet_deck` pins that. A build that drops them makes bare
 # `protoagent fleet` / `top` print the one-line "not available in this build" hint (exit 2).

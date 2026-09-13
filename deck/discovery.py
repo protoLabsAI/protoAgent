@@ -496,5 +496,3 @@ def wait_for_port(url: str, *, timeout_s: float = 30.0, every_s: float = 0.5) ->
         time.sleep(every_s)
     return False
 
-
-# ── the screen ────────────────────────────────────────────────────────────────

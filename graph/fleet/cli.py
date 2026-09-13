@@ -461,8 +461,8 @@ def _launch_hub(row) -> None:
         parent = Path(row.root).parent
         if not _same_dir(parent, deckhub.data_home()) and any(_same_dir(parent, b) for b in deckhub.known_box_roots()):
             env["PROTOAGENT_BOX_ROOT"] = str(parent)
-    hubs = importlib.import_module("deck.discovery")  # Textual-free: the launcher never loads the screen
-    member_ports, hub_ports = hubs._ports_on_disk(hubs.instance_roots())
+    discovery = importlib.import_module("deck.discovery")  # Textual-free: the launcher never loads the screen
+    member_ports, hub_ports = discovery._ports_on_disk(discovery.instance_roots())
     taken = set(member_ports) | {p for p, r in hub_ports.items() if not _same_dir(r, row.root)}
     port = _pick_port(row.port, taken=taken)
     row.port = port
@@ -497,13 +497,13 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
     """``protoagent fleet --all``: every hub on this box, probed, plus peers."""
     import importlib
 
-    hubs = importlib.import_module("deck.discovery")  # NOT deck.hubs: the screen would load Textual for a --json run
-    rows = hubs.enumerate_hubs(peers=[] if args.offline else _discover_peers())
-    roots = hubs.instance_roots()
+    discovery = importlib.import_module("deck.discovery")  # NOT deck.hubs: the screen would load Textual for a --json run
+    rows = discovery.enumerate_hubs(peers=[] if args.offline else _discover_peers())
+    roots = discovery.instance_roots()
     for r in rows:
         if r.candidate is not None and not args.offline:
-            hubs.probe(r, token=args.token, insecure_http=args.insecure_http, roots=roots)
-    rows = hubs.reconcile(rows)
+            discovery.probe(r, token=args.token, insecure_http=args.insecure_http, roots=roots)
+    rows = discovery.reconcile(rows)
     if args.as_json:
         _emit({"mode": "hubs", "offline": bool(args.offline), "hubs": [_hub_row_dict(r) for r in rows]})
         return 0
@@ -511,10 +511,10 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
         print("(no hubs found on this box)")
         return 0
     print(f"hubs on this box · {len(rows)} found · {sum(1 for r in rows if r.presence == 'running')} running" + (" · --offline: peers not scanned, hubs not probed" if args.offline else ""))
-    plain = hubs.plain  # a peer names itself and a hub reports its version: no control character reaches the terminal
+    plain = discovery.plain  # a peer names itself and a hub reports its version: no control character reaches the terminal
     for r in rows:
-        glyph = hubs.PRESENCE_GLYPH.get(r.presence, "·")
-        members, where = hubs.row_text(r)
+        glyph = discovery.PRESENCE_GLYPH.get(r.presence, "·")
+        members, where = discovery.row_text(r)
         port = f":{r.port}" if r.port else "—"
         ver = f"v{plain(r.version)}" if r.version else "—"
         print(f"  {glyph} {plain(r.name):<18} {r.presence:<12} {r.launcher:<13} {port:<7} {ver:<9} {members:<18} {plain(where)}")

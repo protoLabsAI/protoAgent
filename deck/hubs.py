@@ -32,7 +32,7 @@ from deck.discovery import (  # noqa: F401 — re-exported for callers and tests
     wait_for_port,
 )
 
-__all__ = ["HubRow", "PRESENCE_GLYPH", "_classify_failure", "_is_loose_box_root", "_ports_on_disk", "count_members", "enumerate_hubs", "instance_roots", "launcher_of", "plain", "probe", "reconcile", "row_text", "wait_for_port", "HubTreeScreen", "HUBS_CSS"]
+__all__ = ["HubRow", "PRESENCE_GLYPH", "count_members", "enumerate_hubs", "instance_roots", "launcher_of", "plain", "probe", "reconcile", "row_text", "wait_for_port", "HubTreeScreen", "HUBS_CSS"]  # the public surface; the underscore helpers above stay reachable as attributes
 
 class HubTreeScreen(Screen):
     """Every hub on the box, one row each; ``enter`` attaches the deck to that hub,
