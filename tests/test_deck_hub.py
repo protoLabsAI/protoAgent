@@ -606,3 +606,23 @@ def test_connect_no_candidates_answering_says_so(tmp_path, monkeypatch):
 
 
 # ── layering ──────────────────────────────────────────────────────────────────
+
+
+def test_every_manage_path_encodes_its_id_as_one_segment_dots_included():
+    """CodeRabbit (S2) for turns; the same for every id the manage calls put in a path —
+    httpx collapses `.`/`..` segments, so a bare quote() would DELETE /api/fleet for `..`."""
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.raw_path.decode()))
+        return httpx.Response(200, json={"ok": True, "agent": {}, "archetypes": [], "order": []})
+
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(handler))
+    c.remove("..", purge=True)
+    c.rename(".", "x")
+    c.remote_remove("../..")
+    c.remote_update("a.b", url="u")
+    c.start("..")
+    paths = [p for _, p in seen]
+    assert paths == ["/api/fleet/%2E%2E?purge=true", "/api/fleet/%2E", "/api/fleet/remotes/%2E%2E%2F%2E%2E", "/api/fleet/remotes/a%2Eb", "/api/fleet/%2E%2E/start"]
+    assert hub.segment("chat-1.2/3") == "chat-1%2E2%2F3"

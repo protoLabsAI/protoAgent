@@ -654,3 +654,51 @@ def test_order_live_and_offline(monkeypatch, capsys):
     monkeypatch.setattr(fleet_ops, "order", bad)
     assert cli.run_fleet_cli(["order", "alpha-1"]) == 1
     assert "missing current member" in capsys.readouterr().err
+
+
+# ── round-1 review: credential and --json edges ──
+
+
+def test_an_empty_bearer_never_clears_or_registers_and_flag_conflicts_are_refused(monkeypatch, capsys):
+    import io
+
+    client = FakeClient()
+    _live(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # an upstream `pass show` that failed
+    assert cli.run_fleet_cli(["remote", "edit", "bo", "--bearer-stdin", "--json"]) == 1
+    body = json.loads(capsys.readouterr().out)
+    assert "empty" in body["results"][0]["error"] and not any(c[0] == "remote_update" for c in client.calls)
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+    assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo:7870", "--bearer-stdin"]) == 1
+    assert "empty" in capsys.readouterr().err and not any(c[0] == "remote_add" for c in client.calls)
+    assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo:7870", "--bearer", ""]) == 1
+    assert cli.run_fleet_cli(["remote", "edit", "bo", "--bearer", "x", "--clear-bearer"]) == 1
+    assert "ONE of" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO("tok\n"))
+    assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo:7870", "--bearer", "x", "--bearer-stdin"]) == 1
+    assert not client.calls or not any(c[0] in ("remote_add", "remote_update") for c in client.calls)
+    # a terminal never echoes the bearer: getpass
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "typed-secret")
+    assert cli.run_fleet_cli(["remote", "add", "bo", "https://bo:7870", "--bearer-stdin"]) == 0
+    assert ("remote_add", "bo", "https://bo:7870", "typed-secret") in client.calls
+    # --archetype and --bundle together is ambiguous
+    assert cli.run_fleet_cli(["new", "x", "--archetype", "pm", "--bundle", "https://g/x"]) == 1
+    assert "not both" in capsys.readouterr().err and not any(c[0] == "create" for c in client.calls)
+
+
+def test_rm_json_keeps_stdout_clean_and_tells_scripts_about_yes(monkeypatch, capsys):
+    client = FakeClient()
+    _live(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "alpha")
+    assert cli.run_fleet_cli(["rm", "alpha", "--yes", "--json"]) == 0
+    out, err = capsys.readouterr()
+    json.loads(out)  # nothing but JSON on stdout
+    assert cli.run_fleet_cli(["rm", "alpha", "--json"]) == 0  # the interactive confirm
+    out, err = capsys.readouterr()
+    json.loads(out) and "type the name to confirm" in err  # the prompt went to stderr
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli.run_fleet_cli(["rm", "alpha", "--json"]) == 1
+    body = json.loads(capsys.readouterr().out)
+    assert body["mode"] == "aborted" and "--yes" in body["results"][0]["error"]

@@ -113,10 +113,10 @@ def remove_sync(ident: str, *, purge: bool = False) -> dict:
     return manager.remove(ident, purge=purge)
 
 
-def rename_sync(ident: str, new_name: str) -> dict:
+def rename_sync(ident: str, new_name: object) -> dict:
     from graph.workspaces import manager
 
-    new_name = str(new_name or "").strip()
+    new_name = str(new_name).strip() if isinstance(new_name, str) else ""  # None / a non-string is no name
     if not new_name:
         raise manager.WorkspaceError("name is required")
     return manager.rename(ident, new_name)

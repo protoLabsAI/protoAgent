@@ -263,7 +263,7 @@ def register_fleet_routes(app) -> None:
         URL slug, the workspace dir and the data scope — never changes; open windows
         and checkpoints survive. A running agent re-reads its identity on restart."""
         try:
-            return {"ok": True, **await fleet_ops.rename(name, str((req or {}).get("name", "")))}
+            return {"ok": True, **await fleet_ops.rename(name, (req or {}).get("name"))}  # the op owns the check: None/blank → 400
         except manager.WorkspaceError as exc:
             raise HTTPException(400, str(exc))
 

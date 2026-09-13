@@ -85,6 +85,7 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _TIMEOUT = httpx.Timeout(5.0, connect=2.0)
 _PROBE_TIMEOUT = httpx.Timeout(2.0, connect=1.0)
 _LIFECYCLE_TIMEOUT = httpx.Timeout(60.0, connect=2.0)
+_CREATE_TIMEOUT = httpx.Timeout(330.0, connect=5.0)  # a bundle create: the hub's 300 s clone/install budget, then the start
 _DOWN_PER_MEMBER_S = 15.0
 
 
@@ -468,6 +469,13 @@ def wake_blocked_reader(resp: Any) -> None:
             pass
 
 
+def segment(value: Any) -> str:
+    """One URL path segment, fully encoded — dots included: httpx collapses literal ``.``
+    and ``..`` segments before sending, so an id from a member's own list (or a typo) must
+    never steer a request to a different route with the fleet credential."""
+    return quote(str(value), safe="").replace(".", "%2E")
+
+
 def credential_allowed(url: str, token: str | None, *, insecure_http: bool) -> None:
     """Raise :class:`InsecureHub` when sending ``token`` to ``url`` would be cleartext
     off-box (CWE-319). Loopback ``http://`` and any ``https://`` are always fine; a
@@ -599,28 +607,30 @@ class HubClient:
         return [a for a in agents if isinstance(a, dict)]
 
     def start(self, name: str) -> dict:
-        res = self._request("POST", f"/api/fleet/{quote(name, safe='')}/start", timeout=_LIFECYCLE_TIMEOUT)
+        res = self._request("POST", f"/api/fleet/{segment(name)}/start", timeout=_LIFECYCLE_TIMEOUT)
         return _expect_dict(self.url, res, "start")
 
     def stop(self, name: str) -> dict:
-        res = self._request("POST", f"/api/fleet/{quote(name, safe='')}/stop", timeout=_LIFECYCLE_TIMEOUT)
+        res = self._request("POST", f"/api/fleet/{segment(name)}/stop", timeout=_LIFECYCLE_TIMEOUT)
         return _expect_dict(self.url, res, "stop")
 
     # ── manage (#3471): the console's own routes, same bodies ──
 
     def create(self, body: dict) -> dict:
         """``POST /api/fleet`` — create (blank Basic, or from a bundle archetype) and start
-        unless ``start: false``. A create may clone a bundle: the lifecycle budget applies."""
-        return _expect_dict(self.url, self._request("POST", "/api/fleet", json_body=dict(body), timeout=_LIFECYCLE_TIMEOUT), "create")
+        unless ``start: false``. A bundle create clones and installs on the hub with its own
+        300 s budget, then starts the member: the read budget here must outlast that, or a
+        slow bundle reads as a dead hub while the member is in fact being created."""
+        return _expect_dict(self.url, self._request("POST", "/api/fleet", json_body=dict(body), timeout=_CREATE_TIMEOUT), "create")
 
     def rename(self, ident: str, name: str) -> dict:
-        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/{quote(ident, safe='')}", json_body={"name": name}), "rename")
+        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/{segment(ident)}", json_body={"name": name}), "rename")
 
     def remove(self, ident: str, *, purge: bool = False) -> dict:
         """``DELETE /api/fleet/<id>[?purge=true]`` — stops the member first. A 409
         (``HubRequestError.status == 409``) means it stopped but its workspace survived:
         partial and retryable, not a failure (#2583)."""
-        path = f"/api/fleet/{quote(ident, safe='')}" + ("?purge=true" if purge else "")
+        path = f"/api/fleet/{segment(ident)}" + ("?purge=true" if purge else "")
         return _expect_dict(self.url, self._request("DELETE", path, timeout=_LIFECYCLE_TIMEOUT), "remove")
 
     def remote_add(self, name: str, url: str, token: str = "") -> dict:
@@ -632,10 +642,10 @@ class HubClient:
     def remote_update(self, ident: str, **fields: Any) -> dict:
         """Only the fields given change; ``token=""`` clears the stored bearer."""
         body = {k: v for k, v in fields.items() if v is not None}
-        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/remotes/{quote(ident, safe='')}", json_body=body), "remote edit")
+        return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/remotes/{segment(ident)}", json_body=body), "remote edit")
 
     def remote_remove(self, ident: str) -> dict:
-        return _expect_dict(self.url, self._request("DELETE", f"/api/fleet/remotes/{quote(ident, safe='')}"), "remote remove")
+        return _expect_dict(self.url, self._request("DELETE", f"/api/fleet/remotes/{segment(ident)}"), "remote remove")
 
     def set_order(self, ids: list[str]) -> dict:
         """``PUT /api/fleet/order`` — a COMPLETE permutation of the current member ids."""

@@ -21,7 +21,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote
 from typing import Any, Protocol
 
 from deck import hub as deckhub
@@ -134,11 +133,7 @@ class Backend(Protocol):
     def close(self) -> None: ...
 
 
-def _seg(value: Any) -> str:
-    """One path segment, fully encoded — a session id comes from the member's own list, and a
-    member (or a proxy in between) must not be able to steer a request elsewhere with a
-    ``..`` or a ``/`` (httpx collapses literal dot segments before sending)."""
-    return quote(str(value), safe="").replace(".", "%2E")
+_seg = deckhub.segment  # one path-segment encoder for the whole deck (dots included)
 
 
 def _num(value: Any, default: float = 0.0) -> float:

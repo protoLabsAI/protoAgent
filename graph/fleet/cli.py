@@ -359,13 +359,33 @@ def _cmd_down(args: argparse.Namespace) -> int:
 # ── manage (#3471) ───────────────────────────────────────────────────────────
 
 
+class _BearerError(ValueError):
+    """A bearer flag combination or source that must not silently do the wrong thing."""
+
+
 def _read_bearer(args: argparse.Namespace) -> str | None:
-    """The REMOTE's bearer from ``--bearer`` or one line of stdin (``--bearer-stdin``);
-    None when neither. (``--token`` is the hub credential every verb takes.)"""
-    if getattr(args, "bearer_stdin", False):
-        line = sys.stdin.readline()
-        return line.rstrip("\r\n")
-    return getattr(args, "bearer", None)
+    """The REMOTE's bearer from ``--bearer`` or ``--bearer-stdin`` (one line of a pipe, or
+    a no-echo prompt on a terminal); None when neither. (``--token`` is the hub credential
+    every verb takes.) An EMPTY bearer is an error, never "clear it": an upstream ``pass
+    show`` that failed must not wipe a stored credential with exit 0."""
+    argv_bearer = getattr(args, "bearer", None)
+    from_stdin = bool(getattr(args, "bearer_stdin", False))
+    clear = bool(getattr(args, "clear_bearer", False))
+    if sum(1 for x in (argv_bearer is not None, from_stdin, clear) if x) > 1:
+        raise _BearerError("pass ONE of --bearer, --bearer-stdin, --clear-bearer")
+    if from_stdin:
+        if sys.stdin.isatty():
+            import getpass
+
+            line = getpass.getpass("remote bearer (not echoed): ")
+        else:
+            line = sys.stdin.readline().rstrip("\r\n")
+        if not line.strip():
+            raise _BearerError("--bearer-stdin read an empty line — nothing sent (to forget a stored bearer, pass --clear-bearer)")
+        return line
+    if argv_bearer is not None and not argv_bearer.strip():
+        raise _BearerError("--bearer is empty — nothing sent (to forget a stored bearer, pass --clear-bearer)")
+    return argv_bearer
 
 
 def _hub_detail(exc: Exception) -> str:
@@ -380,8 +400,11 @@ def _run_op(coro_fn, *a, **kw):
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    conn = _open_hub(args)
     results: list[dict] = []
+    if args.archetype and args.bundle:
+        _row_fail(args.name, args, results, "pass --archetype OR --bundle, not both (an archetype names its own bundle)")
+        return _finish(args, "error", results)
+    conn = _open_hub(args)
     body: dict[str, Any] = {"name": args.name, "start": args.start, "inherit_config": args.inherit}
     if args.port:
         body["port"] = args.port
@@ -431,26 +454,30 @@ def _cmd_new(args: argparse.Namespace) -> int:
     return _finish(args, "offline", results)
 
 
-def _confirm_remove(args: argparse.Namespace) -> bool:
+def _confirm_remove(args: argparse.Namespace) -> str:
+    """"" when confirmed; else why not. The prompt goes to STDERR: ``rm … --json | jq`` keeps
+    stdin on the terminal and stdout on the pipe, and a prompt on stdout would sit
+    invisibly ahead of the JSON."""
     if args.yes:
-        return True
+        return ""
     if not sys.stdin.isatty():
-        _row_fail(args.name, args, [], "refusing to remove without --yes when stdin is not a terminal")
-        return False
+        return "not confirmed — pass --yes when stdin is not a terminal"
     what = "DELETE its workspace and data" if args.purge else "remove it from the fleet (its data is kept)"
+    print(f"  this will stop {args.name} and {what} — type the name to confirm: ", end="", file=sys.stderr, flush=True)
     try:
-        typed = input(f"  this will stop {args.name} and {what} — type the name to confirm: ")
+        typed = input()
     except EOFError:
-        return False
-    return typed.strip() == args.name
+        return "not confirmed — no input"
+    return "" if typed.strip() == args.name else "not confirmed — the typed name did not match"
 
 
 def _cmd_rm(args: argparse.Namespace) -> int:
     results: list[dict] = []
-    if not _confirm_remove(args):
+    why = _confirm_remove(args)
+    if why:
         if not args.as_json:
-            print("  aborted", file=sys.stderr)
-        return _finish(args, "aborted", [{"name": args.name, "ok": False, "error": "not confirmed"}])
+            print(f"  aborted: {why}", file=sys.stderr)
+        return _finish(args, "aborted", [{"name": args.name, "ok": False, "error": why}])
     conn = _open_hub(args)
     if conn is not None:
         hub_url = conn.client.url
@@ -518,12 +545,18 @@ def _remote_text(res: dict) -> str:
 
 
 def _cmd_remote(args: argparse.Namespace) -> int:
-    conn = _open_hub(args)
     results: list[dict] = []
     name = args.name
-    token = _read_bearer(args) if args.remote_cmd in ("add", "edit") else None
-    if args.remote_cmd == "edit" and args.clear_bearer:
-        token = ""
+    token: str | None = None
+    if args.remote_cmd in ("add", "edit"):
+        try:
+            token = _read_bearer(args)
+        except _BearerError as exc:
+            _row_fail(name, args, results, str(exc))
+            return _finish(args, "error", results)
+        if args.remote_cmd == "edit" and args.clear_bearer:
+            token = ""
+    conn = _open_hub(args)
     if conn is not None:
         hub_url = conn.client.url
         try:
