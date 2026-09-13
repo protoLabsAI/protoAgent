@@ -112,10 +112,13 @@ def test_parks_are_per_session_and_the_three_writers_merge():
     assert act.parked_sessions("x") == []
     act.probe("x", {"chat-A": ("waiting on you", "tA")}, probed_at=t0)
     assert act.parked_sessions("x") == []
-    # a fresh probe is authoritative for what it saw
-    act.probe("x", {"chat-A": ("waiting on you", "tA")}, probed_at=time.monotonic())
+    # a fresh probe — read strictly AFTER the bus's clearing — is authoritative for what it
+    # saw (Windows' monotonic clock ticks every ~16 ms: a read in the same tick as the
+    # clearing is, by design, the stale one; give the probe its own tick)
+    later = time.monotonic() + 0.05
+    act.probe("x", {"chat-A": ("waiting on you", "tA")}, probed_at=later)
     assert act.parked_sessions("x") == ["chat-A"] and act.state["x"].parked["chat-A"].source == "probe"
-    act.probe("x", {"chat-A": ("", "tA")}, probed_at=time.monotonic())
+    act.probe("x", {"chat-A": ("", "tA")}, probed_at=later + 0.05)
     assert act.parked_sessions("x") == []
     # a task the deck SETTLED (a redeemed plugin form the member keeps reporting parked) is
     # never re-parked by a probe, however many cycles later; a NEW task in that session is
