@@ -375,10 +375,36 @@ def _discover_peers() -> list[dict]:
         return []
 
 
+def _port_free(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _pick_port(preferred: int | None, *, low: int = 7870, high: int = 7910) -> int:
+    """The port a stopped hub should come up on: the one it last used when nothing holds
+    it, else the first free one in the fleet's range (ports are box-global: the desktop
+    hub usually holds 7870)."""
+    if preferred and _port_free(preferred):
+        return preferred
+    for p in range(low, high + 1):
+        if p != preferred and _port_free(p):
+            return p
+    raise RuntimeError(f"no free port between {low} and {high} on this box")
+
+
 def _launch_hub(row) -> None:
     """``protoagent up`` for another instance root — the detached server the CLI's own
     ``up`` starts, scoped by ``PROTOAGENT_HOME`` (the instance root) and never by this
-    shell's environment. Raises with the CLI's own message when it could not start."""
+    shell's environment. A hub with no remembered port (no ``server.pid``: the desktop's,
+    a dev instance last run in the foreground) gets the first free one in the fleet's
+    range, and the row learns it. Raises with the CLI's own message when it could not start."""
     import os
     import subprocess
 
@@ -386,11 +412,12 @@ def _launch_hub(row) -> None:
         raise RuntimeError("only a hub with an instance root on this box can be brought up")
     env = {k: v for k, v in os.environ.items() if not k.startswith("PROTOAGENT_")}
     env["PROTOAGENT_HOME"] = str(row.root)
+    port = _pick_port(row.port)
+    row.port = port
+    row.url = deckhub._loopback(port)
     # the frozen-aware base argv (as server/cli.py builds it — graph must not import server)
     base = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "server"]
-    argv = [*base, "up"]
-    if row.port:
-        argv += ["--port", str(row.port)]
+    argv = [*base, "up", "--port", str(port)]
     proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout or "").strip().splitlines()[-1] if (proc.stderr or proc.stdout).strip() else f"protoagent up exited {proc.returncode}")

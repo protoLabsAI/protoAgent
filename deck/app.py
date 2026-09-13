@@ -966,6 +966,7 @@ class FleetDeck(App[int]):
             return
         row.candidate = deckhub.HubCandidate(row.url, "pidfile", instance_root=row.root)
         row.presence = "running"
+        row.launcher = "protoagent up"  # that is what the launcher ran; the next discovery reads it from the pidfile
         row.note = ""
         _probe_hub(row, token=self._token, insecure_http=self._insecure_http)
         self.call_from_thread(self._show_hubs, self.hub_rows, False)
