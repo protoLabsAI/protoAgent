@@ -13,7 +13,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
-from textual.screen import ModalScreen
+from deck.modal import OnceModal
 from textual.widgets import Button, Checkbox, Input, Select, Static
 
 # The layouts are sized to hold inside the deck's 80×24 floor (a refused submit must show
@@ -48,7 +48,7 @@ def name_problem(name: str) -> str:
     return ""
 
 
-class NewAgentModal(ModalScreen[dict | None]):
+class NewAgentModal(OnceModal[dict | None]):
     """Name + archetype (the built-in Basic and every installed archetype), "inherit the
     hub's model connections" and "start after create". Returns the ``POST /api/fleet``
     body, or None."""
@@ -154,7 +154,7 @@ class NewAgentModal(ModalScreen[dict | None]):
             self.action_cancel()
 
 
-class RenameModal(ModalScreen[str | None]):
+class RenameModal(OnceModal[str | None]):
     """A display-name change: the id, URL slug and data scope never move."""
 
     BINDINGS = [Binding("escape", "cancel", "cancel", show=True, priority=True)]
@@ -201,7 +201,7 @@ class RenameModal(ModalScreen[str | None]):
         self._submit() if event.button.id == "submit" else self.action_cancel()
 
 
-class DeleteModal(ModalScreen[dict | None]):
+class DeleteModal(OnceModal[dict | None]):
     """Type the member's name to delete it; purge (its workspace and data, gone for good) is
     a separate box. For a remote member this only unregisters it. Returns ``{"purge": bool}``
     or None."""
@@ -258,7 +258,7 @@ class DeleteModal(ModalScreen[dict | None]):
         self._submit() if event.button.id == "submit" else self.action_cancel()
 
 
-class RemoteModal(ModalScreen[dict | None]):
+class RemoteModal(OnceModal[dict | None]):
     """Register a remote protoAgent (name, URL, optional bearer entered masked and never
     shown again), or edit one in place. Returns ``{name, url, token?}`` — for an edit only the
     changed fields, ``token: ""`` meaning "clear the stored bearer" — or None."""

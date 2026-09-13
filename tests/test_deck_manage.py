@@ -290,3 +290,95 @@ async def test_every_manage_modal_holds_inside_the_decks_80x24_floor():
             await pilot.press("escape")
             await pilot.pause(0.1)
             assert isinstance(app.screen, RosterScreen)
+
+
+# ── round-2 review reproducers ──
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
+    """Blocker: Textual's dismiss has no is-active guard — a second submit queued behind
+    the first (double click, Enter twice) popped the ROSTER and left a blank deck."""
+    from deck.hitl import QuestionModal
+
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("j", "j", "j", "d")  # Cindi
+        assert await _until(pilot, lambda: isinstance(app.screen, DeleteModal))
+        modal = app.screen
+        modal.query_one("#confirm", Input).value = "Cindi"
+        await pilot.pause(0.1)
+        modal._submit()
+        modal._submit()  # the queued duplicate
+        modal.action_cancel()  # and a cancel racing in behind
+        await _settle(app, pilot)
+        assert isinstance(app.screen, RosterScreen) and len(app.screen_stack) == 2
+        assert [c for c in be.calls if c[0] == "remove"] == [("remove", "Cindi-9f49", {"purge": False})]
+        for key, kind, fill in (("n", NewAgentModal, lambda m: setattr(m.query_one("#name", Input), "value", "twice")), ("a", RemoteModal, lambda m: (setattr(m.query_one("#name", Input), "value", "bo"), setattr(m.query_one("#url", Input), "value", "https://bo:7870")))):
+            await pilot.press(key)
+            assert await _until(pilot, lambda: isinstance(app.screen, kind)), key
+            modal = app.screen
+            fill(modal)
+            await pilot.pause(0.1)
+            (modal.action_submit if hasattr(modal, "action_submit") else modal._submit)()
+            (modal.action_submit if hasattr(modal, "action_submit") else modal._submit)()
+            await _settle(app, pilot)
+            assert isinstance(app.screen, RosterScreen) and len(app.screen_stack) == 2, key
+        assert len([c for c in be.calls if c[0] == "create"]) == 1 and len([c for c in be.calls if c[0] == "remote_add"]) == 1
+        # the S3 prompt modals share the guard
+        q = QuestionModal("x", {"question": "?"}, draft="yes")
+        got: list = []
+        app.push_screen(q, got.append)
+        await pilot.pause(0.2)
+        q._send()
+        q._send()
+        q.action_close()
+        await pilot.pause(0.2)
+        assert got == ["yes"] and isinstance(app.screen, RosterScreen)
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_remote_goes_through_its_own_record():
+    """Blocker: R on a remote sent PATCH /api/fleet/<id>, which only knows workspaces —
+    a rename that could never succeed."""
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        app.screen.query_one("#roster", DataTable).move_cursor(row=4)  # ava, remote
+        await pilot.pause(0.1)
+        assert app.screen.check_action("rename", ()) is True
+        await pilot.press("R")
+        assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
+        app.screen.query_one("#name", Input).value = ""
+        await pilot.press(*"ava2", "enter")
+        await _settle(app, pilot)
+        assert ("remote_update", "r-ava", {"name": "ava2"}) in be.calls and not any(c[0] == "rename" for c in be.calls)
+
+
+@pytest.mark.asyncio
+async def test_authored_strings_render_as_text_not_markup():
+    """A member label or a tool output shaped like console markup ("Coach [/]") raised on
+    the UI thread at the roster render."""
+    from tests.test_deck_feed import FakeEvents, ev
+
+    roster = [dict(a) for a in FakeBackend().roster]
+    roster[1]["name"] = roster[1]["label"] = "Coach [/]"
+    roster[2]["bundle"] = "[bold]x[/bold]"
+    be = FakeBackend(roster=roster)
+    fe = FakeEvents()
+    app = FleetDeck(be, poll_s=0, events=fe)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        assert _rows(app)[1] == "Coach [/]"
+        fe.pending.append(ev("old-1", "chat.progress", session_id="s", task_id="t", phase="tool_end", tool="run_command", tool_call_id="c1", output="[red]boom[/] [/]"))
+        await pilot.pause(0.7)
+        await pilot.press("w")
+        await pilot.pause(0.7)
+        from deck.feed import WorkFeedScreen
+
+        assert isinstance(app.screen, WorkFeedScreen)
+        table = app.screen.query_one("#feed", DataTable)
+        assert "[red]boom[/] [/]" in str(table.get_row_at(0)[4])

@@ -150,7 +150,9 @@ class RosterScreen(Screen):
                 bundle = str(a["url"])
             turn = app.activity.turn_cell(slug_of(a)) if pres in ("online", "host", "remote") else ""
             turn_cell = Text(turn, style="bold yellow" if turn.startswith("⚑") else ("yellow" if turn.startswith("⟳") else "dim"))
-            table.add_row(glyph, display_name(a), pres, turn_cell, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), app.activity.last_active_cell(slug_of(a)), bundle, key=key)
+            # every operator- or member-authored string is a Text, never markup: a label
+            # like "Coach [/]" would otherwise raise on the UI thread
+            table.add_row(glyph, Text(display_name(a)), pres, turn_cell, port, ver_cell, pid, _fmt_cost(snap.rollups.get(slug_of(a)), pres), app.activity.last_active_cell(slug_of(a)), Text(bundle) if isinstance(bundle, str) else bundle, key=key)
         if rows:
             idx = next((i for i, a in enumerate(rows) if slug_of(a) == keep), 0)
             table.move_cursor(row=idx)
@@ -309,7 +311,10 @@ class RosterScreen(Screen):
         a = self.selected()
         if a is None or a.get("host"):
             return
-        self.app.push_screen(RenameModal(display_name(a)), lambda name: self.app.manage("rename", a, {"name": name}) if name else None)  # type: ignore[attr-defined]
+        # a remote is renamed through its own record (PATCH /api/fleet/remotes/<id>); the
+        # workspace rename route does not know it
+        verb = "remote_update" if a.get("remote") else "rename"
+        self.app.push_screen(RenameModal(display_name(a)), lambda name: self.app.manage(verb, a, {"name": name}) if name else None)  # type: ignore[attr-defined]
 
     def action_delete(self) -> None:
         a = self.selected()
@@ -554,7 +559,7 @@ class DetailScreen(Screen):
                 sid = str(s.get("session_id") or s.get("context_id") or "")
                 short = sid if len(sid) <= 26 else f"{sid[:12]}…{sid[-8:]}"
                 state = str(s.get("latest_task_state") or s.get("status") or "").replace("TASK_STATE_", "").lower()
-                table.add_row(short, state, str(s.get("last_activity") or "")[:16].replace("T", " "))
+                table.add_row(Text(str(short)), Text(str(state)), str(s.get("last_activity") or "")[:16].replace("T", " "))
 
         r = d.rollup
         if r is None:
