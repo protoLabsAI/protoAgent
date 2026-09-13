@@ -330,6 +330,47 @@ async def test_log_tail_anchors_on_seq_when_the_member_stamps_it_even_with_dupli
 
 
 @pytest.mark.asyncio
+async def test_log_tail_re_renders_when_the_member_restarts_and_seq_starts_over():
+    """Final-review blocker: seq is per-process; after a restart the window's seqs are
+    LOWER than the anchor, and filtering `> anchor` froze the tail with stale lines."""
+    be = FakeBackend()
+    window: list[dict] = []
+
+    def rec(seq: int, msg: str, ts: str) -> dict:
+        return {"seq": seq, "ts": ts, "level": "INFO", "logger": "t", "message": msg}
+
+    def detail(agent):
+        d = deckdata.MemberDetail(slug=deckdata.slug_of(agent), name=agent["name"])
+        d.logs = list(window)
+        return d
+
+    be.detail = detail  # type: ignore[assignment]
+    window[:] = [rec(498, "old a", "2026-09-12T09:00:01+00:00"), rec(499, "old b", "2026-09-12T09:00:02+00:00"), rec(500, "old c", "2026-09-12T09:00:03+00:00")]
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("j", "enter")
+        await _settle(app, pilot)
+        log = app.screen.query_one("#log", RichLog)
+        assert len(log.lines) == 3
+        # the member restarted: a fresh process, seq from 1, different records
+        window[:] = [rec(1, "boot", "2026-09-12T09:05:00+00:00"), rec(2, "ready", "2026-09-12T09:05:01+00:00")]
+        app.screen.refresh_detail()
+        await _settle(app, pilot)
+        assert [str(line) for line in log.lines][-2:] == [str(line) for line in log.lines][-2:]
+        assert len(log.lines) == 2 and "ready" in str(log.lines[-1]) and "old" not in str(log.lines[0])
+        # a restarted counter that happens to REUSE our anchor number with a different record
+        window[:] = [rec(1, "boot", "2026-09-12T09:05:00+00:00"), rec(2, "ready", "2026-09-12T09:05:01+00:00"), rec(3, "x", "2026-09-12T09:05:02+00:00")]
+        app.screen.refresh_detail()
+        await _settle(app, pilot)
+        assert len(log.lines) == 3  # exactly one new line: same seq 2, same record → advance
+        window[:] = [rec(2, "different", "2026-09-12T09:09:00+00:00"), rec(3, "y", "2026-09-12T09:09:01+00:00"), rec(4, "z", "2026-09-12T09:09:02+00:00")]
+        app.screen.refresh_detail()
+        await _settle(app, pilot)
+        assert len(log.lines) == 3 and "different" in str(log.lines[0])  # seq 3 exists but names another record → re-rendered
+
+
+@pytest.mark.asyncio
 async def test_roster_survives_duplicate_and_empty_ids():
     """CodeRabbit Major: DataTable raises DuplicateKey on a repeated key; a malformed
     roster must not abort the render on the UI thread."""

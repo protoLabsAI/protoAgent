@@ -489,10 +489,17 @@ class DetailScreen(Screen):
             return None
         if self._last_seq is not None:
             seqs = [_rec_seq(r) for r in logs]
-            if all(q is not None for q in seqs) and logs:
-                if seqs[0] is not None and seqs[0] > self._last_seq:
-                    return None  # everything we had rotated out
-                return [r for r, q in zip(logs, seqs, strict=True) if q is not None and q > self._last_seq]
+            if logs and all(q is not None for q in seqs):
+                # `seq` is a per-PROCESS counter: a member restart (the `r` key on this very
+                # screen) restarts it at 1. So the anchor is "our last seq is in the window
+                # AND names the same record"; anything else — rotated out, or a restarted
+                # counter reusing our number — re-renders the window rather than filtering
+                # against a number that no longer means what it did.
+                if self._last_seq in seqs:
+                    i = seqs.index(self._last_seq)
+                    if self._tail and _rec_key(logs[i]) == self._tail[-1]:
+                        return logs[i + 1 :]
+                return None
         if not self._tail:
             return None
         keys = [_rec_key(r) for r in logs]

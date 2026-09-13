@@ -62,6 +62,9 @@ def test_logs_records_carry_level_and_logger(ring):
     assert row["level"] == "ERROR"
     assert row["logger"] == "graph.agent"
     assert row["ts"].endswith("+00:00")
+    lines = _client().get("/api/diagnostics/logs").json()["lines"]
+    seqs = [r["seq"] for r in lines]
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)  # the deck's tail anchors on it
 
 
 @pytest.mark.parametrize(
