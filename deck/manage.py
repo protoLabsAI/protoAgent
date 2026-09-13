@@ -61,7 +61,7 @@ class NewAgentModal(OnceModal[dict | None]):
     def __init__(self, archetypes: list[dict]) -> None:
         super().__init__(classes="manage-modal")
         self.archetypes = [a for a in archetypes if a.get("id")]
-        if not any(str(a.get("id")) == "basic" or not a.get("bundle") for a in self.archetypes):
+        if not any(str(a.get("id")) == "basic" for a in self.archetypes):  # by id: the catalog's bundle-less `custom` is not Basic
             self.archetypes.insert(0, {"id": "basic", "label": "Basic", "blurb": "a blank agent", "bundle": None, "soul": ""})
 
     def compose(self) -> ComposeResult:

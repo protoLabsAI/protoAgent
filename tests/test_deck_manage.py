@@ -216,7 +216,9 @@ async def test_roster_order_moves_persist_a_complete_permutation():
         await pilot.press("J", "J")
         await _settle(app, pilot)
         orders = [c[1] for c in be.calls if c[0] == "set_order"]
-        assert orders[-2].index("protoEngineer-ba4c") == 3 and orders[-1].index("protoEngineer-ba4c") == 4
+        assert orders[-1].index("protoEngineer-ba4c") == 4  # the newest order is what the hub holds
+        if len(orders) == 3:  # both writes landed (the usual case); a press overtaken by the newer one is dropped, never committed late
+            assert orders[-2].index("protoEngineer-ba4c") == 3
         assert _rows(app)[-1] == "protoEngineer"
         # under a filter the keys are hidden and inert: a move would swap with a hidden neighbour
         app.screen._set_filter("proto")
@@ -382,3 +384,34 @@ async def test_authored_strings_render_as_text_not_markup():
         assert isinstance(app.screen, WorkFeedScreen)
         table = app.screen.query_one("#feed", DataTable)
         assert "[red]boom[/] [/]" in str(table.get_row_at(0)[4])
+
+
+@pytest.mark.asyncio
+async def test_a_stale_order_write_never_commits_after_a_newer_one():
+    """CodeRabbit (S4): `set_order` writes ran in parallel workers and the supervisor has no
+    newest-write check — an older request landing after a newer one persisted the older
+    order and the next poll reverted the roster. Writes are serialized and numbered now."""
+    import threading
+
+    be = FakeBackend()
+    gate = threading.Event()
+    real = be.set_order
+
+    def slow_first(ids):
+        if not gate.is_set():
+            gate.wait(5)  # the FIRST write is held on the wire while the operator keeps pressing
+        return real(ids)
+
+    be.set_order = slow_first
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("j", "J")  # protoEngineer one down: write #1, held
+        await pilot.pause(0.2)
+        await pilot.press("J")  # and one more: write #2, queued behind #1
+        await pilot.pause(0.2)
+        gate.set()
+        await _settle(app, pilot)
+        orders = [c[1] for c in be.calls if c[0] == "set_order"]
+        assert orders[-1].index("protoEngineer-ba4c") == 3 and len(orders) == 2  # in order, the newest last
+        assert _rows(app)[3] == "protoEngineer"

@@ -18,6 +18,7 @@ gets a one-line hint instead of a traceback.
 
 from __future__ import annotations
 
+import threading
 import webbrowser
 from typing import Any
 
@@ -351,7 +352,7 @@ class RosterScreen(Screen):
         roster[i], roster[j] = roster[j], roster[i]
         ids[i], ids[j] = ids[j], ids[i]
         self.render_snapshot(app.snapshot)
-        app.manage("set_order", a, {"order": ids})
+        app.set_order(ids)
 
     def action_move_down(self) -> None:
         self._move(1)
@@ -696,6 +697,9 @@ class FleetDeck(App[int]):
         self.backend = backend
         self.snapshot: Snapshot | None = None
         self._poll_s = poll_s
+        self._order_lock = threading.Lock()  # roster-order writes go out one at a time…
+        self._order_seq = 0  # …numbered per press on the UI thread…
+        self._order_sent = 0  # …and a press older than the newest on the hub is dropped
         self.warm_max: int | None = None  # the hub's fleet.warm.max, read once (read-only here)
         self.activity = Activity()
         # The fan-in of every online member's event bus (live mode). Injectable for tests.
@@ -847,9 +851,6 @@ class FleetDeck(App[int]):
             elif verb == "remote_remove":
                 res = self.backend.remote_remove(agent or {})
                 done = f"removed remote {who} (the agent itself is untouched)"
-            elif verb == "set_order":
-                res = self.backend.set_order(list(payload.get("order") or []))
-                done = "order saved"
             else:
                 return
         except Exception as exc:  # noqa: BLE001 — surfaced as a toast, the deck stays up
@@ -866,6 +867,32 @@ class FleetDeck(App[int]):
             self.call_from_thread(self.notify, done)
         else:
             self.call_from_thread(self.notify, f"{verb.replace('_', ' ')} {who}: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
+        self.call_from_thread(self.poll)
+
+    def set_order(self, ids: list[str]) -> None:
+        """Persist the roster order. Presses are numbered on the UI thread and written one
+        at a time: a press older than one already on the hub is dropped, so two quick moves
+        can never commit in the wrong order and the next poll cannot revert the roster."""
+        self._order_seq += 1
+        self._set_order(list(ids), self._order_seq)
+
+    @work(thread=True, group="order")
+    def _set_order(self, ids: list[str], seq: int) -> None:
+        with self._order_lock:
+            if seq <= self._order_sent:
+                return  # a newer order is already on the hub — the poll shows it
+            try:
+                res = self.backend.set_order(ids)
+            except Exception as exc:  # noqa: BLE001 — surfaced as a toast, the hub's order wins back on the poll
+                detail = getattr(exc, "detail", None) or str(exc)
+                self.call_from_thread(self.notify, f"set order: {detail}", severity="error", timeout=10)
+                self.call_from_thread(self.poll)
+                return
+            self._order_sent = seq
+        if res.get("ok", True):
+            self.call_from_thread(self.notify, "order saved")
+        else:
+            self.call_from_thread(self.notify, f"set order: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
         self.call_from_thread(self.poll)
 
     def lifecycle(self, verb: str, agent: dict) -> None:

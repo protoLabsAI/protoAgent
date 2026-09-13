@@ -697,7 +697,8 @@ def test_rm_json_keeps_stdout_clean_and_tells_scripts_about_yes(monkeypatch, cap
     json.loads(out)  # nothing but JSON on stdout
     assert cli.run_fleet_cli(["rm", "alpha", "--json"]) == 0  # the interactive confirm
     out, err = capsys.readouterr()
-    json.loads(out) and "type the name to confirm" in err  # the prompt went to stderr
+    json.loads(out)  # nothing but JSON on stdout
+    assert "type the name to confirm" in err  # the prompt went to stderr
     monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     assert cli.run_fleet_cli(["rm", "alpha", "--json"]) == 1
     body = json.loads(capsys.readouterr().out)
