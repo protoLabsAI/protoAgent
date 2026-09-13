@@ -784,7 +784,7 @@ def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope
     monkeypatch.setattr(cli, "_port_free", lambda port: port not in held)
     row = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
     cli._launch_hub(row)  # its remembered port is held: the next free one in the range
-    assert seen["argv"][-3:] == ["up", "--port", "7872"] and seen["env"]["PROTOAGENT_HOME"] == "/tmp/dev" and "PROTOAGENT_INSTANCE" not in seen["env"]
+    assert seen["argv"][-3:] == ["up", "--port", "7872"] and seen["env"]["PROTOAGENT_HOME"] == str(Path("/tmp/dev")) and "PROTOAGENT_INSTANCE" not in seen["env"]
     assert (row.port, row.url) == (7872, "http://127.0.0.1:7872")  # the row learned where it will answer
     held.discard(7871)
     row = HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root")
