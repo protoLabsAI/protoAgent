@@ -130,6 +130,9 @@ class FakeBackend:
     def remove(self, agent, *, purge=False):
         self._manage("remove", deckdata.slug_of(agent), purge=purge)
         if self.remove_error is not None:
+            for a in self.roster:  # the hub stopped it before its workspace refused to go
+                if deckdata.slug_of(a) == deckdata.slug_of(agent):
+                    a["pid"], a["running"] = None, False
             raise self.remove_error
         self.roster = [a for a in self.roster if deckdata.slug_of(a) != deckdata.slug_of(agent)]
         return {"ok": True, "name": agent.get("name"), "removed": ["workspace"] if purge else []}

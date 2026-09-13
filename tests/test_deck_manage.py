@@ -38,11 +38,15 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         await pilot.press("n")
         assert await _until(pilot, lambda: isinstance(app.screen, NewAgentModal))
         modal = app.screen
-        assert [o[1] for o in modal.query_one("#archetype", Select)._options][:2] == ["basic", "pm"] if hasattr(modal.query_one("#archetype", Select), "_options") else True
+        assert modal.query_one("#archetype", Select).value == "basic" and [a["id"] for a in modal.archetypes] == ["basic", "pm"]
         await pilot.press("ctrl+s")  # no name yet: refused, stays open
         await pilot.pause(0.1)
         assert isinstance(app.screen, NewAgentModal) and "name is required" in str(modal.query_one("#hint", Static).content)
         modal.query_one("#name", Input).focus()
+        await pilot.press(*"sc out", "ctrl+s")  # the hub's charset rule, checked before the round trip
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, NewAgentModal) and "letters, digits" in str(modal.query_one("#hint", Static).content)
+        modal.query_one("#name", Input).value = ""
         await pilot.press(*"scout")
         modal.query_one("#archetype", Select).value = "pm"
         await pilot.pause(0.1)
@@ -81,12 +85,19 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
         inp = app.screen.query_one("#name", Input)
         inp.value = ""
-        await pilot.press(*"Engineer Prime", "enter")
+        await pilot.press(*"Engineer Prime", "enter")  # a space: the hub would 400 — refused here, typing kept
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, RenameModal) and "letters, digits" in str(app.screen.query_one("#hint", Static).content)
+        assert app.screen.query_one("#name", Input).value == "Engineer Prime"
+        app.screen.query_one("#name", Input).value = ""
+        await pilot.press(*"engineer-prime", "enter")
         await _settle(app, pilot)
-        assert ("rename", "protoEngineer-ba4c", "Engineer Prime") in be.calls
-        assert "Engineer Prime" in _rows(app)
-        # the hub's own name is not for the deck to change
+        assert ("rename", "protoEngineer-ba4c", "engineer-prime") in be.calls
+        assert "engineer-prime" in _rows(app)
+        # the hub's own name is not for the deck to change: the key is hidden and inert
         app.screen.query_one("#roster", DataTable).move_cursor(row=0)
+        await pilot.pause(0.1)
+        assert app.screen.check_action("rename", ()) is False and app.screen.check_action("delete", ()) is False
         await pilot.press("R")
         await pilot.pause(0.1)
         assert isinstance(app.screen, RosterScreen)
@@ -123,7 +134,9 @@ async def test_delete_needs_the_typed_name_purge_is_separate_and_a_409_is_retrya
         await pilot.press(*"old", "enter")
         await _settle(app, pilot)
         assert any("repeat the delete" in m and sev == "warning" for m, sev in seen)
-        assert "old" in _rows(app)  # still listed: the hub says so
+        # still listed — and the re-poll shows what the hub did before the workspace refused: stopped
+        table = app.screen.query_one("#roster", DataTable)
+        assert "old" in _rows(app) and str(table.get_row_at(_rows(app).index("old"))[2]) == "stopped"
 
 
 @pytest.mark.asyncio
@@ -153,16 +166,23 @@ async def test_remotes_add_edit_and_remove_with_the_token_sent_once():
         await pilot.press("enter")
         await _settle(app, pilot)
         assert ("remote_update", "r-bo", {"url": "https://bo2.tail:7870"}) in be.calls
-        # clear the token explicitly
+        # clear the token explicitly — but never together with a typed one
         app.screen.query_one("#roster", DataTable).move_cursor(row=rows.index("bo"))
         await pilot.press("e")
         assert await _until(pilot, lambda: isinstance(app.screen, RemoteModal))
         app.screen.query_one("#clear", Checkbox).value = True
+        app.screen.query_one("#token", Input).value = "new"
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, RemoteModal) and "not both" in str(app.screen.query_one("#hint", Static).content)
+        app.screen.query_one("#token", Input).value = ""
         await pilot.press("enter")
         await _settle(app, pilot)
         assert ("remote_update", "r-bo", {"token": ""}) in be.calls
-        # edit on a LOCAL member is refused; remove a remote = unregister, typed confirm
+        # edit on a LOCAL member: the key is hidden and inert; remove a remote = unregister, typed confirm
         app.screen.query_one("#roster", DataTable).move_cursor(row=1)
+        await pilot.pause(0.1)
+        assert app.screen.check_action("edit_remote", ()) is False
         await pilot.press("e")
         await pilot.pause(0.1)
         assert isinstance(app.screen, RosterScreen)
@@ -191,6 +211,21 @@ async def test_roster_order_moves_persist_a_complete_permutation():
         await pilot.press("K")  # the host cannot move above the top: nothing sent
         await pilot.pause(0.2)
         assert len([c for c in be.calls if c[0] == "set_order"]) == 1
+        # two quick presses move TWICE (the second computes from the optimistic order)
+        app.screen.query_one("#roster", DataTable).move_cursor(row=2)  # protoEngineer, now third
+        await pilot.press("J", "J")
+        await _settle(app, pilot)
+        orders = [c[1] for c in be.calls if c[0] == "set_order"]
+        assert orders[-2].index("protoEngineer-ba4c") == 3 and orders[-1].index("protoEngineer-ba4c") == 4
+        assert _rows(app)[-1] == "protoEngineer"
+        # under a filter the keys are hidden and inert: a move would swap with a hidden neighbour
+        app.screen._set_filter("proto")
+        await pilot.pause(0.2)
+        assert app.screen.check_action("move_down", ()) is False and app.screen.check_action("move_up", ()) is False
+        n = len(orders)
+        await pilot.press("J")
+        await pilot.pause(0.2)
+        assert len([c for c in be.calls if c[0] == "set_order"]) == n
 
 
 @pytest.mark.asyncio
@@ -199,6 +234,8 @@ async def test_offline_refuses_every_manage_key_and_the_footer_shows_the_warm_ca
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle(app, pilot)
+        for action in ("new_member", "rename", "delete", "add_remote", "edit_remote", "move_down", "move_up"):
+            assert app.screen.check_action(action, ()) is False, action  # hidden and inert offline
         for key in ("n", "R", "d", "a", "e", "J"):
             await pilot.press(key)
             await pilot.pause(0.1)
@@ -210,3 +247,46 @@ async def test_offline_refuses_every_manage_key_and_the_footer_shows_the_warm_ca
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle(app, pilot)
         assert await _until(pilot, lambda: "warm cap 3" in str(app.screen.query_one("#status", Static).content))
+
+
+@pytest.mark.asyncio
+async def test_the_footer_shows_each_manage_key_only_where_it_applies():
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _settle(app, pilot)
+        scr = app.screen
+        table = scr.query_one("#roster", DataTable)
+        table.move_cursor(row=0)  # host
+        await pilot.pause(0.1)
+        assert {a: scr.check_action(a, ()) for a in ("new_member", "add_remote", "rename", "delete", "edit_remote", "move_down")} == {"new_member": True, "add_remote": True, "rename": False, "delete": False, "edit_remote": False, "move_down": True}
+        table.move_cursor(row=1)  # a local member
+        await pilot.pause(0.1)
+        assert (scr.check_action("rename", ()), scr.check_action("delete", ()), scr.check_action("edit_remote", ())) == (True, True, False)
+        table.move_cursor(row=4)  # the remote
+        await pilot.pause(0.1)
+        assert (scr.check_action("rename", ()), scr.check_action("delete", ()), scr.check_action("edit_remote", ())) == (True, True, True)
+
+
+@pytest.mark.asyncio
+async def test_every_manage_modal_holds_inside_the_decks_80x24_floor():
+    """A refused submit must show its hint and the buttons must be on screen at the deck's
+    smallest supported terminal."""
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await _settle(app, pilot)
+        for key, kind in (("n", NewAgentModal), ("a", RemoteModal), ("R", RenameModal), ("d", DeleteModal)):
+            if kind is not NewAgentModal and kind is not RemoteModal:
+                app.screen.query_one("#roster", DataTable).move_cursor(row=1)
+                await pilot.pause(0.1)
+            await pilot.press(key)
+            assert await _until(pilot, lambda: isinstance(app.screen, kind)), key
+            modal = app.screen
+            await pilot.pause(0.2)
+            box = modal.query_one(".manage-box")
+            submit, hint = modal.query_one("#submit", Button), modal.query_one("#hint", Static)
+            assert box.region.height <= 24 and submit.region.y + submit.region.height <= 24 and 0 <= hint.region.y < 24, (kind.__name__, box.region, submit.region, hint.region)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, RosterScreen)

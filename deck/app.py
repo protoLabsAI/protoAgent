@@ -210,10 +210,14 @@ class RosterScreen(Screen):
         if action in ("new_member", "add_remote"):
             return not offline  # live mutations go through the hub
         if action in ("rename", "delete", "edit_remote", "move_down", "move_up"):
+            # False HIDES the key and Textual never runs the action: the footer is the
+            # only refusal these need
             if a is None or offline:
                 return False
+            if action in ("move_down", "move_up"):
+                return not self._filter  # a move under a filter would swap with a hidden neighbour
             if a.get("host"):
-                return action in ("move_down", "move_up")
+                return False  # the hub's name is its identity; it cannot delete itself
             if action == "edit_remote":
                 return bool(a.get("remote"))
             return True
@@ -294,63 +298,42 @@ class RosterScreen(Screen):
 
     # ── manage (#3471) ──
 
-    def _manage_target(self) -> dict | None:
-        a = self.selected()
-        if a is None:
-            return None
-        if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
-            self.notify("managing members needs a running hub — offline mode can only start and stop", severity="warning")
-            return None
-        return a
+    # (`check_action` above hides each key where it does not apply — offline, the host row,
+    # a local row for `e` — and Textual then never runs the action, so none of these needs
+    # its own refusal)
 
     def action_new_member(self) -> None:
-        if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
-            self.notify("creating a member needs a running hub — offline mode can only start and stop", severity="warning")
-            return
         self.app.new_member()  # type: ignore[attr-defined]
 
     def action_rename(self) -> None:
-        a = self._manage_target()
-        if a is None:
-            return
-        if a.get("host"):
-            self.notify("the hub's own name is its identity — rename it in its settings", severity="warning")
+        a = self.selected()
+        if a is None or a.get("host"):
             return
         self.app.push_screen(RenameModal(display_name(a)), lambda name: self.app.manage("rename", a, {"name": name}) if name else None)  # type: ignore[attr-defined]
 
     def action_delete(self) -> None:
-        a = self._manage_target()
-        if a is None:
-            return
-        if a.get("host"):
-            self.notify("the hub cannot delete itself", severity="warning")
+        a = self.selected()
+        if a is None or a.get("host"):
             return
         remote = bool(a.get("remote"))
         self.app.push_screen(DeleteModal(display_name(a), remote=remote), lambda res: self.app.manage("remote_remove" if remote else "remove", a, res) if res is not None else None)  # type: ignore[attr-defined]
 
     def action_add_remote(self) -> None:
-        if self.app.backend.mode == "offline":  # type: ignore[attr-defined]
-            self.notify("adding a remote needs a running hub", severity="warning")
-            return
         self.app.push_screen(RemoteModal(), lambda res: self.app.manage("remote_add", None, res) if res else None)  # type: ignore[attr-defined]
 
     def action_edit_remote(self) -> None:
-        a = self._manage_target()
-        if a is None:
-            return
-        if not a.get("remote"):
-            self.notify("only a remote member has a URL and token to edit — rename a local one with R", severity="warning")
+        a = self.selected()
+        if a is None or not a.get("remote"):
             return
         self.app.push_screen(RemoteModal(a), lambda res: self.app.manage("remote_update", a, res) if res else None)  # type: ignore[attr-defined]
 
     def _move(self, delta: int) -> None:
-        a = self._manage_target()
-        if a is None:
-            return
+        a = self.selected()
         app: FleetDeck = self.app  # type: ignore[assignment]
-        if app.snapshot is None:
+        if a is None or app.snapshot is None or self._filter:
             return
-        ids = [str(r.get("id") or slug_of(r)) for r in app.snapshot.roster]  # the hub's order, complete, by immutable id (the host's is its own id, not the `host` slug)
+        roster = app.snapshot.roster
+        ids = [str(r.get("id") or slug_of(r)) for r in roster]  # the hub's order, complete, by immutable id (the host's is its own id, not the `host` slug)
         me = str(a.get("id") or slug_of(a))
         if me not in ids:
             return
@@ -358,7 +341,11 @@ class RosterScreen(Screen):
         j = i + delta
         if j < 0 or j >= len(ids):
             return
+        # optimistic: the roster shows the move at once and a second press computes from
+        # the NEW order, not the order before the hub answered; the post-PUT poll reconciles
+        roster[i], roster[j] = roster[j], roster[i]
         ids[i], ids[j] = ids[j], ids[i]
+        self.render_snapshot(app.snapshot)
         app.manage("set_order", a, {"order": ids})
 
     def action_move_down(self) -> None:

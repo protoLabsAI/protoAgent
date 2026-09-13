@@ -69,7 +69,8 @@ Bare `protoagent fleet` (or `protoagent top`) opens an interactive terminal over
 running hub — the **fleet deck**. The roster shows every member with the console's
 presence words (host, online, remote, stopped, unreachable), version skew, spend over the
 last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` (or `c`) talk to the member, `i` member detail, `w` the work feed, `n` new
-member, `R` rename, `d` delete, `a` add a remote, `e` edit a remote, `J`/`K` move a row, `s`
+member, `R` rename, `d` delete, `a` add a remote, `e` edit a remote, `J`/`K` move a row (with
+no filter active), `F5` refresh, `s`
 start, `x` stop, `r` restart, `l` follow logs, `o` open the member in the browser console,
 `/` filter, `?` help, `q` quit (members keep running). The footer lists only the keys that
 apply to the selected row. Member detail shows runtime status (model, identity, warnings),
@@ -108,14 +109,15 @@ has focus; `tab` to the WORK pane first.)
 (the built-in Basic and every installed archetype, with what each installs and needs),
 "inherit the hub's model connections and credentials" (on by default — the member boots
 ready to chat) and "start after create". `R` renames the selected member's display name
-only — its id, URL slug and data never change, so open windows survive. `d` deletes it:
+only (letters, digits, `-` and `_`, like every member name) — its id, URL slug and data never
+change, so open windows survive. `d` deletes it:
 the member is stopped first, you type its name to confirm, and purging its workspace and
 data is a separate checkbox — both irreversible, and the deck says so. If the hub reports
 that the member stopped but its workspace survived (a 409), the deck says so and asks you
 to repeat the delete; that is a partial result, not a failure. `a` registers a remote
 protoAgent (name, URL, an optional bearer typed masked, sent once and never shown again);
-`e` edits one in place (blank bearer keeps the stored one, "clear" forgets it); `d` on a
-remote only unregisters it. An unreachable remote reads `unreachable`, never `stopped`.
+`e` edits one in place (blank bearer keeps the stored one, "clear" forgets it — one or the
+other, not both); `d` on a remote only unregisters it. An unreachable remote reads `unreachable`, never `stopped`.
 `J`/`K` move the selected row and persist the order on the hub as a complete permutation
 of member ids. The status line shows the hub's warm-agent cap (`fleet.warm.max`;
 read-only here — change it in the hub's settings).
@@ -154,7 +156,7 @@ protoagent fleet up protoEngineer         # POST /api/fleet/protoEngineer/start 
 protoagent fleet down                     # POST /api/fleet/down
 protoagent fleet new scout --archetype pm       # from the hub's catalog (live); --bundle <git-url> works offline too
 protoagent fleet new blank --no-start --no-inherit
-protoagent fleet rename scout "Scout Prime"     # display name only; the id and slug stay
+protoagent fleet rename scout scout-prime        # display name only (letters, digits, - and _); the id and slug stay
 protoagent fleet rm scout --purge               # asks you to type the name; --yes off a terminal
 protoagent fleet remote add ava https://ava.tail:7870 --bearer-stdin < token.txt
 protoagent fleet remote edit ava --url https://ava2.tail:7870 --clear-bearer

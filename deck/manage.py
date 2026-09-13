@@ -12,27 +12,40 @@ from __future__ import annotations
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, Input, Select, Static
 
+# The layouts are sized to hold inside the deck's 80×24 floor (a refused submit must show
+# its hint, and the buttons must be reachable); the box scrolls if a terminal is shorter.
 MANAGE_CSS = """
 .manage-modal { align: center middle; }
-.manage-box { width: 76; max-width: 96%; height: auto; border: round $accent; background: $surface; padding: 1 2; }
+.manage-box { width: 76; max-width: 96%; height: auto; max-height: 100%; border: round $accent; background: $surface; padding: 0 2; }
 .manage-title { text-style: bold; height: 1; }
-.manage-sub { color: $text-muted; }
-.manage-danger { color: $error; }
-.manage-field { height: auto; margin-top: 1; }
-.manage-field Label { color: $text-muted; }
-.manage-field Input { width: 100%; }
-.manage-buttons { height: 3; margin-top: 1; align-horizontal: right; }
+.manage-sub { color: $text-muted; height: 1; }
+.manage-danger { color: $error; height: 2; }
+.manage-row { height: 3; }
+.manage-row Input { width: 1fr; }
+.manage-row Checkbox { width: 1fr; }
+.manage-box Input, .manage-box Select { width: 100%; }
+.manage-buttons { height: 3; align-horizontal: right; }
 .manage-buttons Button { margin-left: 1; min-width: 12; }
-.manage-hint { color: $text-muted; height: 1; }
+.manage-hint { color: $warning; height: 1; }
 """
 
 
-def _field(label: str, widget) -> Vertical:
-    return Vertical(Label(label), widget, classes="manage-field")
+def name_problem(name: str) -> str:
+    """Why the hub would refuse ``name`` as a member name, or "": the same rule as
+    ``graph.workspaces.manager._safe`` — letters, digits, '-' and '_' only, never ``host``.
+    Checked here so the modal keeps the operator's typing instead of a toast after the fact."""
+    n = (name or "").strip()
+    if not n:
+        return "a name is required"
+    if n.lower() == "host":
+        return "'host' is reserved — it is how the fleet addresses the hub"
+    if any(not (c.isalnum() or c in "-_") for c in n):
+        return "use letters, digits, '-' or '_' only (the hub refuses spaces and punctuation)"
+    return ""
 
 
 class NewAgentModal(ModalScreen[dict | None]):
@@ -52,19 +65,21 @@ class NewAgentModal(ModalScreen[dict | None]):
             self.archetypes.insert(0, {"id": "basic", "label": "Basic", "blurb": "a blank agent", "bundle": None, "soul": ""})
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="manage-box"):
+        with VerticalScroll(classes="manage-box"):
             yield Static("new member", classes="manage-title")
-            yield _field("name", Input(placeholder="letters, digits, - and _", id="name", select_on_focus=False))
+            with Horizontal(classes="manage-row"):
+                yield Input(placeholder="name — letters, digits, - and _", id="name", select_on_focus=False)
+                yield Input(placeholder="port (optional)", id="port", select_on_focus=False)
             options = [(f"{a.get('label') or a['id']}" + (f" — {a['blurb']}" if a.get("blurb") else ""), str(a["id"])) for a in self.archetypes]
-            yield _field("archetype", Select[str](options, value=str(self.archetypes[0]["id"]), allow_blank=False, id="archetype"))
+            yield Select[str](options, value=str(self.archetypes[0]["id"]), allow_blank=False, prompt="archetype", id="archetype")
             yield Static("", id="archetype-note", classes="manage-sub")
-            yield Checkbox("inherit the hub's model connections and credentials", value=True, id="inherit")
-            yield Checkbox("start after create", value=True, id="start")
-            yield _field("port (optional)", Input(placeholder="next free", id="port", select_on_focus=False))
+            with Horizontal(classes="manage-row"):
+                yield Checkbox("inherit the hub's model connections", value=True, id="inherit")
+                yield Checkbox("start after create", value=True, id="start")
+            yield Static("", id="hint", classes="manage-hint")
             with Horizontal(classes="manage-buttons"):
                 yield Button("Create (ctrl+s)", id="submit", variant="primary")
                 yield Button("Cancel (esc)", id="cancel")
-            yield Static("", id="hint", classes="manage-hint")
 
     def on_mount(self) -> None:
         self.query_one("#name", Input).focus()
@@ -91,12 +106,10 @@ class NewAgentModal(ModalScreen[dict | None]):
 
     def _body(self) -> dict | None:
         name = self.query_one("#name", Input).value.strip()
-        if not name:
-            self.query_one("#hint", Static).update("a name is required")
+        problem = name_problem(name)
+        if problem:
+            self.query_one("#hint", Static).update(problem)
             self.query_one("#name", Input).focus()
-            return None
-        if name.lower() == "host":
-            self.query_one("#hint", Static).update("'host' is reserved — it is how the fleet addresses the hub")
             return None
         port_raw = self.query_one("#port", Input).value.strip()
         port: int | None = None
@@ -151,14 +164,14 @@ class RenameModal(ModalScreen[str | None]):
         self.current = current
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="manage-box"):
+        with VerticalScroll(classes="manage-box"):
             yield Static(f"rename {self.current}", classes="manage-title")
-            yield Static("display name only — the id, the URL slug and the member's data never change; a running member re-reads it on restart", classes="manage-sub")
-            yield _field("new name", Input(value=self.current, id="name", select_on_focus=False))
+            yield Static("display name only (letters, digits, - and _) — the id, the URL slug and the member's data never change", classes="manage-sub")
+            yield Input(value=self.current, placeholder="new name", id="name", select_on_focus=False)
+            yield Static("", id="hint", classes="manage-hint")
             with Horizontal(classes="manage-buttons"):
                 yield Button("Rename", id="submit", variant="primary")
                 yield Button("Cancel (esc)", id="cancel")
-            yield Static("", id="hint", classes="manage-hint")
 
     def on_mount(self) -> None:
         inp = self.query_one("#name", Input)
@@ -167,8 +180,9 @@ class RenameModal(ModalScreen[str | None]):
 
     def _submit(self) -> None:
         name = self.query_one("#name", Input).value.strip()
-        if not name:
-            self.query_one("#hint", Static).update("a name is required")
+        problem = name_problem(name)
+        if problem:
+            self.query_one("#hint", Static).update(problem)
             return
         if name == self.current:
             self.dismiss(None)
@@ -200,20 +214,20 @@ class DeleteModal(ModalScreen[dict | None]):
         self.remote = remote
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="manage-box"):
+        with VerticalScroll(classes="manage-box"):
             if self.remote:
                 yield Static(f"remove remote {self.target}", classes="manage-title")
                 yield Static("unregisters it from this fleet — the remote agent itself is untouched", classes="manage-sub")
             else:
                 yield Static(f"delete {self.target}", classes="manage-title")
                 yield Static("stops it and takes it out of the fleet. Its data is kept unless you also purge — both are irreversible.", classes="manage-danger")
-            yield _field(f"type {self.target} to confirm", Input(placeholder=self.target, id="confirm", select_on_focus=False))
+            yield Input(placeholder=f"type {self.target} to confirm", id="confirm", select_on_focus=False)
             if not self.remote:
                 yield Checkbox("also purge its workspace and data (cannot be undone)", value=False, id="purge")
+            yield Static("", id="hint", classes="manage-hint")
             with Horizontal(classes="manage-buttons"):
                 yield Button("Remove" if self.remote else "Delete", id="submit", variant="error", disabled=True)
                 yield Button("Cancel (esc)", id="cancel")
-            yield Static("", id="hint", classes="manage-hint")
 
     def on_mount(self) -> None:
         self.query_one("#confirm", Input).focus()
@@ -257,18 +271,18 @@ class RemoteModal(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         ex = self.existing or {}
-        with Vertical(classes="manage-box"):
+        with VerticalScroll(classes="manage-box"):
             yield Static(f"edit remote {ex.get('name')}" if ex else "add a remote member", classes="manage-title")
-            yield Static("the hub proxies its console and A2A under a slug window, like a local member; an unreachable peer is registered anyway and reads 'unreachable' until it answers", classes="manage-sub")
-            yield _field("name", Input(value=str(ex.get("name") or ""), placeholder="ava", id="name", select_on_focus=False))
-            yield _field("url", Input(value=str(ex.get("url") or ""), placeholder="https://ava.tail:7870", id="url", select_on_focus=False))
-            yield _field("bearer token" + (" (blank keeps the stored one)" if ex else " (optional)"), Input(password=True, placeholder="entered once, never shown again", id="token", select_on_focus=False))
+            yield Static("proxied under a slug window like a local member; unreachable is registered anyway", classes="manage-sub")
+            yield Input(value=str(ex.get("name") or ""), placeholder="name — letters, digits, - and _", id="name", select_on_focus=False)
+            yield Input(value=str(ex.get("url") or ""), placeholder="url — https://ava.tail:7870", id="url", select_on_focus=False)
+            yield Input(password=True, placeholder="bearer token — entered once, never shown again" + (" (blank keeps the stored one)" if ex else " (optional)"), id="token", select_on_focus=False)
             if ex:
                 yield Checkbox("clear the stored token", value=False, id="clear")
+            yield Static("", id="hint", classes="manage-hint")
             with Horizontal(classes="manage-buttons"):
                 yield Button("Save" if ex else "Add", id="submit", variant="primary")
                 yield Button("Cancel (esc)", id="cancel")
-            yield Static("", id="hint", classes="manage-hint")
 
     def on_mount(self) -> None:
         self.query_one("#name" if not self.existing else "#url", Input).focus()
@@ -278,8 +292,9 @@ class RemoteModal(ModalScreen[dict | None]):
         url = self.query_one("#url", Input).value.strip()
         token = self.query_one("#token", Input).value
         if self.existing is None:
-            if not name or not url:
-                self.query_one("#hint", Static).update("a name and a URL are required")
+            problem = name_problem(name) if name else "a name and a URL are required"
+            if problem or not url:
+                self.query_one("#hint", Static).update(problem or "a name and a URL are required")
                 return
             out: dict = {"name": name, "url": url}
             if token:
@@ -288,10 +303,18 @@ class RemoteModal(ModalScreen[dict | None]):
             return
         out = {}
         if name and name != str(self.existing.get("name") or ""):
+            problem = name_problem(name)
+            if problem:
+                self.query_one("#hint", Static).update(problem)
+                return
             out["name"] = name
         if url and url != str(self.existing.get("url") or ""):
             out["url"] = url
-        if self.query_one("#clear", Checkbox).value:
+        clear = self.query_one("#clear", Checkbox).value
+        if clear and token:
+            self.query_one("#hint", Static).update("either type a new token or clear the stored one — not both")
+            return
+        if clear:
             out["token"] = ""
         elif token:
             out["token"] = token
