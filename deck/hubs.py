@@ -42,7 +42,7 @@ from deck import hub as deckhub
 
 FLEET_JSON = "fleet.json"
 REMOTES_JSON = "remotes.json"
-PRESENCE_GLYPH = {"running": "●", "unauthorized": "◐", "unreachable": "◌", "stopped": "○", "starting": "◍"}
+PRESENCE_GLYPH = {"running": "●", "unauthorized": "◐", "insecure": "◐", "unreadable": "◐", "unreachable": "◌", "stopped": "○", "starting": "◍"}
 
 
 @dataclass
@@ -115,7 +115,7 @@ def count_members(root: Path) -> tuple[int, int, int]:
             for rec in fleet.values():
                 if isinstance(rec, dict):
                     try:
-                        if deckhub.pid_alive(int(rec.get("pid") or 0)):
+                        if deckhub.is_protoagent_pid(int(rec.get("pid") or 0)):  # a stopped hub's fleet.json outlives reboots: a recycled pid is not a running member
                             running += 1
                     except (TypeError, ValueError):
                         pass
@@ -135,7 +135,7 @@ def launcher_of(root: Path | None, pid: int | None) -> str:
     """How a hub was started: the desktop app owns its box root; ``protoagent up`` leaves a
     ``server.pid`` naming the pid; anything else with a heartbeat is a foreground server."""
     if root is None:
-        return "peer"
+        return "foreground" if pid is not None else "peer"  # a heartbeat that names no root is still a local server
     rroot = _resolve(root)
     for d in deckhub.desktop_box_roots():
         if rroot == _resolve(d):
@@ -150,35 +150,79 @@ def launcher_of(root: Path | None, pid: int | None) -> str:
 
 
 def _root_name(root: Path) -> str:
-    """The data home is the default instance; everything else is named by its directory."""
-    try:
-        if _resolve(root) == _resolve(deckhub.data_home()):
-            return "default"
-    except OSError:
-        pass
+    """Named by its directory; the desktop's box root by the app id (the probe gives it
+    the hub's identity once it answers)."""
     return root.name
 
 
+def _is_loose_box_root(root: Path) -> bool:
+    """The plain data home (``~/.protoagent``) is the machine-shared BOX root, not an
+    instance: the default instance lives at ``<box>/default``. A pre-scoping
+    ``workspaces/fleet.json`` left in the box root must not make it a hub row — bringing it
+    up would run an UNSCOPED server writing into the shared root (#706). The desktop app's
+    root is both box and instance by design and is not loose."""
+    r = _resolve(root)
+    if r is None or any(r == _resolve(d) for d in deckhub.desktop_box_roots()):
+        return False
+    return r == _resolve(deckhub.data_home())
+
+
 def instance_roots() -> list[Path]:
-    """Every instance root on this box that is (or was) a hub: each known box root and
-    the plain data home themselves, plus their child instance roots — existing, deduped."""
+    """Every instance root on this box that is (or was) a hub: each known box root's child
+    instance roots (``<box>/default``, ``<box>/dev``, …), the desktop's root (an instance of
+    its own), and this shell's instance root — existing, deduped. The plain data home
+    itself is a box root, not an instance (see :func:`_is_loose_box_root`)."""
     bases: list[Path] = []
-    for b in [*deckhub.known_box_roots(), deckhub.data_home(), deckhub.instance_paths().instance_root]:
+    for b in [*deckhub.known_box_roots(), deckhub.data_home()]:
         rb = _resolve(b)
         if rb is not None and rb.is_dir() and rb not in bases:
             bases.append(rb)
     out: list[Path] = []
+    cands: list[Path] = []
     for b in bases:
-        cands = [b]
+        if not _is_loose_box_root(b):
+            cands.append(b)
         try:
             cands.extend(sorted(p for p in b.iterdir() if p.is_dir() and not p.name.startswith(".")))
         except OSError:
             pass
-        for c in cands:
-            rc = _resolve(c)
-            if rc is not None and rc not in out and _is_hub_root(rc):
-                out.append(rc)
+    own = _resolve(deckhub.instance_paths().instance_root)
+    if own is not None:
+        cands.append(own)
+    for c in cands:
+        rc = _resolve(c)
+        if rc is not None and rc not in out and _is_hub_root(rc) and not _is_loose_box_root(rc):
+            out.append(rc)
     return out
+
+
+def _ports_on_disk(roots: list[Path]) -> tuple[dict[int, Path], dict[int, Path]]:
+    """``(member ports, hub ports)`` every hub root on this box records: members from each
+    root's ``fleet.json`` (the supervisor writes their ports), the hub itself from its
+    ``server.pid``. A local listener is matched here BEFORE any request — a member is
+    then a row under its hub, never a hub row, whatever credential it would refuse."""
+    members: dict[int, Path] = {}
+    hubs_: dict[int, Path] = {}
+    for root in roots:
+        try:
+            fleet = json.loads((root / "workspaces" / FLEET_JSON).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            fleet = {}
+        if isinstance(fleet, dict):
+            for rec in fleet.values():
+                try:
+                    port = int((rec or {}).get("port") or 0) if isinstance(rec, dict) else 0
+                except (TypeError, ValueError):
+                    port = 0
+                if port:
+                    members.setdefault(port, root)
+        try:
+            port = int(_server_pid_record(root).get("port") or 0)
+        except (TypeError, ValueError):
+            port = 0
+        if port:
+            hubs_.setdefault(port, root)
+    return members, hubs_
 
 
 def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
@@ -202,7 +246,9 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
             pass
         local, running, remotes = count_members(root) if root is not None and _is_hub_root(root) else (None, None, None)
         rows.append(HubRow(name=c.identity or (root.name if root is not None else f"hub :{port}"), root=root, url=c.url, port=port, presence="running", launcher=launcher_of(root, c.pid), pid=c.pid, source=c.source, members=local, running=running, remotes=remotes, candidate=c))
-    for root in instance_roots():
+    roots = instance_roots()
+    member_ports, hub_ports = _ports_on_disk(roots)
+    for root in roots:
         if root in seen_roots:
             continue
         rec = _server_pid_record(root)
@@ -228,11 +274,15 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
         except (TypeError, ValueError, IndexError):
             port = None
         local = deckhub.is_loopback(url)
+        if local and port in member_ports:
+            continue  # a member of a hub on this box (its fleet.json says so): a row under that hub, never a hub row
         # a listener on THIS box found by port (the desktop hub whose heartbeat is missing,
         # a foreground server) is a hub row only once it says which root it runs from —
         # `reconcile` folds it into that root's row; a member answers as a fleet of itself
-        # and is dropped there
-        rows.append(HubRow(name=str(p.get("name") or p.get("host") or url), root=None, url=url, port=port, presence="unreachable", launcher="" if local else "peer", source="local" if local else "peer", candidate=deckhub.HubCandidate(url, "peer")))
+        # and is dropped there. A port a root's server.pid remembers names the root up front,
+        # so that root's own fleet token is in the chain.
+        known_root = hub_ports.get(port) if local and port else None
+        rows.append(HubRow(name=str(p.get("name") or p.get("host") or url), root=None, url=url, port=port, presence="unreachable", launcher="" if local else "peer", source="local" if local else "peer", candidate=deckhub.HubCandidate(url, "peer", instance_root=known_root), seen_root=known_root))
     by_port: dict[int, list[HubRow]] = {}
     for r in rows:
         if r.port and r.root is not None:
@@ -245,38 +295,84 @@ def enumerate_hubs(*, peers: list[dict] | None = None) -> list[HubRow]:
     return rows
 
 
-def probe(row: HubRow, *, token: str | None = None, insecure_http: bool = False) -> HubRow:
+def _classify_failure(why: str) -> tuple[str, str, bool]:
+    """``(presence, note, drop)`` for a ``NoHub.failed`` reason — three different things
+    hide in it: a credential that would travel in cleartext (the operator's call), a hub
+    that answered its card but not its roster (slow, not absent), and a listener that is
+    not a hub at all (nothing to show)."""
+    w = why.lower()
+    if "insecure-http" in w or "plain http" in w or "cleartext" in w:
+        return "insecure", "would send a credential over plain http — pass --insecure-http for a link you trust", False
+    if "http 404" in w or "malformed roster" in w or "no agents list" in w:
+        return "unreachable", f"not a hub: {why}", True
+    if "did not answer its agent card" in w:
+        return "unreachable", why, False
+    return "unreadable", f"answers, but its roster did not: {why}", False
+
+
+def probe(row: HubRow, *, token: str | None = None, insecure_http: bool = False, roots: list[Path] | None = None) -> HubRow:
     """Ask a running hub or a peer what it is: version and member counts through its own
     fleet token (a peer only through ``token``). Sets ``presence`` to ``running`` /
-    ``unauthorized`` / ``unreachable`` and keeps the connection's credential for a later
-    attach. Never raises."""
+    ``unauthorized`` / ``insecure`` / ``unreadable`` / ``unreachable`` and keeps the
+    connection's credential for a later attach. A loopback listener that refuses this
+    shell's credentials is retried with every hub root's own fleet token (``roots``): a
+    scoped hub's token lives under its root, which the default chain does not know.
+    Never raises."""
     if row.candidate is None:
         return row
+    tried_roots: list[Path | None] = [row.candidate.instance_root]
+    retry = [r for r in (roots or []) if r not in tried_roots] if deckhub.is_loopback(row.candidate.url) else []
     try:
         conn = deckhub.connect(candidates=[row.candidate], token=token, insecure_http=insecure_http)
     except deckhub.NoHub as exc:
-        if exc.unauthorized:
-            row.presence = "unauthorized"
-            row.note = row.note or "answers, but every credential was refused — pass --token"
-        elif exc.failed:
-            # answered, but not as a hub (no fleet route: another service on the port, an
-            # older protoAgent): nothing to attach to
-            row.presence = "unreachable"
-            row.note = row.note or f"not a hub: {next(iter(exc.failed.values()), '')}"
-            row.drop = row.source in ("local", "peer")
-        elif exc.members:
-            row.presence = "running"
-            row.note = row.note or "answers as a member (a fleet of itself), not a hub"
-            row.drop = True  # a member is a row under its hub, never a hub row
+        if exc.unauthorized and retry:
+            for root in retry:
+                cand = deckhub.HubCandidate(row.candidate.url, row.candidate.source, instance_root=root, identity=row.candidate.identity, pid=row.candidate.pid)
+                if not any(p.is_file() for p in deckhub.fleet_token_files(cand)[:1]):
+                    continue  # that root has no fleet token to offer
+                try:
+                    conn = deckhub.connect(candidates=[cand], token=token, insecure_http=insecure_http)
+                except deckhub.NoHub as again:
+                    exc = again
+                    continue
+                except Exception:  # noqa: BLE001
+                    continue
+                row.candidate = cand
+                break
+            else:
+                conn = None
         else:
-            row.presence = "unreachable" if row.source in ("peer", "local") else "stopped"
-            row.note = row.note or ("no answer" if row.source in ("peer", "local") else "its heartbeat is here but it does not answer")
-            row.drop = row.source == "local"
-        return row
+            conn = None
+        if conn is None:
+            return _probe_failed(row, exc)
     except Exception as exc:  # noqa: BLE001 — a probe never takes the tree down
         row.presence = "unreachable"
         row.note = row.note or str(exc)
         return row
+    return _probe_read(row, conn)
+
+
+def _probe_failed(row: HubRow, exc: deckhub.NoHub) -> HubRow:
+    if exc.unauthorized:
+        row.presence = "unauthorized"
+        row.note = row.note or "answers, but every credential was refused — pass --token"
+    elif exc.failed:
+        presence, note, drop = _classify_failure(next(iter(exc.failed.values()), ""))
+        row.presence = presence
+        row.note = row.note or note
+        row.drop = drop and row.source in ("local", "peer")
+    elif exc.members:
+        row.presence = "running"
+        row.note = row.note or "answers as a member (a fleet of itself), not a hub"
+        row.drop = True  # a member is a row under its hub, never a hub row
+    else:
+        row.presence = "unreachable" if row.source in ("peer", "local") else "stopped"
+        row.note = row.note or ("no answer" if row.source in ("peer", "local") else "its heartbeat is here but it does not answer")
+        row.drop = row.source == "local"
+    return row
+
+
+def _probe_read(row: HubRow, conn: deckhub.Connection) -> HubRow:
     try:
         roster = conn.roster
         host = next((a for a in roster if a.get("host")), {})
@@ -311,12 +407,17 @@ def reconcile(rows: list[HubRow]) -> list[HubRow]:
             target = by_root.get(r.seen_root)
             if target is not None:
                 if target.presence != "running":
+                    # the listener IS that root's hub — running, or answering but refusing /
+                    # unreadable: the root's row carries that word instead of "stopped"
                     target.presence, target.url, target.port = r.presence, r.url, r.port
                     target.launcher = target.launcher or launcher_of(target.root, None) or ("desktop app" if any(_resolve(target.root) == _resolve(d) for d in deckhub.desktop_box_roots()) else "foreground")
-                    target.version, target.members, target.running, target.remotes = r.version, r.members, r.running, r.remotes
-                    target.candidate, target.token, target.note = r.candidate, r.token, ""
-                    if r.name and r.name != r.url:
-                        target.name = r.name
+                    if r.presence == "running":
+                        target.version, target.members, target.running, target.remotes = r.version, r.members, r.running, r.remotes
+                        target.name = r.name if r.name and r.name != r.url else target.name
+                        target.note = ""
+                    else:
+                        target.note = r.note
+                    target.candidate, target.token = r.candidate, r.token
                 continue  # folded in (or the root already reads running)
             r.launcher = r.launcher or "foreground"
             if r.seen_root is not None and r.source == "local":

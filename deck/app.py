@@ -38,6 +38,7 @@ from deck.talk import TALK_CSS, ConversationScreen
 from deck.hitl import HITL_CSS
 from deck.hubs import HUBS_CSS, HubRow, HubTreeScreen
 from deck.hubs import enumerate_hubs as _enumerate_hubs
+from deck.hubs import instance_roots as _instance_roots
 from deck.hubs import probe as _probe_hub
 from deck.hubs import reconcile as _reconcile_hubs
 from deck.hubs import wait_for_port as _wait_for_port
@@ -753,14 +754,20 @@ class FleetDeck(App[int]):
 
     @work(thread=True, group="warm")
     def _read_warm_max(self) -> None:
+        backend = self.backend
         try:
-            v = self.backend.warm_max()
+            v = backend.warm_max()
         except Exception:  # noqa: BLE001 — a footer figure, never fatal
             return
+        self.call_from_thread(self._set_warm_max, v, backend)
+
+    def _set_warm_max(self, v: int | None, backend: Any) -> None:
+        if backend is not self.backend:
+            return  # the deck attached to another hub while this read was out
         self.warm_max = v
         roster = self._roster_screen()
         if roster is not None and self.snapshot is not None:
-            self.call_from_thread(roster.render_snapshot, self.snapshot)
+            roster.render_snapshot(self.snapshot)  # read on the UI thread: a snapshot captured in the worker could be the "attaching" placeholder the first poll has since replaced
 
     def drain_events(self) -> None:
         """Fold what the member buses sent since the last tick into the activity model;
@@ -806,14 +813,17 @@ class FleetDeck(App[int]):
 
     @work(thread=True, exclusive=True, group="poll")
     def poll(self) -> None:
-        snap = self.backend.snapshot()
+        backend = self.backend  # the hub this poll is FOR — `exclusive` cancels the task, not the thread
+        snap = backend.snapshot()
         if snap.error and self.snapshot is not None:
             # keep the last good roster, surface the failure
             keep = self.snapshot
             snap = Snapshot(mode=keep.mode, label=keep.label, roster=keep.roster, host_version=keep.host_version, rollups=keep.rollups, warnings=keep.warnings, error=snap.error)
-        self.call_from_thread(self._apply, snap)
+        self.call_from_thread(self._apply, snap, backend)
 
-    def _apply(self, snap: Snapshot) -> None:
+    def _apply(self, snap: Snapshot, backend: Any = None) -> None:
+        if backend is not None and backend is not self.backend:
+            return  # a poll of the hub the deck just left: its fleet must not paint the new hub's roster
         self.snapshot = snap
         self.activity.names.update({slug_of(a): display_name(a) for a in snap.roster})
         if self.events is not None:
@@ -876,9 +886,10 @@ class FleetDeck(App[int]):
         rows = _enumerate_hubs(peers=peers)
         rows = self._keep_starting(rows)
         self.call_from_thread(self._show_hubs, [r for r in rows if r.source != "local"], True)  # a listener by port is shown once it says what it is
+        roots = _instance_roots()
         for r in rows:
             if r.presence in ("running", "unreachable") and r.candidate is not None:
-                _probe_hub(r, token=self._token, insecure_http=self._insecure_http)
+                _probe_hub(r, token=self._token, insecure_http=self._insecure_http, roots=roots)
         rows = self._keep_starting(_reconcile_hubs(rows))
         self.call_from_thread(self._show_hubs, rows, False)
 

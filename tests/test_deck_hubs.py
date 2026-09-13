@@ -63,6 +63,7 @@ def box(tmp_path, monkeypatch):
 
     monkeypatch.setattr(deckhub, "instance_paths", lambda: _Paths())
     monkeypatch.setattr(deckhub, "pid_alive", lambda pid: pid in (111, 222, 333, 4242))
+    monkeypatch.setattr(deckhub, "is_protoagent_pid", lambda pid: pid in (111, 222, 333, 4242))
     monkeypatch.setattr(deckhub, "known_box_roots", lambda: [home, desktop])
     monkeypatch.setattr(deckhub, "data_home", lambda: home)
     monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
@@ -390,3 +391,122 @@ async def test_reopening_the_tree_mid_discovery_still_says_working(monkeypatch):
         await _settle(app, pilot)
         assert "working" not in str(app.screen.query_one("#hubs-head", Static).content)
         assert str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "unauthorized"
+
+
+# ── round-1 review (discovery / attach / launcher) ──
+
+
+def test_the_loose_box_root_is_never_a_hub_row_but_its_default_child_is(box):
+    """Reviewer: the plain data home is the BOX root; a pre-scoping fleet.json left there
+    made it a "default · stopped" row whose `u` would start an UNSCOPED server (#706).
+    The default instance lives at <box>/default."""
+    home = box["home"]
+    (home / "workspaces").mkdir()
+    (home / "workspaces" / "fleet.json").write_text("{}")
+    _hub_root(home, "default", members=1)
+    names = [(r.name, r.root) for r in hubs.enumerate_hubs()]
+    assert (home.name, home) not in names and not any(r == home for _, r in names)
+    assert ("default", home / "default") in names
+    assert hubs._is_loose_box_root(home) and not hubs._is_loose_box_root(box["desktop"])  # the desktop's root is an instance of its own
+
+
+def test_a_recycled_pid_in_a_stopped_hubs_fleet_json_is_not_a_running_member(box, monkeypatch):
+    monkeypatch.setattr(deckhub, "is_protoagent_pid", lambda pid: False)  # alive, but not ours
+    assert hubs.count_members(box["running"]) == (2, 0, 1)
+
+
+def test_failures_are_told_apart_insecure_unreadable_not_a_hub():
+    assert hubs._classify_failure("http://x:7870 refuses to send a credential over plain http — use an https:// hub URL, or pass --insecure-http for a link you know is encrypted")[0] == "insecure"
+    assert hubs._classify_failure("HTTP 404: Not Found") == ("unreachable", "not a hub: HTTP 404: Not Found", True)
+    p, n, d = hubs._classify_failure("http://x:7870 did not answer (ReadTimeout)")
+    assert p == "unreadable" and "roster did not" in n and d is False
+    assert hubs._classify_failure("a live server process (pid 5) did not answer its agent card") == ("unreachable", "a live server process (pid 5) did not answer its agent card", False)
+
+
+def test_local_listeners_are_matched_to_roots_on_disk_before_any_request(box, monkeypatch):
+    """A member's port is in its hub's fleet.json → never a hub row, whatever it would
+    refuse; a hub's port in its server.pid → that root's own fleet token is in the chain."""
+    calls: list = []
+    monkeypatch.setattr(deckhub, "connect", lambda **kw: (calls.append(kw["candidates"][0]) or (_ for _ in ()).throw(deckhub.NoHub([kw["candidates"][0].url], [kw["candidates"][0].url], None, None))))
+    peers = [
+        {"name": "m0", "url": "http://127.0.0.1:7900", "host": "127.0.0.1", "port": 7900},  # main's member (fleet.json port 7900)
+        {"name": "devhub", "url": "http://127.0.0.1:7871", "host": "127.0.0.1", "port": 7871},  # dev's server.pid port
+    ]
+    rows = hubs.enumerate_hubs(peers=peers)
+    assert not any(r.port == 7900 and r.root is None for r in rows)  # the member never became a listener row
+    dev_listener = next(r for r in rows if r.root is None and r.port == 7871)
+    assert dev_listener.candidate.instance_root == box["stopped"] and dev_listener.seen_root == box["stopped"]
+    hubs.probe(dev_listener)
+    assert calls[0].instance_root == box["stopped"]  # its own root's token is what the chain reads first
+    rows = hubs.reconcile(rows)
+    dev = next(r for r in rows if r.root == box["stopped"])
+    assert dev.presence == "unauthorized" and dev.port == 7871 and "refused" in dev.note  # one row, the root's, wearing the word
+    assert not any(r.root is None and r.port == 7871 for r in rows)
+
+
+def test_a_refused_loopback_listener_is_retried_with_every_hub_roots_own_token(box, monkeypatch):
+    dev = box["stopped"]
+    (dev / "workspaces" / ".fleet-token").write_text("dev-token")
+    seen: list = []
+
+    def fake_connect(*, candidates, token=None, insecure_http=False):
+        cand = candidates[0]
+        seen.append(cand.instance_root)
+        if cand.instance_root == dev:
+            class _C:
+                url, _token = cand.url, "dev-token"
+
+                def instance_root(self):
+                    return str(dev)
+
+                def close(self):
+                    pass
+
+            return deckhub.Connection(client=_C(), candidate=cand, card={}, roster=[{"name": "dev", "id": "dev", "host": True, "running": True, "version": "0.1"}])
+        raise deckhub.NoHub([cand.url], [cand.url], None, None)
+
+    monkeypatch.setattr(deckhub, "connect", fake_connect)
+    row = HubRow(name="?", root=None, url="http://127.0.0.1:7871", port=7871, presence="unreachable", source="local", candidate=deckhub.HubCandidate("http://127.0.0.1:7871", "peer"))
+    hubs.probe(row, roots=hubs.instance_roots())
+    assert seen[0] is None and dev in seen  # the default chain first, then each root that has a token
+    assert (row.presence, row.token, row.seen_root) == ("running", "dev-token", dev)
+    # a tailnet peer is never retried with local tokens
+    seen.clear()
+    peer = HubRow(name="ava", root=None, url="https://ava.tail:7870", port=7870, presence="unreachable", source="peer", candidate=deckhub.HubCandidate("https://ava.tail:7870", "peer"))
+    hubs.probe(peer, roots=hubs.instance_roots())
+    assert seen == [None] and peer.presence == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_a_poll_of_the_hub_the_deck_just_left_never_paints_the_new_roster(monkeypatch):
+    """Reviewer: `exclusive` cancels the awaiting task, not the thread — the old hub's
+    snapshot landed after the switch, under the new hub's label."""
+    import threading
+    import time
+
+    from deck import data as deckdata
+
+    gate = threading.Event()
+
+    class SlowOld(FakeBackend):
+        def snapshot(self):
+            gate.wait(5)
+            time.sleep(0.05)
+            return super().snapshot()
+
+    old = SlowOld()
+    new = FakeBackend(roster=[{"name": "newhub", "id": "newhub", "port": 7872, "pid": 9, "running": True, "host": True, "version": "0.165.0"}, {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"}])
+    app = FleetDeck(old, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.pause(0.3)  # the first poll is out, blocked on the gate
+        row = HubRow(name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer")
+        app._switch_backend(new, row)  # attach while the old poll is still out
+        await pilot.pause(0.2)
+        gate.set()
+        await _settle(app, pilot)
+        await pilot.pause(0.3)
+        table = app.screen.query_one("#roster", DataTable)
+        names = [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
+        assert names == ["newhub", "nm"], names  # never protoEngineer/old/Cindi from the hub we left
+        assert app.snapshot is not None and app.snapshot.roster[0]["id"] == "newhub"
+        assert isinstance(deckdata, object)

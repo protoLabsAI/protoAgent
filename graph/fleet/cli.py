@@ -376,8 +376,16 @@ def _discover_peers() -> list[dict]:
 
 
 def _port_free(port: int) -> bool:
+    """Nothing answers on the port AND it binds: a wildcard (0.0.0.0) listener lets a
+    loopback bind succeed on macOS, so the connect probe (as ``server/cli.py::_port_open``
+    does) is what catches it."""
     import socket
 
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return False  # something answers there
+    except OSError:
+        pass
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -399,6 +407,15 @@ def _pick_port(preferred: int | None, *, low: int = 7870, high: int = 7910) -> i
     raise RuntimeError(f"no free port between {low} and {high} on this box")
 
 
+def _same_dir(a, b) -> bool:
+    from pathlib import Path
+
+    try:
+        return Path(a).expanduser().resolve() == Path(b).expanduser().resolve()
+    except OSError:
+        return False
+
+
 def _launch_hub(row) -> None:
     """``protoagent up`` for another instance root — the detached server the CLI's own
     ``up`` starts, scoped by ``PROTOAGENT_HOME`` (the instance root) and never by this
@@ -412,6 +429,11 @@ def _launch_hub(row) -> None:
         raise RuntimeError("only a hub with an instance root on this box can be brought up")
     env = {k: v for k, v in os.environ.items() if not k.startswith("PROTOAGENT_")}
     env["PROTOAGENT_HOME"] = str(row.root)
+    if any(_same_dir(row.root, d) for d in deckhub.desktop_box_roots()):
+        # the desktop app runs its hub with the box root AT its instance root; a server
+        # started for that root must see the same Host layer, commons and credential
+        # store, not this machine's plain ~/.protoagent
+        env["PROTOAGENT_BOX_ROOT"] = str(row.root)
     port = _pick_port(row.port)
     row.port = port
     row.url = deckhub._loopback(port)
@@ -447,9 +469,10 @@ def _cmd_hubs(args: argparse.Namespace) -> int:
 
     hubs = importlib.import_module("deck.hubs")
     rows = hubs.enumerate_hubs(peers=[] if args.offline else _discover_peers())
+    roots = hubs.instance_roots()
     for r in rows:
         if r.candidate is not None and not args.offline:
-            hubs.probe(r, token=args.token, insecure_http=args.insecure_http)
+            hubs.probe(r, token=args.token, insecure_http=args.insecure_http, roots=roots)
     rows = hubs.reconcile(rows)
     if args.as_json:
         _emit({"mode": "hubs", "offline": bool(args.offline), "hubs": [_hub_row_dict(r) for r in rows]})

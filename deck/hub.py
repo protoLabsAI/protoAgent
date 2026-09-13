@@ -104,6 +104,14 @@ def data_home() -> Path:
     return _paths.data_home()
 
 
+def is_protoagent_pid(pid: int) -> bool:
+    """A live pid that is one of ours (a recycled pid is not)."""
+    try:
+        return pid_alive(pid) and bool(_paths._is_protoagent_pid(pid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def pid_alive(pid: int) -> bool:
     return _paths.pid_alive(pid)
 

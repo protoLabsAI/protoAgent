@@ -729,7 +729,7 @@ def test_fleet_all_prints_the_hub_tree_and_json_carries_every_row(monkeypatch, c
     probed: list = []
     monkeypatch.setattr(hubs, "enumerate_hubs", lambda *, peers=None: (probed.append(("peers", peers)) or _tree_rows()))
 
-    def probe(row, *, token=None, insecure_http=False):
+    def probe(row, *, token=None, insecure_http=False, roots=None):
         probed.append((row.name, token))
         if row.name == "ava":
             row.presence, row.note = "unauthorized", "answers, but every credential was refused — pass --token"
@@ -799,3 +799,39 @@ def test_launch_hub_runs_protoagent_up_for_that_root_and_never_this_shells_scope
         cli._launch_hub(HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root"))
     with pytest.raises(RuntimeError, match="instance root"):
         cli._launch_hub(HubRow(name="ava", root=None, url="https://ava:7870", port=7870, presence="unreachable", source="peer"))
+
+
+def test_launch_hub_gives_the_desktop_root_its_box_root_and_the_port_probe_sees_a_wildcard_listener(monkeypatch, tmp_path):
+    import socket
+    from pathlib import Path
+
+    from deck.hubs import HubRow
+
+    seen: dict = {}
+
+    class P:
+        returncode = 0
+        stdout = "started"
+        stderr = ""
+
+    monkeypatch.setattr("subprocess.run", lambda argv, *, env, capture_output, text, timeout: (seen.update(argv=argv, env=env) or P()))
+    monkeypatch.setattr(cli, "_port_free", lambda port: True)
+    desktop = tmp_path / "Application Support" / "studio.protolabs.protoagent"
+    desktop.mkdir(parents=True)
+    monkeypatch.setattr(deckhub, "desktop_box_roots", lambda: [desktop])
+    cli._launch_hub(HubRow(name="studio", root=desktop, url=None, port=7870, presence="stopped", source="root"))
+    assert seen["env"]["PROTOAGENT_HOME"] == str(desktop) and seen["env"]["PROTOAGENT_BOX_ROOT"] == str(desktop)
+    cli._launch_hub(HubRow(name="dev", root=Path("/tmp/dev"), url=None, port=7871, presence="stopped", source="root"))
+    assert "PROTOAGENT_BOX_ROOT" not in seen["env"]  # a scoped instance keeps the machine's box root
+    # a wildcard (0.0.0.0) listener holds the port even though a loopback bind would succeed
+    monkeypatch.undo()
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    try:
+        assert cli._port_free(port) is False
+    finally:
+        srv.close()
+    assert cli._port_free(port) is True
