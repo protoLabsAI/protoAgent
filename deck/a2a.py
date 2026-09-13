@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import json
 import re
-import socket
 import time
 import uuid
 from collections.abc import Iterator
@@ -687,26 +686,10 @@ class A2AClient:
         return f"{self.base_url}{self.a2a_path}"
 
     def abort(self) -> None:
-        """Unblock a reader stuck in ``iter_lines`` from ANOTHER thread. ``Response.close()``
-        alone does not wake a thread blocked in ``recv``; shutting the underlying socket
-        does (the read returns, httpcore raises, the worker unwinds through
-        ``HubUnreachable``). Only the shutdown happens here: closing the response too —
-        which closes the fd — right behind the shutdown races the wake-up on macOS (the
-        poller finds its fd gone and sleeps out the whole read timeout, ~7% of tries). The
-        reader owns the response and closes it as it unwinds. Safe to call when nothing is
-        open."""
-        resp = self._active
-        if resp is None:
-            return
-        try:
-            stream = resp.extensions.get("network_stream")
-            sock = stream.get_extra_info("socket") if stream is not None else None
-            if sock is not None:
-                sock.shutdown(socket.SHUT_RDWR)
-            else:  # no socket to shut (a mock transport): closing is the only lever there is
-                resp.close()
-        except Exception:  # noqa: BLE001 — a dead socket must never raise into the UI
-            pass
+        """Unblock a reader stuck in ``iter_lines`` from ANOTHER thread (the worker unwinds
+        through ``HubUnreachable``). See :func:`deck.hub.wake_blocked_reader` for why the
+        move differs per platform. Safe to call when nothing is open."""
+        deckhub.wake_blocked_reader(self._active)
 
     def close(self) -> None:
         self.abort()
