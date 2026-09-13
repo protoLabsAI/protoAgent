@@ -13,6 +13,7 @@ import pytest
 
 import runtime.state as rs
 from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.request_context import request_metadata_scope
 
 
 def _mw() -> KnowledgeMiddleware:
@@ -137,32 +138,45 @@ def _job(jid, schedule, next_fire, context_id="gh-alerts"):
     )
 
 
-def test_firing_one_shot_is_marked_as_this_turn(clear_state, monkeypatch):
+_PAST = "2026-09-09T14:47:14+00:00"
+
+
+def test_the_job_that_started_this_turn_is_marked(clear_state, monkeypatch):
     # Regression (2026-09-09): the scheduler deletes a one-shot only after the turn it
     # started returns, so the job is still listed during that turn. Unmarked, the agent
     # read it as a second queued wake and looped until the stall guard fired.
-    past = "2026-09-09T14:47:14+00:00"
-    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("watch-gh-x", past, past)]), raising=False)
-    block = _mw()._working_state_block({"session_id": "gh-alerts"})
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("watch-gh-x", _PAST, _PAST)]), raising=False)
+    with request_metadata_scope({"scheduler_job_id": "watch-gh-x"}):
+        block = _mw()._working_state_block({"session_id": "gh-alerts"})
     assert "watch-gh-x [FIRING NOW — this is the turn you are in, not another wake]" in block
 
 
-def test_future_one_shot_stays_pending(clear_state, monkeypatch):
-    fut = "2999-01-01T00:00:00+00:00"
-    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("later", fut, fut)]), raising=False)
-    block = _mw()._working_state_block({"session_id": "gh-alerts"})
-    assert "FIRING NOW" not in block and f"later next={fut}" in block
+def test_a_due_job_that_did_not_start_this_turn_stays_pending(clear_state, monkeypatch):
+    # A `wait` resume for the same chat can come due while the operator's own turn is
+    # running. It really is still pending, so it must not read as this turn.
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("wait-resume", _PAST, _PAST)]), raising=False)
+    with request_metadata_scope({"origin": "user"}):
+        block = _mw()._working_state_block({"session_id": "gh-alerts"})
+    assert "FIRING NOW" not in block and f"wait-resume next={_PAST}" in block
 
 
-def test_due_one_shot_in_another_session_is_not_this_turn(clear_state, monkeypatch):
-    past = "2026-09-09T14:47:14+00:00"
-    jobs = [_job("other", past, past, context_id="someone-else")]
+def test_another_jobs_turn_does_not_mark_this_job(clear_state, monkeypatch):
+    jobs = [_job("watch-a", _PAST, _PAST), _job("watch-b", _PAST, _PAST)]
     monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
-    assert "FIRING NOW" not in _mw()._working_state_block({"session_id": "gh-alerts"})
+    with request_metadata_scope({"scheduler_job_id": "watch-b"}):
+        block = _mw()._working_state_block({"session_id": "gh-alerts"})
+    assert f"watch-a next={_PAST}" in block and "watch-b [FIRING NOW" in block
 
 
-def test_cron_job_is_never_marked_firing(clear_state, monkeypatch):
-    past = "2026-09-09T14:47:14+00:00"
-    jobs = [_job("digest", "0 9 * * 1", past)]
+def test_a_cron_turn_is_marked_and_keeps_its_next_fire(clear_state, monkeypatch):
+    nxt = "2026-09-21T16:00:00+00:00"
+    jobs = [_job("digest", "0 9 * * 1", nxt, context_id=None)]
     monkeypatch.setattr(rs.STATE, "scheduler", _Sched(jobs), raising=False)
+    with request_metadata_scope({"scheduler_job_id": "digest"}):
+        block = _mw()._working_state_block({"session_id": "activity"})
+    assert f"digest [FIRING NOW — this is the turn you are in, not another wake] next={nxt}" in block
+
+
+def test_no_request_context_marks_nothing(clear_state, monkeypatch):
+    monkeypatch.setattr(rs.STATE, "scheduler", _Sched([_job("watch-gh-x", _PAST, _PAST)]), raising=False)
     assert "FIRING NOW" not in _mw()._working_state_block({"session_id": "gh-alerts"})
