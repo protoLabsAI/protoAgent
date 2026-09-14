@@ -6,10 +6,14 @@ them — without opening the browser console. It is the same fleet the console s
 driven through the same hub API.
 
 ```bash
-protoagent fleet        # or: protoagent top
+uv tool install protolabs-agent   # once; or: pipx install protolabs-agent
+protoagent fleet                  # or: protoagent top
 ```
 
-From a source checkout, run it as `uv run python -m server fleet`. `q` quits the deck; members
+The `protoagent` command comes from the `protolabs-agent` package on PyPI (see
+[Install](./cli.md#install)). A source checkout doesn't install it: there, run
+`uv run python -m server fleet`. With only the desktop app installed, use
+[its bundled binary](#from-the-desktop-app). `q` quits the deck; members
 keep running. The footer only ever lists the keys that apply to the selected row, and `?` lists
 all of them — the full key table is in [the CLI guide](./cli.md#the-fleet-deck-protoagent-fleet-with-no-arguments).
 
@@ -113,8 +117,8 @@ roster beneath it drives nothing from disk beside that hub — attach to it from
 
 ## From the desktop app
 
-The desktop app's bundled binary opens the deck too, which matters on a machine with no other
-`protoagent` installed. On macOS:
+From 0.166.0, the desktop app's bundled binary opens the deck too, which matters on a machine
+with no other `protoagent` installed. On macOS:
 
 ```bash
 /Applications/protoAgent.app/Contents/MacOS/protoagent-server fleet
@@ -124,6 +128,7 @@ The desktop app's bundled binary opens the deck too, which matters on a machine 
 
 | You see | Why | Do |
 |---|---|---|
+| `protoagent: command not found` | a source checkout and the desktop app don't put `protoagent` on your PATH | `uv tool install protolabs-agent`; in a checkout, `uv run python -m server fleet`; with only the desktop app, [its bundled binary](#from-the-desktop-app) |
 | `the deck needs a terminal` | stdout or stdin is not a TTY | use `protoagent fleet ls --json` in scripts |
 | `the fleet deck is not available in this build` | this binary was built without Textual | use `protoagent fleet ls \| up \| down`, or run from a source checkout |
 | a hub reads `unauthorized` | it answered but refused every credential this shell has | attach from `H` if it is on this box, else `--hub … --token …` |
