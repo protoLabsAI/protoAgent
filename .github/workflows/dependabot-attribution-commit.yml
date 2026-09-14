@@ -59,7 +59,7 @@ jobs:
       - name: Fetch the regenerated manifest
         id: fetch
         if: steps.probe.outputs.present == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: attribution
           path: _attribution
