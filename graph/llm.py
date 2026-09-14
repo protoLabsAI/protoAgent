@@ -5,7 +5,11 @@ so we use ChatOpenAI for everything.
 """
 
 import asyncio
+import contextvars
+import hashlib
+import json
 import logging
+import math
 import os
 from collections.abc import AsyncIterator, Callable
 
@@ -172,6 +176,124 @@ def _gateway_wire_default() -> bool | None:
     return False
 
 
+# ── Output budget sized to fit the window (#3502) ─────────────────────────────────────
+# `model.max_tokens` is a flat output reservation. A prompt within that reservation of the
+# context window fails outright: vLLM rejects prompt + max_tokens > window before generating
+# anything, the gateway's fallback chain can re-send the same request elsewhere, and a
+# subagent lane (which runs no pruning or compaction) has no other way out — even when a
+# smaller output budget would have fit. So when the window is known (the gateway-reported
+# ``profile["max_input_tokens"]``, graph.model_window) and the prompt would not fit beside the
+# full reservation, the request asks for what does fit.
+#
+# The prompt is MEASURED, not guessed: chars/4 undercounts code by ~20%, more than the whole
+# margin that matters here. Each completed call records its real ``input_tokens`` per
+# character of request body, and the next request from the same agent is sized off that
+# ratio. Keyed by model + the system-prompt prefix, so one agent's code-heavy lanes never
+# size another agent's prose chat. No measurement yet → the request is left as configured.
+_TOKENS_PER_CHAR: dict[str, float] = {}
+_MAX_CALIBRATIONS = 256
+# Calls this small are dominated by chat-template and tool-schema overhead that the request
+# body doesn't show, which would inflate the ratio — and they're never the ones that overflow.
+_MIN_CALIBRATION_TOKENS = 8_000
+# Below this much room a lowered budget can't do useful work (a thinking model spends part
+# of it reasoning), so the request is left alone: the provider's overflow error then reaches
+# the force-compact-and-retry path (server/chat.py, #2783), which is the better recovery.
+_MIN_OUTPUT_TOKENS = 8_192
+_BUDGET_MARGIN_FRACTION = 0.02  # tokenization drift between the measured call and this one
+_BUDGET_MARGIN_TOKENS = 1_024
+# (calibration key, request chars) for the request this context just built — paired with
+# that call's usage when its stream ends. A ContextVar, so concurrent calls never cross.
+_REQUEST_MEASURE: contextvars.ContextVar[tuple[str, int] | None] = contextvars.ContextVar(
+    "_request_measure", default=None
+)
+
+
+# Content parts that aren't text. Their tokens bear no relation to their (base64) size.
+_MEDIA_PART_TYPES = frozenset({"image_url", "input_image", "input_audio", "file"})
+
+
+def _is_media_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") in _MEDIA_PART_TYPES
+
+
+def _has_media(payload: dict) -> bool:
+    return any(
+        isinstance(m, dict) and isinstance(m.get("content"), list) and any(map(_is_media_part, m["content"]))
+        for m in payload.get("messages") or []
+    )
+
+
+def _request_chars(payload: dict) -> int:
+    """Characters in the TEXT of a chat-completions body — what becomes prompt tokens in
+    proportion to its length. Media parts are left out: an attached image's base64 would
+    inflate the estimate and lower the budget of a call that fits."""
+    messages = []
+    for m in payload.get("messages") or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, list) and any(map(_is_media_part, content)):
+            m = {**m, "content": [part for part in content if not _is_media_part(part)]}
+        messages.append(m)
+    return len(json.dumps(messages, ensure_ascii=False)) + len(json.dumps(payload.get("tools") or [], ensure_ascii=False))
+
+
+def _calibration_key(model: str, payload: dict) -> str:
+    """Model + a hash of the first message's opening — stable per agent (its system prompt)."""
+    messages = payload.get("messages") or []
+    head = messages[0].get("content", "") if messages and isinstance(messages[0], dict) else ""
+    if not isinstance(head, str):
+        head = json.dumps(head, ensure_ascii=False)
+    return f"{model}|{hashlib.sha1(head[:512].encode()).hexdigest()[:12]}"
+
+
+def _fit_output_budget(payload: dict, model: str, window: int | None) -> None:
+    """Lower the request's output budget, in place, when the prompt won't fit beside it (#3502).
+
+    A no-op unless the window is known, this agent has a measured tokens-per-char ratio, and
+    the estimated prompt leaves at least ``_MIN_OUTPUT_TOKENS`` but less than the configured
+    budget. Everything else — including every call that already fits — is sent unchanged."""
+    _REQUEST_MEASURE.set(None)
+    if not window or not isinstance(payload.get("messages"), list):
+        return
+    key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
+    requested = payload.get(key)
+    if not isinstance(requested, int) or requested <= _MIN_OUTPUT_TOKENS:
+        return
+    chars = _request_chars(payload)
+    cal_key = _calibration_key(model, payload)
+    # A call carrying media doesn't calibrate: its reported tokens include the images,
+    # which the char count leaves out, so its ratio would overstate every later prompt.
+    _REQUEST_MEASURE.set(None if _has_media(payload) else (cal_key, chars))
+    ratio = _TOKENS_PER_CHAR.get(cal_key)
+    if not ratio:
+        return
+    prompt = math.ceil(chars * ratio * (1 + _BUDGET_MARGIN_FRACTION)) + _BUDGET_MARGIN_TOKENS
+    room = window - prompt
+    if room >= requested or room < _MIN_OUTPUT_TOKENS:
+        return
+    payload[key] = room
+    log.info(
+        "[llm] output budget %d -> %d so a ~%d-token prompt fits %s's %d-token window (#3502)",
+        requested,
+        room,
+        prompt,
+        model,
+        window,
+    )
+
+
+def _record_calibration(measure: tuple[str, int] | None, input_tokens: object) -> None:
+    """Store a finished call's real tokens-per-char for its agent (see ``_fit_output_budget``)."""
+    if not measure or not isinstance(input_tokens, int) or input_tokens < _MIN_CALIBRATION_TOKENS:
+        return
+    cal_key, chars = measure
+    if chars <= 0:
+        return
+    _TOKENS_PER_CHAR.pop(cal_key, None)  # re-insert last, so the cap evicts the stalest
+    _TOKENS_PER_CHAR[cal_key] = input_tokens / chars
+    while len(_TOKENS_PER_CHAR) > _MAX_CALIBRATIONS:
+        _TOKENS_PER_CHAR.pop(next(iter(_TOKENS_PER_CHAR)))
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI that surfaces the gateway's NATIVE reasoning stream.
 
@@ -250,6 +372,10 @@ class _ReasoningChatOpenAI(ChatOpenAI):
                     if msg_dict.get("role") == "assistant":
                         extra = getattr(msg, "additional_kwargs", None) or {}
                         msg_dict["reasoning_content"] = extra.get("reasoning_content") or ""
+        try:
+            _fit_output_budget(payload, self.model_name or "", (self.profile or {}).get("max_input_tokens"))
+        except Exception:  # noqa: BLE001 — sizing must never break a request; send it as configured
+            log.debug("[llm] output-budget sizing skipped", exc_info=True)
         return payload
 
     async def _astream(self, *args, **kwargs):
@@ -258,12 +384,20 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         Transparent pass-through on the happy path; on a mid-read transport error with
         zero chunks yielded it reconnects (within the model's ``max_retries`` budget)
         instead of letting the error kill the turn — the failure mode a rate-limited
-        gateway produces. Once a chunk has streamed, the error propagates unchanged."""
+        gateway produces. Once a chunk has streamed, the error propagates unchanged.
+
+        When the stream ends, its reported ``input_tokens`` calibrate the output-budget
+        sizing for this agent's next request (#3502)."""
+        input_tokens = None
         async for chunk in _stream_with_reconnect(
             lambda: super(_ReasoningChatOpenAI, self)._astream(*args, **kwargs),
             max_retries=self.max_retries or 0,
         ):
+            usage = getattr(getattr(chunk, "message", None), "usage_metadata", None)
+            if usage and usage.get("input_tokens"):
+                input_tokens = usage["input_tokens"]
             yield chunk
+        _record_calibration(_REQUEST_MEASURE.get(), input_tokens)
 
 
 def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = None) -> bool:
