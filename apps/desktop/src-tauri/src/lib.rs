@@ -38,6 +38,67 @@ fn choose_port() -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
+/// Desktop log retention (#3504). tauri-plugin-log's defaults are a 40,000-byte file under
+/// `RotationStrategy::KeepOne`, which DELETES the file at each rotation: with the console
+/// open that kept under a minute of history, so the hub boot, member spawns, `updater:`
+/// lines and a crash traceback were gone before anyone looked. 5 MB a file, and four dated
+/// files kept beside the active one (`KeepSome(n)` keeps n plus the active file), caps the
+/// log directory at about 25 MB.
+const LOG_MAX_FILE_BYTES: u128 = 5 * 1024 * 1024;
+const LOG_KEEP_ROTATED: usize = 4;
+// The plugin computes `n - 1` on every rotation, so `KeepSome(0)` would underflow.
+const _: () = assert!(LOG_KEEP_ROTATED >= 1);
+
+/// The level a captured sidecar output line is logged at (#3504).
+///
+/// Every request the hub serves or proxies prints two INFO lines on the sidecar's output:
+/// uvicorn's access line and the proxy's httpx client line. An open console makes several
+/// a second, and they rotated everything else out of the desktop log. Exactly those two
+/// shapes, and only at INFO, go to DEBUG, below the file's INFO threshold. Every other line
+/// stays at INFO: boot and lifecycle, a WARNING or ERROR that happens to mention a request,
+/// and each line of a traceback.
+fn sidecar_line_level(line: &str) -> log::Level {
+    if is_uvicorn_access_line(line) || is_httpx_request_line(line) {
+        log::Level::Debug
+    } else {
+        log::Level::Info
+    }
+}
+
+/// uvicorn's default access format, `%(levelprefix)s %(client_addr)s - "%(request_line)s"
+/// %(status_code)s`, uncoloured because stdout is a pipe:
+/// `INFO:     127.0.0.1:54910 - "GET /api/fleet HTTP/1.1" 200 OK`. The level prefix is part
+/// of the shape, so uvicorn's WARNING/ERROR lines never match.
+fn is_uvicorn_access_line(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("INFO:") else {
+        return false;
+    };
+    let Some((client, request)) = rest.trim_start().split_once(" - \"") else {
+        return false;
+    };
+    // `host:port`, one token; then a quoted `METHOD path HTTP/x`.
+    client.contains(':') && !client.contains(char::is_whitespace) && request.contains(" HTTP/")
+}
+
+/// The httpx client's per-request line under the server's log format
+/// (`%(asctime)s %(levelname)s %(name)s %(message)s`, observability/logging_config.py):
+/// `2026-09-13 21:52:46,403 INFO httpx HTTP Request: GET http://127.0.0.1:7881/... "HTTP/1.1 200 OK"`.
+/// Level and logger are matched by field, so the same message at WARNING, or another
+/// logger quoting it, stays at INFO.
+fn is_httpx_request_line(line: &str) -> bool {
+    let mut fields = line.splitn(5, ' ');
+    let (Some(_date), Some(_time), Some(level), Some(logger), Some(message)) = (
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+    ) else {
+        return false;
+    };
+    level == "INFO" && logger == "httpx" && message.starts_with("HTTP Request: ")
+}
+
 /// The shell's OS-global hotkeys (#1675): stable id → default chord, in the
 /// global-hotkey string grammar ("super+shift+p"). The quick launcher is ⌥Space on
 /// macOS (the Raycast-familiar default) and Ctrl+Alt+Space elsewhere — plain
@@ -425,7 +486,12 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
-                    log::info!("[sidecar] {}", String::from_utf8_lossy(&bytes).trim_end());
+                    // One event per line (the shell plugin reads line by line), so each
+                    // is classified on its own: per-request lines drop below the log
+                    // file's INFO threshold (#3504).
+                    let line = String::from_utf8_lossy(&bytes);
+                    let line = line.trim_end();
+                    log::log!(sidecar_line_level(line), "[sidecar] {line}");
                 }
                 CommandEvent::Terminated(payload) => {
                     log::warn!("[sidecar] terminated: {payload:?}");
@@ -1321,10 +1387,16 @@ pub fn run() {
             // wrote no logs is exactly why the v0.35.0 sidecar failure was opaque
             // — "no logs?". tauri-plugin-log's default targets include the OS log
             // dir (~/Library/Logs/studio.protolabs.protoagent/), so the captured
-            // `[sidecar]` stdout/stderr (incl. a boot crash) lands on disk.
+            // `[sidecar]` stdout/stderr (incl. a boot crash) lands on disk. Sized and
+            // rotated so that history is still there when someone looks (#3504); the
+            // per-request sidecar lines are kept out by `sidecar_line_level`.
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Info)
+                    .max_file_size(LOG_MAX_FILE_BYTES)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(
+                        LOG_KEEP_ROTATED,
+                    ))
                     .build(),
             )?;
             app.manage(SidecarProcess::default());
@@ -1743,5 +1815,80 @@ mod new_window_tests {
         assert_eq!(own_origin_path("http://127.0.0.1:7870/app/"), None);
         assert_eq!(own_origin_path("tauri://localhost/index.html?__apiPort=7870"), None);
         assert_eq!(own_origin_path("http://127.0.0.1:7870"), None);
+    }
+}
+
+#[cfg(test)]
+mod sidecar_log_tests {
+    use super::sidecar_line_level;
+    use log::Level::{Debug, Info};
+
+    // #3504: lines copied from the desktop log of 2026-09-13, the file that had rotated
+    // everything but these away within a minute.
+    #[test]
+    fn uvicorn_access_lines_are_demoted() {
+        for line in [
+            r#"INFO:     127.0.0.1:54910 - "GET /api/fleet HTTP/1.1" 200 OK"#,
+            r#"INFO:     127.0.0.1:54910 - "GET /agents/merchantAgent-6604/api/plugins/notes/note HTTP/1.1" 200 OK"#,
+            r#"INFO:     127.0.0.1:54374 - "GET /agents/merchantAgent-6604/api/events?token=eyJz&since=5 HTTP/1.1" 200 OK"#,
+            r#"INFO:     127.0.0.1:61022 - "POST /a2a HTTP/1.1" 500 Internal Server Error"#,
+            r#"INFO:     ::1:61022 - "GET /api/fleet HTTP/1.1" 404 Not Found"#,
+        ] {
+            assert_eq!(sidecar_line_level(line), Debug, "{line}");
+        }
+    }
+
+    #[test]
+    fn httpx_request_lines_are_demoted() {
+        for line in [
+            r#"2026-09-13 21:52:46,403 INFO httpx HTTP Request: GET http://127.0.0.1:7881/api/plugins/notes/note "HTTP/1.1 200 OK""#,
+            r#"2026-09-13 21:57:22,217 INFO httpx HTTP Request: GET http://127.0.0.1:7903/.well-known/agent-card.json "HTTP/1.0 200 OK""#,
+            r#"2026-09-13 21:57:22,217 INFO httpx HTTP Request: POST http://127.0.0.1:7881/a2a "HTTP/1.1 502 Bad Gateway""#,
+        ] {
+            assert_eq!(sidecar_line_level(line), Debug, "{line}");
+        }
+    }
+
+    #[test]
+    fn boot_and_lifecycle_lines_stay_in_the_file() {
+        for line in [
+            "INFO:     Started server process [69481]",
+            "INFO:     Waiting for application startup.",
+            "INFO:     Uvicorn running on http://127.0.0.1:7870 (Press CTRL+C to quit)",
+            "INFO:     Shutting down",
+            "INFO:     Finished server process [69481]",
+            "2026-09-13 21:52:40,001 INFO server.fleet [fleet] spawned member merchantAgent on :7881",
+            "2026-09-13 21:52:40,001 INFO server [watchdog] launcher pid 4242 gone — exiting sidecar",
+        ] {
+            assert_eq!(sidecar_line_level(line), Info, "{line}");
+        }
+    }
+
+    #[test]
+    fn warnings_and_errors_that_mention_a_request_are_never_demoted() {
+        for line in [
+            r#"2026-09-13 21:52:46,403 WARNING httpx HTTP Request: GET http://127.0.0.1:7881/api/x "HTTP/1.1 200 OK""#,
+            r#"2026-09-13 21:52:46,403 ERROR server.fleet proxy GET http://127.0.0.1:7881/api/x failed: "HTTP/1.1 502 Bad Gateway""#,
+            r#"WARNING:  127.0.0.1:54910 - "GET /api/fleet HTTP/1.1" 200 OK"#,
+            "WARNING:  Invalid HTTP request received.",
+            "ERROR:    Exception in ASGI application",
+            // Another logger quoting httpx's message is not httpx's request line.
+            r#"2026-09-13 21:52:46,403 INFO server.proxy HTTP Request: GET http://127.0.0.1:7881/ "HTTP/1.1 200 OK""#,
+        ] {
+            assert_eq!(sidecar_line_level(line), Info, "{line}");
+        }
+    }
+
+    #[test]
+    fn every_line_of_a_traceback_stays_in_the_file() {
+        for line in [
+            "Traceback (most recent call last):",
+            r#"  File "httpx/_transports/default.py", line 101, in map_httpcore_exceptions"#,
+            "    yield",
+            "httpx.ConnectError: [Errno 61] Connection refused",
+            "",
+        ] {
+            assert_eq!(sidecar_line_level(line), Info, "{line:?}");
+        }
     }
 }
