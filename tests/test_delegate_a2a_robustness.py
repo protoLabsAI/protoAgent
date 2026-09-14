@@ -443,8 +443,8 @@ def test_poll_sleep_never_outruns_the_explicit_timeout(patched):
 
 
 def test_no_explicit_timeout_lets_a_progressing_poll_run_past_poll_timeout(patched):
-    """The other side of the cap: with no per-call timeout the bound stays no-progress only
-    (the bound #3369 introduced), so a task that keeps advancing is still waited out."""
+    """The other side of the cap (#3360): with no per-call timeout the bound stays
+    no-progress only, so a task that keeps advancing is still waited out."""
     reads = _clock(patched, step=1.0)
     progressing = [_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(8)]
     _install_capture_client(
