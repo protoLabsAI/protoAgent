@@ -27,6 +27,12 @@ Two rules from the ADR:
   would hit an unrelated private row). History is kept for audit; retrieval
   excludes invalidated rows by default. Nothing here UPDATEs content in place
   or DELETEs.
+- **An older date never replaces a newer one.** Harvested facts carry the
+  conversation's ``[as of YYYY-MM-DD]``, and threads are NOT harvested in
+  chronological order (the TTL sweep takes them in DB order; a
+  delete-with-harvest runs any time). So "arrived later" does not mean "is
+  newer": in both bands an incoming fact dated before the one it matches is
+  skipped, never stored over it.
 
 Facts carry a ``namespace`` so per-project/owner scoping (ADR 0007) is a filter
 later, not a migration.
@@ -50,9 +56,10 @@ _DEDUP_JACCARD = 0.85
 # Token-overlap band [_SUPERSEDE_JACCARD, _DEDUP_JACCARD) ⇒ the new fact is a
 # *revision* of the existing one (same subject, changed details): the old row is
 # marked invalidated_at=now and the new row inserted (ADR 0069 D9 — supersede,
-# don't delete). The comparison is purely deterministic — token sets plus
-# "the incoming fact is newer by construction" — never an LLM freshness call
-# (Mem0's 2026 reversal + arXiv 2606.01435 are the ADR's basis for that rule).
+# don't delete). The comparison is purely deterministic — token sets plus the
+# ``[as of]`` dates (an incoming fact dated BEFORE its match never supersedes it; an
+# undated side falls back to "the incoming fact is newer") — never an LLM freshness
+# call (Mem0's 2026 reversal + arXiv 2606.01435 are the ADR's basis for that rule).
 _SUPERSEDE_JACCARD = 0.6
 # Harvested facts carry an ``[as of YYYY-MM-DD]`` lead (the conversation's date, not the
 # harvest's). Similarity is measured on the text AFTER it, see ``_split_as_of``.
@@ -134,9 +141,12 @@ def consolidate_and_store(
     ``invalidated_at=now`` + ``invalidation_reason="superseded_by:<new id>"``
     (ADR 0108 D7.3; kept for audit — never UPDATE-in-place, never DELETE). A
     failed insert therefore never invalidates anything. The incoming fact wins
-    purely because it is newer — deterministic timestamps/ids, no LLM
-    freshness judging. ``list_chunks`` excludes invalidated rows by default,
-    so comparisons only ever run against currently-valid facts.
+    unless its ``[as of]`` date is OLDER than the matched fact's: then it is the
+    past state of something already stored, and is skipped (see
+    ``_predates``). Undated facts keep "the incoming one is newer".
+    Deterministic dates/ids, no LLM freshness judging. ``list_chunks`` excludes
+    invalidated rows by default, so comparisons only ever run against
+    currently-valid facts.
 
     ``source`` is the originating session/thread id (provenance, ADR 0069 D5);
     when the caller has none it falls back to the legacy ``"harvest"`` literal
@@ -173,6 +183,15 @@ def consolidate_and_store(
             if cand_id is None or not _refreshes(new_as_of, cand_as_of):
                 counts["skipped"] += 1
                 continue
+        elif best >= _SUPERSEDE_JACCARD and _predates(new_as_of, candidates[best_idx][2]):
+            # A revision dated BEFORE the fact it revises: harvest order isn't chronological,
+            # so this is the past state of something we already hold a newer state for. It is
+            # skipped, the same as an older near-duplicate above. It is NOT stored as
+            # already-invalidated history: that is insert-then-invalidate, and if the
+            # invalidation failed the stale fact would be left valid, which is this very bug.
+            # What was true then stays in that thread's episodic summary.
+            counts["skipped"] += 1
+            continue
         # Revision of an existing fact (supersede band): remember the single best
         # match; it is invalidated only AFTER the new row has landed, so a failed
         # insert never loses the old fact (ADR 0108 D7.3).
@@ -218,6 +237,13 @@ def _split_as_of(text: str) -> tuple[str | None, str]:
 def _refreshes(new_as_of: str | None, old_as_of: str | None) -> bool:
     """Does a near-identical incoming fact carry a newer date than the stored one?"""
     return bool(new_as_of) and (old_as_of is None or new_as_of > old_as_of)
+
+
+def _predates(new_as_of: str | None, old_as_of: str | None) -> bool:
+    """Is a revision dated strictly BEFORE the stored fact it matches? Only when both carry
+    a date: an undated side keeps the old "incoming is newer" rule, and the same date is
+    not older."""
+    return bool(new_as_of and old_as_of) and new_as_of < old_as_of
 
 
 def _candidate(row) -> tuple[int | None, set[str], str | None]:
