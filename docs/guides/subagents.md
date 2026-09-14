@@ -225,7 +225,7 @@ Every subagent call:
 - Runs inside the same `trace_session` context as the lead → nested Langfuse span.
 - Inherits the same `session_id` → audit-log entries from the subagent's tools land alongside the lead's.
 - Emits the same `autonomous.cost.*` events on terminal completion.
-- Is rate-limited by `max_turns` (hard stop — avoids runaway recursion).
+- Is bounded by `max_turns`, a count of **tool rounds**: the subagent can call tools that many times, then it must answer. The runner converts it into LangGraph's step-based `recursion_limit` using the compiled middleware stack, so adding middleware never shrinks it. Round `max_turns + 1` hard-stops, and whatever the subagent had comes back marked `hard-stopped at max_turns` instead of an error.
 
 Neither `task` nor `task_batch` is ever in a subagent's tool allowlist (subagents only get the tools named in their `tools:` list), so subagents can't spawn further subagents. This is intentional; one level of delegation is almost always enough.
 

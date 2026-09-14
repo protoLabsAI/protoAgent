@@ -19,9 +19,13 @@ Rules:
 - ``disallowed_tools`` — explicitly blocked names. Always includes
   ``task`` so subagents can't spawn further subagents (recursion
   guard).
-- ``max_turns`` — hard cap on tool-call iterations. Keep tight; a
-  subagent that can't finish in ~20 turns probably needs a better
-  prompt or more tools, not more turns.
+- ``max_turns`` — hard cap on tool-call iterations (tool rounds): the
+  subagent can call tools this many times, then it must answer. The
+  runner converts it into LangGraph's step-based ``recursion_limit`` using
+  the compiled middleware stack (``graph.agent._subagent_recursion_limit``),
+  so adding middleware never shrinks it. Keep tight; a subagent that can't
+  finish in ~20 turns probably needs a better prompt or more tools, not
+  more turns.
 """
 
 from dataclasses import dataclass, field
@@ -459,7 +463,9 @@ Hard stop at max_turns: return what you have (partial findings beat none).""",
     # 40: bumped twice on live evidence — 15→25 (#1858: a 6-file protoAgent diff),
     # 25→40 (ADR 0078 shadow reviews on protoContent hit 25 mid-read). The limit is
     # now a soft budget (run_subagent salvages partial output at the recursion
-    # limit), so headroom costs nothing when unused.
+    # limit), so headroom costs nothing when unused. Those bumps were sized when
+    # max_turns was fed raw into recursion_limit (40 bought ~12 tool rounds); since
+    # #3510 it counts tool rounds, so 40 is now genuine headroom.
     max_turns=40,
     # Per-invocation review verdicts are context-specific — never distill to a skill.
     allow_skill_emission=False,
