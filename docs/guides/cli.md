@@ -307,7 +307,7 @@ first and downloads the zip on a second click.
 ```bash
 protoagent agent import vera-snapshot.zip --dry-run        # the plan; changes nothing
 protoagent agent import vera-snapshot.zip --name vera-2 --yes \
-  --secret model.api_key=sk-…
+  --secret providers.gateway=sk-…
 ```
 
 **Importing runs code.** A snapshot names plugin repos, and applying it clones them and
@@ -317,7 +317,10 @@ until you pass `--yes`. Read the plan; it is describing what is about to run on 
 
 The config applies **verbatim**, including capability settings like `filesystem.allow_run`
 and `operator.allowed_dirs` — those are part of the agent's definition, so they're shown in
-the plan rather than silently stripped.
+the plan rather than silently stripped. Its model connections travel in the provider-registry
+shape, and a model credential is named by its connection (`providers.gateway`); an older
+snapshot's `model.api_key` is asked for under that name and still accepted as `--secret`
+(see [Agent snapshots](agent-snapshots.md#the-model-connection-travels-as-a-registry)).
 
 The new agent arrives **incomplete** until its credentials are supplied: none travel in a
 snapshot. Pass them with `--secret NAME=VALUE` (repeatable, written `0600` to the new agent

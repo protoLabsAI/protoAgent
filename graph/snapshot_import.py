@@ -16,7 +16,11 @@ fans out into N code-execution decisions.
 
 The config is applied **verbatim** — it IS the agent's definition, and stripping capability
 keys would produce a duplicate that behaves subtly differently for reasons no review could
-fully enumerate. Consistent with ADR 0071 D1 (trust, not sandbox): the answer to dangerous
+fully enumerate. The one rewrite is its *model-connection shape*: a snapshot exported before
+#3128 carries the retired ``model.provider`` / ``api_base`` / ``api_key``, and is staged in the
+provider-registry shape a current export produces (``graph.config.to_registry_shape``) — same
+connections, same model, stated the way ADR 0106 states them. Consistent with ADR 0071 D1
+(trust, not sandbox): the answer to dangerous
 config is to show it, not to silently neuter it. ``ImportPlan.capabilities`` is what makes
 "show it" real.
 
@@ -318,6 +322,9 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
 
     config = manifest.get("config")
     config = config if isinstance(config, dict) else {}
+    # Describe what will actually be staged — the registry shape — so the credential names
+    # the plan asks for are the ones `_write_secrets` files where the loader reads them.
+    config = _staged_shape(config)
 
     plugins: list[PluginPin] = []
     for raw in manifest.get("plugins") or []:
@@ -359,7 +366,9 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
         knowledge=knowledge,
         agent_name=str((manifest.get("agent") or {}).get("name") or "").strip() or "imported-agent",
         plugins=plugins,
-        required_secrets=[r for r in (manifest.get("required_secrets") or []) if isinstance(r, dict)],
+        required_secrets=_current_secret_names(
+            [r for r in (manifest.get("required_secrets") or []) if isinstance(r, dict)], config
+        ),
         capabilities=capabilities,
         has_soul=bool(manifest.get("soul")) and "SOUL.md" in names,
         skill_files=sum(1 for n in names if n.startswith("skills/")),
@@ -393,11 +402,89 @@ def stage_snapshot(data: bytes, dest: Path) -> dict:
 
     import yaml
 
-    config = manifest.get("config") or {}
+    config = _staged_shape(manifest.get("config") or {})
+    config = _bridge_legacy_aliases(config)
     (dest / "langgraph-config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )
     return manifest
+
+
+def _staged_shape(config: dict) -> dict:
+    """The manifest config in the provider-registry shape. Any inline credential is DROPPED,
+    not applied: an export never emits one, and credentials arrive only as operator-supplied
+    values."""
+    from graph.config import to_registry_shape
+
+    shaped, _lifted = to_registry_shape(config if isinstance(config, dict) else {})
+    return shaped
+
+
+def _current_secret_names(required: list[dict], config: dict) -> list[dict]:
+    """``required_secrets`` with the retired ``model.api_key`` renamed to the connection it
+    authenticates (``providers.<id>``) — how a pre-#3128 snapshot named the gateway key.
+    Merges into an entry already carrying that name rather than listing it twice."""
+    from graph.config import legacy_gateway_connection
+
+    target = f"providers.{legacy_gateway_connection(config)}"
+    out: list[dict] = []
+    index: dict[str, int] = {}
+    for req in required:
+        entry = dict(req)
+        if str(entry.get("name") or "") == _RETIRED_GATEWAY_SECRET:
+            entry["name"] = target
+            entry["description"] = f"API key for the `{target.split('.', 1)[1]}` model connection."
+        name = str(entry.get("name") or "")
+        if name in index:
+            kept = out[index[name]]
+            kept["was_set"] = bool(kept.get("was_set")) or bool(entry.get("was_set"))
+            continue
+        index[name] = len(out)
+        out.append(entry)
+    return out
+
+
+#: How a pre-#3128 snapshot named the gateway key — still ACCEPTED as a supplied credential
+#: (scripts and docs written against the old contract), filed as its connection's key.
+_RETIRED_GATEWAY_SECRET = "model.api_key"
+
+
+def _bridge_legacy_aliases(config: dict) -> dict:
+    """TEMPORARY (#3128): restate, FROM the registry, the retired fields the runtime still reads.
+
+    The registry is the shape a snapshot stages in. But several runtime paths still read
+    ``model.api_base`` / ``model.provider`` / ``model.api_key`` directly instead of the
+    registry: the unqualified default model route (``graph.llm._build_llm_kwargs``),
+    knowledge embeddings, transcription and the plugin ``gateway_client``, the context-window
+    probe, the egress auto-allow and ``--setup`` validation. A registry-only config leaves
+    all of those on the Host layer's endpoint (or the App default) with no key — the state
+    first-run setup leaves an instance in today. An import must not regress an agent that
+    works, so it restates them — derived from the registry, never from anything the snapshot
+    carried: ``model.provider`` for a native primary connection, ``model.api_base`` for the
+    gateway connection's endpoint. The key half is ``_write_secrets``' mirror.
+
+    Remove with the #3128 removal PR, together with those readers' legacy reads.
+    """
+    from graph.config import _NATIVE_PROVIDER_TYPES, legacy_gateway_connection
+
+    model = config.get("model") if isinstance(config.get("model"), dict) else {}
+    entries = {
+        str(e.get("id", "") or "").strip().lower(): e
+        for e in (config.get("providers") if isinstance(config.get("providers"), list) else [])
+        if isinstance(e, dict)
+    }
+    name = str(model.get("name") or "")
+    prefix = name.partition(":")[0].strip().lower() if ":" in name else ""
+    primary_type = str((entries.get(prefix) or {}).get("type", "") or "").strip().lower() or prefix
+    derived: dict = {}
+    if primary_type in _NATIVE_PROVIDER_TYPES and "provider" not in model:
+        derived["provider"] = primary_type
+    base = (entries.get(legacy_gateway_connection(config)) or {}).get("base_url")
+    if isinstance(base, str) and base.strip() and "api_base" not in model:
+        derived["api_base"] = base.strip()
+    if derived:
+        config["model"] = {**model, **derived}
+    return config
 
 
 @dataclass
@@ -603,10 +690,19 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
     doc: dict[str, dict[str, str]] = {}
     mcp_values: dict[str, str] = {}
     persisted: set[str] = set()
+    gateway_secret = f"providers.{_staged_gateway_connection(ws)}"
     for name, value in (supplied or {}).items():
         name = str(name)
         if not str(value or "").strip():
             continue
+        if name == _RETIRED_GATEWAY_SECRET:
+            name = gateway_secret  # the old contract's name for the same credential
+        if name == gateway_secret:
+            # TEMPORARY (#3128): the same key under the retired `model.api_key` too — the
+            # readers `_bridge_legacy_aliases` describes still authenticate from it. Both
+            # names count as supplied, so a plan written either way reports it present.
+            doc.setdefault("model", {})["api_key"] = str(value)
+            persisted.add(_RETIRED_GATEWAY_SECRET)
         section, _, key = name.partition(".")
         if not section or not key:
             continue
@@ -677,6 +773,20 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
         for r in plan.required_secrets
         if r.get("was_set") and str(r.get("name")) not in persisted
     )
+
+
+def _staged_gateway_connection(ws: Path) -> str:
+    """The retired single-gateway key's connection id, read from the workspace config the
+    import staged (``gateway`` when it cannot be read)."""
+    import yaml
+
+    from graph.config import legacy_gateway_connection
+
+    try:
+        doc = yaml.safe_load((ws / "config" / "langgraph-config.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return "gateway"
+    return legacy_gateway_connection(doc) if isinstance(doc, dict) else "gateway"
 
 
 def _seed_knowledge(src: Path, ws: Path) -> list[str]:

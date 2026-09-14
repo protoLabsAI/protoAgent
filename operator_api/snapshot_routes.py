@@ -111,7 +111,7 @@ def register_snapshot_routes(app) -> None:
         file: UploadFile = File(..., description="The snapshot zip"),
         name: str = Form("", description="Name for the new agent; blank uses the snapshot's"),
         acknowledged: bool = Form(False, description="The operator has read the plan and consents to running its plugin code"),
-        secrets_json: str = Form("", description='JSON {"model.api_key": "…"} of supplied credentials'),
+        secrets_json: str = Form("", description='JSON {"providers.gateway": "…"} of supplied credentials'),
     ):
         """Inspect or apply an agent snapshot (ADR 0091 D3).
 

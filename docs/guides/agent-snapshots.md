@@ -91,7 +91,7 @@ the new workspace. Run `protoagent knowledge ingest` on them once the gateway is
 ```bash
 protoagent agent import vera-snapshot.zip --dry-run
 protoagent agent import vera-snapshot.zip --name vera-2 --yes \
-  --secret model.api_key=sk-…
+  --secret providers.gateway=sk-…
 ```
 
 ### Carrying knowledge (opt-in)
@@ -143,12 +143,41 @@ seeing what you're accepting.
 Import only snapshots from a source you trust, exactly as you would a plugin or a
 dependency.
 
+### The model connection travels as a registry
+
+A snapshot's config is written in the provider-registry shape
+([ADR 0106](../adr/0106-provider-registry.md)) and never carries the retiring
+`model.provider`, `model.api_base` or `model.api_key` (#3128):
+
+- an endpoint the source agent pinned becomes a `gateway` connection under `providers:`;
+- a Claude / ChatGPT subscription lead becomes a qualified `model.name`
+  (`anthropic-oauth:claude-sonnet-4-5`);
+- anything the source left to its box — typically a fleet member's endpoint — is left out
+  entirely, so the target box supplies its own. Nothing is ever written as a blank value: an
+  empty `base_url` would *replace* the target's endpoint rather than inherit it.
+
+Snapshots exported before this change still import: the plan is built from the same
+registry shape, so an old snapshot is staged exactly as a current export would be.
+
+Until #3128 finishes, a few runtime paths (the default model route for an unqualified name,
+knowledge embeddings, transcription, the plugin gateway client, the context-window probe,
+egress auto-allow, `--setup` validation) still read the retiring fields directly. So the
+import also writes `model.api_base` / `model.provider` into the new agent — **derived from
+that registry, never from the snapshot** — and files the gateway key under `model.api_key`
+as well as `providers.gateway`. Both go away with the retiring fields.
+
 ### The new agent arrives incomplete
 
 No credentials travel, so a freshly imported agent can't reach its gateway until you supply
 them — via `--secret NAME=VALUE`, the console's import form, or that agent's Settings ▸
 Secrets afterwards. Only credentials the **source** agent actually had are reported missing;
 one a plugin merely declares isn't, because the original didn't have it either.
+
+A model credential is named by the **connection** that uses it — `providers.gateway` for the
+default gateway, `providers.<id>` for any other — because that is where the new agent's
+loader reads it. A snapshot exported before #3128 names the gateway key `model.api_key`; the
+plan asks for it as `providers.gateway`, and `--secret model.api_key=…` is still accepted for
+the same credential.
 
 ## Duplicating an agent
 

@@ -398,8 +398,9 @@ class TestRoundTrip:
         assert plan.agent_name == "vera"
         assert plan.has_soul is True
         assert plan.skill_files == 1
-        # The export stripped model.api_key and inventoried it; import must ask for it.
-        assert any(r["name"] == "model.api_key" and r["was_set"] for r in plan.required_secrets)
+        # The export stripped the gateway key and inventoried it under its connection
+        # (#3128); import must ask for it.
+        assert any(r["name"] == "providers.gateway" and r["was_set"] for r in plan.required_secrets)
         # …and the capability the source config granted is surfaced, not silently applied.
         assert "filesystem.allow_run" in [k for k, _ in plan.capabilities]
 
@@ -541,7 +542,9 @@ class TestApplyEndToEnd:
 
     def test_arrives_incomplete_until_its_credentials_are_supplied(self, ws_root):
         res = apply_snapshot(_snapshot_no_plugins(), name="vera-copy", acknowledged=True, install=False)
-        assert res.missing_secrets == ["model.api_key"]
+        # The fixture is a pre-#3128 manifest naming `model.api_key`; the plan asks for the
+        # same credential under the connection that uses it.
+        assert res.missing_secrets == ["providers.gateway"]
         assert res.complete is False
 
     def test_supplying_the_credential_completes_it(self, ws_root):
@@ -645,7 +648,7 @@ class TestImportRoute:
         body = res.json()
         assert body["mode"] == "applied"
         assert body["name"] == "vera-copy"
-        assert body["missing_secrets"] == ["model.api_key"]
+        assert body["missing_secrets"] == ["providers.gateway"]
         assert body["complete"] is False
 
     def test_supplied_secrets_ride_the_form(self, client, ws_root):
@@ -729,3 +732,199 @@ class TestKnowledgeSeedImport:
         data = _zip({"agent.snapshot.yaml": _manifest(plugins=[]), "knowledge/../../evil.md": "x"})
         with pytest.raises(SnapshotError, match="unsafe path"):
             inspect_snapshot(data)
+
+
+# ── the provider-registry shape on import (#3128) ─────────────────────────────────────
+
+from types import SimpleNamespace  # noqa: E402 — section-local
+
+from graph.config import LangGraphConfig  # noqa: E402
+from graph.llm import create_llm  # noqa: E402
+
+KEY = "sk-" + "livekey" + "q" * 24
+LEGACY_PINNED = {"model": {"provider": "openai", "name": "protolabs/reasoning", "api_base": "https://src.example/v1"}}
+
+
+class TestOldSnapshotsMigrateOnStage:
+    """A snapshot exported before #3128 carries the retired fields and names the gateway key
+    `model.api_key`. It must still import — staged in the registry shape a current export
+    produces, with its credential asked for under the connection that uses it."""
+
+    def test_the_plan_asks_for_the_connection_credential(self):
+        plan = inspect_snapshot(_snapshot_no_plugins(config=LEGACY_PINNED))
+        assert [r["name"] for r in plan.required_secrets] == ["providers.gateway"]
+
+    def test_it_stages_in_the_registry_shape(self, tmp_path):
+        stage_snapshot(_snapshot_no_plugins(config=LEGACY_PINNED), tmp_path / "s")
+        doc = yaml.safe_load((tmp_path / "s" / "langgraph-config.yaml").read_text())
+        assert doc["providers"] == [{"id": "gateway", "type": "openai-compat", "base_url": "https://src.example/v1"}]
+        assert doc["model"]["name"] == "gateway:protolabs/reasoning"
+        # The alias bridge: restated FROM the registry for the readers that still use it.
+        assert doc["model"]["api_base"] == "https://src.example/v1"
+        assert "provider" not in doc["model"] and "api_key" not in doc["model"]
+
+    @pytest.mark.parametrize("supplied_as", ["providers.gateway", "model.api_key"])
+    def test_either_name_completes_it_and_lands_where_the_loader_reads(self, ws_root, supplied_as):
+        res = apply_snapshot(
+            _snapshot_no_plugins(config=LEGACY_PINNED),
+            name=f"v-{supplied_as.split('.')[0]}",
+            acknowledged=True,
+            install=False,
+            secrets={supplied_as: KEY},
+        )
+        assert res.complete, res.missing_secrets
+        ws = Path(res.path) / "config"
+        sec = yaml.safe_load((ws / "secrets.yaml").read_text())
+        assert sec["providers"]["gateway"] == KEY
+        assert sec["model"]["api_key"] == KEY  # the temporary mirror for the legacy readers
+        cfg = LangGraphConfig.from_yaml(ws / "langgraph-config.yaml")
+        assert cfg.provider_by_id("gateway").api_key == KEY
+        assert cfg.api_key == KEY
+
+    def test_a_custom_primary_connection_owns_the_gateway_key(self, tmp_path):
+        from graph.snapshot_import import _write_secrets
+
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "langgraph-config.yaml").write_text(
+            yaml.safe_dump(
+                {"providers": [{"id": "prod", "type": "openai-compat", "base_url": "https://prod/v1"}], "model": {"name": "prod:m"}}
+            )
+        )
+        plan = ImportPlan(agent_name="x", required_secrets=[{"name": "providers.prod", "was_set": True}])
+        assert _write_secrets(tmp_path, plan, {"model.api_key": KEY}) == []
+        sec = yaml.safe_load((tmp_path / "config" / "secrets.yaml").read_text())
+        assert sec == {"providers": {"prod": KEY}, "model": {"api_key": KEY}}
+
+
+# Legacy source layers an agent can hold, and the Host layers the import can land under:
+# absent, legacy-shaped (what `sync_host_model_layer` mirrors), and registry-shaped.
+_SOURCES = {
+    "pinned-openai": (LEGACY_PINNED, True),
+    "pinned-native": (
+        {
+            "model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5", "api_base": "https://src.example/v1"},
+            "routing": {"aux_model": "claude-haiku-4-5"},
+        },
+        True,
+    ),
+    "unpinned-native": ({"model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5"}}, False),
+    "name-only": ({"model": {"name": "protolabs/reasoning"}}, True),
+}
+_HOSTS = {
+    "no-host": None,
+    "legacy-host": {"model": {"name": "protolabs/fast", "provider": "openai", "api_base": "https://box.example/v1"}},
+    "registry-host": {
+        "model": {"api_base": "https://box.example/v1"},
+        "providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}],
+    },
+}
+
+
+@pytest.fixture
+def no_model_io(monkeypatch):
+    """Build models without network or OAuth stores: a native build records what it was asked."""
+    monkeypatch.setattr("graph.model_window.context_window_for", lambda cfg, model: None)
+    monkeypatch.setattr(
+        "graph.providers.build_native_oauth_llm",
+        lambda provider, config, *, model_name=None, reasoning_effort=None: SimpleNamespace(
+            native=provider, model=model_name or config.model_name
+        ),
+    )
+
+
+def _route(cfg: LangGraphConfig, model_name: str | None = None) -> tuple:
+    llm = create_llm(cfg, model_name=model_name)
+    if hasattr(llm, "native"):
+        return ("native", llm.native, llm.model)
+    key = llm.openai_api_key.get_secret_value() if llm.openai_api_key else ""
+    return ("gateway", str(llm.openai_api_base), key, llm.model_name)
+
+
+def _meaning(cfg: LangGraphConfig, aux: str | None) -> dict:
+    """Everything that decides where this agent's model traffic goes and how it authenticates:
+    the lead model's route, an aux slot's route, and the retired fields the gateway-only
+    readers (embeddings, gateway_client, the context-window probe, egress) still read."""
+    return {
+        "lead": _route(cfg),
+        "aux": _route(cfg, aux) if aux else None,
+        "model_provider": cfg.model_provider,
+        "api_base": cfg.api_base,
+        "api_key": cfg.api_key,
+    }
+
+
+@pytest.mark.parametrize("host", list(_HOSTS))
+@pytest.mark.parametrize("source", list(_SOURCES))
+def test_an_old_agent_imports_with_the_same_meaning(tmp_path, ws_root, monkeypatch, no_model_io, source, host):
+    """Export + import in the registry shape vs. what importing the same agent meant before
+    #3128 (config verbatim minus its key, the key filed under `model.api_key`), on every
+    Host shape. The model traffic must go to the same place with the same credential."""
+    layer, has_key = _SOURCES[source]
+    aux = (layer.get("routing") or {}).get("aux_model")
+    if _HOSTS[host] is not None:
+        host_file = tmp_path / "host-config.yaml"
+        host_file.write_text(yaml.safe_dump(_HOSTS[host]))
+        monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(host_file))
+
+    before = tmp_path / "before" / "config"
+    before.mkdir(parents=True)
+    (before / "langgraph-config.yaml").write_text(yaml.safe_dump(layer))
+    if has_key:
+        (before / "secrets.yaml").write_text(yaml.safe_dump({"model": {"api_key": KEY}}))
+    was = _meaning(LangGraphConfig.from_yaml(before / "langgraph-config.yaml"), aux)
+
+    src = tmp_path / "src" / "config"
+    src.mkdir(parents=True)
+    (src / "langgraph-config.yaml").write_text(yaml.safe_dump(layer))
+    (src / "secrets.yaml").write_text(yaml.safe_dump({"model": {"api_key": KEY}} if has_key else {}))
+    snap = build_snapshot(
+        config_yaml=src / "langgraph-config.yaml",
+        soul_path=src / "SOUL.md",
+        plugins_lock=tmp_path / "src" / "plugins.lock",
+        secrets_yaml=src / "secrets.yaml",
+        agent_name="vera",
+        secret_key_paths=SECRET_KEYS,
+        plugin_requirements=[],
+    )
+    config_text = yaml.safe_dump(snap.manifest["config"])
+    assert "api_base" not in config_text and "api_key" not in config_text and "provider:" not in config_text
+    res = apply_snapshot(
+        snap.data, name="vera-2", acknowledged=True, install=False, secrets={"providers.gateway": KEY} if has_key else {}
+    )
+    assert res.complete, res.missing_secrets
+    now = _meaning(LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml"), aux)
+    assert now == was
+
+
+def test_a_registry_shaped_agent_now_imports_its_gateway_everywhere(ws_root, tmp_path, no_model_io):
+    """The shape first-run setup writes. Before #3128 its key was never inventoried, and a
+    registry-only config leaves the gateway-only readers on the App-default endpoint."""
+    from graph.llm import _gateway_client_kwargs
+
+    src = tmp_path / "src" / "config"
+    src.mkdir(parents=True)
+    (src / "langgraph-config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://gw.example/v1"}],
+                "model": {"name": "gateway:protolabs/reasoning"},
+            }
+        )
+    )
+    (src / "secrets.yaml").write_text(yaml.safe_dump({"providers": {"gateway": KEY}}))
+    snap = build_snapshot(
+        config_yaml=src / "langgraph-config.yaml",
+        soul_path=src / "SOUL.md",
+        plugins_lock=tmp_path / "src" / "plugins.lock",
+        secrets_yaml=src / "secrets.yaml",
+        agent_name="wiz",
+        secret_key_paths=SECRET_KEYS,
+        plugin_requirements=[],
+    )
+    assert inspect_snapshot(snap.data).required_secrets[0]["name"] == "providers.gateway"
+    res = apply_snapshot(snap.data, name="wiz-2", acknowledged=True, install=False, secrets={"providers.gateway": KEY})
+    cfg = LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml")
+    assert _route(cfg) == ("gateway", "https://gw.example/v1", KEY, "protolabs/reasoning")
+    client = _gateway_client_kwargs(cfg, timeout=1)
+    assert client["base_url"] == "https://gw.example/v1"
+    assert client["headers"]["Authorization"] == f"Bearer {KEY}"

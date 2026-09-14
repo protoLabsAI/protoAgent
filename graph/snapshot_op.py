@@ -31,6 +31,12 @@ What the target must re-provide travels as ``required_secrets``: names and descr
 never values (Letta Agent File's null-on-export, the A2A card's ``securitySchemes``). So
 import can prompt instead of silently producing a broken agent.
 
+The config travels in the **provider-registry shape** (ADR 0106, #3128): never the retired
+``model.provider`` / ``model.api_base`` / ``model.api_key``. A model credential is named by
+the connection that uses it — ``providers.<id>`` — which is where the target's loader reads
+it from, and which also covers the registry keys a correctly-configured agent keeps in
+``secrets.yaml`` under ``providers:`` (a list of objects ``secret_paths()`` cannot describe).
+
 Host-free and unit-testable: every path is an argument, nothing imports ``server`` or
 reads ``STATE`` — the ``export_op`` / ``rewind_op`` shape.
 """
@@ -92,6 +98,10 @@ EXCLUDED_FILENAMES = frozenset(
 #: breach that never happened.
 NON_CREDENTIAL_KINDS = frozenset({"home-path"})
 
+#: The retired single-gateway key (ADR 0106). Still in ``secret_paths()`` while the field
+#: exists, but a snapshot names it by the connection it authenticates (``providers.<id>``).
+_RETIRED_GATEWAY_KEY = ("model", "api_key")
+
 EXCLUDED_SECTIONS = frozenset(
     {
         "secrets_manager",  # ADR 0080 bootstrap identity; its keys are secret_paths anyway
@@ -103,7 +113,7 @@ EXCLUDED_SECTIONS = frozenset(
 class SecretRequirement:
     """One credential the target must supply before the rehydrated agent works."""
 
-    name: str  # dotted config path ("model.api_key") or "mcp.<server>.env.<VAR>"
+    name: str  # dotted config path ("providers.gateway", "auth.token") or "mcp.<server>.env.<VAR>"
     kind: str  # "config" | "mcp_env" | "mcp_header" | "plugin"
     description: str = ""
     #: True when the source agent actually had a value here. A requirement discovered from
@@ -235,9 +245,13 @@ def redact_config_for_export(
     removed unconditionally, with no relocation and no leave-it-inline fallback. If we
     cannot prove a value is safe it does not ship.
     """
-    import copy
+    from graph.config import legacy_gateway_connection, to_registry_shape
 
-    clean = copy.deepcopy(doc) if isinstance(doc, dict) else {}
+    # ── layer 0: the provider-registry shape (#3128) ──
+    # Before anything else, so every layer below sees the shape that ships. It lifts every
+    # inline model credential out of the doc (a legacy `model.api_key`, a connection's
+    # `api_key`) — layer 1c inventories them by connection and discards the values.
+    clean, lifted = to_registry_shape(doc)
     required: list[SecretRequirement] = []
 
     # ── layer 1a: declared secret keys ──
@@ -246,6 +260,8 @@ def redact_config_for_export(
     # real ones — `model.api_key` (the gateway key the agent cannot run without) vanished
     # from the inventory entirely, which defeats the point of shipping an inventory.
     for section, key in secret_key_paths:
+        if (section, key) == _RETIRED_GATEWAY_KEY:
+            continue  # layer 1c names it by the connection it authenticates
         sect = clean.get(section)
         inline = isinstance(sect, dict) and key in sect
         in_overlay = _overlay_has(stored_secrets, section, key)
@@ -263,6 +279,42 @@ def redact_config_for_export(
         )
         if isinstance(sect, dict) and not sect:
             clean.pop(section, None)
+
+    # ── layer 1c: model-connection credentials (ADR 0106) ──
+    # A connection's key lives in `secrets.yaml` under `providers.<id>` — or, on a config
+    # the registry migrated in at load, under the retired `model.api_key`, which is the key
+    # of the connection `legacy_gateway_connection` names. Both are reported under the
+    # connection's name, because that is where the target's loader will look. The set is
+    # every connection with a key ANYWHERE (inline, stored, or legacy) — including ids this
+    # layer does not declare, which it inherits from its Host layer while holding the key
+    # itself (ADR 0106: keys are agent-scoped). A keyless endpoint is normal, not missing.
+    stored_keys = (stored_secrets or {}).get("providers")
+    stored_keys = stored_keys if isinstance(stored_keys, dict) else {}
+    gateway_id = legacy_gateway_connection(clean)
+    legacy_stored = _overlay_has(stored_secrets, "model", "api_key")
+    declared = [
+        str(e.get("id", "") or "").strip().lower()
+        for e in (clean.get("providers") if isinstance(clean.get("providers"), list) else [])
+        if isinstance(e, dict)
+    ]
+    for pid in dict.fromkeys([*declared, *lifted, *(str(k).strip().lower() for k in stored_keys), gateway_id]):
+        if not pid:
+            continue
+        was_set = (
+            bool(lifted.get(pid))
+            or _overlay_has(stored_secrets, "providers", pid)
+            or (pid == gateway_id and legacy_stored)
+        )
+        if not was_set:
+            continue
+        required.append(
+            SecretRequirement(
+                name=f"providers.{pid}",
+                kind="config",
+                description=f"API key for the `{pid}` model connection (stripped on export).",
+                was_set=True,
+            )
+        )
 
     for section in EXCLUDED_SECTIONS:
         clean.pop(section, None)
