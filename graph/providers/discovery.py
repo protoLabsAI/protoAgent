@@ -423,8 +423,9 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
         # rather than degrade. Fall back to the three lanes this function always
         # reported — gateway plus both subscriptions — so such a caller sees exactly what
         # it saw before. Retires with the legacy fields (no earlier than v0.152.0).
-        from graph.config import Provider
+        from graph.config import Provider, note_legacy_registry_floor
 
+        note_legacy_registry_floor("available_model_lanes")
         entries = [Provider(id="gateway", type="openai-compat", label=_PROVIDER_LABELS["gateway"])]
         entries += [
             Provider(id=t, type=t, label=_PROVIDER_LABELS.get(t, t)) for t in sorted(NATIVE_OAUTH_PROVIDERS)

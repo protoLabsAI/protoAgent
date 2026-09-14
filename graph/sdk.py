@@ -82,7 +82,9 @@ def gateway_client(*, timeout: float | None = None) -> Any:
     from graph.config import LangGraphConfig
     from graph.llm import gateway_client as _factory
 
-    cfg = STATE.graph_config or LangGraphConfig()
+    # Before the runtime has loaded a config there is still a gateway to describe: App
+    # defaults WITH their registry, never a bare LangGraphConfig() (#3128).
+    cfg = STATE.graph_config or LangGraphConfig.app_defaults()
     return _factory(cfg, **({} if timeout is None else {"timeout": timeout}))
 
 
