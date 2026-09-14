@@ -62,7 +62,9 @@ def test_awaiting_true_for_pending_schedule_on_this_session(clear_triggers, monk
 # The scheduler deletes a fired one-shot only after the turn it started returns, so while
 # the goal loop runs, that job is still listed. Counting it paused the drive on a trigger
 # that was about to vanish, and nothing ever resumed the goal.
-def _job(job_id, *, context_id="s", schedule="2026-09-13T10:00:00+00:00", next_fire=None):
+# A one-shot that is already due unless a test says otherwise: a date far in the past, so
+# "due" never depends on when the suite runs.
+def _job(job_id, *, context_id="s", schedule="2000-01-01T00:00:00+00:00", next_fire=None):
     return SimpleNamespace(
         id=job_id, context_id=context_id, schedule=schedule, next_fire=next_fire or schedule, prompt="p"
     )
@@ -81,6 +83,16 @@ def test_the_one_shot_firing_this_turn_is_not_awaited(clear_triggers, monkeypatc
         assert chat_mod._awaiting_self_resume("s") is False
     # Outside that turn the same row is an ordinary pending resume.
     assert chat_mod._awaiting_self_resume("s") is True
+
+
+@pytest.mark.parametrize("next_fire", [None, "", "not-a-date"])
+def test_an_unreadable_next_fire_on_the_firing_job_counts_as_pending(clear_triggers, monkeypatch, next_fire):
+    # _is_spent_firing_job's documented fail-safe: a next_fire it can't read is treated as a
+    # pending resume, never as the spent one-shot. Pinned so a refactor can't flip it quietly.
+    job = SimpleNamespace(id="wait:s", context_id="s", schedule="2000-01-01T00:00:00+00:00", next_fire=next_fire, prompt="p")
+    monkeypatch.setattr(rs.STATE, "scheduler", SimpleNamespace(list_jobs=lambda: [job]), raising=False)
+    with _fired_by("wait:s"):
+        assert chat_mod._awaiting_self_resume("s") is True
 
 
 def test_another_pending_job_still_counts_while_one_fires(clear_triggers, monkeypatch):
