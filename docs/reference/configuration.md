@@ -125,7 +125,7 @@ One entry per subagent name. Each entry matches a `SubagentConfig` in `graph/sub
 |---|---|---|
 | `enabled` | `true` | If false, the subagent is still registered but dispatches return "disabled" errors. |
 | `tools` | `[]` | Allowlist. Tool names not listed here are invisible to this subagent. |
-| `max_turns` | `30` | Recursion cap. |
+| `max_turns` | `30` | Tool rounds per delegation: the subagent can call tools this many times, then it must answer. The runner converts this into LangGraph's step-based `recursion_limit` using the compiled middleware stack, so adding middleware never shrinks it. Round `max_turns + 1` hard-stops, and the partial output comes back marked `hard-stopped at max_turns`. |
 
 Two `subagents`-block keys govern **fan-out** via the `task_batch` tool (concurrent delegation):
 

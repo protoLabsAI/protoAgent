@@ -11,6 +11,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langgraph.constants import START
 from langgraph.errors import GraphBubbleUp
 from langgraph.prebuilt import InjectedState
 
@@ -617,6 +618,57 @@ async def _emit_subagent_usage(usage_rows: list[dict]) -> None:
         logging.getLogger(__name__).debug("[subagent] usage rows not dispatched to the turn stream", exc_info=True)
 
 
+# Node-name suffixes `create_agent` gives middleware hooks that run ONCE per invocation
+# (entry / exit), as opposed to once per model pass (`.before_model` / `.after_model`).
+_RUN_ONCE_NODE_SUFFIXES = (".before_agent", ".after_agent")
+
+
+def _subagent_recursion_limit(agent_graph: Any, max_turns: int) -> int:
+    """The LangGraph ``recursion_limit`` that gives a subagent exactly ``max_turns`` tool rounds.
+
+    ``max_turns`` caps tool rounds. That is what ``SubagentConfig`` documents, and what
+    every subagent prompt promises the model ("hard stop at max_turns"). LangGraph's
+    ``recursion_limit`` counts something else: super-steps, one per graph NODE executed,
+    and ``create_agent`` compiles each middleware ``before_model`` / ``after_model`` hook
+    into a node of its own. The old code passed ``max_turns`` through raw, which bought
+    about half the promised rounds on a bare stack and about a third once #3199 added a
+    ``before_model`` node. ``max_turns=4`` then hard-stopped right after its first tool
+    result (#3510).
+
+    The step costs are read from the COMPILED graph's node set rather than a constant,
+    so a middleware added to the subagent stack later moves the budget with it instead
+    of quietly shrinking it:
+
+    - once per run: ``__start__`` and every ``*.before_agent`` / ``*.after_agent`` node;
+    - per model pass: ``model``, every ``*.before_model`` / ``*.after_model`` node, and
+      any node not recognised here (over-budgeting is safe; under-budgeting is the bug);
+    - per tool round: one model pass plus ``tools``. Parallel tool calls in one round
+      are a single super-step.
+
+    ``max_turns`` rounds plus the answering pass fit exactly: a run completes only if it
+    needs at most ``recursion_limit`` steps. The model call that would open round
+    ``max_turns + 1`` still runs, since it might have been the answer. LangGraph lets one
+    node past the limit execute before it raises (``stop = step + limit + 1``, checked
+    before it knows nothing is left to run), so that round's tool calls execute too. The
+    model never sees their results, though: the run hard-stops there and the caller
+    salvages it as before. The raw budget had the same one-node overrun.
+    """
+    once = per_pass = 0
+    has_tools = False
+    for name in getattr(agent_graph, "nodes", None) or ():
+        if name == "tools":
+            has_tools = True
+        elif name == START or name.endswith(_RUN_ONCE_NODE_SUFFIXES):
+            once += 1
+        else:
+            per_pass += 1
+    if not per_pass:
+        # Not a compiled graph (a test double): budget a bare start + model + tools loop.
+        once, per_pass, has_tools = 1, 1, True
+    per_round = per_pass + (1 if has_tools else 0)
+    return max(0, max_turns) * per_round + per_pass + once
+
+
 async def _run_subagent(
     *,
     config,
@@ -822,7 +874,11 @@ async def _run_subagent_inner(
     # tool frames carry `parent_task_id` — letting the console nest them under the
     # `task` card BY ID rather than by frame ordering (the delegation runs detached
     # via ensure_future, so its on_tool_end races AHEAD of these child frames).
-    sub_run_config: dict[str, Any] = {"recursion_limit": sub_config.max_turns}
+    # `max_turns` counts TOOL ROUNDS; LangGraph's recursion_limit counts graph steps, and
+    # each round costs one step per node the compiled stack runs. Never pass it raw (#3510).
+    sub_run_config: dict[str, Any] = {
+        "recursion_limit": _subagent_recursion_limit(subagent, sub_config.max_turns),
+    }
     if parent_task_id:
         sub_run_config["metadata"] = {"parent_task_id": parent_task_id}
 
