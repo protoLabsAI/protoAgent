@@ -824,56 +824,100 @@ def test_auto_captured_payloads_are_clipped_with_a_marker_too(ledger):
     assert len(detail) == 300 and detail.endswith("…")
 
 
-def test_the_working_state_provider_stays_far_inside_its_inline_budget(wired):
-    """It runs inline on EVERY turn. `graph.work_providers.SLOW_PROVIDER_S` is the line;
-    measured ~6.5ms cold at the ledger's 2000-entry cap, so this asserts an order of
-    magnitude of headroom rather than the exact number."""
-    import os
-    import time
+class _CountedRecord(dict):
+    """A parsed ledger line that tallies every field lookup the projection makes on it."""
 
-    from graph.work_providers import SLOW_PROVIDER_S
-    from plugins.friction import _WORK_CACHE, open_friction_work
+    def __init__(self, data: dict, counts: dict):
+        super().__init__(data)
+        self._counts = counts
 
-    path = _ledger_for(wired)
+    def get(self, key, default=None):
+        self._counts["field_reads"] += 1
+        return super().get(key, default)
+
+    def __getitem__(self, key):
+        self._counts["field_reads"] += 1
+        return super().__getitem__(key)
+
+
+def _count_ledger_work(monkeypatch, path: Path) -> dict:
+    """From now on, tally what the friction plugin does to the ledger at ``path``: opens of
+    it (``read_text``/``read_bytes`` go through ``Path.open``), the plugin's ``json.loads``
+    calls, and field lookups on the records those return. Zero the dict to start a window."""
+    from plugins import friction
+
+    counts = {"opens": 0, "parses": 0, "field_reads": 0}
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        if self == path:
+            counts["opens"] += 1
+        return real_open(self, *args, **kwargs)
+
+    class _CountingJson:
+        def __getattr__(self, name):  # dumps, JSONDecodeError, … pass straight through
+            return getattr(json, name)
+
+        def loads(self, *args, **kwargs):
+            counts["parses"] += 1
+            rec = json.loads(*args, **kwargs)
+            return _CountedRecord(rec, counts) if isinstance(rec, dict) else rec
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    monkeypatch.setattr(friction, "json", _CountingJson())
+    return counts
+
+
+def _write_signal_ledger(path: Path, lines: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
-        for i in range(2000):
+        for i in range(lines):
             fh.write(json.dumps({
                 "ts": f"2026-08-{(i % 28) + 1:02d}T00:00:00+00:00", "kind": "harness",
                 "summary": f"signal {i % 97}", "severity": "major", "source": "auto",
                 "detail": "d" * 400,
             }) + "\n")
 
-    # Reference: the irreducible work — read every line and parse it. The projection
-    # cannot be faster than this, so it isolates the provider's OWN cost from how fast
-    # the machine is. A bare wall-clock ceiling cannot: this took 621ms on a Windows CI
-    # runner against a ~6.5ms local measurement, ~95x, with nothing wrong in the code —
-    # a shared runner's file I/O is simply that variable, and a flake on an unrelated PR
-    # is worse than no guard.
-    ref_started = time.perf_counter()
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            json.loads(line)
-    reference = max(time.perf_counter() - ref_started, 1e-6)
 
-    _WORK_CACHE["stamp"] = None
-    started = time.perf_counter()
-    open_friction_work()
-    cold = time.perf_counter() - started
+def test_the_working_state_provider_does_one_pass_over_the_ledger_and_caches_it(wired, monkeypatch):
+    """It runs INLINE ON EVERY TURN (`graph.work_providers.SLOW_PROVIDER_S` is the line the
+    runtime logs against), so it must never re-read the ledger per entry or grow worse than
+    linearly with it — and must not read it at all while it is unchanged.
 
-    # The regression this actually guards is ALGORITHMIC — someone making the projection
-    # quadratic over the ledger, or re-reading it per entry. That shows up as a blown
-    # RATIO on any machine; it does not need an absolute number to be visible.
-    assert cold < reference * 8, (
-        f"cold projection took {cold * 1000:.0f}ms vs a {reference * 1000:.0f}ms "
-        f"read+parse reference ({cold / reference:.1f}x) — the provider is doing "
-        f"substantially more than one pass over the ledger"
+    Those properties are COUNTED, not timed (#3480). Two wall-clock versions of this test —
+    an absolute 50ms bound (#3310), then a ratio against a read-and-parse reference with a
+    CI backstop (#3422) — failed unrelated PRs on loaded Linux and Windows runners at
+    233-621ms with nothing wrong in the code: one sample of a shared runner's clock bounds
+    nothing. An operation count is identical on every machine, so it can be exact where a
+    timing had to be loose."""
+    from plugins.friction import _WORK_CACHE, open_friction_work
+
+    path = _ledger_for(wired)
+    counts = _count_ledger_work(monkeypatch, path)
+
+    def cold_projection(lines: int) -> dict:
+        _write_signal_ledger(path, lines)
+        _WORK_CACHE["stamp"] = None
+        counts.update(dict.fromkeys(counts, 0))
+        assert open_friction_work()  # every entry is major: there is something to project
+        return dict(counts)
+
+    small, big = cold_projection(500), cold_projection(2000)
+    for lines, cost in ((500, small), (2000, big)):
+        assert cost["opens"] == 1, f"{lines} lines: one projection opened the ledger {cost['opens']} times"
+        # > 0 proves the shim sees the parses (a plugin that stopped calling `json.loads`
+        # through its module global would otherwise pass this vacuously).
+        assert 0 < cost["parses"] <= lines, f"{lines} lines: {cost['parses']} json.loads calls, at most one per line"
+    # 4x the lines is ~4x the field lookups when each record is visited a fixed number of
+    # times; a projection that rescans the records for every record is ~16x.
+    assert big["field_reads"] <= 5 * small["field_reads"], (
+        f"field lookups grew {big['field_reads'] / small['field_reads']:.1f}x for 4x the ledger "
+        f"({small['field_reads']} -> {big['field_reads']}): the projection is superlinear"
     )
-    # Absolute ceiling kept as a backstop, but only where wall clock means something.
-    # `SLOW_PROVIDER_S / 5` is the real target and holds locally; CI runners get the
-    # full threshold, which is the line the runtime actually logs against.
-    ceiling = SLOW_PROVIDER_S if os.environ.get("CI") else SLOW_PROVIDER_S / 5
-    assert cold < ceiling, f"cold projection took {cold * 1000:.0f}ms (ceiling {ceiling * 1000:.0f}ms)"
+
+    counts.update(dict.fromkeys(counts, 0))
+    open_friction_work()  # the ledger is unchanged, so its (mtime, size) stamp still matches
+    assert counts["opens"] == counts["parses"] == 0, f"a warm call re-read the ledger: {counts}"
 
 
 def test_the_api_serves_its_own_namespace_and_keeps_the_documented_alias(monkeypatch, tmp_path):
