@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.166.0",
+    "date": "2026-09-14",
+    "changes": [
+      "protoagent fleet talks to the running hub (#3467).",
+      "The fleet deck: protoagent fleet with no arguments (#3468).",
+      "Talk to a fleet member from the deck (#3469).",
+      "Act on a fleet member's turn from the deck (#3470).",
+      "Manage the fleet from the deck and the CLI (#3471).",
+      "Every hub on the box, from the deck and the CLI (#3472).",
+      "The fleet deck ships: in the desktop binary, in the docs, in the ADRs (#3473).",
+      "Frozen desktop servers keep their heartbeats (#3482).",
+      "A new fleet member never takes a port another instance on the machine records (#3492).",
+      "A watch-woken turn no longer mistakes its own wake for another one (#3494).",
+      "Harvested memories carry the date of the conversation, not the harvest (#3494).",
+      "The fleet deck has its own guide, and member ports are documented as machine-wide (#3496)."
+    ]
+  },
+  {
     "version": "v0.165.0",
     "date": "2026-09-12",
     "changes": [
