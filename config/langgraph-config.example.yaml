@@ -12,12 +12,19 @@
 # `gateway`, and `<id>:<model>` picks a connection, so slots can mix a gateway with a
 # Claude / ChatGPT subscription. Manage them in Settings ▸ Model ▸ Connections.
 #
-# Like `model.api_base` below, this is box-shared: set it on the Host and every agent
-# on the box inherits it. An agent entry is merged FIELD BY FIELD over the host entry
-# with the same id, so an agent-side `base_url: ""` REPLACES the box endpoint rather
-# than deferring to it — leave a field out to inherit it. Keys belong in secrets.yaml
+# This is box-shared: set it on the Host and every agent on the box inherits it. An
+# agent entry is merged FIELD BY FIELD over the host entry with the same id, so an
+# agent-side `base_url: ""` REPLACES the box endpoint rather than deferring to it —
+# leave a field out to inherit it. A declared connection's key belongs in secrets.yaml
 # (`providers: {gateway: sk-...}`), which wins over an inline `api_key`; the Host file
 # cannot hand one out.
+#
+# Left commented on purpose: an active list here would be copied into every new
+# instance, shadowing its box's connections and turning off the load-time migration —
+# which, for a config with NO `providers:` block, builds `gateway` from the App default
+# endpoint (http://gateway:4000/v1) with its key from secrets.yaml `model.api_key` or
+# OPENAI_API_KEY. That is how this template runs until you declare connections here or
+# in Settings ▸ Model ▸ Connections.
 #
 # providers:
 #   - id: gateway
@@ -33,27 +40,31 @@
 #     type: openai-codex                   # ChatGPT/Codex plan — no endpoint, no key
 
 model:
-  # provider / name / api_base are HOST-scoped (ADR 0047) — box-wide defaults set
-  # on the Host console (Settings ▸ Host ▸ Model & Routing) or in host-config.yaml,
-  # NOT here. Uncommenting them in this agent layer would shadow the host value
-  # (agent > host in the cascade), so a Host-console edit would appear to "reset".
-  # The App defaults (shown below) already apply; uncomment ONLY to pin a per-agent
-  # override that should deliberately outrank the box default.
-  #   provider: openai
-  #   name: protolabs/reasoning        # LiteLLM gateway alias → swapping the model
-  #                                    # is a gateway edit, not a fork code change
-  #   api_base: http://gateway:4000/v1
+  # `name` is HOST-scoped (ADR 0047) — a box-wide default set on the Host console
+  # (Settings ▸ Host ▸ Model & Routing) or in host-config.yaml, NOT here. Uncommenting
+  # it in this agent layer would shadow the host value (agent > host in the cascade),
+  # so a Host-console edit would appear to "reset". The App default (shown below)
+  # already applies; uncomment ONLY to pin a per-agent override.
+  #   name: protolabs/reasoning             # bare → the `gateway` connection; swapping
+  #                                         # the model is a gateway edit, not a fork
+  #                                         # code change
+  #   name: local:qwen3-32b                 # `<id>:<model>` picks a connection above
   #
-  # Native OAuth-subscription providers (ADR 0097) — run Claude / ChatGPT on your OWN
-  # coding-agent plan, straight through the native pipeline (no gateway, no ACP):
-  #   provider: anthropic-oauth        # Claude Pro/Max. Reads Claude Code's own token
-  #   name: claude-sonnet-4-5          # (~/.claude/.credentials.json or
-  #                                    # CLAUDE_CODE_OAUTH_TOKEN). name must be a real
-  #                                    # Claude model id, NOT a gateway alias.
-  #   provider: openai-codex           # ChatGPT/Codex plan (Responses API). Bootstraps
-  #   name: gpt-5-codex                # from ~/.codex/auth.json, then owns its refresh.
-  #                                    # ToS gray area — opt-in. name = real OpenAI id.
-  api_key: ""  # falls back to OPENAI_API_KEY env (gateway path only)
+  # Native OAuth subscriptions (ADR 0097) run Claude / ChatGPT on your OWN coding-agent
+  # plan, straight through the native pipeline (no gateway, no ACP). Declare the
+  # connection above, then name a real model id on it — NOT a gateway alias:
+  #   name: anthropic-oauth:claude-sonnet-4-5  # Claude Pro/Max. Reads Claude Code's own
+  #                                            # token (~/.claude/.credentials.json or
+  #                                            # CLAUDE_CODE_OAUTH_TOKEN).
+  #   name: openai-codex:gpt-5-codex           # ChatGPT/Codex plan (Responses API).
+  #                                            # Bootstraps from ~/.codex/auth.json, then
+  #                                            # owns its refresh. ToS gray area — opt-in.
+  #
+  # `provider`, `api_base` and `api_key` are RETIRING (#3128): the connections above
+  # replace them, so this template sets none of them. Until that lands a few paths still
+  # read them directly — the unqualified default route, embeddings / transcription, the
+  # context-window probe, egress auto-allow and `--setup` validation — so a subscription
+  # PRIMARY still wants `provider: anthropic-oauth` (or `openai-codex`) beside its name.
   temperature: 0.2
   max_tokens: 32768  # 32k — required headroom for the Qwen models we run
   max_iterations: 2000  # LangGraph recursion_limit for the tool loop — ~8 steps/tool call

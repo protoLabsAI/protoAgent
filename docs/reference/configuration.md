@@ -7,11 +7,13 @@
 ## Full example
 
 ```yaml
+providers:
+  - id: gateway
+    type: openai-compat
+    base_url: http://gateway:4000/v1   # its key lives in secrets.yaml → providers.gateway
+
 model:
-  provider: openai
-  name: protolabs/reasoning
-  api_base: http://gateway:4000/v1
-  api_key: ""
+  name: gateway:protolabs/reasoning
   temperature: 0.2
   max_tokens: 32768
   max_iterations: 2000
@@ -39,14 +41,51 @@ knowledge:
   top_k: 5
 ```
 
+## `providers`
+
+The model connections ([ADR 0106](/adr/0106-provider-registry)): one entry per endpoint or
+subscription the agent can reach. Managed in **Settings ▸ Model ▸ Connections**; every model
+slot names a model *within* one of them.
+
+| Key | What |
+|---|---|
+| `id` | Slug, `[a-z0-9][a-z0-9_-]*`, **immutable** — stored model values name it (`<id>:<model>`), including in other instances' configs via the Host layer. Rename = remove and re-add. |
+| `type` | `openai-compat` (a LiteLLM gateway, vLLM, Ollama, LM Studio …), `anthropic-oauth` (Claude Pro/Max) or `openai-codex` (ChatGPT/Codex plan). Several entries may share a type. |
+| `label` | Display name only; freely editable. |
+| `base_url` | The endpoint, for `openai-compat`. Subscriptions have none. |
+| `api_key` | **Secret — not stored here.** Kept in `config/secrets.yaml` under `providers: {<id>: …}` (see [Secrets](#secrets)). A keyless endpoint (a local vLLM) is normal. |
+
+```yaml
+providers:
+  - id: gateway
+    type: openai-compat
+    base_url: https://api.proto-labs.ai/v1
+  - id: local
+    type: openai-compat
+    base_url: http://127.0.0.1:8080/v1
+  - id: anthropic-oauth
+    type: anthropic-oauth
+model:
+  name: gateway:protolabs/reasoning
+```
+
+- **Box-shared, per-field.** A Host-layer (`host-config.yaml`) list is inherited by every
+  instance on the box; an instance entry with the same `id` overrides it **field by field**.
+  So leave a field out to inherit it — an empty `base_url: ""` *replaces* the box endpoint
+  rather than deferring to it. Keys never come from the Host layer.
+- **A connection is resolved strictly from its own fields.** Its key is never borrowed from
+  another connection, from `model.api_key` or from `OPENAI_API_KEY`.
+- **No `providers:` block** (the shipped template) means the loader builds the registry the
+  retiring fields imply: a `gateway` entry from `model.api_base` (App default
+  `http://gateway:4000/v1`) keyed from `model.api_key` or `OPENAI_API_KEY`, plus the lead
+  subscription when `model.provider` names one. **`providers: []`** is different — it is what
+  removing the last connection writes, and it stays empty.
+
 ## `model`
 
 | Key | Default | What |
 |---|---|---|
-| `provider` | `openai` | LangChain LLM provider. The template's `graph/llm.py` only uses `openai` (via LiteLLM gateway). |
-| `name` | `protolabs/reasoning` | Gateway alias or direct model name. |
-| `api_base` | `http://gateway:4000/v1` | OpenAI-compatible endpoint. |
-| `api_key` | `""` | **Secret — not stored here.** Managed in the untracked `config/secrets.yaml` (see [Secrets](#secrets)); falls back to the `OPENAI_API_KEY` env var. |
+| `name` | `protolabs/reasoning` | The lead model. `<id>:<model>` names the connection that serves it (`gateway:protolabs/reasoning`, `anthropic-oauth:claude-sonnet-5`); a bare gateway alias routes to the gateway. |
 | `temperature` | `0.2` | Sampling temperature. |
 | `max_tokens` | `32768` | Per-call output cap. 32k headroom for the Qwen models we run. |
 | `max_iterations` | `2000` | LangGraph `recursion_limit` for the tool loop — counts graph steps through the middleware chain, not tool calls 1:1 (~8 steps/tool call, so 2000 ≈ 250 tool calls/turn). |
@@ -61,20 +100,29 @@ knowledge:
 
 All sampling params are optional — omit to use the gateway / model-card defaults. `temperature`, `max_tokens`, `top_p`, and `presence_penalty` are standard OpenAI fields; `top_k`, `repetition_penalty`, and `chat_template_kwargs` are sent via `extra_body` for vLLM-compatible gateways.
 
+**Retiring: `model.provider`, `model.api_base`, `model.api_key`** (#3128). The `providers:`
+registry replaces all three, and Settings no longer renders them. They are still honored —
+a config with no `providers:` block has its registry built from them at load — and, until
+#3128 lands, a few paths still read them directly rather than through the registry: the
+unqualified default model route, knowledge embeddings and transcription, the plugin
+`gateway_client`, the context-window probe, the egress auto-allow (below) and `--setup`
+validation. A subscription *lead* therefore still wants `model.provider: anthropic-oauth`
+(or `openai-codex`) beside its qualified `name` for now.
+
 ## Secrets
 
-Three **core** fields are secrets and are **never written to the tracked config YAML**: the model `api_key`, the A2A `auth.token`, and the A2A `auth.federation_token` (ADR 0066). (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
+The **core** secrets are **never written to the tracked config YAML**: each model connection's key (`providers.<id>`; the retiring `model.api_key` on a config with no `providers:` block), the A2A `auth.token`, and the A2A `auth.federation_token` (ADR 0066). (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
 
 ```yaml
 # config/secrets.yaml — never committed
-model:
-  api_key: sk-...
+providers:
+  gateway: sk-...             # the key of the `gateway` connection (one line per keyed id)
 auth:
   token: bearer-...
   federation_token: fed-...   # optional (ADR 0066) — semi-trusted peers get THIS, not `token`
 ```
 
-`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts all three fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value. (`auth.federation_token` doesn't share `from_yaml`'s env-var fallback above — its own env source, `A2A_FEDERATION_TOKEN`, is read one layer down, by the A2A auth guard itself; see "Federation token" below.)
+`LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). A declared connection's key has no env tier — `OPENAI_API_KEY` only feeds the `gateway` the loader builds for a config with no `providers:` block. So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts all three fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value. (`auth.federation_token` doesn't share `from_yaml`'s env-var fallback above — its own env source, `A2A_FEDERATION_TOKEN`, is read one layer down, by the A2A auth guard itself; see "Federation token" below.)
 
 ### External secrets manager (ADR 0080)
 
@@ -311,7 +359,7 @@ tracing:
   host: https://cloud.langfuse.com
   # public_key / secret_key are SECRETS — the Settings UI stores them in
   # secrets.yaml, never here. Hand-editing them into this file works, but the
-  # next save relocates them to secrets.yaml (like model.api_key).
+  # next save relocates them to secrets.yaml (like every other credential).
 ```
 
 | Key | Default | What |
@@ -484,9 +532,9 @@ routing:
 
 ### Mixing a subscription with the gateway
 
-A native OAuth provider (`model.provider: anthropic-oauth` / `openai-codex`, [ADR 0097](/adr/0097-native-oauth-subscription-providers)) bypasses the gateway entirely — so LiteLLM's own `fallbacks:` chain can't see those calls, and a subscription hiccup or an expired credential is otherwise a hard stop.
+A native OAuth connection (`type: anthropic-oauth` / `openai-codex`, [ADR 0097](/adr/0097-native-oauth-subscription-providers)) bypasses the gateway entirely — so LiteLLM's own `fallbacks:` chain can't see those calls, and a subscription hiccup or an expired credential is otherwise a hard stop.
 
-Any slot that takes a model name — `routing.fallback_models`, `routing.aux_model`, `compaction.model`, `goal.eval_model`, `model.favorites`, a subagent's `model` — can **name its own provider**, so slots don't all inherit `model.provider`:
+Any slot that takes a model name — `routing.fallback_models`, `routing.aux_model`, `compaction.model`, `goal.eval_model`, `model.favorites`, a subagent's `model` — can **name its own connection** (`<id>:<model>`, [ADR 0106](/adr/0106-provider-registry)), so slots don't all follow the lead. The ids below are the default ones; any registered [`providers`](#providers) id works the same way:
 
 | Slot value | Routes to |
 |---|---|
@@ -495,7 +543,7 @@ Any slot that takes a model name — `routing.fallback_models`, `routing.aux_mod
 | `openai-codex:gpt-5.6-sol` | your ChatGPT subscription |
 | `acp:claude` | that CLI coding agent over ACP |
 | `protolabs/coder` | the gateway (shorthand — a `/` implies a gateway alias) |
-| `claude-sonnet-5` | whatever `model.provider` is |
+| `claude-sonnet-5` | the lead provider — the retiring `model.provider` (the gateway by default) |
 
 Hold a gateway key and both subscriptions and you can mix all of them at once — Claude for review, Codex for code, the gateway for cheap bulk work — whatever the main brain runs on. The qualified form is the one to reach for when two providers could plausibly serve the same model id.
 
@@ -509,15 +557,21 @@ conversation itself is unaffected.
 :::
 
 ```yaml
+providers:
+  - id: gateway
+    type: openai-compat
+    base_url: https://api.proto-labs.ai/v1
+  - id: anthropic-oauth
+    type: anthropic-oauth
 model:
-  provider: anthropic-oauth      # main brain on your Claude subscription
-  name: claude-sonnet-5
+  name: anthropic-oauth:claude-sonnet-5        # main brain on your Claude subscription
+  provider: anthropic-oauth                    # retiring (#3128) — see the note under `model`
 routing:
-  fallback_models: [protolabs/coder]   # degrade to the gateway if the subscription can't serve
-  aux_model: protolabs/fast            # cheap calls never touch the subscription
+  fallback_models: [gateway:protolabs/coder]   # degrade to the gateway if the subscription can't serve
+  aux_model: gateway:protolabs/fast            # cheap calls never touch the subscription
 ```
 
-Requires a gateway key (`model.api_key` or `OPENAI_API_KEY`); without one the alias is ignored with a warning, since there'd be nothing to route to. A gateway alias as the **main** `model.name` under a native provider is still an error — that's a misconfiguration, not a fallback.
+A `gateway:` slot needs that connection's endpoint (and its key, if it takes one). A bare `/`-alias slot under a subscription lead routes through the retiring single-gateway fields instead, so it needs `model.api_key` or `OPENAI_API_KEY`; without one the alias is ignored with a warning, since there'd be nothing to route to. A gateway alias as the **main** `model.name` under a native provider is still an error — that's a misconfiguration, not a fallback.
 
 #### Removing a connection that slots still name
 
