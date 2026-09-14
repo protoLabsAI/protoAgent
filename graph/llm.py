@@ -363,6 +363,12 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     prefix, sep, rest = raw.partition(":")
     if not sep:
         return "", raw
+    if config is None or not config.providers:
+        # Only the legacy union below can claim a prefix here. Lazy import: resolved at
+        # call time, so the guard test can make it fatal (graph.config is already loaded).
+        from graph.config import note_legacy_registry_floor
+
+        note_legacy_registry_floor("split_slot_target")
     # Registered ids UNION the legacy three — the second half is a compatibility floor,
     # not redundancy. Every qualified value stored before ADR 0106 names one of those
     # three, the old hardcoded tuple accepted them unconditionally, and a migrated

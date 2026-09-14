@@ -842,6 +842,35 @@ _LEGACY_PROVIDER_LABELS = {
 }
 
 
+_LEGACY_FLOOR_SEEN: set[str] = set()
+
+
+def note_legacy_registry_floor(where: str) -> None:
+    """Record that a config with NO provider registry reached ``where`` (#3128).
+
+    `split_slot_target` and `available_model_lanes` fall back to the three legacy lanes
+    for an empty registry — the compatibility floor ADR 0106 scheduled for removal. Every
+    shipped config source now carries a registry (`from_dict` migrates one in, and
+    `LangGraphConfig.app_defaults()` is the unloaded equivalent), so reaching this means a
+    caller built a bare `LangGraphConfig()` — or the operator removed every connection
+    (`providers: []`), the one shape still read through the floor until the removal PR
+    decides what an empty registry means.
+
+    A seam rather than inline logging so the guard test can turn it into a hard failure
+    and prove no shipped flow depends on the floor. Logged at DEBUG, once per call site:
+    a fork or plugin tripping it should be findable, not noisy.
+    """
+    if where in _LEGACY_FLOOR_SEEN:
+        return
+    _LEGACY_FLOOR_SEEN.add(where)
+    log.debug(
+        "[config] %s received a config with no provider registry and fell back to the legacy "
+        "lanes (ADR 0106 floor, retiring with #3128) — build configs through from_yaml / "
+        "from_dict / LangGraphConfig.app_defaults(), not a bare LangGraphConfig()",
+        where,
+    )
+
+
 @dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
@@ -1954,13 +1983,30 @@ class LangGraphConfig:
         p = Path(path)
         merged, secrets, present = _read_config_docs(p)
         if not present:
-            return cls()
+            # Not a bare `cls()`: that has an EMPTY registry, which every model-routing
+            # reader then answers from the legacy floor (#3128). No file and no host
+            # layer still means "App defaults", and App defaults imply a registry.
+            return cls.app_defaults()
 
         # External secrets-manager hydration (ADR 0080) — before the parse, so the
         # env fallbacks consulted below (and later, lazily, by create_llm / plugin
         # requires_env gates) already see manager-sourced values.
         _hydrate_external_secrets(merged, secrets)
         return cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
+
+    @classmethod
+    def app_defaults(cls) -> "LangGraphConfig":
+        """The App layer alone: dataclass defaults WITH the provider registry they imply.
+
+        Use this, never a bare ``LangGraphConfig()``, wherever the result can reach model
+        routing. A bare construction skips the ADR 0106 migration `from_dict` performs, so
+        its registry is empty and `split_slot_target` / `available_model_lanes` can only
+        answer it from their legacy floor — the dependency #3128 has to remove before that
+        floor can go. Every field except ``providers`` is identical to ``cls()``.
+        """
+        config = cls()
+        config.providers = _migrated_providers(config)
+        return config
 
     def provider_by_id(self, pid: str) -> "Provider | None":
         """The registered connection named `pid`, or None. Case-insensitive."""
