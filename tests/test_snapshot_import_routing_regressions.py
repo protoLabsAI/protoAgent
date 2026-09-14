@@ -95,13 +95,10 @@ def _roundtrip(env, layer, secrets, host=None):
     return source, imported, plan
 
 
-_AUX = [None]
-
-
 def test_A_native_primary_in_model_name_bare_slot_flips_gateway_to_subscription(env):
     """Registry-way subscription lead: model.provider is ui_hidden since ADR 0106, so the lead
     is a qualified model.name and model.provider is absent (default "openai")."""
-    aux = _AUX[0] = "gpt-5-mini"
+    aux = "gpt-5-mini"
     layer = {
         "providers": [{"id": "anthropic-oauth", "type": "anthropic-oauth"}],
         "model": {"name": "anthropic-oauth:claude-sonnet-4-5"},
@@ -115,7 +112,7 @@ def test_A_native_primary_in_model_name_bare_slot_flips_gateway_to_subscription(
 
 def test_B_LEGACY_native_lead_with_gateway_qualified_primary_flips_subscription_to_gateway(env):
     """Legacy-shaped source (model.provider SET) -- the direction the PR description omits."""
-    aux = _AUX[0] = "claude-haiku-4-5"
+    aux = "claude-haiku-4-5"
     layer = {
         "model": {"provider": "anthropic-oauth", "name": "gateway:protolabs/reasoning", "api_base": SRC},
         "routing": {"aux_model": aux},
@@ -125,7 +122,7 @@ def test_B_LEGACY_native_lead_with_gateway_qualified_primary_flips_subscription_
 
 
 def test_C_LEGACY_gateway_lead_with_native_qualified_primary_flips_gateway_to_subscription(env):
-    aux = _AUX[0] = "gpt-5-mini"
+    aux = "gpt-5-mini"
     layer = {
         "model": {"provider": "openai", "name": "anthropic-oauth:claude-sonnet-4-5", "api_base": SRC},
         "routing": {"aux_model": aux},
@@ -138,7 +135,7 @@ def test_D_custom_primary_is_credited_with_the_legacy_gateway_key(env):
     """A member on a box gateway whose lead runs on its own keyless local connection. The
     legacy model.api_key authenticates the BOX gateway (model.api_base from the Host); it
     feeds no registered connection (`_parse_providers` reads only secrets.providers)."""
-    aux = _AUX[0] = "protolabs/fast"
+    aux = "protolabs/fast"
     layer = {
         "providers": [{"id": "local", "type": "openai-compat", "base_url": LOCAL}],
         "model": {"name": "local:qwen3"},
@@ -153,7 +150,7 @@ def test_D_custom_primary_is_credited_with_the_legacy_gateway_key(env):
 
 
 def test_E_bridge_moves_legacy_readers_off_the_host_gateway_even_with_no_key(env):
-    aux = _AUX[0] = "protolabs/fast"
+    aux = "protolabs/fast"
     layer = {
         "providers": [{"id": "local", "type": "openai-compat", "base_url": LOCAL}],
         "model": {"name": "local:qwen3"},
