@@ -16,6 +16,7 @@ exactly today's behavior (message-count fallback, size-only meter).
 from __future__ import annotations
 
 import logging
+import os
 
 from graph.config import LangGraphConfig
 
@@ -81,6 +82,19 @@ def _fetch_window_map(api_base: str, api_key: str) -> dict[str, int]:
     return out
 
 
+def _gateway_key(config: LangGraphConfig) -> str:
+    """The key the gateway client itself authenticates with: ``model.api_key``, else
+    ``OPENAI_API_KEY`` — the same resolution as ``graph.llm._build_llm_kwargs``.
+
+    Reading only the config field sent this lookup KEYLESS for every deployment that
+    supplies the gateway key through the environment (a fleet agent's stack env or its
+    secrets manager, where ``model.api_key`` is blank by design). The gateway answered
+    401 "No api key passed in", the window stayed unknown for the life of the process,
+    and everything sized off it — the compaction trigger, the tool-result pruner, the
+    context meter — quietly ran on its fallback (#3502)."""
+    return (config.api_key or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+
+
 def context_window_for(config: LangGraphConfig, model_name: str | None = None) -> int | None:
     """The input context window (``max_input_tokens``) for a model on the gateway, or ``None``.
 
@@ -93,7 +107,7 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None) -
     if base not in _ATTEMPTED:
         _ATTEMPTED.add(base)
         try:
-            _WINDOWS[base] = _fetch_window_map(base, config.api_key or "")
+            _WINDOWS[base] = _fetch_window_map(base, _gateway_key(config))
         except Exception:  # noqa: BLE001 — never let model-info break model creation / a turn
             _WINDOWS[base] = {}
             log.debug("[model-window] fetch failed for %s", base, exc_info=True)
