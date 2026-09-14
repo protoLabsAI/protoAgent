@@ -20,6 +20,48 @@ use tauri_plugin_updater::UpdaterExt;
 /// preferred so the no-handoff path still lands on the live server.
 const DEFAULT_PORT: u16 = 7870;
 
+/// How long a launch keeps re-probing a held 7870 before the #1668 fallback (#3503).
+/// Long enough to outlast the path that frees the port when the previous shell could
+/// not stop its sidecar itself (a crash, Windows, a stop that ran out of time): the
+/// orphaned server's parent-death watchdog polls every 2 s, then reaps its trees with
+/// a 1 s grace before it exits (server/__init__.py). A listener that stays, which is
+/// what #1668 is for, costs a launch this long before it falls back as it always did.
+const PORT_RETRY_WINDOW: Duration = Duration::from_secs(4);
+const PORT_PROBE_INTERVAL: Duration = Duration::from_millis(250);
+
+fn port_is_free(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Probe until `is_free` says yes or `window` has passed, sleeping `interval` between
+/// probes. Returns how long it waited when the port came free, None when it never did.
+/// The sleeps are the clock (a probe is a bind that costs microseconds), so tests drive
+/// it with a fake one. Always bounded: at most `window / interval` sleeps.
+fn wait_until_free(
+    mut is_free: impl FnMut() -> bool,
+    mut sleep: impl FnMut(Duration),
+    window: Duration,
+    interval: Duration,
+) -> Option<Duration> {
+    let mut waited = Duration::ZERO;
+    loop {
+        if is_free() {
+            return Some(waited);
+        }
+        if waited >= window {
+            return None;
+        }
+        // A zero interval would never advance the clock: spend the rest of the window.
+        let step = if interval.is_zero() {
+            window - waited
+        } else {
+            interval.min(window - waited)
+        };
+        sleep(step);
+        waited += step;
+    }
+}
+
 /// The sidecar's port: the fixed default when it's free, else an OS-assigned free
 /// port. Launching straight at an occupied 7870 — an orphaned sidecar, a headless
 /// dev server, any unrelated app — meant the new sidecar died at bind and the
@@ -28,14 +70,44 @@ const DEFAULT_PORT: u16 = 7870;
 /// always visible to the page, unlike the injected global) plus the
 /// `__PROTOAGENT_API_BASE__` init script. Bind-probe-then-release has a tiny
 /// TOCTOU window — acceptable for a single local launch.
-fn choose_port() -> u16 {
-    if TcpListener::bind(("127.0.0.1", DEFAULT_PORT)).is_ok() {
-        return DEFAULT_PORT;
+///
+/// A held 7870 is re-probed for `PORT_RETRY_WINDOW` before falling back (#3503). The
+/// holder is often OUR previous sidecar on its way out: an update's restart relaunches
+/// about 0.6 s after the old shell exits, and a hub that fell back stayed on a random
+/// port for the whole session, so anything addressing 127.0.0.1:7870 found nothing.
+/// The retry is unconditional rather than gated on evidence of a restart: the cases it
+/// exists for (a crashed shell, a Windows installer relaunch, a stop that ran out of
+/// time) are exactly the ones that leave no evidence behind.
+fn choose_port_with(
+    default_is_free: impl FnMut() -> bool,
+    sleep: impl FnMut(Duration),
+    fallback: impl FnOnce() -> Option<u16>,
+) -> u16 {
+    match wait_until_free(default_is_free, sleep, PORT_RETRY_WINDOW, PORT_PROBE_INTERVAL) {
+        Some(waited) => {
+            if !waited.is_zero() {
+                log::info!(
+                    "desktop: port {DEFAULT_PORT} came free after {} ms (a previous sidecar exiting)",
+                    waited.as_millis()
+                );
+            }
+            DEFAULT_PORT
+        }
+        None => fallback().unwrap_or(DEFAULT_PORT),
     }
-    TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|addr| addr.port())
-        .unwrap_or(DEFAULT_PORT)
+}
+
+fn choose_port() -> u16 {
+    choose_port_with(
+        || port_is_free(DEFAULT_PORT),
+        std::thread::sleep,
+        || {
+            TcpListener::bind("127.0.0.1:0")
+                .and_then(|l| l.local_addr())
+                .map(|addr| addr.port())
+                .ok()
+        },
+    )
 }
 
 /// Desktop log retention (#3504). tauri-plugin-log's defaults are a 40,000-byte file under
@@ -515,11 +587,87 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
     });
 }
 
-/// Kill the sidecar if it's still running (called on app exit).
-fn kill_sidecar<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(state) = app.try_state::<SidecarProcess>() {
-        if let Some(child) = state.0.lock().unwrap().take() {
-            let _ = child.kill();
+/// How long stopping the sidecar waits for it to give its port back (#3503). Measured
+/// on macOS with the frozen sidecar: the listener closes 0.4-0.6 s after SIGTERM.
+#[cfg(unix)]
+const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(3);
+#[cfg(unix)]
+const SIDECAR_STOP_POLL: Duration = Duration::from_millis(50);
+
+/// Stop the sidecar and give its port back before this process goes away (#3503).
+/// Called on app exit and before an update's restart; idempotent.
+///
+/// The tracked child is the PyInstaller onefile BOOTLOADER; the server holding the port
+/// is its child. `child.kill()` is SIGKILL on Unix, which the bootloader can't forward:
+/// it died alone, the server kept the port until its parent-death watchdog noticed this
+/// process was gone, and a relaunch inside that window (an update's restart comes about
+/// 0.6 s after) found 7870 taken and fell back to a random port for the whole session.
+/// SIGTERM IS forwarded: uvicorn closes its listener at once and starts its own teardown
+/// (measured: port free in about 0.5 s, the whole tree gone in about 1 s, the onefile
+/// extraction dir cleaned up).
+///
+/// So on Unix: SIGTERM, then wait, bounded and never a hang, until the port binds. Once
+/// it does, the bootloader is left to finish on its own; a SIGKILL would cut the
+/// server's teardown short and strand its extraction dir, and the server's watchdog
+/// still ends it within seconds of our exit if that teardown stalls. If the port is
+/// still held at the deadline, fall back to the old kill; the relaunch's own retry
+/// (`PORT_RETRY_WINDOW`) covers the watchdog path from there. Windows keeps the plain
+/// kill: TerminateProcess can't be forwarded either, so no wait here could succeed, and
+/// the relaunch's retry covers it.
+fn stop_sidecar<R: Runtime>(app: &AppHandle<R>) {
+    // The stop fires the sidecar's Terminated event: mark the shutdown first so it
+    // isn't alerted as an unexpected server death.
+    QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
+    let Some(state) = app.try_state::<SidecarProcess>() else {
+        return;
+    };
+    let Some(child) = state.0.lock().unwrap().take() else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        // WakeSignal carries the port the sidecar was spawned on (see open_chat_window).
+        if let Some(port) = app.try_state::<WakeSignal>().map(|s| s.port) {
+            if terminate_and_wait(child.pid(), port) {
+                return;
+            }
+        }
+    }
+    let _ = child.kill();
+}
+
+/// SIGTERM the sidecar and wait for its port. True once the port binds; false when the
+/// signal couldn't be sent or the port is still held after `SIDECAR_STOP_GRACE`.
+#[cfg(unix)]
+fn terminate_and_wait(pid: u32, port: u16) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: kill(2) takes no pointers. The pid is our own un-reaped child: the shell
+    // plugin reaps it only after it exits, so the pid can't have been reused yet.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        log::warn!(
+            "sidecar: SIGTERM failed ({}), killing it instead",
+            std::io::Error::last_os_error()
+        );
+        return false;
+    }
+    match wait_until_free(
+        || port_is_free(port),
+        std::thread::sleep,
+        SIDECAR_STOP_GRACE,
+        SIDECAR_STOP_POLL,
+    ) {
+        Some(waited) => {
+            log::info!("sidecar: stopped, port {port} free after {} ms", waited.as_millis());
+            true
+        }
+        None => {
+            log::warn!(
+                "sidecar: port {port} still held {} s after SIGTERM, killing it",
+                SIDECAR_STOP_GRACE.as_secs()
+            );
+            false
         }
     }
 }
@@ -1330,6 +1478,13 @@ async fn updater_install<R: Runtime>(
         )
         .await
         .map_err(|e| e.to_string())?;
+    // Give the sidecar's port back BEFORE relaunching (#3503): the new launch probes 7870
+    // about 0.6 s after this process exits. (Windows never gets here: its installer exits
+    // the app inside `download_and_install`, and the relaunch's retry covers that path.)
+    // stop_sidecar blocks for up to SIDECAR_STOP_GRACE, so it runs off the async runtime.
+    // The restart's own RunEvent::Exit calls it again, as a no-op.
+    let stopping = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || stop_sidecar(&stopping)).await;
     app.restart();
 }
 
@@ -1439,7 +1594,8 @@ pub fn run() {
             let port: u16 = choose_port();
             if port != DEFAULT_PORT {
                 log::warn!(
-                    "desktop: port {DEFAULT_PORT} is in use — sidecar on {port} (handoff via ?__apiPort)"
+                    "desktop: port {DEFAULT_PORT} still in use after {} s — sidecar on {port} (handoff via ?__apiPort)",
+                    PORT_RETRY_WINDOW.as_secs()
                 );
             }
             spawn_sidecar(app.handle(), port);
@@ -1576,12 +1732,10 @@ pub fn run() {
                 // System woke to the foreground (ADR 0074) — debounced system.wake.
                 maybe_signal_wake(app_handle);
             }
-            // Tear the bundled server down with the app rather than orphaning it.
+            // Tear the bundled server down with the app rather than orphaning it, and
+            // wait (bounded) for its port so a quick relaunch lands on 7870 (#3503).
             if let RunEvent::Exit = event {
-                // The kill below fires the sidecar's Terminated event — mark the
-                // shutdown so it isn't alerted as an unexpected server death.
-                QUITTING.store(true, std::sync::atomic::Ordering::Relaxed);
-                kill_sidecar(app_handle);
+                stop_sidecar(app_handle);
             }
         });
 }
@@ -1890,5 +2044,122 @@ mod sidecar_log_tests {
         ] {
             assert_eq!(sidecar_line_level(line), Info, "{line:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod port_choice_tests {
+    use super::{
+        choose_port_with, port_is_free, wait_until_free, DEFAULT_PORT, PORT_RETRY_WINDOW,
+    };
+    use std::cell::Cell;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    const FALLBACK: u16 = 58614;
+
+    /// A fake clock: `sleep` advances it, and the probe reads it.
+    struct Clock(Cell<Duration>);
+
+    impl Clock {
+        fn new() -> Self {
+            Clock(Cell::new(Duration::ZERO))
+        }
+        fn sleep(&self, d: Duration) {
+            self.0.set(self.0.get() + d);
+        }
+        fn now(&self) -> Duration {
+            self.0.get()
+        }
+    }
+
+    #[test]
+    fn a_free_port_is_taken_at_once() {
+        let clock = Clock::new();
+        let port = choose_port_with(|| true, |d| clock.sleep(d), || panic!("no fallback"));
+        assert_eq!(port, DEFAULT_PORT);
+        assert_eq!(clock.now(), Duration::ZERO);
+    }
+
+    // #3503: the relaunch raced its own exiting sidecar, found 7870 held, and fell back
+    // to 58614 for the whole session.
+    #[test]
+    fn a_port_released_inside_the_window_is_still_7870() {
+        let clock = Clock::new();
+        let released_at = Duration::from_millis(1500);
+        let port = choose_port_with(
+            || clock.now() >= released_at,
+            |d| clock.sleep(d),
+            || panic!("no fallback while the port frees inside the window"),
+        );
+        assert_eq!(port, DEFAULT_PORT);
+        assert_eq!(clock.now(), released_at);
+    }
+
+    #[test]
+    fn a_release_at_the_very_end_of_the_window_still_counts() {
+        let clock = Clock::new();
+        let port = choose_port_with(
+            || clock.now() >= PORT_RETRY_WINDOW,
+            |d| clock.sleep(d),
+            || panic!("the last probe comes after the last sleep"),
+        );
+        assert_eq!(port, DEFAULT_PORT);
+    }
+
+    // #1668 still holds for a listener that stays: fall back, just after the window.
+    #[test]
+    fn a_port_held_throughout_falls_back_after_the_window() {
+        let clock = Clock::new();
+        let fallbacks = Cell::new(0);
+        let port = choose_port_with(
+            || false,
+            |d| clock.sleep(d),
+            || {
+                fallbacks.set(fallbacks.get() + 1);
+                Some(FALLBACK)
+            },
+        );
+        assert_eq!(port, FALLBACK);
+        assert_eq!(fallbacks.get(), 1);
+        assert_eq!(clock.now(), PORT_RETRY_WINDOW, "waits the window, and no longer");
+    }
+
+    #[test]
+    fn a_failed_fallback_keeps_the_old_default() {
+        let clock = Clock::new();
+        assert_eq!(choose_port_with(|| false, |d| clock.sleep(d), || None), DEFAULT_PORT);
+    }
+
+    #[test]
+    fn the_wait_is_bounded_even_with_a_zero_interval() {
+        let clock = Clock::new();
+        let window = Duration::from_secs(3);
+        let waited = wait_until_free(|| false, |d| clock.sleep(d), window, Duration::ZERO);
+        assert_eq!(waited, None);
+        assert_eq!(clock.now(), window);
+    }
+
+    #[test]
+    fn the_wait_reports_how_long_the_port_took() {
+        let clock = Clock::new();
+        let waited = wait_until_free(
+            || clock.now() >= Duration::from_millis(500),
+            |d| clock.sleep(d),
+            Duration::from_secs(3),
+            Duration::from_millis(50),
+        );
+        assert_eq!(waited, Some(Duration::from_millis(500)));
+    }
+
+    // The real probe, against a real socket: held while a listener owns it, free once
+    // that listener is gone. (The same probe decides when a stopped sidecar let go.)
+    #[test]
+    fn the_probe_sees_a_real_listener_come_and_go() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!port_is_free(port));
+        drop(listener);
+        assert!(port_is_free(port));
     }
 }
