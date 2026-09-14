@@ -45,13 +45,26 @@ concurrency:
 
 jobs:
   regenerate:
-    # Only bot bumps. A human touching the lock is expected to run the documented
-    # `scripts/gate.py --lint-only` and fix the manifest themselves.
-    if: github.actor == 'dependabot[bot]'
+    # Only Dependabot's own PRs, from branches in this repository. WHO the PR is from is
+    # its author (`pull_request.user.login`, fixed when it is opened) and where its head
+    # lives; `github.actor` is only whoever triggered this particular event, so it narrows
+    # the gate rather than proving anything: a human pushing to a Dependabot branch is
+    # expected to run the documented `scripts/gate.py --lint-only` and fix the manifest
+    # themselves. This gate saves runs; the commit workflow re-checks all of it on its own.
+    # (zizmor's bot-conditions flags the `github.actor` clause: it is kept deliberately as a
+    # narrowing condition beside the author/repository checks, not as the identity check.)
+    if: >-  # zizmor: ignore[bot-conditions]
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free, and this job runs no owned-runner work
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
+        with:
+          # `uv sync` below runs the bumped packages' build hooks, and nothing in this job
+          # pushes — so don't leave even the read-only token in .git/config.
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -83,13 +96,16 @@ jobs:
 
       - name: Stage the regenerated manifest for the commit workflow
         if: steps.diff.outputs.changed == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           mkdir -p _attribution
           cp THIRD_PARTY_LICENSES.md _attribution/
-          # The commit workflow runs in the BASE repo context and does not know which PR
-          # triggered it, so the head ref travels with the artifact.
-          printf '%s\n' "${{ github.event.pull_request.number }}" > _attribution/pr
-          printf '%s\n' "${{ github.event.pull_request.head.ref }}" > _attribution/head-ref
+          # The commit workflow resolves the PR and branch from GitHub's record of this run;
+          # these travel only so it can check the artifact is the one for that PR.
+          printf '%s\n' "$PR_NUMBER" > _attribution/pr
+          printf '%s\n' "$HEAD_REF" > _attribution/head-ref
 
       - uses: actions/upload-artifact@v4
         if: steps.diff.outputs.changed == 'true'

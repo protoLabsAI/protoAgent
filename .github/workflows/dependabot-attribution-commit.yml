@@ -12,10 +12,28 @@
 # The PAT is not a convenience. A push made with the default GITHUB_TOKEN does not trigger
 # workflows, so the commit would land and the PR would keep its stale red check forever —
 # the same reason prepare-release.yml checks out with GH_PAT.
+#
+# ── What this job trusts ─────────────────────────────────────────────────────────────────
+#
+# `workflow_run` fires for ANY completed run of a workflow NAMED "Dependabot attribution",
+# and a `pull_request` run executes the PR's own copy of that file. So the producer's
+# artifact is data to check, never routing to follow:
+#
+#   - WHICH branch and PR come from GitHub's record of the run (`workflow_run.*`) and an
+#     API lookup, not from the artifact. The job only runs for a `pull_request` run whose
+#     head lives in THIS repository on a `dependabot/` branch, and the PR must be an open
+#     one opened by Dependabot.
+#   - The ONLY thing taken from the artifact is the manifest itself, after checking it is
+#     a regular file of sane size. It lands as an ordinary commit on the PR, where review
+#     and CI see it like any other change.
+#   - The PAT is held by the one step that pushes and labels. The checkout does not keep a
+#     credential in .git/config, and untrusted values reach shell only through `env:`.
 
 name: Dependabot attribution (commit)
 
-on:
+# zizmor flags every `workflow_run` trigger. It is this workflow's purpose (see the header),
+# and the job below runs no code from the triggering run and checks where that run came from.
+on:  # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: ["Dependabot attribution"]
     types: [completed]
@@ -28,10 +46,22 @@ permissions:
   # collect the producer's artifact. Read-only: nothing here re-runs or cancels a
   # workflow. (The PAT below is what does the writing, and it is scoped separately.)
   actions: read
+  # The gate looks the PR up by its head branch rather than believing the artifact.
+  pull-requests: read
 
 jobs:
   commit:
-    if: github.event.workflow_run.conclusion == 'success'
+    # Every field here is set by GitHub on the triggering run, not by the run's code:
+    #   event            the producer is `pull_request`-only, so anything else is not it
+    #   head_repository  a fork's PR run carries the FORK here; this admits only branches
+    #                    pushed to this repository, which is where Dependabot pushes
+    #   head_branch      Dependabot's `dependabot/<ecosystem>/<name>` (shape re-checked
+    #                    strictly in the gate — expression comparisons ignore case)
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free; this job only commits, it installs nothing
     timeout-minutes: 8
     steps:
@@ -44,9 +74,11 @@ jobs:
         id: probe
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          names="$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/artifacts" \
+          names="$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
             --jq '.artifacts[].name')"
           if printf '%s\n' "$names" | grep -qx attribution; then
             echo "present=true" >> "$GITHUB_OUTPUT"
@@ -62,44 +94,109 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: attribution
-          path: _attribution
+          # Outside the workspace: the checkout below empties a workspace that is not yet a
+          # git repo, and untrusted bytes have no business in the worktree anyway.
+          path: ${{ runner.temp }}/attribution
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Read what the producer staged
+      # Where to commit, and for which PR, comes from GitHub's record of the run — see the
+      # header. The artifact's own `pr` / `head-ref` can no longer steer anything; they are
+      # compared, so an artifact that is not for this PR stops the job instead of landing.
+      - name: Resolve the PR and check what the producer staged
         id: gate
         if: steps.probe.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          STAGED: ${{ runner.temp }}/attribution
         run: |
           set -euo pipefail
-          # The artifact was present, so the file must be too — a download that lands
-          # without it is corruption, not a no-op.
-          test -f _attribution/THIRD_PARTY_LICENSES.md
+          # 1. The branch. The job gate required the prefix; this also rejects anything
+          #    else a ref name may legally hold, before it reaches git, the API or
+          #    $GITHUB_OUTPUT (which is line-oriented).
+          if [[ ! "$HEAD_BRANCH" =~ ^dependabot/[A-Za-z0-9._/-]+$ || "$HEAD_BRANCH" == *..* ]]; then
+            echo "::error::the run's head branch is not a plain dependabot/... name — refusing to continue"
+            exit 1
+          fi
+
+          # 2. The PR: the OPEN one headed by this branch in this repository and opened by
+          #    Dependabot. Looked up rather than read from `workflow_run.pull_requests`,
+          #    which GitHub documents as PRs that share the run's head, not necessarily the
+          #    one that triggered it.
+          prs="$(gh api -X GET "repos/$REPO/pulls" -f state=open -f head="$OWNER:$HEAD_BRANCH" \
+            | jq -c --arg repo "$REPO" --arg branch "$HEAD_BRANCH" \
+                '[.[] | select(.head.repo.full_name == $repo and .head.ref == $branch
+                               and .user.login == "dependabot[bot]") | .number]')"
+          case "$(jq 'length' <<<"$prs")" in
+            0)
+              # Closed or merged since the producer ran, or not Dependabot's: not ours.
+              echo "no open Dependabot PR is headed by $HEAD_BRANCH — nothing to commit"
+              exit 0
+              ;;
+            1) pr="$(jq -r '.[0]' <<<"$prs")" ;;
+            *)
+              echo "::error::more than one open Dependabot PR is headed by $HEAD_BRANCH: $prs"
+              exit 1
+              ;;
+          esac
+          [[ "$pr" =~ ^[1-9][0-9]{0,9}$ ]]
+
+          # 3. The artifact must agree. Read with a cap and never echoed: it is untrusted.
+          #    The producer uploads only when the manifest changed, so a present artifact
+          #    without these files is corruption, not a no-op.
+          for f in pr head-ref THIRD_PARTY_LICENSES.md; do
+            if [ ! -f "$STAGED/$f" ] || [ -L "$STAGED/$f" ]; then
+              echo "::error::the attribution artifact has no regular file named $f"
+              exit 1
+            fi
+          done
+          if [ "$(head -c 64 "$STAGED/pr")" != "$pr" ] \
+             || [ "$(head -c 512 "$STAGED/head-ref")" != "$HEAD_BRANCH" ]; then
+            echo "::error::the attribution artifact was staged for a different PR or branch than run $RUN_ID (#$pr, $HEAD_BRANCH) — refusing to commit it"
+            exit 1
+          fi
+          # The manifest is ~55 KB; a megabyte is room for years of growth, not a real file.
+          size="$(wc -c < "$STAGED/THIRD_PARTY_LICENSES.md")"
+          if [ "$size" -eq 0 ] || [ "$size" -gt 1048576 ]; then
+            echo "::error::the staged manifest is $size bytes — refusing to commit it"
+            exit 1
+          fi
+
+          # Both values were validated above, so each is exactly one line.
           {
             echo "go=true"
-            echo "pr=$(cat _attribution/pr)"
-            echo "head_ref=$(cat _attribution/head-ref)"
+            echo "pr=$pr"
+            echo "branch=$HEAD_BRANCH"
           } >> "$GITHUB_OUTPUT"
+          echo "committing for #$pr on $HEAD_BRANCH"
 
       - uses: actions/checkout@v7
         if: steps.gate.outputs.go == 'true'
         with:
-          # `head_ref` resolves in THIS repo: dependabot pushes its branches to the base
-          # repository, it does not fork. Every dependabot PR here is same-repo —
-          # #3382/#3372/#3371 all carry `isCrossRepository: false` and
-          # `headRepositoryOwner: protoLabsAI`. (Noted because a review flagged the
-          # opposite; the fork model is how a HUMAN contributor's PR behaves, not a
-          # bot-pushed branch, and `pull_request` withholding a write token from
-          # dependabot is a permissions decision, not evidence of a fork.)
-          ref: ${{ steps.gate.outputs.head_ref }}
-          # Pushing with the default token would not re-trigger the PR's checks, leaving
-          # a green commit under a red check. See the header.
-          token: ${{ secrets.GH_PAT }}
+          # The branch the gate validated, from GitHub's record of the run. Spelled as a full
+          # ref so it can only resolve to a branch. It is a branch in THIS repo — the job
+          # gate requires it — and every Dependabot PR here is same-repo (#3382/#3372/#3371
+          # all carry `isCrossRepository: false`): Dependabot pushes to the base repository.
+          ref: refs/heads/${{ steps.gate.outputs.branch }}
+          # Clone with the default read-only token and keep no credential in .git/config.
+          # The PAT is used by the commit step alone, for its push and its label.
+          persist-credentials: false
 
       - name: Commit the regenerated manifest
         if: steps.gate.outputs.go == 'true'
         env:
+          # Pushing with the default token would not re-trigger the PR's checks, leaving a
+          # green commit under a red check. See the header.
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO: ${{ github.repository }}
           PR: ${{ steps.gate.outputs.pr }}
+          BRANCH: ${{ steps.gate.outputs.branch }}
+          GENERATED_FOR: ${{ github.event.workflow_run.head_sha }}
+          STAGED: ${{ runner.temp }}/attribution
         run: |
           set -euo pipefail
           # The manifest was generated FOR a specific lockfile revision. If dependabot
@@ -109,14 +206,14 @@ jobs:
           # producer's `paths:` filter and so never re-triggers a regeneration.
           # Diffing the file is not enough to catch that: a manifest can be byte-identical
           # across two different lockfiles.
-          if [ "$(git rev-parse HEAD)" != "${{ github.event.workflow_run.head_sha }}" ]; then
+          if [ "$(git rev-parse HEAD)" != "$GENERATED_FOR" ]; then
             echo "branch moved since the manifest was generated"
-            echo "  generated for: ${{ github.event.workflow_run.head_sha }}"
+            echo "  generated for: $GENERATED_FOR"
             echo "  checked out:   $(git rev-parse HEAD)"
             echo "the newer head re-triggers the producer on its own — nothing to commit"
             exit 0
           fi
-          cp _attribution/THIRD_PARTY_LICENSES.md THIRD_PARTY_LICENSES.md
+          cp "$STAGED/THIRD_PARTY_LICENSES.md" THIRD_PARTY_LICENSES.md
           if git diff --quiet -- THIRD_PARTY_LICENSES.md; then
             echo "already in sync on this head — nothing to commit"
             exit 0
@@ -129,7 +226,16 @@ jobs:
           dependabot updates the lockfile but not the attribution manifest, so
           gen_attribution --check inside scripts/gate.py --lint-only fails and the PR
           arrives red on a check named for two gates that both passed (#3393)."
-          git push origin "HEAD:${{ steps.gate.outputs.head_ref }}"
+          # Credentials for this one command: the same Authorization header actions/checkout
+          # would have persisted, handed to git through the environment instead — never on
+          # the command line, never written to .git/config. A plain (non-force) push, so a
+          # branch that moved after the check above is rejected rather than overwritten.
+          basic="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$basic"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic" \
+            git push origin "HEAD:refs/heads/$BRANCH"
           # The commit turns a lock-only PR into one touching a tracked file, which trips
           # the changelog gate. A dependency bump plus regenerated attribution is exactly
           # what that label is for, and applying it re-triggers changelog.yml by itself.
@@ -137,7 +243,7 @@ jobs:
           # leaves the PR red on the changelog gate with the job reporting success and no
           # path back. Retry the transient case, then fail loudly.
           for attempt in 1 2 3; do
-            if gh pr edit "$PR" --add-label skip-changelog; then
+            if gh pr edit "$PR" --repo "$REPO" --add-label skip-changelog; then
               exit 0
             fi
             echo "label attempt $attempt failed; retrying in $((attempt * 5))s"
