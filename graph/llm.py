@@ -5,8 +5,14 @@ so we use ChatOpenAI for everything.
 """
 
 import asyncio
+import contextvars
+import hashlib
+import json
 import logging
+import math
 import os
+import re
+import time
 from collections.abc import AsyncIterator, Callable
 
 import httpcore
@@ -172,6 +178,199 @@ def _gateway_wire_default() -> bool | None:
     return False
 
 
+# ── Output budget sized to fit the window (#3502) ─────────────────────────────────────
+# `model.max_tokens` is a flat output reservation, and providers like vLLM enforce
+# prompt + max_tokens <= window. A prompt within that reservation of the window was
+# rejected outright ("...maximum context length is 262144 tokens. However, you requested
+# 32768 output tokens...") even when a smaller output budget would have fit, and a subagent
+# lane, which runs no pruning or compaction, had no other way out.
+#
+# WHICH window: the one the provider enforces, learned from its own overflow error. The
+# gateway's advertised ``max_input_tokens`` can't serve. It may be an input-only cap with a
+# separate output cap (gpt-5: 272k in + 128k out), or an operator's declaration rather than
+# the backend's limit (protolabs/smart advertises 196,608 in front of a 262,144-token vLLM),
+# and sizing off either would cut the budget of calls that succeed today. A message saying
+# prompt + output exceeded W states the shared limit exactly. So nothing changes until a
+# model overflows once in this process: that call is retried once with the budget that
+# fits, and later calls on the model are sized before they're sent.
+#
+# The prompt is MEASURED, not guessed: chars/4 undercounts code by ~20%, more than the whole
+# margin that matters here. Each finished call records its real ``input_tokens`` per
+# character of request body, per conversation, and later requests are sized off that.
+# "endpoint|model" -> (the shared window its provider enforces, when it was learned). Keyed by
+# endpoint too, so two connections serving one model id with different windows never size
+# each other; expired after an hour, so an operator raising the window isn't held to the old one.
+_LEARNED_WINDOWS: dict[str, tuple[int, float]] = {}
+_LEARNED_WINDOW_TTL_S = 3_600.0
+_CALIBRATIONS: dict[str, tuple[float, int]] = {}  # key -> (tokens per char, chars measured)
+_MAX_CALIBRATIONS = 256
+# Calls this small are dominated by chat-template and tool-schema overhead that the request
+# body doesn't show, which would inflate the ratio — and they're never the ones that overflow.
+_MIN_CALIBRATION_TOKENS = 8_000
+# Below this much room a lowered budget can't do useful work (a thinking model spends part
+# of it reasoning), so the request is left alone and the overflow reaches the
+# force-compact-and-retry path (server/chat.py, #2783), the better recovery there.
+_MIN_OUTPUT_TOKENS = 8_192
+_BUDGET_MARGIN_FRACTION = 0.02  # tokenization drift between the measured call and this one
+_BUDGET_MARGIN_TOKENS = 1_024
+# Provider phrasings that state a SHARED prompt + output limit: vLLM's, and OpenAI's classic
+# one. Anything else — an input-only cap, "prompt is too long" — teaches nothing.
+_SHARED_WINDOW_RES = (
+    re.compile(r"maximum context length is (\d+) tokens\. However, you requested \d+ output tokens"),
+    re.compile(
+        r"maximum context length is (\d+) tokens\. However, you requested \d+ tokens "
+        r"\(\d+ in the messages, \d+ in the completion\)"
+    ),
+)
+# (calibration key, request chars, budget sent) for the request this context just built —
+# paired with that call's usage when its stream ends. A ContextVar, so concurrent calls never cross.
+_REQUEST_MEASURE: contextvars.ContextVar[tuple[str, int, int] | None] = contextvars.ContextVar(
+    "_request_measure", default=None
+)
+
+
+# Content parts that aren't text. Their tokens bear no relation to their (base64) size.
+_MEDIA_PART_TYPES = frozenset({"image_url", "input_image", "input_audio", "file"})
+
+
+def _is_media_part(part: object) -> bool:
+    return isinstance(part, dict) and part.get("type") in _MEDIA_PART_TYPES
+
+
+def _has_media(payload: dict) -> bool:
+    return any(
+        isinstance(m, dict) and isinstance(m.get("content"), list) and any(map(_is_media_part, m["content"]))
+        for m in payload.get("messages") or []
+    )
+
+
+def _request_chars(payload: dict) -> int:
+    """Characters in the TEXT of a chat-completions body — what becomes prompt tokens in
+    proportion to its length. Media parts are left out: an attached image's base64 would
+    inflate the estimate and lower the budget of a call that fits."""
+    messages = []
+    for m in payload.get("messages") or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, list) and any(map(_is_media_part, content)):
+            m = {**m, "content": [part for part in content if not _is_media_part(part)]}
+        messages.append(m)
+    return len(json.dumps(messages, ensure_ascii=False)) + len(json.dumps(payload.get("tools") or [], ensure_ascii=False))
+
+
+def _opening(message: object, limit: int = 512) -> str:
+    content = message.get("content", "") if isinstance(message, dict) else ""
+    return (content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))[:limit]
+
+
+def _calibration_key(model: str, payload: dict) -> str:
+    """Model + the openings of the system prompt AND the first non-system message.
+
+    One key per CONVERSATION, not per agent. Parallel lanes of one subagent type share a
+    system prompt but not a task, and two chats with one agent share a system prompt but
+    not a first turn — and their content mix, so their tokens per char, differs (JSON tool
+    output runs ~0.35, code ~0.22). A sibling's ratio would size this request wrong. When
+    compaction rewrites the head, the conversation simply starts a fresh key. The task is
+    hashed to 8 KB, not 512 chars: templated lanes share long preambles before the part
+    that tells them apart."""
+    messages = [m for m in payload.get("messages") or [] if isinstance(m, dict)]
+    system = next((m for m in messages if m.get("role") in ("system", "developer")), None)
+    first = next((m for m in messages if m.get("role") not in ("system", "developer")), None)
+    head = f"{_opening(system)}\x00{_opening(first, 8_192)}"
+    return f"{model}|{hashlib.sha1(head.encode()).hexdigest()[:16]}"
+
+
+def _learn_window(exc: BaseException, model: str) -> int | None:
+    """The shared window a provider's overflow error states (remembered for ``model``), or None."""
+    parts = (exc, getattr(exc, "body", None), exc.__cause__, exc.__context__)
+    text = " ".join(str(part) for part in parts if part)
+    for pattern in _SHARED_WINDOW_RES:
+        match = pattern.search(text)
+        if match:
+            window = int(match.group(1))
+            if model and window > 0:
+                _LEARNED_WINDOWS[model] = (window, time.monotonic())
+            return window
+    return None
+
+
+def _learned_window(model: str) -> int | None:
+    """The shared window learned for ``model`` ("endpoint|model"), unless it has expired."""
+    learned = _LEARNED_WINDOWS.get(model)
+    if not learned:
+        return None
+    window, at = learned
+    if time.monotonic() - at > _LEARNED_WINDOW_TTL_S:
+        _LEARNED_WINDOWS.pop(model, None)
+        return None
+    return window
+
+
+def _fitted_budget(cal_key: str, chars: int, requested: int, window: int | None) -> int | None:
+    """The output budget that fits ``window`` beside this request, or None to send it as is.
+
+    None unless the window is known, this conversation has a measurement from a request at
+    least half this size, and the estimated prompt leaves at least ``_MIN_OUTPUT_TOKENS``
+    but less than ``requested``."""
+    if not window or requested <= _MIN_OUTPUT_TOKENS:
+        return None
+    calibration = _CALIBRATIONS.get(cal_key)
+    if not calibration:
+        return None
+    ratio, measured_chars = calibration
+    # A ratio measured on a much smaller request carries chat-template and tool-schema
+    # overhead the body doesn't show (~8% near the calibration floor), so it overstates a
+    # big prompt. A conversation that nears the window grew into it a step at a time, so
+    # its previous call is comparable; a sudden jump is left alone.
+    if measured_chars * 2 < chars:
+        return None
+    prompt = math.ceil(chars * ratio * (1 + _BUDGET_MARGIN_FRACTION)) + _BUDGET_MARGIN_TOKENS
+    room = window - prompt
+    if room >= requested or room < _MIN_OUTPUT_TOKENS:
+        return None
+    return room
+
+
+def _fit_output_budget(payload: dict, model: str) -> None:
+    """Measure this request for calibration and, once ``model``'s shared window is learned,
+    lower its output budget in place when the prompt won't fit beside it (#3502)."""
+    _REQUEST_MEASURE.set(None)
+    if not isinstance(payload.get("messages"), list):
+        return
+    key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
+    requested = payload.get(key)
+    if not isinstance(requested, int) or requested <= _MIN_OUTPUT_TOKENS:
+        return
+    chars = _request_chars(payload)
+    cal_key = _calibration_key(model, payload)
+    window = _learned_window(model)
+    room = _fitted_budget(cal_key, chars, requested, window)
+    if room is not None:
+        payload[key] = room
+        log.info(
+            "[llm] output budget %d -> %d so this prompt fits %s's %d-token window (#3502)",
+            requested,
+            room,
+            model,
+            window,
+        )
+    # A call carrying media doesn't calibrate: its reported tokens include the images,
+    # which the char count leaves out, so its ratio would overstate every later prompt.
+    _REQUEST_MEASURE.set(None if _has_media(payload) else (cal_key, chars, payload[key]))
+
+
+def _record_calibration(measure: tuple[str, int, int] | None, input_tokens: object) -> None:
+    """Store a finished call's real tokens-per-char for its conversation."""
+    if not measure or not isinstance(input_tokens, int) or input_tokens < _MIN_CALIBRATION_TOKENS:
+        return
+    cal_key, chars, _sent = measure
+    if chars <= 0:
+        return
+    _CALIBRATIONS.pop(cal_key, None)  # re-insert last, so the cap evicts the stalest
+    _CALIBRATIONS[cal_key] = (input_tokens / chars, chars)
+    while len(_CALIBRATIONS) > _MAX_CALIBRATIONS:
+        _CALIBRATIONS.pop(next(iter(_CALIBRATIONS)), None)
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI that surfaces the gateway's NATIVE reasoning stream.
 
@@ -250,6 +449,10 @@ class _ReasoningChatOpenAI(ChatOpenAI):
                     if msg_dict.get("role") == "assistant":
                         extra = getattr(msg, "additional_kwargs", None) or {}
                         msg_dict["reasoning_content"] = extra.get("reasoning_content") or ""
+        try:
+            _fit_output_budget(payload, self._window_key())
+        except Exception:  # noqa: BLE001 — sizing must never break a request; send it as configured
+            log.debug("[llm] output-budget sizing skipped", exc_info=True)
         return payload
 
     async def _astream(self, *args, **kwargs):
@@ -258,12 +461,69 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         Transparent pass-through on the happy path; on a mid-read transport error with
         zero chunks yielded it reconnects (within the model's ``max_retries`` budget)
         instead of letting the error kill the turn — the failure mode a rate-limited
-        gateway produces. Once a chunk has streamed, the error propagates unchanged."""
+        gateway produces. Once a chunk has streamed, the error propagates unchanged.
+
+        A context overflow that states the provider's shared window is retried ONCE with
+        the output budget that fits, when this conversation's measurements can size it
+        (#3502); otherwise the error propagates exactly as before."""
+        state: dict = {}
+        try:
+            async for chunk in self._stream_measured(args, kwargs, state):
+                yield chunk
+            return
+        except Exception as exc:
+            retry = None if state.get("streamed") else self._overflow_retry_budget(exc)
+            if retry is None:
+                raise
+            log.warning(
+                "[llm] %s overflowed its %d-token window; retrying once with max_tokens=%d (#3502)",
+                self.model_name,
+                _learned_window(self._window_key()) or 0,
+                retry,
+            )
+        async for chunk in self._stream_measured(args, {**kwargs, "max_tokens": retry}, {}):
+            yield chunk
+
+    async def _stream_measured(self, args, kwargs, state: dict):
+        """One provider stream (with #1728 reconnects) whose usage calibrates the output
+        budget of this conversation's later requests (#3502)."""
+        input_tokens = None
+        measure = None
         async for chunk in _stream_with_reconnect(
             lambda: super(_ReasoningChatOpenAI, self)._astream(*args, **kwargs),
             max_retries=self.max_retries or 0,
         ):
+            if not state.get("streamed"):
+                # Read on the FIRST chunk: this request's body is built by then, and a model
+                # streamed on the same task while we yield can't overwrite what we pair with.
+                measure, state["streamed"] = _REQUEST_MEASURE.get(), True
+            usage = getattr(getattr(chunk, "message", None), "usage_metadata", None)
+            if usage and usage.get("input_tokens"):
+                input_tokens = usage["input_tokens"]
             yield chunk
+        try:
+            _record_calibration(measure, input_tokens)
+        except Exception:  # noqa: BLE001 — bookkeeping must never fail a finished call
+            log.debug("[llm] output-budget calibration skipped", exc_info=True)
+
+    def _window_key(self) -> str:
+        """Where a learned window applies: this endpoint + model (#3502)."""
+        return f"{self.openai_api_base or ''}|{self.model_name or ''}"
+
+    def _overflow_retry_budget(self, exc: BaseException) -> int | None:
+        """The budget to retry an overflowed request with, or None to let the error stand."""
+        try:
+            if not is_context_overflow_error(exc):
+                return None
+            window = _learn_window(exc, self._window_key())
+            measure = _REQUEST_MEASURE.get()  # the failed request's own measurement
+            if not window or not measure:
+                return None
+            cal_key, chars, sent = measure
+            return _fitted_budget(cal_key, chars, sent, window)
+        except Exception:  # noqa: BLE001 — never mask the provider's error with ours
+            log.debug("[llm] overflow retry sizing skipped", exc_info=True)
+            return None
 
 
 def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = None) -> bool:
