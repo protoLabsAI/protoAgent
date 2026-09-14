@@ -1163,3 +1163,16 @@ def test_prompt_cache_ttl_profile_default(monkeypatch, tmp_path):
     # Absent → the profile default.
     cfg_yaml.write_text("prompt_cache: {}\n")
     assert LangGraphConfig.from_yaml(str(cfg_yaml)).prompt_cache_ttl == "1h"
+
+
+def test_the_shipped_example_sets_none_of_the_retiring_model_keys():
+    """#3128: the example seeds every new live config (`config_io.ensure_live_config`), so an
+    active `model.provider` / `api_base` / `api_key` there is copied into each instance the
+    template creates — the retired fields kept alive by the file meant to teach the new ones."""
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    example = Path(__file__).resolve().parents[1] / "config" / "langgraph-config.example.yaml"
+    doc = _yaml.safe_load(example.read_text(encoding="utf-8")) or {}
+    assert not {"provider", "api_base", "api_key"} & set(doc.get("model") or {})
