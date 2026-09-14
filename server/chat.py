@@ -2048,6 +2048,8 @@ def _awaiting_self_resume(session_id: str) -> bool:
     targeting this context. The goal drive loop PAUSES (leaves the goal active, ends the turn)
     when one exists instead of spinning its continuation loop to the iteration cap; the trigger's
     eventual fire re-enters the session and — the goal still being active — resumes the drive.
+    The one-shot that fired THIS turn is not a future resume (``_is_spent_firing_job``): it is
+    deleted as soon as the turn returns, so pausing on it strands the goal.
     Best-effort: any read failure just means "not awaiting" (fall through to the normal loop)."""
     if not session_id:
         return False
@@ -2062,11 +2064,39 @@ def _awaiting_self_resume(session_id: str) -> bool:
         pass
     try:
         sched = STATE.scheduler
-        if sched is not None and any(getattr(j, "context_id", None) == session_id for j in sched.list_jobs()):
+        if sched is not None and any(
+            getattr(j, "context_id", None) == session_id and not _is_spent_firing_job(j) for j in sched.list_jobs()
+        ):
             return True
     except Exception:  # noqa: BLE001
         pass
     return False
+
+
+def _is_spent_firing_job(job) -> bool:
+    """Is ``job`` the one-shot that started the turn now running, and so about to be deleted?
+
+    The scheduler deletes a fired one-shot only after the turn it started returns, so during
+    that turn it is still listed. A goal session woken by its own ``wait:<session>`` or
+    ``watch-<id>`` job used to read that row as a queued resume, pause the drive, and then
+    lose the row: nothing ever resumed the goal. Matched on the turn's ``scheduler_job_id``
+    (the same ``_is_firing_now`` check the ``<working_state>`` FIRING NOW tag uses), plus:
+
+    - a cron job rolls forward when it is claimed, so it WILL fire here again: still pending;
+    - a ``wait`` in this turn re-adds the SAME ``wait:<session>`` id with a future fire time
+      (#2751). That row is a new resume, not the one being fired, so a ``next_fire`` still in
+      the future counts as pending. An unreadable ``next_fire`` counts as pending too."""
+    from datetime import UTC, datetime
+
+    from graph.projection import _is_firing_now
+    from scheduler.interface import is_cron, parse_iso_to_utc
+
+    if not _is_firing_now(job) or is_cron(getattr(job, "schedule", "") or ""):
+        return False
+    try:
+        return parse_iso_to_utc(job.next_fire) <= datetime.now(UTC)
+    except (TypeError, ValueError):
+        return False
 
 
 def _is_hitl_resume(request_metadata: dict | None) -> bool:
