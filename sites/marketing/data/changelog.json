@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.167.0",
+    "date": "2026-09-14",
+    "changes": [
+      "The fleet deck finds the desktop app's box root through infra.paths, the same code the workspace port allocator uses (#3507).",
+      "The sent time sits in the usage stats row under an answer, not on a line of its own (#3505).",
+      "The desktop log keeps its history instead of under a minute (#3508).",
+      "An in-app update no longer moves the desktop hub off port 7870 (#3509).",
+      "A subagent's max_turns now buys the tool rounds it promises, not a third of them (#3511).",
+      "A memory fact harvested from an older conversation no longer replaces a newer one (#3512).",
+      "A goal woken by its own wait or watch no longer stalls forever (#3513).",
+      "Incognito chats are no longer archived into memory by compaction (#3514).",
+      "Compaction archives say which chat they came from and when their messages were written (#3514).",
+      "Deleting or clearing a chat can now forget what it already saved to memory (#3514).",
+      "The desktop build now runs the fleet deck it bundles, on every platform (#3516).",
+      "A config loaded with nothing to read, and the plugin gateway_client() before one is loaded, now carry a provider registry (#3518).",
+      "The docs say how to get the protoagent command (#3501).",
+      "The shipped config template and the configuration reference teach the provider registry (#3520)."
+    ]
+  },
+  {
     "version": "v0.166.0",
     "date": "2026-09-14",
     "changes": [

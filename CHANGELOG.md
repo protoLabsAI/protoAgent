@@ -15,6 +15,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.167.0] - 2026-09-14
+
+### Changed
+- **The fleet deck finds the desktop app's box root through `infra.paths`, the same code the workspace port allocator uses (#3507).**
+  `deck/hub.py` had its own copy of `DESKTOP_APP_ID`, `desktop_box_roots()` and
+  `known_box_roots()`, and the two copies had already drifted once: the Linux desktop root was
+  wrong in both and had to be fixed twice. The deck now delegates to the one definition, so the
+  next fix lands once. The test suite's pin on the desktop root now reaches deck tests too, so
+  a developer's installed desktop fleet no longer leaks into them.
+
+### Fixed
+- **The sent time sits in the usage stats row under an answer, not on a line of its own (#3505).** The per-turn stats and the sent-time chip now share one footer row, side by side; a user bubble keeps the time alone, right-aligned. The duration stat uses a stopwatch icon so it no longer looks like the sent time next to it.
+
+- **The desktop log keeps its history instead of under a minute (#3508).** The log plugin ran on tauri-plugin-log's defaults, a 40 KB file deleted at every rotation, and every request the hub served or proxied wrote two `[sidecar]` lines. With the console open, the hub boot, member spawns, `updater:` lines and crash tracebacks were gone within a minute. The file now rotates at 5 MB and keeps four rotated files (about 25 MB). uvicorn's access lines and httpx's `HTTP Request:` lines no longer reach it; warnings, errors and tracebacks still do (#3504).
+
+- **An in-app update no longer moves the desktop hub off port 7870 (#3509).** Installing an update from the prompt restarted the app, and the relaunched hub came up on an OS-assigned port for the rest of the session. Anything addressing `127.0.0.1:7870`, such as a bookmark, an external A2A client or a script, found nothing. The shell SIGKILLed the sidecar's PyInstaller bootloader, which can't pass that signal on, so the server kept 7870 until after the relaunch had already probed it. Quitting or restarting now sends the server SIGTERM on macOS and Linux and waits up to 3 seconds for the port. A launch that finds 7870 held retries for up to 4 seconds before falling back (#3503).
+
+- **A subagent's `max_turns` now buys the tool rounds it promises, not a third of them (#3511).**
+  The subagent runner passed `max_turns` straight through as LangGraph's `recursion_limit`,
+  which counts graph steps (one per node: `model`, `tools`, and every middleware
+  `before_model`/`after_model` hook), not tool rounds. After v0.154.0 added a `before_model`
+  node to the subagent stack, `max_turns=4` hard-stopped right after the first tool result
+  with no salvageable output. The `coder` face could no longer call `coder_solve` and relay
+  it, and the PR reviewer's structural lane hard-stopped on most reviews. The limit is now
+  derived from the compiled subagent graph, so `max_turns=N` means N tool rounds and then an
+  answer on every delegation path (`task`, `task_batch`, console fan-out, slash commands,
+  workflows), and adding middleware no longer shrinks it. Round N+1 still hard-stops with
+  the same partial-output salvage. Subagents now get their full declared budgets
+  (researcher: 40 tool rounds instead of 12), so a runaway subagent can take more steps
+  before the stop.
+
+- **A memory fact harvested from an older conversation no longer replaces a newer one (#3512).**
+  Threads are not harvested in date order: the TTL sweep takes them in database order, and a delete-with-harvest can run at any time. A revised fact (same subject, changed details) dated *earlier* than the stored one used to supersede it anyway, leaving the stale fact as the only valid memory. Example: "runs DeepSeek-V4-Flash" from August replaced "runs Qwen3.8-27B" from September. An older-dated revision is now skipped, the same as an older near-duplicate. Same-date, newer and undated facts supersede as before.
+
+- **A goal woken by its own `wait` or watch no longer stalls forever (#3513).**
+  When a goal session was woken by its own `wait` resume or a watch reaction, the goal loop mistook the job that had just woken it for another pending wake. It paused ("handed off to a watch/schedule; will resume when it fires"), the scheduler then deleted that job, and nothing ever resumed the goal. The job that fired the current turn is no longer counted. A different pending job, a recurring schedule, or a `wait` the agent re-issues during the turn still pauses the drive as before.
+
+- **Incognito chats are no longer archived into memory by compaction (#3514).** Both auto-compaction and `/compact` wrote an incognito chat's full transcript into the knowledge store (`chat-archive:<session>`), where retrieval could inject it into later prompts. That broke incognito's "no memory trail" promise, which the retire harvest already kept. Auto-compaction now shrinks an incognito context without keeping a copy. `/compact` refuses rather than removing history it hasn't archived. The overflow safety valve shrinks the thread unarchived.
+- **Compaction archives say which chat they came from and when their messages were written (#3514).** Archive rows now carry `source=<thread>` and the dates of the messages they hold, including a day on each transcript line, so an old transcript is no longer recalled as current. Dates come from the trajectory log. A session without one is labelled "message dates unknown".
+- **Deleting or clearing a chat can now forget what it already saved to memory (#3514).** A second, opt-in switch in the delete and clear dialogs (`?forget=true` on `DELETE /api/chat/sessions/{id}`) removes the chat's compaction archives and the summaries and facts harvested from it. The dialogs also say plainly that compaction may already have archived part of the chat. The Harvest switch only adds a summary; it never controlled archiving.
+
+- **The desktop build now runs the fleet deck it bundles, on every platform (#3516).**
+  Since the fleet deck shipped (#3491), `protoagent-server fleet` opens it from the frozen
+  desktop binary — on a desktop-only install, the only `protoagent` on the machine — but each
+  desktop-build leg only booted the server, so a PyInstaller miss in the deck would have shipped
+  green on macOS, Linux and Windows (#3498). Every leg now runs `scripts/fleet_deck_smoke.py
+  --bin` against the frozen sidecar: `fleet --help`, `fleet ls --offline --json`, `fleet --all
+  --offline --json`, and a new hidden `protoagent fleet --self-check` that opens the real deck
+  under Textual's headless driver over an in-memory roster and paints its roster, filter,
+  detail and hub-tree screens — so a module the deck only reaches at render time (Rich's
+  unicode tables, loaded by name) fails the build instead of the first desktop user.
+
+- **A config loaded with nothing to read, and the plugin `gateway_client()` before one is loaded, now carry a provider registry (#3518).**
+  Both built a bare `LangGraphConfig()`, whose empty registry every model-routing reader answered from the
+  ADR 0106 legacy-lane floor. `LangGraphConfig.app_defaults()` gives them the registry their defaults imply,
+  and a guard test fails if a shipped caller starts depending on that floor again: one of the blockers to
+  retiring `model.provider` / `model.api_base` / `model.api_key` (#3128).
+
+### Docs
+- **The docs say how to get the `protoagent` command (#3501).** The fleet deck guide and the README now lead with `uv tool install protolabs-agent`, the fleet deck guide's troubleshooting covers `protoagent: command not found`, and it notes the desktop app's bundled binary opens the deck from 0.166.0. The CLI guide's source-checkout example, `uv run protoagent`, failed with "Failed to spawn" because a checkout installs no entry point; it now uses `uv run python -m server fleet --help`.
+
+- **The shipped config template and the configuration reference teach the provider registry (#3520).**
+  `config/langgraph-config.example.yaml` no longer sets `model.api_key: ""` (it was inert) and names models
+  within connections (`<id>:<model>`). `docs/reference/configuration.md` gains a `providers` section, files
+  keys under `providers.<id>`, and says exactly which paths still read the retiring `model.provider` /
+  `model.api_base` / `model.api_key` until #3128 lands.
+
 ## [0.166.0] - 2026-09-14
 
 ### Added
