@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import re
+import time
 from collections.abc import AsyncIterator, Callable
 
 import httpcore
@@ -196,7 +197,11 @@ def _gateway_wire_default() -> bool | None:
 # The prompt is MEASURED, not guessed: chars/4 undercounts code by ~20%, more than the whole
 # margin that matters here. Each finished call records its real ``input_tokens`` per
 # character of request body, per conversation, and later requests are sized off that.
-_LEARNED_WINDOWS: dict[str, int] = {}  # model -> the shared window its provider enforces
+# "endpoint|model" -> (the shared window its provider enforces, when it was learned). Keyed by
+# endpoint too, so two connections serving one model id with different windows never size
+# each other; expired after an hour, so an operator raising the window isn't held to the old one.
+_LEARNED_WINDOWS: dict[str, tuple[int, float]] = {}
+_LEARNED_WINDOW_TTL_S = 3_600.0
 _CALIBRATIONS: dict[str, tuple[float, int]] = {}  # key -> (tokens per char, chars measured)
 _MAX_CALIBRATIONS = 256
 # Calls this small are dominated by chat-template and tool-schema overhead that the request
@@ -252,9 +257,9 @@ def _request_chars(payload: dict) -> int:
     return len(json.dumps(messages, ensure_ascii=False)) + len(json.dumps(payload.get("tools") or [], ensure_ascii=False))
 
 
-def _opening(message: object) -> str:
+def _opening(message: object, limit: int = 512) -> str:
     content = message.get("content", "") if isinstance(message, dict) else ""
-    return (content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))[:512]
+    return (content if isinstance(content, str) else json.dumps(content, ensure_ascii=False))[:limit]
 
 
 def _calibration_key(model: str, payload: dict) -> str:
@@ -264,11 +269,13 @@ def _calibration_key(model: str, payload: dict) -> str:
     system prompt but not a task, and two chats with one agent share a system prompt but
     not a first turn — and their content mix, so their tokens per char, differs (JSON tool
     output runs ~0.35, code ~0.22). A sibling's ratio would size this request wrong. When
-    compaction rewrites the head, the conversation simply starts a fresh key."""
+    compaction rewrites the head, the conversation simply starts a fresh key. The task is
+    hashed to 8 KB, not 512 chars: templated lanes share long preambles before the part
+    that tells them apart."""
     messages = [m for m in payload.get("messages") or [] if isinstance(m, dict)]
     system = next((m for m in messages if m.get("role") in ("system", "developer")), None)
     first = next((m for m in messages if m.get("role") not in ("system", "developer")), None)
-    head = f"{_opening(system)}\x00{_opening(first)}"
+    head = f"{_opening(system)}\x00{_opening(first, 8_192)}"
     return f"{model}|{hashlib.sha1(head.encode()).hexdigest()[:16]}"
 
 
@@ -281,9 +288,21 @@ def _learn_window(exc: BaseException, model: str) -> int | None:
         if match:
             window = int(match.group(1))
             if model and window > 0:
-                _LEARNED_WINDOWS[model] = window
+                _LEARNED_WINDOWS[model] = (window, time.monotonic())
             return window
     return None
+
+
+def _learned_window(model: str) -> int | None:
+    """The shared window learned for ``model`` ("endpoint|model"), unless it has expired."""
+    learned = _LEARNED_WINDOWS.get(model)
+    if not learned:
+        return None
+    window, at = learned
+    if time.monotonic() - at > _LEARNED_WINDOW_TTL_S:
+        _LEARNED_WINDOWS.pop(model, None)
+        return None
+    return window
 
 
 def _fitted_budget(cal_key: str, chars: int, requested: int, window: int | None) -> int | None:
@@ -323,7 +342,8 @@ def _fit_output_budget(payload: dict, model: str) -> None:
         return
     chars = _request_chars(payload)
     cal_key = _calibration_key(model, payload)
-    room = _fitted_budget(cal_key, chars, requested, _LEARNED_WINDOWS.get(model))
+    window = _learned_window(model)
+    room = _fitted_budget(cal_key, chars, requested, window)
     if room is not None:
         payload[key] = room
         log.info(
@@ -331,7 +351,7 @@ def _fit_output_budget(payload: dict, model: str) -> None:
             requested,
             room,
             model,
-            _LEARNED_WINDOWS[model],
+            window,
         )
     # A call carrying media doesn't calibrate: its reported tokens include the images,
     # which the char count leaves out, so its ratio would overstate every later prompt.
@@ -430,7 +450,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
                         extra = getattr(msg, "additional_kwargs", None) or {}
                         msg_dict["reasoning_content"] = extra.get("reasoning_content") or ""
         try:
-            _fit_output_budget(payload, self.model_name or "")
+            _fit_output_budget(payload, self._window_key())
         except Exception:  # noqa: BLE001 — sizing must never break a request; send it as configured
             log.debug("[llm] output-budget sizing skipped", exc_info=True)
         return payload
@@ -458,7 +478,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             log.warning(
                 "[llm] %s overflowed its %d-token window; retrying once with max_tokens=%d (#3502)",
                 self.model_name,
-                _LEARNED_WINDOWS.get(self.model_name or "", 0),
+                _learned_window(self._window_key()) or 0,
                 retry,
             )
         async for chunk in self._stream_measured(args, {**kwargs, "max_tokens": retry}, {}):
@@ -486,12 +506,16 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         except Exception:  # noqa: BLE001 — bookkeeping must never fail a finished call
             log.debug("[llm] output-budget calibration skipped", exc_info=True)
 
+    def _window_key(self) -> str:
+        """Where a learned window applies: this endpoint + model (#3502)."""
+        return f"{self.openai_api_base or ''}|{self.model_name or ''}"
+
     def _overflow_retry_budget(self, exc: BaseException) -> int | None:
         """The budget to retry an overflowed request with, or None to let the error stand."""
         try:
             if not is_context_overflow_error(exc):
                 return None
-            window = _learn_window(exc, self.model_name or "")
+            window = _learn_window(exc, self._window_key())
             measure = _REQUEST_MEASURE.get()  # the failed request's own measurement
             if not window or not measure:
                 return None

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 
 import httpx
 import pytest
@@ -60,7 +61,7 @@ def _expected_room(payload: dict, ratio: float, window: int) -> int:
 def test_learns_the_shared_window_from_the_providers_overflow_message():
     exc = ValueError(_VLLM_OVERFLOW.format(w=262144, r=32768, p=229377, t=262145))
     assert llm._learn_window(exc, "protolabs/smart") == 262_144
-    assert llm._LEARNED_WINDOWS["protolabs/smart"] == 262_144
+    assert llm._learned_window("protolabs/smart") == 262_144
     classic = ValueError(
         "This model's maximum context length is 128000 tokens. However, you requested 140000 tokens "
         "(120000 in the messages, 20000 in the completion). Please reduce the length of the messages."
@@ -98,7 +99,35 @@ def test_an_advertised_window_alone_never_sizes_a_request():
 
 
 def _learned(window: int = 262_144) -> None:
-    llm._LEARNED_WINDOWS["protolabs/smart"] = window
+    llm._LEARNED_WINDOWS["protolabs/smart"] = (window, time.monotonic())
+
+
+def test_a_learned_window_expires():
+    # An operator who raises the backend's window isn't held to the old one for the
+    # process's life: the next overflow (if any) re-learns it.
+    llm._LEARNED_WINDOWS["k"] = (60_000, time.monotonic() - llm._LEARNED_WINDOW_TTL_S - 1)
+    assert llm._learned_window("k") is None
+
+
+def test_a_window_learned_on_one_endpoint_never_sizes_another():
+    def model(base):
+        return _ReasoningChatOpenAI(model="protolabs/smart", api_key="sk-test", base_url=base, max_tokens=32_768)
+
+    small, big = model("http://small-gw/v1"), model("http://big-gw/v1")
+    messages = [SystemMessage("You are the reviewer."), HumanMessage("x" * 700_000)]
+    llm._LEARNED_WINDOWS[small._window_key()] = (200_000, time.monotonic())  # ~21k of room
+    for m in (small, big):
+        body = m._get_request_payload(messages)
+        llm._CALIBRATIONS[llm._calibration_key(m._window_key(), body)] = (0.25, llm._request_chars(body))
+    assert small._get_request_payload(messages)["max_completion_tokens"] < 32_768
+    assert big._get_request_payload(messages)["max_completion_tokens"] == 32_768
+
+
+def test_templated_lanes_that_share_a_long_preamble_still_get_their_own_key():
+    preamble = "Review PR #3526 against the diff below. " * 30  # ~1.2 KB shared by every lane
+    a = _payload("x", system="You are a review-finder.", task=preamble + "Angle: correctness")
+    b = _payload("x", system="You are a review-finder.", task=preamble + "Angle: cross-file")
+    assert llm._calibration_key("m", a) != llm._calibration_key("m", b)
 
 
 def test_a_prompt_that_would_overflow_the_reservation_gets_the_room_that_fits():
@@ -247,7 +276,7 @@ async def test_an_overflow_is_retried_once_with_the_budget_that_fits_then_sized_
     convo += [AIMessage("ok"), HumanMessage("b" * 30_000)]
     await model.ainvoke(convo)
     assert sent[1] == 16_384 and llm._MIN_OUTPUT_TOKENS <= sent[2] < 16_384
-    assert llm._LEARNED_WINDOWS["protolabs/smart"] == 60_000
+    assert llm._learned_window("http://gw.test/v1|protolabs/smart") == 60_000
 
     # 3. The window is known now: the next near-window call is sized before it's sent.
     convo += [AIMessage("ok"), HumanMessage("c" * 5_000)]
