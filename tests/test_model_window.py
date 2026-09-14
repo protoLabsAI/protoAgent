@@ -87,3 +87,41 @@ def test_unreachable_gateway_is_none_and_not_refetched(monkeypatch):
     assert model_window.context_window_for(_cfg()) is None
     assert model_window.context_window_for(_cfg()) is None  # cached miss → no second fetch
     assert n["calls"] == 1
+
+
+def _window_row_get(seen: list):
+    def fake_get(url, headers=None, timeout=None):
+        seen.append((headers or {}).get("Authorization"))
+        return _Resp(200, {"data": [{"model_name": "protolabs/smart", "model_info": {"max_input_tokens": 262144}}]})
+
+    return fake_get
+
+
+def test_authenticates_with_the_env_key_when_the_config_key_is_blank(monkeypatch):
+    # A fleet agent's gateway key arrives through the environment (its stack env or
+    # secrets manager) and `model.api_key` stays blank by design. The lookup read only
+    # the config field, went out keyless, and the gateway answered 401 "No api key
+    # passed in" — the window stayed unknown for the process's whole life (#3502).
+    seen: list = []
+    monkeypatch.setattr(httpx, "get", _window_row_get(seen))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    assert model_window.context_window_for(_cfg(api_key="")) == 262144
+    assert seen == ["Bearer sk-from-env"]
+
+
+def test_the_config_key_still_wins_over_the_env_key(monkeypatch):
+    # Same precedence as the gateway client itself (graph.llm._build_llm_kwargs).
+    seen: list = []
+    monkeypatch.setattr(httpx, "get", _window_row_get(seen))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    assert model_window.context_window_for(_cfg(api_key="sk-config")) == 262144
+    assert seen == ["Bearer sk-config"]
+
+
+def test_no_key_anywhere_still_probes_without_auth(monkeypatch):
+    # A keyless local endpoint (vLLM, Ollama) serves model info unauthenticated.
+    seen: list = []
+    monkeypatch.setattr(httpx, "get", _window_row_get(seen))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert model_window.context_window_for(_cfg(api_key="")) == 262144
+    assert seen == [None]
