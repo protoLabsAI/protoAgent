@@ -84,22 +84,31 @@ def test_infra_paths_are_late_bound(monkeypatch, tmp_path):
     assert hub.data_home() == tmp_path / "isolated"
 
 
-def test_known_box_roots_dedupes_and_includes_existing_desktop_root(tmp_path, monkeypatch):
+def test_the_deck_box_roots_are_infra_paths_not_a_copy(tmp_path, monkeypatch):
+    """#3497: the deck kept its own `DESKTOP_APP_ID`, `desktop_box_roots()` and
+    `known_box_roots()` beside infra.paths' (#3492), and the copies drifted — the Linux
+    desktop root was wrong in both and was fixed twice. The deck's names now late-bind to
+    infra.paths, so a patch there steers the deck; a copy grown back here would ignore it."""
+    from infra import paths as real
+
     box = tmp_path / "box"
     box.mkdir()
     desktop = tmp_path / "desktop-appdata"
     desktop.mkdir()
-    monkeypatch.setattr(hub, "box_root", lambda: box)
-    monkeypatch.setattr(hub, "data_home", lambda: box)  # same as box_root → deduped
-    monkeypatch.setattr(hub, "desktop_box_roots", lambda: [desktop, tmp_path / "missing"])
-    roots = hub.known_box_roots()
-    assert roots == [box.resolve(), desktop.resolve()]
+    monkeypatch.delenv("PROTOAGENT_BOX_ROOT", raising=False)
+    monkeypatch.setattr(real, "data_home", lambda: box)  # box root == data home → listed once
+    monkeypatch.setattr(real, "desktop_box_roots", lambda: [desktop, tmp_path / "missing"])
+    assert hub.desktop_box_roots() == [desktop, tmp_path / "missing"]
+    assert hub.known_box_roots() == [box.resolve(), desktop.resolve()]  # deduped, existing only
+    assert hub.DESKTOP_APP_ID == real.DESKTOP_APP_ID
 
 
-def test_desktop_box_root_is_the_tauri_app_data_dir(monkeypatch):
-    roots = hub.desktop_box_roots()
-    assert len(roots) == 1
-    assert roots[0].name == hub.DESKTOP_APP_ID
+def test_an_unpatched_deck_test_never_sees_the_real_desktop_fleet():
+    """#3497: conftest pins `infra.paths.desktop_box_roots` to [] so a developer's installed
+    desktop app never leaks into a test. The deck's old copy escaped that pin — a deck test
+    that forgot to patch it read the real `~/Library/Application Support/<app id>`."""
+    assert hub.desktop_box_roots() == []
+    assert all(r.name != hub.DESKTOP_APP_ID for r in hub.known_box_roots())
 
 
 def test_read_heartbeats_skips_dead_and_own_pid_and_never_unlinks(tmp_path, monkeypatch):
@@ -704,16 +713,3 @@ def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, 
     (inst / "server.pid").write_text(json.dumps({"pid": 4242, "port": 7871}))
     cand = hub._pidfile_candidate()
     assert cand is not None and cand.pid == 4242 and cand.url == "http://127.0.0.1:7871"
-
-
-@pytest.mark.skipif(os.name == "nt", reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS")
-def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
-    """Review: the desktop points its sidecar's PROTOAGENT_HOME at Tauri's app_config_dir —
-    `$XDG_CONFIG_HOME`/`~/.config/<id>` on Linux, not the data dir."""
-    monkeypatch.setattr(hub.sys, "platform", "linux")
-    monkeypatch.setattr(hub.os, "name", "posix")
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
-    assert hub.desktop_box_roots() == [tmp_path / "cfg" / hub.DESKTOP_APP_ID]
-    monkeypatch.delenv("XDG_CONFIG_HOME")
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    assert hub.desktop_box_roots() == [tmp_path / "home" / ".config" / hub.DESKTOP_APP_ID]

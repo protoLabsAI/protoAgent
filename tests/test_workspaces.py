@@ -134,6 +134,20 @@ def test_the_linux_desktop_root_is_taurus_config_dir(tmp_path, monkeypatch):
     assert fresh.desktop_box_roots() == [tmp_path / "home" / ".config" / fresh.DESKTOP_APP_ID]
 
 
+def test_the_desktop_root_is_named_after_the_tauri_app_id_on_this_platform():
+    """The one `desktop_box_roots` (the deck uses it too since #3497) names the desktop's dir
+    after its Tauri identifier on whatever platform runs the suite — the macOS and Windows
+    branches get no other coverage. (A fresh copy of the module: conftest pins
+    `desktop_box_roots` on the imported one.)"""
+    import importlib.util
+
+    spec = importlib.util.find_spec("infra.paths")
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    roots = fresh.desktop_box_roots()
+    assert len(roots) == 1 and roots[0].name == fresh.DESKTOP_APP_ID
+
+
 def test_create_chooses_and_records_its_port_under_the_machine_wide_lock(root, monkeypatch):
     """CodeRabbit (#3492): the cross-instance scan is only a snapshot — two instances creating
     members at the same moment could both read a port as free and both record it. The pick

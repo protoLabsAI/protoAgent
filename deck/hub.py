@@ -73,9 +73,10 @@ FLEET_TOKEN_FILE = ".fleet-token"
 # (graph/workspaces/manager.py::is_workspace_member).
 WORKSPACE_MARKER = "workspace.yaml"
 # The Tauri identifier — the desktop app sets PROTOAGENT_HOME = PROTOAGENT_BOX_ROOT = its
-# per-user app-data dir for this id (apps/desktop/src-tauri/src/lib.rs), so a shell that
-# wants the desktop hub's heartbeats and fleet token has to look there.
-DESKTOP_APP_ID = "studio.protolabs.protoagent"
+# per-user app-config dir for this id (apps/desktop/src-tauri/src/lib.rs), so a shell that
+# wants the desktop hub's heartbeats and fleet token has to look there. Defined once, in
+# infra.paths (#3497).
+DESKTOP_APP_ID = _paths.DESKTOP_APP_ID
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -102,6 +103,20 @@ def box_root() -> Path:
 
 def data_home() -> Path:
     return _paths.data_home()
+
+
+# Which box roots this machine uses has ONE definition, in infra.paths (#3497). The deck kept
+# its own copy of both beside the port allocator's, and the two drifted: the Linux desktop
+# root was wrong in both and had to be fixed twice. Delegating keeps them one — and, because
+# the lookup is late, the test suite's pin on `infra.paths.desktop_box_roots` reaches the deck
+# too. Note `known_box_roots` calls infra.paths' OWN `desktop_box_roots`: a test steering it
+# patches `infra.paths`, not these names.
+def desktop_box_roots() -> list[Path]:
+    return _paths.desktop_box_roots()
+
+
+def known_box_roots() -> list[Path]:
+    return _paths.known_box_roots()
 
 
 def is_protoagent_pid(pid: int) -> bool:
@@ -261,39 +276,6 @@ def is_loopback(url: str) -> bool:
 
 def _loopback(port: int) -> str:
     return f"http://127.0.0.1:{port}"
-
-
-def desktop_box_roots() -> list[Path]:
-    """Where the desktop app keeps its box root on each platform: Tauri's
-    ``app_config_dir`` for :data:`DESKTOP_APP_ID`, which is where the desktop points the
-    sidecar's ``PROTOAGENT_HOME`` / ``PROTOAGENT_BOX_ROOT``. On macOS and Windows that is
-    the same dir as ``app_data_dir``; on Linux it is ``$XDG_CONFIG_HOME`` (``~/.config``),
-    not the data dir. Existence is checked by the caller."""
-    home = Path.home()
-    if sys.platform == "darwin":
-        return [home / "Library" / "Application Support" / DESKTOP_APP_ID]
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA", "").strip()
-        base = Path(appdata) if appdata else home / "AppData" / "Roaming"
-        return [base / DESKTOP_APP_ID]
-    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
-    base = Path(xdg) if xdg else home / ".config"
-    return [base / DESKTOP_APP_ID]
-
-
-def known_box_roots() -> list[Path]:
-    """Every box root this machine is known to use, existing dirs only, deduped in
-    priority order: this shell's resolved box root, the plain data home, the desktop's."""
-    seen: list[Path] = []
-    for p in [box_root(), data_home(), *desktop_box_roots()]:
-        try:
-            rp = p.expanduser().resolve()
-        except OSError:
-            continue
-        if rp in seen or not rp.is_dir():
-            continue
-        seen.append(rp)
-    return seen
 
 
 def is_member_root(instance_root: Path | None) -> bool:
