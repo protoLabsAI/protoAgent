@@ -1092,11 +1092,14 @@ class A2aAdapter(Adapter):
         # Wall-clock start of the wire round-trips, used to flag a suspiciously short reply
         # relative to how long the dispatch took (#3085) and to anchor the per-call cap below.
         t0 = time.monotonic()
-        # An explicit per-call ``timeout`` is the caller's "max seconds to wait for the reply"
-        # (``delegate_to(timeout=…)``). Against a peer that answers inline it bounds the one
-        # held read; against one that hands the task back at once it has to bound the POLL
-        # too, or a task that keeps making progress runs straight past the caller's limit.
-        # Without one, the no-progress ``poll_timeout`` is the only bound, as it always was.
+        # An explicit per-call ``timeout`` is the caller's "max seconds to wait for the reply",
+        # and it OVERRIDES the configured bound for this call (``delegate_to(timeout=…)``) —
+        # which is how a caller runs a known-long job. Against a peer that answers inline it
+        # was the one held read's budget; against one that hands the task back at once it
+        # has to be the POLL's bound instead, and a wall clock in both directions: it stops
+        # a task that keeps progressing at N, and it also outlasts a quiet stretch longer
+        # than ``poll_timeout_s`` (one long tool call streams nothing between its start and
+        # end frames). Without one, the no-progress ``poll_timeout`` is the bound.
         hard_deadline = t0 + send_timeout if send_timeout is not None else None
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
@@ -1134,13 +1137,19 @@ class A2aAdapter(Adapter):
             # resolved by the classification block AFTER it; only a non-terminal task polls.
             progress_fingerprint = _a2a_progress_fingerprint(result)
             deadline = time.monotonic() + poll_timeout
+            poll_interval = 1.0
 
             def _within_bounds() -> bool:
                 now = time.monotonic()
-                return now < deadline and (hard_deadline is None or now < hard_deadline)
+                return now < hard_deadline if hard_deadline is not None else now < deadline
 
             while task_id and not _is_terminal(state) and not _is_input_required(state) and _within_bounds():
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(poll_interval)
+                # Back off toward 5s. Every GetTask makes a protoAgent peer load and parse the
+                # task's whole stored history — ``historyLength`` trims only the reply — on
+                # the event loop its turn is running on, so a long turn must not be polled
+                # at 1s for its whole length.
+                poll_interval = min(poll_interval * 1.5, 5.0)
                 # A2A 1.0 GetTaskRequest is {tenant, id, history_length} — `id`, not
                 # the v0.3 legacy `name` (proto: a2a.types.a2a_pb2.GetTaskRequest).
                 # The old {"name": …} shape only ever worked against 0.3 peers; a 1.0
@@ -1248,7 +1257,7 @@ class A2aAdapter(Adapter):
             if task_id and not _is_terminal(state):
                 if hard_deadline is not None and time.monotonic() >= hard_deadline:
                     raise DelegateError(
-                        f"delegate {d.name!r} still running after {int(send_timeout)}s (this call's "
+                        f"delegate {d.name!r} still running after {send_timeout:g}s (this call's "
                         f"timeout) — the peer may still be working; raise the call's timeout for a "
                         f"job this long (state={state})"
                     )

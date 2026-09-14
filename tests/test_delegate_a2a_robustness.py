@@ -385,6 +385,45 @@ def test_explicit_timeout_caps_a_poll_that_keeps_progressing(patched):
     assert 1 <= methods.count("GetTask") < 10
 
 
+def test_explicit_timeout_outlasts_a_quiet_stretch_longer_than_poll_timeout(patched):
+    """``delegate_to(timeout=…)`` is how a caller runs a known-long job, and it overrides the
+    configured bound for the call. Held inline, it was simply the read budget; polled, a
+    quiet stretch (one long tool call streams nothing between its start and end frames)
+    longer than ``poll_timeout_s`` must not cut the call off before the caller's N."""
+    reads = _clock(patched, step=1.0)
+    quiet = [_task_resp(state="TASK_STATE_WORKING") for _ in range(12)]  # identical: no progress
+    _install_capture_client(
+        patched,
+        send_resp=_task_resp(state="TASK_STATE_WORKING"),
+        get_resps=[*quiet, _task_resp(state="TASK_STATE_COMPLETED", text="done")],
+    )
+
+    assert asyncio.run(A.dispatch(_parse(poll_timeout_s=3), "hi", timeout=600)) == "done"
+    assert reads[-1] - reads[0] > 3
+
+
+def test_poll_interval_backs_off_to_five_seconds(patched):
+    slept: list[float] = []
+
+    async def _record(seconds):
+        slept.append(seconds)
+
+    patched.setattr(asyncio, "sleep", _record)
+    _clock(patched, step=0.01)
+    _install_capture_client(
+        patched,
+        send_resp=_task_resp(state="TASK_STATE_WORKING"),
+        get_resps=[
+            *[_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(8)],
+            _task_resp(state="TASK_STATE_COMPLETED", text="done"),
+        ],
+    )
+
+    assert asyncio.run(A.dispatch(_parse(), "hi")) == "done"
+    assert slept[0] == 1.0
+    assert slept == sorted(slept) and max(slept) == 5.0
+
+
 def test_no_explicit_timeout_lets_a_progressing_poll_run_past_poll_timeout(patched):
     """The other side of the cap: with no per-call timeout the bound stays no-progress only,
     so a task that keeps advancing is still waited out (#3369)."""
