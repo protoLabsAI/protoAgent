@@ -1169,7 +1169,6 @@ def test_the_shipped_example_sets_none_of_the_retiring_model_keys():
     """#3128: the example seeds every new live config (`config_io.ensure_live_config`), so an
     active `model.provider` / `api_base` / `api_key` there is copied into each instance the
     template creates — the retired fields kept alive by the file meant to teach the new ones."""
-    from pathlib import Path
 
     import yaml as _yaml
 
