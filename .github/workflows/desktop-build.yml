@@ -12,8 +12,9 @@ name: Desktop Build
 #                                       expect a SmartScreen prompt)
 #
 # Every leg smoke-tests the actual frozen sidecar (scripts/live_smoke.py --bin
-# boots it and drives a real A2A turn) BEFORE the slow Tauri bundle step, so
-# per-platform PyInstaller under-collection fails the build, not the first user.
+# boots it and drives a real A2A turn; scripts/fleet_deck_smoke.py --bin runs its
+# fleet verbs and opens the Textual deck headlessly) BEFORE the slow Tauri bundle
+# step, so per-platform PyInstaller under-collection fails the build, not the first user.
 #
 # When the org updater signing key is present, every leg also emits signed
 # updater bundles, and the updater-manifest fan-in job composes latest.json
@@ -197,6 +198,22 @@ jobs:
           BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"
           if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
           python scripts/live_smoke.py --bin "${BIN}" --timeout 180 --expect-console
+
+      - name: Smoke-test the frozen fleet deck
+        shell: bash
+        # `protoagent-server fleet` opens the Textual deck from this binary (#3473) — on a
+        # desktop-only install, the only `protoagent` on the box — yet the smoke above boots
+        # the server and never touches it (#3498). Against the same frozen binary: `fleet
+        # --help`, `fleet ls --offline --json` and `fleet --all --offline --json` (exit 0 +
+        # the JSON shape), then the hidden `fleet --self-check`, which opens the real deck
+        # under Textual's headless driver over an in-memory roster and paints its first
+        # screens (roster, filter, detail, hub tree). A Textual widget or driver module, a
+        # Rich table loaded at render time, or a deck module reached by name that PyInstaller
+        # missed fails this leg. No hub, no TTY: an empty throwaway instance + box root.
+        run: |
+          BIN="apps/desktop/src-tauri/binaries/protoagent-server-${{ matrix.target }}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
+          python scripts/fleet_deck_smoke.py --bin "${BIN}"
 
       - name: Run Windows-native path, process, and wheel regressions
         if: runner.os == 'Windows'

@@ -63,6 +63,9 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     _common(p, top=True)
+    # Hidden: the desktop build's proof that the deck loads in the FROZEN binary (#3498) —
+    # open it headlessly over an in-memory roster, paint its first screens, exit 0.
+    p.add_argument("--self-check", action="store_true", help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="cmd", required=False)
     pu = sub.add_parser("up", help="start agents — all stopped local members, or named")
     pu.add_argument("names", nargs="*")
@@ -809,6 +812,29 @@ def _offline_backend(reason: str, *, lifecycle: bool = True):
     )
 
 
+def _deck_unavailable(exc: ModuleNotFoundError) -> int:
+    print(
+        f"✗ the fleet deck is not available in this build ({exc.name}) — use `protoagent fleet ls|up|down`, "
+        "or run from a source checkout / `uv tool install protolabs-agent`",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _cmd_self_check() -> int:
+    """Hidden ``fleet --self-check`` (#3498): the deck, opened under Textual's headless driver
+    over an in-memory roster — no terminal, no hub, no disk — painting its first screens. The
+    desktop build runs it against the frozen binary (the real deck refuses a pipe). Same
+    by-name import and the same exit-2 hint as the deck when the build did not bundle it."""
+    import importlib
+
+    try:
+        selfcheck = importlib.import_module("deck.selfcheck")
+    except ModuleNotFoundError as exc:
+        return _deck_unavailable(exc)
+    return int(selfcheck.run())
+
+
 def _cmd_deck(args: argparse.Namespace) -> int:
     """Open the interactive deck. Textual is imported by NAME here so the non-interactive
     verbs and ``protoagent --help`` never load it, and a frozen build that does not bundle
@@ -826,12 +852,7 @@ def _cmd_deck(args: argparse.Namespace) -> int:
         deckapp = importlib.import_module("deck.app")
         deckdata = importlib.import_module("deck.data")
     except ModuleNotFoundError as exc:
-        print(
-            f"✗ the fleet deck is not available in this build ({exc.name}) — use `protoagent fleet ls|up|down`, "
-            "or run from a source checkout / `uv tool install protolabs-agent`",
-            file=sys.stderr,
-        )
-        return 2
+        return _deck_unavailable(exc)
     reason, lifecycle = "no hub answered", True
     if args.all_hubs:
         # `--all` opens on the tree, which is the one view that can SHOW a hub that answered
@@ -883,6 +904,10 @@ def run_fleet_cli(argv: list[str]) -> int:
     # request onto stderr. The hub probe is chatty by design (a 401 per rejected token),
     # so keep that out of the operator's face — errors still surface as typed HubErrors.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if args.self_check:
+        if args.cmd is not None:
+            parser.error("--self-check takes no verb")
+        return _cmd_self_check()
     try:
         if args.cmd is None:
             if args.all_hubs and (args.as_json or not (sys.stdout.isatty() and sys.stdin.isatty())):

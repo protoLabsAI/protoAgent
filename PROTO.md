@@ -435,7 +435,10 @@ These are the failures that actually recur — read them before you edit.
   verb), which is why the hub model shared with the CLI lives in the Textual-free
   `deck/discovery.py`. Any hub- or member-authored string put into a widget must
   be a `rich.text.Text`: Textual parses a plain `str` as markup, and a stray `[/]`
-  raises on the UI thread (`tests/test_deck_markup.py`).
+  raises on the UI thread (`tests/test_deck_markup.py`). The frozen desktop binary ships
+  the deck, and every desktop-build leg runs it there (`scripts/fleet_deck_smoke.py --bin`,
+  #3498) through the hidden `protoagent fleet --self-check` — the deck under Textual's
+  headless driver over an in-memory roster, painting roster, filter, detail and hub tree.
 
 - **Module names.** It's `a2a_impl/` (NOT `a2a/` — that shadows the A2A SDK).
   Metrics live in `observability/` → `from observability import metrics`.

@@ -157,7 +157,10 @@ COLLECT_ALL = [
     # and `deck.hubs` — the Textual screens, and everything they pull in — are reached only by
     # name from `graph.fleet.cli` (importlib, so `--help` and the member verbs never load
     # Textual), while `deck.hub` / `deck.data` / `deck.discovery` are its static, Textual-free
-    # imports. Collect both packages whole. (~2.4 MB compressed on a 74 MB binary.)
+    # imports. Collect both packages whole. (~2.4 MB compressed on a 74 MB binary.) Every
+    # desktop-build leg then RUNS the frozen deck (`scripts/fleet_deck_smoke.py --bin`, #3498):
+    # the hidden `fleet --self-check` opens it headlessly and paints its first screens, so a
+    # module either package reaches lazily that this collect misses fails the leg.
     "textual",
     "deck",
 ]
