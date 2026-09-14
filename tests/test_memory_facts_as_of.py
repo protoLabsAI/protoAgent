@@ -64,3 +64,71 @@ def test_commons_row_dedups_because_it_cannot_be_invalidated_here():
     kb = _Store([{"id": 3, "tier": "commons", "content": "The user prefers teal."}])
     counts = consolidate_and_store(kb, ["[as of 2026-09-10] The user prefers teal."])
     assert counts == {"added": 0, "skipped": 1, "superseded": 0}
+
+
+# ── the date rule in the revision band [0.6, 0.85) (#3494 re-review) ───────────────
+# Harvest order is not chronological: the TTL sweep retires threads in DB order and a
+# delete-with-harvest can run any time. So a revision harvested LATER can be dated EARLIER
+# than the fact it matches, and must not invalidate it.
+_NEWER = "[as of 2026-09-10] The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
+_OLDER = "[as of 2026-08-11] The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
+
+
+def test_the_scenario_lands_in_the_revision_band():
+    from graph.memory_facts import _DEDUP_JACCARD, _SUPERSEDE_JACCARD, _jaccard, _split_as_of, _tokens
+
+    score = _jaccard(_tokens(_split_as_of(_NEWER)[1]), _tokens(_split_as_of(_OLDER)[1]))
+    assert _SUPERSEDE_JACCARD <= score < _DEDUP_JACCARD
+
+
+def test_an_older_revision_harvested_later_does_not_supersede_the_newer_fact():
+    kb = _Store([{"id": 7, "content": _NEWER}])
+    counts = consolidate_and_store(kb, [_OLDER])
+    assert counts == {"added": 0, "skipped": 1, "superseded": 0}
+    assert kb.invalidated == []
+    assert [r["content"] for r in kb.list_chunks()] == [_NEWER]
+
+
+def test_an_older_revision_does_not_supersede_the_newer_fact_in_the_real_store(tmp_path):
+    from knowledge.store import KnowledgeStore
+
+    ks = KnowledgeStore(tmp_path / "k.db")
+    # Thread B (last active 09-10) is retired first, e.g. deleted from the console with
+    # harvest; thread A (last active 08-11) is retired later by the TTL sweep.
+    consolidate_and_store(ks, [_NEWER], source="thread-B")
+    counts = consolidate_and_store(ks, [_OLDER], source="thread-A")
+    valid = [c.content for c in ks.list_chunks(domain="fact", limit=50)]
+    assert counts == {"added": 0, "skipped": 1, "superseded": 0}
+    assert valid == [_NEWER]
+
+
+def test_a_same_date_revision_still_supersedes():
+    same_day = "[as of 2026-09-10] The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
+    kb = _Store([{"id": 7, "content": _NEWER}])
+    counts = consolidate_and_store(kb, [same_day])
+    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
+
+
+def test_a_newer_revision_supersedes_in_the_real_store(tmp_path):
+    from knowledge.store import KnowledgeStore
+
+    ks = KnowledgeStore(tmp_path / "k.db")
+    consolidate_and_store(ks, [_OLDER], source="thread-A")
+    counts = consolidate_and_store(ks, [_NEWER], source="thread-B")
+    valid = [c.content for c in ks.list_chunks(domain="fact", limit=50)]
+    assert counts == {"added": 1, "skipped": 0, "superseded": 1}
+    assert valid == [_NEWER]
+
+
+def test_an_undated_revision_still_supersedes_a_dated_fact():
+    undated = "The user runs DeepSeek-V4-Flash and MiniCPM-V-4.6 as model endpoints."
+    kb = _Store([{"id": 7, "content": _NEWER}])
+    counts = consolidate_and_store(kb, [undated])
+    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
+
+
+def test_a_dated_revision_still_supersedes_an_undated_fact():
+    undated = "The user runs Qwen3.8-27B and MiniCPM-V-4.6 as model endpoints."
+    kb = _Store([{"id": 7, "content": undated}])
+    counts = consolidate_and_store(kb, [_OLDER])
+    assert counts["superseded"] == 1 and kb.invalidated == [(7, 1001)]
