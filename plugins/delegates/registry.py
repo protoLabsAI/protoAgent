@@ -253,7 +253,7 @@ class DelegateRegistry:
             logger.exception("[delegates] forgetting session %r conversations failed", session_id)
             return 0
 
-    def collect_late(self, conversation_key: str, name: str, *, session_id: str = "") -> bool:
+    def collect_late(self, conversation_key: str, name: str, *, session_id: str = "", incognito: bool = False) -> bool:
         """Start collecting ``name``'s unfinished task in one conversation, if its last
         address left one (#3360b); returns whether a collection is running for it.
 
@@ -263,12 +263,20 @@ class DelegateRegistry:
         READS the peer's task (``late.collect``) and delivers what it settled into
         ``session_id`` as the member's own late room message; it never re-addresses the
         member. ``False`` — and nothing started — for an address that left no pending task.
-        Never raises: a room must not fail over a courtesy.
+        ``incognito`` is the origin's flag (ADR 0069 D3b): the late answer still lands in the
+        session, but no lead turn is pushed for it. Never raises: a room must not fail over a
+        courtesy.
         """
         from . import late
 
         try:
-            return late.start(self, str(conversation_key or ""), str(name or ""), session_id=str(session_id or ""))
+            return late.start(
+                self,
+                str(conversation_key or ""),
+                str(name or ""),
+                session_id=str(session_id or ""),
+                incognito=bool(incognito),
+            )
         except Exception:  # noqa: BLE001 — best-effort, never the caller's problem
             logger.exception("[delegates] starting late collection for %r failed", name)
             return False

@@ -345,7 +345,8 @@ async def _dispatch_into_room(
         # when this gave up keeps its task, and its answer comes back to this session on a
         # later turn instead of being lost. Said to the lead so it neither re-delegates the
         # work (a duplicate task) nor tells the operator the answer is gone.
-        if registry.collect_late(thread_id, target, session_id=session_id):
+        incognito = bool(state.get("incognito")) if isinstance(state, dict) else False
+        if registry.collect_late(thread_id, target, session_id=session_id, incognito=incognito):
             result += (
                 "\n\nIt may still be working — its answer will be delivered to you automatically on "
                 "a later turn if it finishes. Do not re-delegate this."

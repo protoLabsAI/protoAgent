@@ -428,9 +428,15 @@ What it deliberately is **not**:
 - **Not forever.** A collection gives up after an hour of the task still running, or after
   losing touch with the peer eight polls in a row, and says so in the chat. A peer that
   no longer knows the task (it restarted, or dropped it) ends the collection quietly.
-- **Not proof against erasing history.** Rewinding or deleting the chat withdraws the
-  collection with everything else in [the list above](#what-continuity-does-not-survive),
-  so an answer to history you erased does not reappear in it.
+- **Not proof against erasing history.** Rewinding or deleting the chat while the member is
+  still being waited on withdraws the collection with everything else in [the list
+  above](#what-continuity-does-not-survive), so an answer to history you erased does not
+  reappear in it. So does re-pointing the delegate, changing its credential or removing it.
+- **One per member per chat.** If the same member times out again in the same chat before
+  the first answer arrives, the newer task replaces the older one, and only the newer
+  answer is collected.
+- **Quiet in incognito.** A late answer to an incognito message still lands in the chat, but
+  the lead is not woken to take it in.
 
 The lead's own `delegate_to` gets the same treatment: a foreground delegation that gives up
 on a still-working `a2a` peer tells the lead the answer will be delivered on a later turn,

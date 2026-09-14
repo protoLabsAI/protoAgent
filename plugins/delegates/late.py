@@ -17,18 +17,22 @@ Three properties hold by construction rather than by care:
   It lands the way a background ``delegate_to`` reply does — through
   ``BackgroundManager.spawn_work(result_author=…)``: persisted as the member's own room
   message, drained into the session and followed by a lead turn
-  (``server.chat._drain_background``).
-* **Erasing history withdraws it.** The pending handle obeys the conversation's invalidation
-  rules — rewind, delete, a fork onto the thread, a re-pointed delegate
-  (``conversations.forget``). A collection re-checks its handle before every poll and after
-  every ``GetTask``; one whose handle has gone delivers nothing, so an answer to history the
-  operator erased cannot reappear in it.
+  (``server.chat._drain_background``), and never a lead turn for an incognito origin.
+* **What invalidates the handle withdraws the WAIT.** A rewind, a delete or a fork onto the
+  thread drops the pending handle (``conversations.forget``), and a delegate re-pointed,
+  re-credentialed or removed from the roster no longer matches it. A collection re-checks
+  both before every poll and after every ``GetTask``; one whose handle has gone delivers
+  nothing. Once an answer has settled it is a background job like any other — an erase
+  after that point is the background store's business, exactly as for a background
+  ``delegate_to`` reply (with the default push-resume, that window is the delivery itself).
 
 The WAIT runs as a plain task, not a background job: ``spawn_work`` holds a slot in the
 background concurrency cap for its whole life, and a collection can wait on a slow peer for
 up to ``_COLLECT_MAX_S``. Only the settled result goes through ``spawn_work``, which then
 completes at once. Process-local, like the handle it polls: a restart loses both, and the
-member simply stays failed — which is all a room ever did before this existed.
+member simply stays failed — which is all a room ever did before this existed. One member
+in one conversation has one outstanding handle: a newer timeout replaces it, and the older
+collection withdraws.
 """
 
 from __future__ import annotations
@@ -66,14 +70,31 @@ LATE_MARKER = "_(Arrived after its turn — the room had already moved on.)_"
 _RUNNING: dict[tuple[str, str, str, str], asyncio.Task] = {}
 
 
-def start(registry, conversation_key: str, name: str, *, session_id: str = "") -> bool:
+def _live_delegate(registry, name: str) -> Delegate | None:
+    """``name`` as the roster defines it NOW. The registry is rebuilt on every hot-reload, so
+    the live one is read off ``STATE`` when there is one, else the one the room handed us."""
+    try:
+        from runtime.state import STATE
+
+        live = getattr(STATE, "delegate_registry", None)
+    except Exception:  # noqa: BLE001 — no runtime state (a unit test, a bare import)
+        live = None
+    roster = live if live is not None else registry
+    try:
+        return roster.get(name) if roster is not None else None
+    except Exception:  # noqa: BLE001 — an odd roster reads as "no such delegate"
+        return None
+
+
+def start(registry, conversation_key: str, name: str, *, session_id: str = "", incognito: bool = False) -> bool:
     """Collect ``name``'s unfinished task in ``conversation_key``, if its last address left one.
 
     Returns whether a collection is now running for it: ``False`` when there is nothing to
     collect (the address answered, failed some other way, or the delegate is not ``a2a``),
     or when called outside an event loop. A second call while one runs for the same task is
     a no-op that returns ``True``. ``session_id`` is where the result is delivered; blank
-    falls back to the session the handle recorded.
+    falls back to the session the handle recorded. ``incognito`` marks the origin as such
+    (ADR 0069 D3b): the result still lands in the session, but no lead turn is pushed for it.
     """
     d = registry.get(name) if registry is not None else None
     if d is None or getattr(d, "type", "") != "a2a" or not conversation_key:
@@ -91,7 +112,15 @@ def start(registry, conversation_key: str, name: str, *, session_id: str = "") -
     except RuntimeError:
         return False
     task = loop.create_task(
-        _collect_and_deliver(d, conversation_key, credential, pending, session_id or pending.session_id),
+        _collect_and_deliver(
+            d,
+            conversation_key,
+            credential,
+            pending,
+            session_id or pending.session_id,
+            incognito=bool(incognito),
+            lookup=lambda: _live_delegate(registry, d.name),
+        ),
         name=f"delegates.late.{d.name}.{pending.task_id}",
     )
     _RUNNING[key] = task
@@ -107,14 +136,17 @@ async def collect(
     *,
     sleep: Callable[[float], Awaitable] | None = None,
     clock: Callable[[], float] | None = None,
+    lookup: Callable[[], Delegate | None] | None = None,
 ) -> tuple[str, str]:
     """Poll ONE pending task until it settles; returns ``(outcome, text)``.
 
     ``outcome`` is ``ANSWERED`` (``text`` is the answer), ``PARKED`` (the task stopped on a
     question — ``text`` carries it and the resume handle, for the lead), ``FAILED`` (``text``
     says why, in words for the operator) or ``WITHDRAWN`` (deliver nothing: the handle was
-    erased, or the peer no longer knows the task). The handle is released on every settled
-    outcome. Never raises ``DelegateError``.
+    erased, the delegate changed under it, or the peer no longer knows the task). The handle
+    is released on every settled outcome. ``lookup`` returns the delegate as the roster
+    defines it now; when given, a re-pointed, re-credentialed or removed delegate withdraws
+    the collection. Never raises ``DelegateError``.
     """
     from tools.a2a_parse import _extract_context_id, _extract_text, _is_input_required, classify_answer, state_name
 
@@ -124,12 +156,21 @@ async def collect(
     sleep = sleep or asyncio.sleep
     clock = clock or time.monotonic
 
-    def held() -> bool:
-        current = conversations.pending_for(conversation_key, d.name, d.url, credential)
-        return current is not None and current.task_id == pending.task_id
-
     def release() -> None:
         conversations.forget_pending(conversation_key, d.name, d.url, credential, task_id=pending.task_id)
+
+    def held() -> bool:
+        current = conversations.pending_for(conversation_key, d.name, d.url, credential)
+        if current is None or current.task_id != pending.task_id:
+            return False
+        if lookup is not None:
+            live = lookup()
+            if live is None or live.url != d.url or _continuity_credential(live) != credential:
+                # Re-pointed, re-credentialed or removed since the address: the handle names a
+                # task on a peer — or for a principal — this roster no longer talks to.
+                release()
+                return False
+        return True
 
     started = clock()
     wait = _FIRST_POLL_S
@@ -139,17 +180,14 @@ async def collect(
         wait = min(wait * _BACKOFF, _MAX_POLL_S)
         if not held():
             return WITHDRAWN, ""
-        if clock() - started >= _COLLECT_MAX_S:
-            release()
-            return FAILED, (
-                f"stopped waiting for @{d.name}'s unfinished task after {int(_COLLECT_MAX_S // 60)} "
-                "minutes — it was still working."
-            )
+        # Past the ceiling this is the LAST look, not a skipped one: a task that finished in
+        # the final interval is still collected.
+        last_look = clock() - started >= _COLLECT_MAX_S
         try:
             result = await adapter.get_task(d, pending.task_id)
-        except DelegateError as exc:
+        except Exception as exc:  # noqa: BLE001 — DelegateError, or a reply we could not read
             failures += 1
-            if failures >= _MAX_TRANSPORT_FAILURES:
+            if failures >= _MAX_TRANSPORT_FAILURES or last_look:
                 release()
                 return FAILED, f"lost touch with @{d.name} while waiting for its unfinished task: {exc}"
             continue
@@ -192,15 +230,24 @@ async def collect(
             return FAILED, (
                 f"@{d.name} {state_name(state)} its unfinished task (state={state})" + (f": {diag}" if diag else "")
             )
-        # Still working: poll again.
+        # Still working.
+        if last_look:
+            release()
+            return FAILED, (
+                f"stopped waiting for @{d.name}'s unfinished task after {int(_COLLECT_MAX_S // 60)} "
+                "minutes — it was still working."
+            )
 
 
-async def deliver(name: str, task_id: str, session_id: str, outcome: str, text: str) -> bool:
+async def deliver(
+    name: str, task_id: str, session_id: str, outcome: str, text: str, *, incognito: bool = False
+) -> bool:
     """Hand a settled collection to its origin session as ``name``'s own late room message.
 
     Through ``BackgroundManager.spawn_work(result_author=…)``, the same path as a background
     ``delegate_to`` reply: the drain persists it as the member's room message and the
-    completion wakes the lead. A ``FAILED`` outcome settles the job as failed, so the room
+    completion wakes the lead — unless the origin was ``incognito`` (ADR 0069 D3b), which
+    skips that push-resume. A ``FAILED`` outcome settles the job as failed, so the room
     message is marked failed rather than read as the member's words. Returns whether it was
     handed over — ``False`` with no background manager (a lean/CLI context) or no session.
     """
@@ -232,24 +279,35 @@ async def deliver(name: str, task_id: str, session_id: str, outcome: str, text: 
         description=f"late reply ← {name}",
         detail=f"a2a task {task_id}",
         work=_work,
+        origin_incognito=bool(incognito),
         result_author=name,
     )
     return True
 
 
 async def _collect_and_deliver(
-    d: Delegate, conversation_key: str, credential: str, pending: conversations._Pending, session_id: str
+    d: Delegate,
+    conversation_key: str,
+    credential: str,
+    pending: conversations._Pending,
+    session_id: str,
+    *,
+    incognito: bool = False,
+    lookup: Callable[[], Delegate | None] | None = None,
 ) -> None:
     try:
-        outcome, text = await collect(d, conversation_key, credential, pending)
+        outcome, text = await collect(d, conversation_key, credential, pending, lookup=lookup)
         if outcome == WITHDRAWN:
             logger.info("[delegates] collection of @%s's task %s withdrawn", d.name, pending.task_id)
             return
-        await deliver(d.name, pending.task_id, session_id, outcome, text)
+        await deliver(d.name, pending.task_id, session_id, outcome, text, incognito=incognito)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — a collection must never take anything else down with it
         logger.exception("[delegates] collecting @%s's task %s failed", d.name, pending.task_id)
+        # Never leave a handle behind for a collection that is no longer running: a later
+        # failure of this member would find it and promise a late answer nothing will post.
+        conversations.forget_pending(conversation_key, d.name, d.url, credential, task_id=pending.task_id)
 
 
 def running() -> dict[tuple[str, str, str, str], asyncio.Task]:

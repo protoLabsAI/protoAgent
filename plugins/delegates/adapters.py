@@ -1357,13 +1357,23 @@ class A2aAdapter(Adapter):
             raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
         if r.status_code >= 400:
             raise DelegateError(f"delegate {d.name!r} HTTP {r.status_code}: {r.text[:200]}")
-        data = r.json()
+        # A malformed reply is a protocol failure the collector retries — never read as a
+        # settled task (an empty ``{}`` would classify as a bare Message, i.e. "finished").
+        try:
+            data = r.json()
+        except ValueError as exc:
+            raise DelegateError(f"delegate {d.name!r} sent a GetTask reply that is not JSON") from exc
+        if not isinstance(data, dict):
+            raise DelegateError(f"delegate {d.name!r} sent a malformed GetTask reply")
         error = data.get("error")
         if error:
             if isinstance(error, dict) and error.get("code") == _A2A_TASK_NOT_FOUND:
                 return None
             raise DelegateError(_a2a_error_detail(d, error))
-        return data.get("result") or {}
+        result = data.get("result")
+        if not isinstance(result, dict) or not result:
+            raise DelegateError(f"delegate {d.name!r} sent a GetTask reply with no task")
+        return result
 
     async def probe(self, d: Delegate) -> dict:
         import httpx

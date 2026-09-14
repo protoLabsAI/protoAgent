@@ -47,6 +47,7 @@ from plugins.delegates.registry import DelegateRegistry
 sc = importlib.import_module("server.chat")
 
 PEER_URL = "https://peer.example/a2a"
+OTHER_URL = "https://other.example/a2a"
 KEY = "thread-1"
 SESSION = "sess-1"
 _real_sleep = asyncio.sleep  # captured before any fixture swaps it for a no-op
@@ -129,7 +130,10 @@ def wire(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(monkeypatch):
+    # A collection re-reads the live roster off STATE; start every test with none, so the
+    # registry a test hands in IS the roster unless the test says otherwise.
+    monkeypatch.setattr(rs.STATE, "delegate_registry", None, raising=False)
     conversations.reset()
     late._RUNNING.clear()
     yield
@@ -254,7 +258,8 @@ async def test_no_handle_for_a_resume(wire, monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(_time, "monotonic", lambda: next(ticks))
         with pytest.raises(DelegateError, match="still running"):
-            await _registry().dispatch("peer", "main", resume_task_id="t0")
+            # WITH a conversation key, so only the adapter's resume guard can keep it out.
+            await _registry().dispatch("peer", "main", resume_task_id="t0", conversation_key=KEY)
     assert conversations.snapshot_pending() == {}
 
 
@@ -276,6 +281,7 @@ async def test_collection_polls_with_get_task_only_and_delivers_the_late_answer(
     [job] = mgr.jobs
     assert job["result_author"] == "peer"
     assert job["origin_session"] == SESSION
+    assert job["origin_incognito"] is False
     assert job["status"] == "completed"
     assert job["result"].startswith(late.LATE_MARKER)
     assert "the late answer" in job["result"]
@@ -438,6 +444,115 @@ async def test_a_collection_that_never_settles_stops_at_the_ceiling(wire, monkey
     assert _pending() is None
 
 
+async def test_the_ceiling_still_takes_one_last_look(wire, monkeypatch):
+    """Past the hour the collection does one final read rather than skipping it: a task that
+    finished in the last interval is still collected."""
+    reg = _registry()
+    await _abandon(reg, wire, monkeypatch)
+    wire(lambda _u, _b: _ok(state="TASK_STATE_COMPLETED", text="just in time"))
+    ticks = itertools.count(0.0, 4000.0)
+
+    outcome, text = await late.collect(
+        reg.get("peer"), KEY, "", _pending(), sleep=lambda _s: _real_sleep(0), clock=lambda: next(ticks)
+    )
+
+    assert (outcome, text) == (late.ANSWERED, "just in time")
+
+
+class _NotJson(_Resp):
+    def json(self):
+        raise ValueError("<html>bad gateway</html>")
+
+
+async def test_a_malformed_reply_is_retried_not_read_as_finished(wire, monkeypatch, mgr):
+    """A non-JSON body, or ``result: null`` (which would classify as a bare Message, i.e.
+    "finished"), is a protocol failure to retry — never a settled task."""
+    reg = _registry()
+    await _abandon(reg, wire, monkeypatch)
+    script = iter(
+        [
+            _NotJson({}),
+            _Resp({"jsonrpc": "2.0", "result": None}),
+            _ok(state="TASK_STATE_COMPLETED", text="the real answer"),
+        ]
+    )
+    wire(lambda _u, _b: next(script))
+
+    reg.collect_late(KEY, "peer", session_id=SESSION)
+    await _drain_collections()
+
+    [job] = mgr.jobs
+    assert job["status"] == "completed" and "the real answer" in job["result"]
+
+
+async def test_a_collection_that_dies_releases_its_handle(wire, monkeypatch, mgr):
+    """Otherwise the member's NEXT failure, of any kind, finds the stale handle and promises a
+    late answer that nothing is waiting for."""
+    reg = _registry()
+    await _abandon(reg, wire, monkeypatch)
+
+    async def _bug(*_a, **_k):
+        raise RuntimeError("a bug in the collector")
+
+    monkeypatch.setattr(late, "collect", _bug)
+    reg.collect_late(KEY, "peer", session_id=SESSION)
+    await _drain_collections()
+
+    assert _pending() is None and mgr.jobs == []
+
+
+async def test_incognito_rides_through_to_the_delivery(wire, monkeypatch, mgr):
+    reg = _registry()
+    await _abandon(reg, wire, monkeypatch)
+    wire(lambda _u, _b: _ok(state="TASK_STATE_COMPLETED", text="quietly"))
+
+    reg.collect_late(KEY, "peer", session_id=SESSION, incognito=True)
+    await _drain_collections()
+
+    # The manager skips the push-resume for an incognito origin (ADR 0069 D3b); the answer
+    # still lands in the session.
+    assert mgr.jobs[0]["origin_incognito"] is True
+
+
+@pytest.mark.parametrize(
+    "roster",
+    [
+        [{"name": "peer", "type": "a2a", "url": OTHER_URL}],
+        [{"name": "peer", "type": "a2a", "url": PEER_URL, "auth": {"scheme": "bearer", "token": "rotated"}}],
+        [],
+    ],
+    ids=["re-pointed", "re-credentialed", "removed"],
+)
+async def test_a_delegate_changed_under_a_collection_withdraws_it(wire, monkeypatch, mgr, roster):
+    """The handle names a task on one peer for one principal. A hot-reload that re-points the
+    delegate, rotates its token or removes it must stop the polling — not keep sending the
+    old credential to the old url for an hour and then post the answer under the name."""
+    reg = _registry()
+    await _abandon(reg, wire, monkeypatch)
+    bodies = wire(lambda _u, _b: _ok(state="TASK_STATE_COMPLETED", text="from the old peer"))
+    start = len(bodies)
+    monkeypatch.setattr(rs.STATE, "delegate_registry", DelegateRegistry(roster), raising=False)
+
+    reg.collect_late(KEY, "peer", session_id=SESSION)
+    await _drain_collections()
+
+    assert _methods(bodies[start:]) == []  # not one GetTask after the change
+    assert mgr.jobs == []
+    assert _pending() is None
+
+
+async def test_a_hot_reload_that_changes_nothing_keeps_collecting(wire, monkeypatch, mgr):
+    reg = _registry()
+    await _abandon(reg, wire, monkeypatch)
+    wire(lambda _u, _b: _ok(state="TASK_STATE_COMPLETED", text="still mine"))
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _registry(), raising=False)  # rebuilt, same row
+
+    reg.collect_late(KEY, "peer", session_id=SESSION)
+    await _drain_collections()
+
+    assert "still mine" in mgr.jobs[0]["result"]
+
+
 async def test_no_background_manager_means_nothing_is_delivered(monkeypatch):
     monkeypatch.setattr(rs.STATE, "background_mgr", None, raising=False)
     assert await late.deliver("peer", "t9", SESSION, late.ANSWERED, "x") is False
@@ -579,8 +694,8 @@ class _Room:
             )
         return f"fast says {len(self.calls)}"
 
-    def collect_late(self, conversation_key, name, *, session_id=""):
-        self.collect_calls.append((conversation_key, name, session_id))
+    def collect_late(self, conversation_key, name, *, session_id="", incognito=False):
+        self.collect_calls.append((conversation_key, name, session_id, incognito))
         return self._collectable
 
 
@@ -608,7 +723,7 @@ async def test_a_member_the_room_gave_up_on_is_collected_and_never_re_addressed(
     # The round policy is untouched: `slow` failed once and was dropped — never retried —
     # and with one survivor the cast guard ended the room after round one.
     assert room.calls == ["fast", "slow"]
-    assert room.collect_calls == [(sc._resolve_thread_id(None, "room-s1"), "slow", "room-s1")]
+    assert room.collect_calls == [(sc._resolve_thread_id(None, "room-s1"), "slow", "room-s1", False)]
     slow = next(o for o in outcomes if o["author"] == "slow")
     assert slow["collecting"] is True and slow["ok"] is False
     assert "Still waiting on @slow" in reply
@@ -622,6 +737,15 @@ async def test_a_failure_with_nothing_to_collect_adds_no_note(monkeypatch):
 
     assert "Still waiting" not in reply
     assert next(o for o in outcomes if o["author"] == "slow")["collecting"] is False
+
+
+async def test_an_incognito_room_collects_without_waking_the_lead(monkeypatch):
+    room = _Room()
+    _wire_room(monkeypatch, room)
+
+    await sc._at_delegate_exchange("@fast @slow what broke?", "room-s4", {"incognito": True})
+
+    assert [call[3] for call in room.collect_calls] == [True]
 
 
 async def test_no_session_means_no_collection(monkeypatch):
@@ -657,6 +781,10 @@ async def test_delegate_to_tells_the_lead_a_late_answer_is_coming(monkeypatch, c
     )
 
     [tool_message] = [m for m in command.update["messages"] if isinstance(m, ToolMessage)]
-    assert room.collect_calls == [(sc._resolve_thread_id(None, "lead-s1"), "slow", "lead-s1")]
-    assert ("delivered to you automatically" in tool_message.content) is collecting
-    assert "Do not re-delegate" in tool_message.content if collecting else True
+    assert room.collect_calls == [(sc._resolve_thread_id(None, "lead-s1"), "slow", "lead-s1", False)]
+    if collecting:
+        assert "delivered to you automatically" in tool_message.content
+        assert "Do not re-delegate" in tool_message.content
+    else:
+        assert "delivered to you automatically" not in tool_message.content
+        assert "re-delegate" not in tool_message.content

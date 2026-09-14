@@ -1560,10 +1560,15 @@ async def _at_delegate_exchange(
     # nowhere to deliver to, is exactly the old behaviour.
     collect_late = getattr(reg, "collect_late", None)
     if collect_late is not None and session_id:
+        # An incognito origin still gets the answer in its session, but no lead turn is pushed
+        # for it — an on-time `@` answer runs no lead turn either (ADR 0069 D3b).
+        incognito = bool((request_metadata or {}).get("incognito"))
         for o in outcomes:
             if not o.get("ok") and o.get("author"):
                 try:
-                    o["collecting"] = bool(collect_late(tid, str(o["author"]), session_id=session_id))
+                    o["collecting"] = bool(
+                        collect_late(tid, str(o["author"]), session_id=session_id, incognito=incognito)
+                    )
                 except Exception:  # noqa: BLE001 — a courtesy must never fail the room
                     log.exception("[room] starting late collection for @%s failed", o.get("author"))
 

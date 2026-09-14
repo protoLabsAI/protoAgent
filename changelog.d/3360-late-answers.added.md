@@ -5,7 +5,8 @@
   after its turn, and the lead gets a turn to take it in, the same way a background `delegate_to` reply
   arrives. A failure arrives as a failed message; a task that stops on a question hands the lead the question
   and its resume handle. Collection never sends the member anything, so it cannot open a duplicate task, and
-  the member stays dropped from the room's remaining rounds. Rewinding or deleting the chat withdraws it, so
-  an answer to erased history cannot reappear. The lead's own foreground `delegate_to` gets the same: it is
+  the member stays dropped from the room's remaining rounds. Rewinding or deleting the chat while it is still
+  waiting withdraws it, and so does re-pointing, re-crediting or removing the delegate. In an incognito chat
+  the late answer lands without waking the lead. The lead's own foreground `delegate_to` gets the same: it is
   told the answer will arrive on a later turn instead of re-delegating the work. Gives up after an hour, or
   after losing touch with the peer eight polls in a row, and says so. In-memory, so a restart ends it.
