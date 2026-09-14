@@ -342,37 +342,56 @@ async def test_an_edit_does_not_resurrect_a_delegate_deleted_meanwhile(
 
 
 # ── nothing here blocks the event loop ───────────────────────────────────────────────
+#
+# Not timed. These used to heartbeat the loop and require every gap < 0.3s while a
+# 0.6s blocking step ran; a shared CI runner stalls a loop that long with nothing wrong
+# (#3516's run failed at 0.33s). The property is "the loop keeps serving while the
+# blocking step is in flight", so check exactly that: the step parks until a coroutine
+# ON the loop answers it. Offloaded to a worker thread, the loop is free and answers at
+# once; run inline on the loop, nothing can answer, and the step gives up empty-handed.
 
 
-async def _max_loop_stall(action) -> float:
-    """Run `action` while a heartbeat ticks on the loop; return the longest gap."""
-    stop = asyncio.Event()
-    gaps: list[float] = []
+class _LoopRendezvous:
+    """A blocking step that only finishes early if the event loop answers it meanwhile."""
 
-    async def _beat():
-        last = time.monotonic()
-        while not stop.is_set():
-            await asyncio.sleep(0.02)
-            now = time.monotonic()
-            gaps.append(now - last)
-            last = now
+    def __init__(self, timeout: float = 10.0) -> None:
+        self.entered, self.answered = threading.Event(), threading.Event()
+        self.timeout = timeout
+        self.thread: int | None = None
+        self.served: bool | None = None
 
-    beat = asyncio.create_task(_beat())
-    await asyncio.sleep(0.05)
-    try:
-        await action()
-    finally:
-        stop.set()
-        await beat
-    return max(gaps)
+    def park(self) -> None:
+        """Call from the blocking step: record its thread, wait for the loop to answer."""
+        self.thread = threading.get_ident()
+        self.entered.set()
+        self.served = self.answered.wait(self.timeout)
+
+    async def answer(self) -> None:
+        """Runs on the loop: answer the step once it is parked."""
+        await _wait_for(self.entered, timeout=self.timeout + 5)
+        self.answered.set()
+
+    async def run(self, action) -> None:
+        """Run `action` (which reaches `park`) and assert the loop served it meanwhile."""
+        loop_thread = threading.get_ident()
+        answering = asyncio.create_task(self.answer())
+        try:
+            await action()
+        finally:
+            await answering
+        assert self.thread is not None, "the blocking step never ran"
+        assert self.thread != loop_thread, "the blocking step ran ON the event loop thread"
+        assert self.served, "the event loop served nothing while the blocking step was in flight"
 
 
 async def test_adding_an_mcp_server_does_not_freeze_the_server_during_the_reload(monkeypatch, live_config):
     # The route used to call the applier INLINE: every other request waited out the reload.
     import server.agent_init as ai
 
+    meet = _LoopRendezvous()
+
     def _slow_reload(*_a, **_k):
-        time.sleep(0.6)  # a real rebuild takes seconds
+        meet.park()  # a real rebuild takes seconds
         rs.STATE.graph_config = LangGraphConfig.from_yaml(str(live_config))
         return True, "reloaded"
 
@@ -383,8 +402,7 @@ async def test_adding_an_mcp_server_does_not_freeze_the_server_during_the_reload
             r = await client.post("/api/mcp/servers", json={"name": "x", "transport": "stdio", "command": "x"})
             assert r.status_code == 200, r.text
 
-        stall = await _max_loop_stall(_add)
-    assert stall < 0.3, f"the event loop stalled {stall:.2f}s during the reload"
+        await meet.run(_add)
 
 
 async def test_saving_a_delegate_does_not_freeze_the_server(monkeypatch, live_config, tmp_path):
@@ -393,11 +411,13 @@ async def test_saving_a_delegate_does_not_freeze_the_server(monkeypatch, live_co
     import plugins.delegates.api as dapi
     from plugins.delegates import store
 
+    meet = _LoopRendezvous()
+
     async def _noreload():
         return True, "reloaded"
 
     def _slow_upsert(entry, **_kw):
-        time.sleep(0.6)  # waiting on a lock a reload holds
+        meet.park()  # waiting on a lock a reload holds
         return []
 
     monkeypatch.setattr(dapi, "_reload", _noreload)
@@ -412,5 +432,4 @@ async def test_saving_a_delegate_does_not_freeze_the_server(monkeypatch, live_co
             )
             assert r.status_code == 200, r.text
 
-        stall = await _max_loop_stall(_create)
-    assert stall < 0.3, f"the event loop stalled {stall:.2f}s while a delegate was saved"
+        await meet.run(_create)
