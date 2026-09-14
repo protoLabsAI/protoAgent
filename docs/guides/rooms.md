@@ -121,11 +121,11 @@ note appears on the very first `@` in a busy thread.
 
 ## Multi-round rooms
 
-By default an address is **one round**: each addressee answers once, and the exchange
-ends. That is fine for *"ask two people the same thing"* and useless for *"let them work
-it out"* — neither ever sees the other's answer as something to respond to.
+With `room.max_rounds: 1` an address is **one round**: each addressee answers once, and
+the exchange ends. That is fine for *"ask two people the same thing"* and useless for
+*"let them work it out"* — neither ever sees the other's answer as something to respond to.
 
-Raise `room.max_rounds` and the same cast runs again:
+Above 1 the same cast runs again. The default is `3`:
 
 ```yaml
 room:
@@ -169,11 +169,12 @@ room:
   `a2a` delegate, `poll_timeout_s` is the time since the last material task observation,
   not a cap on the whole turn. A `SendMessage` or `GetTask` response that changes the
   same task's visible state, context, status message, or artifact content resets that
-  inactivity clock; repeated identical `TASK_STATE_WORKING` polls do not. A room passes
-  no resume handle, so a retry opens a **second** task on a peer already busy with the
-  first, waits the same timeout again, and still returns nothing. The member is not
-  quietly written off: its failure is recorded in the room, and the adapter's own wording
-  (including "raise its poll timeout") is quoted straight to you.
+  inactivity clock; repeated identical `TASK_STATE_WORKING` polls do not. Re-addressing
+  it would open a **second** task on a peer already busy with the first, wait the same
+  timeout again, and still return nothing. The member is not quietly written off: its
+  failure is recorded in the room, and the adapter's own wording (including "raise its
+  poll timeout") is quoted straight to you. And for an `a2a` member, its answer is not
+  lost either — see [late answers](#late-answers-from-a-member-still-working).
 - **A room needs two participants to be a room.** `@one-agent do X` is one round however
   high `max_rounds` is, and so is a room that has lost all but one participant. With a
   single speaker there is nothing new between its own reply and its next turn — the
@@ -182,10 +183,9 @@ room:
   `room.max_rounds` is one global knob; it must not multiply the cost of the most common
   address, which is to a single agent.
 
-At `max_rounds: 1` — the default — almost none of this is observable: no pass offer in
-the prompt, no pass handling, no cap note, exactly the single pass rooms have always
-made. The one addition on the default path is the **truncation note** above, and only
-when the window actually truncated.
+At `max_rounds: 1` almost none of this is observable: no pass offer in the prompt, no pass
+handling, no cap note, exactly the single pass rooms originally made. The one addition
+there is the **truncation note** above, and only when the window actually truncated.
 
 ### When to raise it
 
@@ -195,7 +195,7 @@ should respond to, a plan two specialists have to reconcile. One round cannot do
 those — the second addressee sees the first's answer, but the first never sees a word
 back.
 
-Leave it at 1 when you are fanning the *same* question out to several participants and
+Set it to 1 when you are fanning the *same* question out to several participants and
 intend to read the answers yourself. A second round there costs dispatches and buys you
 agreement noise.
 
@@ -248,7 +248,7 @@ Behavior ▸ Room**. All are hot-reloaded on Save & Reload.
 room:
   catchup_max_messages: 40   # messages replayed to an addressed participant
   catchup_max_chars: 8000    # …and the size ceiling on that replay
-  max_rounds: 1              # 1 = each addressee answers once (the default)
+  max_rounds: 3              # the default; 1 = each addressee answers once
 ```
 
 A zero or negative value on any of them is read as "leave it at the default", never as
@@ -373,10 +373,12 @@ behavior every address had before this existed, which is why none of it fails lo
   writes `(could not be reached: …)` and moves on, so whatever that turn eventually
   produced is in a conversation this side has no record of. The pointer goes with it —
   otherwise the next address would both inherit that invisible history and queue behind
-  the turn the room already gave up on. This is not a slow-peer rejoin mechanism, and no
-  resume handle is persisted for the room. An address that failed because the peer was
-  *unreachable* keeps its continuity: nothing happened on the peer, so nothing about its
-  conversation changed.
+  the turn the room already gave up on. What the room keeps instead is the *task*, so it
+  can collect that turn's answer when it finishes ([late
+  answers](#late-answers-from-a-member-still-working)) — and a collected answer lands on
+  this thread, which is when the pointer comes back. An address that failed because the
+  peer was *unreachable* keeps its continuity: nothing happened on the peer, so nothing
+  about its conversation changed.
 
 **Compaction is the exception that keeps it.** `/compact` shortens *your* side to save
 your window; it is not a claim that anything was unsaid, and the peer manages its own
@@ -392,12 +394,49 @@ other, exactly as it did before continuity existed.
 
 ### What continuity is not
 
-It is not a way to rejoin work already in flight. A room passes no resume handle, so
-re-addressing a peer that is still working starts a *second* task beside the first rather
-than joining it — which is why [a failed address is not retried](#multi-round-rooms), even
-the failure that says the peer may still be working. That failure also drops the
-conversation, so your next address opens a clean one: it will be answered, but it will
-know nothing about whatever the abandoned turn eventually produced.
+It is not a way to rejoin work already in flight. Re-addressing a peer that is still
+working starts a *second* task beside the first rather than joining it — which is why [a
+failed address is not retried](#multi-round-rooms), even the failure that says the peer
+may still be working. That failure also drops the conversation, so your next address opens
+a clean one: it will be answered, and it will not queue behind the abandoned turn. The
+abandoned turn's own answer is a separate matter — the room collects it (below).
+
+### Late answers from a member still working
+
+When an `a2a` member's address gives up with the peer still working — *"still running
+after Ns without observable progress"* — the room keeps that task's id and **collects** it
+in the background: it asks the peer about that one task (`GetTask`, read-only) every few
+seconds, backing off to every 30s, until it settles. The reply you get says so:
+
+> _Still waiting on @slow in the background — a late answer will be posted here if it
+> finishes._
+
+When the task finishes, its answer is posted to this chat as that member's own message,
+marked as having arrived after its turn, and the lead agent gets a turn to take it in —
+the same way a `delegate_to(background=True)` reply arrives. If the task fails instead,
+you get that as a failed message from the member. If it stops on a question (`⏸ … needs
+input`), the question and its resume handle go to the lead, which is the only one that can
+answer it.
+
+What it deliberately is **not**:
+
+- **Not a re-address.** Collection never sends the member a message, so it cannot open a
+  duplicate task, and the member stays dropped from the room's remaining rounds. A late
+  answer is not a turn: it does not restart the room or extend `max_rounds`.
+- **Not durable.** Like continuity, the handle is in memory: a restart ends every
+  collection, and the member simply stays failed, as it always did.
+- **Not forever.** A collection gives up after an hour of the task still running, or after
+  losing touch with the peer eight polls in a row, and says so in the chat. A peer that
+  no longer knows the task (it restarted, or dropped it) ends the collection quietly.
+- **Not proof against erasing history.** Rewinding or deleting the chat withdraws the
+  collection with everything else in [the list above](#what-continuity-does-not-survive),
+  so an answer to history you erased does not reappear in it.
+
+The lead's own `delegate_to` gets the same treatment: a foreground delegation that gives up
+on a still-working `a2a` peer tells the lead the answer will be delivered on a later turn,
+so it neither re-delegates the work nor reports the answer as lost. This needs a peer that
+hands the task back when asked to — every protoAgent does; a peer that holds the request
+open until it has finished leaves no task to collect.
 
 It is not a *record*, either. The room's transcript is this thread, and that is the only
 copy you can read, search, export or rewind. What continuity buys is that the participant

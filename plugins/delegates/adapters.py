@@ -58,6 +58,56 @@ KIND_TIMEOUT = "timeout"
 # echoes a whole request body can't flood the caller's context.
 _A2A_ERROR_DETAIL_LIMIT = 2000
 
+# A2A 1.0 ``TaskNotFoundError``: the peer no longer knows a task id (it restarted, or its
+# task retention expired). ``A2aAdapter.get_task`` reads it as "gone", not as a failure.
+_A2A_TASK_NOT_FOUND = -32001
+
+
+def _a2a_headers(d) -> dict:
+    """The request headers every A2A call to ``d`` carries — dispatch and ``get_task`` alike."""
+    # A2A-Version is mandatory for an a2a-sdk >=1.0 peer: a missing header defaults
+    # to 0.3 on the receiver → -32009 VERSION_NOT_SUPPORTED (ADR 0051 audit). The
+    # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+    if d.auth_token:
+        headers["Authorization"] = f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
+        if d.auth_scheme == "apiKey":
+            headers["X-API-Key"] = d.auth_token
+    elif _is_loopback_url(d.url):
+        # ADR 0089 D4: an in-instance delegate to a loopback member/board carries no
+        # explicit credential (the "local board is tokenless" pattern, supervisor.py). Now
+        # that members require a credential (D5), present the fleet service token so the
+        # call still authenticates — the member accepts it as operator. Loopback ONLY: an
+        # off-box delegate must configure its own token; the fleet token never leaves the box.
+        try:
+            from graph.fleet.service_token import resolve_service_token
+
+            headers["Authorization"] = f"Bearer {resolve_service_token()}"
+        except Exception:  # noqa: BLE001 — not in a fleet / no token: dispatch unauthenticated as before
+            logger.debug("[delegates] no fleet service token for loopback delegate %r", d.name)
+    return headers
+
+
+def _continuity_credential(d) -> str:
+    """The auth material that joins name+url in ``conversations``' keys: rotating a row's
+    token IN PLACE must not hand the new principal what the old one was holding."""
+    return f"{d.auth_scheme}:{d.auth_token}" if d.auth_token else ""
+
+
+def _park_message(name: str, task_id: str, question: str) -> str:
+    """What a delegation that PARKED on a question returns: the question plus the resume
+    handle, phrased for the calling agent (the HITL delegation chain)."""
+    return (
+        f"⏸ delegate {name!r} needs input before it can continue.\n"
+        + (f"Question: {str(question)[:1000]}\n" if question else "")
+        + f"Parked task: {task_id}\n\n"
+        f"To continue: answer with delegate_to(target={name!r}, "
+        f"query='<your answer>', resume_task_id={str(task_id)!r}). "
+        "If you can't answer it yourself, get the answer first — ask your own "
+        "operator (ask_human) if you have one; your question bubbles up the same "
+        "way — then resume with it."
+    )
+
 
 def _is_loopback_url(url: str) -> bool:
     """True when ``url`` targets this box's loopback interface — i.e. an in-instance
@@ -855,26 +905,7 @@ class A2aAdapter(Adapter):
                 "would reject the call with -32009 VERSION_NOT_SUPPORTED). Upgrade the peer, or point "
                 "its url at a 1.0 /a2a endpoint."
             )
-        # A2A-Version is mandatory for an a2a-sdk >=1.0 peer: a missing header defaults
-        # to 0.3 on the receiver → -32009 VERSION_NOT_SUPPORTED (ADR 0051 audit). The
-        # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
-        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-        if d.auth_token:
-            headers["Authorization"] = f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
-            if d.auth_scheme == "apiKey":
-                headers["X-API-Key"] = d.auth_token
-        elif _is_loopback_url(d.url):
-            # ADR 0089 D4: an in-instance delegate to a loopback member/board carries no
-            # explicit credential (the "local board is tokenless" pattern, supervisor.py). Now
-            # that members require a credential (D5), present the fleet service token so the
-            # call still authenticates — the member accepts it as operator. Loopback ONLY: an
-            # off-box delegate must configure its own token; the fleet token never leaves the box.
-            try:
-                from graph.fleet.service_token import resolve_service_token
-
-                headers["Authorization"] = f"Bearer {resolve_service_token()}"
-            except Exception:  # noqa: BLE001 — not in a fleet / no token: dispatch unauthenticated as before
-                logger.debug("[delegates] no fleet service token for loopback delegate %r", d.name)
+        headers = _a2a_headers(d)
 
         async def _rpc(client, method, params):
             body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
@@ -1035,7 +1066,7 @@ class A2aAdapter(Adapter):
         # The credential joins the name+url in the map's key (see ``conversations``):
         # rotating a row's token IN PLACE must not hand the new principal the conversation
         # the old one was having.
-        credential = f"{d.auth_scheme}:{d.auth_token}" if d.auth_token else ""
+        credential = _continuity_credential(d)
         room_context = conversations.remembered(d.conversation_key, d.name, d.url, credential)
         if room_context:
             send_params["message"]["contextId"] = room_context
@@ -1209,16 +1240,7 @@ class A2aAdapter(Adapter):
                         f"delegate {d.name!r} asked for input but returned no task id to resume"
                         + (f": {str(question)[:300]}" if question else "")
                     )
-                return (
-                    f"⏸ delegate {d.name!r} needs input before it can continue.\n"
-                    + (f"Question: {str(question)[:1000]}\n" if question else "")
-                    + f"Parked task: {task_id}\n\n"
-                    f"To continue: answer with delegate_to(target={d.name!r}, "
-                    f"query='<your answer>', resume_task_id={str(task_id)!r}). "
-                    "If you can't answer it yourself, get the answer first — ask your own "
-                    "operator (ask_human) if you have one; your question bubbles up the same "
-                    "way — then resume with it."
-                )
+                return _park_message(d.name, task_id, question)
             # STATE decides whether this result is an ANSWER, a diagnostic, or nothing for
             # the room — never "is there text" (#3362). ``classify_answer`` keeps that
             # decision apart from ``_is_terminal`` (the poll-stop predicate): a terminal
@@ -1270,6 +1292,23 @@ class A2aAdapter(Adapter):
             # to the pre-#3360 wire: a fresh context next time.
             _drop()
             if task_id and not _is_terminal(state):
+                # Retain the TASK for collection while continuity stays dropped (#3360b).
+                # The peer took the work and is still doing it; the room will not address
+                # this member again (``room_rounds._dropped``), but ``late.collect`` can poll
+                # this one task with GetTask and bring its answer back when it settles. A
+                # separate slot from the context, deliberately: restoring the contextId would
+                # queue the next address behind the very turn we just gave up on. No-op
+                # without a conversation key; never for a resume, which is the lead's.
+                if not resume_task_id:
+                    conversations.remember_pending(
+                        d.conversation_key,
+                        d.name,
+                        d.url,
+                        str(task_id),
+                        context_id=str(task.get("contextId") or ""),
+                        credential=credential,
+                        session_id=d.origin_session_id,
+                    )
                 if hard_deadline is not None and time.monotonic() >= hard_deadline:
                     raise DelegateError(
                         f"delegate {d.name!r} still running after {send_timeout:g}s (this call's "
@@ -1283,6 +1322,48 @@ class A2aAdapter(Adapter):
                     f"(state={state})"
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
+
+    async def get_task(self, d: Delegate, task_id: str, *, timeout: float = 30.0) -> dict | None:
+        """ONE read-only ``GetTask`` for a task this side stopped waiting on (#3360b).
+
+        The whole of what collecting a late answer may send: there is no ``SendMessage``
+        here, so no argument, state or peer reply can turn a collection into a dispatch.
+        Returns the JSON-RPC ``result`` (the task envelope), or ``None`` when the peer no
+        longer knows the task — a restart or its retention expiring, which is normal rather
+        than an error. Raises ``DelegateError`` on a transport or protocol failure, so a
+        collector can retry it. Asks for no history, like the dispatch poll.
+        """
+        import httpx
+
+        from security import policy
+
+        blocked = policy.check_url(d.url)
+        if blocked:
+            raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
+        body = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "GetTask",
+            "params": {"id": str(task_id), "historyLength": 0},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+                r = await client.post(d.url, json=body, headers=_a2a_headers(d))
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            raise DelegateError(
+                f"delegate {d.name!r} unreachable at {d.url} ({type(exc).__name__})", kind=KIND_UNREACHABLE
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
+        if r.status_code >= 400:
+            raise DelegateError(f"delegate {d.name!r} HTTP {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        error = data.get("error")
+        if error:
+            if isinstance(error, dict) and error.get("code") == _A2A_TASK_NOT_FOUND:
+                return None
+            raise DelegateError(_a2a_error_detail(d, error))
+        return data.get("result") or {}
 
     async def probe(self, d: Delegate) -> dict:
         import httpx

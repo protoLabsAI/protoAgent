@@ -213,7 +213,8 @@ class DelegateRegistry:
         plugin. Returns how many peer contexts were dropped, and never raises: a cleanup
         path must not be able to fail the gesture it is cleaning up after.
 
-        **Scope: the A2A ``contextId`` map, and only that.** A persistent ACP session is
+        **Scope: the A2A ``contextId`` map and the pending-task handles beside it (#3360b),
+        and only those** — dropping a handle is what withdraws a late collection. A persistent ACP session is
         *not* torn down here, deliberately — it is a pooled subprocess holding a coding
         agent's live working state (``plugins/coding_agent._client_for``), so ending one
         is an operator-visible action with its own consequences, and it has behaved this
@@ -251,3 +252,23 @@ class DelegateRegistry:
         except Exception:  # noqa: BLE001 — best-effort cleanup, never the caller's problem
             logger.exception("[delegates] forgetting session %r conversations failed", session_id)
             return 0
+
+    def collect_late(self, conversation_key: str, name: str, *, session_id: str = "") -> bool:
+        """Start collecting ``name``'s unfinished task in one conversation, if its last
+        address left one (#3360b); returns whether a collection is running for it.
+
+        The seam a room calls after an address gave up on a member that was still working
+        — the server ``@`` dispatch through ``STATE.delegate_registry`` (duck-typed, like
+        ``forget_conversation``), and ``delegate_to``'s room helper. Collection only ever
+        READS the peer's task (``late.collect``) and delivers what it settled into
+        ``session_id`` as the member's own late room message; it never re-addresses the
+        member. ``False`` — and nothing started — for an address that left no pending task.
+        Never raises: a room must not fail over a courtesy.
+        """
+        from . import late
+
+        try:
+            return late.start(self, str(conversation_key or ""), str(name or ""), session_id=str(session_id or ""))
+        except Exception:  # noqa: BLE001 — best-effort, never the caller's problem
+            logger.exception("[delegates] starting late collection for %r failed", name)
+            return False

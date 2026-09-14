@@ -313,6 +313,7 @@ async def _dispatch_into_room(
         session_id = _session_id_from(state) or ""
         if not session_id:
             return await plain()
+        thread_id = resolve_thread_id(None, session_id)
         messages = list((state or {}).get("messages") or []) if isinstance(state, dict) else []
         # Bind the originating chat session so an answered a2a exchange records it beside the
         # resolved conversation key (#3362). `dispatch_into_room` reaches `registry.dispatch`
@@ -325,7 +326,7 @@ async def _dispatch_into_room(
                 target,
                 query,
                 messages,
-                thread_id=resolve_thread_id(None, session_id),
+                thread_id=thread_id,
                 speaker="assistant",
                 timeout=timeout,
                 # The room's catch-up bounds are the operator's (room.catchup_max_*), not this
@@ -340,6 +341,15 @@ async def _dispatch_into_room(
         result = outcome["reply"]
     else:
         result = f"Error: delegate {target!r} failed: {outcome['error'] or 'unknown error'}"
+        # The same late collection the `@` room gets (#3360b): a peer that was still working
+        # when this gave up keeps its task, and its answer comes back to this session on a
+        # later turn instead of being lost. Said to the lead so it neither re-delegates the
+        # work (a duplicate task) nor tells the operator the answer is gone.
+        if registry.collect_late(thread_id, target, session_id=session_id):
+            result += (
+                "\n\nIt may still be working — its answer will be delivered to you automatically on "
+                "a later turn if it finishes. Do not re-delegate this."
+            )
     # A Command update needs the matching ToolMessage: ToolNode validates that every
     # model tool call has exactly one terminator. It also leaves the usual result in the
     # current loop, so the lead can synthesize immediately while the envelopes persist.
