@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, Timer, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -135,6 +135,13 @@ export function ChatMessageView({
   if (message.role === "assistant" && message.addressedTo && !message.author) {
     return <DelegationRow message={message} />;
   }
+  // The footer meta row: the per-turn usage stats and the sent time share ONE row under an
+  // answer instead of stacking on two. A user bubble has no usage stats, so its row carries the
+  // time alone. Streaming turns show neither until they settle (no final send/receipt yet).
+  const showUsage =
+    showChatUsage && message.role === "assistant" && !streaming && Boolean(message.usage || message.contextWindow);
+  const sentStamp =
+    !streaming && (message.role === "user" || message.role === "assistant") ? sentTimestamp(message.createdAt) : null;
   return (
     <Message
       role={message.role}
@@ -259,14 +266,13 @@ export function ChatMessageView({
           {activityLabel ? <span className="chat-streaming-label">{activityLabel}</span> : null}
         </div>
       ) : null}
-      {showChatUsage && message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
-        <UsageFooter usage={message.usage} context={message.contextWindow} />
-      ) : null}
-      {/* Sent-time footer (#3458): a settled normal user/assistant turn shows when it was sent.
-          Streaming turns haven't finished their send/receipt lifecycle, so no final timestamp
-          until settled; system notes and the specialized cards (returned above) are excluded. */}
-      {!streaming && (message.role === "user" || message.role === "assistant") ? (
-        <SentTimestamp createdAt={message.createdAt} />
+      {/* Footer meta row (#3458): usage stats and the sent time on one line (see showUsage and
+          sentStamp above). System notes and the specialized cards (returned above) never get here. */}
+      {showUsage || sentStamp ? (
+        <div className="chat-msg-meta">
+          {showUsage ? <UsageFooter usage={message.usage} context={message.contextWindow} /> : null}
+          {sentStamp ? <SentTimestamp stamp={sentStamp} /> : null}
+        </div>
       ) : null}
       {actions && message.role === "assistant" && !streaming && message.content ? (
         <MessageActions>
@@ -721,27 +727,21 @@ function UsageTip({
 
 /** The sent-time footer widget (#3458) — a quiet clock chip on a SETTLED normal user/assistant
  *  message, showing a concise local time with the full local sent date-and-time behind the DS
- *  `Tooltip` on pointer hover or keyboard focus. Renders nothing when the message carries no valid
- *  `createdAt` (see `sentTimestamp`), so a turn saved before timestamps existed — or with a
- *  zero/invalid one — shows no widget rather than a wrong or `Invalid Date` value. Reuses the
- *  footer `Clock` icon and the same DS `Tooltip` the usage footer uses (no bespoke tooltip). It is
- *  rendered only after the specialized-card early returns, so report/schedule/server-result cards
+ *  `Tooltip` on pointer hover or keyboard focus. The caller passes a valid `sentTimestamp` result
+ *  and renders nothing when there isn't one, so a turn saved before timestamps existed (or with a
+ *  zero/invalid `createdAt`) shows no widget rather than a wrong or `Invalid Date` value. The chip
+ *  sits in the message's footer meta row beside the usage stats (`.chat-msg-meta`); it keeps the
+ *  `Clock` icon, and the duration stat uses `Timer`, so the two never read as the same thing.
+ *  Rendered only after the specialized-card early returns, so report/schedule/server-result cards
  *  keep their own timestamp treatment. */
-function SentTimestamp({ createdAt }: { createdAt?: number }) {
-  const stamp = sentTimestamp(createdAt);
-  if (!stamp) return null;
-  // The row is what puts the chip on its own line: the DS Tooltip wraps its trigger in an
-  // inline-flex span, so without a block-level parent the chip ran on straight after a user
-  // bubble's text.
+function SentTimestamp({ stamp }: { stamp: { label: string; full: string } }) {
   return (
-    <div className="chat-sent-time-row">
-      <Tooltip label={stamp.full} side="top" align="start">
-        <span className="chat-sent-time" tabIndex={0} aria-label={`Sent ${stamp.full}`}>
-          <Clock size={12} aria-hidden />
-          <span className="chat-sent-time-label">{stamp.label}</span>
-        </span>
-      </Tooltip>
-    </div>
+    <Tooltip label={stamp.full} side="top" align="start">
+      <span className="chat-sent-time" tabIndex={0} aria-label={`Sent ${stamp.full}`}>
+        <Clock size={13} aria-hidden />
+        <span className="chat-sent-time-label">{stamp.label}</span>
+      </span>
+    </Tooltip>
   );
 }
 
@@ -786,7 +786,7 @@ function UsageFooter({ usage, context }: { usage?: TurnUsage; context?: ContextW
         ) : null}
         {usage?.durationMs ? (
           <span className="chat-usage-item" aria-label="duration">
-            <Clock size={13} aria-hidden />
+            <Timer size={13} aria-hidden />
             {fmtDuration(usage.durationMs)}
           </span>
         ) : null}
