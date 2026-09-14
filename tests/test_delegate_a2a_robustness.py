@@ -424,9 +424,27 @@ def test_poll_interval_backs_off_to_five_seconds(patched):
     assert slept == sorted(slept) and max(slept) == 5.0
 
 
+def test_poll_sleep_never_outruns_the_explicit_timeout(patched):
+    """The interval grows to 5s; with ``timeout=2`` no single nap may carry the wait past it."""
+    slept: list[float] = []
+
+    async def _record(seconds):
+        slept.append(seconds)
+
+    patched.setattr(asyncio, "sleep", _record)
+    _clock(patched, step=0.1)
+    progressing = [_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(40)]
+    _install_capture_client(patched, send_resp=_task_resp(state="TASK_STATE_WORKING"), get_resps=progressing)
+
+    with pytest.raises(DelegateError, match="this call's timeout"):
+        asyncio.run(A.dispatch(_parse(), "hi", timeout=2))
+
+    assert slept and max(slept) < 2.0
+
+
 def test_no_explicit_timeout_lets_a_progressing_poll_run_past_poll_timeout(patched):
-    """The other side of the cap: with no per-call timeout the bound stays no-progress only,
-    so a task that keeps advancing is still waited out (#3369)."""
+    """The other side of the cap: with no per-call timeout the bound stays no-progress only
+    (the bound #3369 introduced), so a task that keeps advancing is still waited out."""
     reads = _clock(patched, step=1.0)
     progressing = [_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(8)]
     _install_capture_client(

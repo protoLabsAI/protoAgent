@@ -828,11 +828,16 @@ class A2aAdapter(Adapter):
         item_id: str | None = None,
         resume_task_id: str | None = None,
     ) -> str:
+        import time
+
         import httpx  # noqa: F401 — used by the pre-flight probe below
 
         from observability import tracing
         from security import policy
 
+        # An explicit per-call ``timeout`` counts from HERE, before the pre-flight probe, so
+        # the probe's own time comes out of the caller's budget rather than on top of it.
+        started = time.monotonic()
         blocked = policy.check_url(d.url)
         if blocked:
             raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
@@ -933,10 +938,18 @@ class A2aAdapter(Adapter):
             as_type="agent",
         ):
             return await self._dispatch_traced(
-                d, query, send_timeout=timeout, poll_timeout=poll_timeout, _rpc=_rpc, resume_task_id=resume_task_id
+                d,
+                query,
+                send_timeout=timeout,
+                poll_timeout=poll_timeout,
+                _rpc=_rpc,
+                resume_task_id=resume_task_id,
+                started=started,
             )
 
-    async def _dispatch_traced(self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None) -> str:
+    async def _dispatch_traced(
+        self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None, started=None
+    ) -> str:
         """The wire half of ``dispatch``, inside the outbound span (see caller)."""
         import time
 
@@ -1100,7 +1113,7 @@ class A2aAdapter(Adapter):
         # a task that keeps progressing at N, and it also outlasts a quiet stretch longer
         # than ``poll_timeout_s`` (one long tool call streams nothing between its start and
         # end frames). Without one, the no-progress ``poll_timeout`` is the bound.
-        hard_deadline = t0 + send_timeout if send_timeout is not None else None
+        hard_deadline = (started if started is not None else t0) + send_timeout if send_timeout is not None else None
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
                 parked = await _rpc_tracked(client, "GetTask", {"id": resume_task_id})
@@ -1144,7 +1157,9 @@ class A2aAdapter(Adapter):
                 return now < hard_deadline if hard_deadline is not None else now < deadline
 
             while task_id and not _is_terminal(state) and not _is_input_required(state) and _within_bounds():
-                await asyncio.sleep(poll_interval)
+                # Never sleep past the caller's explicit timeout — the interval grows to 5s.
+                nap = poll_interval if hard_deadline is None else min(poll_interval, hard_deadline - time.monotonic())
+                await asyncio.sleep(max(nap, 0.0))
                 # Back off toward 5s. Every GetTask makes a protoAgent peer load and parse the
                 # task's whole stored history — ``historyLength`` trims only the reply — on
                 # the event loop its turn is running on, so a long turn must not be polled
