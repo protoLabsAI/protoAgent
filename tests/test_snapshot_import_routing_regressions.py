@@ -16,7 +16,6 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-import graph
 from graph.config import LangGraphConfig
 from graph.llm import create_llm
 from graph.snapshot_import import apply_snapshot, inspect_snapshot
@@ -34,10 +33,6 @@ REGISTRY_HOST = {
     "model": {"api_base": BOX},
     "providers": [{"id": "gateway", "type": "openai-compat", "base_url": BOX}],
 }
-
-
-def test_which_tree():
-    print("graph imported from", graph.__file__)
 
 
 @pytest.fixture
@@ -72,7 +67,7 @@ def _meaning(cfg, aux):
     }
 
 
-def _roundtrip(env, layer, secrets, host=None, show=True):
+def _roundtrip(env, layer, secrets, host=None):
     tmp_path, monkeypatch = env
     if host is not None:
         hf = tmp_path / "host-config.yaml"
@@ -96,13 +91,7 @@ def _roundtrip(env, layer, secrets, host=None, show=True):
     # The operator supplies, for every credential the plan asks for, the value the source had.
     supplied = {r["name"]: KEY for r in plan.required_secrets if r.get("was_set")}
     res = apply_snapshot(snap.data, name="vera-2", acknowledged=True, install=False, secrets=supplied)
-    staged = yaml.safe_load((Path(res.path) / "config" / "langgraph-config.yaml").read_text())
     imported = LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml")
-    print("\nplan asks for:", sorted(supplied))
-    print("staged model:", staged.get("model"), "providers:", staged.get("providers"))
-    if show:  # building a keyless gateway client raises OpenAIError, so E skips this
-        print("source :", _meaning(source, _AUX[0]))
-        print("import :", _meaning(imported, _AUX[0]))
     return source, imported, plan
 
 
@@ -170,8 +159,7 @@ def test_E_bridge_moves_legacy_readers_off_the_host_gateway_even_with_no_key(env
         "model": {"name": "local:qwen3"},
         "routing": {"aux_model": aux},
     }
-    source, imported, _ = _roundtrip(env, layer, {}, host=REGISTRY_HOST, show=False)
-    print("legacy-reader endpoint: source", source.api_base, "-> import", imported.api_base)
+    source, imported, _ = _roundtrip(env, layer, {}, host=REGISTRY_HOST)
     assert imported.api_base == source.api_base  # embeddings / gateway_client / transcription endpoint
 
 
@@ -207,10 +195,6 @@ def test_G_old_snapshot_model_api_key_alias_is_filed_as_a_custom_connections_key
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(SNAPSHOT_MANIFEST, yaml.safe_dump(manifest))
-    plan = inspect_snapshot(buf.getvalue())
-    print("\nplan asks for:", [r["name"] for r in plan.required_secrets])
     res = apply_snapshot(buf.getvalue(), name="old-1", acknowledged=True, install=False, secrets={"model.api_key": KEY})
-    sec = yaml.safe_load((Path(res.path) / "config" / "secrets.yaml").read_text())
-    print("secrets.yaml sections/keys:", {k: sorted(v) for k, v in sec.items()})
     cfg = LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml")
     assert cfg.provider_by_id("local").api_key != KEY, "`--secret model.api_key` was filed as the `local` connection's key"
