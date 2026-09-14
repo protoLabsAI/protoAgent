@@ -87,6 +87,19 @@ through every wizard step with screenshots.
 Once you're happy and want to ship it as your own image in your
 own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
 
+## The `protoagent` command
+
+To manage a running protoAgent from a terminal (including the desktop app's hub) without a
+clone, install the CLI from PyPI:
+
+```bash
+uv tool install protolabs-agent   # or: pipx install protolabs-agent
+protoagent fleet                  # the fleet deck over the running hub
+```
+
+A clone doesn't put `protoagent` on your PATH; there, run `uv run python -m server <subcommand>`.
+See [the `protoagent` command](./docs/guides/cli.md) for every subcommand.
+
 ## One-command install (Docker)
 
 No clone, no Python — for a fresh box you just SSH'd into. Pulls the published

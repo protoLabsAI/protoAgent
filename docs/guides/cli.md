@@ -16,10 +16,14 @@ uv tool install protolabs-agent   # or: pipx install protolabs-agent
 protoagent --help                 # the command is `protoagent` (install name differs)
 ```
 
-In a source checkout you can also run it through uv without installing:
+Upgrade with `uv tool upgrade protolabs-agent` (or `pipx upgrade protolabs-agent`).
+
+A source checkout doesn't have the `protoagent` command: uv doesn't install the project itself
+into a checkout's environment (`[tool.uv] package = false`), so `uv run protoagent` fails with
+"Failed to spawn". Run the same subcommands through the server module instead:
 
 ```bash
-uv run protoagent --help
+uv run python -m server fleet --help   # the same as `protoagent fleet --help`
 ```
 
 `python -m server <subcommand>` keeps working — both front doors route through the
