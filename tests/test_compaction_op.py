@@ -16,12 +16,13 @@ from graph.compaction_op import compact_thread
 class _FakeGraph:
     """Records aupdate_state calls; serves seeded messages from aget_state."""
 
-    def __init__(self, messages):
+    def __init__(self, messages, created_at=None):
         self._messages = messages
+        self._created_at = created_at
         self.updates: list = []
 
     async def aget_state(self, config):
-        return SimpleNamespace(values={"messages": list(self._messages)})
+        return SimpleNamespace(values={"messages": list(self._messages)}, created_at=self._created_at)
 
     async def aupdate_state(self, config, update):
         self.updates.append((config, update))
@@ -33,7 +34,9 @@ class _FakeKnowledge:
         self._yields = yields
 
     def add_document(self, content, *, domain=None, heading=None, namespace=None, **kw):
-        self.docs.append({"content": content, "domain": domain, "heading": heading, "namespace": namespace})
+        self.docs.append(
+            {"content": content, "domain": domain, "heading": heading, "namespace": namespace, "source": kw.get("source")}
+        )
         return [1, 2] if self._yields else []
 
 
@@ -286,3 +289,97 @@ def test_default_mode_unchanged_by_the_force_flag():
     res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", summarizer=_summ))
     assert res["refused"] is True and res["reason"] == "no_store"
     assert g.updates == []
+
+
+# ── incognito (ADR 0069 D3b, #3493) ───────────────────────────────────────────
+
+
+def _seed_real_thread(db, thread, *, incognito):
+    """A REAL checkpoint (sqlite saver + the agent's state schema), so the incognito
+    channel is read exactly the way the live graph stores it."""
+    from graph.state import ProtoAgentState
+
+    g = StateGraph(ProtoAgentState)
+    g.add_node("n", lambda s: {"messages": [AIMessage(content="noted")]})
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+    app = g.compile(checkpointer=build_sqlite_checkpointer(db))
+
+    async def main():
+        for text in ("my secret color is teal", "and my secret number is 7", "remember both"):
+            await app.ainvoke(
+                {"messages": [HumanMessage(content=text)], "incognito": incognito},
+                {"configurable": {"thread_id": thread}},
+            )
+
+    asyncio.run(main())
+    return app
+
+
+def test_compact_never_archives_an_incognito_thread(tmp_path):
+    """Manual /compact on an incognito thread: archiving would put the transcript in
+    the knowledge store (where RAG re-injects it), and the never-lossy invariant forbids
+    rewriting history it hasn't archived — so it refuses and changes nothing."""
+    app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:incog", incognito=True)
+    kb = _FakeKnowledge()
+    res = asyncio.run(compact_thread(app, object(), kb, _cfg(2), "a2a:incog", "incog", summarizer=_boom))
+    assert kb.docs == []
+    assert res["refused"] is True and res["reason"] == "incognito"
+    assert res["removed"] == 0
+
+
+def test_force_compact_of_an_incognito_thread_shrinks_without_archiving(tmp_path):
+    """The overflow safety valve must still shrink an incognito thread — without
+    writing its transcript into memory."""
+    app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:incog", incognito=True)
+    kb = _FakeKnowledge()
+    res = asyncio.run(compact_thread(app, object(), kb, _cfg(2), "a2a:incog", "incog", summarizer=_summ, force=True))
+    assert kb.docs == []
+    assert res["refused"] is False and res["removed"] > 0 and res["archived"] is False
+
+
+def test_compact_archives_a_non_incognito_real_thread(tmp_path):
+    """Control for the two tests above: the same real thread, not incognito, IS archived."""
+    app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:open", incognito=False)
+    kb = _FakeKnowledge()
+    res = asyncio.run(compact_thread(app, object(), kb, _cfg(2), "a2a:open", "open", summarizer=_summ))
+    assert len(kb.docs) == 1 and "teal" in kb.docs[0]["content"]
+    assert res["archived"] is True
+
+
+# ── provenance + dates on the archive row (#3493) ─────────────────────────────
+
+
+def test_compact_archive_row_carries_thread_source_and_dates(monkeypatch, tmp_path):
+    """The /compact archive names its thread and dates its lines: from the trajectory
+    where it has seen a message, and from the checkpoint's own date for anything newer
+    than its last model call (not "today" — /compact can run days after the last turn)."""
+    import json
+
+    from observability import trajectory as traj
+
+    log = traj.TrajectoryLog(tmp_path)
+    monkeypatch.setattr(traj, "trajectory_log", log)
+    log.path_for("s1").write_text(
+        json.dumps({"ts": "2026-08-31T09:00:00+00:00", "t": "request", "msgs": [{"id": "h1"}]}) + "\n",
+        encoding="utf-8",
+    )
+    msgs = [
+        HumanMessage(content="hi", id="h1"),
+        AIMessage(content="hello", id="a1"),
+        HumanMessage(content="favorite color?", id="h2"),
+        AIMessage(content="teal", id="a2"),
+    ]
+    g = _FakeGraph(msgs, created_at="2026-09-09T18:00:00+00:00")
+    kb = _FakeKnowledge()
+    asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_summ))
+    (doc,) = kb.docs
+    assert doc["source"] == "a2a:s1"
+    assert doc["namespace"] == "chat-archive:s1"
+    assert doc["heading"] == "Conversation archive (s1, messages 2026-08-31 to 2026-09-09)"
+    assert doc["content"].splitlines()[1:] == [
+        "User [2026-08-31]: hi",
+        "Assistant [2026-09-09]: hello",
+        "User [2026-09-09]: favorite color?",
+        "Assistant [2026-09-09]: teal",
+    ]

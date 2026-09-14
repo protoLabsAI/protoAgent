@@ -1,8 +1,8 @@
 // #2996 — the "Clear this conversation?" confirm behind ⌘K (chat.clear) and /clear. Both
 // entry points park a clear request in the store; ChatSurface folds it into this dialog, so
 // the server clear + local updateMessages sequence starts ONLY on confirm. These pin the
-// dialog's own contract: the exact copy, the opt-in "Harvest to knowledge" checkbox, that
-// cancel/backdrop dismiss without confirming, and that confirm reports the harvest choice.
+// dialog's own contract: the exact copy, the two opt-in memory switches (harvest, and #3493's
+// forget), that cancel/backdrop dismiss without confirming, and that confirm reports both.
 //
 // jsdom + react-dom/client (the console has no @testing-library; the unit harness is
 // `.test.ts` only, so elements are built with React.createElement, not JSX). Same pattern as
@@ -45,6 +45,10 @@ function harvestInput() {
   return document.body.querySelector<HTMLInputElement>(".chat-delete-harvest .pl-switch__input");
 }
 
+function forgetInput() {
+  return document.body.querySelector<HTMLInputElement>(".chat-delete-forget .pl-switch__input");
+}
+
 describe("ClearConversationDialog (#2996)", () => {
   it("renders nothing while closed", () => {
     mount(h(ClearConversationDialog, { open: false, onConfirm: () => {}, onCancel: () => {} }));
@@ -77,7 +81,7 @@ describe("ClearConversationDialog (#2996)", () => {
     mount(h(ClearConversationDialog, { open: true, onConfirm, onCancel: () => {} }));
     act(() => buttonByText("Clear conversation")!.click());
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(onConfirm).toHaveBeenCalledWith(false);
+    expect(onConfirm).toHaveBeenCalledWith({ harvest: false, forget: false });
   });
 
   it("Confirm reports harvest=true once the checkbox is ticked", () => {
@@ -87,16 +91,44 @@ describe("ClearConversationDialog (#2996)", () => {
     act(() => harvestInput()!.click());
     expect(harvestInput()!.checked).toBe(true);
     act(() => buttonByText("Clear conversation")!.click());
-    expect(onConfirm).toHaveBeenCalledWith(true);
+    expect(onConfirm).toHaveBeenCalledWith({ harvest: true, forget: false });
   });
 
-  it("resets the harvest opt-in each time it reopens (no stale tick carries over)", () => {
+  // #3493: the harvest switch never controlled compaction, so the dialog must not imply it
+  // did — it says archives may already exist, and offers a separate, opt-in forget.
+  it("says compaction may already have archived the chat, and offers forget OFF by default", () => {
+    mount(h(ClearConversationDialog, { open: true, onConfirm: () => {}, onCancel: () => {} }));
+    const text = document.body.querySelector(".pl-dialog")!.textContent!;
+    expect(text).toContain("Parts of this chat may already be in the knowledge base");
+    expect(text).toContain("/compact");
+    expect(text).toContain("Clearing the chat leaves them there unless you choose to forget them below.");
+    expect(text).toContain("Forget what this chat already saved to memory");
+    expect(forgetInput()).not.toBeNull();
+    expect(forgetInput()!.checked).toBe(false);
+    // Exactly one "harvest" mention: the e2e locator getByText(/Harvest/i) is strict.
+    expect(text.match(/harvest/gi)).toHaveLength(1);
+  });
+
+  it("Confirm reports forget=true once the forget switch is ticked, independent of harvest", () => {
+    const onConfirm = vi.fn();
+    mount(h(ClearConversationDialog, { open: true, onConfirm, onCancel: () => {} }));
+    act(() => forgetInput()!.click());
+    expect(forgetInput()!.checked).toBe(true);
+    expect(harvestInput()!.checked).toBe(false);
+    act(() => buttonByText("Clear conversation")!.click());
+    expect(onConfirm).toHaveBeenCalledWith({ harvest: false, forget: true });
+  });
+
+  it("resets both opt-ins each time it reopens (no stale tick carries over)", () => {
     mount(h(ClearConversationDialog, { open: true, onConfirm: () => {}, onCancel: () => {} }));
     act(() => harvestInput()!.click());
+    act(() => forgetInput()!.click());
     expect(harvestInput()!.checked).toBe(true);
+    expect(forgetInput()!.checked).toBe(true);
     // Close, then reopen — the effect re-arms the default-off state.
     mount(h(ClearConversationDialog, { open: false, onConfirm: () => {}, onCancel: () => {} }));
     mount(h(ClearConversationDialog, { open: true, onConfirm: () => {}, onCancel: () => {} }));
     expect(harvestInput()!.checked).toBe(false);
+    expect(forgetInput()!.checked).toBe(false);
   });
 });

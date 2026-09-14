@@ -776,7 +776,13 @@
 }
 
 /* Delete-chat dialog: the opt-in harvest checkbox (harvest is never automatic). */
-.chat-delete-harvest {
+.chat-memory-note {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--pl-color-fg-muted);
+}
+.chat-delete-harvest,
+.chat-delete-forget {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -785,7 +791,14 @@
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
-.chat-delete-harvest input { accent-color: var(--pl-color-accent); }
+.chat-delete-harvest input,
+.chat-delete-forget input { accent-color: var(--pl-color-accent); }
+/* The switch track is a flex item beside its label: without this, a label long enough to
+   wrap squeezes the track down to the knob (the forget switch rendered as a bare dot). */
+.chat-delete-harvest .pl-switch__track,
+.chat-delete-forget .pl-switch__track {
+  flex-shrink: 0;
+}
 
 /* Signed-out composer strip (#2513): replaces the PromptInput while the native
    OAuth provider is disconnected, so the send path can't be invoked at all. The

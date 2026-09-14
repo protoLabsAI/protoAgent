@@ -130,6 +130,47 @@ class TrajectoryLog:
         except Exception:  # noqa: BLE001
             log.debug("[trajectory] retire failed", exc_info=True)
 
+    def first_seen(self, session_or_thread: str, ids) -> dict[str, str]:
+        """``{message id: ts}``: when each of ``ids`` was FIRST sent to the model (the
+        first ``request`` event whose refs carry it).
+
+        Checkpoint messages carry no timestamp, and pruning keeps only the latest
+        checkpoints of a thread, so this log is the one record of when a message
+        arrived. The chat archive uses it to date what it holds (#3493). Reads the
+        rotated ``.1`` backup (older) first and stops once every id is found. Ids the
+        log never saw are absent from the result. Never raises."""
+        wanted = {str(i) for i in ids if i}
+        found: dict[str, str] = {}
+        if not wanted:
+            return found
+        try:
+            path = self.path_for(session_or_thread)
+            if path is None:
+                return found
+            for p in (path.with_suffix(path.suffix + ".1"), path):
+                if not p.exists():
+                    continue
+                with p.open(encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if '"request"' not in line:
+                            continue
+                        try:
+                            entry = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(entry, dict) or entry.get("t") != "request":
+                            continue
+                        ts = str(entry.get("ts") or "")
+                        for ref in entry.get("msgs") or []:
+                            mid = str(ref.get("id") or "") if isinstance(ref, dict) else ""
+                            if mid in wanted and mid not in found:
+                                found[mid] = ts
+                        if len(found) == len(wanted):
+                            return found
+        except Exception:  # noqa: BLE001 — dating is best-effort, like every trajectory read
+            log.debug("[trajectory] first_seen failed", exc_info=True)
+        return found
+
 
 trajectory_log = TrajectoryLog()
 

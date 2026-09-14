@@ -1,15 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { canClearSession, retireChatSession } from "./sessionRetirement";
+import { NO_MEMORY_CHANGE, canClearSession, retireChatSession } from "./sessionRetirement";
 
 describe("retireChatSession", () => {
   it("removes the local handle only after durable retirement succeeds", async () => {
     const order: string[] = [];
-    await retireChatSession("chat-a", true, {
+    await retireChatSession("chat-a", { harvest: true, forget: false }, {
       retireRemote: async () => { order.push("remote"); },
       deleteLocal: () => { order.push("local"); },
     });
     expect(order).toEqual(["remote", "local"]);
+  });
+
+  it("forwards both memory choices to the server delete (#3493)", async () => {
+    const retireRemote = vi.fn().mockResolvedValue({ deleted: true });
+    await retireChatSession("chat-a", { harvest: false, forget: true }, { retireRemote, deleteLocal: () => {} });
+    expect(retireRemote).toHaveBeenCalledWith("chat-a", { harvest: false, forget: true });
   });
 
   it("preserves the local handle after failure so the same action can retry", async () => {
@@ -19,10 +25,10 @@ describe("retireChatSession", () => {
       .mockResolvedValueOnce({ deleted: true });
     const deps = { retireRemote, deleteLocal };
 
-    await expect(retireChatSession("chat-a", false, deps)).rejects.toThrow("tombstone unavailable");
+    await expect(retireChatSession("chat-a", NO_MEMORY_CHANGE, deps)).rejects.toThrow("tombstone unavailable");
     expect(deleteLocal).not.toHaveBeenCalled();
 
-    await retireChatSession("chat-a", false, deps);
+    await retireChatSession("chat-a", NO_MEMORY_CHANGE, deps);
     expect(retireRemote).toHaveBeenCalledTimes(2);
     expect(deleteLocal).toHaveBeenCalledWith("chat-a");
   });

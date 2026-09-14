@@ -17,6 +17,12 @@ two additions:
    between the model and an overflow error, and purity loses to availability
    here. The manual path keeps its strict refusal.
 
+   The archive row carries ``source=<thread>`` and the dates of the messages it
+   holds (#3493, see ``conversation_harvest.archive_payload``). An **incognito**
+   turn is never archived (ADR 0069 D3b, the rule the retire harvest applies):
+   it still compacts, because this is the overflow safety valve, and the
+   summarized-away history is simply not kept.
+
 2. **A Prometheus counter** on each real compaction (ADR 0006 — proves the
    lever fires, and how often).
 
@@ -52,6 +58,18 @@ def _surface_op(state, result) -> None:
         pass
 
 
+def _thread_id() -> str | None:
+    """The checkpoint thread this turn runs on, for the archive's ``source``. The
+    hooks run inside a graph node, so the run's config carries it; None outside a run."""
+    try:
+        from langgraph.config import get_config
+
+        tid = ((get_config() or {}).get("configurable") or {}).get("thread_id")
+    except Exception:  # noqa: BLE001 — no run context (a unit test calling the hook)
+        return None
+    return str(tid) if tid else None
+
+
 def _count() -> None:
     try:
         from observability import metrics
@@ -70,12 +88,15 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
 
     # ── archive-first (#2784, ADR 0101 D5) ───────────────────────────────────
 
-    def _archive(self, state) -> None:
+    def _archive(self, state, thread_id: str | None = None) -> None:
         """Archive the full pre-compaction transcript. Best-effort with the D5
         failure mode: any failure logs LOUDLY and compaction proceeds — never
         raises, never blocks the rewrite."""
         store = getattr(self, "_knowledge_store", None)
         session_id = str((state or {}).get("session_id") or "unknown")
+        if (state or {}).get("incognito"):
+            log.info("[compaction] session %s is incognito — compacting WITHOUT an archive (ADR 0069 D3b)", session_id)
+            return
         try:
             if store is None:
                 log.warning(
@@ -84,20 +105,18 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
                     session_id,
                 )
                 return
-            from graph.conversation_harvest import render_transcript
+            from graph.conversation_harvest import archive_payload
             from knowledge import add_document
 
-            transcript = render_transcript(list((state or {}).get("messages") or []), max_chars=None)
-            if not transcript.strip():
-                return  # nothing renderable — nothing to lose
-            chunk_ids = add_document(
-                store,
-                transcript,
-                domain="conversation",
-                heading=f"Conversation archive (auto-compaction, {session_id})",
-                source_type="conversation",
-                namespace=f"chat-archive:{session_id}",
+            content, kwargs = archive_payload(
+                list((state or {}).get("messages") or []),
+                session_id=session_id,
+                thread_id=thread_id,
+                cause="auto-compaction",
             )
+            if not content:
+                return  # nothing renderable — nothing to lose
+            chunk_ids = add_document(store, content, **kwargs)
             if chunk_ids:
                 log.info(
                     "[compaction] archived %d chunk(s) for session %s before compacting",
@@ -124,7 +143,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         if result is not None:
             # The rewrite lands only when this update is RETURNED — archiving here
             # is before-commit, exactly like the manual path's ordering.
-            self._archive(state)
+            self._archive(state, _thread_id())
             _count()
             _surface_op(state, result)
         return result
@@ -136,7 +155,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
 
             # add_document does blocking gateway work (embed/enrich) — off-loop,
             # same pattern as compaction_op / conversation_harvest.
-            await asyncio.to_thread(self._archive, state)
+            await asyncio.to_thread(self._archive, state, _thread_id())
             _count()
             _surface_op(state, result)
         return result

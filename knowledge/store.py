@@ -248,6 +248,28 @@ def _escape_like(text: str) -> str:
     )
 
 
+def _source_clause(source: str, source_types=None, prefix: bool = False) -> tuple[str, list[str]]:
+    """SQL predicate + params selecting chunks by ``source`` (exact, or a prefix match
+    when ``prefix``), optionally narrowed to ``source_types``. ``("", [])`` means
+    "match nothing": an empty source, or an EMPTY type list, is never widened into a
+    delete of every row."""
+    if not source or not str(source).strip():
+        return "", []
+    if prefix:
+        clauses = [f"source LIKE ? ESCAPE '{_LIKE_ESCAPE}'"]
+        params = [_escape_like(str(source)) + "%"]
+    else:
+        clauses = ["source = ?"]
+        params = [str(source)]
+    if source_types is not None:
+        types = [str(t) for t in source_types if t]
+        if not types:
+            return "", []
+        clauses.append(f"source_type IN ({', '.join('?' * len(types))})")
+        params.extend(types)
+    return " AND ".join(clauses), params
+
+
 def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace") -> tuple[str, list[str]]:
     """SQL predicate + params for a namespace filter (ADR 0069 D3a).
 
@@ -1590,6 +1612,32 @@ class KnowledgeStore:
             return int(cur.rowcount)
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] delete_by_namespace failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
+    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False) -> int:
+        """HARD-delete every chunk whose ``source`` is ``source`` (or starts with it,
+        when ``prefix``), superseded rows included, optionally only those whose
+        ``source_type`` is in ``source_types``. Returns the count removed.
+
+        Explicit-intent path like :meth:`delete_by_namespace`: the delete-chat
+        dialog's "forget what this chat saved" (#3493) removes the summaries and
+        facts harvested from a chat's thread. Unlike :meth:`invalidate_by_source`
+        (the console's reversible bulk delete), nothing is kept for an Undo. An
+        empty ``source`` or an empty ``source_types`` list removes nothing."""
+        where, params = _source_clause(source, source_types, prefix)
+        if not where:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cur = db.execute(f"DELETE FROM chunks WHERE {where}", params)
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] delete_by_source failed: %s", exc)
             return 0
         finally:
             db.close()

@@ -22,6 +22,16 @@ not archive. If there is no knowledge store, or the archive write yields no
 chunks, or the summarizer produces nothing, we DO NOT touch the checkpoint and
 return ``refused=True`` — the operator keeps their full, intact context.
 
+**Incognito (ADR 0069 D3b).** An incognito thread is never archived: the archive
+would put its transcript in the knowledge store, where RAG re-injects it. With
+nothing archived, the never-lossy rule refuses the manual ``/compact``
+(``reason="incognito"``); the overflow safety valve still shrinks the thread,
+without an archive. "Incognito" is the checkpoint's channel, so a thread is as
+incognito as its latest turn — the same rule the retire harvest applies.
+
+The archive row carries ``source=<thread_id>`` and its messages' dates (#3493,
+``conversation_harvest.archive_payload``).
+
 **Message-boundary integrity (hard invariant).** The recent tail must never
 orphan a ``ToolMessage`` from the ``AIMessage(tool_calls=…)`` that spawned it —
 the next model call errors ("tool_call without response"). We reuse the same
@@ -40,7 +50,7 @@ import logging
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from graph.conversation_harvest import _default_summarizer, render_transcript
+from graph.conversation_harvest import _default_summarizer, archive_payload, render_transcript
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +144,9 @@ async def compact_thread(
 
     lg_config = {"configurable": {"thread_id": thread_id}}
     snapshot = await graph.aget_state(lg_config)
-    messages = list((getattr(snapshot, "values", None) or {}).get("messages") or [])
+    values = getattr(snapshot, "values", None) or {}
+    messages = list(values.get("messages") or [])
+    incognito = bool(values.get("incognito"))
 
     keep = keep_recent if keep_recent is not None else getattr(config, "compaction_keep_messages", _DEFAULT_KEEP_MESSAGES)
     keep = max(0, int(keep))
@@ -143,40 +155,50 @@ async def compact_thread(
     if len(messages) <= keep:
         return _refused("too_short", kept=len(messages))
 
+    # Incognito: never archived, so the manual path refuses (never-lossy); the
+    # safety valve shrinks it unarchived below.
+    if incognito and not force:
+        return _refused("incognito", kept=len(messages))
+
     # Never-lossy: no archive target ⇒ never touch the checkpoint. In force
     # mode the rewrite proceeds unarchived — loudly: the thread is unusable
     # until it shrinks, and that outranks purity on the safety-valve path.
     if knowledge_store is None and not force:
         return _refused("no_store", kept=len(messages))
 
-    # Archive the FULL transcript (uncapped) so the raw history is recallable —
-    # a capped render would silently drop the head we're about to remove.
-    full_transcript = render_transcript(messages, max_chars=None)
-    if not full_transcript.strip() and not force:
-        # Nothing renderable to archive (e.g. an all-tool-noise thread) — refuse
-        # rather than drop un-archived history.
-        return _refused("empty", kept=len(messages))
-
     import asyncio
 
     from knowledge import add_document
 
+    # Archive the FULL transcript (uncapped) so the raw history is recallable —
+    # a capped render would silently drop the head we're about to remove. Dated from
+    # the trajectory (a file read — off the loop); messages newer than its last
+    # model call take the checkpoint's own date.
+    content, archive_kw = "", {}
+    if incognito:
+        log.warning(
+            "[compact] FORCE: thread %s is incognito — shrinking it WITHOUT an archive (ADR 0069 D3b)",
+            thread_id,
+        )
+    else:
+        content, archive_kw = await asyncio.to_thread(
+            archive_payload,
+            messages,
+            session_id=session_id,
+            thread_id=thread_id,
+            trailing_date=str(getattr(snapshot, "created_at", None) or "")[:10],
+        )
+        if not content.strip() and not force:
+            # Nothing renderable to archive (e.g. an all-tool-noise thread) — refuse
+            # rather than drop un-archived history.
+            return _refused("empty", kept=len(messages))
+
     # add_document does blocking gateway work per chunk (embed + optional
     # enrichment) — keep it off the event loop (mirrors conversation_harvest).
     chunk_ids: list = []
-    if knowledge_store is not None and full_transcript.strip():
+    if knowledge_store is not None and content.strip():
         try:
-            chunk_ids = await asyncio.to_thread(
-                add_document,
-                knowledge_store,
-                full_transcript,
-                domain="conversation",
-                heading=f"Conversation archive ({session_id})",
-                # Agent-derived trust tier (ADR 0069 D8) — the archive is the
-                # operator's own conversation, not ingested third-party content.
-                source_type="conversation",
-                namespace=f"chat-archive:{session_id}",
-            )
+            chunk_ids = await asyncio.to_thread(add_document, knowledge_store, content, **archive_kw)
         except Exception:
             if not force:
                 log.exception("[compact] archive failed for thread %s — refusing to rewrite", thread_id)
@@ -189,7 +211,7 @@ async def compact_thread(
             chunk_ids = []
     if not chunk_ids and not force:
         return _refused("empty_archive", kept=len(messages))
-    if not chunk_ids and force:
+    if not chunk_ids and force and not incognito:
         log.warning(
             "[compact] FORCE: proceeding without an archive for thread %s — the history "
             "removed by this rewrite is unrecoverable (overflow safety valve)",

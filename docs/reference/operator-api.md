@@ -21,7 +21,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/chat` | Run a non-streaming chat turn (the streaming path is A2A `/a2a`) |
-| DELETE | `/api/chat/sessions/{id}` | Delete a session (`?harvest=` to extract memory first) |
+| DELETE | `/api/chat/sessions/{id}` | Delete a session (`?harvest=true` to extract memory first; `?forget=true` to remove what it already wrote to memory: its compaction archives and harvested summaries/facts; `?retire=false` clears it but keeps the id) |
 | GET | `/api/chat/commands` | Slash-command inventory (workflows / subagents / skills) |
 | POST | `/api/chat/sessions/{id}/steer` | Enqueue a mid-turn [steering](/explanation/steering) message |
 | GET | `/api/chat/sessions/{id}/steer` | Peek pending steers |
