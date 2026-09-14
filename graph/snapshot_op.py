@@ -31,6 +31,16 @@ What the target must re-provide travels as ``required_secrets``: names and descr
 never values (Letta Agent File's null-on-export, the A2A card's ``securitySchemes``). So
 import can prompt instead of silently producing a broken agent.
 
+The config travels in the **provider-registry shape** (ADR 0106, #3128) wherever the
+registry can say what a retired ``model.provider`` / ``model.api_base`` / ``model.api_key``
+said — ``graph.config.to_registry_shape`` — and the manifest's ``model_aliases`` records how,
+so an import can restate them for a runtime that still reads them. A connection's key is
+named by the connection (``providers.<id>``), which also covers the registry keys a
+correctly-configured agent keeps under ``providers:`` in ``secrets.yaml`` (a list of objects
+``secret_paths()`` cannot describe). The retired ``model.api_key`` is named
+``providers.gateway`` only where it IS that connection's key; elsewhere it authenticates
+only the retiring single-gateway readers and keeps its name.
+
 Host-free and unit-testable: every path is an argument, nothing imports ``server`` or
 reads ``STATE`` — the ``export_op`` / ``rewind_op`` shape.
 """
@@ -92,6 +102,10 @@ EXCLUDED_FILENAMES = frozenset(
 #: breach that never happened.
 NON_CREDENTIAL_KINDS = frozenset({"home-path"})
 
+#: The retired single-gateway key (ADR 0106). Still in ``secret_paths()`` while the field
+#: exists, but a snapshot names it by the connection it authenticates (``providers.<id>``).
+_RETIRED_GATEWAY_KEY = ("model", "api_key")
+
 EXCLUDED_SECTIONS = frozenset(
     {
         "secrets_manager",  # ADR 0080 bootstrap identity; its keys are secret_paths anyway
@@ -103,7 +117,7 @@ EXCLUDED_SECTIONS = frozenset(
 class SecretRequirement:
     """One credential the target must supply before the rehydrated agent works."""
 
-    name: str  # dotted config path ("model.api_key") or "mcp.<server>.env.<VAR>"
+    name: str  # dotted config path ("providers.gateway", "auth.token") or "mcp.<server>.env.<VAR>"
     kind: str  # "config" | "mcp_env" | "mcp_header" | "plugin"
     description: str = ""
     #: True when the source agent actually had a value here. A requirement discovered from
@@ -221,6 +235,7 @@ def redact_config_for_export(
     *,
     secret_key_paths: tuple[tuple[str, str], ...],
     stored_secrets: dict | None = None,
+    host_layer: dict | None = None,
 ) -> tuple[dict, list[SecretRequirement], dict[str, list[str]]]:
     """Return ``(clean_config, required_secrets, pattern_redactions)``.
 
@@ -235,9 +250,16 @@ def redact_config_for_export(
     removed unconditionally, with no relocation and no leave-it-inline fallback. If we
     cannot prove a value is safe it does not ship.
     """
-    import copy
+    from graph.config import to_registry_shape
 
-    clean = copy.deepcopy(doc) if isinstance(doc, dict) else {}
+    # ── layer 0: the provider-registry shape (#3128) ──
+    # Before anything else, so every layer below sees the shape that ships. It lifts every
+    # inline model credential out of the doc (a legacy `model.api_key`, a connection's
+    # `api_key`) — layer 1c inventories them by name and discards the values. `host_layer`
+    # is the SOURCE box's Host layer: whether the loader migrates this layer decides
+    # whether its endpoint and key are the `gateway` connection's.
+    clean, lifted, aliases = to_registry_shape(doc, host=host_layer)
+    legacy_name = f"providers.{aliases['api_key']}" if "api_key" in aliases else "model.api_key"
     required: list[SecretRequirement] = []
 
     # ── layer 1a: declared secret keys ──
@@ -246,6 +268,8 @@ def redact_config_for_export(
     # real ones — `model.api_key` (the gateway key the agent cannot run without) vanished
     # from the inventory entirely, which defeats the point of shipping an inventory.
     for section, key in secret_key_paths:
+        if (section, key) == _RETIRED_GATEWAY_KEY:
+            continue  # layer 1c names it by the connection it authenticates
         sect = clean.get(section)
         inline = isinstance(sect, dict) and key in sect
         in_overlay = _overlay_has(stored_secrets, section, key)
@@ -263,6 +287,55 @@ def redact_config_for_export(
         )
         if isinstance(sect, dict) and not sect:
             clean.pop(section, None)
+
+    # ── layer 1c: model credentials (ADR 0106) ──
+    # A connection's key lives in `secrets.yaml` under `providers.<id>`, and is reported
+    # under that name — including ids this layer does not declare, which it inherits from
+    # its Host layer while holding the key itself (keys are agent-scoped). The retired
+    # `model.api_key` is reported as `legacy_name`: the `gateway` connection's key where the
+    # loader folds it into that connection, and its own name everywhere else, where it
+    # authenticates only the retiring readers and must never be filed as a connection's key
+    # (that sends it to another endpoint). A keyless endpoint is normal, not missing.
+    stored_keys = (stored_secrets or {}).get("providers")
+    stored_keys = stored_keys if isinstance(stored_keys, dict) else {}
+    legacy_stored = _overlay_has(stored_secrets, "model", "api_key")
+    raw_model = doc.get("model") if isinstance(doc, dict) and isinstance(doc.get("model"), dict) else {}
+    declared = [
+        str(e.get("id", "") or "").strip().lower()
+        for e in (clean.get("providers") if isinstance(clean.get("providers"), list) else [])
+        if isinstance(e, dict)
+    ]
+    lifted_ids = [n.split(".", 1)[1] for n in lifted if n.startswith("providers.")]
+    for pid in dict.fromkeys([*declared, *lifted_ids, *(str(k).strip().lower() for k in stored_keys)]):
+        if not pid:
+            continue
+        name = f"providers.{pid}"
+        was_set = (
+            bool(lifted.get(name))
+            or _overlay_has(stored_secrets, "providers", pid)
+            or (name == legacy_name and legacy_stored)
+        )
+        if was_set:
+            required.append(
+                SecretRequirement(
+                    name=name,
+                    kind="config",
+                    description=f"API key for the `{pid}` model connection (stripped on export).",
+                    was_set=True,
+                )
+            )
+    if legacy_name == "model.api_key" and ("api_key" in raw_model or legacy_stored):
+        required.append(
+            SecretRequirement(
+                name="model.api_key",
+                kind="config",
+                description=(
+                    "Key for the retiring single-gateway `model.api_base` — the endpoint an unqualified "
+                    "model, embeddings and the gateway client still use (stripped on export)."
+                ),
+                was_set=bool(lifted.get("model.api_key")) or legacy_stored,
+            )
+        )
 
     for section in EXCLUDED_SECTIONS:
         clean.pop(section, None)
@@ -611,6 +684,7 @@ def build_snapshot(
     secrets_yaml: Path | None = None,
     knowledge: KnowledgeSeed | None = None,
     now: datetime | None = None,
+    host_layer: dict | None = None,
 ) -> SnapshotResult:
     """Build the snapshot zip in memory. Every input is an explicit path — no ``STATE``,
     no ``instance_paths()`` call — so a test can point it at a fixture tree and the caller
@@ -649,9 +723,16 @@ def build_snapshot(
     # Read-only, and never packaged: the overlay decides `was_set`, nothing more. The file
     # itself is in EXCLUDED_FILENAMES and can never become a zip member.
     stored_secrets = _read_yaml(secrets_yaml) if secrets_yaml else {}
+    # The SOURCE box's Host layer (ADR 0047), read the way the loader reads it: whether this
+    # layer's retired endpoint and key are a registry connection depends on it (#3128).
+    from graph.config import _load_host_layer, to_registry_shape
+
+    if host_layer is None:
+        host_layer = _load_host_layer()
     clean_config, config_reqs, pattern_hits = redact_config_for_export(
-        raw_config, secret_key_paths=secret_key_paths, stored_secrets=stored_secrets
+        raw_config, secret_key_paths=secret_key_paths, stored_secrets=stored_secrets, host_layer=host_layer
     )
+    _, _, model_aliases = to_registry_shape(raw_config, host=host_layer)
 
     soul_text = ""
     if soul_path.exists():
@@ -682,6 +763,10 @@ def build_snapshot(
         # which is what makes the artifact small, auditable, and reproducible.
         "plugins": plugins,
         "config": clean_config,
+        # How the retired `model.*` fields that left `config` pointed into its registry
+        # (#3128): an import restates them for a runtime that still reads them. Always
+        # present — its presence is what says `config` is already in the registry shape.
+        "model_aliases": model_aliases,
         "soul": "SOUL.md" if soul_text else None,
         "required_secrets": [r.as_dict() for r in required],
         # Stated in the artifact so a reader knows what it is NOT: ADR 0091 D4 seeds runtime

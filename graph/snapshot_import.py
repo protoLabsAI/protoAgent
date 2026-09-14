@@ -16,7 +16,11 @@ fans out into N code-execution decisions.
 
 The config is applied **verbatim** — it IS the agent's definition, and stripping capability
 keys would produce a duplicate that behaves subtly differently for reasons no review could
-fully enumerate. Consistent with ADR 0071 D1 (trust, not sandbox): the answer to dangerous
+fully enumerate. The one rewrite is its *model-connection shape*: a snapshot exported before
+#3128 carries the retired ``model.provider`` / ``api_base`` / ``api_key`` and is staged in
+the provider-registry shape a current export produces (``graph.config.to_registry_shape``,
+read against this box's Host layer). Consistent with ADR 0071 D1 (trust, not sandbox): the
+answer to dangerous
 config is to show it, not to silently neuter it. ``ImportPlan.capabilities`` is what makes
 "show it" real.
 
@@ -247,6 +251,8 @@ def _validated_manifest(zf: zipfile.ZipFile) -> tuple[dict, set[str]]:
         raise SnapshotError("manifest agent `name` must be a string")
     if "config" in manifest and not isinstance(manifest.get("config"), dict):
         raise SnapshotError("manifest `config` must be a mapping")
+    if "model_aliases" in manifest and not isinstance(manifest.get("model_aliases") or {}, dict):
+        raise SnapshotError("manifest `model_aliases` must be a mapping")
     config = manifest.get("config") or {}
     for section in ("identity", "instance"):
         if section in config and not isinstance(config[section], dict):
@@ -318,6 +324,9 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
 
     config = manifest.get("config")
     config = config if isinstance(config, dict) else {}
+    # Describe what will actually be staged — the registry shape — so the credential names
+    # the plan asks for are the ones `_write_secrets` files where the loader reads them.
+    config, aliases = _import_shape(manifest)
 
     plugins: list[PluginPin] = []
     for raw in manifest.get("plugins") or []:
@@ -359,7 +368,9 @@ def inspect_snapshot(data: bytes, *, known_sources: list[str] | None = None) -> 
         knowledge=knowledge,
         agent_name=str((manifest.get("agent") or {}).get("name") or "").strip() or "imported-agent",
         plugins=plugins,
-        required_secrets=[r for r in (manifest.get("required_secrets") or []) if isinstance(r, dict)],
+        required_secrets=_current_secret_names(
+            [r for r in (manifest.get("required_secrets") or []) if isinstance(r, dict)], aliases
+        ),
         capabilities=capabilities,
         has_soul=bool(manifest.get("soul")) and "SOUL.md" in names,
         skill_files=sum(1 for n in names if n.startswith("skills/")),
@@ -393,11 +404,104 @@ def stage_snapshot(data: bytes, dest: Path) -> dict:
 
     import yaml
 
-    config = manifest.get("config") or {}
+    config, aliases = _import_shape(manifest)
+    config = _bridge_legacy_aliases(config, aliases)
     (dest / "langgraph-config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )
     return manifest
+
+
+def _import_shape(manifest: dict) -> tuple[dict, dict[str, str]]:
+    """The config to stage, in the provider-registry shape, and its ``model_aliases``.
+
+    A #3128-aware export already shaped it against the SOURCE box and says so by carrying
+    ``model_aliases`` (even empty) — it is used as-is. An older snapshot carries the config
+    verbatim; it is shaped here against THIS box's Host layer, which is the box the agent
+    will run on, so it loads with exactly the meaning the verbatim config had. Inline
+    credentials are DROPPED, never applied: an export never emits one, and credentials
+    arrive only as operator-supplied values."""
+    import copy
+
+    config = manifest.get("config") if isinstance(manifest.get("config"), dict) else {}
+    if "model_aliases" in manifest:
+        raw = manifest.get("model_aliases") or {}
+        aliases = {
+            k: v.strip().lower()
+            for k, v in raw.items()
+            if k in ("provider", "api_base", "api_key") and isinstance(v, str) and v.strip()
+        }
+        return copy.deepcopy(config), aliases
+    from graph.config import _load_host_layer, to_registry_shape
+
+    shaped, _lifted, aliases = to_registry_shape(config, host=_load_host_layer())
+    return shaped, aliases
+
+
+def _current_secret_names(required: list[dict], aliases: dict[str, str]) -> list[dict]:
+    """``required_secrets`` as this build names them. A pre-#3128 snapshot named the gateway
+    key ``model.api_key``; it becomes ``providers.<id>`` only where the shaping found it IS
+    that connection's key (``aliases["api_key"]``) — elsewhere it authenticates only the
+    retiring readers and keeps its name. Merges into an entry already carrying the name."""
+    target = f"providers.{aliases['api_key']}" if aliases.get("api_key") else ""
+    out: list[dict] = []
+    index: dict[str, int] = {}
+    for req in required:
+        entry = dict(req)
+        if target and str(entry.get("name") or "") == _RETIRED_GATEWAY_SECRET:
+            entry["name"] = target
+            entry["description"] = f"API key for the `{aliases['api_key']}` model connection."
+        name = str(entry.get("name") or "")
+        if name in index:
+            kept = out[index[name]]
+            kept["was_set"] = bool(kept.get("was_set")) or bool(entry.get("was_set"))
+            continue
+        index[name] = len(out)
+        out.append(entry)
+    return out
+
+
+#: How a pre-#3128 snapshot named the gateway key — still ACCEPTED as a supplied credential
+#: where it is a connection's key (scripts and docs written against the old contract).
+_RETIRED_GATEWAY_SECRET = "model.api_key"
+
+
+def _bridge_legacy_aliases(config: dict, aliases: dict[str, str]) -> dict:
+    """TEMPORARY (#3128): restate, from ``model_aliases``, the retired fields the source set.
+
+    Several runtime paths still read ``model.provider`` / ``model.api_base`` directly rather
+    than the registry: bare model values in every slot, ``--setup`` validation and slot
+    reconciliation (the provider), and the unqualified default route, knowledge embeddings,
+    transcription, the plugin ``gateway_client``, the context-window probe and the egress
+    auto-allow (the endpoint). The snapshot moved each value the registry could express into
+    it and recorded where; this puts back exactly those values, read FROM the registry entry
+    the alias names — never a value the source did not set, and never a connection the
+    source's field did not point at. The key half is ``_write_secrets``' mirror.
+
+    Remove with the #3128 removal PR, together with those readers' legacy reads.
+    """
+    from graph.config import _NATIVE_PROVIDER_TYPES
+
+    model = config.get("model") if isinstance(config.get("model"), dict) else {}
+    entries = {
+        str(e.get("id", "") or "").strip().lower(): e
+        for e in (config.get("providers") if isinstance(config.get("providers"), list) else [])
+        if isinstance(e, dict)
+    }
+    derived: dict = {}
+    lane = aliases.get("provider", "")
+    if lane and "provider" not in model:
+        ptype = str((entries.get(lane) or {}).get("type", "") or "").strip().lower() or lane
+        if ptype in _NATIVE_PROVIDER_TYPES:
+            derived["provider"] = ptype
+    endpoint = aliases.get("api_base", "")
+    if endpoint and "api_base" not in model:
+        base = (entries.get(endpoint) or {}).get("base_url")
+        if isinstance(base, str) and base.strip():
+            derived["api_base"] = base.strip()
+    if derived:
+        config["model"] = {**model, **derived}
+    return config
 
 
 @dataclass
@@ -473,7 +577,8 @@ def apply_snapshot(
     try:
         with tempfile.TemporaryDirectory(prefix="protoagent-snapshot-") as tmp:
             staged = Path(tmp)
-            stage_snapshot(data, staged)
+            staged_manifest = stage_snapshot(data, staged)
+            _, model_aliases = _import_shape(staged_manifest)
             soul_text = ""
             soul_file = staged / "SOUL.md"
             if soul_file.exists():
@@ -501,7 +606,7 @@ def apply_snapshot(
         if install and plan.plugins:
             installed, failed = _install_pins(ws, plan.plugins)
 
-        missing = _write_secrets(ws, plan, secrets or {})
+        missing = _write_secrets(ws, plan, secrets or {}, aliases=model_aliases)
         return ImportResult(
             name=rec["name"],
             workspace_id=rec["id"],
@@ -589,7 +694,9 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
     return installed, failed
 
 
-def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list[str]:
+def _write_secrets(
+    ws: Path, plan: ImportPlan, supplied: dict[str, str], *, aliases: dict[str, str] | None = None
+) -> list[str]:
     """Write operator-supplied credentials into the NEW workspace's overlay, and report
     which of the snapshot's ``required_secrets`` are still missing.
 
@@ -603,10 +710,23 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
     doc: dict[str, dict[str, str]] = {}
     mcp_values: dict[str, str] = {}
     persisted: set[str] = set()
+    # The connection whose key the retired `model.api_key` IS (`model_aliases["api_key"]`,
+    # only where the loader folds it into that connection). Nowhere else is it ever filed as
+    # a connection's key: there it authenticates the retiring readers' endpoint alone.
+    shared = (aliases or {}).get("api_key", "")
+    shared_secret = f"providers.{shared}" if shared else ""
     for name, value in (supplied or {}).items():
         name = str(name)
         if not str(value or "").strip():
             continue
+        if shared_secret and name == _RETIRED_GATEWAY_SECRET:
+            name = shared_secret  # the old contract's name for the same credential
+        if shared_secret and name == shared_secret:
+            # TEMPORARY (#3128): the same key under the retired `model.api_key` too — one
+            # credential, one endpoint (`_bridge_legacy_aliases` restated `model.api_base`
+            # from the same connection). Both names count as supplied.
+            doc.setdefault("model", {})["api_key"] = str(value)
+            persisted.add(_RETIRED_GATEWAY_SECRET)
         section, _, key = name.partition(".")
         if not section or not key:
             continue

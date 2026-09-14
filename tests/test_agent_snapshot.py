@@ -240,6 +240,8 @@ class TestRequiredSecrets:
     def test_every_stripped_credential_is_listed_by_name(self, agent_tree):
         result = _build(agent_tree)
         names = {r.name for r in result.required_secrets}
+        # This fixture pins no endpoint, so its key authenticates only the retiring
+        # single-gateway readers and keeps its name (#3128): it is no connection's key.
         assert "model.api_key" in names
         assert "auth.token" in names
         assert "discord.bot_token" in names
@@ -627,3 +629,150 @@ def test_read_yaml_tolerates_legacy_cp1252_config(tmp_path):
     doc = _read_yaml(p)
     assert doc.get("identity", {}).get("name") == "legacy"
     assert doc.get("model", {}).get("name") == "gpt-5"
+
+
+# ── the provider-registry shape (#3128) ──────────────────────────────────────────────
+
+#: Matches no redaction PATTERN, so only the structural strip can keep it out of the zip.
+PLAIN_CONNECTION_KEY = _C + "plain7f3a9c2e1b44d0"
+
+
+def _snapshot_of(tmp_path, config: dict, secrets: dict | None = None, host_layer: dict | None = None):
+    cfg = tmp_path / "config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    (cfg / "langgraph-config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    if secrets is not None:
+        (cfg / "secrets.yaml").write_text(yaml.safe_dump(secrets), encoding="utf-8")
+    return build_snapshot(
+        config_yaml=cfg / "langgraph-config.yaml",
+        soul_path=cfg / "SOUL.md",
+        plugins_lock=tmp_path / "plugins.lock",
+        secrets_yaml=(cfg / "secrets.yaml") if secrets is not None else None,
+        agent_name="shape",
+        secret_key_paths=SECRET_KEYS,
+        plugin_requirements=[],
+        host_layer=host_layer,
+    )
+
+
+def _zip_text(data: bytes) -> str:
+    """Every member, decompressed — the bytes of a DEFLATEd zip hide plaintext."""
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        return "\n".join(zf.read(n).decode("utf-8", "replace") for n in zf.namelist())
+
+
+class TestRegistryShape:
+    """A snapshot never carries `model.provider` / `model.api_base` / `model.api_key`: the
+    #3128 pre-removal audit found export writing the config verbatim, which kept the
+    retired fields alive in every artifact it produced."""
+
+    def test_a_legacy_config_travels_as_a_registry(self, tmp_path):
+        result = _snapshot_of(
+            tmp_path,
+            {
+                "model": {
+                    "provider": "openai",
+                    "name": "protolabs/reasoning",
+                    "api_base": "https://gw.example/v1",
+                    "api_key": GATEWAY_KEY,
+                }
+            },
+        )
+        config = result.manifest["config"]
+        assert not {"provider", "api_base", "api_key"} & set(config["model"])
+        # With no registry anywhere the loader makes that endpoint + key the `gateway`
+        # connection — so that is what travels, and the key is asked for under it.
+        assert config["providers"] == [{"id": "gateway", "type": "openai-compat", "base_url": "https://gw.example/v1"}]
+        assert config["model"]["name"] == "protolabs/reasoning"  # bare still means the gateway
+        assert result.manifest["model_aliases"] == {"api_key": "gateway", "api_base": "gateway"}
+        assert [(r.name, r.was_set) for r in result.required_secrets] == [("providers.gateway", True)]
+        text = _zip_text(result.data)
+        assert GATEWAY_KEY not in text
+        assert "model.api_key" not in text
+
+    def test_a_native_lead_keeps_its_meaning_without_model_provider(self, tmp_path):
+        result = _snapshot_of(
+            tmp_path,
+            {"model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5"}, "routing": {"aux_model": "claude-haiku-4-5"}},
+        )
+        # Every bare value it routed now names it; the alias lets an import restate it.
+        assert result.manifest["config"] == {
+            "model": {"name": "anthropic-oauth:claude-sonnet-4-5"},
+            "routing": {"aux_model": "anthropic-oauth:claude-haiku-4-5"},
+        }
+        assert result.manifest["model_aliases"] == {"provider": "anthropic-oauth"}
+
+    def test_on_a_registry_host_the_pinned_endpoint_is_no_connection_and_stays(self, tmp_path):
+        """The source's Host declares connections, so the loader never migrated this layer:
+        its `model.api_base` / `model.api_key` belong to the retiring readers alone. Filing
+        them under a connection would send that key to another endpoint (#3521 review D)."""
+        result = _snapshot_of(
+            tmp_path,
+            {"model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}},
+            secrets={"model": {"api_key": GATEWAY_KEY}},
+            host_layer={"providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}]},
+        )
+        assert result.manifest["config"] == {"model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}}
+        assert result.manifest["model_aliases"] == {}
+        assert [(r.name, r.was_set) for r in result.required_secrets] == [("model.api_key", True)]
+
+    def test_an_inline_connection_key_is_stripped_structurally(self, tmp_path):
+        """`providers:` is a list of objects, which `secret_paths()`' (section, key) pairs
+        cannot describe — so before #3128 an inline connection key reached the zip unless
+        the pattern sweep happened to recognize its shape. This one it does not."""
+        from graph.export_op import redact
+
+        assert redact(PLAIN_CONNECTION_KEY)[1] == []  # the pattern layer alone would ship it
+        result = _snapshot_of(
+            tmp_path,
+            {
+                "providers": [
+                    {"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1", "api_key": PLAIN_CONNECTION_KEY}
+                ],
+                "model": {"name": "local:qwen3"},
+            },
+        )
+        assert PLAIN_CONNECTION_KEY not in _zip_text(result.data)
+        assert result.manifest["config"]["providers"] == [
+            {"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1"}
+        ]
+        assert [(r.name, r.was_set) for r in result.required_secrets] == [("providers.local", True)]
+
+    def test_a_connection_key_kept_in_the_overlay_is_inventoried(self, tmp_path):
+        """The shape first-run setup writes: the key lives under `providers:` in
+        secrets.yaml. Before #3128 nothing inventoried it, so the import of a working
+        agent reported itself complete while holding no key at all."""
+        result = _snapshot_of(
+            tmp_path,
+            {
+                "providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://gw.example/v1"}],
+                "model": {"name": "gateway:protolabs/reasoning"},
+            },
+            secrets={"providers": {"gateway": GATEWAY_KEY}},
+        )
+        assert [(r.name, r.was_set) for r in result.required_secrets] == [("providers.gateway", True)]
+        assert GATEWAY_KEY not in _zip_text(result.data)
+
+    def test_the_key_for_a_host_inherited_connection_is_inventoried(self, tmp_path):
+        """Keys are agent-scoped (ADR 0106): a member can hold the key for a connection its
+        Host layer declares, so the id need not appear in the layer being exported."""
+        result = _snapshot_of(
+            tmp_path, {"model": {"name": "box-gw:protolabs/reasoning"}}, secrets={"providers": {"box-gw": "k"}}
+        )
+        assert ("providers.box-gw", True) in [(r.name, r.was_set) for r in result.required_secrets]
+
+    def test_blank_connection_fields_never_travel(self, tmp_path):
+        """`base_url: ""` on the target REPLACES its box endpoint (#3425) — leave it out."""
+        result = _snapshot_of(
+            tmp_path,
+            {"providers": [{"id": "gateway", "type": "openai-compat", "base_url": "", "label": ""}], "model": {"name": "m"}},
+        )
+        assert result.manifest["config"]["providers"] == [{"id": "gateway", "type": "openai-compat"}]
+
+    def test_a_keyless_connection_is_not_a_missing_credential(self, tmp_path):
+        result = _snapshot_of(
+            tmp_path,
+            {"providers": [{"id": "local", "type": "openai-compat", "base_url": "http://127.0.0.1:8080/v1"}]},
+            secrets={},
+        )
+        assert result.required_secrets == []

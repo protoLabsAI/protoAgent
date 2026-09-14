@@ -836,6 +836,207 @@ def _migrated_providers(config) -> list[Provider]:
     return out
 
 
+# ── the registry shape of ONE config layer (#3128) ─────────────────────────────────
+#
+# `_migrated_providers` above rebuilds a registry IN MEMORY at load, against the fully
+# merged (host ⊕ agent) doc. A snapshot needs the same answer as a DOCUMENT, for one layer
+# that travels to another box — and until #3128 removes them, the three retired fields
+# still carry runtime meaning of their own, separate from the registry:
+#
+# * `model.provider` routes every BARE model value — the lead and each aux / compaction /
+#   goal / drift-judge / subagent / fallback / favorite slot: a slash-less id goes to that
+#   subscription, anything else to the default gateway route. `--setup` validation and
+#   load-time slot reconciliation read it too.
+# * `model.api_base` / `model.api_key` are the endpoint and key of that default route and of
+#   every gateway-only reader (embeddings, transcription, the plugin gateway client, the
+#   context-window probe, egress auto-allow). In a config WITH a registry they are no
+#   connection's endpoint or key; only in a config the loader migrates do they become the
+#   `gateway` connection.
+#
+# So a retired value leaves the document only where the registry can say the same thing,
+# and `aliases` records how — as references into the registry — for an importer that has to
+# restate it to a runtime that still reads the field. A value the registry cannot express
+# stays exactly where it was. And nothing is emitted blank: `_merge_provider_lists` overlays
+# field by field, so `base_url: ""` REPLACES a box endpoint rather than inheriting it (#3425).
+
+_NATIVE_PROVIDER_TYPES = ("anthropic-oauth", "openai-codex")
+# Prefixes a model value may already carry that say where it routes: the three legacy lane
+# ids (claimed by `split_slot_target`'s floor), and `acp:` (handled upstream of it).
+_KNOWN_ROUTE_PREFIXES = ("gateway", "anthropic-oauth", "openai-codex", "acp")
+#: YAML paths of every model value `create_llm` resolves, so every value a bare
+#: `model.provider` routes: the lead, the `_SCALAR_MODEL_SLOTS`, and the list slots.
+#: `subagents.<name>.model` is walked separately.
+_ROUTED_SCALAR_SLOTS = (
+    ("model", "name"),
+    ("routing", "aux_model"),
+    ("compaction", "model"),
+    ("goal", "eval_model"),
+    ("soul", "drift", "judge", "model"),
+)
+_ROUTED_LIST_SLOTS = (("routing", "fallback_models"), ("model", "favorites"))
+
+
+def _layer_connection_types(doc: dict) -> dict[str, str]:
+    """``{id: type}`` for the mapping entries of a layer's ``providers:`` list."""
+    entries = doc.get("providers") if isinstance(doc, dict) else None
+    out: dict[str, str] = {}
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            pid = str(entry.get("id", "") or "").strip().lower()
+            if pid and pid not in out:
+                out[pid] = str(entry.get("type", "") or PROVIDER_TYPE_OPENAI_COMPAT).strip().lower()
+    return out
+
+
+def _route_prefix(value: object) -> str:
+    """The ``<id>`` of a ``<id>:<model>`` value, lowercased; "" for a bare value."""
+    text = str(value or "").strip()
+    prefix, sep, _ = text.partition(":")
+    return prefix.strip().lower() if sep else ""
+
+
+def _node(doc: dict, path: tuple[str, ...]):
+    for part in path:
+        doc = doc.get(part) if isinstance(doc, dict) else None
+    return doc
+
+
+def _routed_model_refs(doc: dict) -> list[tuple[object, object]]:
+    """``(container, key)`` for every model value in a layer that `create_llm` resolves."""
+    refs: list[tuple[object, object]] = []
+    for path in _ROUTED_SCALAR_SLOTS:
+        parent = _node(doc, path[:-1])
+        if isinstance(parent, dict) and path[-1] in parent:
+            refs.append((parent, path[-1]))
+    for path in _ROUTED_LIST_SLOTS:
+        values = _node(doc, path)
+        if isinstance(values, list):
+            refs.extend((values, i) for i in range(len(values)))
+    subagents = doc.get("subagents")
+    for sub in subagents.values() if isinstance(subagents, dict) else []:
+        if isinstance(sub, dict) and "model" in sub:
+            refs.append((sub, "model"))
+    return refs
+
+
+def _claimed_by_a_native_lead(value: object, registered: dict[str, str]) -> bool:
+    """Would a subscription `model.provider` route this bare value to itself? A slash-less
+    id with no route prefix of its own does; a `/`-namespaced gateway alias routes through
+    the gateway instead (#2550), and a qualified value already says where it goes."""
+    if not isinstance(value, str) or not value.strip() or "/" in value:
+        return False
+    prefix = _route_prefix(value)
+    return not (prefix in registered or prefix in _KNOWN_ROUTE_PREFIXES)
+
+
+def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[dict, dict[str, str], dict[str, str]]:
+    """One config layer with every retired model value the registry can express moved into it.
+
+    Returns ``(doc, credentials, aliases)``:
+
+    * ``doc`` — the layer. ``model.api_key`` and each connection's ``api_key`` are lifted
+      out; everything else in a connection entry passes through as the layer had it (a
+      caller that must ship nothing secret still strips and sweeps the rest). No provider
+      field is emitted blank.
+    * ``credentials`` — each non-blank key lifted, by the name a snapshot asks for it under:
+      ``providers.<id>`` for a connection's key; for the retired ``model.api_key``,
+      ``providers.gateway`` exactly when it IS that connection's key (below), else
+      ``model.api_key``.
+    * ``aliases`` — for each retired field that left ``doc``, the connection it pointed at:
+      ``provider`` (the lane its bare values now name), ``api_base`` (the connection whose
+      endpoint it is), ``api_key`` (the connection whose key it is).
+
+    ``host`` is the Host layer this layer is read against — the SOURCE box for an export.
+    A layer the loader migrates (no ``providers:`` list here or on the Host) gets the
+    registry the loader builds from it, because there its endpoint and key ARE the
+    ``gateway`` connection. Anywhere else they are not, and nothing is built.
+
+    * ``model.provider`` naming a subscription: every bare value it routes (the lead and
+      each routed slot) is qualified with that connection, and ``aliases["provider"]``
+      names it. The default (``openai``) is dropped — bare values mean the gateway without
+      it — unless the layer sets no ``model.name``, where it also decides whether the Host's
+      model is inherited; then it stays.
+    * ``model.api_base``: dropped when the ``gateway`` entry here has exactly that endpoint
+      (a migrating layer gets one built from it); dropped when blank. Otherwise it stays —
+      the endpoint of the default route and the gateway-only readers, which no connection
+      in the registry is.
+    * ``model.api_key``: never in ``doc``.
+
+    Idempotent for the same ``host``. PURE — never mutates ``layer``.
+    """
+    doc = copy.deepcopy(layer) if isinstance(layer, dict) else {}
+    credentials: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    model = doc.get("model") if isinstance(doc.get("model"), dict) else None
+    lead = str((model or {}).get("provider") or "").strip().lower()
+    base = str((model or {}).get("api_base") or "").strip()
+    legacy_key = str((model or {}).get("api_key") or "").strip()
+    has_name = bool(str((model or {}).get("name") or "").strip())
+
+    declared = doc.get("providers")
+    migrates = not isinstance(declared, list) and not isinstance((host or {}).get("providers"), list)
+    if isinstance(declared, list):
+        cleaned: list = []
+        for entry in declared:
+            if not isinstance(entry, dict):
+                cleaned.append(entry)  # malformed — the loader drops it with a warning
+                continue
+            pid = str(entry.get("id", "") or "").strip().lower()
+            key = entry.get("api_key")
+            if pid and isinstance(key, str) and key.strip():
+                credentials.setdefault(f"providers.{pid}", key.strip())  # first duplicate wins, as at load
+            cleaned.append({k: v for k, v in entry.items() if k != "api_key" and v not in ("", None)})
+        doc["providers"] = cleaned
+    elif migrates and base:
+        # Exactly what `_migrated_providers` builds from this layer at load: the endpoint
+        # and key ARE the `gateway` connection, plus the subscription lead's own entry
+        # (a declared list switches that load-time step off, so it has to be here).
+        built = [{"id": "gateway", "type": PROVIDER_TYPE_OPENAI_COMPAT, "base_url": base}]
+        if lead in _NATIVE_PROVIDER_TYPES:
+            built.append({"id": lead, "type": lead})
+        doc["providers"] = built
+        aliases["api_key"] = "gateway"
+    else:
+        doc.pop("providers", None)  # absent/null/malformed all migrate at load — say nothing
+
+    if model is not None:
+        registered = _layer_connection_types(doc)
+        if "api_key" in model:
+            model.pop("api_key")
+            if legacy_key:
+                credentials[f"providers.{aliases['api_key']}" if "api_key" in aliases else "model.api_key"] = legacy_key
+        if "api_base" in model:
+            gateway = next(
+                (
+                    e
+                    for e in (doc.get("providers") if isinstance(doc.get("providers"), list) else [])
+                    if isinstance(e, dict) and str(e.get("id", "") or "").strip().lower() == "gateway"
+                ),
+                None,
+            )
+            if not base:
+                model.pop("api_base")  # a blank REPLACES the box endpoint; absent inherits it
+            elif gateway is not None and str(gateway.get("base_url") or "").strip() == base:
+                model.pop("api_base")
+                aliases["api_base"] = "gateway"
+            # else: no connection has this endpoint — it stays, exactly as the layer had it
+        if "provider" in model:
+            if lead in _NATIVE_PROVIDER_TYPES:
+                lane = next((pid for pid, t in registered.items() if t == lead), lead)
+                for container, key in _routed_model_refs(doc):
+                    value = container[key]  # type: ignore[index]
+                    if _claimed_by_a_native_lead(value, registered):
+                        container[key] = f"{lane}:{value.strip()}"  # type: ignore[index]
+                model.pop("provider")
+                aliases["provider"] = lane
+            elif has_name and lead in ("", "openai"):
+                model.pop("provider")
+            # else: it also picks whether the Host's model is inherited (no name here) — keep
+        if not model:
+            doc.pop("model", None)
+    return doc, credentials, aliases
+
+
 _LEGACY_PROVIDER_LABELS = {
     "anthropic-oauth": "Claude subscription",
     "openai-codex": "ChatGPT subscription",
