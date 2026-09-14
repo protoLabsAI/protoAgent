@@ -2,7 +2,10 @@ import { act, createElement, Fragment, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatMessage } from "../lib/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import type { ChatMessage, TurnUsage } from "../lib/types";
+import { useUI } from "../state/uiStore";
 import { CANCELLED_DELEGATION_PREFIX } from "./dismissedToolCalls";
 
 const messageRender = vi.hoisted(() => vi.fn());
@@ -228,6 +231,10 @@ describe("ChatMessageView sent-timestamp footer (#3458)", () => {
   let ChatMessageView: (props: { message: ChatMessage }) => ReactNode;
   let tsHost: HTMLDivElement | null = null;
   let tsRoot: Root | null = null;
+  // UsageFooter reads runtime status through react-query; a client whose queries are disabled
+  // satisfies the hook without any network.
+  const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+  const withQuery = (node: ReactNode) => createElement(QueryClientProvider, { client: queryClient }, node);
 
   beforeAll(async () => {
     ({ ChatMessageView } = (await vi.importActual("./ChatMessageView")) as {
@@ -244,14 +251,14 @@ describe("ChatMessageView sent-timestamp footer (#3458)", () => {
     document.body.appendChild(tsHost);
     await act(async () => {
       tsRoot = createRoot(tsHost!);
-      tsRoot.render(createElement(ChatMessageView, { message }));
+      tsRoot.render(withQuery(createElement(ChatMessageView, { message })));
     });
     return tsHost;
   }
 
   /** Re-render the SAME root — a streamed turn settling in place. */
   async function rerender(message: ChatMessage): Promise<HTMLElement> {
-    await act(async () => tsRoot!.render(createElement(ChatMessageView, { message })));
+    await act(async () => tsRoot!.render(withQuery(createElement(ChatMessageView, { message }))));
     return tsHost!;
   }
 
@@ -308,6 +315,49 @@ describe("ChatMessageView sent-timestamp footer (#3458)", () => {
     el = await rerender({ ...live, status: "done", content: "final" });
     expect(chip(el)).toBeTruthy();
     expect(el.querySelector(".chat-sent-time-label")?.textContent).toBe(shortLabel);
+  });
+
+  const usage = (over: Partial<TurnUsage> = {}): TurnUsage => ({
+    inputTokens: 25_700,
+    outputTokens: 601,
+    totalTokens: 26_301,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    costUsd: 0.09,
+    durationMs: 15_700,
+    ...over,
+  });
+
+  it("puts the sent time in the SAME row as the usage stats under an answer", async () => {
+    useUI.setState({ showChatUsage: true });
+    try {
+      const el = await render({ id: "a3", role: "assistant", content: "Done.", status: "done", createdAt: SENT, usage: usage() });
+      const rows = el.querySelectorAll(".chat-msg-meta");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].querySelector(".chat-usage")).toBeTruthy();
+      expect(rows[0].querySelector(".chat-sent-time")).toBeTruthy();
+      // The duration stat and the sent time no longer share the clock icon.
+      expect(el.querySelector('[aria-label="duration"] svg')?.getAttribute("class")).toContain("lucide-timer");
+      expect(chip(el)!.querySelector("svg")?.getAttribute("class")).toContain("lucide-clock");
+    } finally {
+      useUI.setState({ showChatUsage: false });
+    }
+  });
+
+  it("keeps the time alone in the row when the usage stats are off, and on a user bubble", async () => {
+    // showChatUsage defaults off (#2931): the answer's row carries only the time.
+    let el = await render({ id: "a4", role: "assistant", content: "Done.", status: "done", createdAt: SENT, usage: usage() });
+    expect(el.querySelectorAll(".chat-msg-meta")).toHaveLength(1);
+    expect(el.querySelector(".chat-usage")).toBeNull();
+    expect(chip(el)).toBeTruthy();
+    el = await render({ id: "u2", role: "user", content: "Hi", status: "done", createdAt: SENT });
+    expect(el.querySelector(".chat-msg-meta .chat-sent-time")).toBeTruthy();
+    expect(el.querySelector(".chat-usage")).toBeNull();
+  });
+
+  it("renders no empty meta row when there is neither a sent time nor usage stats", async () => {
+    const el = await render({ id: "a5", role: "assistant", content: "Done.", status: "done" });
+    expect(el.querySelector(".chat-msg-meta")).toBeNull();
   });
 
   it("leaves a specialized card (background report) untouched — no sent-time footer on it", async () => {
