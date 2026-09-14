@@ -222,8 +222,9 @@ later images bake.
 Put together, a deployed team is **lead config seed + persona seed + `fleet.autostart` roster +
 [`delegate_to`](./delegates.md) wiring** — `docker compose up` brings up the lead, restarts the
 crew, and hands real work to them (delegation is reliable past 60s as of
-[#1788](https://github.com/protoLabsAI/protoAgent/pull/1788); a member's turn budget is its
-delegate `poll_timeout_s`).
+[#1788](https://github.com/protoLabsAI/protoAgent/pull/1788); a member's turn is bounded by its
+delegate `poll_timeout_s` of *no observable progress*, not by total length — a turn that keeps
+streaming work is waited out).
 
 > **Reproducible-from-zero is the next step, not this one.** `fleet.autostart` reconciles members
 > that already **exist** (created via the console, `POST /api/fleet`, or `--from`/`--bundle`) and

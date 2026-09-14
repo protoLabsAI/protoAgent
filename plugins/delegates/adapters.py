@@ -974,6 +974,17 @@ class A2aAdapter(Adapter):
                 "messageId": str(uuid.uuid4()),
                 "metadata": dict(provenance),
             },
+            # Ask for the task back NOW instead of holding this request open for the whole
+            # turn (#3360; A2A 1.0 ``SendMessageConfiguration.returnImmediately``). A peer
+            # that holds the connection — protoAgent's own server does, by default — hands
+            # over no task id until it has finished, so a turn that outruns the read budget
+            # ends as a bare transport timeout with nothing left to observe: no progress to
+            # reset ``poll_timeout_s`` on (it degrades into a flat wall-clock cap) and no
+            # handle for anything to come back to. Returned at once, the task goes through
+            # the GetTask loop below, which already knows progress, parks and terminal
+            # states. A peer that ignores the flag answers inline exactly as before, and
+            # the read budget below still covers it.
+            "configuration": {"returnImmediately": True},
         }
         try:
             from observability import tracing
@@ -1069,17 +1080,24 @@ class A2aAdapter(Adapter):
                     _drop()
                 raise
 
-        # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
-        # holding the connection open for the whole delegated turn before returning the final
-        # Message — so the initial SendMessage READ must be allowed to run as long as the task
-        # legitimately might (poll_timeout), NOT the flat 60s that hard-failed every member turn
-        # >60s (#1778: hub→member delegation silently fell back on any non-trivial turn). Connect
-        # stays short so an unreachable peer still fails fast; the same client serves the GetTask
-        # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
+        # A *synchronous* peer — one that ignores ``returnImmediately`` above and answers
+        # SendMessage INLINE, holding the connection open for the whole delegated turn before
+        # returning the final Message — needs the initial SendMessage READ to be allowed to
+        # run as long as the task legitimately might (poll_timeout), NOT the flat 60s that
+        # hard-failed every member turn >60s (#1778: hub→member delegation silently fell back
+        # on any non-trivial turn). Connect stays short so an unreachable peer still fails
+        # fast; the same client serves the GetTask poll loop, which returns quickly regardless.
+        # An explicit ``timeout`` still overrides.
         read_budget = send_timeout if send_timeout is not None else poll_timeout
-        # Wall-clock start of the wire round-trips, used only to flag a suspiciously short
-        # reply relative to how long the dispatch took (#3085) — never alters the answer.
+        # Wall-clock start of the wire round-trips, used to flag a suspiciously short reply
+        # relative to how long the dispatch took (#3085) and to anchor the per-call cap below.
         t0 = time.monotonic()
+        # An explicit per-call ``timeout`` is the caller's "max seconds to wait for the reply"
+        # (``delegate_to(timeout=…)``). Against a peer that answers inline it bounds the one
+        # held read; against one that hands the task back at once it has to bound the POLL
+        # too, or a task that keeps making progress runs straight past the caller's limit.
+        # Without one, the no-progress ``poll_timeout`` is the only bound, as it always was.
+        hard_deadline = t0 + send_timeout if send_timeout is not None else None
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
                 parked = await _rpc_tracked(client, "GetTask", {"id": resume_task_id})
@@ -1116,7 +1134,12 @@ class A2aAdapter(Adapter):
             # resolved by the classification block AFTER it; only a non-terminal task polls.
             progress_fingerprint = _a2a_progress_fingerprint(result)
             deadline = time.monotonic() + poll_timeout
-            while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
+
+            def _within_bounds() -> bool:
+                now = time.monotonic()
+                return now < deadline and (hard_deadline is None or now < hard_deadline)
+
+            while task_id and not _is_terminal(state) and not _is_input_required(state) and _within_bounds():
                 await asyncio.sleep(1.0)
                 # A2A 1.0 GetTaskRequest is {tenant, id, history_length} — `id`, not
                 # the v0.3 legacy `name` (proto: a2a.types.a2a_pb2.GetTaskRequest).
@@ -1124,7 +1147,12 @@ class A2aAdapter(Adapter):
                 # peer rejects/ignores it, so the poll loop could never converge for
                 # an async-style peer (latent: protoAgent peers answer SendMessage
                 # inline, so this path rarely ran).
-                result = await _rpc_tracked(client, "GetTask", {"id": task_id})
+                #
+                # ``historyLength: 0``: nothing below reads a task's history — state, the
+                # status message and artifacts are the whole of what the adapter acts on —
+                # while a long protoAgent turn appends to it on every streamed status update,
+                # so without this each 1s poll re-ships the entire turn so far.
+                result = await _rpc_tracked(client, "GetTask", {"id": task_id, "historyLength": 0})
                 task = result.get("task", result) or {}
                 observed_task_id = task.get("id")
                 state = (task.get("status") or {}).get("state")
@@ -1218,6 +1246,12 @@ class A2aAdapter(Adapter):
             # to the pre-#3360 wire: a fresh context next time.
             _drop()
             if task_id and not _is_terminal(state):
+                if hard_deadline is not None and time.monotonic() >= hard_deadline:
+                    raise DelegateError(
+                        f"delegate {d.name!r} still running after {int(send_timeout)}s (this call's "
+                        f"timeout) — the peer may still be working; raise the call's timeout for a "
+                        f"job this long (state={state})"
+                    )
                 raise DelegateError(
                     f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable "
                     f"progress — the peer may still be working; raise its poll timeout if tasks go "

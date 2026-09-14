@@ -324,6 +324,82 @@ def test_explicit_timeout_overrides_read_budget(patched):
     assert cap["timeout"].read == 25.0
 
 
+# ── #3360: the peer hands the task back at once; the GetTask loop does the waiting ──
+
+
+def test_send_message_asks_the_peer_to_return_immediately(patched):
+    """Without it a protoAgent peer holds SendMessage open for the whole turn, so a slow turn
+    ends as a bare read timeout with no task id — nothing to observe progress on, nothing
+    to come back to."""
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "ok" if result else "")
+    bodies = _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "ok"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "hi")) == "ok"
+    send = next(b for b in bodies if b.get("method") == "SendMessage")
+    assert send["params"]["configuration"] == {"returnImmediately": True}
+
+
+def test_resume_also_asks_the_peer_to_return_immediately(patched):
+    parked = _task_resp(state="TASK_STATE_INPUT_REQUIRED", task_id="parked", context_id="ctx-p")
+    bodies = _install_capture_client(
+        patched,
+        send_resp=_task_resp(state="TASK_STATE_COMPLETED", task_id="parked", text="resumed"),
+        get_resps=[parked],
+    )
+
+    assert asyncio.run(A.dispatch(_parse(), "the answer", resume_task_id="parked")) == "resumed"
+    send = next(b for b in bodies if b.get("method") == "SendMessage")
+    assert send["params"]["configuration"] == {"returnImmediately": True}
+    assert send["params"]["message"]["taskId"] == "parked"
+
+
+def test_polls_ask_for_no_history(patched):
+    _clock(patched, step=0.3)
+    bodies = _install_capture_client(
+        patched,
+        send_resp=_task_resp(state="TASK_STATE_WORKING"),
+        get_resps=[_task_resp(state="TASK_STATE_COMPLETED", text="done")],
+    )
+
+    assert asyncio.run(A.dispatch(_parse(), "hi")) == "done"
+    polls = [b["params"] for b in bodies if b.get("method") == "GetTask"]
+    assert polls == [{"id": "t1", "historyLength": 0}]
+
+
+def test_explicit_timeout_caps_a_poll_that_keeps_progressing(patched):
+    """Every poll shows material progress, so the no-progress ``poll_timeout_s`` alone would
+    never trip. An explicit per-call timeout is "max seconds to wait for the reply" and must
+    still hold now that the wait happens in the poll rather than in one held read."""
+    _clock(patched, step=1.0)
+    progressing = [_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(50)]
+    bodies = _install_capture_client(
+        patched, send_resp=_task_resp(state="TASK_STATE_WORKING"), get_resps=progressing
+    )
+
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=300), "hi", timeout=5))
+
+    assert "this call's timeout" in str(ei.value)
+    methods = [b.get("method") for b in bodies]
+    assert methods.count("SendMessage") == 1
+    assert 1 <= methods.count("GetTask") < 10
+
+
+def test_no_explicit_timeout_lets_a_progressing_poll_run_past_poll_timeout(patched):
+    """The other side of the cap: with no per-call timeout the bound stays no-progress only,
+    so a task that keeps advancing is still waited out (#3369)."""
+    reads = _clock(patched, step=1.0)
+    progressing = [_task_resp(state="TASK_STATE_WORKING", text=f"step {i}") for i in range(8)]
+    _install_capture_client(
+        patched,
+        send_resp=_task_resp(state="TASK_STATE_WORKING"),
+        get_resps=[*progressing, _task_resp(state="TASK_STATE_COMPLETED", text="done")],
+    )
+
+    assert asyncio.run(A.dispatch(_parse(poll_timeout_s=5), "hi")) == "done"
+    assert reads[-1] - reads[0] > 5
+
+
 # ── fleet tracing: outbound a2a.trace propagation ──────────────────────────────
 
 
@@ -584,7 +660,9 @@ def test_gettask_poll_uses_the_a2a_10_id_param(patched):
     assert asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "do the thing")) == "peer answer"
 
     gettask = next(b for b in bodies if b.get("method") == "GetTask")
-    assert gettask["params"] == {"id": "t-9"}, f"1.0 GetTask must send id, got {gettask['params']}"
+    # `historyLength: 0` rides along since #3360 (the adapter never reads history).
+    assert gettask["params"] == {"id": "t-9", "historyLength": 0}, f"1.0 GetTask must send id, got {gettask['params']}"
+    assert "name" not in gettask["params"]
 
 
 def _parked_task(question="Which repo should I use?"):
