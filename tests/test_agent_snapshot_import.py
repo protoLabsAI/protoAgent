@@ -398,9 +398,9 @@ class TestRoundTrip:
         assert plan.agent_name == "vera"
         assert plan.has_soul is True
         assert plan.skill_files == 1
-        # The export stripped the gateway key and inventoried it under its connection
-        # (#3128); import must ask for it.
-        assert any(r["name"] == "providers.gateway" and r["was_set"] for r in plan.required_secrets)
+        # The export stripped the key and inventoried it; import must ask for it. This source
+        # pins no endpoint, so the key is the retiring readers' and keeps its name (#3128).
+        assert any(r["name"] == "model.api_key" and r["was_set"] for r in plan.required_secrets)
         # …and the capability the source config granted is surfaced, not silently applied.
         assert "filesystem.allow_run" in [k for k, _ in plan.capabilities]
 
@@ -542,9 +542,7 @@ class TestApplyEndToEnd:
 
     def test_arrives_incomplete_until_its_credentials_are_supplied(self, ws_root):
         res = apply_snapshot(_snapshot_no_plugins(), name="vera-copy", acknowledged=True, install=False)
-        # The fixture is a pre-#3128 manifest naming `model.api_key`; the plan asks for the
-        # same credential under the connection that uses it.
-        assert res.missing_secrets == ["providers.gateway"]
+        assert res.missing_secrets == ["model.api_key"]
         assert res.complete is False
 
     def test_supplying_the_credential_completes_it(self, ws_root):
@@ -648,7 +646,7 @@ class TestImportRoute:
         body = res.json()
         assert body["mode"] == "applied"
         assert body["name"] == "vera-copy"
-        assert body["missing_secrets"] == ["providers.gateway"]
+        assert body["missing_secrets"] == ["model.api_key"]
         assert body["complete"] is False
 
     def test_supplied_secrets_ride_the_form(self, client, ws_root):
@@ -758,7 +756,7 @@ class TestOldSnapshotsMigrateOnStage:
         stage_snapshot(_snapshot_no_plugins(config=LEGACY_PINNED), tmp_path / "s")
         doc = yaml.safe_load((tmp_path / "s" / "langgraph-config.yaml").read_text())
         assert doc["providers"] == [{"id": "gateway", "type": "openai-compat", "base_url": "https://src.example/v1"}]
-        assert doc["model"]["name"] == "gateway:protolabs/reasoning"
+        assert doc["model"]["name"] == "protolabs/reasoning"
         # The alias bridge: restated FROM the registry for the readers that still use it.
         assert doc["model"]["api_base"] == "https://src.example/v1"
         assert "provider" not in doc["model"] and "api_key" not in doc["model"]
@@ -781,7 +779,10 @@ class TestOldSnapshotsMigrateOnStage:
         assert cfg.provider_by_id("gateway").api_key == KEY
         assert cfg.api_key == KEY
 
-    def test_a_custom_primary_connection_owns_the_gateway_key(self, tmp_path):
+    def test_the_retired_key_is_never_filed_as_another_connections_key(self, tmp_path):
+        """The retired key authenticates the retiring readers' endpoint. Unless the shaping
+        found it IS a connection's key (`model_aliases["api_key"]`), it lands only under its
+        own name — never as the lead's custom connection (#3521 review D, G)."""
         from graph.snapshot_import import _write_secrets
 
         (tmp_path / "config").mkdir()
@@ -790,10 +791,10 @@ class TestOldSnapshotsMigrateOnStage:
                 {"providers": [{"id": "prod", "type": "openai-compat", "base_url": "https://prod/v1"}], "model": {"name": "prod:m"}}
             )
         )
-        plan = ImportPlan(agent_name="x", required_secrets=[{"name": "providers.prod", "was_set": True}])
-        assert _write_secrets(tmp_path, plan, {"model.api_key": KEY}) == []
+        plan = ImportPlan(agent_name="x", required_secrets=[{"name": "model.api_key", "was_set": True}])
+        assert _write_secrets(tmp_path, plan, {"model.api_key": KEY}, aliases={}) == []
         sec = yaml.safe_load((tmp_path / "config" / "secrets.yaml").read_text())
-        assert sec == {"providers": {"prod": KEY}, "model": {"api_key": KEY}}
+        assert sec == {"model": {"api_key": KEY}}
 
 
 # Legacy source layers an agent can hold, and the Host layers the import can land under:
@@ -887,18 +888,27 @@ def test_an_old_agent_imports_with_the_same_meaning(tmp_path, ws_root, monkeypat
         plugin_requirements=[],
     )
     config_text = yaml.safe_dump(snap.manifest["config"])
-    assert "api_base" not in config_text and "api_key" not in config_text and "provider:" not in config_text
+    assert "api_key" not in config_text and "provider:" not in config_text
+    # A pinned endpoint leaves the config only where it IS a connection (the source migrated);
+    # on a registry Host it serves the retiring readers alone and travels as-is.
+    pinned_on_registry_host = "api_base" in layer["model"] and host == "registry-host"
+    assert ("api_base" in config_text) == pinned_on_registry_host
+    plan = inspect_snapshot(snap.data)
     res = apply_snapshot(
-        snap.data, name="vera-2", acknowledged=True, install=False, secrets={"providers.gateway": KEY} if has_key else {}
+        snap.data,
+        name="vera-2",
+        acknowledged=True,
+        install=False,
+        secrets={r["name"]: KEY for r in plan.required_secrets if r.get("was_set")},
     )
     assert res.complete, res.missing_secrets
     now = _meaning(LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml"), aux)
     assert now == was
 
 
-def test_a_registry_shaped_agent_now_imports_its_gateway_everywhere(ws_root, tmp_path, no_model_io):
-    """The shape first-run setup writes. Before #3128 its key was never inventoried, and a
-    registry-only config leaves the gateway-only readers on the App-default endpoint."""
+def test_a_registry_shaped_agent_imports_with_its_connection_key(ws_root, tmp_path, no_model_io):
+    """The shape first-run setup writes. Before #3128 its connection key was never
+    inventoried, so the import reported itself complete while holding no key at all."""
     from graph.llm import _gateway_client_kwargs
 
     src = tmp_path / "src" / "config"
@@ -921,10 +931,12 @@ def test_a_registry_shaped_agent_now_imports_its_gateway_everywhere(ws_root, tmp
         secret_key_paths=SECRET_KEYS,
         plugin_requirements=[],
     )
-    assert inspect_snapshot(snap.data).required_secrets[0]["name"] == "providers.gateway"
+    assert [r["name"] for r in inspect_snapshot(snap.data).required_secrets] == ["providers.gateway"]
     res = apply_snapshot(snap.data, name="wiz-2", acknowledged=True, install=False, secrets={"providers.gateway": KEY})
+    source = LangGraphConfig.from_yaml(src / "langgraph-config.yaml")
     cfg = LangGraphConfig.from_yaml(Path(res.path) / "config" / "langgraph-config.yaml")
-    assert _route(cfg) == ("gateway", "https://gw.example/v1", KEY, "protolabs/reasoning")
-    client = _gateway_client_kwargs(cfg, timeout=1)
-    assert client["base_url"] == "https://gw.example/v1"
-    assert client["headers"]["Authorization"] == f"Bearer {KEY}"
+    assert _route(cfg) == _route(source) == ("gateway", "https://gw.example/v1", KEY, "protolabs/reasoning")
+    # Nothing restated a retired field the source did not set: the gateway-only readers read
+    # exactly what they read on the source (a gap of the registry-only shape, not the import's).
+    assert (cfg.api_base, cfg.api_key) == (source.api_base, source.api_key)
+    assert _gateway_client_kwargs(cfg, timeout=1) == _gateway_client_kwargs(source, timeout=1)

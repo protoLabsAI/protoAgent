@@ -146,25 +146,27 @@ dependency.
 ### The model connection travels as a registry
 
 A snapshot's config is written in the provider-registry shape
-([ADR 0106](../adr/0106-provider-registry.md)) and never carries the retiring
-`model.provider`, `model.api_base` or `model.api_key` (#3128):
+([ADR 0106](../adr/0106-provider-registry.md)) wherever the registry can say what the
+retiring `model.provider`, `model.api_base` and `model.api_key` said (#3128):
 
-- an endpoint the source agent pinned becomes a `gateway` connection under `providers:`;
-- a Claude / ChatGPT subscription lead becomes a qualified `model.name`
+- a Claude / ChatGPT subscription set as `model.provider` qualifies every bare model name it
+  routed — the lead and each aux / compaction / goal / subagent / fallback slot
   (`anthropic-oauth:claude-sonnet-4-5`);
+- an endpoint the source pinned becomes its `gateway` connection **when the source box had no
+  connections of its own** — only then is that endpoint the `gateway` connection. On a box
+  that declares connections it serves only the retiring readers, so it travels as it is;
 - anything the source left to its box — typically a fleet member's endpoint — is left out
   entirely, so the target box supplies its own. Nothing is ever written as a blank value: an
   empty `base_url` would *replace* the target's endpoint rather than inherit it.
 
-Snapshots exported before this change still import: the plan is built from the same
-registry shape, so an old snapshot is staged exactly as a current export would be.
+Until #3128 finishes, a few runtime paths still read the retiring fields directly (bare model
+names, the default model route, knowledge embeddings, transcription, the plugin gateway
+client, the context-window probe, egress auto-allow, `--setup` validation). So the manifest's
+`model_aliases` records which connection each moved value pointed at, and the import restates
+**exactly those values, read from those connections** — never one the source did not set.
 
-Until #3128 finishes, a few runtime paths (the default model route for an unqualified name,
-knowledge embeddings, transcription, the plugin gateway client, the context-window probe,
-egress auto-allow, `--setup` validation) still read the retiring fields directly. So the
-import also writes `model.api_base` / `model.provider` into the new agent — **derived from
-that registry, never from the snapshot** — and files the gateway key under `model.api_key`
-as well as `providers.gateway`. Both go away with the retiring fields.
+Snapshots exported before this change still import: they are staged in the same shape,
+judged against the box you import onto, so they load with the meaning they had.
 
 ### The new agent arrives incomplete
 
@@ -173,11 +175,13 @@ them — via `--secret NAME=VALUE`, the console's import form, or that agent's S
 Secrets afterwards. Only credentials the **source** agent actually had are reported missing;
 one a plugin merely declares isn't, because the original didn't have it either.
 
-A model credential is named by the **connection** that uses it — `providers.gateway` for the
-default gateway, `providers.<id>` for any other — because that is where the new agent's
-loader reads it. A snapshot exported before #3128 names the gateway key `model.api_key`; the
-plan asks for it as `providers.gateway`, and `--secret model.api_key=…` is still accepted for
-the same credential.
+A connection's key is named by the connection — `providers.<id>`. The retiring
+`model.api_key` is asked for as `providers.gateway` only where it *is* that connection's key
+(the source box had no connections, so the loader made it one); everywhere else it
+authenticates only the retiring single-gateway endpoint and keeps its name, because filing it
+under a connection would send it to that connection's endpoint instead. `--dry-run` prints the
+names this snapshot needs, and `--secret model.api_key=…` is still accepted where the plan
+asks for `providers.gateway`.
 
 ## Duplicating an agent
 

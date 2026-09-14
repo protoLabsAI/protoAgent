@@ -318,9 +318,10 @@ until you pass `--yes`. Read the plan; it is describing what is about to run on 
 The config applies **verbatim**, including capability settings like `filesystem.allow_run`
 and `operator.allowed_dirs` — those are part of the agent's definition, so they're shown in
 the plan rather than silently stripped. Its model connections travel in the provider-registry
-shape, and a model credential is named by its connection (`providers.gateway`); an older
-snapshot's `model.api_key` is asked for under that name and still accepted as `--secret`
-(see [Agent snapshots](agent-snapshots.md#the-model-connection-travels-as-a-registry)).
+shape wherever the registry can express them, and a connection's key is named by the
+connection (`providers.<id>`); the retiring `model.api_key` keeps its name unless it *is* the
+`gateway` connection's key. `--dry-run` prints the names to supply (see
+[Agent snapshots](agent-snapshots.md#the-model-connection-travels-as-a-registry)).
 
 The new agent arrives **incomplete** until its credentials are supplied: none travel in a
 snapshot. Pass them with `--secret NAME=VALUE` (repeatable, written `0600` to the new agent

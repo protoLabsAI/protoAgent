@@ -240,10 +240,9 @@ class TestRequiredSecrets:
     def test_every_stripped_credential_is_listed_by_name(self, agent_tree):
         result = _build(agent_tree)
         names = {r.name for r in result.required_secrets}
-        # The gateway key is named by the connection it authenticates (#3128), which is
-        # where the target's loader reads it — never by the retired `model.api_key`.
-        assert "providers.gateway" in names
-        assert "model.api_key" not in names
+        # This fixture pins no endpoint, so its key authenticates only the retiring
+        # single-gateway readers and keeps its name (#3128): it is no connection's key.
+        assert "model.api_key" in names
         assert "auth.token" in names
         assert "discord.bot_token" in names
         assert "mcp.github.env.GITHUB_TOKEN" in names
@@ -259,7 +258,7 @@ class TestRequiredSecrets:
     def test_was_set_distinguishes_configured_from_merely_declared(self, agent_tree):
         result = _build(agent_tree)
         by_name = {r.name: r for r in result.required_secrets}
-        assert by_name["providers.gateway"].was_set is True
+        assert by_name["model.api_key"].was_set is True
         assert by_name["mcp.github.env.GITHUB_TOKEN"].was_set is True
 
     def test_a_credential_stored_ONLY_in_the_overlay_is_still_inventoried(self, tmp_path):
@@ -283,8 +282,8 @@ class TestRequiredSecrets:
             plugin_requirements=[],
         )
         by_name = {r.name: r for r in result.required_secrets}
-        assert "providers.gateway" in by_name, "a credential stored in secrets.yaml was not inventoried"
-        assert by_name["providers.gateway"].was_set is True
+        assert "model.api_key" in by_name, "a credential stored in secrets.yaml was not inventoried"
+        assert by_name["model.api_key"].was_set is True
         assert GATEWAY_KEY.encode() not in result.data
         # the non-secret part of the section still travels
         assert result.manifest["config"]["model"]["name"] == "protolabs/reasoning"
@@ -295,7 +294,7 @@ class TestRequiredSecrets:
         the signal and telling the operator their working agent needs nothing."""
         result = _build(agent_tree, secrets_yaml=agent_tree / "config" / "secrets.yaml")
         by_name = {r.name: r for r in result.required_secrets}
-        assert by_name["providers.gateway"].was_set is True
+        assert by_name["model.api_key"].was_set is True
 
     def test_overlay_only_ever_yields_a_boolean(self, agent_tree):
         """Reading secrets.yaml to answer `was_set` must not pull a VALUE into the artifact."""
@@ -467,7 +466,7 @@ class TestReviewDocument:
         result = _build(agent_tree)
         with zipfile.ZipFile(BytesIO(result.data)) as zf:
             review = zf.read("REVIEW.md").decode()
-        assert "providers.gateway" in review
+        assert "model.api_key" in review
         assert "mcp.github.env.GITHUB_TOKEN" in review
         for canary in ALL_CANARIES:
             assert canary not in review
@@ -638,7 +637,7 @@ def test_read_yaml_tolerates_legacy_cp1252_config(tmp_path):
 PLAIN_CONNECTION_KEY = _C + "plain7f3a9c2e1b44d0"
 
 
-def _snapshot_of(tmp_path, config: dict, secrets: dict | None = None):
+def _snapshot_of(tmp_path, config: dict, secrets: dict | None = None, host_layer: dict | None = None):
     cfg = tmp_path / "config"
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "langgraph-config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -652,6 +651,7 @@ def _snapshot_of(tmp_path, config: dict, secrets: dict | None = None):
         agent_name="shape",
         secret_key_paths=SECRET_KEYS,
         plugin_requirements=[],
+        host_layer=host_layer,
     )
 
 
@@ -680,17 +680,41 @@ class TestRegistryShape:
         )
         config = result.manifest["config"]
         assert not {"provider", "api_base", "api_key"} & set(config["model"])
+        # With no registry anywhere the loader makes that endpoint + key the `gateway`
+        # connection — so that is what travels, and the key is asked for under it.
         assert config["providers"] == [{"id": "gateway", "type": "openai-compat", "base_url": "https://gw.example/v1"}]
-        assert config["model"]["name"] == "gateway:protolabs/reasoning"
+        assert config["model"]["name"] == "protolabs/reasoning"  # bare still means the gateway
+        assert result.manifest["model_aliases"] == {"api_key": "gateway", "api_base": "gateway"}
         assert [(r.name, r.was_set) for r in result.required_secrets] == [("providers.gateway", True)]
         text = _zip_text(result.data)
         assert GATEWAY_KEY not in text
         assert "model.api_key" not in text
 
     def test_a_native_lead_keeps_its_meaning_without_model_provider(self, tmp_path):
-        result = _snapshot_of(tmp_path, {"model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5"}})
-        # No endpoint pinned → no list declared: the target box supplies its own gateway.
-        assert result.manifest["config"] == {"model": {"name": "anthropic-oauth:claude-sonnet-4-5"}}
+        result = _snapshot_of(
+            tmp_path,
+            {"model": {"provider": "anthropic-oauth", "name": "claude-sonnet-4-5"}, "routing": {"aux_model": "claude-haiku-4-5"}},
+        )
+        # Every bare value it routed now names it; the alias lets an import restate it.
+        assert result.manifest["config"] == {
+            "model": {"name": "anthropic-oauth:claude-sonnet-4-5"},
+            "routing": {"aux_model": "anthropic-oauth:claude-haiku-4-5"},
+        }
+        assert result.manifest["model_aliases"] == {"provider": "anthropic-oauth"}
+
+    def test_on_a_registry_host_the_pinned_endpoint_is_no_connection_and_stays(self, tmp_path):
+        """The source's Host declares connections, so the loader never migrated this layer:
+        its `model.api_base` / `model.api_key` belong to the retiring readers alone. Filing
+        them under a connection would send that key to another endpoint (#3521 review D)."""
+        result = _snapshot_of(
+            tmp_path,
+            {"model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}},
+            secrets={"model": {"api_key": GATEWAY_KEY}},
+            host_layer={"providers": [{"id": "gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}]},
+        )
+        assert result.manifest["config"] == {"model": {"name": "protolabs/reasoning", "api_base": "https://pinned.example/v1"}}
+        assert result.manifest["model_aliases"] == {}
+        assert [(r.name, r.was_set) for r in result.required_secrets] == [("model.api_key", True)]
 
     def test_an_inline_connection_key_is_stripped_structurally(self, tmp_path):
         """`providers:` is a list of objects, which `secret_paths()`' (section, key) pairs
