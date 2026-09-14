@@ -180,6 +180,10 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
     be working; raise its poll timeout" text is quoted straight to the operator — and
     the cast guard in ``plan_round`` means a room that loses a participant this way ends
     at once rather than spending further rounds on the survivors.
+
+    What the room CAN do for a still-working member is collect rather than retry (#3360b):
+    the delegates seam polls that one task read-only and posts its answer when it settles,
+    outside the rounds (``collecting_note``). Nothing here changes for it.
     """
     return {
         str(outcome.get("author") or "")
@@ -283,6 +287,24 @@ def catchup_note(outcomes: Sequence[Mapping]) -> str:
         f"last spoke is longer than the window. Raise `room.catchup_max_messages` / "
         f"`room.catchup_max_chars` to widen it._"
     )
+
+
+def collecting_note(outcomes: Sequence[Mapping]) -> str:
+    """The operator-facing line for members the room stopped waiting on but is still
+    collecting from (#3360b), else ``""``.
+
+    The host marks an outcome ``collecting`` when the delegates seam started a collection
+    for it — a member whose address gave up while its peer was still working. Without the
+    line, the failure the operator just read ("the peer may still be working") would be the
+    last word, and a late answer turning up minutes later would read as out of nowhere.
+    Names each member once, in the order they were addressed. Nothing about the ROUND
+    changes: a collecting member stays dropped (``_dropped``); this only says what arrives.
+    """
+    names = list(dict.fromkeys(str(o.get("author") or "") for o in outcomes if o.get("collecting") and o.get("author")))
+    if not names:
+        return ""
+    who = ", ".join(f"@{name}" for name in names)
+    return f"_Still waiting on {who} in the background — a late answer will be posted here if it finishes._"
 
 
 def cap_note(plan: RoundPlan) -> str:

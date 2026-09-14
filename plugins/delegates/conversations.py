@@ -74,6 +74,18 @@ exchange is on this thread.* Without it, a peer that parked on a HITL interrupt 
 every later address into the same hold — the room passes no resume handle, so the peer
 re-parks with the same question and the room livelocks — and a peer still working past the
 poll deadline makes the next address queue behind the very turn the room gave up on.
+
+**Pending tasks: retain the task, keep continuity dropped (#3360b).** That last case leaves
+the peer holding real work — an answer the room would otherwise never see. So when an
+address gives up on a task the peer is still working on, the adapter records the TASK id in
+a second slot, ``_PENDING``, under the same four-part key, while ``forget_one`` still drops
+the context. Two slots, not a new field on ``_Entry``: the pending handle is only ever
+*polled* (``late.collect``, ``GetTask`` only), never re-sent to, and re-learning the context
+while the task runs would queue the next address behind it. The handle obeys the context's
+invalidation rules exactly — ``forget`` (rewind / delete / fork) and ``forget_by_session``
+drop both slots, and a re-pointed or re-credentialed delegate can reach neither — because it
+too is a pointer at work the peer is doing on behalf of history this side may erase. One
+invalidation policy, two slots.
 """
 
 from __future__ import annotations
@@ -96,6 +108,19 @@ class _Entry(NamedTuple):
     session_id: str
 
 
+class _Pending(NamedTuple):
+    """A task the peer was still working on when this side stopped waiting (#3360b).
+
+    ``task_id`` and ``context_id`` are the peer's own — echoed, never minted here, like the
+    context. ``context_id`` is kept for the record only; it is NOT re-sent while the task is
+    pending (see the module docstring). ``session_id`` is the originating chat session, as
+    on ``_Entry``, so ``forget_by_session`` reaches it."""
+
+    task_id: str
+    context_id: str
+    session_id: str
+
+
 # One entry is four short key strings and a two-field value; the cap exists so a long-lived
 # instance that has addressed many threads can't accumulate them forever. Evicted
 # least-recently-used, which for a room means the conversations nobody is having any more.
@@ -103,6 +128,10 @@ _MAX_ENTRIES = 512
 
 # (conversation_key, delegate name, delegate url, credential digest) -> _Entry(contextId, session)
 _CONTEXTS: OrderedDict[tuple[str, str, str, str], _Entry] = OrderedDict()
+
+# Same key -> the task a peer is still working on after this side gave up waiting (#3360b).
+# Same cap, same lock, same invalidation.
+_PENDING: OrderedDict[tuple[str, str, str, str], _Pending] = OrderedDict()
 
 # Guards every mutation of _CONTEXTS as a GROUP: `__setitem__` + `move_to_end` + the LRU
 # eviction loop are three statements, and `forget()` deletes while it walks the mapping.
@@ -238,6 +267,57 @@ def forget_one(conversation_key: str, delegate: str, url: str, credential: str =
         return _CONTEXTS.pop(_key(conversation_key, delegate, url, credential), None) is not None
 
 
+def remember_pending(
+    conversation_key: str,
+    delegate: str,
+    url: str,
+    task_id: str,
+    *,
+    context_id: str = "",
+    credential: str = "",
+    session_id: str = "",
+) -> None:
+    """Record a task the peer is still working on after this side stopped waiting (#3360b).
+
+    A no-op without both a conversation key and a task id — there is nothing a later
+    collection could name. Replaces any earlier pending task for the same key: one member
+    in one conversation has one outstanding handle, the newest.
+    """
+    if not (conversation_key and task_id):
+        return
+    key = _key(conversation_key, delegate, url, credential)
+    with _LOCK:
+        _PENDING[key] = _Pending(str(task_id), str(context_id or ""), str(session_id or ""))
+        _PENDING.move_to_end(key)
+        while len(_PENDING) > _MAX_ENTRIES:
+            _PENDING.popitem(last=False)
+
+
+def pending_for(conversation_key: str, delegate: str, url: str, credential: str = "") -> _Pending | None:
+    """The task still pending for this participant in this conversation, or ``None``."""
+    if not conversation_key:
+        return None
+    with _LOCK:
+        return _PENDING.get(_key(conversation_key, delegate, url, credential))
+
+
+def forget_pending(conversation_key: str, delegate: str, url: str, credential: str = "", *, task_id: str = "") -> bool:
+    """Drop this participant's pending task; returns whether one was dropped.
+
+    With ``task_id``, only when the slot still names THAT task — a collection that settles
+    must not drop a newer handle a later address left in its place.
+    """
+    if not conversation_key:
+        return False
+    key = _key(conversation_key, delegate, url, credential)
+    with _LOCK:
+        current = _PENDING.get(key)
+        if current is None or (task_id and current.task_id != str(task_id)):
+            return False
+        del _PENDING[key]
+        return True
+
+
 def forget(conversation_key: str) -> int:
     """Forget every peer context remembered for one conversation; returns how many.
 
@@ -259,7 +339,13 @@ def forget(conversation_key: str) -> int:
         gone = [k for k in _CONTEXTS if k[0] == key]
         for k in gone:
             _CONTEXTS.pop(k, None)
-    return len(gone)
+        # The pending tasks go with it (#3360b): a collection still running re-checks its
+        # handle before every poll and before delivering, so dropping it here is what stops
+        # an erased conversation's late answer from reappearing in it.
+        pending = [k for k in _PENDING if k[0] == key]
+        for k in pending:
+            _PENDING.pop(k, None)
+    return len(gone) + len(pending)
 
 
 def forget_by_session(session_id: str) -> int:
@@ -285,7 +371,10 @@ def forget_by_session(session_id: str) -> int:
         gone = [k for k, entry in _CONTEXTS.items() if entry.session_id == sid]
         for k in gone:
             _CONTEXTS.pop(k, None)
-    return len(gone)
+        pending = [k for k, entry in _PENDING.items() if entry.session_id == sid]
+        for k in pending:
+            _PENDING.pop(k, None)
+    return len(gone) + len(pending)
 
 
 def snapshot() -> dict[tuple[str, str, str, str], _Entry]:
@@ -294,7 +383,14 @@ def snapshot() -> dict[tuple[str, str, str, str], _Entry]:
         return dict(_CONTEXTS)
 
 
+def snapshot_pending() -> dict[tuple[str, str, str, str], _Pending]:
+    """Every pending task (copy) — for tests and debugging, never the wire."""
+    with _LOCK:
+        return dict(_PENDING)
+
+
 def reset() -> None:
     """Forget everything (tests)."""
     with _LOCK:
         _CONTEXTS.clear()
+        _PENDING.clear()
