@@ -345,7 +345,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
     @app.delete("/api/chat/sessions/{session_id}")
-    async def _api_delete_session(session_id: str, harvest: bool = False, retire: bool = True):
+    async def _api_delete_session(session_id: str, harvest: bool = False, retire: bool = True, forget: bool = False):
         """Purge a chat session's checkpoints for both the A2A and chat prefix,
         optionally harvesting the conversation into the knowledge base first.
         The default ``retire=true`` permanently hides the id from durable
@@ -356,10 +356,32 @@ def register_chat_routes(app, ui: str) -> None:
         operator may be deleting it precisely to get rid of it. The TTL prune
         sweep keeps its own config-driven default (``checkpoint_harvest_enabled``).
 
+        Forget is OPT-IN too (``?forget=true`` — the dialog's second switch, #3493):
+        remove what this chat already wrote to memory, which harvest and the
+        checkpoint purge never touch. Exactly two kinds of row: the compaction
+        archives (``chat-archive:<session_id>``) and the summaries/facts harvested
+        with one of this chat's threads as their ``source``. Not the memories the
+        agent was asked to keep (``memory_ingest``, hot memory), and not rows
+        written before provenance existed (a fact stored with the legacy
+        ``source="harvest"`` names no thread). It runs BEFORE retirement, so a
+        harvest ticked alongside it writes a fresh summary that survives.
+
         Both ``a2a:{session_id}`` and the legacy ``chat:{session_id}`` threads are
         retired (non-streaming turns keyed ``chat:`` before ADR 0069 unified the
         prefix) with cascade so goal-mode ``:goal-iter-N`` sub-threads are not
         orphaned."""
+        forgotten = 0
+        if forget and STATE.knowledge_store is not None:
+            from graph.conversation_harvest import forget_conversation_memory
+
+            # Not best-effort: if this raises, the delete fails and the console keeps
+            # the tab, rather than reporting a chat's memory gone while it is still there.
+            forgotten = await asyncio.to_thread(
+                forget_conversation_memory,
+                STATE.knowledge_store,
+                session_id,
+                [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)],
+            )
         chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
         await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
         # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a
@@ -441,7 +463,7 @@ def register_chat_routes(app, ui: str) -> None:
         from graph import steering
 
         steering.forget(session_id)
-        return {"deleted": True, "harvested": chunk_id is not None}
+        return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
     async def _api_compact_session(session_id: str):

@@ -154,9 +154,12 @@ outside the scope.
 A turn flagged **incognito** leaves no memory trail and reads none in: the
 session-summary write is skipped (nothing to show up in later threads'
 `<prior_sessions>` digest), the digest / hot-memory / RAG injection is skipped
-for that turn (the skill index still injects — it's capability, not memory), and
+for that turn (the skill index still injects — it's capability, not memory),
 the retire-time conversation harvest skips the thread (its transcript is never
-summarized into the knowledge store).
+summarized into the knowledge store), and compaction never archives it.
+Auto-compaction still shrinks an incognito context, since it's the overflow
+safety valve, but keeps no copy. A manual `/compact` refuses, because it never
+removes history it hasn't archived.
 
 - **`POST /api/chat`** — pass `"incognito": true` in the request body (additive;
   default `false`).
@@ -173,6 +176,45 @@ The flag is per-message and stamped explicitly on every turn, so a thread is onl
 as incognito as its latest message — a raw API caller must send the flag on each
 turn of a thread it wants kept out of memory (the console toggle does exactly
 that for you).
+
+### Conversations in memory, and deleting a chat
+
+A chat reaches the knowledge store by four paths:
+
+| Path | When | What lands | Provenance and date |
+|---|---|---|---|
+| Compaction archive | automatically when the context fills, or `/compact` | the full transcript before the rewrite, in namespace `chat-archive:<session>` | `source` = the chat's thread; the text opens with the date span of its messages, and each line carries its own day |
+| TTL retire sweep | a thread idle past `checkpoint.max_age_days`, when harvesting is on (the default) | a summary and extracted facts | `source` = the thread; `[as of YYYY-MM-DD]` = its last activity |
+| Delete or clear with **Harvest** on | the operator | the same summary and facts | same |
+| `memory_ingest`, hot memory | the agent, when asked to remember | the row it writes | `source` = the session |
+
+A checkpoint message has no timestamp, so an archive dates each message by the
+first model call that carried it, read from the [trajectory](/adr/0102-the-trajectory-session-log-and-derived-surface).
+Messages newer than the last call take today's date (auto-compaction) or the
+checkpoint's date (`/compact`). A session with no trajectory is archived as
+"message dates unknown" instead of being dated to the day it was compacted.
+Incognito chats are never archived or harvested.
+
+**Deleting or clearing a chat** removes its checkpoints, trajectory, prompt
+snapshots, session summary and attachments. By default it does not remove what
+the chat already wrote to memory, and the dialog says so. It offers two
+independent switches, both off by default:
+
+- **Harvest into the knowledge base first** adds a searchable summary (and facts).
+- **Forget what this chat already saved to memory**
+  (`DELETE /api/chat/sessions/{id}?forget=true`) removes the chat's compaction
+  archives (everything in `chat-archive:<session>`) and the summaries and facts
+  harvested from its threads: `source` is `a2a:<session>`, `chat:<session>`, the
+  thread-id resolver's id, or one of their `:goal-iter-N` sub-threads, and
+  `source_type` is `harvest` or `extracted`. It runs before the harvest, so with
+  both switches on the fresh summary is kept. The response reports the rows
+  removed as `forgotten`.
+
+Forget does not reach memories the agent was asked to keep (`memory_ingest`, hot
+memory: delete those in the Memory inspector), background-job reports, facts
+stored before provenance existed (their `source` is the literal `harvest`), or an
+archive written without a session id (`chat-archive:unknown`). A fact from
+another chat that one of this chat's facts superseded stays superseded.
 
 ### The per-turn injection record
 

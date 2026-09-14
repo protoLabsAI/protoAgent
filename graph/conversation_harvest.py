@@ -13,6 +13,7 @@ classification-grade work, not the main reasoning task.
 from __future__ import annotations
 
 import logging
+import re
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -33,21 +34,167 @@ def render_transcript(messages: list, *, max_chars: int | None = _MAX_TRANSCRIPT
     compaction path archives the *whole* conversation losslessly before it
     rewrites the live context — a capped render would silently drop the head).
     """
-    lines: list[str] = []
-    for m in messages:
-        content = getattr(m, "content", "")
-        if not isinstance(content, str) or not content.strip():
-            continue
-        if isinstance(m, HumanMessage):
-            lines.append(f"User: {content.strip()}")
-        elif isinstance(m, AIMessage):
-            clean = extract_output(content).strip()
-            if clean:
-                lines.append(f"Assistant: {clean}")
+    lines = [line for line in (_line(m) for m in messages) if line is not None]
     transcript = "\n".join(lines)
     if max_chars is not None and len(transcript) > max_chars:
         transcript = "…\n" + transcript[-max_chars:]
     return transcript
+
+
+def _line(m, day: str = "") -> str | None:
+    """One transcript line (``User: …`` / ``Assistant: …``), or None for a message the
+    transcript skips. ``day`` stamps the line with when the message was sent."""
+    content = getattr(m, "content", "")
+    if not isinstance(content, str) or not content.strip():
+        return None
+    tag = f" [{day}]" if day else ""
+    if isinstance(m, HumanMessage):
+        return f"User{tag}: {content.strip()}"
+    if isinstance(m, AIMessage):
+        clean = extract_output(content).strip()
+        return f"Assistant{tag}: {clean}" if clean else None
+    return None
+
+
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
+
+
+def _today() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def message_dates(messages: list, session_id: str, *, trailing_date: str = "") -> dict[str, str]:
+    """``{message id: YYYY-MM-DD}``: the day each message was first sent to the model.
+
+    Checkpoint messages carry no timestamp of their own, so this reads the session's
+    trajectory (ADR 0102), which logs every model call's message ids. ``trailing_date``
+    dates the messages AFTER the last one the trajectory has seen (they arrived after
+    the last model call). It is applied only when at least one message IS dated: a
+    session without a trajectory stays undated instead of looking brand new, which is
+    the mistake this exists to stop (#3493). Never raises."""
+    ids = [str(getattr(m, "id", None) or "") for m in messages]
+    wanted = {i for i in ids if i}
+    if not wanted or not session_id:
+        return {}
+    try:
+        from observability.trajectory import trajectory_log
+
+        seen = trajectory_log.first_seen(session_id, wanted)
+    except Exception:  # noqa: BLE001 — dating is best-effort; an archive is still written
+        seen = {}
+    dates = {i: ts[:10] for i, ts in seen.items() if _DAY.match(ts[:10])}
+    if dates and _DAY.match(trailing_date or ""):
+        last = max(k for k, i in enumerate(ids) if i in dates)
+        for i in ids[last + 1 :]:
+            if i:
+                dates.setdefault(i, trailing_date)
+    return dates
+
+
+def archive_payload(
+    messages: list,
+    *,
+    session_id: str,
+    thread_id: str | None,
+    cause: str = "",
+    trailing_date: str | None = None,
+) -> tuple[str, dict]:
+    """The compaction archive write: ``(content, add_document kwargs)``, shared by
+    auto-compaction and ``/compact``. ``content`` is ``""`` when nothing renders.
+
+    Provenance and dates (#3493). An archive used to carry only the compaction day
+    (``created_at``) and no ``source``, so a transcript from weeks earlier was recalled
+    as current. Now the row's ``source`` is the thread it came from, the heading names
+    the span of the messages' dates, and the content opens with that span. Each line also
+    carries its own day, so every chunk the store splits the transcript into still says
+    when it was written: recall shows a chunk's text and stored date, never its heading.
+
+    ``trailing_date`` defaults to today (see :func:`message_dates`)."""
+    today = _today()
+    trailing = trailing_date if _DAY.match(trailing_date or "") else today
+    dates = message_dates(messages, session_id, trailing_date=trailing)
+    lines: list[str] = []
+    days: list[str] = []
+    undated = False
+    for m in messages:
+        day = dates.get(str(getattr(m, "id", None) or ""), "")
+        line = _line(m, day)
+        if line is None:
+            continue
+        lines.append(line)
+        if day:
+            days.append(day)
+        else:
+            undated = True
+    transcript = "\n".join(lines)
+    if not transcript.strip():
+        return "", {}
+    if days:
+        first, last = min(days), max(days)
+        span = first if first == last else f"{first} to {last}"
+        lead = f"[Conversation archive: messages from {span}" + ("; some messages undated" if undated else "")
+        label = f"messages {span}"
+    else:
+        lead = "[Conversation archive: message dates unknown"
+        label = f"archived {today}"
+    lead += f"; archived {today}]"
+    prefix = f"{cause}, " if cause else ""
+    return f"{lead}\n{transcript}", {
+        "domain": "conversation",
+        "heading": f"Conversation archive ({prefix}{session_id}, {label})",
+        # source=<thread> is the provenance link the harvest already writes (ADR 0069 D5).
+        "source": thread_id or None,
+        # Agent-derived trust tier (ADR 0069 D8): the operator's own conversation.
+        "source_type": "conversation",
+        "namespace": f"chat-archive:{session_id}",
+    }
+
+
+# What "forget what this chat saved" removes by ``source`` — the harvest's summaries
+# and extracted facts. NOT "conversation": memory_ingest writes that type with the
+# session as its source, and a fork's thread-id resolver may BE the session id.
+# Compaction archives are reached through their namespace instead.
+_FORGET_SOURCE_TYPES = ("harvest", "extracted")
+
+
+def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> int:
+    """Delete what a chat already wrote to the knowledge store (#3493, the delete
+    dialog's opt-in). Returns the number of rows removed.
+
+    Exactly two kinds of row:
+
+    - its compaction archives: everything in ``chat-archive:<session_id>``
+      (auto-compaction and ``/compact``, with or without a ``source``);
+    - summaries and facts harvested from one of its threads: ``source`` equal to
+      one of ``thread_ids`` (or one of their ``:goal-iter-N`` sub-threads, which the
+      TTL sweep can harvest on their own), ``source_type`` harvest/extracted.
+
+    Out of reach, by design or by history: memories the agent was asked to keep
+    (``memory_ingest``, hot memory), background-job reports, and facts stored before
+    provenance existed (``source="harvest"``, which names no thread). A fact from
+    ANOTHER chat that one of this chat's facts superseded stays superseded.
+
+    Hard delete, like the chat delete it rides on. Stores without the method (a plugin
+    backend) are skipped with a warning rather than failing the delete."""
+    if knowledge_store is None or not session_id:
+        return 0
+    removed = 0
+    by_namespace = getattr(knowledge_store, "delete_by_namespace", None)
+    if callable(by_namespace):
+        removed += int(by_namespace(f"chat-archive:{session_id}") or 0)
+    else:
+        log.warning("[forget] knowledge store has no delete_by_namespace — archives of %s kept", session_id)
+    by_source = getattr(knowledge_store, "delete_by_source", None)
+    if callable(by_source):
+        for tid in dict.fromkeys(str(t) for t in thread_ids if t):
+            removed += int(by_source(tid, source_types=_FORGET_SOURCE_TYPES) or 0)
+            removed += int(by_source(f"{tid}:goal-iter-", source_types=_FORGET_SOURCE_TYPES, prefix=True) or 0)
+    else:
+        log.warning("[forget] knowledge store has no delete_by_source — harvested rows of %s kept", session_id)
+    log.info("[forget] removed %d knowledge row(s) written by session %s", removed, session_id)
+    return removed
 
 
 _SUMMARY_PROMPT = (
@@ -71,8 +218,6 @@ async def _default_summarizer(transcript: str, config) -> str:
 
 def _as_of(tup) -> str:
     """``YYYY-MM-DD`` of the thread's last checkpoint (its last activity), or ``""``."""
-    import re
-
     ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
     return ts[:10] if re.match(r"\d{4}-\d{2}-\d{2}", ts) else ""
 

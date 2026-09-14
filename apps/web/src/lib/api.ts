@@ -2266,21 +2266,22 @@ export const api = {
   },
 
   // Retire a chat session server-side: purge its checkpoints, optionally
-  // harvesting the conversation into knowledge first (the delete dialog's
-  // opt-in checkbox). Callers await this durable commit before dropping the
-  // local tab so a failed tombstone write remains visible and retryable.
-  deleteChatSession(sessionId: string, harvest = false) {
-    return request<{ deleted: boolean; harvested: boolean }>(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}`,
+  // harvesting the conversation into knowledge first and/or forgetting what it
+  // already wrote to memory (the delete dialog's two opt-in switches, #3493).
+  // Callers await this durable commit before dropping the local tab so a failed
+  // tombstone write remains visible and retryable.
+  deleteChatSession(sessionId: string, harvest = false, forget = false) {
+    return request<{ deleted: boolean; harvested: boolean; forgotten?: number }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}${forget ? "&forget=true" : ""}`,
       { method: "DELETE" },
     );
   },
 
   /** Wipe durable history but keep the tab/id reusable. Unlike retirement this
    * deliberately does not tombstone the id, so its next turn can be discovered. */
-  clearChatSession(sessionId: string, harvest = false) {
-    return request<{ deleted: boolean; harvested: boolean }>(
-      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}&retire=false`,
+  clearChatSession(sessionId: string, harvest = false, forget = false) {
+    return request<{ deleted: boolean; harvested: boolean; forgotten?: number }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}${forget ? "&forget=true" : ""}&retire=false`,
       { method: "DELETE" },
     );
   },

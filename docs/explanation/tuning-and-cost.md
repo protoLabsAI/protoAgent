@@ -113,13 +113,16 @@ the sweep keeps the latest `keep_per_thread` per session and drops whole session
 idle past `max_age_days` (age decoded from the checkpoint's UUIDv6). The DB runs
 in WAL mode so the sweep coexists with live writes.
 
-**Harvest to knowledge** (`harvest_enabled`, on): when a session is *retired* —
-aged out by the pruner, or explicitly deleted (the chat tab's trash button hits
-`DELETE /api/chat/sessions/{id}`) — it's first summarized into the knowledge
-base (`domain: conversation`, by the cheap aux model) and *then* its raw
-checkpoints are dropped. So past conversations stay searchable via
-`memory_recall` while the bulky raw history is reclaimed — signal kept, space
-freed. Needs the knowledge middleware enabled.
+**Harvest to knowledge** (`harvest_enabled`, on): when the pruner ages a session
+out, it's first summarized into the knowledge base (`domain: conversation`, by
+the cheap aux model) and *then* its raw checkpoints are dropped. So past
+conversations stay searchable via `memory_recall` while the bulky raw history is
+reclaimed — signal kept, space freed. Needs the knowledge middleware enabled. An
+explicit delete (the chat tab's trash button, `DELETE /api/chat/sessions/{id}`)
+harvests only when the dialog's Harvest switch is on, whatever this setting says.
+Compaction archives a long chat's earlier messages on its own, and the delete
+dialog can forget those too; see
+[Conversations in memory, and deleting a chat](/guides/knowledge#conversations-in-memory-and-deleting-a-chat).
 
 ## What's already optimal
 

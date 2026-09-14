@@ -2852,6 +2852,11 @@ def _compaction_message(result: dict) -> str:
             "Compaction skipped — no searchable knowledge store is configured, so the raw history "
             "couldn't be archived. Nothing was changed (your full context is intact)."
         )
+    if reason == "incognito":
+        return (
+            "Compaction skipped — this chat is incognito, so its history is never archived to memory, "
+            "and /compact doesn't remove history it hasn't archived. Nothing was changed."
+        )
     if reason in ("empty", "empty_archive", "archive_error"):
         return "Compaction skipped — the conversation couldn't be archived, so nothing was changed."
     if reason in ("no_summary", "summary_error"):

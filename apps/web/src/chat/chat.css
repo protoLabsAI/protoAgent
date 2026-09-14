@@ -776,7 +776,13 @@
 }
 
 /* Delete-chat dialog: the opt-in harvest checkbox (harvest is never automatic). */
-.chat-delete-harvest {
+.chat-memory-note {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  color: var(--pl-color-fg-muted);
+}
+.chat-delete-harvest,
+.chat-delete-forget {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -785,7 +791,8 @@
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
-.chat-delete-harvest input { accent-color: var(--pl-color-accent); }
+.chat-delete-harvest input,
+.chat-delete-forget input { accent-color: var(--pl-color-accent); }
 
 /* Signed-out composer strip (#2513): replaces the PromptInput while the native
    OAuth provider is disconnected, so the send path can't be invoked at all. The

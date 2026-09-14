@@ -39,7 +39,7 @@ import {
   type SessionStatus,
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
-import { ClearConversationDialog } from "./ClearConversationDialog";
+import { ChatMemoryChoices, ClearConversationDialog } from "./ClearConversationDialog";
 import { exportChatToFile } from "./exportChat";
 import { PublishDialog } from "./PublishDialog";
 import { openPublishDialog } from "./publishDialogStore";
@@ -87,7 +87,7 @@ import {
   staleInterjections,
   type ServerTurnPhase,
 } from "./serverInterjections";
-import { canClearSession, retireChatSession } from "./sessionRetirement";
+import { NO_MEMORY_CHANGE, canClearSession, retireChatSession, type ChatMemoryChoice } from "./sessionRetirement";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -248,6 +248,8 @@ export function ChatSurface({
   // dialog-storm the spec warns against), and exactly one dialog is ever open.
   const [closeQueue, setCloseQueue] = useState<string[]>([]);
   const [harvestOnDelete, setHarvestOnDelete] = useState(false);
+  // #3493: forget what the chat already wrote to memory (archives, harvested summaries/facts).
+  const [forgetOnDelete, setForgetOnDelete] = useState(false);
   const [retiringSessionId, setRetiringSessionId] = useState<string | null>(null);
   // Goal tab close: default keeps the goal running (detach); toggle on to STOP it (clear the
   // goal + close its task backlog) instead.
@@ -287,9 +289,9 @@ export function ChatSurface({
     if (chat.sessions.some((s) => s.id === requested)) setPendingClose(requested);
   }, [chat.pendingDeleteRequest, pendingClose, chat.sessions]);
 
-  async function closeSession(id: string, harvest: boolean): Promise<boolean> {
+  async function closeSession(id: string, memory: ChatMemoryChoice): Promise<boolean> {
     try {
-      await retireChatSession(id, harvest);
+      await retireChatSession(id, memory);
       return true;
     } catch (error) {
       onError(`Couldn't delete chat: ${errMsg(error)}. The tab was kept so you can retry.`);
@@ -307,13 +309,13 @@ export function ChatSurface({
     if (chat.sessions.some((s) => s.id === requested)) setPendingClear(requested);
   }, [chat.pendingClearRequest, pendingClear, chat.sessions]);
 
-  async function clearSession(id: string, harvest: boolean): Promise<boolean> {
+  async function clearSession(id: string, memory: ChatMemoryChoice): Promise<boolean> {
     if (!canClearSession(chatStore.getSnapshot().sessionStatusMap[id], serverTurnSessions.has(id))) {
       onError("Stop the active response before clearing this conversation.");
       return false;
     }
     try {
-      await api.clearChatSession(id, harvest);
+      await api.clearChatSession(id, memory.harvest, memory.forget);
       chatStore.updateMessages(id, []);
       return true;
     } catch (error) {
@@ -333,9 +335,10 @@ export function ChatSurface({
     );
     const goals = ids.filter((id) => activeGoalIds.has(id));
     for (const id of ids) {
-      if (!activeGoalIds.has(id)) void closeSession(id, false);
+      if (!activeGoalIds.has(id)) void closeSession(id, NO_MEMORY_CHANGE);
     }
     setHarvestOnDelete(false);
+    setForgetOnDelete(false);
     setStopGoalOnClose(false);
     setPendingClose(goals[0] ?? null);
     setCloseQueue(goals.slice(1));
@@ -347,6 +350,7 @@ export function ChatSurface({
   // empty, so this just clears the dialog.
   function advanceClose() {
     setHarvestOnDelete(false);
+    setForgetOnDelete(false);
     setStopGoalOnClose(false);
     setPendingClose(closeQueue[0] ?? null);
     setCloseQueue((queue) => queue.slice(1));
@@ -359,6 +363,7 @@ export function ChatSurface({
     setPendingClose(null);
     setCloseQueue([]);
     setHarvestOnDelete(false);
+    setForgetOnDelete(false);
     setStopGoalOnClose(false);
   }
 
@@ -407,7 +412,7 @@ export function ChatSurface({
       if (disposition === "confirm-goal") {
         setPendingClose(session.id);
       } else if (disposition === "direct") {
-        await closeSession(session.id, false); // false = no knowledge harvest
+        await closeSession(session.id, NO_MEMORY_CHANGE); // no harvest, no forget
       } else {
         onError("Couldn't verify whether this chat owns an active goal. The tab was kept; try again.");
       }
@@ -577,7 +582,8 @@ export function ChatSurface({
             setRetiringSessionId(id);
             try {
               if (closingGoal && stopGoalOnClose) await api.clearGoal(id, true);
-              if (await closeSession(id, closingGoal ? false : harvestOnDelete)) advanceClose();
+              const memory = closingGoal ? NO_MEMORY_CHANGE : { harvest: harvestOnDelete, forget: forgetOnDelete };
+              if (await closeSession(id, memory)) advanceClose();
             } catch (error) {
               onError(`Couldn't stop and delete this goal chat: ${errMsg(error)}. The tab was kept so you can retry.`);
             } finally {
@@ -607,14 +613,14 @@ export function ChatSurface({
               <p style={{ margin: 0 }}>
                 {`"${pendingCloseSession.title}" and its history will be removed — this can't be undone from here.`}
               </p>
-              {/* Harvest is OPT-IN: deleting a chat must not silently copy it into
-                  searchable memory — the operator may be deleting it precisely to
-                  get rid of it. */}
-              <Switch
-                className="chat-delete-harvest"
-                checked={harvestOnDelete}
-                onCheckedChange={setHarvestOnDelete}
-                label="Harvest into the knowledge base first (keeps a searchable summary)"
+              {/* Both memory switches are opt-in; the note says what compaction may
+                  already have archived (#3493). Shared with the clear dialog. */}
+              <ChatMemoryChoices
+                action="Deleting"
+                harvest={harvestOnDelete}
+                forget={forgetOnDelete}
+                onHarvestChange={setHarvestOnDelete}
+                onForgetChange={setForgetOnDelete}
               />
             </>
           )
@@ -626,11 +632,11 @@ export function ChatSurface({
           the tab, rather than closing it. */}
       <ClearConversationDialog
         open={pendingClear !== null}
-        onConfirm={(harvest) => {
+        onConfirm={(memory) => {
           if (!pendingClear || clearingSessionId) return;
           const id = pendingClear;
           setClearingSessionId(id);
-          void clearSession(id, harvest)
+          void clearSession(id, memory)
             .then((cleared) => {
               if (cleared) setPendingClear(null);
             })
