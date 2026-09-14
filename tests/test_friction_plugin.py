@@ -905,9 +905,10 @@ def test_the_working_state_provider_does_one_pass_over_the_ledger_and_caches_it(
     small, big = cold_projection(500), cold_projection(2000)
     for lines, cost in ((500, small), (2000, big)):
         assert cost["opens"] == 1, f"{lines} lines: one projection opened the ledger {cost['opens']} times"
-        # > 0 proves the shim sees the parses (a plugin that stopped calling `json.loads`
-        # through its module global would otherwise pass this vacuously).
-        assert 0 < cost["parses"] <= lines, f"{lines} lines: {cost['parses']} json.loads calls, at most one per line"
+        # Every fixture line is a valid record, so one real pass parses each exactly once:
+        # fewer means lines were skipped (a first-line-only read still returns a non-empty
+        # projection), more means records are re-parsed. Exact, so neither can hide.
+        assert cost["parses"] == lines, f"{lines} lines: expected one json.loads call per line, got {cost['parses']}"
     # 4x the lines is ~4x the field lookups when each record is visited a fixed number of
     # times; a projection that rescans the records for every record is ~16x.
     assert big["field_reads"] <= 5 * small["field_reads"], (
