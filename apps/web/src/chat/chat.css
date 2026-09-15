@@ -450,11 +450,6 @@
   gap: 12px;
   margin-top: 7px;
 }
-/* In a user bubble the row carries only the time, bottom-right under the text, where a sent
-   receipt reads. */
-.pl-message--user .chat-msg-meta {
-  justify-content: flex-end;
-}
 /* Sent-time chip (#3458): the full local sent date-and-time lives in the DS Tooltip on hover or
    focus. Same muted monospace tone and size as the usage stats so the row reads as one strip of
    metadata; the chip stays tight around icon and time so the hover target is not the whole row. */
