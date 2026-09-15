@@ -15,6 +15,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.168.0] - 2026-09-15
+
+### Added
+- **A room member the room stopped waiting on is no longer lost: its late answer is collected and posted (#3360).**
+  When an `a2a` member's address gives up with the peer still working ("still running after Ns without
+  observable progress"), the room keeps that task's id and polls it read-only (`GetTask`, backing off to 30s)
+  until it settles. The answer is then posted to the chat as that member's own message, marked as arriving
+  after its turn, and the lead gets a turn to take it in, the same way a background `delegate_to` reply
+  arrives. A failure arrives as a failed message; a task that stops on a question hands the lead the question
+  and its resume handle. Collection never sends the member anything, so it cannot open a duplicate task, and
+  the member stays dropped from the room's remaining rounds. Rewinding or deleting the chat while it is still
+  waiting withdraws it, and so does re-pointing, re-crediting or removing the delegate. In an incognito chat
+  the late answer lands without waking the lead. The lead's own foreground `delegate_to` gets the same: it is
+  told the answer will arrive on a later turn instead of re-delegating the work. Gives up after an hour, or
+  after losing touch with the peer eight polls in a row, and says so. In-memory, so a restart ends it.
+
+### Changed
+- **A2A delegation to a protoAgent peer is now bounded by lack of progress, not by one held-open request (#3360).**
+  The `a2a` delegate now sends `SendMessage` with `returnImmediately`, so the peer hands the task back at once
+  and the adapter polls it with `GetTask`. Before, a protoAgent peer held the request open for the whole turn:
+  `poll_timeout_s` acted as a flat wall-clock cap (a long turn that was visibly making progress still failed at
+  300s), and the failure left no task id behind, so nothing could come back for the peer's eventual answer.
+  Now `poll_timeout_s` means what the rooms guide already said it meant — time since the last material change
+  to the task — for every peer that hands the task back (a peer that ignores `returnImmediately` still holds
+  the request, and `poll_timeout_s` stays its read budget). An explicit `delegate_to(timeout=…)` still overrides it for that call, as a
+  wall clock on the whole wait. Polls ask for no task history and back off from 1s to 5s. A peer that ignores
+  `returnImmediately` answers inline, exactly as before.
+
+- **Review-finder lanes get 60 tool rounds instead of 40 (#3532).** Paged file reads cost a round per page,
+  and lanes were running out of budget while still reading large files, which left a whole review angle
+  unreviewed (a WARN for incomplete coverage). Rounds a lane doesn't need cost nothing.
+
+- **User messages no longer show a sent time; it appears only in the answer's footer (#3458).**
+  The clock chip under your own message duplicated the one under the reply, which already sits in
+  the usage-stats row, so the transcript now shows each turn's time once.
+
+### Fixed
+- **Agents that get their gateway key from the environment now learn their model's context window (#3502).**
+  The window lookup authenticated with `model.api_key` only. A deployment that supplies the key through
+  `OPENAI_API_KEY` instead (a fleet agent's stack env or secrets manager) sent the lookup with no key, and
+  the gateway answered 401 "No api key passed in". The window then stayed unknown for the life of the
+  process, so compaction, tool-result pruning and the context meter all ran on their fallbacks. The lookup
+  now uses the same key as the gateway client.
+
+- **A prompt near the context window no longer fails just because of the output reservation (#3502).**
+  `model.max_tokens` is a flat reservation, and providers like vLLM reject a request whose prompt plus
+  output exceeds the window before generating anything, even when a smaller output budget would have fit.
+  Subagent lanes, which run no pruning or compaction, had no other way out. The first time a model
+  overflows, protoAgent now learns the window from the provider's own error and retries that call once with
+  the output budget that fits; later calls on that model are sized before they're sent. The prompt is sized
+  from the conversation's measured tokens per character, not a chars/4 guess. The gateway's advertised
+  `max_input_tokens` isn't used for this, because it can be an input-only cap or lower than the backend's
+  real limit. Anything that can't be sized safely goes out exactly as before.
+
+- **Agent snapshots travel in the provider-registry shape, without changing where the imported agent's model traffic goes (#3521).**
+  Export moves each retiring `model.provider` / `model.api_base` / `model.api_key` value into the registry
+  wherever the registry can say the same thing — a subscription `model.provider` qualifies every bare model
+  name it routed; a pinned endpoint becomes the `gateway` connection when the source box had none of its own —
+  and records where in `model_aliases`, so the import restates exactly those values for the paths that still
+  read them. A connection's key is asked for as `providers.<id>`; the retiring `model.api_key` keeps its name
+  unless it is the `gateway` connection's key. Older snapshots are migrated when staged. This also closes two
+  secret-free gaps: an inline `providers[].api_key` was only caught if the pattern sweep recognised its shape,
+  and keys kept under `providers:` in `secrets.yaml` were never inventoried, so a setup-wizard agent imported
+  as "complete" with no key. One of the blockers to retiring the three fields (#3128).
+
 ## [0.167.0] - 2026-09-14
 
 ### Changed
