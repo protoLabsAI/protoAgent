@@ -58,6 +58,56 @@ KIND_TIMEOUT = "timeout"
 # echoes a whole request body can't flood the caller's context.
 _A2A_ERROR_DETAIL_LIMIT = 2000
 
+# A2A 1.0 ``TaskNotFoundError``: the peer no longer knows a task id (it restarted, or its
+# task retention expired). ``A2aAdapter.get_task`` reads it as "gone", not as a failure.
+_A2A_TASK_NOT_FOUND = -32001
+
+
+def _a2a_headers(d) -> dict:
+    """The request headers every A2A call to ``d`` carries — dispatch and ``get_task`` alike."""
+    # A2A-Version is mandatory for an a2a-sdk >=1.0 peer: a missing header defaults
+    # to 0.3 on the receiver → -32009 VERSION_NOT_SUPPORTED (ADR 0051 audit). The
+    # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
+    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
+    if d.auth_token:
+        headers["Authorization"] = f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
+        if d.auth_scheme == "apiKey":
+            headers["X-API-Key"] = d.auth_token
+    elif _is_loopback_url(d.url):
+        # ADR 0089 D4: an in-instance delegate to a loopback member/board carries no
+        # explicit credential (the "local board is tokenless" pattern, supervisor.py). Now
+        # that members require a credential (D5), present the fleet service token so the
+        # call still authenticates — the member accepts it as operator. Loopback ONLY: an
+        # off-box delegate must configure its own token; the fleet token never leaves the box.
+        try:
+            from graph.fleet.service_token import resolve_service_token
+
+            headers["Authorization"] = f"Bearer {resolve_service_token()}"
+        except Exception:  # noqa: BLE001 — not in a fleet / no token: dispatch unauthenticated as before
+            logger.debug("[delegates] no fleet service token for loopback delegate %r", d.name)
+    return headers
+
+
+def _continuity_credential(d) -> str:
+    """The auth material that joins name+url in ``conversations``' keys: rotating a row's
+    token IN PLACE must not hand the new principal what the old one was holding."""
+    return f"{d.auth_scheme}:{d.auth_token}" if d.auth_token else ""
+
+
+def _park_message(name: str, task_id: str, question: str) -> str:
+    """What a delegation that PARKED on a question returns: the question plus the resume
+    handle, phrased for the calling agent (the HITL delegation chain)."""
+    return (
+        f"⏸ delegate {name!r} needs input before it can continue.\n"
+        + (f"Question: {str(question)[:1000]}\n" if question else "")
+        + f"Parked task: {task_id}\n\n"
+        f"To continue: answer with delegate_to(target={name!r}, "
+        f"query='<your answer>', resume_task_id={str(task_id)!r}). "
+        "If you can't answer it yourself, get the answer first — ask your own "
+        "operator (ask_human) if you have one; your question bubbles up the same "
+        "way — then resume with it."
+    )
+
 
 def _is_loopback_url(url: str) -> bool:
     """True when ``url`` targets this box's loopback interface — i.e. an in-instance
@@ -828,11 +878,16 @@ class A2aAdapter(Adapter):
         item_id: str | None = None,
         resume_task_id: str | None = None,
     ) -> str:
+        import time
+
         import httpx  # noqa: F401 — used by the pre-flight probe below
 
         from observability import tracing
         from security import policy
 
+        # An explicit per-call ``timeout`` counts from HERE, before the pre-flight probe, so
+        # the probe's own time comes out of the caller's budget rather than on top of it.
+        started = time.monotonic()
         blocked = policy.check_url(d.url)
         if blocked:
             raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
@@ -850,26 +905,7 @@ class A2aAdapter(Adapter):
                 "would reject the call with -32009 VERSION_NOT_SUPPORTED). Upgrade the peer, or point "
                 "its url at a 1.0 /a2a endpoint."
             )
-        # A2A-Version is mandatory for an a2a-sdk >=1.0 peer: a missing header defaults
-        # to 0.3 on the receiver → -32009 VERSION_NOT_SUPPORTED (ADR 0051 audit). The
-        # scheduler/inbox/background self-POSTs already set it; the delegate client must too.
-        headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-        if d.auth_token:
-            headers["Authorization"] = f"Bearer {d.auth_token}" if d.auth_scheme != "apiKey" else d.auth_token
-            if d.auth_scheme == "apiKey":
-                headers["X-API-Key"] = d.auth_token
-        elif _is_loopback_url(d.url):
-            # ADR 0089 D4: an in-instance delegate to a loopback member/board carries no
-            # explicit credential (the "local board is tokenless" pattern, supervisor.py). Now
-            # that members require a credential (D5), present the fleet service token so the
-            # call still authenticates — the member accepts it as operator. Loopback ONLY: an
-            # off-box delegate must configure its own token; the fleet token never leaves the box.
-            try:
-                from graph.fleet.service_token import resolve_service_token
-
-                headers["Authorization"] = f"Bearer {resolve_service_token()}"
-            except Exception:  # noqa: BLE001 — not in a fleet / no token: dispatch unauthenticated as before
-                logger.debug("[delegates] no fleet service token for loopback delegate %r", d.name)
+        headers = _a2a_headers(d)
 
         async def _rpc(client, method, params):
             body = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
@@ -933,10 +969,18 @@ class A2aAdapter(Adapter):
             as_type="agent",
         ):
             return await self._dispatch_traced(
-                d, query, send_timeout=timeout, poll_timeout=poll_timeout, _rpc=_rpc, resume_task_id=resume_task_id
+                d,
+                query,
+                send_timeout=timeout,
+                poll_timeout=poll_timeout,
+                _rpc=_rpc,
+                resume_task_id=resume_task_id,
+                started=started,
             )
 
-    async def _dispatch_traced(self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None) -> str:
+    async def _dispatch_traced(
+        self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None, started=None
+    ) -> str:
         """The wire half of ``dispatch``, inside the outbound span (see caller)."""
         import time
 
@@ -974,6 +1018,17 @@ class A2aAdapter(Adapter):
                 "messageId": str(uuid.uuid4()),
                 "metadata": dict(provenance),
             },
+            # Ask for the task back NOW instead of holding this request open for the whole
+            # turn (#3360; A2A 1.0 ``SendMessageConfiguration.returnImmediately``). A peer
+            # that holds the connection — protoAgent's own server does, by default — hands
+            # over no task id until it has finished, so a turn that outruns the read budget
+            # ends as a bare transport timeout with nothing left to observe: no progress to
+            # reset ``poll_timeout_s`` on (it degrades into a flat wall-clock cap) and no
+            # handle for anything to come back to. Returned at once, the task goes through
+            # the GetTask loop below, which already knows progress, parks and terminal
+            # states. A peer that ignores the flag answers inline exactly as before, and
+            # the read budget below still covers it.
+            "configuration": {"returnImmediately": True},
         }
         try:
             from observability import tracing
@@ -1011,7 +1066,7 @@ class A2aAdapter(Adapter):
         # The credential joins the name+url in the map's key (see ``conversations``):
         # rotating a row's token IN PLACE must not hand the new principal the conversation
         # the old one was having.
-        credential = f"{d.auth_scheme}:{d.auth_token}" if d.auth_token else ""
+        credential = _continuity_credential(d)
         room_context = conversations.remembered(d.conversation_key, d.name, d.url, credential)
         if room_context:
             send_params["message"]["contextId"] = room_context
@@ -1069,17 +1124,27 @@ class A2aAdapter(Adapter):
                     _drop()
                 raise
 
-        # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
-        # holding the connection open for the whole delegated turn before returning the final
-        # Message — so the initial SendMessage READ must be allowed to run as long as the task
-        # legitimately might (poll_timeout), NOT the flat 60s that hard-failed every member turn
-        # >60s (#1778: hub→member delegation silently fell back on any non-trivial turn). Connect
-        # stays short so an unreachable peer still fails fast; the same client serves the GetTask
-        # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
+        # A *synchronous* peer — one that ignores ``returnImmediately`` above and answers
+        # SendMessage INLINE, holding the connection open for the whole delegated turn before
+        # returning the final Message — needs the initial SendMessage READ to be allowed to
+        # run as long as the task legitimately might (poll_timeout), NOT the flat 60s that
+        # hard-failed every member turn >60s (#1778: hub→member delegation silently fell back
+        # on any non-trivial turn). Connect stays short so an unreachable peer still fails
+        # fast; the same client serves the GetTask poll loop, which returns quickly regardless.
+        # An explicit ``timeout`` still overrides.
         read_budget = send_timeout if send_timeout is not None else poll_timeout
-        # Wall-clock start of the wire round-trips, used only to flag a suspiciously short
-        # reply relative to how long the dispatch took (#3085) — never alters the answer.
+        # Wall-clock start of the wire round-trips, used to flag a suspiciously short reply
+        # relative to how long the dispatch took (#3085) and to anchor the per-call cap below.
         t0 = time.monotonic()
+        # An explicit per-call ``timeout`` is the caller's "max seconds to wait for the reply",
+        # and it OVERRIDES the configured bound for this call (``delegate_to(timeout=…)``) —
+        # which is how a caller runs a known-long job. Against a peer that answers inline it
+        # was the one held read's budget; against one that hands the task back at once it
+        # has to be the POLL's bound instead, and a wall clock in both directions: it stops
+        # a task that keeps progressing at N, and it also outlasts a quiet stretch longer
+        # than ``poll_timeout_s`` (one long tool call streams nothing between its start and
+        # end frames). Without one, the no-progress ``poll_timeout`` is the bound.
+        hard_deadline = (started if started is not None else t0) + send_timeout if send_timeout is not None else None
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
                 parked = await _rpc_tracked(client, "GetTask", {"id": resume_task_id})
@@ -1116,15 +1181,33 @@ class A2aAdapter(Adapter):
             # resolved by the classification block AFTER it; only a non-terminal task polls.
             progress_fingerprint = _a2a_progress_fingerprint(result)
             deadline = time.monotonic() + poll_timeout
-            while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
-                await asyncio.sleep(1.0)
+            poll_interval = 1.0
+
+            def _within_bounds() -> bool:
+                now = time.monotonic()
+                return now < hard_deadline if hard_deadline is not None else now < deadline
+
+            while task_id and not _is_terminal(state) and not _is_input_required(state) and _within_bounds():
+                # Never sleep past the caller's explicit timeout — the interval grows to 5s.
+                nap = poll_interval if hard_deadline is None else min(poll_interval, hard_deadline - time.monotonic())
+                await asyncio.sleep(max(nap, 0.0))
+                # Back off toward 5s. Every GetTask makes a protoAgent peer load and parse the
+                # task's whole stored history — ``historyLength`` trims only the reply — on
+                # the event loop its turn is running on, so a long turn must not be polled
+                # at 1s for its whole length.
+                poll_interval = min(poll_interval * 1.5, 5.0)
                 # A2A 1.0 GetTaskRequest is {tenant, id, history_length} — `id`, not
                 # the v0.3 legacy `name` (proto: a2a.types.a2a_pb2.GetTaskRequest).
                 # The old {"name": …} shape only ever worked against 0.3 peers; a 1.0
                 # peer rejects/ignores it, so the poll loop could never converge for
                 # an async-style peer (latent: protoAgent peers answer SendMessage
                 # inline, so this path rarely ran).
-                result = await _rpc_tracked(client, "GetTask", {"id": task_id})
+                #
+                # ``historyLength: 0``: nothing below reads a task's history — state, the
+                # status message and artifacts are the whole of what the adapter acts on —
+                # while a long protoAgent turn appends to it on every streamed status update,
+                # so without this each 1s poll re-ships the entire turn so far.
+                result = await _rpc_tracked(client, "GetTask", {"id": task_id, "historyLength": 0})
                 task = result.get("task", result) or {}
                 observed_task_id = task.get("id")
                 state = (task.get("status") or {}).get("state")
@@ -1157,16 +1240,7 @@ class A2aAdapter(Adapter):
                         f"delegate {d.name!r} asked for input but returned no task id to resume"
                         + (f": {str(question)[:300]}" if question else "")
                     )
-                return (
-                    f"⏸ delegate {d.name!r} needs input before it can continue.\n"
-                    + (f"Question: {str(question)[:1000]}\n" if question else "")
-                    + f"Parked task: {task_id}\n\n"
-                    f"To continue: answer with delegate_to(target={d.name!r}, "
-                    f"query='<your answer>', resume_task_id={str(task_id)!r}). "
-                    "If you can't answer it yourself, get the answer first — ask your own "
-                    "operator (ask_human) if you have one; your question bubbles up the same "
-                    "way — then resume with it."
-                )
+                return _park_message(d.name, task_id, question)
             # STATE decides whether this result is an ANSWER, a diagnostic, or nothing for
             # the room — never "is there text" (#3362). ``classify_answer`` keeps that
             # decision apart from ``_is_terminal`` (the poll-stop predicate): a terminal
@@ -1218,6 +1292,29 @@ class A2aAdapter(Adapter):
             # to the pre-#3360 wire: a fresh context next time.
             _drop()
             if task_id and not _is_terminal(state):
+                # Retain the TASK for collection while continuity stays dropped (#3360b).
+                # The peer took the work and is still doing it; the room will not address
+                # this member again (``room_rounds._dropped``), but ``late.collect`` can poll
+                # this one task with GetTask and bring its answer back when it settles. A
+                # separate slot from the context, deliberately: restoring the contextId would
+                # queue the next address behind the very turn we just gave up on. No-op
+                # without a conversation key; never for a resume, which is the lead's.
+                if not resume_task_id:
+                    conversations.remember_pending(
+                        d.conversation_key,
+                        d.name,
+                        d.url,
+                        str(task_id),
+                        context_id=str(task.get("contextId") or ""),
+                        credential=credential,
+                        session_id=d.origin_session_id,
+                    )
+                if hard_deadline is not None and time.monotonic() >= hard_deadline:
+                    raise DelegateError(
+                        f"delegate {d.name!r} still running after {send_timeout:g}s (this call's "
+                        f"timeout) — the peer may still be working; raise the call's timeout for a "
+                        f"job this long (state={state})"
+                    )
                 raise DelegateError(
                     f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable "
                     f"progress — the peer may still be working; raise its poll timeout if tasks go "
@@ -1225,6 +1322,58 @@ class A2aAdapter(Adapter):
                     f"(state={state})"
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
+
+    async def get_task(self, d: Delegate, task_id: str, *, timeout: float = 30.0) -> dict | None:
+        """ONE read-only ``GetTask`` for a task this side stopped waiting on (#3360b).
+
+        The whole of what collecting a late answer may send: there is no ``SendMessage``
+        here, so no argument, state or peer reply can turn a collection into a dispatch.
+        Returns the JSON-RPC ``result`` (the task envelope), or ``None`` when the peer no
+        longer knows the task — a restart or its retention expiring, which is normal rather
+        than an error. Raises ``DelegateError`` on a transport or protocol failure, so a
+        collector can retry it. Asks for no history, like the dispatch poll.
+        """
+        import httpx
+
+        from security import policy
+
+        blocked = policy.check_url(d.url)
+        if blocked:
+            raise DelegateError(blocked.replace("destination", f"delegate {d.name!r}", 1))
+        body = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "GetTask",
+            "params": {"id": str(task_id), "historyLength": 0},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+                r = await client.post(d.url, json=body, headers=_a2a_headers(d))
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            raise DelegateError(
+                f"delegate {d.name!r} unreachable at {d.url} ({type(exc).__name__})", kind=KIND_UNREACHABLE
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
+        if r.status_code >= 400:
+            raise DelegateError(f"delegate {d.name!r} HTTP {r.status_code}: {r.text[:200]}")
+        # A malformed reply is a protocol failure the collector retries — never read as a
+        # settled task (an empty ``{}`` would classify as a bare Message, i.e. "finished").
+        try:
+            data = r.json()
+        except ValueError as exc:
+            raise DelegateError(f"delegate {d.name!r} sent a GetTask reply that is not JSON") from exc
+        if not isinstance(data, dict):
+            raise DelegateError(f"delegate {d.name!r} sent a malformed GetTask reply")
+        error = data.get("error")
+        if error:
+            if isinstance(error, dict) and error.get("code") == _A2A_TASK_NOT_FOUND:
+                return None
+            raise DelegateError(_a2a_error_detail(d, error))
+        result = data.get("result")
+        if not isinstance(result, dict) or not result:
+            raise DelegateError(f"delegate {d.name!r} sent a GetTask reply with no task")
+        return result
 
     async def probe(self, d: Delegate) -> dict:
         import httpx

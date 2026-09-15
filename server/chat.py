@@ -1550,6 +1550,28 @@ async def _at_delegate_exchange(
     if _all_mentions_are_startable_unreachable(reg, targets, outcomes):
         return None, None
 
+    # A member whose address gave up while its peer was still working is not retried — the
+    # round driver dropped it, and a second SendMessage would be a duplicate task (#3359).
+    # But its task is still running, so the delegates seam can COLLECT it: poll that one task
+    # read-only and post the answer as the member's own late room message when it settles
+    # (#3360b). The seam decides whether there is anything to collect (a pending task the
+    # adapter kept), so every other failure is `False` here and changes nothing. Duck-typed
+    # like `recording_session`; a fork without the plugin, or a session-less caller that has
+    # nowhere to deliver to, is exactly the old behaviour.
+    collect_late = getattr(reg, "collect_late", None)
+    if collect_late is not None and session_id:
+        # An incognito origin still gets the answer in its session, but no lead turn is pushed
+        # for it — an on-time `@` answer runs no lead turn either (ADR 0069 D3b).
+        incognito = bool((request_metadata or {}).get("incognito"))
+        for o in outcomes:
+            if not o.get("ok") and o.get("author"):
+                try:
+                    o["collecting"] = bool(
+                        collect_late(tid, str(o["author"]), session_id=session_id, incognito=incognito)
+                    )
+                except Exception:  # noqa: BLE001 — a courtesy must never fail the room
+                    log.exception("[room] starting late collection for @%s failed", o.get("author"))
+
     def _line(o: dict) -> str:
         who = str(o.get("author") or "")
         if o.get("ok"):
@@ -1640,11 +1662,11 @@ def _room_note(uncovered: list[dict], spoken: list[dict], targets: list[str], li
     attributed exactly as the answer attributes them, so this text is a subset of the
     answer rather than a second rendering of it in different words.
     """
-    from graph.room_rounds import cap_note, catchup_note
+    from graph.room_rounds import cap_note, catchup_note, collecting_note
 
     attribute = not (len(targets) == 1 and len(spoken) == 1)
     lines = [f"**@{o.get('author')}** — {line(o)}" if attribute else line(o) for o in uncovered]
-    lines += [note for note in (catchup_note(outcomes), cap_note(plan)) if note]
+    lines += [note for note in (catchup_note(outcomes), collecting_note(outcomes), cap_note(plan)) if note]
     return "\n\n".join(lines)
 
 
@@ -1661,9 +1683,9 @@ def _with_room_notes(body: str, outcomes: list[dict], plan) -> str:
     of its own, and inventing a frame the console doesn't render would be a bound the
     operator still can't see.
     """
-    from graph.room_rounds import cap_note, catchup_note
+    from graph.room_rounds import cap_note, catchup_note, collecting_note
 
-    notes = [note for note in (catchup_note(outcomes), cap_note(plan)) if note]
+    notes = [note for note in (catchup_note(outcomes), collecting_note(outcomes), cap_note(plan)) if note]
     return "\n\n".join([body, *notes]) if notes else body
 
 
