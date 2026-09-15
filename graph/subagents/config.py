@@ -466,7 +466,12 @@ Hard stop at max_turns: return what you have (partial findings beat none).""",
     # limit), so headroom costs nothing when unused. Those bumps were sized when
     # max_turns was fed raw into recursion_limit (40 bought ~12 tool rounds); since
     # #3510 it counts tool rounds, so 40 is now genuine headroom.
-    max_turns=40,
+    # 40→60 (2026-09-15): once reads became ranged (github-plugin v0.8.0), a large file
+    # costs one round per page, and lanes began spending the whole budget still reading —
+    # on protoAgent#3526 two of four finders stopped mid-sentence ("Let me read the full
+    # `_get_request_payload`…") at 793 s and 978 s with no findings block, so their whole
+    # angle went unreviewed. Rounds a lane doesn't need still cost nothing.
+    max_turns=60,
     # Per-invocation review verdicts are context-specific — never distill to a skill.
     allow_skill_emission=False,
 )
