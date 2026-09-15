@@ -38,7 +38,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from graph.config import LangGraphConfig, _deep_merge_dicts
+from graph.config import LangGraphConfig, _deep_merge_dicts, resolve_model_route
 from infra.paths import atomic_write, harden_private_file, instance_paths
 
 log = logging.getLogger("protoagent.config_io")
@@ -1925,10 +1925,10 @@ def validate_for_headless(config) -> tuple[bool, str]:
     if is_native_oauth_provider(getattr(config, "model_provider", "")):
         return True, "ok"
 
-    if not str(getattr(config, "api_base", "") or "").strip():
+    route = resolve_model_route(config)
+    if not route.base_url:
         return False, "model.api_base is not set"
-    key = str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
-    if not key:
+    if not route.api_key:
         return False, "no model api_key — set model.api_key in config/secrets.yaml or the OPENAI_API_KEY env var"
     return True, "ok"
 

@@ -219,6 +219,7 @@ def register_config_routes(app) -> None:
         and base are stored in the current config — useful for the
         drawer's initial render where there's nothing to POST yet.
         """
+        from graph.config import resolve_model_route
         from graph.config_io import list_gateway_models
 
         body = req or ModelsProbeRequest()
@@ -231,8 +232,9 @@ def register_config_routes(app) -> None:
 
             models, error = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
             return {"models": models, "error": error}
-        base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
-        key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
+        live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
+        base = body.api_base or (live.base_url if live else "")
+        key = body.api_key or (live.api_key if live else "")
         # Offloaded (#2486): the gateway probe is a blocking network call — running it
         # inline stalled the event loop for the probe duration (the native-OAuth branch
         # above already offloads).
@@ -393,6 +395,7 @@ def register_config_routes(app) -> None:
         Offloaded to a thread — a real completion is a blocking network call,
         and we never want the connection test to freeze the event loop.
         """
+        from graph.config import resolve_model_route
         from graph.config_io import validate_model_connection
 
         body = req or ModelsProbeRequest()
@@ -407,8 +410,9 @@ def register_config_routes(app) -> None:
 
             ok, error = await asyncio.to_thread(validate_oauth_connection, provider, model, STATE.graph_config)
             return {"ok": ok, "error": error}
-        base = body.api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
-        key = body.api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
+        live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
+        base = body.api_base or (live.base_url if live else "")
+        key = body.api_key or (live.api_key if live else "")
         ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
         # A successful test of the LIVE saved key (no form-local override) proves the
         # gateway + key are good again — so clear any open embedding circuit breaker
@@ -745,7 +749,7 @@ def register_config_routes(app) -> None:
         """All editable settings, grouped, with current values + metadata
         (type, default, restart-vs-hot-reload, description). Drives the
         operator console's Settings surface."""
-        from graph.config import _load_host_layer
+        from graph.config import _load_host_layer, resolve_model_route
         from graph.config_io import config_yaml_path, list_gateway_models, load_yaml_doc
         from graph.settings_schema import build_schema
 
@@ -764,9 +768,8 @@ def register_config_routes(app) -> None:
 
                 models, _ = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
             else:
-                models, _ = await asyncio.to_thread(
-                    list_gateway_models, STATE.graph_config.api_base, STATE.graph_config.api_key
-                )
+                live = resolve_model_route(STATE.graph_config)
+                models, _ = await asyncio.to_thread(list_gateway_models, live.base_url, live.api_key)
         # The SLOT fields (aux/fallbacks/favorites/compaction/goal-eval) offer every lane
         # the operator can reach, qualified — `model.name` keeps the bare single-provider
         # list above, since the main model belongs to `model.provider`. Best-effort: a

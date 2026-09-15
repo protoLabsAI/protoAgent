@@ -178,10 +178,14 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # inventory then also drops them (console_handlers), so they never render or toggle.
     _denied = list(dict.fromkeys([*STATE.graph_config.tools_disabled, *STATE.graph_config.tools_hidden]))
     set_disabled_tools(_denied)
-    # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url.
+    # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url. The model
+    # gateway's host is always allowed: the default route's endpoint.
+    from graph.config import resolve_model_route
     from security import egress
 
-    egress.set_allowed_hosts(STATE.graph_config.egress_allowed_hosts, also_allow_url=STATE.graph_config.api_base)
+    egress.set_allowed_hosts(
+        STATE.graph_config.egress_allowed_hosts, also_allow_url=resolve_model_route(STATE.graph_config).base_url
+    )
     # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
     from security import policy
 
@@ -2728,11 +2732,12 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     STATE.plugin_tool_owner = new_plugin_tool_owner
     STATE.plugin_bundle = new_plugin_bundle  # what a prompt-only rebuild reuses (#3365)
     try:
+        from graph.config import resolve_model_route
         from security import egress
         from security import policy
 
         egress.set_allowed_hosts(
-            new_config.egress_allowed_hosts, also_allow_url=new_config.api_base
+            new_config.egress_allowed_hosts, also_allow_url=resolve_model_route(new_config).base_url
         )  # live-reload (ADR 0008)
         policy.set_callback_allowlist(new_config.security_callback_allowlist)  # live-reload (#572)
     except Exception:  # noqa: BLE001 — never block a reload on the egress update
@@ -3360,6 +3365,7 @@ def _reset_settings_keys(keys: list[str]) -> tuple[bool, list[str]]:
 
 def _build_settings_callbacks() -> dict[str, Any]:
     """Callbacks consumed by the console Settings (config routes) + the setup wizard."""
+    from graph.config import resolve_model_route
     from graph.config_io import (
         config_to_dict,
         is_setup_complete,
@@ -3383,8 +3389,9 @@ def _build_settings_callbacks() -> dict[str, Any]:
         loaded graph config so the initial render works without
         arguments.
         """
-        base = api_base or (STATE.graph_config.api_base if STATE.graph_config else "")
-        key = api_key or (STATE.graph_config.api_key if STATE.graph_config else "")
+        live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
+        base = api_base or (live.base_url if live else "")
+        key = api_key or (live.api_key if live else "")
         return list_gateway_models(base, key)
 
     def save_all(config: dict | None, soul: str | None) -> tuple[bool, str]:
@@ -3463,16 +3470,9 @@ def _build_settings_callbacks() -> dict[str, Any]:
         _skip_probe = _runtime.startswith("acp:") or is_native_oauth_provider(_provider)
         if not _skip_probe and config is not None and isinstance(_model_cfg, dict):
             m = _model_cfg
-            test_base = (
-                (_conn or {}).get("base_url")
-                or m.get("api_base")
-                or (STATE.graph_config.api_base if STATE.graph_config else "")
-            )
-            test_key = (
-                (_conn or {}).get("api_key")
-                or m.get("api_key")
-                or (STATE.graph_config.api_key if STATE.graph_config else "")
-            )
+            live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
+            test_base = (_conn or {}).get("base_url") or m.get("api_base") or (live.base_url if live else "")
+            test_key = (_conn or {}).get("api_key") or m.get("api_key") or (live.api_key if live else "")
             test_model = m.get("name") or (STATE.graph_config.model_name if STATE.graph_config else "")
             # The gateway is asked for a MODEL, not for a route: sending it
             # `gateway:protolabs/reasoning` verbatim probes a model id that does not exist.

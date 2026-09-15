@@ -151,17 +151,13 @@ def _is_gateway_alias(model_value, config=None) -> bool:
 def _native_provider_without_gateway(config) -> bool:
     """A native-OAuth provider (ADR 0097) with NO gateway key to fall back on — the only
     shape in which a '/'-alias slot is genuinely incoherent (it raises at first dispatch
-    rather than routing through the gateway). Mirrors ``graph.llm._gateway_configured``
-    (config key or ``OPENAI_API_KEY`` env)."""
+    rather than routing through the gateway). The same default-route key
+    ``graph.llm._gateway_configured`` checks (``resolve_model_route``)."""
     from graph.providers import is_native_oauth_provider  # lazy — avoid an import cycle
 
     if not is_native_oauth_provider(getattr(config, "model_provider", "")):
         return False
-    has_gateway_key = bool(
-        (getattr(config, "api_key", "") or "").strip()
-        or os.environ.get("OPENAI_API_KEY", "").strip()
-    )
-    return not has_gateway_key
+    return not resolve_model_route(config).api_key
 
 
 def _detect_incoherent_slots(config) -> list[str]:
@@ -813,6 +809,54 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
     return out
 
 
+# ── the default route's endpoint and key: ONE resolver (#3128) ──────────────────────────
+#
+# Every reader asking "which endpoint, which key" — the runtime client, embeddings, the
+# gateway HTTP client, the context-window probe, egress auto-allow, headless validation, the
+# model-listing and test-connection fallbacks — answers through here, so they cannot drift
+# apart again (#3525: the window probe skipped the env key the client itself used).
+#
+# The precedence is the one the runtime client already had:
+#   1. a REGISTERED connection, when the value being routed names one — strictly from its
+#      own fields, never borrowing the legacy pair or the env key (the cross-credential
+#      guard: that is how one connection's credential reaches another's endpoint);
+#   2. otherwise the unqualified default route: the retired `model.api_base` /
+#      `model.api_key`, with `""` and whitespace counting as unset;
+#   3. then OPENAI_API_KEY for the key.
+# The unqualified route does not consult the registry. Moving it onto one is the removal
+# slice's decision, and it lands here.
+
+
+@dataclass(frozen=True)
+class ModelRoute:
+    """Where an OpenAI-compatible call goes and what it authenticates with."""
+
+    base_url: str
+    api_key: str
+    #: The registered connection this came from; ``""`` for the unqualified default route.
+    connection: str = ""
+
+
+def resolve_model_route(config, connection: Provider | None = None) -> ModelRoute:
+    """The endpoint and key for ``connection``, or for the default route when None.
+
+    ``api_key`` is ``""`` when nothing resolves; what goes on the wire then is the caller's
+    call (a registered connection sends a placeholder, the default route sends the empty
+    key, a probe omits the header). Reads with ``getattr`` so any config-shaped object
+    works, and never reads request context.
+    """
+    if connection is not None:
+        return ModelRoute(
+            base_url=str(connection.base_url or "").strip(),
+            api_key=str(connection.api_key or "").strip(),
+            connection=connection.id,
+        )
+    return ModelRoute(
+        base_url=str(getattr(config, "api_base", "") or "").strip(),
+        api_key=str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip(),
+    )
+
+
 def _migrated_providers(config) -> list[Provider]:
     """The registry a pre-ADR-0106 config implies.
 
@@ -822,12 +866,12 @@ def _migrated_providers(config) -> list[Provider]:
     needs rewriting. The migration is as close to an identity function as it can be.
     """
     out: list[Provider] = []
-    base = (getattr(config, "api_base", "") or "").strip()
-    # Includes the env key: the migrated entry has to carry everything the legacy gateway
-    # ran on, because a REGISTERED connection is resolved strictly from its own fields —
-    # nothing downstream may borrow a global key on its behalf (that is how one
-    # connection's credential reaches another's endpoint).
-    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    # Exactly the default route, env key included: the migrated entry has to carry
+    # everything the legacy gateway ran on, because a REGISTERED connection is resolved
+    # strictly from its own fields — nothing downstream may borrow a global key on its
+    # behalf (that is how one connection's credential reaches another's endpoint).
+    route = resolve_model_route(config)
+    base, key = route.base_url, route.api_key
     if base or key:
         out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
     lead = (getattr(config, "model_provider", "") or "").strip().lower()
@@ -849,7 +893,8 @@ def _migrated_providers(config) -> list[Provider]:
 #   load-time slot reconciliation read it too.
 # * `model.api_base` / `model.api_key` are the endpoint and key of that default route and of
 #   every gateway-only reader (embeddings, transcription, the plugin gateway client, the
-#   context-window probe, egress auto-allow). In a config WITH a registry they are no
+#   context-window probe, egress auto-allow), all resolved by `resolve_model_route`. In a
+#   config WITH a registry they are no
 #   connection's endpoint or key; only in a config the loader migrates do they become the
 #   `gateway` connection.
 #

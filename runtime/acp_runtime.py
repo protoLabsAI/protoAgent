@@ -624,9 +624,10 @@ _AUX_CLIENTS: dict[str, object] = {}  # one reused aux session per agent
 
 
 def _gateway_configured(config) -> bool:
-    """True when a real OpenAI-compatible gateway key is available (config or env)."""
-    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
-    return bool(key)
+    """True when the default gateway route resolves a key (config or env)."""
+    from graph.config import resolve_model_route
+
+    return bool(resolve_model_route(config).api_key)
 
 
 async def _aux_prompt(agent: str, config, text: str) -> str:
