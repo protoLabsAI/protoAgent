@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.168.0",
+    "date": "2026-09-15",
+    "changes": [
+      "A room member the room stopped waiting on is no longer lost: its late answer is collected and posted (#3360).",
+      "A2A delegation to a protoAgent peer is now bounded by lack of progress, not by one held-open request (#3360).",
+      "Review-finder lanes get 60 tool rounds instead of 40 (#3532).",
+      "User messages no longer show a sent time; it appears only in the answer's footer (#3458).",
+      "Agents that get their gateway key from the environment now learn their model's context window (#3502).",
+      "A prompt near the context window no longer fails just because of the output reservation (#3502).",
+      "Agent snapshots travel in the provider-registry shape, without changing where the imported agent's model traffic goes (#3521)."
+    ]
+  },
+  {
     "version": "v0.167.0",
     "date": "2026-09-14",
     "changes": [
