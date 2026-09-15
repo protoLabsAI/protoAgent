@@ -285,10 +285,10 @@ describe("ChatMessageView sent-timestamp footer (#3458)", () => {
     expect(chip(el)!.querySelector("svg")).toBeTruthy(); // the reused Clock icon
   });
 
-  it("renders the widget for a settled user message too (shared renderer → both consumers)", async () => {
+  it("renders NO sent time on a user message — it lives only in the answer's footer", async () => {
     const el = await render({ id: "u1", role: "user", content: "Hi", status: "done", createdAt: SENT });
-    expect(chip(el)).toBeTruthy();
-    expect(el.querySelector(".chat-sent-time-label")?.textContent).toBe(shortLabel);
+    expect(chip(el)).toBeNull();
+    expect(el.querySelector(".chat-msg-meta")).toBeNull(); // no empty footer row either
   });
 
   it("exposes the full local date-and-time via the DS Tooltip plus a focusable accessible name", async () => {
@@ -344,15 +344,12 @@ describe("ChatMessageView sent-timestamp footer (#3458)", () => {
     }
   });
 
-  it("keeps the time alone in the row when the usage stats are off, and on a user bubble", async () => {
+  it("keeps the time alone in the row when the usage stats are off", async () => {
     // showChatUsage defaults off (#2931): the answer's row carries only the time.
-    let el = await render({ id: "a4", role: "assistant", content: "Done.", status: "done", createdAt: SENT, usage: usage() });
+    const el = await render({ id: "a4", role: "assistant", content: "Done.", status: "done", createdAt: SENT, usage: usage() });
     expect(el.querySelectorAll(".chat-msg-meta")).toHaveLength(1);
     expect(el.querySelector(".chat-usage")).toBeNull();
     expect(chip(el)).toBeTruthy();
-    el = await render({ id: "u2", role: "user", content: "Hi", status: "done", createdAt: SENT });
-    expect(el.querySelector(".chat-msg-meta .chat-sent-time")).toBeTruthy();
-    expect(el.querySelector(".chat-usage")).toBeNull();
   });
 
   it("renders no empty meta row when there is neither a sent time nor usage stats", async () => {
