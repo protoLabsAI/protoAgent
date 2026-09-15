@@ -136,12 +136,12 @@ export function ChatMessageView({
     return <DelegationRow message={message} />;
   }
   // The footer meta row: the per-turn usage stats and the sent time share ONE row under an
-  // answer instead of stacking on two. A user bubble has no usage stats, so its row carries the
-  // time alone. Streaming turns show neither until they settle (no final send/receipt yet).
+  // answer instead of stacking on two. User bubbles carry no footer at all: the sent time lives
+  // only under the answer. Streaming turns show neither until they settle (no final receipt yet).
   const showUsage =
     showChatUsage && message.role === "assistant" && !streaming && Boolean(message.usage || message.contextWindow);
   const sentStamp =
-    !streaming && (message.role === "user" || message.role === "assistant") ? sentTimestamp(message.createdAt) : null;
+    !streaming && message.role === "assistant" ? sentTimestamp(message.createdAt) : null;
   return (
     <Message
       role={message.role}
@@ -725,8 +725,8 @@ function UsageTip({
   );
 }
 
-/** The sent-time footer widget (#3458) — a quiet clock chip on a SETTLED normal user/assistant
- *  message, showing a concise local time with the full local sent date-and-time behind the DS
+/** The sent-time footer widget (#3458) — a quiet clock chip on a SETTLED assistant message
+ *  (never a user bubble: the time lives only in the answer's footer), showing a concise local time with the full local sent date-and-time behind the DS
  *  `Tooltip` on pointer hover or keyboard focus. The caller passes a valid `sentTimestamp` result
  *  and renders nothing when there isn't one, so a turn saved before timestamps existed (or with a
  *  zero/invalid `createdAt`) shows no widget rather than a wrong or `Invalid Date` value. The chip
