@@ -42,7 +42,7 @@ from urllib.parse import urlparse
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
-from graph.config import LangGraphConfig  # noqa: E402
+from graph.config import LangGraphConfig, resolve_model_route  # noqa: E402
 
 # Read-only OS baseline for the python:3.12-slim image. Missing paths are
 # skipped under landlock best_effort, so this is safe across image variants.
@@ -99,7 +99,7 @@ def build_policy(cfg: LangGraphConfig) -> str:
 
     # Egress allowlist: configured hosts + the inference gateway. Deny everything else.
     endpoints: list[tuple[str, int, str]] = []
-    api_host, api_port = _host_port(getattr(cfg, "api_base", ""))
+    api_host, api_port = _host_port(resolve_model_route(cfg).base_url)
     if api_host:
         endpoints.append((api_host, api_port, "model / inference gateway"))
     for h in cfg.egress_allowed_hosts or []:

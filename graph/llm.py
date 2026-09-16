@@ -21,7 +21,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import Field
 
-from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider
+from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider, resolve_model_route
 from graph.providers.identity import tag_model_provider
 
 log = logging.getLogger(__name__)
@@ -537,9 +537,8 @@ def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = N
         # is the requirement — a key is optional (local endpoints want none) — and neither
         # is ever borrowed from another connection or from the legacy fields. Accepting a
         # key alone would let the build fall through to the legacy endpoint.
-        return bool((provider.base_url or "").strip())
-    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
-    return bool(key)
+        return bool(resolve_model_route(config, provider).base_url)
+    return bool(resolve_model_route(config).api_key)
 
 
 def _build_gateway_llm(
@@ -553,27 +552,25 @@ def _build_gateway_llm(
     Extracted so every path that means "route this through the gateway" shares one
     builder: the default, a `/`-shorthand slot under a native provider, and an explicit
     ``gateway:<alias>`` slot."""
-    kwargs = _build_llm_kwargs(config)
     # A registered openai-compat connection supplies its OWN endpoint and key. This is
     # what makes several gateways possible: `prod-gateway:` and `local-vllm:` build the
     # same client class against different connections, rather than every gateway call
     # inheriting the single `model.api_base`/`api_key` pair.
+    kwargs = _build_llm_kwargs(config, provider)
     if provider is not None:
-        # A registered connection is resolved STRICTLY from its own fields. The kwargs
-        # above start from the legacy `model.api_base`/`api_key`, so merely skipping a
-        # blank key left the previous connection's credential in place and sent it to
-        # THIS endpoint — a local vLLM receiving the production gateway's key. The
-        # migrated `gateway` entry carries the legacy base/key (env included), so nothing
-        # that worked before loses its credential here.
-        # BOTH directions, not just the key. Falling back to the legacy `model.api_base`
-        # here sent THIS connection's key to the legacy gateway's endpoint — the same
-        # coupling as the key fallback, mirrored, and just as capable of putting one
-        # party's credential in front of another. A connection with no endpoint has
-        # nowhere to talk to and is rejected by `_gateway_configured` above.
-        kwargs["base_url"] = provider.base_url
+        # A registered connection is resolved STRICTLY from its own fields
+        # (`resolve_model_route`), so the kwargs never start from the legacy pair. When
+        # they did, merely skipping a blank key left the previous connection's credential
+        # in place and sent it to THIS endpoint — a local vLLM receiving the production
+        # gateway's key — and falling back to the legacy `model.api_base` sent THIS
+        # connection's key to the legacy gateway's endpoint, the same coupling mirrored.
+        # The migrated `gateway` entry carries the legacy base/key (env included), so
+        # nothing that worked before loses its credential here. A connection with no
+        # endpoint has nowhere to talk to and is rejected by `_gateway_configured` above.
+        #
         # langchain requires SOMETHING; a keyless endpoint (a local vLLM, Ollama) is
         # normal, so a placeholder goes on the wire rather than another connection's key.
-        kwargs["api_key"] = (provider.api_key or "").strip() or "not-needed"
+        kwargs["api_key"] = kwargs["api_key"] or "not-needed"
     if model_name:
         kwargs["model"] = model_name
     # Per-turn reasoning-effort override (the /effort chat command). When the turn carries
@@ -646,13 +643,16 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     return prefix.strip().lower(), rest.strip()
 
 
-def _build_llm_kwargs(config: LangGraphConfig) -> dict:
-    """Assemble the ChatOpenAI kwargs from config (extracted for testing)."""
-    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+def _build_llm_kwargs(config: LangGraphConfig, connection: Provider | None = None) -> dict:
+    """Assemble the ChatOpenAI kwargs from config (extracted for testing).
+
+    Endpoint and key come from ``resolve_model_route``: ``connection``'s own when given,
+    otherwise the default route."""
+    route = resolve_model_route(config, connection)
 
     kwargs: dict = {
-        "base_url": config.api_base,
-        "api_key": api_key,
+        "base_url": route.base_url,
+        "api_key": route.api_key,
         "model": config.model_name,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
@@ -889,10 +889,10 @@ def _build_embeddings(config: LangGraphConfig) -> "OpenAIEmbeddings | None":
     model = (getattr(config, "embed_model", "") or "").strip()
     if not model:
         return None
-    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+    route = resolve_model_route(config)
     return OpenAIEmbeddings(
-        base_url=config.api_base,
-        api_key=api_key,
+        base_url=route.base_url,
+        api_key=route.api_key,
         model=model,
         default_headers={"User-Agent": _GATEWAY_UA},
         request_timeout=_EMBED_TIMEOUT_S,
@@ -933,7 +933,7 @@ def create_embed_batch_fn(
 # an image plugin. Every such call must reproduce three load-bearing details, so
 # they live in ONE factory instead of being re-derived per caller:
 #
-#   1. the configured ``api_base`` + ``api_key`` (bearer auth);
+#   1. the default route's endpoint + key (bearer auth), from ``resolve_model_route``;
 #   2. the allowlisted User-Agent — the gateway's Cloudflare WAF 403s default
 #      SDK UAs (see the ``default_headers`` note in ``_build_llm_kwargs``);
 #   3. the egress-trust property (ADR 0008): the ``api_base`` host is
@@ -948,11 +948,11 @@ _GATEWAY_CLIENT_TIMEOUT_S = 120.0
 
 def _gateway_client_kwargs(config: LangGraphConfig, *, timeout: float) -> dict:
     """The shared httpx client kwargs (base_url + bearer + allowlisted UA + timeout)."""
-    api_key = config.api_key or os.environ.get("OPENAI_API_KEY", "")
+    route = resolve_model_route(config)
     headers = {"User-Agent": _GATEWAY_UA}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return {"base_url": (config.api_base or "").rstrip("/"), "headers": headers, "timeout": timeout}
+    if route.api_key:
+        headers["Authorization"] = f"Bearer {route.api_key}"
+    return {"base_url": (route.base_url or "").rstrip("/"), "headers": headers, "timeout": timeout}
 
 
 def gateway_client(
