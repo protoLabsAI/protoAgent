@@ -952,7 +952,7 @@ def _gateway_client_kwargs(config: LangGraphConfig, *, timeout: float) -> dict:
     headers = {"User-Agent": _GATEWAY_UA}
     if route.api_key:
         headers["Authorization"] = f"Bearer {route.api_key}"
-    return {"base_url": route.base_url.rstrip("/"), "headers": headers, "timeout": timeout}
+    return {"base_url": (route.base_url or "").rstrip("/"), "headers": headers, "timeout": timeout}
 
 
 def gateway_client(

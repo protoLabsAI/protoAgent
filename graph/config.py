@@ -831,8 +831,12 @@ def _parse_providers(entries, secrets: dict) -> list[Provider]:
 class ModelRoute:
     """Where an OpenAI-compatible call goes and what it authenticates with."""
 
-    base_url: str
-    api_key: str
+    #: ``None`` only on the default route when ``model.api_base`` is null (a bare
+    #: ``api_base:``): the client then gets ``base_url=None`` and the OpenAI SDK applies its
+    #: own default, exactly as before this resolver existed.
+    base_url: str | None
+    #: Never in the repr — a route is exactly the kind of object that ends up in a log line.
+    api_key: str = field(repr=False)
     #: The registered connection this came from; ``""`` for the unqualified default route.
     connection: str = ""
 
@@ -851,8 +855,12 @@ def resolve_model_route(config, connection: Provider | None = None) -> ModelRout
             api_key=str(connection.api_key or "").strip(),
             connection=connection.id,
         )
+    base = getattr(config, "api_base", "")
     return ModelRoute(
-        base_url=str(getattr(config, "api_base", "") or "").strip(),
+        # A null endpoint stays None rather than becoming "": the runtime client and
+        # embeddings have always passed it through, letting the OpenAI SDK default apply
+        # (`https://api.openai.com/v1`, or OPENAI_BASE_URL), where "" fails every call.
+        base_url=None if base is None else str(base or "").strip(),
         api_key=str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip(),
     )
 
@@ -871,7 +879,7 @@ def _migrated_providers(config) -> list[Provider]:
     # strictly from its own fields — nothing downstream may borrow a global key on its
     # behalf (that is how one connection's credential reaches another's endpoint).
     route = resolve_model_route(config)
-    base, key = route.base_url, route.api_key
+    base, key = route.base_url or "", route.api_key
     if base or key:
         out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
     lead = (getattr(config, "model_provider", "") or "").strip().lower()

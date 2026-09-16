@@ -237,14 +237,29 @@ def test_the_egress_auto_allow_and_the_openshell_policy(case):
     cfg, (base, _) = case
     host = urlparse(base).hostname
     assert f"- host: {host}  # model / inference gateway" in _openshell_policy(cfg)
-    # server.agent_init hands the resolved endpoint to the egress guard on boot and reload.
-    from graph.config import resolve_model_route
+    # Drive server.agent_init's own seam, not a hand-rolled copy of it: both boot and
+    # live-reload go through `apply_egress_allowlist`, and a call site that stopped
+    # auto-allowing the gateway used to leave every test green.
+    from server.agent_init import apply_egress_allowlist
 
+    cfg.egress_allowed_hosts = ["example.com"]
     try:
-        egress.set_allowed_hosts(["example.com"], also_allow_url=resolve_model_route(cfg).base_url)
+        apply_egress_allowlist(cfg)
         assert host in egress.allowed_hosts()
     finally:
         egress.set_allowed_hosts([])
+
+
+def test_both_agent_init_egress_call_sites_go_through_the_helper():
+    """The seam is only worth having if nothing bypasses it (the boot/reload revert this pins)."""
+    code = _code_text((_ROOT / "server" / "agent_init.py").read_text(encoding="utf-8"))
+    joined = "\n".join(code)
+    assert sum(line.count("egress.set_allowed_hosts (") for line in code) == 1, (
+        "server/agent_init.py must call egress.set_allowed_hosts in exactly one place — "
+        "apply_egress_allowlist. A second call site can silently drop the gateway auto-allow."
+    )
+    for site in ("apply_egress_allowlist ( STATE.graph_config )", "apply_egress_allowlist ( new_config )"):
+        assert site in joined, f"missing egress helper call: {site}"
 
 
 def test_the_model_listing_and_test_connection_routes(case, monkeypatch, no_network):
@@ -349,10 +364,29 @@ def test_the_resolver_reads_any_config_shaped_object(monkeypatch):
     from graph.config import resolve_model_route
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    assert resolve_model_route(SimpleNamespace()).base_url == ""
+    assert resolve_model_route(SimpleNamespace()).base_url == ""  # absent field: unset
     monkeypatch.setenv("OPENAI_API_KEY", " env-key ")
     route = resolve_model_route(SimpleNamespace(api_base=None, api_key=None))
-    assert (route.base_url, route.api_key) == ("", "env-key")
+    # A null endpoint is NOT "" — see the null-endpoint test below for why.
+    assert (route.base_url, route.api_key) == (None, "env-key")
+
+
+def test_a_null_endpoint_stays_none_so_the_sdk_default_still_applies(monkeypatch, no_network):
+    """`api_base:` written with no value parses to None, and one edit to a host config flips
+    every agent on the box. The runtime client and embeddings have always passed that None
+    through, so the OpenAI SDK applies its own default; `""` fails every call instead. The
+    readers that need a string coerce at their own edge."""
+    from graph.config import resolve_model_route
+    from graph.llm import _build_llm_kwargs, _gateway_client_kwargs
+    from graph.model_window import context_window_for
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = LangGraphConfig.from_dict({"model": {"api_base": None, "api_key": "k", "name": "m"}})
+    assert cfg.api_base is None, "a null api_base must survive from_dict for this to mean anything"
+    assert resolve_model_route(cfg).base_url is None
+    assert _build_llm_kwargs(cfg)["base_url"] is None  # the SDK default, exactly as before
+    assert _gateway_client_kwargs(cfg, timeout=5.0)["base_url"] == ""  # coerced at the edge
+    assert context_window_for(cfg) is None  # no endpoint to probe; never a crash
 
 
 def test_padded_legacy_values_are_trimmed_by_every_reader(monkeypatch, no_network):
@@ -376,11 +410,14 @@ def test_padded_legacy_values_are_trimmed_by_every_reader(monkeypatch, no_networ
 _ROOT = Path(__file__).resolve().parent.parent
 _SCANNED = (
     "a2a_impl", "events", "graph", "infra", "ingestion", "knowledge", "observability",
-    "operator_api", "ops", "runtime", "scheduler", "security", "server", "tools", "scripts",
+    "operator_api", "ops", "plugins", "runtime", "scheduler", "security", "server", "tools", "scripts",
 )  # fmt: skip
 _DIRECT_READ = re.compile(
-    r"\b(?:config|cfg|graph_config|new_config)\.(?:api_base|api_key)\b"
+    r"\b(?:config|cfg|conf|graph_config|new_config)\.(?:api_base|api_key)\b"
     r"|\bgetattr\s*\(\s*[^,()]+,\s*[\"'](?:api_base|api_key)[\"']"
+    # `vars(config).get("api_key")` reads the same field by another road — it slipped past
+    # the first version of this ratchet in review.
+    r"|\bvars\s*\(\s*[^)]*\)\s*\.\s*get\s*\(\s*[\"'](?:api_base|api_key)[\"']"
 )
 #: Every direct read of `model.api_base` / `model.api_key` left, and why. The removal
 #: slice deletes these; nothing else may add one — resolve through `resolve_model_route`.

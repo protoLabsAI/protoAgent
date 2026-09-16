@@ -94,7 +94,7 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None) -
     # for the life of the process, and everything sized off it quietly on its fallback
     # (#3502).
     route = resolve_model_route(config)
-    base = route.base_url.rstrip("/")
+    base = (route.base_url or "").rstrip("/")
     if not base:
         return None
     if base not in _ATTEMPTED:

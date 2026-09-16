@@ -101,6 +101,20 @@ def _log_boot_phase_summary(phases: dict[str, float]) -> None:
         )
 
 
+def apply_egress_allowlist(config) -> None:
+    """Point the egress guard at ``config``'s allowlist, the model gateway always included.
+
+    One seam for boot and live-reload (ADR 0008). The deny-by-default allowlist must never
+    block the operator's own gateway, and the endpoint comes from the resolver every other
+    reader uses (#3128). It exists to be testable: while both call sites inlined this, a site
+    that stopped auto-allowing the gateway left the whole suite green.
+    """
+    from graph.config import resolve_model_route
+    from security import egress
+
+    egress.set_allowed_hosts(config.egress_allowed_hosts, also_allow_url=resolve_model_route(config).base_url or "")
+
+
 def _init_langgraph_agent(headless_setup: bool = False):
     """Initialize the LangGraph backend — setup-aware.
 
@@ -180,12 +194,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     set_disabled_tools(_denied)
     # Egress allowlist (ADR 0008): deny-by-default outbound hosts for fetch_url. The model
     # gateway's host is always allowed: the default route's endpoint.
-    from graph.config import resolve_model_route
-    from security import egress
-
-    egress.set_allowed_hosts(
-        STATE.graph_config.egress_allowed_hosts, also_allow_url=resolve_model_route(STATE.graph_config).base_url
-    )
+    apply_egress_allowlist(STATE.graph_config)
     # Opt-in CIDR allowlist for outbound A2A destinations — callbacks + delegate_to a2a delegates (#572).
     from security import policy
 
@@ -2732,13 +2741,9 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     STATE.plugin_tool_owner = new_plugin_tool_owner
     STATE.plugin_bundle = new_plugin_bundle  # what a prompt-only rebuild reuses (#3365)
     try:
-        from graph.config import resolve_model_route
-        from security import egress
         from security import policy
 
-        egress.set_allowed_hosts(
-            new_config.egress_allowed_hosts, also_allow_url=resolve_model_route(new_config).base_url
-        )  # live-reload (ADR 0008)
+        apply_egress_allowlist(new_config)  # live-reload (ADR 0008)
         policy.set_callback_allowlist(new_config.security_callback_allowlist)  # live-reload (#572)
     except Exception:  # noqa: BLE001 — never block a reload on the egress update
         pass
