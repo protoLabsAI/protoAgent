@@ -15,6 +15,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.169.0] - 2026-09-17
+
+### Changed
+- **Every reader of the default model route resolves its endpoint and key the same way (#3534).**
+  The runtime client, embeddings, the gateway HTTP client, the context-window probe, egress auto-allow, the
+  OpenShell policy, headless validation, and the model-listing and test-connection fallbacks each re-derived
+  `model.api_base` / `model.api_key` / `OPENAI_API_KEY` on their own, and they drifted apart (#3525). They
+  now share `graph.config.resolve_model_route`, which keeps the precedence the runtime client already had.
+  One thing changes: padded or whitespace-only values are trimmed everywhere, so a whitespace-only
+  `model.api_key` falls through to `OPENAI_API_KEY`. This is a step toward retiring the legacy fields (#3128).
+
+- **Settings → Theme opens on a gallery of 28 theme families, each with a dark and a light variant (#3535).**
+  The console adopts `@protolabsai/ui` 0.61. The old presets were single-mode, so flipping light/dark kept a
+  preset's colors over the other mode's base; Amber's links, for example, dropped to 1.56:1 on the light ground.
+  Families fix that: the toggle moves within the family. The gallery offers protoLabs, Classics (Nord, Dracula,
+  Solarized, Gruvbox, Catppuccin, Rosé Pine, Tokyo Night, One, Everforest, Kanagawa) and Moods, and every variant
+  clears WCAG contrast. The stock light theme's accent, warning and info colors also move to clear it
+  (`@protolabsai/design` 0.9.2). On boot, a family you picked locally is no longer mixed with a different
+  family saved to the agent.
+
+### Fixed
+- **Theme reset, saved looks and imports stop picking up the agent's theme (#3536).**
+  Settings → Theme's Reset cleared the saved theme but left the panel showing the reset
+  family, which the next toggle re-saved; the panel now remounts. On boot, a look you picked
+  locally that isn't the agent's family — a saved preset, an import, a reset look — was merged
+  token by token with the agent's saved theme, so that theme filled its gaps and the next
+  light/dark toggle replaced your own accent; such a look now wins whole. Within one family,
+  your edits are kept and the agent's edits fill only tokens you didn't set. The console also
+  moves to `@protolabsai/ui` 0.62: a stricter contrast rulebook (secondary text on tinted and
+  sunken surfaces, text-tier separation, border floors, look-alike accents, all measured as
+  painted), the Classics retuned to pass it, and a family look that survives saving, exporting
+  and importing.
+
 ## [0.168.0] - 2026-09-15
 
 ### Added
