@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 
+import { themeFamilyBlob } from "@protolabsai/ui/theming";
+
 import { mergeTheme, normalizeThemeBlob, resolveThemeToPersist } from "./themeMerge";
 
 // #1762 — the console persists a `{mode, overrides}` theme blob; on boot the user's
@@ -123,9 +125,61 @@ describe("mergeTheme — theme families (DS `preset`)", () => {
     });
   });
 
-  it("a working copy with no preset still merges per token over a family default", () => {
+  it("a working copy with NO family over a family default wins wholesale (a saved preset, an import, a reset look)", () => {
+    const savedLook = { mode: "dark" as const, saved: "user-mine", overrides: { "--pl-color-accent": "#ff8800" } };
+    expect(mergeTheme(amberDark, savedLook)).toEqual(savedLook);
+  });
+
+  it("with no family on either side, the original per-token merge still applies (#1762)", () => {
+    const handTuned = { mode: "dark" as const, overrides: { "--pl-color-accent": "#d72b43", "--pl-radius": "2px" } };
     const tweak = { mode: "dark" as const, overrides: { "--pl-radius": "8px" } };
-    expect(mergeTheme(amberDark, tweak)).toEqual({ ...amberDark, overrides: { ...amberDark.overrides, "--pl-radius": "8px" } });
+    expect(mergeTheme(handTuned, tweak)).toEqual({ mode: "dark", overrides: { "--pl-color-accent": "#d72b43", "--pl-radius": "8px" } });
+  });
+
+  it("same family: edits keep the user's, plus the default's edits to tokens the user didn't set", () => {
+    const def = { ...amberDark, edits: ["--pl-color-accent-fg", "--pl-color-focus"], overrides: { ...amberDark.overrides, "--pl-color-accent-fg": "#123456", "--pl-color-focus": "#654321" } };
+    const user = { mode: "dark" as const, preset: "amber", edits: ["--pl-radius"], overrides: { "--pl-color-focus": "oklch(0.77 0.16 65)", "--pl-radius": "8px" } };
+    const merged = mergeTheme(def, user)!;
+    // focus: the user set it (the family's own value) without listing it → not an edit.
+    expect(merged.edits).toEqual(["--pl-radius", "--pl-color-accent-fg"]);
+    expect(merged.overrides?.["--pl-color-accent-fg"]).toBe("#123456");
+  });
+
+  it("same family: a 0.61 working copy (no edits list) leaves edits unset — never the default's list", () => {
+    const def = { ...amberDark, edits: ["--pl-color-accent"], overrides: { ...amberDark.overrides, "--pl-color-accent": "#123456" } };
+    const legacy = { mode: "dark" as const, preset: "amber", overrides: { ...amberDark.overrides } };
+    const merged = mergeTheme(def, legacy)!;
+    expect(merged).not.toHaveProperty("edits");
+    expect(merged.overrides?.["--pl-color-accent"]).toBe(amberDark.overrides["--pl-color-accent"]);
+  });
+
+  it("`saved` is never inherited, with or without a family", () => {
+    const def = { mode: "dark" as const, saved: "user-mine", overrides: { "--pl-color-accent": "#ff8800" } };
+    const user = { mode: "dark" as const, overrides: { "--pl-color-accent": "#00ff88" } };
+    expect(mergeTheme(def, user)).not.toHaveProperty("saved");
+  });
+
+  it("same family: `saved` is never inherited from the default", () => {
+    const def = { ...amberDark, saved: "user-mine", edits: [] };
+    const user = { mode: "dark" as const, preset: "amber", edits: [], overrides: { "--pl-radius": "8px" } };
+    expect(mergeTheme(def, user)).not.toHaveProperty("saved");
+  });
+});
+
+// The merge's family rules read `preset`, `edits` and `saved` off the DS panel's blob. Pin the
+// shape the DS actually emits, so a DS bump that drops or renames a field fails here rather
+// than silently turning every boot merge back into a per-token merge.
+describe("the DS blob shape this merge depends on", () => {
+  it("themeFamilyBlob emits mode + overrides + preset + edits, and normalize keeps them", () => {
+    const blob = themeFamilyBlob("midnight", "dark")!;
+    expect(blob).toMatchObject({ mode: "dark", preset: "midnight", edits: [] });
+    expect(Object.keys(blob.overrides).every((k) => k.startsWith("--pl-"))).toBe(true);
+    // normalizeThemeBlob must preserve the three family keys (it drops unknown token shapes,
+    // not top-level fields), or mergeTheme can't see them.
+    const round = normalizeThemeBlob({ ...blob, saved: "user-mine" })!;
+    expect(round.preset).toBe("midnight");
+    expect(round.edits).toEqual([]);
+    expect(round.saved).toBe("user-mine");
   });
 });
 

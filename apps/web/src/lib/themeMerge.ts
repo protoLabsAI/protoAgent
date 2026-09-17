@@ -54,12 +54,19 @@ export function normalizeThemeBlob(value: unknown): ThemeBlob | null {
  *  top-level keys also take the user's value when present. Returns `null` only when BOTH
  *  inputs are empty/absent (→ design-system defaults).
  *
- *  Exception — a different theme family. The DS panel stamps `preset` with the family a
- *  blob came from, and a family variant is a complete look for its mode. When the user's
- *  working copy names a family the default doesn't (another family, or a family over a
- *  hand-tuned default), filling its gaps from the default would paint the default's tokens
- *  into it — e.g. a light variant inheriting a dark-tuned accent-fg at 1.5:1. So the user's
- *  blob wins wholesale; the per-token merge still applies within the SAME family. */
+ *  Theme families (the DS panel's `preset`, `edits`, `saved`). A family variant is a
+ *  complete look for its mode, so gap-filling only makes sense WITHIN one family:
+ *  - The working copy's family differs from the default's — another family, a family over a
+ *    hand-tuned default, or no family (a saved preset / import / reset look) over a family
+ *    default → the working copy wins wholesale. Filling its gaps would paint the other look's
+ *    tokens into it (e.g. a light variant inheriting a dark-tuned accent-fg at 1.5:1).
+ *  - Same family → the per-token merge. `edits` = the user's, plus the default's edits to
+ *    tokens the user didn't set (those merged values really are the default's edits); a token
+ *    the user DID set but didn't list is the family's own value, not an edit. A working copy
+ *    with no `edits` list at all (DS 0.61) keeps it unset, so the panel recovers its edits.
+ *  - `saved` is never inherited from the default: a saved look the user hasn't applied would
+ *    mark the wrong gallery tile.
+ *  - Neither has a family → the original per-token merge (#1762). */
 export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | null {
   const base = normalizeThemeBlob(defaults);
   const user = normalizeThemeBlob(overrides);
@@ -67,7 +74,7 @@ export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | n
 
   const b: ThemeBlob = base ?? {};
   const u: ThemeBlob = user ?? {};
-  if (user && typeof u.preset === "string" && u.preset !== b.preset) {
+  if (user && u.preset !== b.preset) {
     const whole: ThemeBlob = { ...u, overrides: { ...(u.overrides ?? {}) } };
     if (whole.mode === undefined && b.mode !== undefined) whole.mode = b.mode;
     return whole;
@@ -80,6 +87,20 @@ export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | n
   const mode = u.mode ?? b.mode;
   if (mode !== undefined) merged.mode = mode;
   else delete merged.mode;
+  if (user) {
+    if (u.saved === undefined) delete merged.saved;
+    if (typeof merged.preset === "string") {
+      if (Array.isArray(u.edits)) {
+        const userSet = u.overrides ?? {};
+        const inherited = Array.isArray(b.edits) ? (b.edits as string[]).filter((k) => !(k in userSet)) : [];
+        merged.edits = [...new Set([...(u.edits as string[]), ...inherited])];
+      } else {
+        // A working copy from before `edits` existed (DS 0.61): leave the list unset so the
+        // panel recovers its edits against the palette that version shipped.
+        delete merged.edits;
+      }
+    }
+  }
   return merged;
 }
 
