@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
@@ -14,6 +15,10 @@ import { applyAgentTheme, currentThemeBlob } from "../lib/agentTheme";
 export function ThemeSurface() {
   const qc = useQueryClient();
   const toast = useToast();
+  // The panel reads the persisted blob once, on mount. Reset clears it underneath the
+  // mounted panel, so remount the panel afterwards — otherwise it keeps showing (and on
+  // the next toggle or edit, re-saves) the look that was just reset.
+  const [panelKey, setPanelKey] = useState(0);
 
   const save = useMutation({
     mutationFn: () => api.saveTheme(currentThemeBlob()),
@@ -28,6 +33,7 @@ export function ThemeSurface() {
     mutationFn: () => api.resetTheme(),
     onSuccess: () => {
       applyAgentTheme(null);
+      setPanelKey((k) => k + 1);
       qc.invalidateQueries({ queryKey: ["theme"] });
       toast({ tone: "success", title: "Theme reset", message: "Back to the defaults." });
     },
@@ -51,7 +57,7 @@ export function ThemeSurface() {
         }
       />
       <div className="stage-body">
-        <ThemePanel />
+        <ThemePanel key={panelKey} />
       </div>
     </section>
   );
