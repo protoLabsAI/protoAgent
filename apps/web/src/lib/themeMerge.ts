@@ -52,7 +52,14 @@ export function normalizeThemeBlob(value: unknown): ThemeBlob | null {
  *  beats the default; a token the user didn't set falls back to the default. `mode` is
  *  scalar — the user's choice wins when present, else the default's (else "dark"). Unknown
  *  top-level keys also take the user's value when present. Returns `null` only when BOTH
- *  inputs are empty/absent (→ design-system defaults). */
+ *  inputs are empty/absent (→ design-system defaults).
+ *
+ *  Exception — a different theme family. The DS panel stamps `preset` with the family a
+ *  blob came from, and a family variant is a complete look for its mode. When the user's
+ *  working copy names a family the default doesn't (another family, or a family over a
+ *  hand-tuned default), filling its gaps from the default would paint the default's tokens
+ *  into it — e.g. a light variant inheriting a dark-tuned accent-fg at 1.5:1. So the user's
+ *  blob wins wholesale; the per-token merge still applies within the SAME family. */
 export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | null {
   const base = normalizeThemeBlob(defaults);
   const user = normalizeThemeBlob(overrides);
@@ -60,6 +67,11 @@ export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | n
 
   const b: ThemeBlob = base ?? {};
   const u: ThemeBlob = user ?? {};
+  if (user && typeof u.preset === "string" && u.preset !== b.preset) {
+    const whole: ThemeBlob = { ...u, overrides: { ...(u.overrides ?? {}) } };
+    if (whole.mode === undefined && b.mode !== undefined) whole.mode = b.mode;
+    return whole;
+  }
   const merged: ThemeBlob = {
     ...b,
     ...u,

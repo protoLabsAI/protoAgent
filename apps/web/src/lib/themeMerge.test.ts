@@ -91,6 +91,44 @@ describe("mergeTheme — user overrides WIN, defaults fill the gaps (#1762)", ()
   });
 });
 
+describe("mergeTheme — theme families (DS `preset`)", () => {
+  const amberDark = {
+    mode: "dark" as const,
+    preset: "amber",
+    overrides: { "--pl-color-accent": "oklch(0.77 0.16 65)", "--pl-color-status-warning": "oklch(0.88 0.15 100)" },
+  };
+
+  it("a different family in the working copy wins wholesale — no tokens leak in from the default's family", () => {
+    const steelLight = { mode: "light" as const, preset: "steel", overrides: { "--pl-color-bg": "oklch(0.975 0.002 286)" } };
+    expect(mergeTheme(amberDark, steelLight)).toEqual(steelLight);
+  });
+
+  it("a family over a hand-tuned default (no preset) wins wholesale too", () => {
+    const handTuned = { mode: "dark" as const, overrides: { "--pl-color-accent": "#d72b43", "--pl-radius": "2px" } };
+    const nord = { mode: "dark" as const, preset: "nord", overrides: { "--pl-color-bg": "#2e3440" } };
+    expect(mergeTheme(handTuned, nord)).toEqual(nord);
+  });
+
+  it("a wholesale family blob with no mode takes the default's mode", () => {
+    const noMode = { preset: "steel", overrides: { "--pl-color-bg": "oklch(0.141 0.005 286)" } };
+    expect(mergeTheme(amberDark, noMode)).toEqual({ ...noMode, mode: "dark" });
+  });
+
+  it("the same family keeps the per-token merge — the user's edit wins, the default fills gaps", () => {
+    const edited = { mode: "dark" as const, preset: "amber", overrides: { "--pl-color-accent": "#123456" } };
+    expect(mergeTheme(amberDark, edited)).toEqual({
+      mode: "dark",
+      preset: "amber",
+      overrides: { "--pl-color-accent": "#123456", "--pl-color-status-warning": "oklch(0.88 0.15 100)" },
+    });
+  });
+
+  it("a working copy with no preset still merges per token over a family default", () => {
+    const tweak = { mode: "dark" as const, overrides: { "--pl-radius": "8px" } };
+    expect(mergeTheme(amberDark, tweak)).toEqual({ ...amberDark, overrides: { ...amberDark.overrides, "--pl-radius": "8px" } });
+  });
+});
+
 describe("resolveThemeToPersist — boot reads persisted state, switch adopts the incoming theme", () => {
   const persisted = { mode: "light" as const, overrides: { "--pl-color-accent": "#00ff00" } };
 
