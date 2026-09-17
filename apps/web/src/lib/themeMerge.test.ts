@@ -109,6 +109,11 @@ describe("mergeTheme — theme families (DS `preset`)", () => {
     expect(mergeTheme(handTuned, nord)).toEqual(nord);
   });
 
+  it("a wholesale family blob with no mode takes the default's mode", () => {
+    const noMode = { preset: "steel", overrides: { "--pl-color-bg": "oklch(0.141 0.005 286)" } };
+    expect(mergeTheme(amberDark, noMode)).toEqual({ ...noMode, mode: "dark" });
+  });
+
   it("the same family keeps the per-token merge — the user's edit wins, the default fills gaps", () => {
     const edited = { mode: "dark" as const, preset: "amber", overrides: { "--pl-color-accent": "#123456" } };
     expect(mergeTheme(amberDark, edited)).toEqual({
