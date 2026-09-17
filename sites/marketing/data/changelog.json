@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.169.0",
+    "date": "2026-09-17",
+    "changes": [
+      "Every reader of the default model route resolves its endpoint and key the same way (#3534).",
+      "Settings → Theme opens on a gallery of 28 theme families, each with a dark and a light variant (#3535).",
+      "Theme reset, saved looks and imports stop picking up the agent's theme (#3536)."
+    ]
+  },
+  {
     "version": "v0.168.0",
     "date": "2026-09-15",
     "changes": [
