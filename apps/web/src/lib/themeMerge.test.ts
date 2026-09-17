@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 
+import { themeFamilyBlob } from "@protolabsai/ui/theming";
+
 import { mergeTheme, normalizeThemeBlob, resolveThemeToPersist } from "./themeMerge";
 
 // #1762 — the console persists a `{mode, overrides}` theme blob; on boot the user's
@@ -161,6 +163,23 @@ describe("mergeTheme — theme families (DS `preset`)", () => {
     const def = { ...amberDark, saved: "user-mine", edits: [] };
     const user = { mode: "dark" as const, preset: "amber", edits: [], overrides: { "--pl-radius": "8px" } };
     expect(mergeTheme(def, user)).not.toHaveProperty("saved");
+  });
+});
+
+// The merge's family rules read `preset`, `edits` and `saved` off the DS panel's blob. Pin the
+// shape the DS actually emits, so a DS bump that drops or renames a field fails here rather
+// than silently turning every boot merge back into a per-token merge.
+describe("the DS blob shape this merge depends on", () => {
+  it("themeFamilyBlob emits mode + overrides + preset + edits, and normalize keeps them", () => {
+    const blob = themeFamilyBlob("midnight", "dark")!;
+    expect(blob).toMatchObject({ mode: "dark", preset: "midnight", edits: [] });
+    expect(Object.keys(blob.overrides).every((k) => k.startsWith("--pl-"))).toBe(true);
+    // normalizeThemeBlob must preserve the three family keys (it drops unknown token shapes,
+    // not top-level fields), or mergeTheme can't see them.
+    const round = normalizeThemeBlob({ ...blob, saved: "user-mine" })!;
+    expect(round.preset).toBe("midnight");
+    expect(round.edits).toEqual([]);
+    expect(round.saved).toBe("user-mine");
   });
 });
 
