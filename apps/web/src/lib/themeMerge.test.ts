@@ -119,13 +119,41 @@ describe("mergeTheme — theme families (DS `preset`)", () => {
     expect(mergeTheme(amberDark, edited)).toEqual({
       mode: "dark",
       preset: "amber",
+      edits: [],
       overrides: { "--pl-color-accent": "#123456", "--pl-color-status-warning": "oklch(0.88 0.15 100)" },
     });
   });
 
-  it("a working copy with no preset still merges per token over a family default", () => {
+  it("a working copy with NO family over a family default wins wholesale (a saved preset, an import, a reset look)", () => {
+    const savedLook = { mode: "dark" as const, saved: "user-mine", overrides: { "--pl-color-accent": "#ff8800" } };
+    expect(mergeTheme(amberDark, savedLook)).toEqual(savedLook);
+  });
+
+  it("with no family on either side, the original per-token merge still applies (#1762)", () => {
+    const handTuned = { mode: "dark" as const, overrides: { "--pl-color-accent": "#d72b43", "--pl-radius": "2px" } };
     const tweak = { mode: "dark" as const, overrides: { "--pl-radius": "8px" } };
-    expect(mergeTheme(amberDark, tweak)).toEqual({ ...amberDark, overrides: { ...amberDark.overrides, "--pl-radius": "8px" } });
+    expect(mergeTheme(handTuned, tweak)).toEqual({ mode: "dark", overrides: { "--pl-color-accent": "#d72b43", "--pl-radius": "8px" } });
+  });
+
+  it("same family: edits keep the user's, plus the default's edits to tokens the user didn't set", () => {
+    const def = { ...amberDark, edits: ["--pl-color-accent-fg", "--pl-color-focus"], overrides: { ...amberDark.overrides, "--pl-color-accent-fg": "#123456", "--pl-color-focus": "#654321" } };
+    const user = { mode: "dark" as const, preset: "amber", edits: ["--pl-radius"], overrides: { "--pl-color-focus": "oklch(0.77 0.16 65)", "--pl-radius": "8px" } };
+    const merged = mergeTheme(def, user)!;
+    // focus: the user set it (the family's own value) without listing it → not an edit.
+    expect(merged.edits).toEqual(["--pl-radius", "--pl-color-accent-fg"]);
+    expect(merged.overrides?.["--pl-color-accent-fg"]).toBe("#123456");
+  });
+
+  it("same family: a 0.61 working copy (no edits) never adopts the default's edit list for tokens it set", () => {
+    const def = { ...amberDark, edits: ["--pl-color-accent"], overrides: { ...amberDark.overrides, "--pl-color-accent": "#123456" } };
+    const legacy = { mode: "dark" as const, preset: "amber", overrides: { ...amberDark.overrides } };
+    expect(mergeTheme(def, legacy)?.edits).toEqual([]);
+  });
+
+  it("same family: `saved` is never inherited from the default", () => {
+    const def = { ...amberDark, saved: "user-mine", edits: [] };
+    const user = { mode: "dark" as const, preset: "amber", edits: [], overrides: { "--pl-radius": "8px" } };
+    expect(mergeTheme(def, user)).not.toHaveProperty("saved");
   });
 });
 
