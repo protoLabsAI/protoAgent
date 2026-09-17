@@ -62,8 +62,10 @@ export function normalizeThemeBlob(value: unknown): ThemeBlob | null {
  *    tokens into it (e.g. a light variant inheriting a dark-tuned accent-fg at 1.5:1).
  *  - Same family → the per-token merge. `edits` = the user's, plus the default's edits to
  *    tokens the user didn't set (those merged values really are the default's edits); a token
- *    the user DID set but didn't list is the family's own value, not an edit. `saved` is never
- *    inherited: a saved look the user hasn't applied would mark the wrong gallery tile.
+ *    the user DID set but didn't list is the family's own value, not an edit. A working copy
+ *    with no `edits` list at all (DS 0.61) keeps it unset, so the panel recovers its edits.
+ *  - `saved` is never inherited from the default: a saved look the user hasn't applied would
+ *    mark the wrong gallery tile.
  *  - Neither has a family → the original per-token merge (#1762). */
 export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | null {
   const base = normalizeThemeBlob(defaults);
@@ -85,12 +87,19 @@ export function mergeTheme(defaults: unknown, overrides: unknown): ThemeBlob | n
   const mode = u.mode ?? b.mode;
   if (mode !== undefined) merged.mode = mode;
   else delete merged.mode;
-  if (user && typeof merged.preset === "string") {
-    const userSet = u.overrides ?? {};
-    const own = Array.isArray(u.edits) ? (u.edits as string[]) : [];
-    const inherited = Array.isArray(b.edits) ? (b.edits as string[]).filter((k) => !(k in userSet)) : [];
-    merged.edits = [...new Set([...own, ...inherited])];
+  if (user) {
     if (u.saved === undefined) delete merged.saved;
+    if (typeof merged.preset === "string") {
+      if (Array.isArray(u.edits)) {
+        const userSet = u.overrides ?? {};
+        const inherited = Array.isArray(b.edits) ? (b.edits as string[]).filter((k) => !(k in userSet)) : [];
+        merged.edits = [...new Set([...(u.edits as string[]), ...inherited])];
+      } else {
+        // A working copy from before `edits` existed (DS 0.61): leave the list unset so the
+        // panel recovers its edits against the palette that version shipped.
+        delete merged.edits;
+      }
+    }
   }
   return merged;
 }

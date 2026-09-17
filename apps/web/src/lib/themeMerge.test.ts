@@ -119,7 +119,6 @@ describe("mergeTheme — theme families (DS `preset`)", () => {
     expect(mergeTheme(amberDark, edited)).toEqual({
       mode: "dark",
       preset: "amber",
-      edits: [],
       overrides: { "--pl-color-accent": "#123456", "--pl-color-status-warning": "oklch(0.88 0.15 100)" },
     });
   });
@@ -144,10 +143,18 @@ describe("mergeTheme — theme families (DS `preset`)", () => {
     expect(merged.overrides?.["--pl-color-accent-fg"]).toBe("#123456");
   });
 
-  it("same family: a 0.61 working copy (no edits) never adopts the default's edit list for tokens it set", () => {
+  it("same family: a 0.61 working copy (no edits list) leaves edits unset — never the default's list", () => {
     const def = { ...amberDark, edits: ["--pl-color-accent"], overrides: { ...amberDark.overrides, "--pl-color-accent": "#123456" } };
     const legacy = { mode: "dark" as const, preset: "amber", overrides: { ...amberDark.overrides } };
-    expect(mergeTheme(def, legacy)?.edits).toEqual([]);
+    const merged = mergeTheme(def, legacy)!;
+    expect(merged).not.toHaveProperty("edits");
+    expect(merged.overrides?.["--pl-color-accent"]).toBe(amberDark.overrides["--pl-color-accent"]);
+  });
+
+  it("`saved` is never inherited, with or without a family", () => {
+    const def = { mode: "dark" as const, saved: "user-mine", overrides: { "--pl-color-accent": "#ff8800" } };
+    const user = { mode: "dark" as const, overrides: { "--pl-color-accent": "#00ff88" } };
+    expect(mergeTheme(def, user)).not.toHaveProperty("saved");
   });
 
   it("same family: `saved` is never inherited from the default", () => {
