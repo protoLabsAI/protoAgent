@@ -1721,6 +1721,7 @@ def validate_model_connection(
     api_key: str = "",
     model: str = "",
     timeout: float = 20.0,
+    allow_env_key: bool = True,
 ) -> tuple[bool, str]:
     """Probe the model with a minimal real completion — the *true* auth check.
 
@@ -1741,7 +1742,12 @@ def validate_model_connection(
     if not model:
         return False, "model is empty"
 
-    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    # `allow_env_key=False` is for a REGISTERED connection (ADR 0106), exactly as in
+    # `list_gateway_models`: a blank key there means "this endpoint needs none", not "go
+    # find a global one". Without the opt-out this probe sends OPENAI_API_KEY — or the
+    # live default route's key, via the callers — to whatever endpoint was typed, which
+    # is the credential-crossing the registry exists to prevent.
+    key = api_key or (os.environ.get("OPENAI_API_KEY", "") if allow_env_key else "")
     url = api_base.rstrip("/") + "/chat/completions"
     # SSRF guard (#871) — same as list_gateway_models: allow_private so a localhost /
     # LAN / tailnet operator gateway works, link-local/metadata stays blocked, and an
