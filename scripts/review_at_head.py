@@ -211,6 +211,12 @@ def decide(
             )
         return Decision("failure", f"no QA panel verdict for {head_sha[:12]} — this head is unreviewed")
 
+    # Fail closed on a marker that matches the head but carries no verdict: "?" is not in
+    # BLOCKING_VERDICTS, so it used to fall through to success. This gate exists to answer
+    # "is there a verdict for THIS head" — a marker without one is not a verdict, and the
+    # module treats every other missing critical attribute as non-satisfying.
+    if "verdict" not in attrs:
+        return Decision("failure", f"panel marker for {head_sha[:12]} carries no verdict")
     verdict = attrs.get("verdict", "?").upper()
     if verdict in BLOCKING_VERDICTS:
         return Decision("failure", f"QA panel returned {verdict} for {head_sha[:12]}")
@@ -278,16 +284,25 @@ def check_pr(pr: int, head_sha: str, labels: list[str], *, dry_run: bool) -> Dec
 
 
 def main() -> int:
-    dry_run = bool(os.environ.get("DRY_RUN"))
+    # Parsed like REQUIRE_COVERAGE_CONTRACT above, not with bool(): every non-empty string is
+    # truthy, so `DRY_RUN=0` / `false` / `no` used to ENABLE dry-run — the gate would post no
+    # status at all and look like it was working. A silent off-switch on a merge gate.
+    dry_run = os.environ.get("DRY_RUN", "").strip().lower() in {"1", "true", "yes", "on"}
     pr_number = os.environ.get("PR_NUMBER")
 
     if pr_number:
         head = os.environ["HEAD_SHA"]
         labels = [x for x in os.environ.get("PR_LABELS", "").split(",") if x]
-        check_pr(int(pr_number), head, labels, dry_run=dry_run)
         # Always exit 0: the STATUS is the signal, not this job. A non-zero exit would add a
         # second red check saying the same thing, and would make an API hiccup look like an
-        # unreviewed PR.
+        # unreviewed PR. That promise needs the same guard the sweep below has had from the
+        # start: without it a RuntimeError from `_gh` (a dropped API call, a rate limit)
+        # escapes main(), `raise SystemExit(main())` never runs, and the job exits non-zero
+        # on a transient error — producing exactly the second red check this comment forbids.
+        try:
+            check_pr(int(pr_number), head, labels, dry_run=dry_run)
+        except RuntimeError as exc:  # a transient API failure is not an unreviewed PR
+            print(f"#{pr_number}: {exc}", file=sys.stderr)
         return 0
 
     # Sweep mode (scheduled backstop) — webhooks do get dropped here, and a PR whose
