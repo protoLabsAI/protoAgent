@@ -364,6 +364,12 @@ def test_v0158_a_genuinely_clean_pass_succeeds():
     assert decision.ok and "PASS" in decision.description
 
 
+# ── the gate's own robustness: it must not fail open ─────────────────────────────────
+#
+# Every case below is a way this job used to pass a head it should not have: an API
+# hiccup read as a clean run, a silent off-switch, a marker with no verdict in it.
+
+
 def test_a_gh_failure_in_single_pr_mode_still_exits_zero(monkeypatch, capsys):
     """The job's promise is that the STATUS is the signal, not the job's exit code.
 
