@@ -24,6 +24,18 @@ async def _until(pilot, cond, timeout=4.0):
     return cond()
 
 
+async def _ready_to_type(pilot, app, timeout=4.0):
+    """Wait until the pushed modal has actually focused its first field.
+
+    A modal focuses that field in ``on_mount``, which runs AFTER the screen is pushed, so
+    asserting the screen type is not enough: a keystroke sent in the gap lands on nothing.
+    That gap is invisible on an unloaded box (focus arrives in the same frame) and opens up
+    under load: on Windows shard 2/2 of v0.168.0's release PR #3533, focus landed BETWEEN
+    two keystrokes and ``bo`` arrived as ``o``, on code that was green elsewhere.
+    """
+    return await _until(pilot, lambda: isinstance(getattr(app.screen, "focused", None), Input), timeout)
+
+
 def _rows(app) -> list[str]:
     t = app.screen.query_one("#roster", DataTable)
     return [str(t.get_row_at(i)[1]) for i in range(t.row_count)]
@@ -46,10 +58,12 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         await pilot.pause(0.1)
         assert isinstance(app.screen, NewAgentModal) and "name is required" in str(modal.query_one("#hint", Static).content)
         modal.query_one("#name", Input).focus()
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"sc out", "ctrl+s")  # the hub's charset rule, checked before the round trip
         await pilot.pause(0.1)
         assert isinstance(app.screen, NewAgentModal) and "letters, digits" in str(modal.query_one("#hint", Static).content)
         modal.query_one("#name", Input).value = ""
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"scout")
         modal.query_one("#archetype", Select).value = "pm"
         await pilot.pause(0.1)
@@ -65,6 +79,7 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         await pilot.press("n")
         assert await _until(pilot, lambda: isinstance(app.screen, NewAgentModal))
         app.screen.query_one("#name", Input).focus()
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"host", "enter")
         await pilot.pause(0.1)
         assert isinstance(app.screen, NewAgentModal) and "reserved" in str(app.screen.query_one("#hint", Static).content)
@@ -88,11 +103,13 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
         inp = app.screen.query_one("#name", Input)
         inp.value = ""
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"Engineer Prime", "enter")  # a space: the hub would 400 — refused here, typing kept
         await pilot.pause(0.1)
         assert isinstance(app.screen, RenameModal) and "letters, digits" in str(app.screen.query_one("#hint", Static).content)
         assert app.screen.query_one("#name", Input).value == "Engineer Prime"
         app.screen.query_one("#name", Input).value = ""
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"engineer-prime", "enter")
         await _settle(app, pilot)
         assert ("rename", "protoEngineer-ba4c", "engineer-prime") in be.calls
@@ -118,6 +135,7 @@ async def test_delete_needs_the_typed_name_purge_is_separate_and_a_409_is_retrya
         assert await _until(pilot, lambda: isinstance(app.screen, DeleteModal))
         modal = app.screen
         assert modal.query_one("#submit", Button).disabled
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"Cind", "enter")  # not the name yet
         await pilot.pause(0.1)
         assert isinstance(app.screen, DeleteModal) and "exactly" in str(modal.query_one("#hint", Static).content)
@@ -134,6 +152,7 @@ async def test_delete_needs_the_typed_name_purge_is_separate_and_a_409_is_retrya
         app.screen.query_one("#roster", DataTable).move_cursor(row=2)  # old
         await pilot.press("d")
         assert await _until(pilot, lambda: isinstance(app.screen, DeleteModal))
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"old", "enter")
         await _settle(app, pilot)
         assert any("repeat the delete" in m and sev == "warning" for m, sev in seen)
@@ -152,6 +171,7 @@ async def test_remotes_add_edit_and_remove_with_the_token_sent_once():
         assert await _until(pilot, lambda: isinstance(app.screen, RemoteModal))
         modal = app.screen
         assert modal.query_one("#token", Input).password  # masked
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"bo", "tab")
         modal.query_one("#url", Input).value = "https://bo.tail:7870"
         modal.query_one("#token", Input).value = "s3cret"
@@ -193,6 +213,7 @@ async def test_remotes_add_edit_and_remove_with_the_token_sent_once():
         await pilot.press("d")
         assert await _until(pilot, lambda: isinstance(app.screen, DeleteModal))
         assert not app.screen.query("#purge") and "unregisters" in app.screen.query(".manage-sub").first().render().plain
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"bo", "enter")
         await _settle(app, pilot)
         assert ("remote_remove", "r-bo") in be.calls and "bo" not in _rows(app)
@@ -358,6 +379,7 @@ async def test_renaming_a_remote_goes_through_its_own_record():
         await pilot.press("R")
         assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
         app.screen.query_one("#name", Input).value = ""
+        assert await _ready_to_type(pilot, app)
         await pilot.press(*"ava2", "enter")
         await _settle(app, pilot)
         assert ("remote_update", "r-ava", {"name": "ava2"}) in be.calls and not any(c[0] == "rename" for c in be.calls)
