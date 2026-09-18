@@ -362,3 +362,64 @@ def test_v0158_a_genuinely_clean_pass_succeeds():
     marker = review(MERGED, "PASS", coverage="complete", standing_block="false")
     decision = rah.decide([marker], MERGED, [], require_contract=True)
     assert decision.ok and "PASS" in decision.description
+
+
+def test_a_gh_failure_in_single_pr_mode_still_exits_zero(monkeypatch, capsys):
+    """The job's promise is that the STATUS is the signal, not the job's exit code.
+
+    Sweep mode has always caught `RuntimeError` ("one unreachable PR must not abandon the
+    rest"); single-PR mode called `check_pr` bare. So a transient `gh` failure — a dropped
+    call, a rate limit — escaped `main()`, `raise SystemExit(main())` never ran, and the job
+    exited non-zero: a second red check saying the same thing as the status, and an API
+    hiccup made to look like an unreviewed PR. Exactly what the comment there forbids.
+    """
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("gh api repos/o/r/pulls/123/reviews failed: 502 Bad Gateway")
+
+    monkeypatch.setattr(rah, "_gh", _boom)
+    monkeypatch.setenv("PR_NUMBER", "123")
+    monkeypatch.setenv("HEAD_SHA", "a" * 40)
+    monkeypatch.setenv("PR_LABELS", "")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+
+    assert rah.main() == 0
+    assert "502 Bad Gateway" in capsys.readouterr().err
+
+def test_dry_run_is_off_unless_explicitly_truthy(monkeypatch):
+    """`DRY_RUN=false` used to ENABLE dry-run.
+
+    `bool("false")` is True, so any non-empty value turned the gate into a no-op: no status
+    posted, nothing red, and the merge gate silently ineffective. It is parsed like
+    REQUIRE_COVERAGE_CONTRACT now — a silent off-switch on a merge gate is the worst kind.
+    """
+    seen: dict[str, bool] = {}
+    monkeypatch.setattr(rah, "check_pr", lambda pr, head, labels, *, dry_run: seen.update(dry_run=dry_run))
+    monkeypatch.setenv("PR_NUMBER", "123")
+    monkeypatch.setenv("HEAD_SHA", MERGED)
+    monkeypatch.setenv("PR_LABELS", "")
+
+    for value in ("false", "0", "no", "off", ""):
+        seen.clear()
+        monkeypatch.setenv("DRY_RUN", value)
+        assert rah.main() == 0
+        assert seen["dry_run"] is False, f"DRY_RUN={value!r} must not enable dry-run"
+
+    for value in ("1", "true", "yes", "on", "TRUE"):
+        seen.clear()
+        monkeypatch.setenv("DRY_RUN", value)
+        assert rah.main() == 0
+        assert seen["dry_run"] is True, f"DRY_RUN={value!r} must enable dry-run"
+
+
+def test_a_marker_with_no_verdict_attribute_fails_closed():
+    """A marker is not a verdict.
+
+    This gate answers one question — is there a QA-panel verdict for THIS head — and the module
+    fails closed on every other missing critical attribute. A marker matching the head but
+    carrying no `verdict` used to read as "?", miss BLOCKING_VERDICTS, and return success.
+    """
+    body = f"<!-- protoagent-qa-review head={MERGED} -->\n## QA panel review\n\nsome prose\n"
+    decision = rah.decide([review(MERGED, body=body)], MERGED, [])
+    assert not decision.ok
+    assert "carries no verdict" in decision.description
