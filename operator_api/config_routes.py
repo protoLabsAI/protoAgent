@@ -411,9 +411,32 @@ def register_config_routes(app) -> None:
             ok, error = await asyncio.to_thread(validate_oauth_connection, provider, model, STATE.graph_config)
             return {"ok": ok, "error": error}
         live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
-        base = body.api_base or (live.base_url if live else "")
-        key = body.api_key or (live.api_key if live else "")
-        ok, error = await asyncio.to_thread(validate_model_connection, base, key, model)
+        # ADR 0106 (#3128): a probe aimed at a DECLARED connection — or at an endpoint the
+        # operator just typed — resolves strictly from that connection's own fields. It may
+        # not borrow the live default route's key, nor OPENAI_API_KEY: putting the production
+        # gateway's credential on the wire to a form-typed endpoint is precisely the
+        # credential-crossing the registry exists to prevent. Only a blank-form re-test of
+        # the live agent (the "test the saved config" path this route also serves) resolves
+        # through the live route, which is its own key by definition.
+        #
+        # The REQUEST names the connection to probe — `body.provider` alone, not the
+        # `provider` above, which falls back to the retired `model.provider`. That fallback
+        # is right for the native-OAuth branch (re-test the live subscription) and wrong
+        # here: it would let a legacy field decide which REGISTRY entry gets probed, inside
+        # the change meant to decouple the two. A config whose `model.provider` happens to
+        # read `gateway` must still re-test its live route on a blank form.
+        named = (body.provider or "").strip().lower()
+        declared = STATE.graph_config.provider_by_id(named) if (named and STATE.graph_config) else None
+        if declared is not None:
+            route = resolve_model_route(STATE.graph_config, declared)
+            base, key, allow_env = route.base_url or "", route.api_key, False
+        elif body.api_base:
+            base, key, allow_env = body.api_base, body.api_key, False
+        else:
+            base = live.base_url if live else ""
+            key = body.api_key or (live.api_key if live else "")
+            allow_env = True
+        ok, error = await asyncio.to_thread(validate_model_connection, base, key, model, allow_env_key=allow_env)
         # A successful test of the LIVE saved key (no form-local override) proves the
         # gateway + key are good again — so clear any open embedding circuit breaker
         # now, instead of waiting out the cooldown. This is the recovery path for an

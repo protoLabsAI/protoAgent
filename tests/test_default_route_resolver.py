@@ -337,6 +337,66 @@ def test_a_qualified_build_still_sizes_its_window_on_the_default_route(monkeypat
     assert seen == [(LEGACY, "legacy-key")]
 
 
+# ── a declared connection fails closed (#3128 ruling) ────────────────────────────────
+
+
+def test_a_declared_connection_probe_never_borrows_the_live_or_env_key(monkeypatch, no_network):
+    """`POST /api/config/test-model` naming a REGISTERED connection probes that
+    connection's endpoint with that connection's own key — never the live default route's
+    key, never OPENAI_API_KEY. `qualified-slot` is the case that can catch a regression:
+    `local-vllm` is keyless while a legacy key AND an env key are both present, so
+    borrowing anything shows up as `legacy-key`/`env-key` instead of "".
+    """
+    cfg = _load(CASES["qualified-slot"][0], "env-key", monkeypatch)
+    _live(cfg, monkeypatch)
+    _routes_client().post("/api/config/test-model", json={"provider": "local-vllm", "model": "qwen"})
+    assert no_network[-1] == (f"{VLLM}/chat/completions", "")
+
+
+def test_a_form_typed_endpoint_probe_never_borrows_the_live_key(monkeypatch, no_network):
+    """An endpoint the operator just typed carries its own key or none. Borrowing the saved
+    gateway's credential would put it on the wire to an endpoint that never had it."""
+    cfg = _load(CASES["both"][0], "env-key", monkeypatch)
+    _live(cfg, monkeypatch)
+    _routes_client().post("/api/config/test-model", json={"api_base": VLLM, "model": "qwen"})
+    assert no_network[-1] == (f"{VLLM}/chat/completions", "")
+
+
+def test_finish_setup_probes_a_declared_connection_strictly_from_its_own_fields(monkeypatch, no_network):
+    """The wizard path: a payload naming a connection probes THAT connection. The stubbed
+    refusal stops finish_setup before it persists anything, as in the live-route test above."""
+    from server.agent_init import _build_settings_callbacks
+
+    cfg = _load(CASES["both"][0], "env-key", monkeypatch)
+    _live(cfg, monkeypatch)
+    ok, message = _build_settings_callbacks()["finish_setup"](
+        {"providers": [{"id": "local-vllm", "base_url": VLLM}], "model": {"name": "local-vllm:qwen"}}, None
+    )
+    assert not ok and "model connection failed" in message
+    assert no_network[-1] == (f"{VLLM}/chat/completions", "")
+
+
+def test_a_blank_form_retest_uses_the_live_route_even_when_a_legacy_field_names_a_connection(
+    monkeypatch, no_network
+):
+    """The gap the fail-closed change could have opened: `model.provider` is a RETIRED field,
+    so it must not decide which registry entry gets probed. This config's legacy provider
+    reads `gateway`, which is also a registered connection id — a blank-form re-test still
+    goes to the live route (LEGACY/legacy-key), not the registry entry (REGISTRY/registry-key).
+    """
+    cfg = _load(
+        {
+            "providers": [dict(_GATEWAY)],
+            "model": {"api_base": LEGACY, "api_key": "legacy-key", "provider": "gateway"},
+        },
+        "env-key",
+        monkeypatch,
+    )
+    _live(cfg, monkeypatch)
+    _routes_client().post("/api/config/test-model", json={"model": "m"})
+    assert no_network[-1] == (f"{LEGACY}/chat/completions", "legacy-key")
+
+
 # ── the resolver itself ───────────────────────────────────────────────────────────────
 
 

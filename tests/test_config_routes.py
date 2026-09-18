@@ -254,7 +254,13 @@ def _wire_test_model(monkeypatch, *, ok: bool):
     monkeypatch.setitem(
         sys.modules,
         "graph.config_io",
-        _fake_module("graph.config_io", validate_model_connection=lambda b, k, m: (ok, "" if ok else "401")),
+        _fake_module(
+            "graph.config_io",
+            # Mirrors the real signature (#3128): the route passes `allow_env_key` so a
+            # declared connection fails closed. A fake accepting fewer parameters turns
+            # signature drift into a TypeError inside a worker thread instead of failing here.
+            validate_model_connection=lambda b, k, m, timeout=20.0, allow_env_key=True: (ok, "" if ok else "401"),
+        ),
     )
     import runtime.state as rs
 

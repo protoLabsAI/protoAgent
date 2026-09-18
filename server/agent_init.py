@@ -3476,8 +3476,20 @@ def _build_settings_callbacks() -> dict[str, Any]:
         if not _skip_probe and config is not None and isinstance(_model_cfg, dict):
             m = _model_cfg
             live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
-            test_base = (_conn or {}).get("base_url") or m.get("api_base") or (live.base_url if live else "")
-            test_key = (_conn or {}).get("api_key") or m.get("api_key") or (live.api_key if live else "")
+            if _conn is not None:
+                # ADR 0106 (#3128): a DECLARED connection is probed strictly from its own
+                # fields — never `model.api_key`, never the live route, never
+                # OPENAI_API_KEY. Falling through to any of those sends one connection's
+                # credential to another connection's endpoint. A blank key here means this
+                # endpoint needs none (a local vLLM or Ollama), not "borrow the global one".
+                test_base = str(_conn.get("base_url") or "")
+                test_key = str(_conn.get("api_key") or "")
+                allow_env = False
+            else:
+                # No registry entry: the pre-0106 triple, resolved as it always was.
+                test_base = m.get("api_base") or (live.base_url if live else "")
+                test_key = m.get("api_key") or (live.api_key if live else "")
+                allow_env = True
             test_model = m.get("name") or (STATE.graph_config.model_name if STATE.graph_config else "")
             # The gateway is asked for a MODEL, not for a route: sending it
             # `gateway:protolabs/reasoning` verbatim probes a model id that does not exist.
@@ -3485,7 +3497,7 @@ def _build_settings_callbacks() -> dict[str, Any]:
                 prefix = f"{_conn.get('id', '')}:"
                 if prefix != ":" and test_model.startswith(prefix):
                     test_model = test_model[len(prefix) :]
-            ok, verr = validate_model_connection(test_base, test_key, test_model)
+            ok, verr = validate_model_connection(test_base, test_key, test_model, allow_env_key=allow_env)
             if not ok:
                 return False, f"model connection failed — {verr}"
 
