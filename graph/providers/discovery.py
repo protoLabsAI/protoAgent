@@ -415,7 +415,10 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
     lanes: list[dict] = []
     env_key = os.environ.get("OPENAI_API_KEY", "").strip()
     entries = list(getattr(config, "providers", []) or [])
-    legacy = not entries
+    # An explicitly emptied registry resolves NOTHING (#3128) — zero lanes, no floor. Only
+    # a config that never declared one (a bare object) still degrades to the legacy lanes.
+    declared_empty = not entries and bool(getattr(config, "providers_declared", False))
+    legacy = not entries and not declared_empty
     if legacy:
         # Compatibility floor, the same one `split_slot_target` keeps: a config that
         # never went through `from_dict` (a bare LangGraphConfig, a caller that built one
@@ -488,6 +491,12 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
     # for exactly that). Append any native lane the registry does not already name, which
     # also honours the rule that an unusable lane is REPORTED with a reason rather than
     # omitted. Retires with the legacy fields (no earlier than v0.152.0).
+    # An explicitly emptied registry declines this affordance too (#3128): a config that
+    # states it has no connections must not be offered subscription lanes it never named.
+    # That is the same "still offering what the operator just deleted" one layer up — and
+    # unlike a migrated config, there are no legacy fields here implying anything.
+    if declared_empty:
+        return lanes
     named = {lane["provider"] for lane in lanes} | {e.type for e in entries}
     for native in sorted(NATIVE_OAUTH_PROVIDERS):
         if native in named:

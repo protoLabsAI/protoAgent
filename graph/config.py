@@ -1168,6 +1168,14 @@ class LangGraphConfig:
     # migrates one in from the legacy `model.provider`/`api_base`/`api_key` fields, so
     # code may assume it is populated after a load.
     providers: list["Provider"] = field(default_factory=list)
+    #: True when the config DECLARED `providers:` as a list — including the empty list.
+    #: `from_dict` already distinguishes absent/null (migrate) from an explicit list (do
+    #: not), because `providers: []` is what removing the last connection writes. The
+    #: floors in `split_slot_target` / `available_model_lanes` see only an empty list and
+    #: cannot tell "the operator emptied it" from "a bare object that never loaded", so
+    #: this carries that distinction to them: declared-empty resolves NOTHING, a bare
+    #: config still gets the legacy floor. Not a config key — never written or read back.
+    providers_declared: bool = False
 
     # Per-call timeout (seconds) on the model client + transient-retry cap. Bounds
     # a hung/slow gateway so a turn surfaces a clean error instead of blocking the
@@ -2714,6 +2722,10 @@ class LangGraphConfig:
         # source" is the more expensive wrong answer of the two.
         if not isinstance(data.get("providers"), list):
             config.providers = _migrated_providers(config)
+        else:
+            # An explicit list — `[]` included — is the operator's answer, so the floors
+            # must not speak for it (#3128).
+            config.providers_declared = True
         _reconcile_slot_providers(config)
 
         return config
