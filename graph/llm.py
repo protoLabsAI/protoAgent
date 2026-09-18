@@ -620,7 +620,11 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     prefix, sep, rest = raw.partition(":")
     if not sep:
         return "", raw
-    if config is None or not config.providers:
+    # A registry the operator emptied on purpose resolves NOTHING (#3128): no floor, and
+    # no legacy union below either — otherwise `gateway:`/`anthropic-oauth:`/`openai-codex:`
+    # would still be claimed by a config that declares no connections at all.
+    declared_empty = config is not None and not config.providers and config.providers_declared
+    if config is None or (not config.providers and not declared_empty):
         # Only the legacy union below can claim a prefix here. Lazy import: resolved at
         # call time, so the guard test can make it fatal (graph.config is already loaded).
         from graph.config import note_legacy_registry_floor
@@ -637,7 +641,8 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     # unregistered-but-legacy prefix by its own name, so it routes as it always did.
     # This floor retires with the legacy fields themselves (no earlier than v0.152.0).
     known = set(config.provider_ids()) if config is not None else set()
-    known.update(_LEGACY_SLOT_PROVIDERS)
+    if not declared_empty:
+        known.update(_LEGACY_SLOT_PROVIDERS)
     if prefix.strip().lower() not in known:
         return "", raw
     return prefix.strip().lower(), rest.strip()

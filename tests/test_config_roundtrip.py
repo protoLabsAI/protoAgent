@@ -233,6 +233,9 @@ FROM_YAML_EXAMPLE_FIELDS = {
     # registered connection is self-contained (nothing downstream may borrow a global key
     # on its behalf), so the golden pins the shape and the roundtrip test checks the key.
     "providers": _GOLDEN_PROVIDERS,
+    # The example declares no `providers:` block, so it MIGRATES — the flag is only True
+    # when a config states its registry explicitly (#3128).
+    "providers_declared": False,
     "model_vision": False,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",

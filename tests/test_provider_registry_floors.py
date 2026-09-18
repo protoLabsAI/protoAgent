@@ -146,14 +146,20 @@ def test_a_bare_config_does_reach_the_floor(floor_is_fatal, no_network):
         discovery.available_model_lanes(LangGraphConfig())
 
 
-def test_an_explicitly_empty_registry_is_the_one_shape_still_on_the_floor(floor_is_fatal, no_network):
-    """`providers: []` — every connection removed — is a deliberate statement, so the load
-    does not migrate it, and the pickers still answer it from the floor. Pinned so the
-    removal PR has to decide what an empty registry offers, rather than inherit it."""
+def test_an_explicitly_empty_registry_resolves_nothing(floor_is_fatal, no_network):
+    """`providers: []` — every connection removed — is a deliberate statement, and now it
+    is answered as one: no floor, no lanes, and no prefix claimed. It used to fall through
+    to the legacy three, which offered connections the operator had explicitly deleted.
+
+    A bare `LangGraphConfig()` is the shape that still gets the floor (the test above);
+    the difference between them is `providers_declared`, which `from_dict` sets."""
     cfg = LangGraphConfig.from_dict({"providers": []})
-    assert cfg.providers == []
-    with pytest.raises(AssertionError, match="available_model_lanes"):
-        discovery.available_model_lanes(cfg)
+    assert cfg.providers == [] and cfg.providers_declared
+
+    # No floor: `floor_is_fatal` turns any fall-through into an AssertionError.
+    assert discovery.available_model_lanes(cfg) == []
+    # And the legacy union is not applied either — an unqualified value, not a lane.
+    assert split_slot_target("gateway:protolabs/coder", cfg) == ("", "gateway:protolabs/coder")
 
 
 def test_app_defaults_differs_from_a_bare_config_only_in_its_registry():
