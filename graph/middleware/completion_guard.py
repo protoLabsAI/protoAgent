@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 # reads the message's guard tag (`guard_notes`), not this text.
 NUDGE_MARK = "[completion-guard]"
 GUARD = "completion"
+LINE_GUARD = "completion-line"  # the single ask for a closing line the caller requires
 # The wrap-up warning sent once as the turn budget runs out (#3559).
 BUDGET_MARK = "[turn-budget]"
 BUDGET_GUARD = "turn-budget"
@@ -49,8 +50,9 @@ def _text(message) -> str:
 
 
 def nudges_sent(messages) -> int:
-    # By tag, never by text: the task prompt is a HumanMessage too (#3556).
-    return sum(1 for m in messages or [] if is_guard_note(m, GUARD))
+    # By tag, never by text: the task prompt is a HumanMessage too (#3556). Both kinds of
+    # nudge count toward the one budget; the closing-line ask is further capped at one.
+    return sum(1 for m in messages or [] if is_guard_note(m, GUARD) or is_guard_note(m, LINE_GUARD))
 
 
 def task_prompt(messages) -> str:
@@ -68,7 +70,17 @@ def missing_markers(markers, prompt: str, answer: str) -> list[str]:
     pr-reviewer's structural recipe requires ``FINDER_STATUS: …`` of `review-finder`, the
     core `code-review` recipe does not. So a marker is owed only when the prompt names it.
     """
-    return [m for m in markers or () if m and m in (prompt or "") and m not in (answer or "")]
+    return [m for m in markers or () if m and m in (prompt or "") and not has_marker_line(answer, m)]
+
+
+def has_marker_line(answer: str, marker: str) -> bool:
+    """Does the answer carry a LINE that starts with ``marker``?
+
+    A line, not a substring: a review that says "`FINDER_STATUS:` is missing from the other
+    lane" mentions the marker without giving one. Leading markdown the model may wrap the
+    line in (backticks, emphasis, a quote or list mark) is allowed before it.
+    """
+    return any(line.lstrip(" \t`*_>-").startswith(marker) for line in (answer or "").splitlines())
 
 
 def tool_rounds(messages) -> int:
@@ -147,6 +159,11 @@ class CompletionGuardMiddleware(AgentMiddleware):
         if sent >= self._max_nudges:
             log.warning("[completion-guard] still no deliverable after %d nudge(s); letting the run end", sent)
             return None
+        if has_deliverable and any(is_guard_note(m, LINE_GUARD) for m in messages):
+            # Asked once already for the closing line and the answer still lacks it. That ask
+            # is a courtesy on finished work, not a loop: the run ends and is labelled.
+            log.warning("[completion-guard] required closing line still missing after one ask; letting the run end")
+            return None
         if has_deliverable:
             # The work is done and one required line is missing (pr-reviewer-plugin#145: a
             # finder wrote a full review and dropped `FINDER_STATUS`, voiding the round). The
@@ -158,7 +175,8 @@ class CompletionGuardMiddleware(AgentMiddleware):
                 f"starting {wanted}. Reply once more with your COMPLETE answer exactly as before — the "
                 "prose and the fenced block, unchanged — and end with that line."
             )
-            log.info("[completion-guard] answer lacks required %s; nudge %d/%d", wanted, sent + 1, self._max_nudges)
+            log.info("[completion-guard] answer lacks required %s; asking once", wanted)
+            return {"jump_to": "model", "messages": [guard_note(LINE_GUARD, note)]}
         else:
             note = (
                 f"{NUDGE_MARK} Your last turn ended the run without your deliverable: it made no tool "

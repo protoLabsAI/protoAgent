@@ -307,8 +307,27 @@ async def test_a_finished_review_missing_the_required_line_is_sent_back_once(mon
     out = await _run_with(ping, ASKS)
     assert out.startswith(f"[{PROBE} completed: lane]") and whole in out, out
     assert len(models[-1].seen) == 2
-    note = next(m for m in models[-1].seen[-1] if is_guard_note(m, "completion"))
+    note = next(m for m in models[-1].seen[-1] if is_guard_note(m, "completion-line"))
     assert STATUS in str(note.text) and "COMPLETE answer" in str(note.text)  # not "reply with just the line"
+
+
+async def test_the_closing_line_is_asked_for_once_not_twice(monkeypatch, probe):
+    # A finished review that STILL omits the line after being asked is not asked again: the
+    # ask is a courtesy on finished work, not a loop. The lane ends, honestly labelled.
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=DELIVERABLE)])  # never adds it
+    out = await _run_with(ping, ASKS)
+    assert len(models[-1].seen) == 2  # the original answer + ONE ask
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+
+
+async def test_mentioning_the_marker_is_not_the_same_as_giving_the_line(monkeypatch, probe):
+    # "FINDER_STATUS: is missing from the other lane" names the marker mid-sentence.
+    prose = f"I note the other lane omitted its {STATUS} line.\n\n```json\n[]\n```"
+    whole = f"{prose}\n\n`{STATUS} reviewed n=0`"  # the model often wraps it in backticks
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=prose), AIMessage(content=whole)])
+    out = await _run_with(ping, ASKS)
+    assert len(models[-1].seen) == 2  # the mention did not pass; it was asked, then delivered
+    assert out.startswith(f"[{PROBE} completed: lane]"), out
 
 
 async def test_a_caller_that_never_asked_for_the_line_is_not_nudged_for_it(monkeypatch, probe):
@@ -326,7 +345,7 @@ async def test_a_reply_holding_only_the_missing_line_does_not_pass_for_the_revie
     ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=DELIVERABLE), AIMessage(content=bare)])
     out = await _run_with(ping, ASKS)
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
-    assert len(models[-1].seen) == 3
+    assert len(models[-1].seen) == 3  # asked for the line, then nudged for the lost array
 
 
 # ── a wrap-up warning before the turn budget is gone (#3559) ───────────────────
