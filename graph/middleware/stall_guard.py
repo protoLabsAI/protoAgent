@@ -38,8 +38,9 @@ from graph.middleware.guard_notes import guard_note, is_guard_note
 NUDGE_AT = 3
 STOP_AT = 6
 
-# Leading tag on our injected note — visible to the model (informative) and the
-# sentinel the scan uses so the note doesn't break the round-trip run it measures.
+# Leading tag on our injected note — informative to the model only. The scan recognises
+# our note by the message's guard tag (`guard_notes`), not this text, so the note does not
+# break the round-trip run it measures and nothing a person types can pass for one.
 NUDGE_MARK = "[stall-guard]"
 GUARD = "stall"
 
