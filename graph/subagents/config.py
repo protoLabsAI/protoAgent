@@ -80,6 +80,12 @@ class SubagentConfig:
     # "```json" also matches a reply cut off mid-array, or one that merely mentions the
     # fence. Takes the answer text; wins over ``completion_marker`` when both are set.
     completion_check: Callable[[str], bool] | None = None
+    # Closing lines a CALLER may require on top of the deliverable. Owed only when the task
+    # prompt names one: pr-reviewer's structural recipe asks `review-finder` to end with
+    # `FINDER_STATUS: …` and voids a round whose lane omits it, while the core `code-review`
+    # recipe asks for no such line. The guard sends an answer that is complete but for such
+    # a line back once, to be repeated whole with the line added (pr-reviewer-plugin#145).
+    completion_prompt_markers: tuple[str, ...] = ()
     # How the nudge names the deliverable to the model. Blank = quote the marker when
     # there is one (`nudge_contract`); with only a `completion_check`, a generic phrase.
     completion_contract: str = ""
@@ -396,6 +402,7 @@ REVIEW_FINDER_CONFIG = SubagentConfig(
     lead_visible=False,
     name="review-finder",
     completion_check=findings_delivered,
+    completion_prompt_markers=("FINDER_STATUS:",),
     completion_contract="the fenced ```json findings array (an empty array when there is nothing to report)",
     description=(
         "Reads a PR/commit diff from ONE assigned review angle (correctness, "

@@ -859,12 +859,14 @@ async def _run_subagent_inner(
     # intent (#3552). Nothing declared, no middleware — the stack is then unchanged.
     delivered = sub_config.delivered() if hasattr(sub_config, "delivered") else None
     if delivered is not None:
-        from graph.middleware.completion_guard import CompletionGuardMiddleware
+        from graph.middleware.completion_guard import CompletionGuardMiddleware, missing_markers
 
         sub_middleware.append(
             CompletionGuardMiddleware(
                 delivered=delivered,
                 contract=sub_config.nudge_contract(),
+                prompt_markers=getattr(sub_config, "completion_prompt_markers", ()) or (),
+                max_turns=sub_config.max_turns,
             )
         )
     # Native-OAuth wire shape — LAST, so the transform sees the final system
@@ -972,7 +974,10 @@ async def _run_subagent_inner(
             return f"[{subagent_type} completed: {description}] -- no output produced."
 
         # Judged on the whole answer: a fan-out's `truncate` may cut the deliverable off.
-        missing_deliverable = delivered is not None and not delivered(body)
+        missing_deliverable = delivered is not None and (
+            not delivered(body)
+            or bool(missing_markers(getattr(sub_config, "completion_prompt_markers", ()), prompt, body))
+        )
         if truncate is not None and len(body) > truncate:
             body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
 

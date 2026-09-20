@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 
 import graph.agent as agent_mod
 from graph.config import LangGraphConfig
-from graph.middleware.completion_guard import NUDGE_MARK, CompletionGuardMiddleware
+from graph.middleware.completion_guard import NUDGE_MARK, CompletionGuardMiddleware, wrap_up_at
 from graph.middleware.guard_notes import is_guard_note
 from graph.review.findings import findings_delivered
 from graph.subagents.config import REVIEW_FINDER_CONFIG, REVIEW_SYNTHESIZER_CONFIG, SUBAGENT_REGISTRY, SubagentConfig
@@ -262,3 +262,106 @@ async def test_a_reply_that_only_mentions_the_fence_is_sent_back(monkeypatch, pr
     out = await _run(ping)
     assert out.startswith(f"[{PROBE} completed: lane]") and DELIVERABLE in out, out
     assert len(models[-1].seen) == 2  # the substring marker would have accepted the first turn
+
+
+# ── a closing line the CALLER requires (pr-reviewer-plugin#145) ────────────────
+
+STATUS = "FINDER_STATUS:"
+ASKS = f"Review the diff. End with `{STATUS} reviewed n=<count>`."
+
+
+def _arm_finder_like(monkeypatch, probe, script, *, max_turns=8):
+    ping, models = probe(script, max_turns=max_turns)
+    monkeypatch.setitem(
+        SUBAGENT_REGISTRY,
+        PROBE,
+        SubagentConfig(
+            name=PROBE,
+            description="d",
+            system_prompt="p",
+            tools=["ping"],
+            max_turns=max_turns,
+            completion_check=findings_delivered,
+            completion_prompt_markers=(STATUS,),
+        ),
+    )
+    return ping, models
+
+
+async def _run_with(ping, prompt) -> str:
+    return await agent_mod._run_subagent(
+        config=LangGraphConfig(),
+        tool_map={"ping": ping},
+        available_subagents=PROBE,
+        description="lane",
+        prompt=prompt,
+        subagent_type=PROBE,
+    )
+
+
+async def test_a_finished_review_missing_the_required_line_is_sent_back_once(monkeypatch, probe):
+    # Seen live: a full, correct review ending in a fenced array — and no FINDER_STATUS line.
+    # The caller voids that lane. One nudge, and the answer comes back WHOLE with the line.
+    whole = f"{DELIVERABLE}\n\n{STATUS} reviewed n=0"
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=DELIVERABLE), AIMessage(content=whole)])
+    out = await _run_with(ping, ASKS)
+    assert out.startswith(f"[{PROBE} completed: lane]") and whole in out, out
+    assert len(models[-1].seen) == 2
+    note = next(m for m in models[-1].seen[-1] if is_guard_note(m, "completion"))
+    assert STATUS in str(note.text) and "COMPLETE answer" in str(note.text)  # not "reply with just the line"
+
+
+async def test_a_caller_that_never_asked_for_the_line_is_not_nudged_for_it(monkeypatch, probe):
+    # The core `code-review` recipe shares this subagent and asks for no status line.
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=DELIVERABLE)])
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} completed: lane]"), out
+    assert len(models[-1].seen) == 1
+
+
+async def test_a_reply_holding_only_the_missing_line_does_not_pass_for_the_review(monkeypatch, probe):
+    # The answer is the LAST message: a bare status line would REPLACE the review. It lacks
+    # the array, so it is sent back again; if that fails too the lane is labelled, not passed.
+    bare = f"{STATUS} reviewed n=0"
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=DELIVERABLE), AIMessage(content=bare)])
+    out = await _run_with(ping, ASKS)
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 3
+
+
+# ── a wrap-up warning before the turn budget is gone (#3559) ───────────────────
+
+
+def test_the_wrap_up_point_leaves_room_to_write():
+    assert {n: wrap_up_at(n) for n in (3, 5, 6, 8, 10, 40, 60)} == {3: 0, 5: 0, 6: 3, 8: 5, 10: 7, 40: 34, 60: 51}
+
+
+async def test_a_lane_that_keeps_reading_is_told_once_that_its_budget_is_nearly_spent(monkeypatch, probe):
+    # Seen live: 60 rounds into a four-file diff, hard-stopped on "Let me find the
+    # `SpyDispatcher` definition" — all of it lost. The model cannot see its own counter.
+    script = [_call(i) for i in range(5)] + [AIMessage(content=DELIVERABLE)]
+    ping, models = _arm_finder_like(monkeypatch, probe, script, max_turns=8)  # warns at round 5
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} completed: lane]"), out
+    seen = models[-1].seen
+    warned = [sum(1 for m in call if is_guard_note(m, "turn-budget")) for call in seen]
+    assert warned == [0, 0, 0, 0, 0, 1]  # only the call AFTER five tool rounds, and only once
+    note = next(m for m in seen[-1] if is_guard_note(m, "turn-budget"))
+    assert "5 of your 8 tool rounds" in str(note.text) and "Gap:" in str(note.text)
+
+
+async def test_the_warning_is_not_a_nudge_and_a_small_budget_gets_none(monkeypatch, probe):
+    # The wrap-up note must not use up a completion nudge…
+    script = [_call(i) for i in range(5)] + [AIMessage(content=NARRATION)]
+    ping, models = _arm_finder_like(monkeypatch, probe, script, max_turns=8)
+    await _run_with(ping, "Review the diff.")
+    assert sum(1 for m in models[-1].seen[-1] if is_guard_note(m, "completion")) == 2  # both nudges still spent
+    # …and a budget too small to have a "nearly spent" is left alone.
+    ping, models = _arm_finder_like(monkeypatch, probe, [_call(0), AIMessage(content=DELIVERABLE)], max_turns=4)
+    await _run_with(ping, "Review the diff.")
+    assert not any(is_guard_note(m, "turn-budget") for call in models[-1].seen for m in call)
+
+
+def test_review_finder_names_the_line_its_callers_may_require():
+    assert REVIEW_FINDER_CONFIG.completion_prompt_markers == ("FINDER_STATUS:",)
+    assert REVIEW_SYNTHESIZER_CONFIG.completion_prompt_markers == ()
