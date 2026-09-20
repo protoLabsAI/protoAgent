@@ -67,6 +67,16 @@ class SubagentConfig:
     # zero routing value and inflate the prompt. The registry still resolves them
     # for workflow dispatch regardless of this flag.
     lead_visible: bool = True
+    # What a finished answer contains (#3552). A model that stops mid-loop — says
+    # "let me check X" and never makes the call, or returns an empty turn — ends the
+    # agent loop exactly like one that finished, and the step read "completed" on a
+    # sentence of intent (17% of live review-finder steps). When set, a run-ending
+    # turn without this substring is sent back to the model (bounded; see
+    # ``CompletionGuardMiddleware``), and a run that still ends without it is labelled
+    # as ended-without-deliverable rather than completed. Blank = no contract.
+    completion_marker: str = ""
+    # How the nudge names the deliverable to the model. Blank = quote the marker.
+    completion_contract: str = ""
 
 
 RESEARCHER_CONFIG = SubagentConfig(
@@ -366,6 +376,8 @@ marked partial.""",
 REVIEW_FINDER_CONFIG = SubagentConfig(
     lead_visible=False,
     name="review-finder",
+    completion_marker="```json",
+    completion_contract="the fenced ```json findings array (an empty array when there is nothing to report)",
     description=(
         "Reads a PR/commit diff from ONE assigned review angle (correctness, "
         "removed behavior, cross-file consistency, conventions, …) and reports "
@@ -479,6 +491,8 @@ Hard stop at max_turns: return what you have (partial findings beat none).""",
 REVIEW_SYNTHESIZER_CONFIG = SubagentConfig(
     lead_visible=False,
     name="review-synthesizer",
+    completion_marker="```json",
+    completion_contract="the fenced ```json findings array (an empty array when there is nothing to report)",
     description=(
         "Merges several review-finders' findings lists into one deduped, ranked "
         "findings JSON (+ a short prose brief). The dedup/rank stage of the "

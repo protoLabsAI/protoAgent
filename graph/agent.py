@@ -854,6 +854,19 @@ async def _run_subagent_inner(
     from graph.middleware.codex_reasoning_replay import CodexReasoningReplayRecoveryMiddleware
 
     sub_middleware.append(CodexReasoningReplayRecoveryMiddleware())
+    # A subagent that owes a recognisable deliverable is continued when a turn ends
+    # the loop without it, instead of being reported "completed" on a sentence of
+    # intent (#3552). No marker, no middleware — the stack is then unchanged.
+    completion_marker = getattr(sub_config, "completion_marker", "") or ""
+    if completion_marker:
+        from graph.middleware.completion_guard import CompletionGuardMiddleware
+
+        sub_middleware.append(
+            CompletionGuardMiddleware(
+                marker=completion_marker,
+                contract=getattr(sub_config, "completion_contract", "") or "",
+            )
+        )
     # Native-OAuth wire shape — LAST, so the transform sees the final system
     # message (and sits inside PromptCapture above). Without these, a Claude/
     # ChatGPT-subscription instance could chat but every delegation failed:
@@ -952,6 +965,8 @@ async def _run_subagent_inner(
                 )
             return f"[{subagent_type} completed: {description}] -- no output produced."
 
+        # Judged on the whole answer: a fan-out's `truncate` may cut the deliverable off.
+        missing_deliverable = bool(completion_marker) and completion_marker not in body
         if truncate is not None and len(body) > truncate:
             body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
 
@@ -959,6 +974,14 @@ async def _run_subagent_inner(
             return (
                 f"[{subagent_type} hard-stopped at max_turns: {description} — PARTIAL output; "
                 f"unverified remainder is a Gap]\n\n{body}"
+            )
+        if missing_deliverable:
+            # The guard's nudges did not rescue it. Say so: "completed" over a run
+            # that never produced its deliverable is how a dead lane passed for a
+            # clean one (#3552).
+            return (
+                f"[{subagent_type} ended without its deliverable: {description} — INCOMPLETE output; "
+                f"treat this lane as a Gap, not a verdict]\n\n{body}"
             )
         return f"[{subagent_type} completed: {description}]\n\n{body}"
     except Exception as e:
