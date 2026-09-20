@@ -70,6 +70,8 @@ def missing_markers(markers, prompt: str, answer: str) -> list[str]:
     pr-reviewer's structural recipe requires ``FINDER_STATUS: …`` of `review-finder`, the
     core `code-review` recipe does not. So a marker is owed only when the prompt names it.
     """
+    if isinstance(markers, str):
+        markers = (markers,)  # a bare string would otherwise be read one CHARACTER at a time
     return [m for m in markers or () if m and m in (prompt or "") and not has_marker_line(answer, m)]
 
 

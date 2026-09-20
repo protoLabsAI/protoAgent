@@ -381,6 +381,32 @@ async def test_the_warning_is_not_a_nudge_and_a_small_budget_gets_none(monkeypat
     assert not any(is_guard_note(m, "turn-budget") for call in models[-1].seen for m in call)
 
 
+def test_every_registered_subagents_completion_contract_is_well_formed():
+    # Structural, over the whole registry: these fields steer control flow, and the easy
+    # mistakes are silent — `completion_prompt_markers="FINDER_STATUS:"` (a string, not a
+    # tuple) reads as the markers "F", "I", "N"…; a non-callable check raises mid-review.
+    for name, cfg in SUBAGENT_REGISTRY.items():
+        markers = cfg.completion_prompt_markers
+        assert isinstance(markers, tuple), f"{name}: completion_prompt_markers must be a tuple, got {type(markers)}"
+        assert all(isinstance(m, str) and m.strip() for m in markers), f"{name}: empty/non-string marker in {markers}"
+        assert cfg.completion_check is None or callable(cfg.completion_check), name
+        assert isinstance(cfg.completion_marker, str) and isinstance(cfg.completion_contract, str), name
+        if markers:  # a closing line is only ever owed ON TOP of a deliverable
+            assert cfg.delivered() is not None, (
+                f"{name}: prompt markers without a completion contract are never checked"
+            )
+        if cfg.delivered() is not None:
+            assert cfg.max_turns > 0, name
+
+
+def test_a_marker_given_as_a_bare_string_is_one_marker_not_its_characters():
+    from graph.middleware.completion_guard import missing_markers
+
+    prompt, answer = f"End with {STATUS} reviewed.", "Finished, no status."
+    assert missing_markers(STATUS, prompt, answer) == [STATUS]
+    assert missing_markers(STATUS, prompt, f"ok\n{STATUS} reviewed n=0") == []
+
+
 def test_review_finder_names_the_line_its_callers_may_require():
     assert REVIEW_FINDER_CONFIG.completion_prompt_markers == ("FINDER_STATUS:",)
     assert REVIEW_SYNTHESIZER_CONFIG.completion_prompt_markers == ()
