@@ -182,6 +182,24 @@ async def test_a_run_with_no_output_at_all_is_not_labelled_completed(probe):
     assert len(models[-1].seen) == 3  # nudged twice before giving up
 
 
+async def test_a_blank_contract_quotes_the_marker_in_the_nudge(probe):
+    ping, models = probe([AIMessage(content=NARRATION), AIMessage(content=DELIVERABLE)])
+    await _run(ping)
+    nudge = next(m for m in models[-1].seen[-1] if isinstance(m, HumanMessage) and str(m.text).startswith(NUDGE_MARK))
+    assert repr(MARKER) in str(nudge.text)
+    # An explicit contract wins; a check-only subagent gets the guard's generic phrase.
+    cfg = SubagentConfig(
+        name="x", description="d", system_prompt="p", completion_marker=MARKER, completion_contract="the array"
+    )
+    assert cfg.nudge_contract() == "the array"
+    assert (
+        SubagentConfig(
+            name="x", description="d", system_prompt="p", completion_check=findings_delivered
+        ).nudge_contract()
+        == ""
+    )
+
+
 def test_a_turn_with_tool_calls_is_left_alone():
     guard = CompletionGuardMiddleware(delivered=lambda text: MARKER in text)
     assert guard._intervene({"messages": [HumanMessage(content="go"), _call(0)]}) is None

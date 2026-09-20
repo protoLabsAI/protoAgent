@@ -864,7 +864,7 @@ async def _run_subagent_inner(
         sub_middleware.append(
             CompletionGuardMiddleware(
                 delivered=delivered,
-                contract=getattr(sub_config, "completion_contract", "") or "",
+                contract=sub_config.nudge_contract(),
             )
         )
     # Native-OAuth wire shape — LAST, so the transform sees the final system

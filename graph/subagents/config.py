@@ -80,7 +80,8 @@ class SubagentConfig:
     # "```json" also matches a reply cut off mid-array, or one that merely mentions the
     # fence. Takes the answer text; wins over ``completion_marker`` when both are set.
     completion_check: Callable[[str], bool] | None = None
-    # How the nudge names the deliverable to the model. Blank = quote the marker.
+    # How the nudge names the deliverable to the model. Blank = quote the marker when
+    # there is one (`nudge_contract`); with only a `completion_check`, a generic phrase.
     completion_contract: str = ""
 
     def delivered(self) -> Callable[[str], bool] | None:
@@ -89,6 +90,12 @@ class SubagentConfig:
             return self.completion_check
         marker = self.completion_marker
         return (lambda text: marker in (text or "")) if marker else None
+
+    def nudge_contract(self) -> str:
+        """The deliverable as the completion guard names it to the model ("" = its generic phrase)."""
+        if self.completion_contract:
+            return self.completion_contract
+        return f"an answer containing {self.completion_marker!r}" if self.completion_marker else ""
 
 
 RESEARCHER_CONFIG = SubagentConfig(
