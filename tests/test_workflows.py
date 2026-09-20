@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from plugins.workflows.engine import (
     execute_workflow,
     render_template,
@@ -208,6 +210,50 @@ def test_step_within_its_timeout_completes_normally():
     recipe = {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": 5}]}
     res = asyncio.run(execute_workflow(recipe, {}, run_step=run_step))
     assert res["degraded"] == [] and res["steps"]["a"] == "a-ok"
+
+
+def test_timeout_may_be_an_input_reference():
+    # The budget depends on the model a deployment runs, so a recipe can take it as an input.
+    def step(t):
+        return {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": t}]}
+
+    assert validate_recipe(step("{{inputs.finder_timeout}}")) == []
+    assert validate_recipe(step("{{ inputs.finder_timeout }}")) == []
+    # Exactly one inputs reference — not a step output, not arithmetic, not prose around it.
+    for bad in ("{{steps.a.output}}", "{{inputs.a}}{{inputs.b}}", "about {{inputs.t}}s", "{{inputs.t}} * 2"):
+        assert any("'timeout' must be" in e for e in validate_recipe(step(bad))), bad
+
+
+def test_an_input_timeout_is_enforced_like_a_literal_one():
+    async def run_step(subagent, prompt, sid):
+        await asyncio.sleep(0.5)
+        return "NEVER"
+
+    recipe = {
+        "name": "t",
+        "inputs": [{"name": "budget", "default": 30}],
+        "steps": [{"id": "slow", "subagent": "researcher", "prompt": "p", "timeout": "{{inputs.budget}}"}],
+    }
+    inputs, _missing = resolve_inputs(recipe, {"budget": "0.05"})  # a caller may pass a string
+    res = asyncio.run(execute_workflow(recipe, inputs, run_step=run_step))
+    assert res["degraded"] == ["slow"] and "exceeded its 0.05s time budget" in res["steps"]["slow"]
+    # The declared default applies when the caller supplies nothing.
+    inputs, _missing = resolve_inputs(recipe, {})
+    assert inputs["budget"] == 30
+
+
+@pytest.mark.parametrize("value", ["soon", "", None, 0, -5, True, "nan"])
+def test_an_unusable_input_timeout_fails_the_step_instead_of_running_unbounded(value):
+    ran = []
+
+    async def run_step(subagent, prompt, sid):
+        ran.append(sid)
+        return "ok"
+
+    recipe = {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": "{{inputs.t}}"}]}
+    res = asyncio.run(execute_workflow(recipe, {"t": value}, run_step=run_step))
+    assert res["failed"] == ["a"] and ran == []  # never silently unbounded, never a guessed number
+    assert "timeout input 't'" in res["steps"]["a"]
 
 
 def test_no_timeout_key_is_unbounded_and_unchanged():
