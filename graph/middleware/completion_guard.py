@@ -25,7 +25,7 @@ import logging
 from collections.abc import Callable
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.middleware.guard_notes import guard_note, is_guard_note
 
@@ -35,6 +35,13 @@ log = logging.getLogger(__name__)
 # reads the message's guard tag (`guard_notes`), not this text.
 NUDGE_MARK = "[completion-guard]"
 GUARD = "completion"
+LINE_GUARD = "completion-line"  # the single ask for a closing line the caller requires
+# The wrap-up warning sent once as the turn budget runs out (#3559).
+BUDGET_MARK = "[turn-budget]"
+BUDGET_GUARD = "turn-budget"
+WRAP_UP_RESERVE_PCT = 15  # warn with this share of the tool rounds left …
+WRAP_UP_MIN_RESERVE = 3  # … and never fewer than this many
+WRAP_UP_MIN_TURNS = 6  # a smaller budget has no meaningful "nearly spent"
 
 
 def _text(message) -> str:
@@ -43,18 +50,100 @@ def _text(message) -> str:
 
 
 def nudges_sent(messages) -> int:
-    # By tag, never by text: the task prompt is a HumanMessage too (#3556).
-    return sum(1 for m in messages or [] if is_guard_note(m, GUARD))
+    # By tag, never by text: the task prompt is a HumanMessage too (#3556). Both kinds of
+    # nudge count toward the one budget; the closing-line ask is further capped at one.
+    return sum(1 for m in messages or [] if is_guard_note(m, GUARD) or is_guard_note(m, LINE_GUARD))
+
+
+def task_prompt(messages) -> str:
+    """The delegation's task — the first thing a person (not a guard) said in the run."""
+    for m in messages or []:
+        if isinstance(m, HumanMessage) and not is_guard_note(m):
+            return _text(m)
+    return ""
+
+
+def missing_markers(markers, prompt: str, answer: str) -> list[str]:
+    """The ``markers`` the task ASKED for that the answer does not carry.
+
+    A subagent type is shared by many callers, and only some ask for a given closing line:
+    pr-reviewer's structural recipe requires ``FINDER_STATUS: …`` of `review-finder`, the
+    core `code-review` recipe does not. So a marker is owed only when the prompt names it.
+    """
+    if isinstance(markers, str):
+        markers = (markers,)  # a bare string would otherwise be read one CHARACTER at a time
+    return [m for m in markers or () if m and m in (prompt or "") and not has_marker_line(answer, m)]
+
+
+def has_marker_line(answer: str, marker: str) -> bool:
+    """Does the answer carry a LINE that starts with ``marker``?
+
+    A line, not a substring: a review that says "`FINDER_STATUS:` is missing from the other
+    lane" mentions the marker without giving one. Leading markdown the model may wrap the
+    line in (backticks, emphasis, a quote or list mark) is allowed before it.
+    """
+    return any(line.lstrip(" \t`*_>-").startswith(marker) for line in (answer or "").splitlines())
+
+
+def tool_rounds(messages) -> int:
+    return sum(1 for m in messages or [] if isinstance(m, AIMessage) and getattr(m, "tool_calls", None))
+
+
+def wrap_up_at(max_turns: int) -> int:
+    """The tool round at which to warn that the budget is nearly spent, or 0 for never.
+
+    The last 15% of the budget, at least three rounds — room to write the deliverable. A
+    budget too small to have a meaningful "nearly" (under six rounds) gets no warning.
+    """
+    if max_turns < WRAP_UP_MIN_TURNS:
+        return 0
+    return max_turns - max(WRAP_UP_MIN_RESERVE, -(-max_turns * WRAP_UP_RESERVE_PCT // 100))
 
 
 class CompletionGuardMiddleware(AgentMiddleware):
-    """Send a run that ended without its deliverable back to the model, at most ``max_nudges`` times."""
+    """Get a subagent to FINISH: warn it before its turn budget is gone, and send a run that
+    ended without its deliverable back to the model, at most ``max_nudges`` times."""
 
-    def __init__(self, *, delivered: Callable[[str], bool], contract: str = "", max_nudges: int = 2):
+    def __init__(
+        self,
+        *,
+        delivered: Callable[[str], bool],
+        contract: str = "",
+        max_nudges: int = 2,
+        prompt_markers: tuple[str, ...] = (),
+        max_turns: int = 0,
+    ):
         super().__init__()
         self._delivered = delivered
         self._contract = contract or "the deliverable your instructions require"
         self._max_nudges = max(0, int(max_nudges))
+        self._prompt_markers = tuple(prompt_markers or ())
+        self._max_turns = max(0, int(max_turns or 0))
+        self._wrap_up_at = wrap_up_at(self._max_turns)
+
+    def _wrap_up(self, state) -> dict | None:
+        """Once, when the budget is nearly spent: stop reading, write it up (#3559).
+
+        Every subagent prompt says "hard stop at max_turns: return what you have", but the
+        model cannot see the counter. A lane whose failure mode is open-ended exploration
+        ran all 60 rounds on a four-file diff and hard-stopped on "Let me find the
+        `SpyDispatcher` definition…" — every round of reading lost.
+        """
+        if not self._wrap_up_at:
+            return None
+        messages = state.get("messages") or []
+        if any(is_guard_note(m, BUDGET_GUARD) for m in messages):
+            return None
+        used = tool_rounds(messages)
+        if used < self._wrap_up_at:
+            return None
+        note = (
+            f"{BUDGET_MARK} You have used {used} of your {self._max_turns} tool rounds. Stop reading "
+            f"now. Write {self._contract} from what you have already read, and state anything you "
+            "did not get to as a `Gap:` line rather than opening another file."
+        )
+        log.info("[completion-guard] turn budget nearly spent (%d/%d); wrap-up note sent", used, self._max_turns)
+        return {"messages": [guard_note(BUDGET_GUARD, note)]}
 
     def _intervene(self, state) -> dict | None:
         messages = state.get("messages") or []
@@ -63,20 +152,48 @@ class CompletionGuardMiddleware(AgentMiddleware):
         # is still working, and anything but an AIMessage is not the model's turn.
         if not isinstance(last, AIMessage) or getattr(last, "tool_calls", None):
             return None
-        if self._delivered(_text(last)):
+        answer = _text(last)
+        has_deliverable = self._delivered(answer)
+        owed = missing_markers(self._prompt_markers, task_prompt(messages), answer)
+        if has_deliverable and not owed:
             return None
         sent = nudges_sent(messages)
         if sent >= self._max_nudges:
             log.warning("[completion-guard] still no deliverable after %d nudge(s); letting the run end", sent)
             return None
-        note = (
-            f"{NUDGE_MARK} Your last turn ended the run without your deliverable: it made no tool "
-            f"call and did not contain {self._contract}. If you were about to read something, make "
-            "that tool call now. Otherwise finish now, from what you have already read, with the "
-            "deliverable — a partial answer that says what it did not cover beats none."
-        )
-        log.info("[completion-guard] run ended without its deliverable; nudge %d/%d", sent + 1, self._max_nudges)
+        if has_deliverable and any(is_guard_note(m, LINE_GUARD) for m in messages):
+            # Asked once already for the closing line and the answer still lacks it. That ask
+            # is a courtesy on finished work, not a loop: the run ends and is labelled.
+            log.warning("[completion-guard] required closing line still missing after one ask; letting the run end")
+            return None
+        if has_deliverable:
+            # The work is done and one required line is missing (pr-reviewer-plugin#145: a
+            # finder wrote a full review and dropped `FINDER_STATUS`, voiding the round). The
+            # delegation's answer is the LAST message, so it must be repeated whole — a reply
+            # holding only the missing line would replace the review with that line.
+            wanted = ", ".join(f"`{m}`" for m in owed)
+            note = (
+                f"{NUDGE_MARK} Your answer is complete except for a closing line your task requires, "
+                f"starting {wanted}. Reply once more with your COMPLETE answer exactly as before — the "
+                "prose and the fenced block, unchanged — and end with that line."
+            )
+            log.info("[completion-guard] answer lacks required %s; asking once", wanted)
+            return {"jump_to": "model", "messages": [guard_note(LINE_GUARD, note)]}
+        else:
+            note = (
+                f"{NUDGE_MARK} Your last turn ended the run without your deliverable: it made no tool "
+                f"call and did not contain {self._contract}. If you were about to read something, make "
+                "that tool call now. Otherwise finish now, from what you have already read, with the "
+                "deliverable — a partial answer that says what it did not cover beats none."
+            )
+            log.info("[completion-guard] run ended without its deliverable; nudge %d/%d", sent + 1, self._max_nudges)
         return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
+
+    def before_model(self, state, runtime):  # type: ignore[override]
+        return self._wrap_up(state)
+
+    async def abefore_model(self, state, runtime):  # type: ignore[override]
+        return self._wrap_up(state)
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state, runtime):  # type: ignore[override]
