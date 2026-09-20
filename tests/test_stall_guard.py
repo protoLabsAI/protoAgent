@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from graph.middleware.guard_notes import guard_note
 from graph.middleware.stall_guard import NUDGE_MARK, StallGuardMiddleware, trailing_repeat
 
 _DEFAULT_ARGS = {"project": "workspace", "command": "gh repo view"}
@@ -60,11 +61,20 @@ def test_stop_ends_the_turn_at_threshold():
 
 def test_injected_nudge_does_not_reset_the_count():
     # 3 round-trips, our nudge, then 3 more identical round-trips → a true run of 6.
-    msgs = _history(3) + [HumanMessage(content=f"{NUDGE_MARK} change approach")]
+    msgs = _history(3) + [guard_note("stall", f"{NUDGE_MARK} change approach")]
     for i in range(3, 6):
         msgs += _roundtrip(i)
     out = _mw().before_model({"messages": msgs}, None)
     assert out is not None and out.get("jump_to") == "end"
+
+
+def test_a_user_message_that_starts_with_the_tag_still_breaks_the_run():
+    # #3556: recognised by tag, not text — a person typing "[stall-guard] …" is a person.
+    msgs = _history(3) + [HumanMessage(content=f"{NUDGE_MARK} I saw that note — try the other repo")]
+    for i in range(3, 6):
+        msgs += _roundtrip(i)
+    out = _mw().before_model({"messages": msgs}, None)
+    assert out is None or out.get("jump_to") != "end"  # only 3 identical calls since the person spoke
 
 
 def test_real_user_message_breaks_the_run():

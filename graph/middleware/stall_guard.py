@@ -28,7 +28,9 @@ from __future__ import annotations
 import json
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
+
+from graph.middleware.guard_notes import guard_note, is_guard_note
 
 # Consecutive identical round-trips before we act. Generous on purpose: identical
 # tool + args + result N times running is a strong "stuck" signal, but we leave
@@ -39,6 +41,7 @@ STOP_AT = 6
 # Leading tag on our injected note — visible to the model (informative) and the
 # sentinel the scan uses so the note doesn't break the round-trip run it measures.
 NUDGE_MARK = "[stall-guard]"
+GUARD = "stall"
 
 
 def _tc_id(tc):
@@ -58,7 +61,7 @@ def _content(m) -> str:
 
 
 def _is_nudge(m) -> bool:
-    return isinstance(m, HumanMessage) and isinstance(m.content, str) and m.content.startswith(NUDGE_MARK)
+    return is_guard_note(m, GUARD)  # by tag, not text (#3556)
 
 
 def _signature(msg, results: dict):
@@ -67,8 +70,7 @@ def _signature(msg, results: dict):
     units with equal signatures made the same calls and got the same results."""
     calls = tuple(
         sorted(
-            (str(_tc_name(tc)), json.dumps(_tc_args(tc), sort_keys=True, default=str))
-            for tc in (msg.tool_calls or [])
+            (str(_tc_name(tc)), json.dumps(_tc_args(tc), sort_keys=True, default=str)) for tc in (msg.tool_calls or [])
         )
     )
     answers = tuple(sorted((results.get(_tc_id(tc)) or "") for tc in (msg.tool_calls or [])))
@@ -82,9 +84,7 @@ def trailing_repeat(messages) -> tuple[int, str, str]:
     """
     msgs = messages or []
     results = {
-        m.tool_call_id: _content(m)
-        for m in msgs
-        if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None)
+        m.tool_call_id: _content(m) for m in msgs if isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None)
     }
 
     i = len(msgs) - 1
@@ -153,7 +153,7 @@ class StallGuardMiddleware(AgentMiddleware):
                 "fix the underlying problem — or, if you cannot make progress, stop and tell "
                 "the user what is blocking you and what you need. Do not issue that same call again."
             )
-            return {"messages": [HumanMessage(content=note)]}
+            return {"messages": [guard_note(GUARD, note)]}
         return None
 
     @hook_config(can_jump_to=["end"])

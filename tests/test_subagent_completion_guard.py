@@ -111,6 +111,22 @@ def _nudges(messages) -> int:
     return sum(1 for m in messages if isinstance(m, HumanMessage) and str(m.text).startswith(NUDGE_MARK))
 
 
+async def test_a_task_prompt_that_starts_with_the_tag_does_not_use_up_a_nudge(probe):
+    # #3556: the task prompt is a HumanMessage too. Counted by text, a prompt opening with
+    # "[completion-guard]" read as a nudge already sent, leaving the run one nudge instead of two.
+    ping, models = probe([AIMessage(content=NARRATION)])  # never recovers: spends every nudge
+    out = await agent_mod._run_subagent(
+        config=LangGraphConfig(),
+        tool_map={"ping": ping},
+        available_subagents=PROBE,
+        description="lane",
+        prompt=f"{NUDGE_MARK} is the name of the middleware under review — check it.",
+        subagent_type=PROBE,
+    )
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 3  # the original turn + BOTH nudges
+
+
 async def test_a_narration_that_ends_the_loop_is_sent_back_to_the_model(probe):
     # One tool round, then the live failure shape: text announcing a read, no tool call.
     ping, models = probe([_call(0), AIMessage(content=NARRATION), AIMessage(content=DELIVERABLE)])

@@ -32,14 +32,15 @@ import logging
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
+from graph.middleware.guard_notes import guard_note, is_guard_note
+
 log = logging.getLogger(__name__)
 
-# Leading tag on the injected note — informative to the model, and the once-per-
-# turn latch (its presence after the last real human means we already nudged).
+# Leading tag on the injected note — informative to the model only. The once-per-turn
+# latch reads the message's guard tag (`guard_notes`), not this text.
 NUDGE_MARK = "[round-governor]"
 
-# The stall guard's own marker — its notes are machinery, never a count reset.
-_STALL_MARK = "[stall-guard]"
+GUARD = "round-governor"
 
 
 def _is_real_human(m) -> bool:
@@ -51,8 +52,7 @@ def _is_real_human(m) -> bool:
         return False
     if kwargs.get("lc_source") == "compaction":  # compaction summary
         return False
-    content = m.content if isinstance(m.content, str) else str(m.content)
-    return not content.startswith((NUDGE_MARK, _STALL_MARK))
+    return not is_guard_note(m)  # any guard's note is machinery — by tag, not text (#3556)
 
 
 def rounds_since_last_input(messages) -> tuple[int, bool]:
@@ -64,10 +64,8 @@ def rounds_since_last_input(messages) -> tuple[int, bool]:
             break
         if isinstance(m, AIMessage):
             rounds += 1
-        elif isinstance(m, HumanMessage):
-            content = m.content if isinstance(m.content, str) else str(m.content)
-            if content.startswith(NUDGE_MARK):
-                nudged = True
+        elif is_guard_note(m, GUARD):
+            nudged = True
     return rounds, nudged
 
 
@@ -102,7 +100,7 @@ class RoundGovernorMiddleware(AgentMiddleware):
                 "starting more. Then continue."
             )
             log.info("[round-governor] soft nudge at %d rounds", rounds)
-            return {"messages": [HumanMessage(content=note)]}
+            return {"messages": [guard_note(GUARD, note)]}
         return None
 
     @hook_config(can_jump_to=["end"])

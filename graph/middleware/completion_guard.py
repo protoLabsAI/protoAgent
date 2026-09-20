@@ -25,12 +25,16 @@ import logging
 from collections.abc import Callable
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
+
+from graph.middleware.guard_notes import guard_note, is_guard_note
 
 log = logging.getLogger(__name__)
 
-# Leading tag on the injected note — informative to the model, and the nudge counter.
+# Leading tag on the injected note — informative to the model only. The nudge counter
+# reads the message's guard tag (`guard_notes`), not this text.
 NUDGE_MARK = "[completion-guard]"
+GUARD = "completion"
 
 
 def _text(message) -> str:
@@ -39,7 +43,8 @@ def _text(message) -> str:
 
 
 def nudges_sent(messages) -> int:
-    return sum(1 for m in messages or [] if isinstance(m, HumanMessage) and _text(m).startswith(NUDGE_MARK))
+    # By tag, never by text: the task prompt is a HumanMessage too (#3556).
+    return sum(1 for m in messages or [] if is_guard_note(m, GUARD))
 
 
 class CompletionGuardMiddleware(AgentMiddleware):
@@ -71,7 +76,7 @@ class CompletionGuardMiddleware(AgentMiddleware):
             "deliverable — a partial answer that says what it did not cover beats none."
         )
         log.info("[completion-guard] run ended without its deliverable; nudge %d/%d", sent + 1, self._max_nudges)
-        return {"jump_to": "model", "messages": [HumanMessage(content=note)]}
+        return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state, runtime):  # type: ignore[override]
