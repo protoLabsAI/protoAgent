@@ -214,11 +214,18 @@ def test_step_within_its_timeout_completes_normally():
 
 def test_timeout_may_be_an_input_reference():
     # The budget depends on the model a deployment runs, so a recipe can take it as an input.
-    def step(t):
-        return {"name": "t", "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": t}]}
+    def step(t, declared="finder_timeout"):
+        return {
+            "name": "t",
+            "inputs": [{"name": declared, "default": 900}],
+            "steps": [{"id": "a", "subagent": "researcher", "prompt": "p", "timeout": t}],
+        }
 
     assert validate_recipe(step("{{inputs.finder_timeout}}")) == []
     assert validate_recipe(step("{{ inputs.finder_timeout }}")) == []
+    # A typo'd name fails at validation, like a prompt's reference — not when the step runs.
+    errors = validate_recipe(step("{{inputs.finder_timeot}}"))
+    assert any("unknown input 'inputs.finder_timeot'" in e for e in errors), errors
     # Exactly one inputs reference — not a step output, not arithmetic, not prose around it.
     for bad in ("{{steps.a.output}}", "{{inputs.a}}{{inputs.b}}", "about {{inputs.t}}s", "{{inputs.t}} * 2"):
         assert any("'timeout' must be" in e for e in validate_recipe(step(bad))), bad

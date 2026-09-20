@@ -92,8 +92,12 @@ def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) ->
         if gate is not None and gate != "human":
             errors.append(f"step {sid!r}: unsupported gate {gate!r} (only 'human' is supported)")
         timeout = step.get("timeout")
-        if isinstance(timeout, str) and _TIMEOUT_REF_RE.match(timeout):
-            pass  # resolved from the run's inputs (`_step_timeout`)
+        timeout_ref = _TIMEOUT_REF_RE.match(timeout) if isinstance(timeout, str) else None
+        if timeout_ref:
+            # Resolved from the run's inputs (`_step_timeout`). Held to the same rule as a
+            # prompt's references: a typo'd name must fail HERE, not when the step runs.
+            if timeout_ref.group(1) not in input_names:
+                errors.append(f"step {sid!r}: 'timeout' references unknown input 'inputs.{timeout_ref.group(1)}'")
         elif timeout is not None and (
             isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
         ):
