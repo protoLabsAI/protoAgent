@@ -33,6 +33,8 @@ from typing import Any, Awaitable, Callable
 
 # {{ inputs.name }} | {{ steps.id.output }}
 _REF_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
+# A step `timeout` given as exactly one input reference — `"{{inputs.finder_timeout}}"`.
+_TIMEOUT_REF_RE = re.compile(r"\A\{\{\s*inputs\.([a-zA-Z0-9_]+)\s*\}\}\Z")
 
 
 def _refs(text: str) -> list[str]:
@@ -90,8 +92,18 @@ def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) ->
         if gate is not None and gate != "human":
             errors.append(f"step {sid!r}: unsupported gate {gate!r} (only 'human' is supported)")
         timeout = step.get("timeout")
-        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
-            errors.append(f"step {sid!r}: 'timeout' must be a positive number of seconds")
+        timeout_ref = _TIMEOUT_REF_RE.match(timeout) if isinstance(timeout, str) else None
+        if timeout_ref:
+            # Resolved from the run's inputs (`_step_timeout`). Held to the same rule as a
+            # prompt's references: a typo'd name must fail HERE, not when the step runs.
+            if timeout_ref.group(1) not in input_names:
+                errors.append(f"step {sid!r}: 'timeout' references unknown input 'inputs.{timeout_ref.group(1)}'")
+        elif timeout is not None and (
+            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
+        ):
+            errors.append(
+                f"step {sid!r}: 'timeout' must be a positive number of seconds, or one '{{{{inputs.<name>}}}}' reference"
+            )
 
     id_set = set(ids)
     # depends_on references + cycle check
@@ -162,6 +174,35 @@ def render_template(text: str, inputs: dict, step_outputs: dict) -> str:
     return _REF_RE.sub(sub, text or "")
 
 
+def _step_timeout(step: dict, inputs: dict) -> float | None:
+    """A step's time budget in seconds, or None for unbounded.
+
+    A literal number, or one ``{{inputs.<name>}}`` reference. The right budget depends on
+    the model a deployment runs — a recipe constant calibrated on one lane silently
+    truncates productive steps on a slower one — so a recipe can declare it as an input
+    with a default and let the caller supply the operator's value.
+
+    A reference that resolves to anything but a positive number RAISES: the alternative
+    readings are "no timeout" (a hung step stalls the DAG, the thing `timeout` exists to
+    prevent) or a guessed number. The step fails with the reason instead.
+    """
+    raw = step.get("timeout")
+    if isinstance(raw, str):
+        ref = _TIMEOUT_REF_RE.match(raw)
+        name = ref.group(1) if ref else raw
+        value = inputs.get(name) if ref else None
+        try:
+            seconds = float(value) if not isinstance(value, bool) else 0.0
+        except (TypeError, ValueError):
+            seconds = 0.0
+        if not seconds > 0:  # also catches NaN
+            raise ValueError(f"timeout input {name!r} resolved to {value!r}; it must be a positive number of seconds")
+        return seconds
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+        return raw
+    return None
+
+
 def resolve_inputs(recipe: dict, provided: dict) -> tuple[dict, list[str]]:
     """Merge provided inputs with declared defaults; return (inputs, missing)."""
     resolved: dict[str, Any] = {}
@@ -207,6 +248,7 @@ async def execute_workflow(
     graceful degradation, NOT a failure: the step yields an empty Gap result and its id
     is listed in ``degraded`` (not ``failed``), so dependents proceed on the other
     steps. Without it a hung subagent has no engine-level bound and stalls the DAG.
+    ``timeout`` may also be one ``{{inputs.<name>}}`` reference (see ``_step_timeout``).
 
     A recipe's own ``max_concurrency`` wins over the caller's, so a declared fan-out is
     never serialized by a resource cap that knows nothing about this recipe's shape.
@@ -263,12 +305,13 @@ async def execute_workflow(
     async def run_one(sid: str) -> tuple[str, str, bool]:
         step = by_id[sid]
         prompt = prompt_overrides[sid] if sid in prompt_overrides else render_template(step["prompt"], inputs, done)
-        timeout = step.get("timeout")
+        timeout = None
         async with sem:
             started = time.monotonic()
             try:
+                timeout = _step_timeout(step, inputs)
                 call = run_step(step["subagent"], prompt, sid)
-                if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0:
+                if timeout is not None:
                     out = await asyncio.wait_for(call, timeout)
                 else:
                     out = await call
