@@ -10,6 +10,7 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from graph.context_frame import context_frame_message
+from graph.middleware.guard_notes import guard_note
 from graph.middleware.round_governor import (
     NUDGE_MARK,
     RoundGovernorMiddleware,
@@ -32,11 +33,24 @@ def test_counts_rounds_since_the_last_real_input():
 def test_machinery_never_resets_the_count():
     msgs = _turn(3)
     msgs.append(context_frame_message("injected memory"))  # #2776 frame
-    msgs.append(HumanMessage(content="[stall-guard] change approach"))
+    msgs.append(guard_note("stall", "[stall-guard] change approach"))
     msgs.append(HumanMessage(content="summary", additional_kwargs={"lc_source": "compaction"}))
     msgs.extend(_turn(2, lead=[]))  # two more rounds, no new real input
     rounds, _ = rounds_since_last_input(msgs)
     assert rounds == 5
+
+
+def test_text_that_merely_starts_with_a_guard_tag_is_a_person_not_machinery():
+    # #3556: a note is recognised by its tag, never its text. An operator message that
+    # happens to open with "[round-governor]" is real steering — it resets the count and
+    # must not latch "already nudged", which used to suppress the turn's re-grounding.
+    msgs = _turn(4)
+    msgs.append(HumanMessage(content="[round-governor] is a weird name, anyway: try the other repo"))
+    msgs.extend(_turn(2, lead=[]))
+    assert rounds_since_last_input(msgs) == (2, False)
+    # The governor's own tagged note latches, and does not reset.
+    msgs = _turn(3) + [guard_note("round-governor", "[round-governor] re-ground")] + _turn(2, lead=[])
+    assert rounds_since_last_input(msgs) == (5, True)
 
 
 def test_real_steering_resets_the_count():

@@ -22,6 +22,7 @@ from langchain_core.tools import tool
 import graph.agent as agent_mod
 from graph.config import LangGraphConfig
 from graph.middleware.completion_guard import NUDGE_MARK, CompletionGuardMiddleware
+from graph.middleware.guard_notes import is_guard_note
 from graph.review.findings import findings_delivered
 from graph.subagents.config import REVIEW_FINDER_CONFIG, REVIEW_SYNTHESIZER_CONFIG, SUBAGENT_REGISTRY, SubagentConfig
 
@@ -107,8 +108,25 @@ async def _run(ping, truncate=None) -> str:
 
 
 def _nudges(messages) -> int:
-    # `.text`, not `.content`: the prompt-cache middleware re-shapes request content into blocks.
-    return sum(1 for m in messages if isinstance(m, HumanMessage) and str(m.text).startswith(NUDGE_MARK))
+    # By the guard tag, the same mechanism as the code under test (#3556) — and the tag
+    # must survive to the model call: the prompt-cache middleware re-shapes request content.
+    return sum(1 for m in messages if is_guard_note(m, "completion"))
+
+
+async def test_a_task_prompt_that_starts_with_the_tag_does_not_use_up_a_nudge(probe):
+    # #3556: the task prompt is a HumanMessage too. Counted by text, a prompt opening with
+    # "[completion-guard]" read as a nudge already sent, leaving the run one nudge instead of two.
+    ping, models = probe([AIMessage(content=NARRATION)])  # never recovers: spends every nudge
+    out = await agent_mod._run_subagent(
+        config=LangGraphConfig(),
+        tool_map={"ping": ping},
+        available_subagents=PROBE,
+        description="lane",
+        prompt=f"{NUDGE_MARK} is the name of the middleware under review — check it.",
+        subagent_type=PROBE,
+    )
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 3  # the original turn + BOTH nudges
 
 
 async def test_a_narration_that_ends_the_loop_is_sent_back_to_the_model(probe):
