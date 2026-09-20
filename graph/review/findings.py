@@ -193,6 +193,27 @@ def _candidate_arrays(text: str) -> list[list]:
     return out
 
 
+def findings_delivered(text: str) -> bool:
+    """Did this reply DELIVER a findings array — a fenced JSON block that parses as a list?
+
+    ``[]`` counts: a clean review is a deliverable. What does not: an opening fence with
+    nothing parseable behind it (a reply cut off mid-array), a sentence that merely
+    mentions the fence ("I will now produce a ```json array"), or a bare ``[...]`` in
+    prose, which is too easy to hit by accident. ``parse_findings`` reads every one of
+    those as ``[]``, so "is the review finished" cannot be asked of it (#3552).
+    """
+    for m in _FENCE_RE.finditer(text or ""):
+        body = m.group(1).strip()
+        if not body.startswith("["):
+            continue
+        try:
+            if isinstance(json.loads(body), list):
+                return True
+        except json.JSONDecodeError:
+            continue
+    return False
+
+
 def parse_findings(text: str) -> list[Finding]:
     """Extract the findings array from an LLM reply, tolerantly.
 
