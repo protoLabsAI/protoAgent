@@ -22,6 +22,7 @@ from langchain_core.tools import tool
 import graph.agent as agent_mod
 from graph.config import LangGraphConfig
 from graph.middleware.completion_guard import NUDGE_MARK, CompletionGuardMiddleware
+from graph.review.findings import findings_delivered
 from graph.subagents.config import REVIEW_FINDER_CONFIG, REVIEW_SYNTHESIZER_CONFIG, SUBAGENT_REGISTRY, SubagentConfig
 
 PROBE = "completion-probe"
@@ -172,12 +173,56 @@ async def test_nudges_spend_the_turn_budget_and_never_outrun_it(probe):
     assert "completed: lane]" not in out.splitlines()[0]
 
 
+async def test_a_run_with_no_output_at_all_is_not_labelled_completed(probe):
+    # Every turn empty: there is no AIMessage with content to walk back to.
+    ping, models = probe([AIMessage(content="")])
+    out = await _run(ping)
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane]"), out
+    assert "no output produced" in out and "Gap" in out
+    assert len(models[-1].seen) == 3  # nudged twice before giving up
+
+
 def test_a_turn_with_tool_calls_is_left_alone():
-    guard = CompletionGuardMiddleware(marker=MARKER)
+    guard = CompletionGuardMiddleware(delivered=lambda text: MARKER in text)
     assert guard._intervene({"messages": [HumanMessage(content="go"), _call(0)]}) is None
 
 
-def test_the_review_lanes_declare_their_deliverable():
+def test_the_review_lanes_require_a_parseable_findings_array():
+    # A substring cannot vouch for this deliverable: a fence can open and never close.
     for cfg in (REVIEW_FINDER_CONFIG, REVIEW_SYNTHESIZER_CONFIG):
-        assert cfg.completion_marker == MARKER
-        assert cfg.completion_marker in cfg.system_prompt  # the contract the prompt states
+        delivered = cfg.delivered()
+        assert delivered is findings_delivered
+        assert "```json" in cfg.system_prompt  # the contract the prompt states
+    assert findings_delivered(DELIVERABLE)
+    assert findings_delivered('Two defects.\n\n```json\n[{"file": "a.py", "claim": "x"}]\n```')
+    for near_miss in (
+        NARRATION,
+        "I will now produce a ```json findings array.",  # mentions the fence
+        'Found one.\n\n```json\n[{"file": "a.py", "cla',  # cut off mid-array
+        "```json\n{}\n```",  # a fenced object is not a findings array
+        "The result is [] — nothing to report.",  # bare array in prose
+        "",
+    ):
+        assert not findings_delivered(near_miss), near_miss
+
+
+async def test_a_reply_that_only_mentions_the_fence_is_sent_back(monkeypatch, probe):
+    ping, models = probe(
+        [AIMessage(content="I will now produce a ```json findings array."), AIMessage(content=DELIVERABLE)]
+    )
+    cfg = SUBAGENT_REGISTRY[PROBE]
+    monkeypatch.setitem(
+        SUBAGENT_REGISTRY,
+        PROBE,
+        SubagentConfig(
+            name=PROBE,
+            description="d",
+            system_prompt="p",
+            tools=cfg.tools,
+            max_turns=cfg.max_turns,
+            completion_check=findings_delivered,
+        ),
+    )
+    out = await _run(ping)
+    assert out.startswith(f"[{PROBE} completed: lane]") and DELIVERABLE in out, out
+    assert len(models[-1].seen) == 2  # the substring marker would have accepted the first turn

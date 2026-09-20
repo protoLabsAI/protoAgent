@@ -10,17 +10,19 @@ intent ("Let me check the other callers of X:"). Measured on a live review panel
 which put a four-lane panel's completion rate at 0.83^4.
 
 A subagent that owes a recognisable deliverable declares it as
-``SubagentConfig.completion_marker``. When a turn ends the loop without it, this
+``SubagentConfig.completion_marker`` (a substring) or ``completion_check`` (a predicate,
+for a deliverable a substring cannot vouch for — a fence can open and never close). When a turn ends the loop without it, this
 middleware appends one short note and sends the run back to the model — one extra
 model call instead of a lost lane. Bounded by ``max_nudges``, and each nudge is an
 ordinary model pass, so it spends the subagent's ``max_turns`` budget like any other.
 
-A subagent with no marker never gets this middleware; its stack is unchanged.
+A subagent that declares neither never gets this middleware; its stack is unchanged.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
@@ -36,11 +38,6 @@ def _text(message) -> str:
     return content if isinstance(content, str) else (getattr(message, "text", "") or str(content))
 
 
-def delivered(text: str, marker: str) -> bool:
-    """Does this answer carry the subagent's declared deliverable? No marker: always."""
-    return not marker or marker in (text or "")
-
-
 def nudges_sent(messages) -> int:
     return sum(1 for m in messages or [] if isinstance(m, HumanMessage) and _text(m).startswith(NUDGE_MARK))
 
@@ -48,10 +45,10 @@ def nudges_sent(messages) -> int:
 class CompletionGuardMiddleware(AgentMiddleware):
     """Send a run that ended without its deliverable back to the model, at most ``max_nudges`` times."""
 
-    def __init__(self, *, marker: str, contract: str = "", max_nudges: int = 2):
+    def __init__(self, *, delivered: Callable[[str], bool], contract: str = "", max_nudges: int = 2):
         super().__init__()
-        self._marker = marker
-        self._contract = contract or f"an answer containing {marker!r}"
+        self._delivered = delivered
+        self._contract = contract or "the deliverable your instructions require"
         self._max_nudges = max(0, int(max_nudges))
 
     def _intervene(self, state) -> dict | None:
@@ -61,7 +58,7 @@ class CompletionGuardMiddleware(AgentMiddleware):
         # is still working, and anything but an AIMessage is not the model's turn.
         if not isinstance(last, AIMessage) or getattr(last, "tool_calls", None):
             return None
-        if delivered(_text(last), self._marker):
+        if self._delivered(_text(last)):
             return None
         sent = nudges_sent(messages)
         if sent >= self._max_nudges:

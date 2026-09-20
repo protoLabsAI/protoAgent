@@ -856,14 +856,14 @@ async def _run_subagent_inner(
     sub_middleware.append(CodexReasoningReplayRecoveryMiddleware())
     # A subagent that owes a recognisable deliverable is continued when a turn ends
     # the loop without it, instead of being reported "completed" on a sentence of
-    # intent (#3552). No marker, no middleware — the stack is then unchanged.
-    completion_marker = getattr(sub_config, "completion_marker", "") or ""
-    if completion_marker:
+    # intent (#3552). Nothing declared, no middleware — the stack is then unchanged.
+    delivered = sub_config.delivered() if hasattr(sub_config, "delivered") else None
+    if delivered is not None:
         from graph.middleware.completion_guard import CompletionGuardMiddleware
 
         sub_middleware.append(
             CompletionGuardMiddleware(
-                marker=completion_marker,
+                delivered=delivered,
                 contract=getattr(sub_config, "completion_contract", "") or "",
             )
         )
@@ -963,10 +963,16 @@ async def _run_subagent_inner(
                     f"[{subagent_type} hard-stopped at max_turns: {description}] -- no salvageable "
                     "output; treat this lane as a Gap, not a verdict."
                 )
+            if delivered is not None:
+                # No output at all is the emptiest way to end without the deliverable.
+                return (
+                    f"[{subagent_type} ended without its deliverable: {description}] -- no output "
+                    "produced; treat this lane as a Gap, not a verdict."
+                )
             return f"[{subagent_type} completed: {description}] -- no output produced."
 
         # Judged on the whole answer: a fan-out's `truncate` may cut the deliverable off.
-        missing_deliverable = bool(completion_marker) and completion_marker not in body
+        missing_deliverable = delivered is not None and not delivered(body)
         if truncate is not None and len(body) > truncate:
             body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
 

@@ -28,9 +28,10 @@ Rules:
   more turns.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from graph.review.findings import BRIEF_CLOSE, BRIEF_OPEN, FINDINGS_CONTRACT
+from graph.review.findings import BRIEF_CLOSE, BRIEF_OPEN, FINDINGS_CONTRACT, findings_delivered
 
 
 @dataclass
@@ -75,8 +76,19 @@ class SubagentConfig:
     # ``CompletionGuardMiddleware``), and a run that still ends without it is labelled
     # as ended-without-deliverable rather than completed. Blank = no contract.
     completion_marker: str = ""
+    # A stricter test of the same thing, for a deliverable a substring cannot vouch for:
+    # "```json" also matches a reply cut off mid-array, or one that merely mentions the
+    # fence. Takes the answer text; wins over ``completion_marker`` when both are set.
+    completion_check: Callable[[str], bool] | None = None
     # How the nudge names the deliverable to the model. Blank = quote the marker.
     completion_contract: str = ""
+
+    def delivered(self) -> Callable[[str], bool] | None:
+        """The test a finished answer must pass, or None when this subagent declares none."""
+        if self.completion_check is not None:
+            return self.completion_check
+        marker = self.completion_marker
+        return (lambda text: marker in (text or "")) if marker else None
 
 
 RESEARCHER_CONFIG = SubagentConfig(
@@ -376,7 +388,7 @@ marked partial.""",
 REVIEW_FINDER_CONFIG = SubagentConfig(
     lead_visible=False,
     name="review-finder",
-    completion_marker="```json",
+    completion_check=findings_delivered,
     completion_contract="the fenced ```json findings array (an empty array when there is nothing to report)",
     description=(
         "Reads a PR/commit diff from ONE assigned review angle (correctness, "
@@ -491,7 +503,7 @@ Hard stop at max_turns: return what you have (partial findings beat none).""",
 REVIEW_SYNTHESIZER_CONFIG = SubagentConfig(
     lead_visible=False,
     name="review-synthesizer",
-    completion_marker="```json",
+    completion_check=findings_delivered,
     completion_contract="the fenced ```json findings array (an empty array when there is nothing to report)",
     description=(
         "Merges several review-finders' findings lists into one deduped, ranked "
