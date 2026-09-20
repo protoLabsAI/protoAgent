@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.170.0",
+    "date": "2026-09-20",
+    "changes": [
+      "A workflow step's timeout can come from an input (#3554).",
+      "Removing every connection now means every connection is removed (#3128).",
+      "A connection test no longer borrows another connection's key (#3128).",
+      "The review-at-head gate no longer fails open in three ways (#3543).",
+      "A subagent that stops mid-loop is continued, not reported \"completed\" (#3552).",
+      "Test-file housekeeping (#3550)."
+    ]
+  },
+  {
     "version": "v0.169.0",
     "date": "2026-09-17",
     "changes": [

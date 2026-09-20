@@ -15,6 +15,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.170.0] - 2026-09-20
+
+### Added
+- **A workflow step's `timeout` can come from an input (#3554).** A recipe's time budget no longer has to be a constant calibrated for one model: `timeout: "{{inputs.finder_timeout}}"` resolves from the run's inputs (the declared `default` applies when the caller passes nothing). A reference that resolves to anything but a positive number fails the step with the reason — never an unbounded step, never a guessed number. Literal numbers behave exactly as before.
+
+### Changed
+- **Removing every connection now means every connection is removed (#3128).** A config
+  with an explicit `providers: []` still fell back to the three legacy lanes — the gateway
+  plus both subscriptions — so the model pickers went on offering connections the operator
+  had just deleted, and a `gateway:`-qualified model value still resolved to one. An
+  explicitly empty registry now resolves nothing: no lanes are offered, and a qualified
+  value is read as a plain model name. A config that never declared a registry is
+  unaffected and still migrates from its legacy `model.provider` / `api_base` / `api_key`
+  fields.
+
+### Fixed
+- **A connection test no longer borrows another connection's key (#3128).** Testing a
+  registered connection — or an endpoint just typed into the connection form — now
+  authenticates with that connection's own key, or with none at all, instead of falling
+  back to the saved default route's key and then to `OPENAI_API_KEY`. A blank key there
+  means the endpoint needs none (a local vLLM or Ollama), so a local endpoint is no longer
+  probed with the production gateway's credential. Re-testing the live agent from a blank
+  form is unchanged, including the embedding circuit-breaker recovery it drives.
+
+- **The review-at-head gate no longer fails open in three ways (#3543).** The job that answers
+  "has the QA panel reviewed the commit that would actually merge" had three defects, all of
+  them failing open: a transient `gh` error made the job exit non-zero and look like an
+  unreviewed PR; `DRY_RUN=false` silently *enabled* dry-run, so the gate posted no status at
+  all while appearing to work; and a panel marker that matched the head but carried no verdict
+  passed as non-blocking. Two of the three were found by protoPatch reviewing the same file
+  vendored into another repo, where every line was new and therefore re-reviewed.
+
+- **A subagent that stops mid-loop is continued, not reported "completed" (#3552).** A model that narrated its next read and never made the call — or returned an empty turn — ended the agent loop exactly like one that finished, so the step read `completed` on a sentence of intent. On a live review panel that was 17% of `review-finder` steps, which put a four-lane panel's completion rate near 0.83⁴. A subagent now declares what a finished answer contains — `SubagentConfig.completion_marker` (a substring) or `completion_check` (a predicate); a run-ending turn without it is sent back to the model (at most twice, inside the `max_turns` budget), and a run that still ends without it, including one with no output at all, is labelled `ended without its deliverable` instead of `completed`. `review-finder` and `review-synthesizer` require a fenced findings array that actually parses (`findings_delivered`), so a fence that opens and never closes does not count; a subagent that declares neither is unchanged.
+
+### Docs
+- **Test-file housekeeping (#3550).** The review-at-head robustness tests now sit under their own section divider, matching the rest of the file.
+
 ## [0.169.0] - 2026-09-17
 
 ### Changed
