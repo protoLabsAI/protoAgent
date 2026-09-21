@@ -103,6 +103,7 @@ def test_advertise_without_port_is_noop(fake_zeroconf):
 
 # ── tailnet channel ───────────────────────────────────────────────────────────
 _TS_STATUS = {
+    "Self": {"HostName": "me", "Online": True, "TailscaleIPs": ["100.64.0.1", "fd7a::9"]},
     "Peer": {
         "k1": {"HostName": "ava", "Online": True, "TailscaleIPs": ["100.101.189.45", "fd7a::1"]},
         "k2": {"HostName": "beefcake", "Online": False, "TailscaleIPs": ["100.77.164.70"]},
@@ -123,19 +124,23 @@ def test_tailnet_peer_ips_online_ipv4_only(monkeypatch):
     monkeypatch.setattr(discovery, "_tailscale_cli", lambda: "/fake/tailscale")
     monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **kw: _FakeRun(0, _json.dumps(_TS_STATUS)))
     assert discovery._tailnet_peer_ips() == ["100.101.189.45"]  # online + IPv4 only
+    assert discovery._tailnet_self_ips() == ["100.64.0.1"]  # the host is under Self, never Peer
 
 
 def test_tailnet_peer_ips_quiet_without_tailscale(monkeypatch):
     monkeypatch.setattr(discovery, "_tailscale_cli", lambda: None)
     assert discovery._tailnet_peer_ips() == []
+    assert discovery._tailnet_self_ips() == []
 
     monkeypatch.setattr(discovery, "_tailscale_cli", lambda: "/fake/tailscale")
     monkeypatch.setattr(discovery.subprocess, "run", lambda *a, **kw: _FakeRun(1, ""))
     assert discovery._tailnet_peer_ips() == []  # CLI errors → empty, never raises
+    assert discovery._tailnet_self_ips() == []
 
 
 def test_scan_tailnet_probes_peers_and_skips_known(monkeypatch):
     monkeypatch.setattr(discovery, "_tailnet_peer_ips", lambda: ["100.101.189.45"])
+    monkeypatch.setattr(discovery, "_tailnet_self_ips", lambda: [])
     probed: list[tuple] = []
 
     async def fake_probe(client, host, port):
@@ -148,6 +153,33 @@ def test_scan_tailnet_probes_peers_and_skips_known(monkeypatch):
     found = asyncio.run(discovery._scan_tailnet((7870, 7872), known={("100.101.189.45", 7870)}))
     assert found == [{"name": "ava-agent", "url": "http://100.101.189.45:7871", "host": "100.101.189.45", "port": 7871}]
     assert ("100.101.189.45", 7870) not in probed  # known member skipped
+
+
+def test_scan_tailnet_probes_own_tailnet_address(monkeypatch):
+    """A container published on the host's tailnet address alone (``-p 100.x:7871:7870``)
+    answers on neither loopback nor a peer's address — the host's own address is scanned.
+    A hit that loopback answers under the same name is the same agent and is dropped; the
+    same PORT under another name is a different agent and is kept."""
+    monkeypatch.setattr(discovery, "_tailnet_peer_ips", lambda: [])
+    monkeypatch.setattr(discovery, "_tailnet_self_ips", lambda: ["100.64.0.1"])
+    cards = {
+        ("100.64.0.1", 7870): "hub",  # bound to 0.0.0.0 — loopback answers as the same agent
+        ("127.0.0.1", 7870): "hub",
+        ("100.64.0.1", 7871): "jon",  # tailnet-only container; loopback:7871 is someone else
+        ("127.0.0.1", 7871): "dev",
+        ("100.64.0.1", 7872): "roxy",  # tailnet-only container; nothing on loopback
+    }
+
+    async def fake_probe(client, host, port):
+        name = cards.get((host, port))
+        return {"name": name, "url": f"http://{host}:{port}", "host": host, "port": port} if name else None
+
+    monkeypatch.setattr(discovery, "_probe", fake_probe)
+    found = asyncio.run(discovery._scan_tailnet((7870, 7872), known=set()))
+    assert sorted((a["name"], a["host"], a["port"]) for a in found) == [
+        ("jon", "100.64.0.1", 7871),
+        ("roxy", "100.64.0.1", 7872),
+    ]
 
 
 def test_discover_merges_three_channels(monkeypatch):
