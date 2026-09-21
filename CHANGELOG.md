@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.171.0] - 2026-09-21
+
+### Fixed
+- **Guard notes are recognised by a tag, not by their text (#3556).** The completion guard, the round governor and the stall guard each inject a note into a run and later look for their own notes — to count nudges, to latch "already nudged this turn", to keep a note from breaking the run it measures. They matched a visible prefix, and a task prompt or an operator message is a `HumanMessage` too: a delegation whose prompt opened with `[completion-guard]` got one nudge instead of two, and an operator message opening with `[round-governor]` suppressed that turn's re-grounding nudge. Notes now carry `additional_kwargs["protoagent_guard_note"]` and are recognised by that; the prefix stays for the model to read.
+
+- **Subagents are told when their turn budget is nearly spent, and get one chance to add a closing line their caller requires (#3559).** Every subagent prompt says "hard stop at max_turns: return what you have", but the model cannot see the counter: a review lane ran all 60 tool rounds on a four-file diff and hard-stopped still opening files, every round of reading lost. A subagent that declares a deliverable now gets one tagged `[turn-budget]` note when the last 15% of its rounds (at least three) remain, telling it to stop reading and write up, stating what it did not reach as a `Gap:`. Separately, `SubagentConfig.completion_prompt_markers` names closing lines a caller may require (`review-finder`: `FINDER_STATUS:`); when the task prompt asks for one and a finished answer omits it, the completion guard sends the answer back once to be repeated whole with the line added — a full, correct review that dropped that line was voiding pr-reviewer rounds (pr-reviewer-plugin#145). A caller that never asked for the line is unaffected.
+
 ## [0.170.0] - 2026-09-20
 
 ### Added
