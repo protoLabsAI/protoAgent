@@ -346,6 +346,15 @@ async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
             await pilot.press(key)
             assert await _until(pilot, lambda: isinstance(app.screen, kind)), key
             modal = app.screen
+            # Being the active screen is not the same as being mounted. NewAgentModal composes a
+            # Select, and Textual's Select queries its own SelectOverlay child (_select.py) — so
+            # touching the modal in the gap raised `NoMatches: No nodes match 'SelectOverlay'` on
+            # Windows shard 1/2 of #3539, on code green everywhere else. The Select applies its
+            # initial value as it mounts, so seeing that value is the proxy for "finished
+            # composing" — the same guard #3499 added to the new-member test above.
+            if kind is NewAgentModal:
+                assert await _until(pilot, lambda: modal.query_one("#archetype", Select).value == "basic"), key
+            assert await _ready_to_type(pilot, app), key
             fill(modal)
             await pilot.pause(0.1)
             (modal.action_submit if hasattr(modal, "action_submit") else modal._submit)()
