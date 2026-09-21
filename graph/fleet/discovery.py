@@ -7,7 +7,9 @@ Three channels, merged:
     browse the LAN for siblings on *other* machines.
   • **Tailnet port-scan** — mDNS is link-local multicast and never crosses a Tailscale
     overlay, so tailnet siblings are found by asking the local ``tailscale`` CLI for online
-    peers and probing their agent-cards over the same port range. (A machine on both the
+    peers and probing their agent-cards over the same port range. This machine's OWN
+    tailnet address is probed too: a container published on it alone answers on neither
+    loopback nor any peer's address. (A machine on both the
     LAN and the tailnet can surface twice — LAN IP via mDNS, ``100.x`` via this channel;
     both URLs are real, we don't guess which one to keep.)
 
@@ -228,34 +230,61 @@ def _tailscale_cli() -> str | None:
     return shutil.which("tailscale") or (_TAILSCALE_APP_CLI if os.path.exists(_TAILSCALE_APP_CLI) else None)
 
 
-def _tailnet_peer_ips(timeout: float = 3.0) -> list[str]:
-    """IPv4 tailnet addresses of ONLINE peers (sync subprocess — call via
+def _tailnet_status(timeout: float = 3.0) -> dict:
+    """``tailscale status --json`` parsed (sync subprocess — call via
     ``asyncio.to_thread``). Empty when tailscale isn't installed or isn't up — the
     channel just goes quiet, never errors."""
     cli = _tailscale_cli()
     if not cli:
-        return []
+        return {}
     try:
         out = subprocess.run([cli, "status", "--json"], capture_output=True, text=True, timeout=timeout)
         if out.returncode != 0:
-            return []
-        peers = (json.loads(out.stdout).get("Peer") or {}).values()
-        return [ip for p in peers if p.get("Online") for ip in (p.get("TailscaleIPs") or []) if "." in ip]
+            return {}
+        status = json.loads(out.stdout)
+        return status if isinstance(status, dict) else {}
     except Exception:  # noqa: BLE001 — discovery is best-effort, never blocks the endpoint
         log.debug("[discovery] tailscale status failed", exc_info=True)
-        return []
+        return {}
+
+
+def _tailnet_peer_ips(timeout: float = 3.0) -> list[str]:
+    """IPv4 tailnet addresses of ONLINE peers (sync — call via ``asyncio.to_thread``)."""
+    peers = (_tailnet_status(timeout).get("Peer") or {}).values()
+    return [ip for p in peers if p.get("Online") for ip in (p.get("TailscaleIPs") or []) if "." in ip]
+
+
+def _tailnet_self_ips(timeout: float = 3.0) -> list[str]:
+    """THIS machine's own IPv4 tailnet addresses (sync — call via ``asyncio.to_thread``).
+    ``tailscale status`` lists the host under ``Self``, never under ``Peer``, so an agent
+    published on the host's tailnet address only (a container with
+    ``-p 100.x.y.z:7871:7870``) is reached by neither the loopback scan nor the peer scan."""
+    me = _tailnet_status(timeout).get("Self") or {}
+    return [ip for ip in (me.get("TailscaleIPs") or []) if "." in ip]
 
 
 async def _scan_tailnet(port_range: tuple[int, int], known: set) -> list[dict]:
-    """Probe every online tailnet peer's agent-card over the fleet port range."""
-    ips = await asyncio.to_thread(_tailnet_peer_ips)
+    """Probe every online tailnet peer's agent-card over the fleet port range — and this
+    machine's OWN tailnet address, where a co-located agent bound to that interface alone
+    lives. A self-address hit that loopback answers under the same name is the same agent
+    (bound to ``0.0.0.0``): the local scan — or ``known`` — already speaks for it, so it is
+    dropped. The name is compared, not just the port: ``127.0.0.1:7871`` and
+    ``100.x:7871`` can be two different agents."""
+    peer_ips, self_ips = await asyncio.gather(
+        asyncio.to_thread(_tailnet_peer_ips), asyncio.to_thread(_tailnet_self_ips)
+    )
+    own = set(self_ips)
+    ips = list(dict.fromkeys([*peer_ips, *self_ips]))
     if not ips:
         return []
+    ports = range(port_range[0], port_range[1] + 1)
     async with httpx.AsyncClient() as client:
-        tasks = [
-            _probe(client, ip, p) for ip in ips for p in range(port_range[0], port_range[1] + 1) if (ip, p) not in known
-        ]
-        return [r for r in await asyncio.gather(*tasks) if r]
+        tasks = [_probe(client, ip, p) for ip in ips for p in ports if (ip, p) not in known]
+        hits = [r for r in await asyncio.gather(*tasks) if r]
+        own_hits = [h for h in hits if h["host"] in own]
+        loopback = await asyncio.gather(*(_probe(client, "127.0.0.1", h["port"]) for h in own_hits))
+    same = {id(h) for h, lo in zip(own_hits, loopback) if lo and lo["name"] == h["name"]}
+    return [h for h in hits if id(h) not in same]
 
 
 async def _scan_local(port_range: tuple[int, int], skip_ports: set[int]) -> list[dict]:
