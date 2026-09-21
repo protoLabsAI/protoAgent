@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from graph.review.findings import (
     FINDINGS_CONTRACT,
     Finding,
+    findings_delivered,
     parse_findings,
     render_findings_markdown,
 )
@@ -149,3 +152,76 @@ def test_render_shows_source_alongside_category():
         [Finding(file="a.py", line=1, severity="major", category="concurrency", claim="Race.", source="protopatch")]
     )
     assert "_[concurrency · protopatch]_" in md
+
+
+# ── a fence closes at a line start, never at a ``` inside a JSON string (#3569) ─
+
+# A finding quoting a reST ``docstring`` inside a markdown code span puts THREE backticks
+# in a row in the middle of a JSON string — seen live on a Python PR.
+_STACKED = "reads `covered by ``tests/test_review_at_head.py```; the sweep skips the rest"
+_FINDINGS_BLOCK = (
+    "```json\n"
+    + json.dumps(
+        [
+            {
+                "file": "scripts/x.py",
+                "line": 12,
+                "severity": "major",
+                "category": "correctness",
+                "claim": _STACKED,
+                "evidence": "e",
+            }
+        ],
+        indent=2,
+    )
+    + "\n```"
+)
+_DISPOSITIONS_BLOCK = '```json\n[{"prior": "scripts/x.py:220", "disposition": "open", "why": "unchanged"}]\n```'
+
+
+def test_a_finding_quoting_stacked_backticks_is_not_dropped_from_a_report():
+    # The report shape: a dispositions block parses first, so the bare-array fallback never
+    # ran and the findings block — cut at the ``` mid-string — was lost. Zero findings is a
+    # clean PASS to anything computing a verdict from this function.
+    assert "```" in _STACKED
+    found = parse_findings(f"Brief.\n\n{_DISPOSITIONS_BLOCK}\n\n{_FINDINGS_BLOCK}")
+    assert [f.claim for f in found] == [_STACKED] and found[0].severity == "major"
+
+
+def test_a_lane_whose_finding_quotes_stacked_backticks_still_reads_as_delivered():
+    # `findings_delivered` is the completion guard's predicate: reading this as undelivered
+    # nudged the lane twice and then lost it — deterministically, on every retry.
+    assert findings_delivered(f"One defect.\n\n{_FINDINGS_BLOCK}")
+    assert findings_delivered(f"Brief.\n\n{_DISPOSITIONS_BLOCK}\n\n{_FINDINGS_BLOCK}")
+
+
+def test_the_legacy_fence_pattern_really_did_lose_it():
+    # Pins the bug, so the per-fence close cannot be simplified back to one regex.
+    import re
+
+    blocks = re.findall(r"```(?:json)?\s*\n(.*?)```", _FINDINGS_BLOCK, re.DOTALL)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(blocks[0])
+
+
+def test_ordinary_and_same_line_closed_fences_read_as_before():
+    assert parse_findings("```json\n[]\n```") == [] and findings_delivered("```json\n[]\n```")
+    assert findings_delivered("```json\n[]```")  # closed on the payload's own line
+    assert not findings_delivered('```json\n[{"claim": "cut off')  # truncated stays undelivered
+    assert not findings_delivered("I will now produce a ```json findings array.")
+
+
+def test_a_line_closed_and_a_same_line_closed_fence_can_share_a_text():
+    from graph.review.findings import _fenced_blocks
+
+    # The close is chosen per fence: an all-or-nothing fallback between two patterns read
+    # only the first of these, and a line-anchored pattern alone reads neither in this order.
+    one = '[{"file": "a.py", "line": 1, "severity": "minor", "claim": "one"}]'
+    two = '[{"file": "b.py", "line": 2, "severity": "minor", "claim": "two"}]'
+    for text in (f"```json\n{one}\n```\n\n```json\n{two}```", f"```json\n{two}```\n\n```json\n{one}\n```"):
+        assert sorted(b.strip() for b in _fenced_blocks(text)) == sorted([one, two])
+
+
+def test_a_fence_holding_no_json_closes_at_its_first_fence_and_hides_nothing_after_it():
+    text = "```\ndiff --git a/x b/x\n```\n\n" + _FINDINGS_BLOCK
+    assert len(parse_findings(text)) == 1 and findings_delivered(text)
