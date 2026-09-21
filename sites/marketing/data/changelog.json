@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.172.0",
+    "date": "2026-09-21",
+    "changes": [
+      "Fleet discovery now finds agents published on this machine's own tailnet address (#3562)."
+    ]
+  },
+  {
     "version": "v0.171.0",
     "date": "2026-09-21",
     "changes": [
