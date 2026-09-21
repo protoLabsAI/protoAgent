@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.171.0",
+    "date": "2026-09-21",
+    "changes": [
+      "Guard notes are recognised by a tag, not by their text (#3556).",
+      "Subagents are told when their turn budget is nearly spent, and get one chance to add a closing line their caller requires (#3559)."
+    ]
+  },
+  {
     "version": "v0.170.0",
     "date": "2026-09-20",
     "changes": [
