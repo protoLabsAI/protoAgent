@@ -138,15 +138,34 @@ def _coerce(item: dict) -> Finding | None:
     )
 
 
-_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+# A fence CLOSES at a ``` that starts a line — not at the first ``` anywhere (#3569). The
+# legacy pattern ended the block at the first triple backtick it met, including one INSIDE
+# a JSON string: a finding quoting a reST ``docstring`` inside a markdown code span puts
+# three backticks in a row mid-string, the block was cut there and ``json.loads`` failed.
+# With a dispositions block ahead of it (every re-review's report) that block still
+# parsed, so the bare-array fallback below never ran and the findings were silently
+# DROPPED — a clean PASS over a report carrying a finding. The same cut made
+# ``findings_delivered`` call a delivered lane undelivered, on every retry.
+#
+# Anchoring to a line start is exact, not a heuristic: a JSON string cannot hold a raw
+# newline, so "\n```" can never occur inside one. The legacy pattern stays only as a
+# fallback for a fence closed on the payload's own line.
+_FENCE_STRICT_RE = re.compile(r"```(?:json)?[ \t]*\n(.*?)\n[ \t]*```", re.DOTALL)
+_FENCE_LEGACY_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+
+
+def _fenced_blocks(text: str) -> list[str]:
+    """The bodies of the fenced blocks in ``text``, in order."""
+    text = text or ""
+    return _FENCE_STRICT_RE.findall(text) or _FENCE_LEGACY_RE.findall(text)
 
 
 def _candidate_arrays(text: str) -> list[list]:
     """Every parseable JSON array in ``text`` — fenced blocks first, then bare
     ``[...]`` spans (brace-matched, string-aware)."""
     out: list[list] = []
-    for m in _FENCE_RE.finditer(text or ""):
-        body = m.group(1).strip()
+    for block in _fenced_blocks(text):
+        body = block.strip()
         if body.startswith("["):
             try:
                 data = json.loads(body)
@@ -202,8 +221,8 @@ def findings_delivered(text: str) -> bool:
     prose, which is too easy to hit by accident. ``parse_findings`` reads every one of
     those as ``[]``, so "is the review finished" cannot be asked of it (#3552).
     """
-    for m in _FENCE_RE.finditer(text or ""):
-        body = m.group(1).strip()
+    for block in _fenced_blocks(text):
+        body = block.strip()
         if not body.startswith("["):
             continue
         try:
