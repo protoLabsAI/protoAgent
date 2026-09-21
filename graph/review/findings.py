@@ -138,8 +138,8 @@ def _coerce(item: dict) -> Finding | None:
     )
 
 
-# A fence CLOSES at a ``` that starts a line — not at the first ``` anywhere (#3569). The
-# legacy pattern ended the block at the first triple backtick it met, including one INSIDE
+# A fence does NOT close at the first ``` anywhere (#3569). The legacy non-greedy
+# pattern ended the block at the first triple backtick it met, including one INSIDE
 # a JSON string: a finding quoting a reST ``docstring`` inside a markdown code span puts
 # three backticks in a row mid-string, the block was cut there and ``json.loads`` failed.
 # With a dispositions block ahead of it (every re-review's report) that block still
@@ -147,17 +147,40 @@ def _coerce(item: dict) -> Finding | None:
 # DROPPED — a clean PASS over a report carrying a finding. The same cut made
 # ``findings_delivered`` call a delivered lane undelivered, on every retry.
 #
-# Anchoring to a line start is exact, not a heuristic: a JSON string cannot hold a raw
-# newline, so "\n```" can never occur inside one. The legacy pattern stays only as a
-# fallback for a fence closed on the payload's own line.
-_FENCE_STRICT_RE = re.compile(r"```(?:json)?[ \t]*\n(.*?)\n[ \t]*```", re.DOTALL)
-_FENCE_LEGACY_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+# So the close is chosen PER FENCE, by what it yields: the first ``` after the opener whose
+# body is valid JSON ends the block. A ``` inside a string leaves a body that cannot parse
+# and is passed over; a fence closed on the payload's own line (no newline before it) still
+# parses at its first ```, exactly as it always did — and the two shapes can share a text.
+# A fence holding no JSON at all (prose, a diff) closes at its first ```, as before.
+_FENCE_OPEN_RE = re.compile(r"```(?:json)?\s*\n")
+_FENCE_CLOSE_TRIES = 32  # bounds the scan of a fence that never parses
 
 
 def _fenced_blocks(text: str) -> list[str]:
     """The bodies of the fenced blocks in ``text``, in order."""
     text = text or ""
-    return _FENCE_STRICT_RE.findall(text) or _FENCE_LEGACY_RE.findall(text)
+    out: list[str] = []
+    pos = 0
+    while (opener := _FENCE_OPEN_RE.search(text, pos)) is not None:
+        start = opener.end()
+        first = close = text.find("```", start)
+        if first == -1:
+            break  # unclosed fence — not a block
+        for _ in range(_FENCE_CLOSE_TRIES):
+            try:
+                json.loads(text[start:close])
+                break
+            except json.JSONDecodeError:
+                close = text.find("```", close + 3)
+                if close == -1:
+                    break
+        else:
+            close = -1
+        if close == -1:
+            close = first
+        out.append(text[start:close])
+        pos = close + 3
+    return out
 
 
 def _candidate_arrays(text: str) -> list[list]:

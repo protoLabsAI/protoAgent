@@ -196,7 +196,7 @@ def test_a_lane_whose_finding_quotes_stacked_backticks_still_reads_as_delivered(
 
 
 def test_the_legacy_fence_pattern_really_did_lose_it():
-    # Pins the bug, so the strict pattern cannot be simplified back.
+    # Pins the bug, so the per-fence close cannot be simplified back to one regex.
     import re
 
     blocks = re.findall(r"```(?:json)?\s*\n(.*?)```", _FINDINGS_BLOCK, re.DOTALL)
@@ -206,6 +206,22 @@ def test_the_legacy_fence_pattern_really_did_lose_it():
 
 def test_ordinary_and_same_line_closed_fences_read_as_before():
     assert parse_findings("```json\n[]\n```") == [] and findings_delivered("```json\n[]\n```")
-    assert findings_delivered("```json\n[]```")  # closed on the payload's line: legacy fallback
+    assert findings_delivered("```json\n[]```")  # closed on the payload's own line
     assert not findings_delivered('```json\n[{"claim": "cut off')  # truncated stays undelivered
     assert not findings_delivered("I will now produce a ```json findings array.")
+
+
+def test_a_line_closed_and_a_same_line_closed_fence_can_share_a_text():
+    from graph.review.findings import _fenced_blocks
+
+    # The close is chosen per fence: an all-or-nothing fallback between two patterns read
+    # only the first of these, and a line-anchored pattern alone reads neither in this order.
+    one = '[{"file": "a.py", "line": 1, "severity": "minor", "claim": "one"}]'
+    two = '[{"file": "b.py", "line": 2, "severity": "minor", "claim": "two"}]'
+    for text in (f"```json\n{one}\n```\n\n```json\n{two}```", f"```json\n{two}```\n\n```json\n{one}\n```"):
+        assert sorted(b.strip() for b in _fenced_blocks(text)) == sorted([one, two])
+
+
+def test_a_fence_holding_no_json_closes_at_its_first_fence_and_hides_nothing_after_it():
+    text = "```\ndiff --git a/x b/x\n```\n\n" + _FINDINGS_BLOCK
+    assert len(parse_findings(text)) == 1 and findings_delivered(text)
