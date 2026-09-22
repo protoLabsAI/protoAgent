@@ -162,6 +162,8 @@ def test_approve_runs_gated_step_with_original_prompt_and_completes(tmp_path, mo
     state = store.load(run_id)
     assert state["status"] == STATUS_DONE
     assert state["pending_step"] is None
+    # A resumed step's record says what it was handed, same as a from-scratch one (#3571).
+    assert state["step_meta"]["analyze"]["prompt_chars"] == len("analyze:\nresearch ai")
 
 
 def test_edit_runs_edited_prompt_and_downstream_sees_it(tmp_path, monkeypatch):

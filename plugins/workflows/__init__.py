@@ -348,7 +348,7 @@ async def _resume(
     run_store.resume(run_id)
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
-        run_store.step_started(step_id)
+        run_store.step_started(step_id, prompt=prompt)
         out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
         run_store.step_done(step_id, out)
         return out
