@@ -811,10 +811,12 @@ async def _run_subagent_inner(
     # delegation had NO relief valve, and a review finder whose whole job is reading files
     # accumulated raw results until the provider refused the call (ContextWindowExceeded,
     # 7 of 8 panels on one PR). Same knobs as the lead; the window is the SUBAGENT model's.
-    from graph.model_window import context_window_for
+    from graph.model_window import context_window_for_slot
 
     try:
-        sub_window: int | None = context_window_for(config, sub_model or None)
+        # The SUBAGENT model's window, on ITS route: `<provider>:<model>` names another
+        # gateway, and only that gateway reports the window (review on #3577).
+        sub_window: int | None = context_window_for_slot(config, sub_model)
     except Exception:  # noqa: BLE001 — no window → the pruner's fixed fallback, no context note
         sub_window = None
     if getattr(config, "pruning_enabled", True):

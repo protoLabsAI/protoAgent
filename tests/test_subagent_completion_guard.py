@@ -495,7 +495,7 @@ def _arm_reader(monkeypatch, probe, script, *, window, config):
     )
     import graph.model_window as mw
 
-    monkeypatch.setattr(mw, "context_window_for", lambda *_a, **_k: window)
+    monkeypatch.setattr(mw, "context_window_for_slot", lambda *_a, **_k: window)
 
     async def run():
         return await agent_mod._run_subagent(
