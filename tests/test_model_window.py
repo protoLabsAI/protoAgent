@@ -166,3 +166,22 @@ def test_a_provider_qualified_slot_resolves_its_window_on_that_providers_route(m
     assert model_window.context_window_for_slot(cfg, "protolabs/smart") == 196608  # unqualified: default route
     assert model_window.context_window_for_slot(cfg, "nope:qwen") is None  # not a registered provider: plain lookup
     assert sorted(set(calls)) == ["https://gw.example/v1/model/info", "https://vllm.example/v1/model/info"]
+
+
+def test_two_keys_on_one_base_are_cached_apart(monkeypatch):
+    # Review on #3577: keyed by base alone, the first key's model list answered for the
+    # second key — which may see a different list on the same gateway.
+    seen: list[str] = []
+
+    def fake_get(url, headers=None, timeout=None):
+        key = (headers or {}).get("Authorization", "")
+        seen.append(key)
+        if key.endswith("k-one"):
+            return _Resp(200, {"data": [{"model_name": "m", "model_info": {"max_input_tokens": 1000}}]})
+        return _Resp(200, {"data": [{"model_name": "m", "model_info": {"max_input_tokens": 2000}}]})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    assert model_window.context_window_for(_cfg(api_key="k-one"), "m") == 1000
+    assert model_window.context_window_for(_cfg(api_key="k-two"), "m") == 2000
+    assert model_window.context_window_for(_cfg(api_key="k-one"), "m") == 1000  # still cached, still its own
+    assert len(seen) == 2

@@ -15,6 +15,7 @@ exactly today's behavior (message-count fallback, size-only meter).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from graph.config import LangGraphConfig, resolve_model_route
@@ -120,14 +121,19 @@ def _window_on_route(route, model: str) -> int | None:
     base = (route.base_url or "").rstrip("/")
     if not base:
         return None
-    if base not in _ATTEMPTED:
-        _ATTEMPTED.add(base)
+    # Cached per AUTHENTICATED route, not per base: two providers on one gateway with
+    # different keys can see different model lists, and keying on the base alone let the
+    # first key's answer stand in for the second's (review on #3577). A digest, so the
+    # key never sits in a dict key.
+    key = f"{base}#{hashlib.sha256((route.api_key or '').encode()).hexdigest()[:12]}"
+    if key not in _ATTEMPTED:
+        _ATTEMPTED.add(key)
         try:
-            _WINDOWS[base] = _fetch_window_map(base, route.api_key)
+            _WINDOWS[key] = _fetch_window_map(base, route.api_key)
         except Exception:  # noqa: BLE001 — never let model-info break model creation / a turn
-            _WINDOWS[base] = {}
+            _WINDOWS[key] = {}
             log.debug("[model-window] fetch failed for %s", base, exc_info=True)
-    return _WINDOWS.get(base, {}).get(model)
+    return _WINDOWS.get(key, {}).get(model)
 
 
 def context_window_for_turn(config: LangGraphConfig, state) -> int | None:
