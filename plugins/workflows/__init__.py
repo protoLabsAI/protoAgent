@@ -134,13 +134,19 @@ async def _run_prepared(
     run_store: WorkflowRunStore,
     run_id: str,
     on_step=None,
+    seed_outputs: dict[str, str] | None = None,
 ) -> dict:
     """Execute an already-validated recipe against its live run record: the store is
     updated at each step dispatch/completion (the Studio's polling target) and closed
-    out with the final envelope on finish/pause."""
+    out with the final envelope on finish/pause.
+
+    ``seed_outputs`` (#3571) hands in outputs for steps already run elsewhere — they
+    are recorded as seeded and never dispatched, so a caller holding a finished run's
+    ``steps`` can re-run one late step (a flaky verifier) without repaying the rest."""
+    run_store.seed(seed_outputs or {})
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
-        run_store.step_started(step_id)
+        run_store.step_started(step_id, prompt=prompt)
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
         out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
@@ -168,6 +174,7 @@ async def _run_prepared(
             max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
             gate_check=_gate_check,
             pause_fn=_pause,
+            seed_outputs=seed_outputs,
         )
     except Exception:
         run_store.finish(STATUS_FAILED)
@@ -185,7 +192,14 @@ async def _run_prepared(
     return result
 
 
-async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None, run_store=None) -> dict:
+async def _execute(
+    reg: WorkflowRegistry,
+    name: str,
+    inputs: dict,
+    on_step=None,
+    run_store=None,
+    seed_outputs: dict[str, str] | None = None,
+) -> dict:
     """Validate → resolve → run a recipe over subagents (each step via the SDK). Raises
     ValueError on unknown/invalid recipe or missing inputs.
 
@@ -197,7 +211,7 @@ async def _execute(reg: WorkflowRegistry, name: str, inputs: dict, on_step=None,
         run_store = WorkflowRunStore(_writable_dir() / ".runs")
     run_id = run_store.start(name, resolved, steps=recipe.get("steps"))
     run_store.prune(keep=_MAX_RUNS)
-    return await _run_prepared(recipe, name, resolved, run_store, run_id, on_step)
+    return await _run_prepared(recipe, name, resolved, run_store, run_id, on_step, seed_outputs=seed_outputs)
 
 
 async def _start_background(
@@ -420,8 +434,12 @@ def register(registry: Any) -> None:
     # Publish the registry + a runner onto runtime state so core surfaces that predate
     # the plugin (the chat `/<recipe>` slash-command) can use workflows WITHOUT importing
     # this plugin — both are None when the plugin is disabled, which gates those paths.
-    async def _run(name: str, inputs: dict | None = None, on_step=None) -> dict:
-        return await _execute(_reg(), name, inputs or {}, on_step)
+    async def _run(
+        name: str, inputs: dict | None = None, on_step=None, *, seed_outputs: dict[str, str] | None = None
+    ) -> dict:
+        # `seed_outputs` (#3571): outputs for steps already run — the engine treats them
+        # as done, so only the steps downstream of the missing ones are dispatched.
+        return await _execute(_reg(), name, inputs or {}, on_step, seed_outputs=seed_outputs)
 
     STATE.workflow_registry = _LiveRegistry()
     STATE.workflow_run = _run

@@ -30,6 +30,7 @@ console's polling target while it executes, not just a post-mortem):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -45,6 +46,7 @@ STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_PAUSED = "paused"
+STATUS_SEEDED = "seeded"  # a step this run did not dispatch: its output was handed in (#3571)
 
 TERMINAL = (STATUS_DONE, STATUS_FAILED)
 
@@ -125,11 +127,31 @@ class WorkflowRunStore:
         self._write()
         return self._state["run_id"]
 
-    def step_started(self, step_id: str) -> None:
-        """Mark a step dispatched — the live timeline's ``running`` state."""
+    def seed(self, outputs: dict[str, str]) -> None:
+        """Record steps whose outputs were handed in by the caller (#3571): they are on
+        the record as ``seeded``, never ``running``/``done``, so a partial re-run reads
+        as what it is — the seeded steps' outputs are what the dispatched ones saw."""
+        if self._state is None or not outputs:
+            return
+        for step_id, output in outputs.items():
+            self._state["step_outputs"][step_id] = output
+            self._state["step_meta"][step_id] = {"status": STATUS_SEEDED}
+        self._state["updated_at"] = _now()
+        self._write()
+
+    def step_started(self, step_id: str, *, prompt: str | None = None) -> None:
+        """Mark a step dispatched — the live timeline's ``running`` state.
+
+        ``prompt`` is the RENDERED text the subagent was handed; its length and digest
+        go on the record (not the text — it can be large). That is what answers "did
+        the block reach the model?" when a subagent claims its input was absent."""
         if self._state is None:
             return
-        self._state["step_meta"][step_id] = {"status": STATUS_RUNNING, "started_at": _now()}
+        meta: dict[str, Any] = {"status": STATUS_RUNNING, "started_at": _now()}
+        if prompt is not None:
+            meta["prompt_chars"] = len(prompt)
+            meta["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        self._state["step_meta"][step_id] = meta
         self._state["updated_at"] = _now()
         self._write()
 
