@@ -8,7 +8,7 @@ import uuid
 from types import SimpleNamespace
 
 import plugins.workflows as wf
-from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, WorkflowRunStore
+from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, STATUS_SEEDED, WorkflowRunStore
 
 RECIPE = {
     "name": "demo",
@@ -115,6 +115,87 @@ def test_execute_persists_a_completed_run(tmp_path, monkeypatch):
     assert state["step_outputs"] == {"gather": "<gather-out>", "brief": "<brief-out>"}
     assert state["inputs"] == {"topic": "ai"}
     assert state["pending_step"] is None
+
+
+def test_execute_with_seeded_steps_dispatches_only_what_is_downstream(tmp_path, monkeypatch):
+    # #3571: a caller holding a finished run's outputs re-runs ONE late step. `gather` is
+    # handed in, so only `brief` is dispatched — and it sees the seeded text, not a rerun.
+    dispatched = []
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        dispatched.append((description.rsplit(":", 1)[-1], prompt))
+        return "brief-from-seed"
+
+    _patch_sdk(monkeypatch, run_subagent)
+    store = WorkflowRunStore(tmp_path)
+    result = asyncio.run(
+        wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store, seed_outputs={"gather": "handed in"})
+    )
+    assert [d[0] for d in dispatched] == ["brief"]
+    assert dispatched[0][1] == "write up:\nhanded in"
+    assert result["output"] == "brief-from-seed" and result["failed"] == []
+    state = store.load(result["run_id"])
+    # The record says what happened: the seeded step is `seeded`, never `done` or `running`.
+    assert state["step_meta"]["gather"] == {"status": STATUS_SEEDED}
+    assert state["step_outputs"] == {"gather": "handed in", "brief": "brief-from-seed"}
+    assert state["step_meta"]["brief"]["status"] == STATUS_DONE
+
+
+def test_the_record_says_what_each_step_was_handed(tmp_path, monkeypatch):
+    # A subagent that claims its input "is absent from the message" can be checked
+    # against data: the rendered prompt's length and digest are on the record.
+    import hashlib
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        return "x"
+
+    _patch_sdk(monkeypatch, run_subagent)
+    store = WorkflowRunStore(tmp_path)
+    result = asyncio.run(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+    meta = store.load(result["run_id"])["step_meta"]["brief"]
+    rendered = "write up:\nx"
+    assert meta["prompt_chars"] == len(rendered)
+    assert meta["prompt_sha256"] == hashlib.sha256(rendered.encode()).hexdigest()
+
+
+def test_state_workflow_run_takes_seed_outputs(monkeypatch, tmp_path):
+    # The public runner a plugin gets (STATE.workflow_run) carries the keyword through.
+    from runtime.state import STATE
+
+    seen = {}
+
+    async def fake_execute(reg, name, inputs, on_step=None, seed_outputs=None):
+        seen.update(name=name, seed=seed_outputs)
+        return {"output": "", "steps": {}, "failed": []}
+
+    class _Registry:
+        def __init__(self):
+            from fastapi import FastAPI
+
+            self.app = FastAPI()
+            self.config = {}
+
+        def register_router(self, router, prefix):
+            pass
+
+        def register_tools(self, tools):
+            pass
+
+        def register_workflow_dir(self, d):
+            pass
+
+        def emit(self, topic, data):
+            pass
+
+    monkeypatch.setattr(wf, "_execute", fake_execute)
+    _patch_sdk(monkeypatch, None, workflow_dir=str(tmp_path / "wfdir"))
+    prev = (getattr(STATE, "workflow_registry", None), getattr(STATE, "workflow_run", None))
+    try:
+        wf.register(_Registry())
+        asyncio.run(STATE.workflow_run("demo", {"topic": "ai"}, seed_outputs={"gather": "g"}))
+    finally:
+        STATE.workflow_registry, STATE.workflow_run = prev
+    assert seen == {"name": "demo", "seed": {"gather": "g"}}
 
 
 def test_execute_persists_a_failed_run(tmp_path, monkeypatch):
