@@ -34,6 +34,12 @@ from dataclasses import dataclass, field
 from graph.review.findings import BRIEF_CLOSE, BRIEF_OPEN, FINDINGS_CONTRACT, findings_delivered
 
 
+def answered(text: str) -> bool:
+    """Any non-empty answer is a deliverable — for a subagent whose contract is a closing
+    LINE (`completion_prompt_markers`) rather than a payload shape."""
+    return bool((text or "").strip())
+
+
 @dataclass
 class SubagentConfig:
     name: str
@@ -291,6 +297,15 @@ Hard stop at max_turns.""",
     # simply unused on research verifications.
     tools=["current_time", "web_search", "fetch_url", "github_pr_diff", "github_read_pr_file", "github_read_file"],
     max_turns=30,
+    # The one closing line a review verify prompt requires (#3578): a verifier that traced
+    # every claim in prose and never wrote `VERIFY_STATUS:` read as "the verify pass did
+    # not run", capping a clean round at WARN. The guard asks once, the same way it asks a
+    # finder for FINDER_STATUS — and only when the task prompt names the marker, so the
+    # research workflow's verify (no such line) is untouched. Any answer is a deliverable;
+    # the marker is what is owed on top of it.
+    completion_check=answered,
+    completion_prompt_markers=("VERIFY_STATUS:",),
+    completion_contract="your verification, ending with its required status line",
 )
 
 SYNTHESIZER_CONFIG = SubagentConfig(
