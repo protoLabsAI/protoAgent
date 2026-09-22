@@ -429,7 +429,7 @@ def _arm_reader(monkeypatch, probe, script, *, window, config):
         """Return a big file."""
         return "x" * 10_000
 
-    ping, models = _arm_finder_like(monkeypatch, probe, script, max_turns=40)
+    _, models = _arm_finder_like(monkeypatch, probe, script, max_turns=40)
     monkeypatch.setitem(
         SUBAGENT_REGISTRY,
         PROBE,
