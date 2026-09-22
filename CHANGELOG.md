@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.174.0] - 2026-09-22
+
+### Fixed
+- **Subagents get context relief (#3576).** A delegation had no relief valve: the lead stack has pruned older tool results at 0.6 of the window since #2782, but a subagent accumulated raw file reads until the provider refused the call (`ContextWindowExceeded` — 7 of 8 review panels on one PR). Subagents now get the same `ToolResultPrunerMiddleware`, sized off the subagent model's window, and the completion guard sends one `[context-budget]` wrap-up note at 80% of the window — stop reading, write the deliverable, list the rest as `Gap:` — the context twin of the `[turn-budget]` note.
+
+- **The verifier is asked once for its status line (#3578).** A verify pass that traced every claim in prose and never wrote `VERIFY_STATUS:` read downstream as "the verify pass did not run", capping a clean review at WARN. `VERIFIER_CONFIG` now carries the completion contract finders already have for `FINDER_STATUS:`; the guard asks only when the task prompt names the line, so research verifications are untouched.
+
 ## [0.173.0] - 2026-09-22
 
 ### Added
