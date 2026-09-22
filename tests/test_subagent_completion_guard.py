@@ -493,7 +493,6 @@ def _arm_reader(monkeypatch, probe, script, *, window, config):
             completion_prompt_markers=(STATUS,),
         ),
     )
-    monkeypatch.setattr(agent_mod, "context_window_for", lambda *_a, **_k: window, raising=False)
     import graph.model_window as mw
 
     monkeypatch.setattr(mw, "context_window_for", lambda *_a, **_k: window)
