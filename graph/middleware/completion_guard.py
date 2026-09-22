@@ -28,6 +28,7 @@ from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.middleware.guard_notes import guard_note, is_guard_note
+from graph.middleware.tool_result_pruner import _est_tokens as estimate_tokens
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +39,10 @@ GUARD = "completion"
 LINE_GUARD = "completion-line"  # the single ask for a closing line the caller requires
 # The wrap-up warning sent once as the turn budget runs out (#3559).
 BUDGET_MARK = "[turn-budget]"
+CONTEXT_MARK = "[context-budget]"
+CONTEXT_WRAP_UP_FRACTION = 0.8  # of the model window — past the pruner's 0.6, before the provider refuses
 BUDGET_GUARD = "turn-budget"
+CONTEXT_GUARD = "context-budget"
 WRAP_UP_RESERVE_PCT = 15  # warn with this share of the tool rounds left …
 WRAP_UP_MIN_RESERVE = 3  # … and never fewer than this many
 WRAP_UP_MIN_TURNS = 6  # a smaller budget has no meaningful "nearly spent"
@@ -112,6 +116,7 @@ class CompletionGuardMiddleware(AgentMiddleware):
         max_nudges: int = 2,
         prompt_markers: tuple[str, ...] = (),
         max_turns: int = 0,
+        context_window: int | None = None,
     ):
         super().__init__()
         self._delivered = delivered
@@ -120,6 +125,8 @@ class CompletionGuardMiddleware(AgentMiddleware):
         self._prompt_markers = tuple(prompt_markers or ())
         self._max_turns = max(0, int(max_turns or 0))
         self._wrap_up_at = wrap_up_at(self._max_turns)
+        self._context_window = int(context_window) if context_window else 0
+        self._context_wrap_up_at = int(self._context_window * CONTEXT_WRAP_UP_FRACTION)
 
     def _wrap_up(self, state) -> dict | None:
         """Once, when the budget is nearly spent: stop reading, write it up (#3559).
@@ -144,6 +151,35 @@ class CompletionGuardMiddleware(AgentMiddleware):
         )
         log.info("[completion-guard] turn budget nearly spent (%d/%d); wrap-up note sent", used, self._max_turns)
         return {"messages": [guard_note(BUDGET_GUARD, note)]}
+
+    def _context_wrap_up(self, state) -> dict | None:
+        """Once, when the context is nearly full: stop reading, write it up (#3576).
+
+        The turn budget cannot see this: a lane that reads large files fills a 262k
+        window in 30 rounds of a 60-round budget and the provider refuses the next call
+        — a failed step, every round of reading lost. Estimated as the pruner does
+        (chars//4), against the SUBAGENT model's window; no window, no note.
+        """
+        if not self._context_wrap_up_at:
+            return None
+        messages = state.get("messages") or []
+        if any(is_guard_note(m, CONTEXT_GUARD) for m in messages):
+            return None
+        used = estimate_tokens(messages)
+        if used < self._context_wrap_up_at:
+            return None
+        note = (
+            f"{CONTEXT_MARK} Your context is nearly full (~{used // 1000}k of {self._context_window // 1000}k "
+            f"tokens). Stop reading now — one more large file may end this run with no output. "
+            f"Write {self._contract} from what you have already read, and state anything you "
+            "did not get to as a `Gap:` line rather than opening another file."
+        )
+        log.info(
+            "[completion-guard] context nearly full (~%dk/%dk); wrap-up note sent",
+            used // 1000,
+            self._context_window // 1000,
+        )
+        return {"messages": [guard_note(CONTEXT_GUARD, note)]}
 
     def _intervene(self, state) -> dict | None:
         messages = state.get("messages") or []
@@ -190,10 +226,10 @@ class CompletionGuardMiddleware(AgentMiddleware):
         return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
 
     def before_model(self, state, runtime):  # type: ignore[override]
-        return self._wrap_up(state)
+        return self._wrap_up(state) or self._context_wrap_up(state)
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
-        return self._wrap_up(state)
+        return self._wrap_up(state) or self._context_wrap_up(state)
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state, runtime):  # type: ignore[override]

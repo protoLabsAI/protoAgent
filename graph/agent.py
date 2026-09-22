@@ -807,6 +807,29 @@ async def _run_subagent_inner(
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
+    # In-history tool-result pruning (#3576) — the lead stack has had it since #2782; a
+    # delegation had NO relief valve, and a review finder whose whole job is reading files
+    # accumulated raw results until the provider refused the call (ContextWindowExceeded,
+    # 7 of 8 panels on one PR). Same knobs as the lead; the window is the SUBAGENT model's.
+    from graph.model_window import context_window_for_slot
+
+    try:
+        # The SUBAGENT model's window, on ITS route: `<provider>:<model>` names another
+        # gateway, and only that gateway reports the window (review on #3577).
+        sub_window: int | None = context_window_for_slot(config, sub_model)
+    except Exception:  # noqa: BLE001 — no window → the pruner's fixed fallback, no context note
+        sub_window = None
+    if getattr(config, "pruning_enabled", True):
+        from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
+
+        sub_middleware.append(
+            ToolResultPrunerMiddleware(
+                max_input_tokens=sub_window,
+                at_fraction=getattr(config, "pruning_at_fraction", 0.6),
+                keep_messages=getattr(config, "pruning_keep_messages", 20),
+                min_chars=getattr(config, "pruning_min_chars", 4000),
+            )
+        )
     if getattr(config, "prompt_capture_enabled", False):
         # #2388 P3: subagent prompts were invisible (P1 was main-loop only).
         # Registered after PromptCache (same ordering rule as the lead stack) so
@@ -867,6 +890,7 @@ async def _run_subagent_inner(
                 contract=sub_config.nudge_contract(),
                 prompt_markers=getattr(sub_config, "completion_prompt_markers", ()) or (),
                 max_turns=sub_config.max_turns,
+                context_window=sub_window,
             )
         )
     # Native-OAuth wire shape — LAST, so the transform sees the final system

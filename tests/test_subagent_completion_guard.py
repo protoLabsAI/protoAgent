@@ -460,3 +460,78 @@ async def test_a_verify_prompt_that_names_no_status_line_asks_for_none(monkeypat
     out = await _run_with(ping, "Check these research claims against their sources.")
     assert out.startswith(f"[{PROBE} completed: lane]"), out
     assert len(models[-1].seen) == 1
+
+
+# ── a wrap-up warning before the CONTEXT is gone, and relief on the way there (#3576) ──
+
+
+def _read_call(i: int) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": "read", "args": {}, "id": f"read-{i}"}])
+
+
+def _arm_reader(monkeypatch, probe, script, *, window, config):
+    """A finder-like lane whose tool returns 10k chars per call, on a model whose window
+    is `window` tokens (chars//4 estimate, so 2.5k tokens per read)."""
+    from langchain_core.tools import tool
+
+    @tool
+    def read() -> str:
+        """Return a big file."""
+        return "x" * 10_000
+
+    _, models = _arm_finder_like(monkeypatch, probe, script, max_turns=40)
+    monkeypatch.setitem(
+        SUBAGENT_REGISTRY,
+        PROBE,
+        SubagentConfig(
+            name=PROBE,
+            description="d",
+            system_prompt="p",
+            tools=["read"],
+            max_turns=40,
+            completion_check=findings_delivered,
+            completion_prompt_markers=(STATUS,),
+        ),
+    )
+    import graph.model_window as mw
+
+    monkeypatch.setattr(mw, "context_window_for_slot", lambda *_a, **_k: window)
+
+    async def run():
+        return await agent_mod._run_subagent(
+            config=config,
+            tool_map={"read": read},
+            available_subagents=PROBE,
+            description="lane",
+            prompt="Review the diff.",
+            subagent_type=PROBE,
+        )
+
+    return run, models
+
+
+async def test_a_lane_that_reads_toward_the_context_wall_is_told_once_to_stop(monkeypatch, probe):
+    # mythxengine#858: 7 of 8 panels died on ContextWindowExceeded — 229k tokens of the
+    # finder's own file reads, prompt ~3k chars. The model cannot see its context size.
+    script = [_read_call(i) for i in range(4)] + [AIMessage(content=DELIVERABLE)]
+    # 8k-token window → note at 6.4k tokens (25.6k chars): after the 3rd 10k-char read.
+    run, models = _arm_reader(monkeypatch, probe, script, window=8_000, config=LangGraphConfig(pruning_enabled=False))
+    out = await run()
+    assert out.startswith(f"[{PROBE} completed: lane]"), out
+    seen = models[-1].seen
+    warned = [sum(1 for m in call if is_guard_note(m, "context-budget")) for call in seen]
+    assert warned == [0, 0, 0, 1, 1]  # once three reads are in history, and only once
+    note = next(m for m in seen[3] if is_guard_note(m, "context-budget"))
+    assert "nearly full" in str(note.text) and "Gap:" in str(note.text)
+
+
+async def test_a_subagent_gets_tool_result_pruning_like_the_lead(monkeypatch, probe):
+    # The lead stack has had the pruner since #2782; a delegation had no relief valve.
+    script = [_read_call(i) for i in range(4)] + [AIMessage(content=DELIVERABLE)]
+    cfg = LangGraphConfig(pruning_keep_messages=2, pruning_min_chars=1_000, pruning_at_fraction=0.5)
+    run, models = _arm_reader(monkeypatch, probe, script, window=8_000, config=cfg)  # prunes past 4k tokens
+    out = await run()
+    assert out.startswith(f"[{PROBE} completed: lane]"), out
+    last_call = models[-1].seen[-1]
+    stubbed = [m for m in last_call if "chars pruned by protoAgent" in str(getattr(m, "content", ""))]
+    assert stubbed, "an older 10k-char read should have been stubbed head+tail"

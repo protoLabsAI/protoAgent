@@ -15,6 +15,7 @@ exactly today's behavior (message-count fallback, size-only meter).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from graph.config import LangGraphConfig, resolve_model_route
@@ -93,19 +94,46 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None) -
     # secrets manager, where `model.api_key` is blank by design): a 401, an unknown window
     # for the life of the process, and everything sized off it quietly on its fallback
     # (#3502).
-    route = resolve_model_route(config)
+    return _window_on_route(resolve_model_route(config), (model_name or config.model_name or "").strip())
+
+
+def context_window_for_slot(config: LangGraphConfig, model_name: str | None) -> int | None:
+    """``context_window_for`` for a SLOT value, which may be provider-qualified (#3576).
+
+    A subagent's model can name its own route — ``<provider>:<model>`` (ADR 0106) — and
+    that provider's gateway is the one that knows the window; the default route does not
+    list the model at all, so the plain lookup returned None and everything sized off it
+    fell back. The prefix is honoured only when it names a REGISTERED provider, exactly as
+    dispatch honours it; an unqualified value is the plain lookup.
+    """
+    from graph.llm import split_slot_target  # lazy — llm imports this module
+
+    prefix, bare = split_slot_target(model_name, config)
+    if not prefix:
+        return context_window_for(config, bare or None)
+    provider = next((p for p in (getattr(config, "providers", None) or []) if p.id == prefix), None)
+    if provider is None:
+        return context_window_for(config, bare or None)
+    return _window_on_route(resolve_model_route(config, provider), bare)
+
+
+def _window_on_route(route, model: str) -> int | None:
     base = (route.base_url or "").rstrip("/")
     if not base:
         return None
-    if base not in _ATTEMPTED:
-        _ATTEMPTED.add(base)
+    # Cached per AUTHENTICATED route, not per base: two providers on one gateway with
+    # different keys can see different model lists, and keying on the base alone let the
+    # first key's answer stand in for the second's (review on #3577). A digest, so the
+    # key never sits in a dict key.
+    key = f"{base}#{hashlib.sha256((route.api_key or '').encode()).hexdigest()[:12]}"
+    if key not in _ATTEMPTED:
+        _ATTEMPTED.add(key)
         try:
-            _WINDOWS[base] = _fetch_window_map(base, route.api_key)
+            _WINDOWS[key] = _fetch_window_map(base, route.api_key)
         except Exception:  # noqa: BLE001 — never let model-info break model creation / a turn
-            _WINDOWS[base] = {}
+            _WINDOWS[key] = {}
             log.debug("[model-window] fetch failed for %s", base, exc_info=True)
-    model = (model_name or config.model_name or "").strip()
-    return _WINDOWS.get(base, {}).get(model)
+    return _WINDOWS.get(key, {}).get(model)
 
 
 def context_window_for_turn(config: LangGraphConfig, state) -> int | None:
