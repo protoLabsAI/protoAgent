@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.173.0] - 2026-09-22
+
+### Added
+- **`STATE.workflow_run(..., seed_outputs=)` re-runs part of a recipe (#3571).** Outputs handed in for steps already run are recorded as `seeded` and never dispatched, so a plugin holding a finished run's `steps` can re-run one late step (a flaky verifier: seconds) instead of the whole panel (minutes). The run record now also carries each dispatched step's `prompt_chars` and `prompt_sha256`, so a subagent's claim that its input "was absent" can be checked against what it was handed.
+
+### Fixed
+- **A deck test no longer flakes on Windows shards (#3564).** `test_a_duplicate_submit_never_pops_the_roster_and_mutates_once` drove the new-agent modal before its archetype `Select` had finished mounting, so Textual raised `NoMatches` on the widget's own internal overlay — green everywhere except under shard load. It now waits for the Select to report its initial value, the same guard its sibling tests already use.
+
+- **The findings parser no longer ends a fenced block at a ``` inside a JSON string (#3569).** A finding quoting a reST ``docstring`` inside a markdown code span puts three backticks in a row mid-string; the non-greedy fence pattern cut the block there and `json.loads` failed. In a report — a dispositions block ahead of the findings block — that silently **dropped the findings** (a clean PASS over a report carrying one), and it made `findings_delivered`, the completion guard's predicate, call a delivered review lane undelivered on every retry. The close is now chosen per fence: the first ``` after the opener whose body is valid JSON, so a ``` inside a string is passed over while a fence closed on the payload's own line reads as before — and both shapes can share a text.
+
 ## [0.172.0] - 2026-09-21
 
 ### Fixed

@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.173.0",
+    "date": "2026-09-22",
+    "changes": [
+      "STATE.workflow_run(..., seed_outputs=) re-runs part of a recipe (#3571).",
+      "A deck test no longer flakes on Windows shards (#3564).",
+      "The findings parser no longer ends a fenced block at a ``` inside a JSON string (#3569)."
+    ]
+  },
+  {
     "version": "v0.172.0",
     "date": "2026-09-21",
     "changes": [
