@@ -412,6 +412,56 @@ def test_review_finder_names_the_line_its_callers_may_require():
     assert REVIEW_SYNTHESIZER_CONFIG.completion_prompt_markers == ()
 
 
+# ── the verifier is asked for its status line, like a finder for its own (#3578) ────────
+
+
+def _arm_verifier_like(monkeypatch, probe, script):
+    from graph.subagents.config import VERIFIER_CONFIG
+
+    ping, models = probe(script, max_turns=8)
+    monkeypatch.setitem(
+        SUBAGENT_REGISTRY,
+        PROBE,
+        SubagentConfig(
+            name=PROBE,
+            description="d",
+            system_prompt="p",
+            tools=["ping"],
+            max_turns=8,
+            completion_check=VERIFIER_CONFIG.completion_check,
+            completion_prompt_markers=VERIFIER_CONFIG.completion_prompt_markers,
+            completion_contract=VERIFIER_CONFIG.completion_contract,
+        ),
+    )
+    return ping, models
+
+
+PROSE_CHECK = "**Claim: the lanes are reclassified** — confirmed at dispatch.py:1740.\n\n```json\n[]\n```"
+
+
+async def test_a_verifier_that_did_its_work_in_prose_is_asked_once_for_its_status_line(monkeypatch, probe):
+    # pr-reviewer-plugin#178's review: 77 s of claim-tracing, no `VERIFY_STATUS:` — read as
+    # "the verify pass did not run", capping a clean round at WARN.
+    whole = f"VERIFY_STATUS: nothing-to-verify\n\n{PROSE_CHECK}"
+    ping, models = _arm_verifier_like(monkeypatch, probe, [AIMessage(content=PROSE_CHECK), AIMessage(content=whole)])
+    out = await _run_with(
+        ping, "Verify these findings. **Begin your reply with exactly one status line** `VERIFY_STATUS: …`."
+    )
+    assert out.startswith(f"[{PROBE} completed: lane]") and whole in out, out
+    assert len(models[-1].seen) == 2
+    assert any(is_guard_note(m, "completion-line") for m in models[-1].seen[-1])
+
+
+async def test_a_verify_prompt_that_names_no_status_line_asks_for_none(monkeypatch, probe):
+    # The research workflow's verifier: prose claim checks are the whole deliverable.
+    ping, models = _arm_verifier_like(
+        monkeypatch, probe, [AIMessage(content="Claim 1: supported. Claim 2: unsupported.")]
+    )
+    out = await _run_with(ping, "Check these research claims against their sources.")
+    assert out.startswith(f"[{PROBE} completed: lane]"), out
+    assert len(models[-1].seen) == 1
+
+
 # ── a wrap-up warning before the CONTEXT is gone, and relief on the way there (#3576) ──
 
 
