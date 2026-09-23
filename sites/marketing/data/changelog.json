@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.174.0",
+    "date": "2026-09-22",
+    "changes": [
+      "Subagents get context relief (#3576).",
+      "The verifier is asked once for its status line (#3578)."
+    ]
+  },
+  {
     "version": "v0.173.0",
     "date": "2026-09-22",
     "changes": [
