@@ -93,6 +93,17 @@ def tool_rounds(messages) -> int:
     return sum(1 for m in messages or [] if isinstance(m, AIMessage) and getattr(m, "tool_calls", None))
 
 
+def describe_turn(message) -> str:
+    """``finish_reason=… out_tokens=… in_tokens=… text_chars=…`` for the give-up log (#3582)."""
+    meta = getattr(message, "response_metadata", None) or {}
+    usage = getattr(message, "usage_metadata", None) or {}
+    return (
+        f"finish_reason={meta.get('finish_reason') or meta.get('stop_reason') or '?'} "
+        f"out_tokens={usage.get('output_tokens', '?')} in_tokens={usage.get('input_tokens', '?')} "
+        f"text_chars={len(_text(message))}"
+    )
+
+
 def wrap_up_at(max_turns: int) -> int:
     """The tool round at which to warn that the budget is nearly spent, or 0 for never.
 
@@ -195,12 +206,22 @@ class CompletionGuardMiddleware(AgentMiddleware):
             return None
         sent = nudges_sent(messages)
         if sent >= self._max_nudges:
-            log.warning("[completion-guard] still no deliverable after %d nudge(s); letting the run end", sent)
+            # What the record cannot say otherwise (#3582): a lane that ends on "Let me verify
+            # X" twice looks the same whether its output was cut (finish_reason=length), its
+            # tool call was stripped, or the model simply stopped after a long think.
+            log.warning(
+                "[completion-guard] still no deliverable after %d nudge(s); letting the run end (%s)",
+                sent,
+                describe_turn(last),
+            )
             return None
         if has_deliverable and any(is_guard_note(m, LINE_GUARD) for m in messages):
             # Asked once already for the closing line and the answer still lacks it. That ask
             # is a courtesy on finished work, not a loop: the run ends and is labelled.
-            log.warning("[completion-guard] required closing line still missing after one ask; letting the run end")
+            log.warning(
+                "[completion-guard] required closing line still missing after one ask; letting the run end (%s)",
+                describe_turn(last),
+            )
             return None
         if has_deliverable:
             # The work is done and one required line is missing (pr-reviewer-plugin#145: a
@@ -222,7 +243,12 @@ class CompletionGuardMiddleware(AgentMiddleware):
                 "that tool call now. Otherwise finish now, from what you have already read, with the "
                 "deliverable — a partial answer that says what it did not cover beats none."
             )
-            log.info("[completion-guard] run ended without its deliverable; nudge %d/%d", sent + 1, self._max_nudges)
+            log.info(
+                "[completion-guard] run ended without its deliverable; nudge %d/%d (%s)",
+                sent + 1,
+                self._max_nudges,
+                describe_turn(last),
+            )
         return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
 
     def before_model(self, state, runtime):  # type: ignore[override]

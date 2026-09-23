@@ -535,3 +535,32 @@ async def test_a_subagent_gets_tool_result_pruning_like_the_lead(monkeypatch, pr
     last_call = models[-1].seen[-1]
     stubbed = [m for m in last_call if "chars pruned by protoAgent" in str(getattr(m, "content", ""))]
     assert stubbed, "an older 10k-char read should have been stubbed head+tail"
+
+
+# ── the give-up log says what the turn looked like (#3582) ──────────────────────────────
+
+
+def test_describe_turn_reads_finish_reason_and_usage():
+    from graph.middleware.completion_guard import describe_turn
+
+    m = AIMessage(
+        content="Let me verify the modules exist.",
+        response_metadata={"finish_reason": "stop"},
+        usage_metadata={"input_tokens": 120000, "output_tokens": 9, "total_tokens": 120009},
+    )
+    assert describe_turn(m) == "finish_reason=stop out_tokens=9 in_tokens=120000 text_chars=32"
+    assert describe_turn(AIMessage(content="")) == "finish_reason=? out_tokens=? in_tokens=? text_chars=0"
+
+
+async def test_the_give_up_log_carries_the_turn_shape(monkeypatch, probe, caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="graph.middleware.completion_guard")
+    plan = AIMessage(content="Let me verify the modules exist.", response_metadata={"finish_reason": "stop"})
+    ping, _ = _arm_finder_like(monkeypatch, probe, [plan, plan, plan])
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    gave_up = [r.getMessage() for r in caplog.records if "letting the run end" in r.getMessage()]
+    assert (
+        gave_up and "finish_reason=" in gave_up[-1] and "text_chars=32" in gave_up[-1]
+    )  # the harness replay drops the fixture's metadata (finish_reason logs as ?)
