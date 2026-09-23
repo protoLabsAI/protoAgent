@@ -57,6 +57,37 @@ def test_stdio_connection_inherit_env_false() -> None:
     assert conn["env"] == {"A": "1"}
 
 
+def test_env_tilde_values_are_expanded() -> None:
+    import os
+
+    conn = _server_connection(
+        {
+            "name": "fs",
+            "transport": "stdio",
+            "command": "npx",
+            "inherit_env": False,
+            "env": {"DATA_DIR": "~/mydata", "PORT": "8080"},
+        }
+    )
+    assert conn["env"]["DATA_DIR"] == os.path.expanduser("~/mydata")
+    assert conn["env"]["DATA_DIR"] != "~/mydata"  # expansion actually happened
+    assert conn["env"]["PORT"] == "8080"  # non-tilde values pass through unchanged
+
+
+def test_env_tilde_expanded_with_default_inherit() -> None:
+    import os
+
+    conn = _server_connection(
+        {
+            "name": "fs",
+            "transport": "stdio",
+            "command": "npx",
+            "env": {"CACHE": "~/.cache/myserver"},
+        }
+    )
+    assert conn["env"]["CACHE"] == os.path.expanduser("~/.cache/myserver")
+
+
 def test_stdio_inherit_env_true_passes_full(monkeypatch) -> None:
     # inherit_env: true → the FULL parent env, secrets included (escape hatch).
     monkeypatch.setenv("MCP_TEST_API_KEY", "secret")

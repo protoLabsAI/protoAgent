@@ -164,7 +164,7 @@ def _server_connection(server: dict) -> dict | None:
     # third-party server can't read the agent's secrets. ``inherit_env: true``
     # passes the FULL env (escape hatch); ``false`` passes only the per-server
     # ``env:``. See ``_inherited_env``.
-    server_env = {str(k): str(v) for k, v in (server.get("env") or {}).items()}
+    server_env = {str(k): os.path.expanduser(str(v)) for k, v in (server.get("env") or {}).items()}
     env = _inherited_env(server_env, inherit=server.get("inherit_env"))
     if env is not None:
         conn["env"] = env
