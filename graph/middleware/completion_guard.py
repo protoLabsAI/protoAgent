@@ -218,7 +218,10 @@ class CompletionGuardMiddleware(AgentMiddleware):
         if has_deliverable and any(is_guard_note(m, LINE_GUARD) for m in messages):
             # Asked once already for the closing line and the answer still lacks it. That ask
             # is a courtesy on finished work, not a loop: the run ends and is labelled.
-            log.warning("[completion-guard] required closing line still missing after one ask; letting the run end")
+            log.warning(
+                "[completion-guard] required closing line still missing after one ask; letting the run end (%s)",
+                describe_turn(last),
+            )
             return None
         if has_deliverable:
             # The work is done and one required line is missing (pr-reviewer-plugin#145: a
@@ -240,7 +243,12 @@ class CompletionGuardMiddleware(AgentMiddleware):
                 "that tool call now. Otherwise finish now, from what you have already read, with the "
                 "deliverable — a partial answer that says what it did not cover beats none."
             )
-            log.info("[completion-guard] run ended without its deliverable; nudge %d/%d", sent + 1, self._max_nudges)
+            log.info(
+                "[completion-guard] run ended without its deliverable; nudge %d/%d (%s)",
+                sent + 1,
+                self._max_nudges,
+                describe_turn(last),
+            )
         return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
 
     def before_model(self, state, runtime):  # type: ignore[override]
