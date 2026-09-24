@@ -1265,6 +1265,10 @@ fn open_chat_window<R: Runtime>(app: &AppHandle<R>, path: Option<String>) -> Res
             let app = app.clone();
             move |url, _features| serve_new_window(&app, port, url.as_str())
         })
+        .on_navigation({
+            let app = app.clone();
+            move |url| serve_navigation(&app, url.as_str())
+        })
         .initialization_script(&init);
     #[cfg(target_os = "macos")]
     {
@@ -1332,6 +1336,9 @@ enum NewWindow {
     Managed(Option<String>),
     /// The wider web — hand it to the system browser.
     External,
+    /// An editor deep link (`zed://file/…`, `vscode://file/…`, `cursor://file/…`) from a
+    /// tool card's "open in editor" link — hand it to the OS, which launches the editor.
+    Editor,
     /// Some other scheme we don't serve (mailto:, a custom protocol): drop it.
     Ignore,
 }
@@ -1341,6 +1348,8 @@ fn route_new_window(target: &str, port: u16) -> NewWindow {
         NewWindow::Managed(own_origin_path(target))
     } else if target.starts_with("http://") || target.starts_with("https://") {
         NewWindow::External
+    } else if is_editor_link(target) {
+        NewWindow::Editor
     } else {
         NewWindow::Ignore
     }
@@ -1374,10 +1383,50 @@ fn serve_new_window<R: Runtime>(
                 log::error!("desktop: failed to open external link {target}: {e}");
             }
         }
+        NewWindow::Editor => open_editor_link(app, target),
         NewWindow::Ignore => {}
     }
     // Deny either way: we've already served the request ourselves.
     tauri::webview::NewWindowResponse::Deny
+}
+
+/// The ONLY custom schemes the shell will hand to the OS: the console's "open in editor"
+/// links (apps/web/src/lib/editorLinks.ts). A STRICT allowlist on purpose — the webview
+/// hosts plugin views and agent-authored content, and a generic custom-scheme passthrough
+/// would let any of it launch an arbitrary registered URL handler (`ms-settings:`,
+/// `file:`, some other app's protocol). Only the `://file/` form is accepted, which is
+/// exactly what the console emits; anything else (other schemes, a look-alike prefix such
+/// as `zedx:`, a non-file editor action) is not an editor link.
+const EDITOR_SCHEMES: [&str; 3] = ["zed", "vscode", "cursor"];
+
+fn is_editor_link(target: &str) -> bool {
+    let Some((scheme, rest)) = target.split_once(':') else {
+        return false;
+    };
+    EDITOR_SCHEMES
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s))
+        && rest.starts_with("//file/")
+}
+
+fn open_editor_link<R: Runtime>(app: &AppHandle<R>, target: &str) {
+    if let Err(e) = app.opener().open_url(target, None::<&str>) {
+        log::error!("desktop: failed to open editor link {target}: {e}");
+    }
+}
+
+/// Same-window navigation guard, wired on every shell-built window alongside
+/// `serve_new_window`. The console's editor links are plain `<a href>` with no target (a
+/// browser hands a custom scheme to the OS without unloading the page), so in the webview
+/// they arrive as a NAVIGATION, not a new-window request — and WKWebView/WebView2 can't
+/// load `zed://`, so the click did nothing. Allowlisted editor links go to the OS and the
+/// navigation is cancelled; everything else proceeds exactly as before (returns true).
+fn serve_navigation<R: Runtime>(app: &AppHandle<R>, target: &str) -> bool {
+    if is_editor_link(target) {
+        open_editor_link(app, target);
+        return false;
+    }
+    true
 }
 
 /// Check the updater manifest for a newer build, returning its version + notes for the
@@ -1637,6 +1686,10 @@ pub fn run() {
                 .initialization_script(&init)
                 .on_new_window(move |url, _features| {
                     serve_new_window(&link_opener, sidecar_port, url.as_str())
+                })
+                .on_navigation({
+                    let app = app.handle().clone();
+                    move |url| serve_navigation(&app, url.as_str())
                 });
             // Invisible title bar (macOS): no opaque chrome — content fills the
             // frame and the native traffic lights float top-left. The web shell
@@ -1681,6 +1734,10 @@ pub fn run() {
                 .on_new_window({
                     let app = app.handle().clone();
                     move |url, _features| serve_new_window(&app, port, url.as_str())
+                })
+                .on_navigation({
+                    let app = app.handle().clone();
+                    move |url| serve_navigation(&app, url.as_str())
                 })
                 .initialization_script(&launcher_init)
                 .build()?;
@@ -1864,7 +1921,54 @@ mod auth_token_tests {
 
 #[cfg(test)]
 mod new_window_tests {
-    use super::{is_own_origin, own_origin_path, route_new_window, NewWindow};
+    use super::{is_editor_link, is_own_origin, own_origin_path, route_new_window, NewWindow};
+
+    // ── #3596: "open in editor" links — a STRICT scheme allowlist ─────────────
+    #[test]
+    fn editor_file_links_are_allowlisted() {
+        assert!(is_editor_link("zed://file/Users/me/app/src/main.ts:42:7"));
+        assert!(is_editor_link("vscode://file/C:/proj/a%20b.ts:10"));
+        assert!(is_editor_link("cursor://file/home/jos%C3%A9/x.rs:1"));
+        // Url normalizes the scheme's case; accept either spelling.
+        assert!(is_editor_link("ZED://file/tmp/x"));
+    }
+
+    #[test]
+    fn everything_else_is_not_an_editor_link() {
+        for target in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "ms-settings:privacy",
+            "zedx://file/tmp/x", // look-alike prefix
+            "xzed://file/tmp/x",
+            "zed:file/tmp/x",   // not the //file/ form
+            "zed://ssh/host/x", // an editor action, not a file open
+            "vscode://ms-vscode.remote/x",
+            "cursor:",
+            "zed",
+            "",
+            "https://zed.dev/",
+            "mailto:hi@example.com",
+        ] {
+            assert!(
+                !is_editor_link(target),
+                "{target} must not pass the allowlist"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_links_route_to_the_os_not_a_window() {
+        assert_eq!(
+            route_new_window("zed://file/Users/me/x.py:3", 7870),
+            NewWindow::Editor
+        );
+        assert_eq!(route_new_window("zedx://file/x", 7870), NewWindow::Ignore);
+        assert_eq!(
+            route_new_window("ms-settings:privacy", 7870),
+            NewWindow::Ignore
+        );
+    }
 
     // ── #3316: the triage every shell-built window shares ─────────────────────
     // These ran on the MAIN window only; a link clicked in a second window skipped

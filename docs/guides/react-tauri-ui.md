@@ -153,9 +153,13 @@ the desktop app; a remote fleet member's paths don't exist on your machine. With
 preference Off, an unknown project, or the roots not loaded, results render as plain
 text exactly as before.
 
-> **Desktop app:** the Tauri shell doesn't hand non-http(s) schemes to the OS yet
-> (`route_new_window` in `apps/desktop/src-tauri/src/lib.rs` drops them), so in the
-> packaged app these links are currently inert — they work in a browser console.
+> **Desktop app:** WKWebView/WebView2 can't load `zed://` themselves, so the Tauri shell
+> (`apps/desktop/src-tauri/src/lib.rs`) hands these links to the OS through
+> `tauri-plugin-opener` — on both the same-window navigation path (`serve_navigation`)
+> and the new-window path (`route_new_window`). It is a strict allowlist: only
+> `zed://file/…`, `vscode://file/…` and `cursor://file/…` pass (`is_editor_link`); every
+> other custom scheme is still dropped, so web content can't launch arbitrary URL
+> handlers.
 
 > `operator.allowed_dirs` and `operator.project_dir` are **not** that fence, despite the
 > names. `allowed_dirs` is inert (its enforcement helper has no callers since tasks went
