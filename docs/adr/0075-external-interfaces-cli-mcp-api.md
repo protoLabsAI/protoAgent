@@ -66,6 +66,13 @@ an **ACP server** (`proto --acp`, so protoAgent's `delegate_to acp` spawns it). 
 runtime lifecycle — it assumes a protoAgent is already running. So the missing leg is
 unambiguously protoAgent's own to own.
 
+> **Amendment (2026-09, [ADR 0111](./0111-zed-operator-editor-acp-shim.md)):** "the ACP-server
+> role is `proto --acp`" is true for *proto's* agent only. *protoAgent's own* agent is exposed
+> to ACP clients (Zed's Agent Panel, JetBrains, Neovim…) by the standalone
+> `protoagent-acp` shim (`integrations/zed-acp/`), a stdio ACP server that is a pure A2A
+> client of a running instance. The two coexist: `proto --acp` = proto's brain reaching
+> protoAgent as tools; `protoagent-acp` = protoAgent's brain in the editor.
+
 ## Decision
 
 Treat the CLI, MCP, and API as **one operation model with three faithful projections**, and
