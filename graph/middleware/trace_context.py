@@ -38,6 +38,56 @@ from langchain.agents.middleware import AgentMiddleware
 log = logging.getLogger(__name__)
 
 
+def _cap(text: str) -> str:
+    from observability.tracing import MAX_IO_CHARS
+
+    if len(text) <= MAX_IO_CHARS:
+        return text
+    return f"{text[:MAX_IO_CHARS]}… [{len(text) - MAX_IO_CHARS} more chars]"
+
+
+def _content_text(content) -> str:
+    """A message's content as text — provider block lists (text / thinking / tool_use
+    / image …) keep their text, and non-text blocks are named rather than dumped."""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content or []:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            kind = block.get("type") or "block"
+            if kind == "text":
+                parts.append(str(block.get("text") or ""))
+            elif kind not in ("tool_use", "tool_call"):  # those ride tool_calls
+                parts.append(f"[{kind}]")
+    return "\n".join(p for p in parts if p)
+
+
+def _io_message(msg) -> dict:
+    """One message in Langfuse's chat shape, capped per field (``MAX_IO_CHARS``)."""
+    role = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}.get(
+        getattr(msg, "type", ""), getattr(msg, "type", "") or "message"
+    )
+    out: dict = {"role": role, "content": _cap(_content_text(getattr(msg, "content", "")))}
+    calls = getattr(msg, "tool_calls", None) or []
+    if calls:
+        out["tool_calls"] = [{"name": c.get("name"), "args": _cap(str(c.get("args") or {}))} for c in calls]
+    if role == "tool":
+        out["name"] = getattr(msg, "name", None) or ""
+    return out
+
+
+def _request_io(request) -> list[dict]:
+    """The call's input: the system prompt, then the conversation it was sent."""
+    msgs: list[dict] = []
+    system = getattr(request, "system_message", None)
+    if system is not None:
+        msgs.append(_io_message(system))
+    msgs.extend(_io_message(m) for m in (getattr(request, "messages", None) or []))
+    return msgs
+
+
 class TraceContextMiddleware(AgentMiddleware):
     """Stamp the current Langfuse trace context onto each gateway LLM call."""
 
@@ -68,15 +118,17 @@ class TraceContextMiddleware(AgentMiddleware):
             log.debug("[trace-context] could not stamp trace context", exc_info=True)
             return request
 
-    def _emit_fleet_generation(self, response, duration_ms: int) -> None:
-        """Emit a lightweight generation into the AGENT's own Langfuse project.
+    def _emit_fleet_generation(self, request, response, duration_ms: int) -> None:
+        """Emit the model call as a generation into the AGENT's own Langfuse project.
 
         The gateway logs the full-detail generation into ITS project (via the
         ``_with_trace`` metadata above). When the agent runs in a *different*
         project — a dedicated fleet project — that generation is absent from
-        the agent's own trace, leaving a hole where its model call should be.
-        This lands a model + usage + cost node (no prompt/completion payload)
-        in the agent's project so its trace is whole. Best-effort; never raises.
+        the agent's own trace, leaving a hole where its model call should be;
+        and an agent on a native OAuth provider never touches the gateway, so
+        without the IO here its prompts and replies were logged nowhere. This
+        lands model + usage + cost + the capped messages and reply, and records a
+        tool-call-free reply as the turn's answer. Best-effort; never raises.
         """
         try:
             from observability import pricing, tracing
@@ -102,20 +154,29 @@ class TraceContextMiddleware(AgentMiddleware):
             model = (getattr(msg, "response_metadata", None) or {}).get("model_name", "") or ""
             cost = pricing.cost_usd(model, usage) if usage else 0.0
             name = f"{os.environ.get('AGENT_NAME', 'protoagent')}-turn"
+            output = _io_message(msg)
             tracing.trace_generation(
-                name=name, model=model, usage=usage, cost_usd=cost, duration_ms=duration_ms
+                name=name,
+                model=model,
+                usage=usage,
+                cost_usd=cost,
+                duration_ms=duration_ms,
+                input=_request_io(request),
+                output=output,
             )
+            if not output.get("tool_calls") and output.get("content"):
+                tracing.set_session_output(output["content"])
         except Exception:  # noqa: BLE001 — tracing must never break a model call
             log.debug("[trace-context] could not emit fleet generation", exc_info=True)
 
     def wrap_model_call(self, request, handler):
         t0 = time.monotonic()
         response = handler(self._with_trace(request))
-        self._emit_fleet_generation(response, int((time.monotonic() - t0) * 1000))
+        self._emit_fleet_generation(request, response, int((time.monotonic() - t0) * 1000))
         return response
 
     async def awrap_model_call(self, request, handler):
         t0 = time.monotonic()
         response = await handler(self._with_trace(request))
-        self._emit_fleet_generation(response, int((time.monotonic() - t0) * 1000))
+        self._emit_fleet_generation(request, response, int((time.monotonic() - t0) * 1000))
         return response

@@ -2496,6 +2496,7 @@ async def _chat_langgraph_stream_impl(
             session_id=session_id,
             name="a2a-stream",
             metadata=trace_meta,
+            input=message,
         ),
         request_metadata_scope(request_metadata),
     ):
@@ -3795,6 +3796,7 @@ async def _chat_langgraph_impl(
         session_id=session_id,
         name="chat",
         metadata={"message_preview": message[:100], "soul_rev": soul_revision()},
+        input=message,
     ):
         try:
             # STEP 0 — @-delegate dispatch (S1): same short-circuit as the streaming path,

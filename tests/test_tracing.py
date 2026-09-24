@@ -1035,3 +1035,47 @@ def test_otel_cross_context_detach_error_is_silenced():
     output = handler_buf.getvalue()
     assert "Failed to detach context" not in output, "filter failed to silence the cross-context detach error"
     assert "unrelated OTel error" in output, "filter is too broad — it silenced an unrelated error too"
+
+
+# ─── Turn IO on the session span (the answer is written back from the model seam) ──
+
+
+@pytest.fixture
+def session_langfuse(monkeypatch):
+    tracing = _reload_tracing()
+    fake = MagicMock()
+    span = MagicMock()
+    span.trace_id = "c" * 32
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=span)
+    cm.__exit__ = MagicMock(return_value=None)
+    fake.start_as_current_observation.return_value = cm
+    monkeypatch.setattr(tracing, "_langfuse", fake)
+    monkeypatch.setattr(tracing, "_enabled", True)
+    return tracing, span
+
+
+async def test_trace_session_records_input_and_the_turns_answer(session_langfuse):
+    tracing, span = session_langfuse
+    async with tracing.trace_session("s1", name="chat", input="status?"):
+        tracing.set_session_output("Three open.")
+
+    span.update.assert_any_call(input="status?")
+    span.set_trace_io.assert_any_call(input="status?")
+    span.update.assert_any_call(output="Three open.")
+    span.set_trace_io.assert_any_call(output="Three open.")
+
+
+async def test_a_subagents_answer_is_not_the_turns(session_langfuse):
+    tracing, span = session_langfuse
+    async with tracing.trace_session("s1", name="chat", input="go"):
+        with tracing.trace_span("subagent:worker", as_type="agent"):
+            tracing.set_session_output("worker's closing line")
+        tracing.set_session_output("the answer")
+
+    outputs = [c.kwargs["output"] for c in span.set_trace_io.call_args_list if "output" in c.kwargs]
+    assert outputs == ["the answer"]
+
+
+def test_set_session_output_outside_a_session_is_a_no_op():
+    _reload_tracing().set_session_output("nothing to attach to")

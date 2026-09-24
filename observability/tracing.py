@@ -102,6 +102,27 @@ _session_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
     default="",
 )
 
+# The ``trace_session`` root span of the active turn, so the answer can be written back
+# onto it (and onto the trace) from the model-call seam — the only place that sees the
+# final reply on every return path of the chat/A2A drivers.
+_session_span_ctx: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "_protoagent_session_span",
+    default=None,
+)
+
+# How many ``trace_span`` boundaries (subagent:, a2a:, acp:) enclose the current code.
+# 0 = the turn itself. A subagent's closing answer is not the turn's answer.
+_span_depth_ctx: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "_protoagent_span_depth",
+    default=0,
+)
+
+# Per-message cap on the text that goes into a generation's input/output. A lead
+# agent's system prompt is ~50k tokens and rides EVERY call of a turn; uncapped, one
+# 30-call turn ships megabytes. The exact prompt is kept in full by prompt capture
+# (``prompts.capture``) — the trace needs enough to read the exchange.
+MAX_IO_CHARS = 8000
+
 # Holds the request's ALREADY-classified trust tier (a2a_impl.auth sets this from
 # request.state.trust_tier) so the structured request telemetry can carry it as a
 # bounded, non-secret dimension. Default "" = unclassified — the dimension is then
@@ -339,6 +360,7 @@ async def trace_session(
     session_id: str,
     name: str = "agent-session",
     metadata: dict | None = None,
+    input: Any = None,
 ) -> AsyncIterator[Any]:
     """Open a session-level Langfuse observation that child observations nest under.
 
@@ -367,6 +389,11 @@ async def trace_session(
     ``trace_context`` instead of opening a fresh one, so a hub→member
     delegation renders as ONE distributed trace. The ids are still stamped
     into the span metadata; malformed ids degrade to a fresh trace.
+
+    ``input`` (the user's message) becomes the span's and the trace's input; the
+    turn's answer is written back as their output by ``set_session_output``. The
+    session id and agent tag are propagated as real trace attributes, so Langfuse's
+    Sessions view groups a conversation's turns.
     """
     # Always set session_id so AuditMiddleware can read it even when
     # Langfuse is disabled.
@@ -389,6 +416,8 @@ async def trace_session(
 
     ctx = None
     token = None
+    span_token = None
+    attrs = None
     try:
         trace_context = _caller_trace_context(metadata)
         # Surface the request's classified trust tier as a bounded, non-secret dimension
@@ -409,6 +438,23 @@ async def trace_session(
             },
         )
         span = ctx.__enter__()
+        try:
+            from langfuse import propagate_attributes
+
+            attrs = propagate_attributes(
+                session_id=(session_id or None) and str(session_id)[:200],
+                tags=[os.environ.get("AGENT_NAME", "protoagent")],
+            )
+            attrs.__enter__()
+        except Exception:  # noqa: BLE001 — older SDK: metadata still carries both
+            attrs = None
+        if input is not None:
+            try:
+                span.update(input=input)
+                span.set_trace_io(input=input)
+            except Exception:  # noqa: BLE001
+                pass
+        span_token = _session_span_ctx.set(span)
         # Joined session: the span reports the CALLER's trace id — that's what
         # audit records and downstream propagation must carry.
         trace_id = (
@@ -429,6 +475,16 @@ async def trace_session(
         if token is not None:
             try:
                 _trace_id_ctx.reset(token)
+            except Exception:
+                pass
+        if span_token is not None:
+            try:
+                _session_span_ctx.reset(span_token)
+            except Exception:
+                pass
+        if attrs is not None:
+            try:
+                attrs.__exit__(None, None, None)
             except Exception:
                 pass
         if ctx is not None:
@@ -472,9 +528,14 @@ def trace_span(
     except Exception as e:  # noqa: BLE001 — never fail the wrapped work for tracing
         print(f"[tracing] trace_span({name}) error: {e}")
         ctx = None
+    depth_token = _span_depth_ctx.set(_span_depth_ctx.get() + 1)
     try:
         yield span
     finally:
+        try:
+            _span_depth_ctx.reset(depth_token)
+        except ValueError:
+            pass
         if ctx is not None:
             try:
                 ctx.__exit__(None, None, None)
@@ -545,6 +606,22 @@ def update_span(span: Any, **fields: Any) -> None:
         pass
 
 
+def set_session_output(output: Any) -> None:
+    """Record ``output`` as the active turn's answer — on its ``trace_session`` span
+    and on the trace. Called after each final (tool-call-free) model reply; the last
+    one wins, which is the turn's answer. Ignored inside a ``trace_span`` boundary: a
+    subagent's or coder's closing line is that span's business, not the turn's.
+    """
+    span = _session_span_ctx.get()
+    if span is None or _span_depth_ctx.get() > 0:
+        return
+    try:
+        span.update(output=output)
+        span.set_trace_io(output=output)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def trace_generation(
     name: str,
     model: str = "",
@@ -552,6 +629,8 @@ def trace_generation(
     cost_usd: float = 0.0,
     duration_ms: int = 0,
     session_id: str = "",
+    input: Any = None,
+    output: Any = None,
 ) -> Any:
     """Log a completed LLM generation as a child observation in the CURRENT trace.
 
@@ -562,10 +641,15 @@ def trace_generation(
     share a project. But when an agent runs in a DIFFERENT project than the
     gateway — a dedicated fleet project — that generation lands in the
     gateway's project, leaving the agent's own trace with a HOLE where its
-    model call should be (only the structural spans remain). This emits a
-    lightweight generation — model + token usage + cost, NO prompt/completion
-    payload — into the AGENT's project so its trace is whole. The heavy IO
-    stays in the gateway project; the two are joinable by ``trace_id``.
+    model call should be (only the structural spans remain). This emits the
+    generation — model + token usage + cost — into the AGENT's project so its
+    trace is whole.
+
+    ``input``/``output`` carry the call's messages and reply, capped per message
+    by the caller. Leaving them out on the assumption the gateway had the IO left
+    every call BLANK on an agent that doesn't use the gateway (native OAuth
+    providers — the flagship PM among them): the prompt and reply were logged
+    nowhere at all.
 
     Mirrors ``trace_tool_call``: ``start_observation`` + ``end`` so it nests
     under the current session span without becoming the parent. No-op /
@@ -586,6 +670,8 @@ def trace_generation(
         span = _langfuse.start_observation(
             name=name,
             as_type="generation",
+            input=input,
+            output=output,
             model=model or None,
             usage_details=usage_details,
             cost_details=({"total": float(cost_usd)} if cost_usd else None),
@@ -593,9 +679,9 @@ def trace_generation(
                 "session_id": session_id,
                 "trace_id": _trace_id_ctx.get(),
                 "duration_ms": duration_ms,
-                # Full prompt/completion IO is logged by the gateway's LiteLLM
-                # callback into the gateway Langfuse project (joined by trace_id).
-                "detail_in": "gateway_project",
+                # Capped per message (MAX_IO_CHARS); the gateway's LiteLLM callback
+                # logs the uncapped call into its own project when the call went
+                # through it (joined by trace_id).
             },
         )
         span.end()
