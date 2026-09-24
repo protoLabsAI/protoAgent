@@ -79,7 +79,7 @@ cites where each one comes from.
 | `tool_call` → `tool_call_update` | tool-call-v1 `started` (announced twice: first with empty args, then with args) → `completed`/`failed` |
 | `kind` | `read_file`/`list_dir` → read · `search_files`/`find_files` → search · `write_file`/`edit_file` → edit · `delete_file` → delete · `run_command` → execute · `task` → think · otherwise other |
 | `locations` | `project` + relative `path` (+ `offset` as line) resolved against the project roots. `search_files` hits (`rel:line:`) become locations on completion. A path that escapes its root is never emitted |
-| `session/request_permission` | A hitl-v1 `approval` park. The answer resumes the same task with `approved`/`denied` in the same prompt, and a failure to ask fails closed |
+| `session/request_permission` | A hitl-v1 `approval` park. The answer resumes the same task with `approved`/`denied` in the same prompt; a failure to ask, or a dismissed prompt, fails closed. A `run_command` approval also offers `allow_always` ("Allow for this session"), see below |
 | a question / form park | Shown as text and the turn ends. The **next prompt** resumes the task (`metadata.hitl_resume`), the same way the console does it |
 | `PromptResponse.usage` | cost-v1 on the terminal artifact |
 | **a failed turn** | protoAgent emits `SUBMITTED → WORKING → FAILED`, with the exception text as the FAILED status message's only part. For example, `Error code: 429 - {… 'usage_limit_reached' …}` when the model's quota is spent; `server/chat.py` yields `("error", str(e))` and the executor calls `updater.failed(...)`. The shim sends a `⚠️ protoAgent error: <friendly message>` chunk, which stays in the thread history, and returns a **JSON-RPC error** from `session/prompt`. Zed renders that as its error callout (`ThreadError::Other`). A plain `end_turn` would read as an empty success |
@@ -100,6 +100,28 @@ When a tool names a project that has no root, the map is **reloaded**. That cove
 agent that `onboard_project`-ed a repo mid-session, which the navaEngineer rehearsal hit.
 Reloads are rate-limited per name, so repeated calls on an unmappable project cost one
 fetch.
+
+**"Allow for this session."** This mirrors the console's `/bypass`, scoped to one Zed
+thread.
+
+- **Offered only for a `run_command` approval.** The shim identifies which tool parked from
+  the tool call that started but hasn't finished. A shell-command approval is the only gate
+  the server's bypass skips.
+- **When chosen,** the shim:
+  - approves the command;
+  - sends `bypass_permissions: true` in `message.metadata` on every later A2A message for
+    that session. That is the key and placement the console uses
+    (`apps/web/src/lib/api.ts`), and `tools/fs_tools.py::_bypass_requested` reads it;
+  - auto-approves further command parks in the **current** turn, because the server reads
+    the flag per message, so the bypass only starts with the next one;
+  - writes one transcript line.
+- **Scope:** in memory and per ACP session. Never persisted, never shared across threads.
+- **Refusals win.** `filesystem.bypass_allowed: false` still wins: a park that arrives
+  despite the flag is prompted normally, noted once in the transcript, and never worked
+  around.
+- **Deletes always ask.** `delete_file`'s permanent-delete floor (ADR 0083 D5) is never
+  offered `allow_always` and never auto-approved, so the shim cannot mask it.
+- **Other approvals** (plugins) are offered only once / deny.
 
 **Credentials** are taken from `--token` / `--token-file`, then `PROTOAGENT_TOKEN` /
 `PROTOAGENT_TOKEN_FILE`, then the file written by `protoagent-acp login`. That file is

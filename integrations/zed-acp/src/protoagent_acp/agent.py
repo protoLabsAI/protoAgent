@@ -111,6 +111,12 @@ class Session:
     runner: asyncio.Task | None = None
     cancelled: bool = False
     spoke: bool = False  # any answer text sent this prompt (for separators)
+    # "Allow for this session" (allow_always on a run_command approval). In memory only —
+    # never persisted; a new Zed thread starts prompting again.
+    allow_commands: bool = False  # send bypass_permissions on every later A2A message
+    auto_approve_turn: bool = False  # the server's bypass starts NEXT message: cover this turn
+    told_bypass_refused: bool = False
+    open_tools: dict[str, str] = field(default_factory=dict)  # started, not yet ended: id -> name
     announced: set[str] = field(default_factory=set)
     args: dict[str, dict] = field(default_factory=dict)
 
@@ -253,11 +259,14 @@ class ProtoAgentACP:
         if s.parked_task_id:
             task_id, metadata = s.parked_task_id, {"hitl_resume": True}
             s.parked_task_id = None
-        elif s.first_prompt:
-            text = self._preamble(s) + text
+        else:
+            s.open_tools.clear()  # a fresh turn: nothing from an earlier one is still pending
+            if s.first_prompt:
+                text = self._preamble(s) + text
         s.first_prompt = False
         s.cancelled = False
         s.spoke = False
+        s.auto_approve_turn = False
         s.runner = asyncio.create_task(self._drive(s, text, task_id, metadata))
         try:
             stop, usage = await s.runner
@@ -289,7 +298,7 @@ class ProtoAgentACP:
             paused: StateEvent | None = None
             last: StateEvent | None = None
             try:
-                async for frame in self.a2a.stream(text, context_id=s.id, task_id=task_id, metadata=metadata):
+                async for frame in self.a2a.stream(text, context_id=s.id, task_id=task_id, metadata=self._metadata(s, metadata)):
                     cid = frame_context_id(frame)
                     if cid and cid != s.id:
                         continue  # cross-talk from another context: never ours
@@ -421,6 +430,7 @@ class ProtoAgentACP:
             if evt.parent_id:
                 title = f"↳ {title}"
             locations = [ToolCallLocation(**loc) for loc in locs] or None
+            s.open_tools[evt.id] = evt.name
             if evt.id not in s.announced:
                 s.announced.add(evt.id)
                 await self._send(
@@ -439,6 +449,7 @@ class ProtoAgentACP:
                 await self._send(s, update_tool_call(evt.id, title=title, locations=locations, raw_input=args or None))
             return
         # end
+        s.open_tools.pop(evt.id, None)
         if evt.id not in s.announced:  # missed start: still show it
             s.announced.add(evt.id)
             title, _ = toolmap.describe(evt.name, {}, self.roots)
@@ -459,28 +470,89 @@ class ProtoAgentACP:
             ),
         )
 
+    @staticmethod
+    def _metadata(s: Session, extra: dict | None) -> dict | None:
+        """A2A message metadata for this session: the caller's (e.g. ``hitl_resume``) plus
+        ``bypass_permissions: true`` once the operator chose "Allow for this session" — the
+        same key, in the same place (``message.metadata``), the console's /bypass sends
+        (``apps/web/src/lib/api.ts``); ``tools/fs_tools.py::_bypass_requested`` reads it."""
+        md = dict(extra or {})
+        if s.allow_commands:
+            md["bypass_permissions"] = True
+        return md or None
+
+    def _pending_tool(self, s: Session, hitl: dict) -> str:
+        """Which tool parked for approval: the most recent started-but-unfinished call
+        (the park happens inside it, so it has no tool_end yet). Falls back to the
+        approval's title for a stream that never announced the call."""
+        if s.open_tools:
+            return next(reversed(s.open_tools.values()))
+        title = str(hitl.get("title") or "").lower()
+        if "shell command" in title:
+            return "run_command"
+        if "delete" in title:
+            return "delete_file"
+        return ""
+
     async def _ask_permission(self, s: Session, task_id: str, hitl: dict) -> str:
         title = str(hitl.get("title") or "Approve this action?")
-        detail = hitl.get("detail") or hitl.get("command") or ""
+        detail = str(hitl.get("detail") or hitl.get("command") or "")
+        tool = self._pending_tool(s, hitl)
+        # Only a shell-command approval can be allowed for the session: that is the one gate
+        # the server's bypass skips. delete_file's permanent-delete floor ALWAYS asks (ADR
+        # 0083 D5) and anything else (a plugin's approval) has no server-side bypass, so
+        # neither is ever offered allow_always nor auto-approved here.
+        session_allowable = tool == "run_command"
         tool_call_id = f"approval-{task_id}-{uuid.uuid4().hex[:6]}"
-        await self._send(
-            s,
-            start_tool_call(tool_call_id, f"{title} {detail}".strip(), kind="execute" if hitl.get("command") else "other", status="pending"),
-        )
+        kind = "execute" if tool == "run_command" else ("delete" if tool == "delete_file" else "other")
+        first_line = detail.splitlines()[0] if detail else ""
+
+        if session_allowable and s.auto_approve_turn:
+            await self._send(
+                s,
+                start_tool_call(tool_call_id, f"Allowed for this session: {first_line}".strip(), kind=kind, status="completed"),
+            )
+            return "approved"
+        if session_allowable and s.allow_commands and not s.told_bypass_refused:
+            # We sent bypass_permissions and the server STILL parked: this instance forbids
+            # bypass (filesystem.bypass_allowed: false). Respect it — ask, don't work around.
+            s.told_bypass_refused = True
+            await self._send(
+                s,
+                update_agent_message_text(
+                    ("\n\n" if s.spoke else "")
+                    + "(This instance doesn't allow skipping command approval, so you'll be asked each time.)\n\n"
+                ),
+            )
+
+        await self._send(s, start_tool_call(tool_call_id, f"{title} {first_line}".strip(), kind=kind, status="pending"))
+        options = [PermissionOption(option_id="approve", name="Allow once", kind="allow_once")]
+        if session_allowable:
+            options.append(PermissionOption(option_id="approve_session", name="Allow for this session", kind="allow_always"))
+        options.append(PermissionOption(option_id="deny", name="Deny", kind="reject_once"))
+        choice = ""
         try:
             resp = await self._conn.request_permission(
                 session_id=s.id,
-                tool_call=ToolCallUpdate(tool_call_id=tool_call_id, title=title),
-                options=[
-                    PermissionOption(option_id="approve", name="Approve", kind="allow_once"),
-                    PermissionOption(option_id="deny", name="Deny", kind="reject_once"),
-                ],
+                tool_call=ToolCallUpdate(tool_call_id=tool_call_id, title=title, raw_input={"detail": detail} if detail else None),
+                options=options,
             )
             outcome = resp.outcome
-            approved = getattr(outcome, "outcome", "") == "selected" and getattr(outcome, "option_id", "") == "approve"
+            if getattr(outcome, "outcome", "") == "selected":  # AllowedOutcome; DeniedOutcome = dismissed
+                choice = str(getattr(outcome, "option_id", ""))
         except Exception as exc:  # a client without permission UI: fail closed
             log.warning("request_permission failed (%s); denying", exc)
-            approved = False
+        approved = choice in ("approve", "approve_session")
+        if choice == "approve_session" and session_allowable:
+            if not s.allow_commands:
+                s.allow_commands = True
+                await self._send(
+                    s,
+                    update_agent_message_text(
+                        ("\n\n" if s.spoke else "") + "Commands will run without asking for the rest of this thread.\n\n"
+                    ),
+                )
+            s.auto_approve_turn = True
         await self._send(s, update_tool_call(tool_call_id, status="completed" if approved else "failed"))
         return "approved" if approved else "denied"
 

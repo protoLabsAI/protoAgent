@@ -17,7 +17,7 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | tool cards with kind (read / search / edit / execute / …) | tool-call-v1 metadata |
 | **follow-the-agent** jumps into files | `project` + `path` (+ `offset`) args, resolved to absolute paths |
 | search-hit locations on a finished `search_files` | the `file:line:` hits in its result |
-| a permission prompt | a parked `approval` (e.g. `run_command`, permanent delete) |
+| a permission prompt: **Allow once / Allow for this session / Deny** | a parked `approval` (e.g. `run_command`, permanent delete) |
 | Stop button | A2A `CancelTask` |
 | an error callout + a "⚠️ protoAgent error: …" line | a turn that FAILED (e.g. the model's 429 usage limit), or a stream that closed without a terminal state and whose task (read back with `GetTask`) failed or is still running |
 
@@ -69,6 +69,24 @@ Panel's new-thread menu:
   mid-session.
 - Logs: `dev: open acp logs` in Zed (the shim logs to stderr; stdout is protocol only).
 
+### "Allow for this session"
+
+A `run_command` approval offers **Allow for this session** as well as Allow once and Deny.
+Choosing it approves the command and switches the Zed thread to allow-all. The shim then:
+
+- stamps `bypass_permissions: true` on every later A2A message in that thread. This is the
+  same `message.metadata` key the console's `/bypass` sends;
+- auto-approves any further command approval in the **current** turn, because the server's
+  bypass only takes effect from the next message;
+- writes "Commands will run without asking for the rest of this thread." into the
+  transcript.
+
+This state is per thread and held in memory only, so a new Zed thread asks again. If the
+instance forbids bypass (`filesystem.bypass_allowed: false`), the server keeps asking and so
+does the shim; it says so once and never works around the refusal. **Permanent deletes
+always ask.** They are never offered "for this session" and never auto-approved, which
+matches the server's delete floor.
+
 ## What it does not do (yet)
 
 - **Edits are not routed through Zed.** protoAgent writes its own project roots; Zed shows
@@ -89,7 +107,8 @@ uv venv && uv pip install -e . pytest pytest-asyncio
 .venv/bin/python -m pytest -q          # unit + fake-A2A + stdio subprocess tests
 
 # drive a live instance exactly as Zed would, printing the session/update stream
-# (permission requests are DENIED unless you pass --approve, which clicks "Allow once"):
+# (permission requests are DENIED unless you pass --approve ("Allow once") or
+#  --approve-always ("Allow for this session", falling back to "Allow once")):
 .venv/bin/python scripts/acp_harness.py --cwd ~/dev/protoAgent \
   --prompt "Read README.md's first 20 lines" \
   -- --url http://127.0.0.1:7870 --trace-frames /tmp/frames.jsonl

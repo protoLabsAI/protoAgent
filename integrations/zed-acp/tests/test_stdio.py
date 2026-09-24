@@ -51,11 +51,15 @@ async def test_stdio_round_trip(tmp_path):
 
 def _approval_script(ctx, msg):
     if not (msg.get("metadata") or {}).get("hitl_resume"):
-        return [fa.task(ctx), fa.hitl(ctx, {"kind": "approval", "title": "Approve shell command?", "detail": "git status"})]
+        return [
+            fa.task(ctx),
+            fa.tool(ctx, "c1", "run_command", "started", args='{"project": "p", "command": "git status"}'),
+            fa.hitl(ctx, {"kind": "approval", "title": "Approve shell command?", "detail": "git status"}),
+        ]
     return [fa.text(ctx, "resumed: " + msg["parts"][0]["text"], append=False), fa.done(ctx)]
 
 
-@pytest.mark.parametrize(("flag", "word"), [([], "denied"), (["--approve"], "approved")])
+@pytest.mark.parametrize(("flag", "word"), [([], "denied"), (["--approve"], "approved"), (["--approve-always"], "approved")])
 def test_harness_denies_by_default_and_approves_with_flag(flag, word):
     harness = Path(__file__).resolve().parents[1] / "scripts" / "acp_harness.py"
     with fa.FakeA2A(token=None) as fake:
@@ -65,9 +69,11 @@ def test_harness_denies_by_default_and_approves_with_flag(flag, word):
             capture_output=True, text=True, timeout=60,
         )
     assert out.returncode == 0, out.stderr
-    assert ("→ ALLOW" if flag else "→ DENY") in out.stdout
+    expect = {"": "→ DENY (deny)", "--approve": "→ ALLOW (approve)", "--approve-always": "→ ALLOW ALWAYS (approve_session)"}
+    assert expect[flag[0] if flag else ""] in out.stdout
     assert f"resumed: {word}" in out.stdout
     assert fake.requests[1]["parts"][0]["text"] == word
+    assert bool((fake.requests[1].get("metadata") or {}).get("bypass_permissions")) == (flag == ["--approve-always"])
 
 
 def test_harness_prints_a_failed_turn_and_exits_nonzero():

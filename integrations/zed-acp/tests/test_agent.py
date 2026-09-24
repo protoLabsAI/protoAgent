@@ -16,9 +16,10 @@ from protoagent_acp.roots import RootMap
 
 
 class RecordingConn:
-    def __init__(self, approve: bool | None = True) -> None:
+    def __init__(self, approve: bool | str | None = True) -> None:
         self.updates: list[dict] = []
         self.permissions: list[Any] = []
+        self.options: list[list[tuple[str, str]]] = []
         self.approve = approve
 
     async def session_update(self, session_id: str, update: Any, **_: Any) -> None:
@@ -26,10 +27,14 @@ class RecordingConn:
 
     async def request_permission(self, session_id: str, tool_call: Any, options: list[Any], **_: Any) -> Any:
         self.permissions.append(tool_call)
+        self.options.append([(o.option_id, o.kind) for o in options])
         # The real schema shapes a client sends: picking any option is AllowedOutcome
         # ("selected"); dismissing the prompt is DeniedOutcome ("cancelled").
         if self.approve is None:
             return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+        if self.approve == "always":
+            ids = [o.option_id for o in options if o.kind == "allow_always"] or [o.option_id for o in options if o.kind == "allow_once"]
+            return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=ids[0]))
         chosen = "approve" if self.approve else "deny"
         return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=chosen))
 
@@ -40,7 +45,7 @@ class RecordingConn:
         return "".join(u["content"]["text"] for u in self.of("agent_message_chunk"))
 
 
-async def _agent(fake: fa.FakeA2A, token: str | None = "secret", overrides: dict | None = None, approve: bool | None = True):
+async def _agent(fake: fa.FakeA2A, token: str | None = "secret", overrides: dict | None = None, approve: bool | str | None = True):
     client = A2AClient(fake.url, token)
     agent = ProtoAgentACP(client, RootMap(overrides))
     conn = RecordingConn(approve)
@@ -309,3 +314,116 @@ async def test_unknown_project_refresh_is_rate_limited():
         await client.aclose()
     assert all("locations" not in u for u in conn.of("tool_call"))
     assert fake.gets.count("/api/fs/roots") == 2  # session/new + one refresh for five misses
+
+
+# ── "Allow for this session" ────────────────────────────────────────────────
+
+SHELL = {"kind": "approval", "title": "Approve shell command?", "detail": "npm test\n\nruns via: /bin/sh -c", "project": "p"}
+DELETE = {"kind": "approval", "title": "Approve permanent file delete?", "detail": "old.txt", "project": "p"}
+
+
+def _run_command_park(ctx, call_id, hitl=SHELL, tid="t1"):
+    return [
+        fa.tool(ctx, call_id, "run_command", "started", args='{"project": "p", "command": "npm test"}', tid=tid),
+        fa.hitl(ctx, hitl, tid=tid),
+    ]
+
+
+def _bypassing(msg) -> bool:
+    return bool((msg.get("metadata") or {}).get("bypass_permissions"))
+
+
+async def test_allow_for_session_approves_now_this_turn_and_bypasses_later_turns():
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            n = len(fake.requests)
+            if n == 1:  # turn 1: a command parks
+                return [fa.task(ctx), *_run_command_park(ctx, "c1")]
+            if n == 2:  # resume → the tool finishes, a SECOND command parks in the same turn
+                return [fa.tool(ctx, "c1", "run_command", "completed", result="ok"), *_run_command_park(ctx, "c2")]
+            if n == 3:  # resume of the second park → turn ends
+                return [fa.tool(ctx, "c2", "run_command", "completed", result="ok"), fa.text(ctx, "done", append=False), fa.done(ctx)]
+            # turn 2: the server honours bypass_permissions and never parks
+            assert _bypassing(msg)
+            return [fa.task(ctx, tid="t2"), fa.text(ctx, "ran without asking", append=False, tid="t2"), fa.done(ctx, tid="t2")]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, approve="always")
+        sess = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("run the tests twice")], session_id=sess.session_id)
+        await agent.prompt(prompt=[text_block("again")], session_id=sess.session_id)
+        await client.aclose()
+    assert len(conn.permissions) == 1  # the second park in the same turn was NOT asked
+    assert ("approve_session", "allow_always") in conn.options[0]
+    assert [m["parts"][0]["text"] for m in fake.requests[1:3]] == ["approved", "approved"]
+    assert not _bypassing(fake.requests[0])  # before the choice
+    assert all(_bypassing(m) for m in fake.requests[1:])  # every later A2A message
+    assert fake.requests[1]["metadata"] == {"hitl_resume": True, "bypass_permissions": True}
+    assert "Commands will run without asking for the rest of this thread." in conn.text()
+    auto = [u for u in conn.of("tool_call") if u["title"].startswith("Allowed for this session")]
+    assert len(auto) == 1 and auto[0]["status"] == "completed"
+
+
+async def test_delete_is_never_session_allowed_or_auto_approved():
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            n = len(fake.requests)
+            if n == 1:
+                return [fa.task(ctx), *_run_command_park(ctx, "c1")]
+            if n == 2:  # after allow-for-session, the same turn asks to delete a file
+                return [
+                    fa.tool(ctx, "c1", "run_command", "completed", result="ok"),
+                    fa.tool(ctx, "d1", "delete_file", "started", args='{"project": "p", "path": "old.txt"}'),
+                    fa.hitl(ctx, DELETE),
+                ]
+            return [fa.tool(ctx, "d1", "delete_file", "completed", result="deleted"), fa.done(ctx)]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, approve="always")
+        sess = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
+        await client.aclose()
+    assert len(conn.permissions) == 2  # the delete WAS asked, despite allow-all
+    assert [k for _, k in conn.options[1]] == ["allow_once", "reject_once"]  # no allow_always offered
+    delete_card = next(u for u in conn.of("tool_call") if u["toolCallId"].startswith("approval-") and "delete" in u["title"])
+    assert delete_card["kind"] == "delete" and delete_card["status"] == "pending"
+
+
+async def test_server_refusing_bypass_still_prompts_and_says_so_once():
+    """filesystem.bypass_allowed: false — the server parks even with bypass_permissions set.
+    The shim must not work around it: it asks, every time."""
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            n = len(fake.requests)
+            if msg.get("metadata", {}).get("hitl_resume"):
+                return [fa.tool(ctx, f"c{n}", "run_command", "completed", result="ok", tid=msg["taskId"]), fa.done(ctx, tid=msg["taskId"])]
+            tid = f"t{n}"
+            return [fa.task(ctx, tid=tid), *_run_command_park(ctx, f"c{n}", tid=tid)]  # parks regardless of bypass
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, approve="always")
+        sess = await agent.new_session(cwd="/")
+        for _ in range(3):
+            await agent.prompt(prompt=[text_block("run")], session_id=sess.session_id)
+        await client.aclose()
+    assert len(conn.permissions) == 3  # asked on every turn after the first
+    assert conn.text().count("doesn't allow skipping command approval") == 1
+
+
+async def test_allow_for_session_is_per_session():
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            if msg.get("metadata", {}).get("hitl_resume"):
+                return [fa.tool(ctx, "c1", "run_command", "completed", result="ok"), fa.done(ctx)]
+            return [fa.task(ctx), *_run_command_park(ctx, "c1")]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, approve="always")
+        a = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("x")], session_id=a.session_id)
+        b = await agent.new_session(cwd="/")  # a new Zed thread
+        await agent.prompt(prompt=[text_block("x")], session_id=b.session_id)
+        await client.aclose()
+    first_b = next(m for m in fake.requests if m["contextId"] == b.session_id)
+    assert not _bypassing(first_b)
+    assert len(conn.permissions) == 2  # thread B asked again

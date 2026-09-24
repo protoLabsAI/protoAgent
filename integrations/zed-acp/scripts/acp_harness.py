@@ -8,7 +8,8 @@ initialize → session/new → session/prompt — and print the session/update s
 Everything after ``--`` is passed to the shim. Permission requests are DENIED by default
 (the harness is for read-only probing of live agents); ``--approve`` selects the
 ``allow_once`` option instead, like a human clicking Allow in Zed, to drive an approval
-flow such as ``run_command``. A failed turn arrives as a JSON-RPC error on
+flow such as ``run_command``; ``--approve-always`` picks ``allow_always`` when offered
+("Allow for this session") and falls back to ``allow_once``. A failed turn arrives as a JSON-RPC error on
 ``session/prompt`` and is printed, not raised. ``--json`` prints each update as
 the raw ACP JSON instead of the one-line summary.
 """
@@ -34,9 +35,10 @@ from acp.schema import (
 
 
 class HarnessClient:
-    def __init__(self, as_json: bool, approve: bool = False) -> None:
+    def __init__(self, as_json: bool, approve: bool = False, approve_always: bool = False) -> None:
         self.as_json = as_json
         self.approve = approve
+        self.approve_always = approve_always
         self.t0 = time.monotonic()
         self.updates: list[dict] = []
 
@@ -66,7 +68,10 @@ class HarnessClient:
             print(f"{self._ts()} {kind} {json.dumps(d)[:200]}", flush=True)
 
     async def request_permission(self, session_id: str, tool_call: Any, options: list[Any], **_: Any) -> RequestPermissionResponse:
-        if self.approve:
+        always = next((o for o in options if o.kind == "allow_always"), None)
+        if self.approve_always and always is not None:
+            pick, verdict = always, "ALLOW ALWAYS"
+        elif self.approve or self.approve_always:
             pick = next((o for o in options if o.kind == "allow_once"), None) or next(o for o in options if o.kind.startswith("allow"))
             verdict = "ALLOW"
         else:
@@ -100,11 +105,12 @@ async def main() -> int:
     p.add_argument("--cwd", default=os.getcwd(), help="the editor folder sent in session/new")
     p.add_argument("--json", action="store_true")
     p.add_argument("--approve", action="store_true", help="answer permission requests with allow_once (default: deny)")
+    p.add_argument("--approve-always", action="store_true", help="answer with allow_always when offered (else allow_once)")
     p.add_argument("--timeout", type=float, default=300.0)
     args = p.parse_args(argv)
 
     rc = 0
-    client = HarnessClient(args.json, approve=args.approve)
+    client = HarnessClient(args.json, approve=args.approve, approve_always=args.approve_always)
     async with spawn_agent_process(client, sys.executable, "-m", "protoagent_acp", *shim_args) as (conn, _proc):
         init = await conn.initialize(
             protocol_version=PROTOCOL_VERSION,
