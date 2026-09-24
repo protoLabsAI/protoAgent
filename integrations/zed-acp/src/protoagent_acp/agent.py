@@ -420,22 +420,23 @@ class ProtoAgentACP:
         runner = asyncio.create_task(self._drive(s, text, task_id, metadata))
         s.runner = runner
         runner.add_done_callback(lambda t, s=s: self._turn_finished(s, t))
-        return await self._own(s)
+        return await self._own(s, runner)
 
     def _turn_finished(self, s: Session, task: asyncio.Task) -> None:
         if s.runner is task:
             s.runner = None
             s.task_id = None
-        if s.detached:  # finished while nobody was attached: its output is dropped
+        if s.detached and s.steer is None:
+            # Finished while nobody was attached and no Send Now is adopting it: dropped.
             s.held.clear()
 
-    async def _own(self, s: Session) -> PromptResponse:
-        """Wait for the running turn's result — or for a detach (session/cancel) to answer
-        this prompt `cancelled` while the turn keeps going."""
+    async def _own(self, s: Session, runner: asyncio.Task) -> PromptResponse:
+        """Wait for ``runner``'s result — or for a detach (session/cancel) to answer this
+        prompt `cancelled` while the turn keeps going. The runner is passed in, not read
+        from the session: an adopted turn can finish (clearing ``s.runner``) while the
+        adopting prompt is still flushing held output."""
         owner: asyncio.Future = asyncio.get_running_loop().create_future()
         s.owner = owner
-        runner = s.runner
-        assert runner is not None
         await asyncio.wait({runner, owner}, return_when=asyncio.FIRST_COMPLETED)
         if owner.done():
             stop, usage = owner.result()
@@ -452,6 +453,8 @@ class ProtoAgentACP:
         (``POST /api/chat/sessions/<contextId>/steer`` — the console's mid-turn steering,
         folded in at the next model call) and make THIS prompt the stream's owner. ``None``
         when the steer can't be queued: the caller cancels for real and starts a new turn."""
+        runner = s.runner
+        assert runner is not None
         steer_id = f"zed-{uuid.uuid4().hex[:12]}"
         s.steer = (steer_id, text)  # set BEFORE the POST: the fold frame can race the reply
         status, body = await self.a2a.send_json("POST", f"/api/chat/sessions/{s.id}/steer", {"id": steer_id, "text": text})
@@ -470,7 +473,7 @@ class ProtoAgentACP:
         for update in held:  # in stream order; includes the marker if the fold already happened
             await self._send(s, update)
         s.attached.set()
-        resp = await self._own(s)
+        resp = await self._own(s, runner)
         if resp.stop_reason != "end_turn":
             return resp
         # Turn over. A steer that arrived after the turn's LAST model call was never folded

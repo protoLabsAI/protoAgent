@@ -22,7 +22,11 @@ class RecordingConn:
         self.options: list[list[tuple[str, str]]] = []
         self.approve = approve
 
+    delay = 0.0  # seconds per update: a slow client widens the adopt-vs-finish race
+
     async def session_update(self, session_id: str, update: Any, **_: Any) -> None:
+        if self.delay:
+            await asyncio.sleep(self.delay)
         self.updates.append(update.model_dump(by_alias=True, exclude_none=True))
 
     async def request_permission(self, session_id: str, tool_call: Any, options: list[Any], **_: Any) -> Any:
@@ -726,3 +730,25 @@ async def test_load_replays_a_send_now_steer_as_a_user_message_where_it_was_read
         ("user_message_chunk", "Just the README"),
         ("agent_message_chunk", "The README says hi."),
     ]
+
+
+async def test_turn_finishing_while_the_steer_is_being_adopted_still_answers_the_prompt():
+    """Found by the stdio harness: the adopted turn ended while the adopting prompt was
+    still flushing held output (s.runner already cleared) → an internal error."""
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [
+            fa.task(ctx),
+            fa.text(ctx, "A.", append=False),
+            fa.after_steer(fake, lambda t: fa.text(ctx, " B.", append=True)),
+            fa.done(ctx),
+        ]
+        agent, conn, client = await _agent(fake, steer_grace=3.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        conn.delay = 0.15  # the whole rest of the turn lands while we flush
+        r2 = await agent.prompt(prompt=[text_block("B")], session_id=sess.session_id)
+        await client.aclose()
+    assert r2.stop_reason == "end_turn"
+    assert conn.text() == "A.\n\n↪ steering: B\n\n B."
