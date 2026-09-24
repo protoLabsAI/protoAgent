@@ -114,6 +114,20 @@ record.
 | POST | `/api/settings` · `/api/settings/reset` | Apply / reset settings |
 | GET | `/api/operations` | The ops-layer catalog — every operation (name, read/write, summary); mirrors `protoagent operations` (ADR 0075 D2) |
 
+## Files & code pane
+
+Read-only. `browse` is the settings folder picker and deliberately reaches outside the fs
+fence (names only, never contents). The other three stay inside it — the same
+`registry.resolve` chokepoint `read_file` uses ([ADR 0007](../adr/0007-directory-aware-operator-agent.md)) —
+and `file`/`diff` never return a secret-like file's content ([ADR 0112](../adr/0112-console-code-pane.md)).
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/fs/browse` | List the server's directories for a path picker (`?path=&files=&hidden=`) |
+| GET | `/api/fs/roots` | `{roots: {project: absolute root}}` — the live fs fence |
+| GET | `/api/fs/file` | `?project=&path=[&start=&end=]` → `{project, path, size, line_count, start, end, truncated, language, binary, text}`. Lines are `\n`-delimited, endings preserved; capped at 2 MB / 20,000 lines / 2,000 chars per line (`truncated: true`, page with `start=end+1`). Binary → `text: null`. Errors carry `detail: {code, reason}`: `bad_path` 400 (unknown project / fence escape), `denied` 403 (secret-like name, checked before existence), `not_found` 404, `not_a_file` / `bad_range` / `unreadable` 400 |
+| GET | `/api/fs/diff` | `?project=` → the working tree vs `HEAD`: `{project, is_git, head, branch, files: [{path, status: M\|A\|D\|R\|?, additions, deletions, binary, denied, old_path?}], patch, truncated}`. Hardened git (no external diff, textconv, filter, fsmonitor, hook or submodule recursion can run), scoped to the project root, untracked text files ≤ 256 KB as synthetic new-file patches, secret-like paths listed `denied` with content omitted, patch capped at 1 MB and the file list at 5,000 entries (`truncated: true`). Not a repo → `{is_git: false, files: [], patch: ""}`; 10 s timeout → 504 |
+
 ## Fleet & agents
 
 | Method | Path | Purpose |

@@ -1046,7 +1046,70 @@ def build_fs_tools(config) -> list:
             return f"Error: cannot delete {path}: {exc}"
         return f"Deleted {path}."
 
-    tools = [list_projects, list_dir, read_file, find_files, search_files, write_file, edit_file, delete_file]
+    @tool
+    def show_code(project: str, path: str, line: int, end_line: int | None = None, note: str = "") -> str:
+        """Put a specific piece of code in front of the operator, in the console's code pane,
+        WITH a one-sentence `note` on why it matters ("this is where the retry budget is
+        reset", "the bug: the lock is released before the write").
+
+        Use it to point at evidence — the function you're about to change, the line that
+        explains a failure, the call site you found — so the operator can follow and check
+        your reasoning. Prefer it over pasting large code blocks into your reply. It does
+        NOT read the file for you (use `read_file` for that), and it can't show secret-like
+        files (.env, keys, credentials) or binary files.
+
+        `path` is relative to the project root; `line` is 1-based and `end_line` (inclusive,
+        defaults to `line`) is clamped to the end of the file. `note` is at most 280 chars.
+        Works in read-only projects.
+        """
+        from graph.components import CODE_REF_NOTE_MAX, encode_component
+        from tools.fs_secrets import is_secret_path
+        from tools.fs_view import count_lines
+
+        registry = registry_ref.get()
+        try:
+            target = registry.resolve(project, path)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        root = registry.get(project).root
+        reason = is_secret_path(path) or is_secret_path(target.relative_to(root))
+        if reason:
+            return f"Error: {path} looks like a secret ({reason}) — the code pane won't show it."
+        if not target.is_file():
+            return f"Error: no such file: {path}"
+        if _is_probably_binary(target):
+            return f"Error: {path} is a binary file — the code pane shows text only."
+        note = (note or "").strip()
+        if len(note) > CODE_REF_NOTE_MAX:
+            return f"Error: `note` is {len(note)} chars; keep it to one sentence (≤ {CODE_REF_NOTE_MAX})."
+        try:
+            total = count_lines(target)
+        except OSError as exc:
+            return f"Error: cannot read {path}: {exc}"
+        if not isinstance(line, int) or line < 1 or line > total:
+            return f"Error: line {line!r} is out of range for {path} ({total} lines)."
+        end = line if end_line is None else end_line
+        if end < line:
+            return f"Error: end_line ({end}) is before line ({line})."
+        end = min(end, total)
+        rel = target.relative_to(root).as_posix()
+        where = f"{line}" if end == line else f"{line}-{end}"
+        props = {"project": project, "path": rel, "line": line, "end_line": end, "note": note}
+        # The human/model-facing text comes FIRST: server/chat.py lifts everything from the
+        # sentinel on into the component frame and keeps this prefix as the tool card.
+        return f"Showing {project}/{rel}:{where} to the operator.\n" + encode_component("code-ref", props)
+
+    tools = [
+        list_projects,
+        list_dir,
+        read_file,
+        find_files,
+        search_files,
+        show_code,
+        write_file,
+        edit_file,
+        delete_file,
+    ]
 
     # `open_in_editor` — bound only when the operator named their desktop editor. It is a
     # side effect on the operator's screen, not on the project, so it works in read-only
