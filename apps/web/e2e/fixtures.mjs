@@ -774,6 +774,73 @@ const MENTION_FAILURE_LINE = "Delegate @protoEngineer failed: connection refused
 // matches the real starter-tool string format the per-tool renderer expects.
 function scenarioFor(prompt) {
   const t = (prompt || "").toUpperCase();
+  // code-ref edge states (ADR 0112): a secret-like path (403), a vanished file (404), a binary.
+  // …and a 20k-line file (virtualized, plain past the highlight cap) pointed deep inside.
+  for (const [key, path, line] of [
+    ["SHOWSECRET", ".env", 1],
+    ["SHOWGONE", "src/gone.ts", 1],
+    ["SHOWBINARY", "assets/logo.png", 1],
+    ["SHOWHUGE", "src/huge.ts", 15000],
+  ]) {
+    if (t.includes(key))
+      return {
+        events: [],
+        component: { component: "code-ref", props: { project: "app", path, line } },
+        answer: `Pointed at ${path}.`,
+      };
+  }
+  if (t.includes("SHOWCODE"))
+    // show_code (ADR 0112): the tool emits a `code-ref` component-v1 part — a chip in the
+    // transcript that (on the LIVE stream, desktop) also opens the code pane at the range.
+    return {
+      events: [
+        {
+          id: "code-1",
+          name: "show_code",
+          phase: "start",
+          input: JSON.stringify({ project: "app", path: "src/server.ts", line: 23, end_line: 29 }),
+        },
+        { id: "code-1", name: "show_code", phase: "end", output: "Showing app/src/server.ts:23-29 to the operator." },
+      ],
+      component: {
+        component: "code-ref",
+        props: {
+          project: "app",
+          path: "src/server.ts",
+          line: 23,
+          end_line: 29,
+          note: "The token check is constant-time now: a length mismatch bails early, then every byte is XOR-folded.",
+        },
+      },
+      answer: "Here's the auth check I changed.",
+    };
+  if (t.includes("FOLLOWREAD"))
+    // Follow mode (ADR 0112): completed read_file calls move the pane when follow is ON.
+    return {
+      events: [
+        {
+          id: "fr-1",
+          name: "read_file",
+          phase: "start",
+          input: JSON.stringify({ project: "app", path: "src/big.ts", offset: 2400, limit: 20 }),
+        },
+        {
+          id: "fr-1",
+          name: "read_file",
+          phase: "end",
+          output: "export const row2400 = 2400; // generated row 2400\n… (showing lines 2400-2419 of 3000)",
+        },
+      ],
+      answer: "Read the generated rows.",
+    };
+  if (t.includes("READFILE"))
+    // A plain read_file result — its path renders as a link (pane by default, ⌘-click editor).
+    return {
+      name: "read_file",
+      input: { project: "app", path: "src/server.ts", offset: 34, limit: 12 },
+      output: "export async function handle(req, res, token) {\n  if (!authorize(req, token)) {",
+      answer: "That's the request handler.",
+    };
   if (t.includes("DELEGATE_BG"))
     // A BACKGROUND delegate_to: the server emits ONE outgoing-ask room frame carrying the
     // lead's summary, the full brief and the job id — no tool card, no reply (that arrives

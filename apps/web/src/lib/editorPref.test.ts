@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { EDITOR_PREF_KEY, getEditorPref, setEditorPref } from "./editorPref";
+import {
+  EDITOR_PREF_KEY,
+  getEditorPref,
+  getOpenFilesIn,
+  OPEN_FILES_IN_KEY,
+  setEditorPref,
+  setOpenFilesChoice,
+  setOpenFilesIn,
+} from "./editorPref";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -32,5 +40,35 @@ describe("editor preference", () => {
     });
     expect(() => setEditorPref("off")).not.toThrow();
     expect(getEditorPref()).toBe("off");
+  });
+});
+
+describe("open files in (ADR 0112)", () => {
+  it("defaults to the in-app pane and keeps the external editor separately", () => {
+    localStorage.clear();
+    setEditorPref("zed");
+    localStorage.removeItem(EDITOR_PREF_KEY);
+    localStorage.removeItem(OPEN_FILES_IN_KEY);
+    expect(getOpenFilesIn()).toBe("protoagent");
+    setOpenFilesChoice("cursor");
+    expect(getOpenFilesIn()).toBe("editor");
+    expect(getEditorPref()).toBe("cursor");
+    setOpenFilesChoice("protoagent");
+    expect(getOpenFilesIn()).toBe("protoagent");
+    expect(getEditorPref()).toBe("cursor"); // still what ⌘-click / ↗ use
+  });
+
+  it("an operator who had turned links OFF keeps them off under the new default", async () => {
+    localStorage.clear();
+    localStorage.setItem(EDITOR_PREF_KEY, "off");
+    // A fresh page: a new module instance, so no in-memory choice — only the stored "off".
+    vi.resetModules();
+    const fresh = await import("./editorPref");
+    expect(fresh.getOpenFilesIn()).toBe("editor");
+    expect(fresh.getEditorPref()).toBe("off");
+    // …while a stored "zed" (or nothing) lands on the pane.
+    localStorage.setItem(EDITOR_PREF_KEY, "zed");
+    expect(fresh.getOpenFilesIn()).toBe("protoagent");
+    setOpenFilesIn("protoagent"); // keep the imported names in use
   });
 });

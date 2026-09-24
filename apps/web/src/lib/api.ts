@@ -363,6 +363,41 @@ function applyAuth(headers: Headers): Headers {
 
 /** An HTTP error from `request()` that carries the status code, so callers (and the
  *  QueryClient's retry policy) can react to it without parsing the message. */
+/** GET /api/fs/file (ADR 0112). `text` is lines start..end (1-based, inclusive); null when
+ *  the file is binary. `truncated` = a server cap cut the read — page with start/end. */
+export type FsFile = {
+  project: string;
+  path: string;
+  size: number;
+  line_count: number;
+  start: number;
+  end: number;
+  truncated: boolean;
+  language: string;
+  binary: boolean;
+  text: string | null;
+};
+
+export type FsDiffFile = {
+  path: string;
+  status: "M" | "A" | "D" | "R" | "?";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  denied: boolean;
+};
+
+/** GET /api/fs/diff (ADR 0112) — the working tree vs HEAD, untracked files included. */
+export type FsDiff = {
+  project: string;
+  is_git: boolean;
+  head?: string;
+  branch?: string;
+  files: FsDiffFile[];
+  patch: string;
+  truncated?: boolean;
+};
+
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -3021,6 +3056,17 @@ export const api = {
   // "open in editor" links, which join a tool's project-relative path onto its root.
   fsRoots() {
     return request<{ roots: Record<string, string> }>("/api/fs/roots");
+  },
+  // The code pane (ADR 0112): one file's text through the SAME fence read_file uses, and the
+  // project's read-only working-tree diff vs HEAD. Both are GETs with no side effects.
+  fsFile(project: string, path: string, range: { start?: number; end?: number } = {}) {
+    const qs = new URLSearchParams({ project, path });
+    if (range.start) qs.set("start", String(range.start));
+    if (range.end) qs.set("end", String(range.end));
+    return request<FsFile>(`/api/fs/file?${qs.toString()}`);
+  },
+  fsDiff(project: string) {
+    return request<FsDiff>(`/api/fs/diff?${new URLSearchParams({ project }).toString()}`);
   },
   uninstallPlugin(id: string) {
     // `superseded_by_bundled` (the bundled version) = only the ignored old copy of a

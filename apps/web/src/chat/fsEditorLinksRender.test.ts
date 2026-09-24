@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { setEditorPref } from "../lib/editorPref";
+import { setEditorPref, setOpenFilesIn } from "../lib/editorPref";
+import { resetCodeViewer, useCodeViewer } from "../codeviewer/store";
 import { queryClient } from "../lib/queryClient";
 import { ToolValue } from "./tool-renderers";
 import { FS_ROOTS_QUERY_KEY } from "./useEditorLinker";
@@ -35,6 +36,9 @@ beforeEach(() => {
   queryClient.clear();
   seedRoots({ app: ROOT });
   setEditorPref("zed");
+  // The suites below pin the EDITOR-mode contract (#3596): the link IS the editor URL. The
+  // in-app pane mode (ADR 0112, the default) has its own suite at the bottom.
+  setOpenFilesIn("editor");
 });
 
 afterEach(async () => {
@@ -205,7 +209,79 @@ describe("no link → exactly today's plain render", () => {
   }
 });
 
+describe("protoAgent mode (ADR 0112): a click opens the code pane", () => {
+  beforeEach(() => {
+    resetCodeViewer();
+    setOpenFilesIn("protoagent");
+  });
+
+  const click = (a: Element, init: MouseEventInit = {}) =>
+    act(async () => {
+      a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+    });
+
+  it("keeps the editor URL as the href (⌘-click target) and opens the pane on a plain click", async () => {
+    const el = await render({
+      tool: "read_file",
+      raw: "line 20\nline 21",
+      input: '{"project": "app", "path": "src/main.py", "offset": 20, "limit": 5}',
+    });
+    expect(hrefs(el)).toEqual(["zed://file/Users/me/My%20Repo/src/main.py:20"]);
+    const a = el.querySelector("a.tool-editor-link")!;
+    expect(a.getAttribute("title")).toMatch(/Open in protoAgent/);
+    await click(a);
+    expect(useCodeViewer.getState().current).toMatchObject({
+      project: "app",
+      path: "src/main.py",
+      line: 20,
+      endLine: 24,
+      source: "link",
+    });
+  });
+
+  it("links WITHOUT /api/fs/roots — the pane needs none, so remote fleet members work too", async () => {
+    queryClient.clear();
+    const el = await render({
+      tool: "search_files",
+      raw: "src/a.py:10: x = 1",
+      input: '{"project": "app", "query": "x"}',
+    });
+    expect(hrefs(el)).toEqual(["#"]);
+    await click(el.querySelector("a.tool-editor-link")!);
+    expect(useCodeViewer.getState().current).toMatchObject({ project: "app", path: "src/a.py", line: 10 });
+  });
+
+  it("⌘/Ctrl-click does NOT open the pane (it goes to the external editor)", async () => {
+    const el = await render({ tool: "edit_file", raw: "Edited src/x.ts.", input: '{"project": "app", "path": "src/x.ts"}' });
+    // jsdom can't follow a custom scheme; the routing decision is what's under test here
+    // (makeFileLinker's unit tests assert the navigate() call itself).
+    await click(el.querySelector("a.tool-editor-link")!, { metaKey: true });
+    expect(useCodeViewer.getState().current).toBeNull();
+  });
+
+  it("a path the fence would refuse gets no link", async () => {
+    const el = await render({
+      tool: "find_files",
+      raw: "../outside.py\nsrc/ok.py",
+      input: '{"project": "app", "pattern": "*.py"}',
+    });
+    expect(el.querySelectorAll("a.tool-editor-link")).toHaveLength(1);
+    expect(el.querySelector("a.tool-editor-link")?.textContent).toBe("src/ok.py");
+  });
+
+  it("pref Off (editor mode + off) still renders plain", async () => {
+    setOpenFilesIn("editor");
+    setEditorPref("off");
+    const el = await render({ tool: "search_files", raw: "src/a.py:10: x = 1", input: '{"project": "app"}' });
+    expect(hrefs(el)).toEqual([]);
+  });
+});
+
 describe("parseFsArgs", () => {
+  it("reads `limit` (full JSON and a truncated preview)", () => {
+    expect(parseFsArgs('{"project":"p","path":"a.py","offset":5,"limit":40}')).toMatchObject({ offset: 5, limit: 40 });
+    expect(parseFsArgs('{"project": "p", "path": "a.py", "limit": 12, "content": "xx')).toMatchObject({ limit: 12 });
+  });
   it("reads full JSON", () => {
     expect(parseFsArgs('{"project":"p","path":"a/b.py","offset":5}')).toEqual({ project: "p", path: "a/b.py", offset: 5 });
   });

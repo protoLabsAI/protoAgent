@@ -80,3 +80,53 @@
   color: var(--pl-color-fg-muted);
   font-size: 12px;
 }
+
+/* code-ref (ADR 0112) — show_code's pointer: a compact chip, click opens the code pane. */
+.code-ref-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 7px 10px;
+  max-width: 100%;
+  border: 1px solid var(--pl-color-border, #2a2a31);
+  border-radius: 8px;
+  background: var(--pl-color-bg-raised, #16161b);
+  color: var(--pl-color-fg, #e8e8ea);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.code-ref-chip:hover {
+  border-color: var(--pl-color-accent, #9b87f2);
+  background: var(--pl-color-bg-hover, #1d1d23);
+}
+.code-ref-chip:focus-visible {
+  outline: 2px solid var(--pl-color-focus, #9b87f2);
+  outline-offset: 2px;
+}
+.code-ref-chip__icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--pl-color-accent, #9b87f2);
+}
+.code-ref-chip__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.code-ref-chip__path {
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.code-ref-chip__project,
+.code-ref-chip__sep {
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-ref-chip__note {
+  color: var(--pl-color-fg-muted, #9a9aa3);
+  line-height: 1.4;
+}

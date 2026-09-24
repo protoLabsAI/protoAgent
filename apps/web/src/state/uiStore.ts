@@ -180,7 +180,7 @@ type UIState = {
 // CORE_SURFACES (apps/web/src/app/coreSurfaces.tsx).
 const DEFAULT_RAIL_ORDER: { left: string[]; right: string[]; bottom: string[]; hidden: string[] } = {
   left: ["chat", "knowledge", "memory"],
-  right: ["work"],
+  right: ["work", "code"],
   bottom: [],
   hidden: [],
 };

@@ -2,7 +2,7 @@
 // desktop quick-launcher (ADR 0057) build their command lists from the SAME source —
 // add a core surface here and it shows up in both the rail and the palette / launcher.
 import type { ReactNode } from "react";
-import { BookMarked, Brain, LayoutDashboard, MessageSquare } from "lucide-react";
+import { BookMarked, Brain, FileCode2, LayoutDashboard, MessageSquare } from "lucide-react";
 
 export type CoreSurface = { id: string; label: string; icon: ReactNode };
 
@@ -18,6 +18,9 @@ export const CORE_SURFACES: CoreSurface[] = [
   // Memory inspector (ADR 0069 D7): the delivery-layer audit surface — session-summary
   // digest sources, hot memory, and the per-turn injection record.
   { id: "memory", label: "Memory", icon: <Brain size={18} /> },
+  // The code pane (ADR 0112): a read-only file + diff viewer beside chat. Right dock by
+  // default; codeviewer/open.ts keeps it off whichever dock holds chat.
+  { id: "code", label: "Code", icon: <FileCode2 size={18} /> },
   // Settings moved off the rail into a utility-bar pill (2026-06 consolidation) → the
   // settings dialog. It's still a valid palette "go to" via the global deep-links.
 ];
