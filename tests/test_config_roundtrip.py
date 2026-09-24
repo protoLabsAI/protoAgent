@@ -12,7 +12,6 @@ literals so a future refactor that drops or mis-parses a field fails loudly.
 """
 
 import dataclasses
-import os
 import textwrap
 from pathlib import Path
 
@@ -80,9 +79,12 @@ _GOLDEN_PROVIDERS = [
     Provider(
         id="gateway",
         type="openai-compat",
-        label="Gateway",
+        label="LiteLLM gateway",
         base_url="http://gateway:4000/v1",
-        api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
+        # DECLARED, not migrated (ADR 0106 / #3128): the key lives in secrets.yaml
+        # `providers.gateway`, never in this file, and a registered connection does NOT
+        # borrow OPENAI_API_KEY — so the entry's api_key is "" regardless of the env.
+        api_key="",
     )
 ]
 
@@ -226,16 +228,15 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "model_favorites": [],
     "model_name": "protolabs/reasoning",
     "model_provider": "openai",
-    # ADR 0106: a config with no `providers:` block is migrated to the registry its
-    # legacy fields imply, reusing the slot grammar's existing lane id so every stored
-    # `gateway:<model>` value keeps resolving to the same connection.
-    # api_key is env-sensitive: migration folds OPENAI_API_KEY into the entry so a
-    # registered connection is self-contained (nothing downstream may borrow a global key
-    # on its behalf), so the golden pins the shape and the roundtrip test checks the key.
+    # ADR 0106 / #3128: the shipped example now DECLARES its `providers:` registry
+    # explicitly, so the load-time migration is not triggered for it. The declared
+    # `gateway` reuses the slot grammar's lane id and the App-default endpoint, so every
+    # stored `gateway:<model>` value keeps resolving to the same connection the migration
+    # built — see tests/test_shipped_config_providers.py for the before/after route parity.
     "providers": _GOLDEN_PROVIDERS,
-    # The example declares no `providers:` block, so it MIGRATES — the flag is only True
-    # when a config states its registry explicitly (#3128).
-    "providers_declared": False,
+    # The example states its registry explicitly, so `providers_declared` is True and the
+    # legacy-lane floor never speaks for it (#3128).
+    "providers_declared": True,
     "model_vision": False,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",
