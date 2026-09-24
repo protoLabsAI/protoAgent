@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -305,6 +306,31 @@ async def _parse_sse(lines: AsyncIterator[str]) -> AsyncIterator[dict]:
             return
 
 
+#: CA env vars httpx's ``trust_env`` reads at client construction: a FILE for the first
+#: (``ssl.create_default_context(cafile=…)``), a DIR for the second (``capath=…``).
+_CA_ENV = (("SSL_CERT_FILE", os.path.isfile), ("SSL_CERT_DIR", os.path.isdir))
+
+
+def drop_stale_ca_env() -> list[str]:
+    """Remove ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` from ``os.environ`` when set to a path
+    that doesn't exist, logging a warning; returns the names dropped.
+
+    An inherited var can outlive its target: Zed launched by a PyInstaller-frozen
+    protoAgent server kept that server's ``_MEI…/certifi/cacert.pem`` after the server
+    restarted and deleted the dir, and passed it to this process — httpx then raised
+    ``FileNotFoundError`` building its SSL context, before a single request. Without
+    the var httpx falls back to its own certifi bundle. A path that DOES exist (an
+    operator's corporate CA bundle) is left alone."""
+    dropped = []
+    for name, exists in _CA_ENV:
+        value = os.environ.get(name)
+        if value and not exists(value):
+            log.warning("ignoring %s=%s — it does not exist (stale env inherited from the launcher?)", name, value)
+            os.environ.pop(name, None)
+            dropped.append(name)
+    return dropped
+
+
 class A2AClient:
     """``url`` is the instance (``http://127.0.0.1:7870``) or a hub; ``slug`` routes
     through the hub's member proxy (``/agents/<slug>/…``) exactly as the deck does."""
@@ -322,6 +348,7 @@ class A2AClient:
         self.prefix = f"/agents/{slug}" if slug else ""
         self.token = token or None
         self._trace = trace  # optional file-like: every raw frame, one JSON per line
+        drop_stale_ca_env()  # a dangling inherited CA path would crash the client below
         self._client = httpx.AsyncClient(base_url=self.base_url, transport=transport, follow_redirects=False)
 
     async def aclose(self) -> None:
