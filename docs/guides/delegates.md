@@ -221,7 +221,9 @@ delegate_to(target="proto", project="billing-api",
   `readonly` ceiling is not used as a fallback because it only applies when the
   coder asks permission before editing. A coder running in its own auto-accept or
   bypass mode (for example Claude Code with those settings in `~/.claude`) never
-  asks, so the ceiling cannot guarantee a read-only project stays unchanged.
+  asks, so the ceiling cannot guarantee a read-only project stays unchanged. A
+  `no_delete: true` project is refused for the same reason: only the fs tools'
+  `delete_file` enforces it, and a coder's own shell can delete files.
 - **Coding delegates only.** Passing `project` to an `a2a` or `openai` delegate is an
   error, not a silent no-op. Describe the project in the query instead.
 - Works with `background=True`. The project is resolved when the call is made, and

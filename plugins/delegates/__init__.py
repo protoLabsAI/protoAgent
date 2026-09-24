@@ -101,10 +101,10 @@ def _build_delegate_to(registry: DelegateRegistry):
             project: coding agents only — the name of a registered project (as
                 `list_projects` shows it) to run THIS call in, instead of the coding
                 agent's configured directory. Use it to hand a focused fix in a specific
-                project to a coder. The project must be read-write. For a git project the
-                reply ends with what the coder changed (a diff stat plus the diff), so you
-                can check the work instead of trusting the coder's summary. Leave empty to
-                use the delegate's own directory.
+                project to a coder. The project must be read-write (not no-delete). For a
+                git project the reply ends with what the coder changed (a diff stat plus
+                the diff), so you can check the work instead of trusting the coder's
+                summary. Leave empty to use the delegate's own directory.
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."

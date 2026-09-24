@@ -1762,7 +1762,7 @@ class AcpAdapter(Adapter):
             return f"{reply}\n\n[no change summary — {root} is not a git repository]"
         try:
             before = await asyncio.to_thread(cs.snapshot, root)
-        except cs.ChangeCaptureError as exc:
+        except (cs.ChangeCaptureError, OSError) as exc:
             reply = await self._prompt(d, query, timeout=timeout)
             return f"{reply}\n\n[no change summary — pre-dispatch snapshot failed: {exc}]"
         token = cs.begin(root)
@@ -1774,7 +1774,7 @@ class AcpAdapter(Adapter):
             summary = await asyncio.to_thread(
                 lambda: cs.render(before, cs.after(before), project=d.project_name, overlapped=overlapped)
             )
-        except cs.ChangeCaptureError as exc:
+        except (cs.ChangeCaptureError, OSError) as exc:
             summary = f"[no change summary — post-dispatch snapshot failed: {exc}]"
         return f"{reply}\n\n{summary}"
 

@@ -62,6 +62,15 @@ def resolve(project: str) -> ProjectScope:
             f"project {name!r} is read-only (write: false) — a coding delegate can't be sent "
             "into it. Ask the operator to make it read-write, or read it yourself with the fs tools."
         )
+    if getattr(proj, "no_delete", False):
+        # Same reasoning as the read-only refusal: ``no_delete`` is enforced by the fs
+        # tools' ``delete_file`` only, and a coder's own shell can delete freely. The
+        # fence must not rest on the child's cooperation.
+        raise DelegateError(
+            f"project {name!r} is read-write-no-delete (no_delete: true) — a coding delegate "
+            "can't honour that fence. Ask the operator to make it fully read-write, or make "
+            "the edits yourself with the fs tools."
+        )
     if not root.is_dir():
         raise DelegateError(f"project {name!r} root does not exist: {root}")
     return ProjectScope(name=name, root=str(root), write=True)

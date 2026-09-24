@@ -63,10 +63,19 @@ def _git(root: str, *args: str, env: dict | None = None) -> str:
     return proc.stdout
 
 
+_INHERITED_GIT_VARS = frozenset(
+    {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"}
+)
+
+
 def _base_env() -> dict:
     # No optional locks: `git status` must never refresh (and so write) the operator's
     # index while a delegate is working in the same tree.
-    return {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+    # And no inherited repository overrides: GIT_DIR / GIT_WORK_TREE would point
+    # `git -C <root>` at another repository, GIT_INDEX_FILE at another index.
+    env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
 
 
 def is_git_worktree(root: str) -> bool:

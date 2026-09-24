@@ -166,6 +166,26 @@ def test_resolve_refuses_a_read_only_project(projects_config):
         resolve("ro")
 
 
+def test_resolve_refuses_a_no_delete_project(projects_config, monkeypatch, tmp_path):
+    """``no_delete`` is enforced only by the fs tools' ``delete_file``; a coder's own shell
+    can delete freely, so a no-delete project must not be handed to one."""
+    from graph.plugins.host import HOST
+
+    nd = tmp_path / "nd-proj"
+    nd.mkdir()
+    cfg = dataclasses.replace(
+        projects_config["cfg"],
+        filesystem_projects=[
+            *projects_config["cfg"].filesystem_projects,
+            {"name": "nd", "path": str(nd), "write": True, "no_delete": True},
+        ],
+    )
+    monkeypatch.setattr(HOST, "config", lambda: cfg)
+    with pytest.raises(DelegateError, match="no-delete"):
+        resolve("nd")
+    assert resolve("rw").write is True  # the plain read-write project still resolves
+
+
 def test_resolve_sees_nothing_when_filesystem_is_disabled(projects_config, monkeypatch):
     from graph.plugins.host import HOST
 
@@ -308,6 +328,28 @@ async def test_non_git_project_degrades_to_a_note(agent_script, tmp_path, monkey
     )
     reply = await reg.dispatch("coder", "add a line", project=resolve("plain"))
     assert "done in" in reply and "is not a git repository" in reply
+
+
+async def test_post_dispatch_oserror_still_returns_the_reply(coder_registry, projects_config, monkeypatch):
+    """A capture failure AFTER the coder ran (e.g. the temp dir can't be created) must
+    degrade to a note — the coder's work already happened, so its reply comes back."""
+
+    def _boom(_before):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(cs, "after", _boom)
+    reply = await coder_registry.dispatch("coder", "add a line", project=resolve("rw"))
+    assert "done in" in reply
+    assert "post-dispatch snapshot failed: no space left on device" in reply
+
+
+def test_base_env_drops_inherited_repository_overrides(monkeypatch, tmp_path):
+    """An inherited GIT_DIR / GIT_INDEX_FILE would point ``git -C <root>`` elsewhere."""
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"):
+        monkeypatch.setenv(var, str(tmp_path / "elsewhere"))
+    env = cs._base_env()
+    assert not {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"} & set(env)
+    assert env["GIT_OPTIONAL_LOCKS"] == "0"
 
 
 def test_render_truncates_and_points_at_the_full_diff(tmp_path):
