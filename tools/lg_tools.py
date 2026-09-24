@@ -1983,7 +1983,7 @@ def _config_gated_tool_reasons(config) -> dict[str, str]:
     # tool name and the reported historical alias (see ``graph/tool_delta``) are covered.
     if not getattr(config, "onboarding_enabled", True):
         reason = "project onboarding is disabled — set onboarding.enabled to bind it"
-        for tool_name in ("board_register_project", "onboard_project"):
+        for tool_name in ("board_register_project", "onboard_project", "register_local_project"):
             reasons[tool_name] = reason
     return reasons
 
@@ -2909,8 +2909,9 @@ def get_all_tools(
         from tools.config_tools import build_config_tools
 
         tools.extend(build_config_tools(graph_config))
-        # Project onboarding (#2555) — bounded clone + register within the
-        # operator-consented `onboarding` space. Absent unless `onboarding.enabled`;
+        # Project onboarding (#2555) — bounded clone (`onboard_project`) + local
+        # registration (`register_local_project`) within the operator-consented
+        # `onboarding` space. Absent unless `onboarding.enabled`;
         # the factory returns [] when off, so a non-opted-in instance gets no
         # onboarding surface at all rather than a tool that only refuses.
         from tools.onboard_tools import build_onboard_tools
