@@ -84,6 +84,18 @@ def test_frozen_matches_resolved_bundle_path(monkeypatch, tmp_path):
     assert "SSL_CERT_FILE" not in env
 
 
+def test_frozen_matches_an_entry_that_aliases_into_the_bundle(monkeypatch, tmp_path):
+    bundle = tmp_path / "_MEIxyz"
+    (bundle / "certifi").mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(bundle)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    monkeypatch.chdir(bundle)
+    env = child_env({"SSL_CERT_FILE": str(alias / "certifi" / "cacert.pem"), "REL": "certifi"})
+    assert env == {"REL": "certifi"}  # a relative value is never resolved against the cwd
+
+
 def test_not_frozen_is_a_plain_copy(monkeypatch):
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     base = _bundle_env()

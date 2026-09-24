@@ -124,7 +124,11 @@ def _inside(entry: str, roots: tuple[str, ...]) -> bool:
     if not entry:
         return False
     path = os.path.normpath(entry)
-    return any(path == r or path.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
+    # An absolute entry is checked resolved too — a symlink alias into the bundle is
+    # still the bundle. Relative entries (and non-path values) are never resolved:
+    # against the cwd they could spuriously land inside it.
+    candidates = (path, os.path.realpath(path)) if os.path.isabs(path) else (path,)
+    return any(c == r or c.startswith(r.rstrip(os.sep) + os.sep) for c in candidates for r in roots)
 
 
 def child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
