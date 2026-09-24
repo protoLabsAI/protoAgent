@@ -46,7 +46,14 @@ class _ScriptedModel(BaseChatModel):
         self.seen.append(list(messages))
         turn = self.script[min(len(self.seen) - 1, len(self.script) - 1)]
         # A fresh message per call, as a real model returns: the state reducer merges by id.
-        msg = AIMessage(content=turn.content, tool_calls=list(turn.tool_calls))
+        msg = AIMessage(
+            content=turn.content,
+            tool_calls=list(turn.tool_calls),
+            # What a real reply carries besides text: the reasoning round-trip (#2642) and
+            # the provider's finish metadata — the guard reads both (#3582, #3584).
+            additional_kwargs=dict(turn.additional_kwargs or {}),
+            response_metadata=dict(turn.response_metadata or {}),
+        )
         return ChatResult(generations=[ChatGeneration(message=msg)])
 
     def bind_tools(self, tools, **kwargs):
@@ -564,3 +571,39 @@ async def test_the_give_up_log_carries_the_turn_shape(monkeypatch, probe, caplog
     assert (
         gave_up and "finish_reason=" in gave_up[-1] and "text_chars=32" in gave_up[-1]
     )  # the harness replay drops the fixture's metadata (finish_reason logs as ?)
+
+
+# ── a reasoning-only turn ends the lane after one nudge (#3584) ─────────────────────────
+
+
+def _thinking(text: str = "") -> AIMessage:
+    return AIMessage(content=text, additional_kwargs={"reasoning_content": "Let me carefully analyze " * 400})
+
+
+async def test_a_reasoning_only_turn_after_one_nudge_ends_the_lane_without_a_second(monkeypatch, probe):
+    # mythxengine-sdk#405: 6.4k then 7.9k output tokens, all reasoning, empty content — the
+    # second nudge never recovered one (0 of 5) and cost ~2 minutes each.
+    ping, models = _arm_finder_like(monkeypatch, probe, [_thinking(), _thinking(), _thinking()])
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 2  # the original turn + ONE nudge; no second
+
+
+async def test_a_reasoning_only_intent_sentence_counts_too(monkeypatch, probe):
+    ping, models = _arm_finder_like(
+        monkeypatch,
+        probe,
+        [_thinking("Let me verify the modules exist."), _thinking("Let me verify the modules exist.")],
+    )
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 2
+
+
+async def test_a_short_answer_without_reasoning_still_gets_both_nudges(monkeypatch, probe):
+    # The rule keys on the thinking, not on brevity: a terse model that is not deliberating
+    # keeps its second chance.
+    ping, models = _arm_finder_like(monkeypatch, probe, [AIMessage(content=NARRATION)] * 3)
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 3
