@@ -489,12 +489,17 @@ def trace_tool_call(
     duration_ms: int,
     success: bool,
     session_id: str = "",
+    parent: Any = None,
 ) -> Any:
     """Log a completed tool execution as a child observation.
 
     When called inside a ``trace_session`` scope, this nests under the
     session span automatically — Langfuse's internal current-observation
     stack threads the parent without explicit wiring.
+
+    ``parent`` (a span yielded by ``trace_span``) parents it EXPLICITLY, for a
+    caller whose events arrive on a task that does not carry the span's context —
+    an ACP client's reader loop, which outlives the turn it is reporting on.
     """
     if not _enabled or _langfuse is None:
         return None
@@ -507,7 +512,7 @@ def trace_tool_call(
         safe_args[k] = sv[:500] if len(sv) > 500 else v
 
     try:
-        span = _langfuse.start_observation(
+        span = (parent or _langfuse).start_observation(
             name=f"tool:{tool_name}",
             as_type="tool",
             input=safe_args,
@@ -524,6 +529,20 @@ def trace_tool_call(
         return span
     except Exception:
         return None
+
+
+def update_span(span: Any, **fields: Any) -> None:
+    """Set ``output`` / ``metadata`` / ``level`` / … on a span from ``trace_span``.
+
+    For outcomes only known once the block's work is done. No-op for the ``None``
+    a disabled ``trace_span`` yields; swallow-all, like every helper here.
+    """
+    if span is None:
+        return
+    try:
+        span.update(**fields)
+    except Exception:  # noqa: BLE001 — tracing never alters the traced work
+        pass
 
 
 def trace_generation(

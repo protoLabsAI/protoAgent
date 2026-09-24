@@ -39,7 +39,7 @@ from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from infra.proc import group_kwargs, signal_tree, track_tree, untrack_tree
 
@@ -510,6 +510,12 @@ class AcpClient:
         # returns, which is how a run that dies before then records no session id
         # instead of inheriting the previous run's (#3040).
         self._turn_session_id: str | None = None
+        # The turn's ``acp:<name>`` Langfuse span (None when tracing is off) and each open
+        # tool call's (start, name, input). Tool spans are parented EXPLICITLY off it:
+        # ``_handle_update`` runs on the reader task, whose context predates the span — a
+        # pooled client's reader outlives every turn it reports on.
+        self._turn_span: Any = None
+        self._turn_tool_starts: dict[str, tuple[float, str, str]] = {}
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -1001,7 +1007,33 @@ class AcpClient:
             except Exception as exc:  # progress is best-effort
                 logger.warning("[acp/%s] progress_callback raised: %s", self.name, exc)
 
+    def _trace_tool(self, event: dict) -> None:
+        """Record a finished coder tool call as a child of the turn's ``acp:`` span."""
+        if self._turn_span is None:
+            return
+        tool_id = str(event.get("id") or "")
+        if event.get("phase") == "start":
+            self._turn_tool_starts[tool_id] = (
+                time.monotonic(),
+                str(event.get("name") or ""),
+                str(event.get("input") or ""),
+            )
+            return
+        started, name, tool_input = self._turn_tool_starts.pop(tool_id, (time.monotonic(), "", ""))
+        from observability import tracing
+
+        tracing.trace_tool_call(
+            name or str(event.get("name") or "tool"),
+            {"input": tool_input},
+            str(event.get("output") or ""),
+            int((time.monotonic() - started) * 1000),
+            event.get("status") == "completed",
+            session_id=self._turn_session_id or "",
+            parent=self._turn_span,
+        )
+
     async def _emit_tool(self, event: dict) -> None:
+        self._trace_tool(event)
         if self._on_tool:
             try:
                 await self._on_tool(event)
@@ -1271,45 +1303,78 @@ class AcpClient:
         # session. Read per-run rather than off `self._session_id`, which on a POOLED
         # client still names the last run that managed to start (#3040).
         session_id = ""
-        try:
-            if self._turn_lock.locked():
-                logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+        reply = ""
+        stop_reason: str | None = None
+        from observability import tracing
+
+        # One Langfuse agent span per coder run, for the same reason the telemetry row is
+        # written here: the board dispatches coders from a background loop, outside any
+        # turn, so this is the only seam every coder run crosses. Inside a traced turn
+        # (``delegate_to``, the ACP runtime) it nests under that turn; from the board it
+        # is its own trace. No-op when tracing is disabled.
+        with tracing.trace_span(
+            f"acp:{self.name}",
+            metadata={"command": self.command, "cwd": self.cwd},
+            as_type="agent",
+        ) as span:
             try:
-                await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
-            except TimeoutError:
-                raise AcpError(
-                    f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
-                    " — dispatch serially or raise the timeout"
-                ) from None
-            try:
-                answer = await self._prompt_locked(
-                    text,
-                    progress_callback=progress_callback,
-                    tool_callback=tool_callback,
-                    text_callback=text_callback,
-                    thought_callback=thought_callback,
-                    timeout=timeout,
-                )
+                if self._turn_lock.locked():
+                    logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+                try:
+                    await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
+                except TimeoutError:
+                    raise AcpError(
+                        f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
+                        " — dispatch serially or raise the timeout"
+                    ) from None
+                # Set only once the lock is ours: a queued turn must not re-parent the
+                # in-flight turn's tool calls onto its own span.
+                self._turn_span = span
+                try:
+                    answer = await self._prompt_locked(
+                        text,
+                        progress_callback=progress_callback,
+                        tool_callback=tool_callback,
+                        text_callback=text_callback,
+                        thought_callback=thought_callback,
+                        timeout=timeout,
+                    )
+                finally:
+                    # Read while the lock is still held: these are per-turn instance state,
+                    # and the next queued turn resets them on the way in — before its first
+                    # await, so a turn that never starts still reports its own nothing
+                    # rather than this one's numbers (#3040).
+                    tool_calls = self._turn_tool_calls
+                    session_id = self._turn_session_id or ""
+                    self._turn_span = None
+                    self._turn_tool_starts.clear()
+                    self._turn_lock.release()
+                # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
+                # refusal, a deliberate cancel and a reply truncated at the output-token
+                # limit all come back as (usually empty or half-written) text. The outcome
+                # is read from the wire stop reason — `unfinished_reason()`, NOT `dead_end()`:
+                # that one answers "is a retry worth making", and a `max_tokens` run is both
+                # retryable and unsuccessful, so reusing it booked every truncated run as a
+                # success while the delegate surface was telling the orchestrator the same
+                # reply was cut off (#2279, #2352, #3015).
+                state = "completed" if self.unfinished_reason() is None else "failed"
+                # Only a turn that returned owns ``last_stop_reason`` — it is not reset
+                # per turn, so a failed one would report the previous run's.
+                reply, stop_reason = answer, self.last_stop_reason
+                return answer
             finally:
-                # Read while the lock is still held: these are per-turn instance state,
-                # and the next queued turn resets them on the way in — before its first
-                # await, so a turn that never starts still reports its own nothing
-                # rather than this one's numbers (#3040).
-                tool_calls = self._turn_tool_calls
-                session_id = self._turn_session_id or ""
-                self._turn_lock.release()
-            # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
-            # refusal, a deliberate cancel and a reply truncated at the output-token
-            # limit all come back as (usually empty or half-written) text. The outcome
-            # is read from the wire stop reason — `unfinished_reason()`, NOT `dead_end()`:
-            # that one answers "is a retry worth making", and a `max_tokens` run is both
-            # retryable and unsuccessful, so reusing it booked every truncated run as a
-            # success while the delegate surface was telling the orchestrator the same
-            # reply was cut off (#2279, #2352, #3015).
-            state = "completed" if self.unfinished_reason() is None else "failed"
-            return answer
-        finally:
-            self._record_run_telemetry(state, started, tool_calls, session_id)
+                self._record_run_telemetry(state, started, tool_calls, session_id)
+                tracing.update_span(
+                    span,
+                    output=reply[:2000],
+                    metadata={
+                        "state": state,
+                        "stop_reason": stop_reason,
+                        "tool_calls": tool_calls,
+                        "acp_session_id": session_id,
+                    },
+                    level="DEFAULT" if state == "completed" else "ERROR",
+                )
 
     def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
