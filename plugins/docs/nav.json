@@ -907,6 +907,10 @@
           "title": "0110 — Plugin setup steps: a host-run, operator-only fix behind a setup-gap button"
         },
         {
+          "path": "adr/0111-zed-operator-editor-acp-shim.md",
+          "title": "0111 — Zed as the operator's editor: ACP agent shim, editor deep-links, operator MCP"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
