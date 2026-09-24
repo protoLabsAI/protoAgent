@@ -40,6 +40,7 @@ from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
 from infra.proc import detached_kwargs
+from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 from tools.shell import run_command as _shell_run
 
 log = logging.getLogger("protoagent.fs")
@@ -623,6 +624,11 @@ def build_fs_tools(config) -> list:
     # Whether this HOST permits bypass-permissions mode at all (default True). When False, the
     # approval gate is enforced regardless of any caller-supplied bypass metadata.
     bypass_allowed = bool(getattr(config, "filesystem_bypass_allowed", True))
+    # Safe-command allowlist (``filesystem.run_auto_approve``): argv-prefix entries whose
+    # matching commands skip the approval prompt. Validated HERE — at every graph build,
+    # so a settings save (hot reload) re-validates — with unusable entries dropped + warned.
+    # Only consulted when the gate would otherwise fire; see tools/run_auto_approve.py.
+    auto_approve_rules = compile_auto_approve(getattr(config, "filesystem_run_auto_approve", None)) if allow_run else []
 
     def _mode(p: Project) -> str:
         if not p.write:
@@ -1106,7 +1112,24 @@ def build_fs_tools(config) -> list:
             # the command before it runs. interrupt() re-runs this fn from the
             # top on resume (the validation above is idempotent) and returns the
             # operator's decision. Denied → don't run.
-            if run_requires_approval and not (bypass_allowed and _bypass_requested()):
+            # Safe-command allowlist: only where the gate would otherwise fire, and only for
+            # the POSIX grammar (cmd.exe / PowerShell have their own metacharacters the
+            # matcher doesn't model). A match runs its shlex tokens DIRECTLY — no shell —
+            # so the command that was matched is exactly the one that runs.
+            auto = None
+            if (
+                auto_approve_rules
+                and run_requires_approval
+                and argv[:2] == ["/bin/sh", "-c"]
+                and not (bypass_allowed and _bypass_requested())
+            ):
+                auto = match_auto_approve(command, auto_approve_rules)
+            marker = ""
+            if auto is not None:
+                rule, argv = auto
+                marker = f'(auto-approved: matches "{rule.entry}")\n'
+                log.info("[fs] run_command auto-approved by run_auto_approve[%s]: %s", rule.entry, command)
+            elif run_requires_approval and not (bypass_allowed and _bypass_requested()):
                 from langgraph.types import interrupt
 
                 decision = interrupt(
@@ -1145,7 +1168,7 @@ def build_fs_tools(config) -> list:
             body = res.stdout or "(no output)"
             if res.stderr:
                 body += f"\n[stderr]\n{res.stderr}"
-            return body[:_MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
+            return marker + body[:_MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
 
         tools.append(run_command)
 

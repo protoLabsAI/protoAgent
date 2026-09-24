@@ -556,6 +556,7 @@ export const SETTINGS_SCHEMA = [
       { key: "filesystem.allow_run", label: "Allow run_command", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.enabled" } },
       { key: "filesystem.run_requires_approval", label: "Require approval per command", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.allow_run" } },
       { key: "filesystem.bypass_allowed", label: "Allow /bypass", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.run_requires_approval" } },
+      { key: "filesystem.run_auto_approve", label: "Auto-approve commands", type: "string_list", section: "Filesystem", restart: false, description: "", options: [], value: [], default: [], scope: "agent", source: "agent", depends_on: { key: "filesystem.run_requires_approval" } },
     ],
   },
   {

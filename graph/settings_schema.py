@@ -958,6 +958,20 @@ FIELDS: list[Field] = [
         depends_on={"key": "filesystem.run_requires_approval"},
     ),
     Field(
+        "filesystem.run_auto_approve",
+        "filesystem_run_auto_approve",
+        "Auto-approve commands",
+        "string_list",
+        "Filesystem",
+        "Command prefixes (one per line, e.g. `git status`, `git diff`, `npx vitest run`) that "
+        "run WITHOUT the approval prompt. Matched word-by-word from the start, so `git diff` "
+        "also covers `git diff --stat` but not `git difftool`. A command containing any shell "
+        "metacharacter (; & | $ ` ( ) < > * ? ~ …) always asks. List read-mostly commands only: "
+        "a test runner executes project code the agent can edit. Too-broad entries (`npx`, "
+        "`sh`, bare `git`) are ignored.",
+        depends_on={"key": "filesystem.run_requires_approval"},
+    ),
+    Field(
         "filesystem.editor_command",
         "filesystem_editor_command",
         "Open-in-editor command",
