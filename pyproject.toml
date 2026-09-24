@@ -45,7 +45,7 @@ dependencies = [
   "fastapi>=0.115",
   "python-multipart>=0.0.9",
   "uvicorn>=0.30",
-  "langfuse>=3.0",
+  "langfuse>=3.3.1",  # agent/tool observation types (as_type) arrived in 3.3.1
   "prometheus-client>=0.20",
   "pyyaml>=6.0",
   # imported directly by graph/plugins/loader.py (min_protoagent_version gate);

@@ -108,6 +108,11 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
             out.append(inner["text"])
         elif isinstance(block.get("text"), str):
             out.append(block["text"])
+    if not any(out):
+        # ACP also lets a tool report its result only as ``rawOutput`` (any JSON).
+        raw = update.get("rawOutput")
+        if raw not in (None, "", {}, []):
+            out.append(raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str))
     return " ".join(o for o in out if o).strip()[:limit]
 
 
@@ -924,6 +929,20 @@ class AcpClient:
                     "input": tool_input,
                 }
             )
+            # ACP lets a tool call arrive already terminal, and the follow-up
+            # ``tool_call_update`` is only recommended — so close it here, or its card
+            # never ends and its trace span is never recorded.
+            status = str(update.get("status") or "")
+            if status in ("completed", "failed"):
+                await self._emit_tool(
+                    {
+                        "phase": "end",
+                        "id": str(update.get("toolCallId") or title),
+                        "name": name,
+                        "output": _tool_output_preview(update),
+                        "status": status,
+                    }
+                )
         elif kind == "tool_call_update":
             # Status transition — emit an end event when it finishes (tool_end card).
             status = str(update.get("status") or "")

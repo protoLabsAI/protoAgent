@@ -16,7 +16,8 @@ import pytest
 from observability import tracing
 from plugins.coding_agent.acp_client import AcpClient
 
-# One tool call with a real id: start → completed, then the answer and end_turn.
+# Two tool calls: t1 start → completed update; t2 arrives ALREADY completed with only
+# ``rawOutput`` (ACP allows both; the follow-up update is only recommended).
 _FAKE_AGENT = r"""
 import sys, json
 
@@ -42,6 +43,8 @@ for line in sys.stdin:
                 "rawInput": {"path": "app.py"}})
         update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "Read app.py",
                 "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]})
+        update({"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "Run tests",
+                "status": "completed", "rawOutput": {"exit": 0}})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 """
@@ -90,7 +93,7 @@ async def test_coder_run_is_an_acp_agent_span_with_its_outcome(fake_agent, tmp_p
     assert outcome["level"] == "DEFAULT"
     assert outcome["metadata"]["state"] == "completed"
     assert outcome["metadata"]["stop_reason"] == "end_turn"
-    assert outcome["metadata"]["tool_calls"] == 1
+    assert outcome["metadata"]["tool_calls"] == 2
 
 
 async def test_coder_tool_call_is_parented_explicitly_on_the_run_span(fake_agent, tmp_path, fake_langfuse):
@@ -99,13 +102,16 @@ async def test_coder_tool_call_is_parented_explicitly_on_the_run_span(fake_agent
 
     # On the run span — never the client, which would start a fresh root trace.
     fake.start_observation.assert_not_called()
-    span.start_observation.assert_called_once()
-    tool = span.start_observation.call_args.kwargs
+    assert span.start_observation.call_count == 2
+    tool, terminal = (c.kwargs for c in span.start_observation.call_args_list)
     assert tool["name"] == "tool:Read app.py"
     assert tool["as_type"] == "tool"
     assert tool["input"] == {"input": '{"path": "app.py"}'}
     assert tool["output"] == "ok"
     assert tool["level"] == "DEFAULT"
+    # Arrived terminal on the initial tool_call: still recorded, its rawOutput kept.
+    assert terminal["name"] == "tool:Run tests"
+    assert terminal["output"] == '{"exit": 0}'
 
 
 async def test_failed_run_marks_the_span_as_an_error(tmp_path, fake_langfuse):
