@@ -90,7 +90,7 @@ test("Diff tab: file list with +/- counts, a hidden secret, and a click opens th
   await page.getByTestId("code-pane").getByRole("tab", { name: "Diff", exact: true }).click();
 
   const list = page.getByTestId("code-pane-files");
-  await expect(list.locator("button")).toHaveCount(4);
+  await expect(list.locator("button")).toHaveCount(7);
   await expect(list.locator("button").first()).toContainText("src/server.ts");
   await expect(list.locator("button").first()).toContainText("+6");
   await expect(list.locator("button").first()).toContainText("−1");
@@ -123,12 +123,78 @@ for (const [prompt, testId, text] of [
   ["SHOWSECRET", "code-pane-denied", "Hidden: secret-like file"],
   ["SHOWGONE", "code-pane-gone", "no longer exists"],
   ["SHOWBINARY", "code-pane-binary", "Binary file"],
+  ["SHOWDIR", "code-pane-error", "is a folder, not a file"],
 ] as const) {
   test(`error state: ${prompt}`, async ({ page }) => {
     await send(page, `${prompt}: point`);
     await expect(page.getByTestId(testId)).toContainText(text);
   });
 }
+
+test("Diff tab: a pure rename, an oversized new file, and a DELETED line opening the current file", async ({ page }) => {
+  await send(page, "SHOWCODE: diff edge cases");
+  await expect(page.getByTestId("code-pane")).toBeVisible();
+  await page.getByTestId("code-pane").getByRole("tab", { name: "Diff", exact: true }).click();
+  const list = page.getByTestId("code-pane-files");
+
+  // A rename with no hunks: never a blank body.
+  await list.locator("button", { hasText: "notes/new-name.md" }).click();
+  await expect(list.locator("button", { hasText: "notes/new-name.md" })).toContainText("notes/old-name.md");
+  await expect(page.getByTestId("code-pane-renamed")).toContainText("Renamed from notes/old-name.md");
+  await expect(page.getByTestId("code-pane-no-hunks")).toContainText("only the name");
+
+  // An untracked file over the server's cap.
+  await list.locator("button", { hasText: "dumps/data.json" }).click();
+  await expect(list.locator("button", { hasText: "dumps/data.json" })).toContainText("too large");
+  await expect(page.getByTestId("code-pane-too-large")).toContainText("Too large to show");
+
+  // A deleted line (old 11) opens the CURRENT file at the nearest new-side line (9), not 11.
+  await list.locator("button", { hasText: "src/moved.ts" }).click();
+  const diffHost = page.locator(".code-pane__body--diff diffs-container");
+  await expect
+    .poll(() => diffHost.evaluate((el) => el.shadowRoot?.querySelectorAll("[data-line-type='change-deletion']").length ?? 0))
+    .toBeGreaterThan(0);
+  await diffHost.evaluate((el) => {
+    el.shadowRoot?.querySelector<HTMLElement>("[data-line-type='change-deletion'][data-line]")?.click();
+  });
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/moved.ts");
+  await expect(page.getByTestId("code-pane-range")).toHaveText("L9");
+});
+
+test("a deep jump in a 45k-line file reaches EOF and pages back", async ({ page }) => {
+  await send(page, "SHOWHUGE45: deep");
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/huge45.ts");
+  const pager = page.getByTestId("code-pane-pager");
+  await expect(pager).toContainText("Lines 25,001–45,000 of 45,000");
+  await expect(pager.getByRole("button", { name: /Later/ })).toHaveCount(0); // EOF is on screen
+  await expect.poll(() => lineVisible(page, 30000), { timeout: 10_000 }).toBe(true);
+  await pager.getByRole("button", { name: /Earlier/ }).click();
+  await expect(pager).toContainText("Lines 5,001–25,000 of 45,000");
+  await expect(pager.getByRole("button", { name: /Later/ })).toBeVisible();
+});
+
+test("a cut long line gets a quiet note — not the paging notice", async ({ page }) => {
+  await send(page, "SHOWMINIFIED: bundle");
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/minified.js");
+  await expect(page.getByTestId("code-pane-cut-lines")).toContainText("1 very long line is cut short");
+  await expect(page.getByTestId("code-pane-pager")).toHaveCount(0);
+});
+
+test("the header and Recent use the server's canonical path", async ({ page }) => {
+  await send(page, "SHOWALIAS: via the symlink");
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
+  await page.getByTestId("code-pane-recent").getByRole("button", { name: /Recent/ }).click();
+  await expect(page.locator(".code-pane__recent-item")).toHaveCount(1);
+  await expect(page.locator(".code-pane__recent-item").first()).toContainText("src/server.ts:23");
+});
+
+test("a reload with the Code surface up restores the file you were reading", async ({ page }) => {
+  await send(page, "SHOWCODE: before reload");
+  await expect(page.getByTestId("code-pane-range")).toHaveText("L23–29");
+  await page.reload({ waitUntil: "load" });
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
+  await expect(page.getByTestId("code-pane-note")).toContainText("XOR-folded");
+});
 
 test("a 20k-line file opens fast at a deep line (virtualized; plain past the highlight cap)", async ({ page }) => {
   await send(page, "SHOWHUGE: deep");

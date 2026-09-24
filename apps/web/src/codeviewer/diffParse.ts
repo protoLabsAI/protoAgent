@@ -106,3 +106,47 @@ export function splitPatch(patch: string): PatchFile[] {
   for (const f of out) f.patch = f.patch.replace(/\n+$/, "\n");
   return out;
 }
+
+const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+/** Does this file's patch carry any hunks? A pure rename or a mode change has only headers. */
+export function hasHunks(patch: string): boolean {
+  return patch.split("\n").some((ln) => HUNK.test(ln));
+}
+
+/** A DELETED line exists only on the old side, so "open the file at it" has to mean the
+ *  nearest line of the CURRENT file: the new-side line at the deletion's position (the line
+ *  that now sits where it was — the hunk's new start plus the new-side lines before it).
+ *  Clamped to ≥ 1 (a deletion at the very top of an emptied file). Null when `oldLine` isn't
+ *  a deletion in this patch. */
+export function newLineForOld(patch: string, oldLine: number): number | null {
+  let oldNo = 0;
+  let newNo = 0;
+  let inHunk = false;
+  for (const ln of patch.split("\n")) {
+    const h = ln.match(HUNK);
+    if (h) {
+      oldNo = Number(h[1]);
+      newNo = Number(h[3]);
+      // A `+N,0` hunk (pure deletion) names the line BEFORE the gap; the next line is N+1.
+      if (h[4] === "0") newNo += 1;
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk || ln.startsWith("\\")) continue;
+    if (ln.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
+    if (ln.startsWith("-")) {
+      if (oldNo === oldLine) return Math.max(1, newNo);
+      oldNo++;
+    } else if (ln.startsWith("+")) {
+      newNo++;
+    } else {
+      oldNo++;
+      newNo++;
+    }
+  }
+  return null;
+}

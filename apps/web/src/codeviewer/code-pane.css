@@ -276,3 +276,28 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* A windowed read of a big file: which lines are on screen, and paging either way. */
+.code-pane__pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__pager > span {
+  margin-right: auto;
+}
+/* A quiet line under the header — cut long lines, a rename's old name. */
+.code-pane__subnote {
+  flex: none;
+  margin: 6px 10px 0;
+  color: var(--pl-color-fg-subtle, #6b6b75);
+  font-size: 12px;
+}
+.code-pane__subnote code {
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__file-old {
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}

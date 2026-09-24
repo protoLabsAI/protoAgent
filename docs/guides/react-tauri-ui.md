@@ -146,12 +146,17 @@ operator as navigator: the agent points at evidence, and you read it at your own
 - **You click.** A file path in a tool result opens in the pane at the line (see below).
 - **File tab.** Syntax-highlighted and line-numbered, with the range highlighted and
   scrolled into view. The header has copy-path and ↗ to open the file in your external
-  editor. **Recent** lists the last 20 files you opened; click one to go back to it.
+  editor. **Recent** lists the last 20 files you opened; click one to go back to it. The
+  open file and Recent survive a reload of the tab (sessionStorage). A file longer than
+  20,000 lines is shown as a window around the target line, with **Earlier** / **Later**
+  paging. A line longer than 2,000 characters is cut by the server, and the pane says so.
   Secret-like files (`.env`, keys, `secrets.yaml`, …) show as *Hidden*. A binary file
   shows its size, and a deleted file says it no longer exists.
 - **Diff tab.** The project's working tree vs `HEAD` (`GET /api/fs/diff`): changed files
   with +/- counts (untracked ones included, secret-like ones listed but hidden), and a
-  unified patch for the file you pick. Click a line to open it in the File tab.
+  unified patch for the file you pick. A pure rename shows *Renamed from …*, and a new
+  file over the server's 256 KB limit shows *Too large to show*. Click a line to open it
+  in the File tab. A deleted line opens the current file where that line used to be.
 - **Follow** (desktop only, off by default). While it's on, each `read_file`,
   `search_files`, `edit_file` or `write_file` the agent finishes moves the pane to that
   file, at most once every 800 ms. **Pin** holds the pane where it is while you read.

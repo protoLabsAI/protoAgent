@@ -71,6 +71,20 @@ const HUGE_TS = Array.from(
   (_, i) => `export const huge${i + 1} = { id: ${i + 1}, name: "row ${i + 1}" }; // generated`,
 ).join("\n") + "\n";
 
+const HUGE45_TS = Array.from(
+  { length: 45000 },
+  (_, i) => `export const deep${i + 1} = ${i + 1};`,
+).join("\n") + "\n";
+
+// One very long line (a minified bundle) — the server cuts it at 2,000 chars.
+const MINIFIED_JS = `// vendored\n${"var a=1;".repeat(700)}\nexport default a;\n`;
+
+// For the Diff tab's deleted-line click: old line 11 ("gamma") is gone; in the new file the
+// hunk starts at 8, so the nearest CURRENT line is 9 — not 11.
+const MOVED_TS = ["one", "two", "three", "four", "five", "six", "seven", "alpha", "beta", "delta", "epsilon", "zeta"]
+  .map((w) => `export const ${w} = "${w}";`)
+  .join("\n") + "\n";
+
 const README = "# app\n\nA fixture project for the console's code pane e2e.\n";
 
 export const CODE_FILES = {
@@ -78,39 +92,61 @@ export const CODE_FILES = {
     "src/server.ts": { text: SERVER_TS, language: "ts" },
     "src/big.ts": { text: BIG_TS, language: "ts" },
     "src/huge.ts": { text: HUGE_TS, language: "ts" },
+    "src/huge45.ts": { text: HUGE45_TS, language: "ts" },
+    "src/minified.js": { text: MINIFIED_JS, language: "js" },
+    "src/moved.ts": { text: MOVED_TS, language: "ts" },
+    "notes/new-name.md": { text: "# notes\n", language: "md" },
     "README.md": { text: README, language: "md" },
     "assets/logo.png": { binary: true, size: 18_342 },
   },
 };
 
+// A symlinked alias (the fence resolves it): the server answers with the CANONICAL path.
+const ALIASES = { "lib-link/server.ts": "src/server.ts" };
+const DIRS = new Set(["src", "notes", "assets"]);
+const MAX_LINES = 20_000;
+const MAX_LINE_CHARS = 2_000;
+const CUT_MARKER = " … [line truncated]";
+
 export const CODE_ROOTS = { roots: { app: "/home/op/dev/app", docs: "/home/op/dev/docs" } };
 
 const SECRET = /(^|\/)(\.env(\.(?!example$|sample$|template$)[^/]*)?|[^/]*\.pem|[^/]*\.key|secrets\.ya?ml|\.netrc)$/i;
 
-/** GET /api/fs/file → `{status, body}`. */
+const err = (status, code, reason) => ({ status, body: { detail: { code, reason } } });
+
+/** GET /api/fs/file → `{status, body}` — the ADR 0112 contract: structured `{detail:{code,
+ *  reason}}` errors, a canonical `path`, null line fields for a binary, a 20,000-line cap per
+ *  response and a 2,000-char cap per line (cut lines end with the marker, `truncated:true`). */
 export function fsFileResponse(params) {
   const project = params.get("project") || "";
-  const path = params.get("path") || "";
+  const asked = params.get("path") || "";
   const files = CODE_FILES[project];
-  if (!files) return { status: 400, body: { detail: { code: "bad_path", reason: "unknown project" } } };
-  if (path.startsWith("/") || path.split("/").includes("..")) {
-    return { status: 400, body: { detail: { code: "bad_path", reason: "outside the project" } } };
-  }
-  if (SECRET.test(path)) return { status: 403, body: { detail: { code: "denied", reason: "secret-like path" } } };
+  if (!files) return err(400, "bad_path", "unknown project");
+  if (asked.startsWith("/") || asked.split("/").includes("..")) return err(400, "bad_path", "outside the project");
+  const path = ALIASES[asked] || asked.replace(/^(\.\/)+/, "");
+  if (SECRET.test(path)) return err(403, "denied", "secret-like path");
+  if (DIRS.has(path)) return err(400, "not_a_file", "is a directory");
   const f = files[path];
-  if (!f) return { status: 404, body: { detail: "not found" } };
+  if (!f) return err(404, "not_found", "no such file");
   if (f.binary) {
     return {
       status: 200,
-      body: { project, path, size: f.size, line_count: 0, start: 0, end: 0, truncated: false, language: "text", binary: true, text: null },
+      body: { project, path, size: f.size, line_count: null, start: null, end: null, truncated: false, language: "text", binary: true, text: null },
     };
   }
   const lines = f.text.split("\n");
   if (lines[lines.length - 1] === "") lines.pop();
   const lineCount = lines.length;
   const start = Math.max(1, Number(params.get("start")) || 1);
-  const end = Math.min(lineCount, Number(params.get("end")) || lineCount);
-  const text = lines.slice(start - 1, end).join("\n") + (end === lineCount ? "\n" : "");
+  if (start > lineCount) return err(400, "bad_range", "start is past the end of the file");
+  const end = Math.min(lineCount, Number(params.get("end")) || lineCount, start + MAX_LINES - 1);
+  let cut = false;
+  const shown = lines.slice(start - 1, end).map((ln) => {
+    if (ln.length <= MAX_LINE_CHARS) return ln;
+    cut = true;
+    return ln.slice(0, MAX_LINE_CHARS) + CUT_MARKER;
+  });
+  const text = shown.join("\n") + (end === lineCount ? "\n" : "");
   return {
     status: 200,
     body: {
@@ -120,7 +156,7 @@ export function fsFileResponse(params) {
       line_count: lineCount,
       start,
       end,
-      truncated: false,
+      truncated: cut || end < lineCount,
       language: f.language || "text",
       binary: false,
       text,
@@ -166,6 +202,21 @@ const DIFF_PATCH = [
   "@@ -0,0 +1,2 @@",
   "+- constant-time token compare",
   "+- rate-limit the auth failures",
+  // A pure rename: headers only, no hunks.
+  "diff --git a/notes/old-name.md b/notes/new-name.md",
+  "similarity index 100%",
+  "rename from notes/old-name.md",
+  "rename to notes/new-name.md",
+  // A deletion whose old and new line numbers differ (the hunk moved up by 2).
+  "diff --git a/src/moved.ts b/src/moved.ts",
+  "index 4a4a4a4..5b5b5b5 100644",
+  "--- a/src/moved.ts",
+  "+++ b/src/moved.ts",
+  "@@ -10,4 +8,3 @@",
+  ' export const alpha = "alpha";',
+  '-export const gamma = "gamma";',
+  ' export const beta = "beta";',
+  ' export const delta = "delta";',
   "",
 ].join("\n");
 
@@ -178,6 +229,9 @@ export const CODE_DIFF = {
     { path: "src/server.ts", status: "M", additions: 6, deletions: 1, binary: false, denied: false },
     { path: "README.md", status: "M", additions: 1, deletions: 1, binary: false, denied: false },
     { path: "notes/todo.md", status: "?", additions: 2, deletions: 0, binary: false, denied: false },
+    { path: "notes/new-name.md", status: "R", additions: 0, deletions: 0, binary: false, denied: false, old_path: "notes/old-name.md" },
+    { path: "src/moved.ts", status: "M", additions: 0, deletions: 1, binary: false, denied: false },
+    { path: "dumps/data.json", status: "?", additions: 0, deletions: 0, binary: false, denied: false, too_large: true },
     { path: ".env", status: "M", additions: 0, deletions: 0, binary: false, denied: true },
   ],
   patch: DIFF_PATCH,

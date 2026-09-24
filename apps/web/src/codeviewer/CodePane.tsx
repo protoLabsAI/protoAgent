@@ -1,7 +1,7 @@
 import "./code-pane.css";
 
 import { File as PierreFile, PatchDiff, useVirtualizer, Virtualizer } from "@pierre/diffs/react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Tabs } from "@protolabsai/ui/navigation";
 import { Button, Empty } from "@protolabsai/ui/primitives";
@@ -19,7 +19,7 @@ import {
   PinOff,
   SquareArrowOutUpRight,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { FS_ROOTS_QUERY_KEY, useEditorLinker } from "../chat/useEditorLinker";
 import { api, ApiError, type FsDiffFile, type FsFile } from "../lib/api";
@@ -27,9 +27,11 @@ import { editorLabel } from "../lib/editorLinks";
 import { useEditorPref } from "../lib/editorPref";
 import { useIsMobile } from "../lib/useIsMobile";
 import { refLabel } from "./codeRef";
-import { splitPatch, type PatchFile } from "./diffParse";
+import { hasHunks, newLineForOld, splitPatch, type PatchFile } from "./diffParse";
+import { countCutLines, pageAfter, pageBefore, windowFor, type LineRange } from "./fileWindow";
 import { openCode } from "./open";
 import {
+  canonicalizeRef,
   setCodeTab,
   setDiffProject,
   setFollow,
@@ -51,10 +53,6 @@ import { useThemeMode } from "./themeMode";
 // `resolve.dedupe` makes the DS markdown and this pane share ONE copy in the bundle.)
 const THEMES = { dark: "github-dark", light: "github-light" } as const;
 
-/** Past this many lines a window of the file is fetched around the target line; the rows
- *  before it are padded so the gutter still shows TRUE line numbers. */
-const WINDOW_BEFORE = 5_000;
-const WINDOW_SIZE = 20_000;
 /** pierre's row height (DEFAULT_VIRTUAL_FILE_METRICS.lineHeight) — the scroll estimate for a
  *  row the virtual window hasn't rendered yet. */
 const ROW_PX = 20;
@@ -134,7 +132,7 @@ function FileTab() {
         <Empty
           icon={<FileCode2 size={22} />}
           title="No file open"
-          description="Click a file path in a tool result, or ask the agent to show you the code it's talking about."
+          description="Click a file path in chat, or ask the agent to show_code — it opens here, at the lines it's talking about."
         />
         <RecentTrail recent={recent} current={null} />
       </div>
@@ -143,21 +141,51 @@ function FileTab() {
   return <FileView key={`${current.project}\u0000${current.path}`} current={current} seq={seq} recent={recent} />;
 }
 
-function errorKind(error: unknown): "denied" | "gone" | "bad" | "other" {
-  if (error instanceof ApiError) {
-    if (error.status === 403) return "denied";
-    if (error.status === 404) return "gone";
-    if (error.status === 400) return "bad";
-  }
+/** The server's structured error codes (ADR 0112: `{detail: {code, reason}}`), with the
+ *  HTTP status as the fallback for an older server that sent a bare string. */
+type FsErrorKind =
+  | "denied"
+  | "not_found"
+  | "bad_path"
+  | "not_a_file"
+  | "bad_range"
+  | "unreadable"
+  | "timeout"
+  | "git_error"
+  | "other";
+
+const FS_CODES: FsErrorKind[] = [
+  "denied",
+  "not_found",
+  "bad_path",
+  "not_a_file",
+  "bad_range",
+  "unreadable",
+  "timeout",
+  "git_error",
+];
+
+export function fsErrorKind(error: unknown): FsErrorKind {
+  if (!(error instanceof ApiError)) return "other";
+  if (error.code && (FS_CODES as string[]).includes(error.code)) return error.code as FsErrorKind;
+  if (error.status === 403) return "denied";
+  if (error.status === 404) return "not_found";
+  if (error.status === 504) return "timeout";
+  if (error.status === 400) return "bad_path";
   return "other";
 }
 
-async function loadFile(ref: CodeRef): Promise<FsFile> {
+/** Fetch the file — or, when `page` is set, that window of it. A plain first read that the
+ *  server capped BEFORE the target line is re-fetched as a window around the target. */
+function fileKey(ref: CodeRef, seq: number, page: LineRange | null) {
+  return ["code-pane-file", ref.project, ref.path, ref.line ?? 0, seq, page?.start ?? 0, page?.end ?? 0] as const;
+}
+
+async function loadFile(ref: CodeRef, page: LineRange | null): Promise<FsFile> {
+  if (page) return api.fsFile(ref.project, ref.path, page);
   const first = await api.fsFile(ref.project, ref.path);
-  // A capped read that stops before the target line: fetch a window around it instead.
-  if (first.truncated && ref.line && ref.line > first.end) {
-    const start = Math.max(1, ref.line - WINDOW_BEFORE);
-    return api.fsFile(ref.project, ref.path, { start, end: start + WINDOW_SIZE - 1 });
+  if (!first.binary && ref.line && first.end != null && first.line_count != null && ref.line > first.end) {
+    return api.fsFile(ref.project, first.path || ref.path, windowFor(ref.line, first.line_count));
   }
   return first;
 }
@@ -169,12 +197,16 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
   const external = useEditorLinker();
   const bodyRef = useRef<HTMLDivElement>(null);
   const virtRef = useRef<VirtualizerHandle | null>(null);
+  const qc = useQueryClient();
+  // A window the operator paged to (Earlier / Later). Cleared by every new open (`seq`).
+  const [page, setPage] = useState<{ seq: number; range: LineRange } | null>(null);
+  const activePage = page && page.seq === seq ? page.range : null;
 
   // Keyed on `seq` too: every open re-reads the file, so a follow jump after an edit_file (or
   // the operator revisiting from Recent) shows the file as it is NOW, not a cached copy.
   const q = useQuery({
-    queryKey: ["code-pane-file", current.project, current.path, current.line ?? 0, seq],
-    queryFn: () => loadFile(current),
+    queryKey: fileKey(current, seq, activePage),
+    queryFn: () => loadFile(current, activePage),
     retry: false,
     staleTime: Infinity,
     gcTime: 30_000,
@@ -184,10 +216,19 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
   });
   const data = q.data;
 
+  // Adopt the server's CANONICAL path (`./src/x` and `src/x` are one file, one Recent entry).
+  // Seed the renamed key first so the remount under the new path doesn't refetch.
+  useEffect(() => {
+    if (!data?.path || data.path === current.path || data.project !== current.project) return;
+    qc.setQueryData(fileKey({ ...current, path: data.path }, seq, activePage), data);
+    canonicalizeRef(current.project, current.path, data.path);
+  }, [data, current, seq, activePage, qc]);
+
   const file = useMemo(() => {
     if (!data || data.binary || data.text == null) return null;
     // Pad a windowed read so line N renders at row N (pierre numbers rows from 1).
-    const pad = data.start > 1 ? "\n".repeat(data.start - 1) : "";
+    const first = data.start ?? 1;
+    const pad = first > 1 ? "\n".repeat(first - 1) : "";
     return {
       name: data.path.split("/").pop() || data.path,
       contents: pad + data.text,
@@ -212,7 +253,15 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
     [current.line, current.endLine],
   );
 
-  useScrollToLine(bodyRef, virtRef, current.line, seq, Boolean(file));
+  // A paged window scrolls to its own top, not back to the ref's line.
+  useScrollToLine(bodyRef, virtRef, activePage ? activePage.start : current.line, seq, Boolean(file), activePage);
+  const shown: LineRange | null =
+    data && data.start != null && data.end != null ? { start: data.start, end: data.end } : null;
+  const lineCount = data?.line_count ?? null;
+  const partial = shown != null && lineCount != null && (shown.start > 1 || shown.end < lineCount);
+  const earlier = partial && shown ? pageBefore(shown) : null;
+  const later = partial && shown && lineCount != null ? pageAfter(shown, lineCount) : null;
+  const cutLines = countCutLines(data?.text);
 
   const href = external?.(current.project, current.path, current.line) ?? null;
   const copyPath = async () => {
@@ -261,16 +310,41 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
           {current.note}
         </div>
       ) : null}
-      {data?.truncated ? (
-        <div className="code-pane__notice">
-          Showing lines {data.start}–{data.end} of {data.line_count} — the rest is past the viewer's cap.
+      {partial && shown && lineCount != null ? (
+        <div className="code-pane__notice code-pane__pager" data-testid="code-pane-pager">
+          <span>
+            Lines {shown.start.toLocaleString()}–{shown.end.toLocaleString()} of {lineCount.toLocaleString()}
+          </span>
+          {earlier ? (
+            <Button size="sm" variant="ghost" onClick={() => setPage({ seq, range: earlier })}>
+              ↑ Earlier
+            </Button>
+          ) : null}
+          {later ? (
+            <Button size="sm" variant="ghost" onClick={() => setPage({ seq, range: later })}>
+              Later ↓
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {cutLines > 0 ? (
+        <div className="code-pane__subnote" data-testid="code-pane-cut-lines">
+          {cutLines === 1 ? "1 very long line is" : `${cutLines} very long lines are`} cut short (marked “… [line
+          truncated]”).
         </div>
       ) : null}
       <div className="code-pane__body" ref={bodyRef} data-testid="code-pane-body">
         {q.isPending ? (
           <div className="code-pane__status">Loading {current.path}…</div>
         ) : q.isError ? (
-          <FileError error={q.error} path={current.path} />
+          <FileError
+            error={q.error}
+            path={current.path}
+            onRetry={() => {
+              setPage(null);
+              void q.refetch();
+            }}
+          />
         ) : data?.binary ? (
           <div className="code-pane__status" data-testid="code-pane-binary">
             Binary file · {formatBytes(data.size)} — not shown.
@@ -287,8 +361,9 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
   );
 }
 
-function FileError({ error, path }: { error: unknown; path: string }) {
-  const kind = errorKind(error);
+function FileError({ error, path, onRetry }: { error: unknown; path: string; onRetry: () => void }) {
+  const kind = fsErrorKind(error);
+  const reason = error instanceof Error ? error.message : "";
   if (kind === "denied") {
     return (
       <div className="code-pane__status code-pane__status--denied" data-testid="code-pane-denied">
@@ -296,16 +371,24 @@ function FileError({ error, path }: { error: unknown; path: string }) {
       </div>
     );
   }
-  if (kind === "gone") {
-    return (
-      <div className="code-pane__status" data-testid="code-pane-gone">
-        {path} no longer exists.
-      </div>
-    );
-  }
+  const retry = (
+    <Button size="sm" variant="ghost" onClick={onRetry}>
+      Try again
+    </Button>
+  );
+  const msg: Record<Exclude<FsErrorKind, "denied">, ReactNode> = {
+    not_found: <>{path} no longer exists.</>,
+    bad_path: <>Can't open {path} — it's outside the agent's work folders.</>,
+    not_a_file: <>{path} is a folder, not a file.</>,
+    bad_range: <>Those lines are past the end of {path} — it has changed since. {retry}</>,
+    unreadable: <>{path} couldn't be read{reason ? ` (${reason})` : ""}.</>,
+    timeout: <>Reading {path} timed out. {retry}</>,
+    git_error: <>git failed{reason ? `: ${reason}` : ""}.</>,
+    other: <>Couldn't load {path}{reason ? ` — ${reason}` : ""}. {retry}</>,
+  };
   return (
-    <div className="code-pane__status" data-testid="code-pane-error">
-      {kind === "bad" ? `Can't open ${path} — it's outside the agent's work folders, or not a file.` : `Couldn't load ${path}.`}
+    <div className="code-pane__status" data-testid={kind === "not_found" ? "code-pane-gone" : "code-pane-error"} data-code={kind}>
+      {msg[kind]}
     </div>
   );
 }
@@ -343,6 +426,7 @@ function useScrollToLine(
   line: number | undefined,
   seq: number,
   ready: boolean,
+  page: LineRange | null,
 ) {
   useEffect(() => {
     if (!ready) return;
@@ -388,7 +472,7 @@ function useScrollToLine(
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [bodyRef, virtRef, line, seq, ready]);
+  }, [bodyRef, virtRef, line, seq, ready, page]);
 }
 
 function RecentTrail({ recent, current }: { recent: CodeRef[]; current: CodeRef | null }) {
@@ -473,14 +557,22 @@ function DiffView({ project, projects }: { project: string; projects: string[] }
       diffStyle: "unified" as const,
       overflow: "scroll" as const,
       disableFileHeader: true,
-      // A click on a diff row opens that line in the File tab — the new-file side's
-      // number for an added/context row, the old side's for a removed one.
-      onLineClick: (props: { lineNumber: number }) => {
-        if (active) openCode({ project, path: active, line: props.lineNumber, source: "diff" });
+      // A click on a diff row opens that line in the File tab — the file as it is NOW. An
+      // added/context row carries its new-side number; a DELETED row only exists on the old
+      // side, so it opens the nearest current line (where the deletion sits in the new file).
+      onLineClick: (props: { lineNumber: number; lineType?: string }) => {
+        if (!active) return;
+        const line =
+          props.lineType === "change-deletion" && patch
+            ? (newLineForOld(patch.patch, props.lineNumber) ?? props.lineNumber)
+            : props.lineNumber;
+        openCode({ project, path: active, line, source: "diff" });
       },
     }),
-    [mode, active, project],
+    [mode, active, project, patch],
   );
+  const activeMeta = files.find((f) => f.path === active);
+  const renamedFrom = activeMeta?.old_path || patch?.oldPath;
   const choices = projects.includes(project) ? projects : [project, ...projects];
 
   return (
@@ -512,10 +604,8 @@ function DiffView({ project, projects }: { project: string; projects: string[] }
       {q.isPending ? (
         <div className="code-pane__status">Loading changes…</div>
       ) : q.isError ? (
-        <div className="code-pane__status" data-testid="code-pane-error">
-          {q.error instanceof ApiError && q.error.status === 504
-            ? "git took too long to answer — try Refresh."
-            : "Couldn't load the diff."}
+        <div className="code-pane__status" data-testid="code-pane-error" data-code={fsErrorKind(q.error)}>
+          {diffErrorMessage(q.error, project)}
         </div>
       ) : !q.data?.is_git ? (
         <div className="code-pane__status">{project} isn't a git repository — there's no diff to show.</div>
@@ -531,9 +621,23 @@ function DiffView({ project, projects }: { project: string; projects: string[] }
             ))}
           </ul>
           {q.data.truncated ? <div className="code-pane__notice">The diff is past the viewer's cap — some changes aren't shown.</div> : null}
-          <div className="code-pane__body code-pane__body--diff">
-            {patch ? (
+          <div className="code-pane__body code-pane__body--diff" data-testid="code-pane-diff-body">
+            {renamedFrom && active ? (
+              <div className="code-pane__subnote" data-testid="code-pane-renamed">
+                Renamed from <code>{renamedFrom}</code>
+              </div>
+            ) : null}
+            {activeMeta?.too_large ? (
+              <div className="code-pane__status" data-testid="code-pane-too-large">
+                Too large to show — {active} is a new file over the diff's 256 KB limit. Open it in the File
+                tab to read it.
+              </div>
+            ) : patch && hasHunks(patch.patch) ? (
               <PatchDiff patch={patch.patch} options={options} className="code-pane__view" />
+            ) : patch || activeMeta ? (
+              <div className="code-pane__status" data-testid="code-pane-no-hunks">
+                {renamedFrom ? "No content changes — only the name." : "No line changes (a mode or metadata change)."}
+              </div>
             ) : (
               <div className="code-pane__status">Pick a file to see its changes.</div>
             )}
@@ -542,6 +646,22 @@ function DiffView({ project, projects }: { project: string; projects: string[] }
       )}
     </div>
   );
+}
+
+function diffErrorMessage(error: unknown, project: string): string {
+  const reason = error instanceof Error ? error.message : "";
+  switch (fsErrorKind(error)) {
+    case "timeout":
+      return "git took too long to answer — try Refresh.";
+    case "git_error":
+      return `git failed${reason ? `: ${reason}` : ""}.`;
+    case "bad_path":
+      return `${project} isn't one of the agent's work folders.`;
+    case "unreadable":
+      return `${project} couldn't be read${reason ? ` (${reason})` : ""}.`;
+    default:
+      return `Couldn't load the diff${reason ? ` — ${reason}` : ""}.`;
+  }
 }
 
 function DiffFileRow({ f, active, onPick }: { f: FsDiffFile; active: boolean; onPick: () => void }) {
@@ -558,13 +678,22 @@ function DiffFileRow({ f, active, onPick }: { f: FsDiffFile; active: boolean; on
         <span className={`code-pane__status-letter is-${f.status === "?" ? "u" : f.status.toLowerCase()}`}>
           {f.status === "?" ? "U" : f.status}
         </span>
-        <span className="code-pane__file-path">{f.path}</span>
+        <span className="code-pane__file-path">
+          {f.old_path ? (
+            <>
+              <span className="code-pane__file-old">{f.old_path}</span> →{" "}
+            </>
+          ) : null}
+          {f.path}
+        </span>
         {f.denied ? (
           <span className="code-pane__file-meta">
             <Lock size={11} aria-hidden /> hidden
           </span>
         ) : f.binary ? (
           <span className="code-pane__file-meta">binary</span>
+        ) : f.too_large ? (
+          <span className="code-pane__file-meta">too large</span>
         ) : (
           <span className="code-pane__file-meta">
             <span className="code-pane__add">+{f.additions}</span> <span className="code-pane__del">−{f.deletions}</span>

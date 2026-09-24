@@ -780,7 +780,11 @@ function scenarioFor(prompt) {
     ["SHOWSECRET", ".env", 1],
     ["SHOWGONE", "src/gone.ts", 1],
     ["SHOWBINARY", "assets/logo.png", 1],
+    ["SHOWHUGE45", "src/huge45.ts", 30000],
     ["SHOWHUGE", "src/huge.ts", 15000],
+    ["SHOWALIAS", "lib-link/server.ts", 23],
+    ["SHOWDIR", "src", 1],
+    ["SHOWMINIFIED", "src/minified.js", 2],
   ]) {
     if (t.includes(key))
       return {

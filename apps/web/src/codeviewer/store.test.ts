@@ -1,8 +1,23 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { normalizeRef, RECENT_CAP, resetCodeViewer, setFollow, setPinned, showCodeRef, useCodeViewer } from "./store";
+import {
+  canonicalizeRef,
+  loadSession,
+  normalizeRef,
+  RECENT_CAP,
+  resetCodeViewer,
+  SESSION_KEY,
+  setFollow,
+  setPinned,
+  showCodeRef,
+  tidyPath,
+  useCodeViewer,
+} from "./store";
 
-beforeEach(() => resetCodeViewer());
+beforeEach(() => {
+  sessionStorage.clear();
+  resetCodeViewer();
+});
 
 describe("normalizeRef", () => {
   it("needs a project and a path", () => {
@@ -66,5 +81,42 @@ describe("follow + pin", () => {
     setPinned(true);
     setFollow(false);
     expect(useCodeViewer.getState()).toMatchObject({ follow: false, pinned: false });
+  });
+});
+
+describe("one file, one Recent entry (canonical paths)", () => {
+  it("tidies ./ and doubled slashes client-side", () => {
+    expect(tidyPath("./src//x.ts")).toBe("src/x.ts");
+    expect(tidyPath("src/./x.ts")).toBe("src/x.ts");
+    expect(tidyPath("/etc/passwd")).toBe("/etc/passwd"); // the server refuses it, not us
+    showCodeRef({ project: "p", path: "./src/x.ts", source: "link" });
+    showCodeRef({ project: "p", path: "src/x.ts", source: "link" });
+    expect(useCodeViewer.getState().recent).toHaveLength(1);
+  });
+  it("adopts the server's canonical path and folds the duplicate", () => {
+    showCodeRef({ project: "p", path: "lib/x.ts", source: "link" });
+    showCodeRef({ project: "p", path: "link-to-lib/x.ts", source: "link" });
+    canonicalizeRef("p", "link-to-lib/x.ts", "lib/x.ts");
+    const s = useCodeViewer.getState();
+    expect(s.current?.path).toBe("lib/x.ts");
+    expect(s.recent.map((r) => r.path)).toEqual(["lib/x.ts"]);
+  });
+});
+
+describe("session restore", () => {
+  it("round-trips current + recent through sessionStorage", () => {
+    showCodeRef({ project: "p", path: "a.ts", line: 4, note: "why", source: "component" });
+    const back = loadSession();
+    expect(back.current).toMatchObject({ project: "p", path: "a.ts", line: 4, note: "why" });
+    expect(back.recent).toHaveLength(1);
+  });
+  it("survives garbage and storage that throws", () => {
+    sessionStorage.setItem(SESSION_KEY, "{not json");
+    expect(loadSession()).toEqual({ current: null, recent: [] });
+    const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(loadSession()).toEqual({ current: null, recent: [] });
+    spy.mockRestore();
   });
 });

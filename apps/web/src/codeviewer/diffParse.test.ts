@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { splitPatch } from "./diffParse";
+import { hasHunks, newLineForOld, splitPatch } from "./diffParse";
 
 const PATCH = [
   "diff --git a/src/a.ts b/src/a.ts",
@@ -54,5 +54,40 @@ describe("splitPatch", () => {
   it("is empty for nothing", () => {
     expect(splitPatch("")).toEqual([]);
     expect(splitPatch("not a diff")).toEqual([]);
+  });
+});
+
+describe("newLineForOld — a deleted line opens the nearest CURRENT line", () => {
+  const P = [
+    "diff --git a/a.ts b/a.ts",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -10,5 +10,4 @@",
+    " ten",
+    "-eleven",
+    "-twelve",
+    "+ELEVEN",
+    " thirteen",
+    " fourteen",
+    "@@ -40,2 +39,0 @@",
+    "-forty",
+    "-forty-one",
+    "",
+  ].join("\n");
+  it("maps a deletion to the new-side line at its position", () => {
+    expect(newLineForOld(P, 11)).toBe(11);
+    expect(newLineForOld(P, 12)).toBe(11); // still before the replacement line
+  });
+  it("handles a pure-deletion hunk (+N,0 names the line before the gap)", () => {
+    expect(newLineForOld(P, 40)).toBe(40);
+    expect(newLineForOld(P, 41)).toBe(40);
+  });
+  it("is null for a line that isn't a deletion", () => {
+    expect(newLineForOld(P, 10)).toBeNull();
+    expect(newLineForOld(P, 99)).toBeNull();
+  });
+  it("hasHunks: a pure rename has none", () => {
+    expect(hasHunks(P)).toBe(true);
+    expect(hasHunks("diff --git a/x b/y\nsimilarity index 100%\nrename from x\nrename to y\n")).toBe(false);
   });
 });

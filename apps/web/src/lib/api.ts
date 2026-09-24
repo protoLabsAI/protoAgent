@@ -369,9 +369,12 @@ export type FsFile = {
   project: string;
   path: string;
   size: number;
-  line_count: number;
-  start: number;
-  end: number;
+  /** null for a binary file (no lines to count). */
+  line_count: number | null;
+  start: number | null;
+  end: number | null;
+  /** A server cap cut the read: lines past `end` (page with start/end) and/or single lines
+   *  past the per-line cap (each cut line ends with " … [line truncated]"). */
   truncated: boolean;
   language: string;
   binary: boolean;
@@ -385,6 +388,10 @@ export type FsDiffFile = {
   deletions: number;
   binary: boolean;
   denied: boolean;
+  /** A rename's previous path (status "R"). */
+  old_path?: string;
+  /** An untracked file over the server's 256 KB cap — listed, content not in `patch`. */
+  too_large?: boolean;
 };
 
 /** GET /api/fs/diff (ADR 0112) — the working tree vs HEAD, untracked files included. */
@@ -399,10 +406,42 @@ export type FsDiff = {
 };
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** `status` is the HTTP status; `code` is the machine-readable `detail.code` when the
+   *  server sent a structured `{detail: {code, reason}}` (e.g. the fs routes, ADR 0112). */
+  constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
     this.name = "ApiError";
   }
+}
+
+/** Pull a human message (+ a machine code) out of an error response body. FastAPI's
+ *  `detail` is a string for plain HTTPExceptions, but routes that raise a STRUCTURED detail
+ *  send `{code, reason}` — and a validation error sends a list. Interpolating either of those
+ *  straight into the message produced "[object Object]". */
+export function parseErrorBody(raw: string, fallback: string): { detail: string; code?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { detail: raw || fallback };
+  }
+  const d = parsed && typeof parsed === "object" ? (parsed as { detail?: unknown }).detail : undefined;
+  if (typeof d === "string" && d) return { detail: d };
+  if (d && typeof d === "object" && !Array.isArray(d)) {
+    const o = d as { code?: unknown; reason?: unknown; message?: unknown };
+    const code = typeof o.code === "string" ? o.code : undefined;
+    const msg =
+      (typeof o.reason === "string" && o.reason) ||
+      (typeof o.message === "string" && o.message) ||
+      code ||
+      fallback;
+    return { detail: msg, code };
+  }
+  if (Array.isArray(d) && d.length) {
+    const first = d[0] as { msg?: unknown };
+    if (first && typeof first.msg === "string") return { detail: first.msg };
+  }
+  return { detail: raw || fallback };
 }
 
 /** Cold start: the backend isn't answering *yet*, but will be shortly — retry through
@@ -472,18 +511,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     // response throws "body stream already read" (a second error that masks the real
     // one). Read text, then best-effort parse a JSON {detail}.
     const raw = await response.text().catch(() => "");
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
-    } catch {
-      detail = raw || detail;
-    }
+    const { detail, code } = parseErrorBody(raw, `${response.status} ${response.statusText}`);
     // Wrong/expired/missing bearer on a token-gated deployment — surface the
     // token prompt (#873) instead of leaving per-panel 401 cards as the only signal.
     // But a MEMBER-scoped 401 is the focused remote's bad token, not the hub's — don't
     // hijack the hub AuthGate; the boot gate / fleet panel own that recovery.
     if (response.status === 401 && !isMemberScoped(path, host)) notifyAuthRequired();
-    throw new ApiError(response.status, detail || "request failed");
+    throw new ApiError(response.status, detail || "request failed", code);
   }
 
   return (await response.json()) as T;
@@ -504,14 +538,9 @@ async function requestForm<T>(path: string, form: FormData, opts: { host?: boole
     // .json() then .text() throws "body stream already read", which masked the
     // real HTTP detail and skipped the 401 AuthGate). Mirror `request`.
     const raw = await response.text().catch(() => "");
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
-    } catch {
-      detail = raw || detail;
-    }
+    const { detail, code } = parseErrorBody(raw, `${response.status} ${response.statusText}`);
     if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired();
-    throw new ApiError(response.status, detail || "request failed");
+    throw new ApiError(response.status, detail || "request failed", code);
   }
   return (await response.json()) as T;
 }
@@ -533,13 +562,8 @@ async function memberRequest<T>(slug: string, rel: string): Promise<T> {
     // Read the body ONCE (a Response stream can't be read twice), best-effort parsing a
     // JSON {detail} — mirrors `request`/`requestForm`.
     const raw = await response.text().catch(() => "");
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
-    } catch {
-      detail = raw || detail;
-    }
-    throw new ApiError(response.status, detail || "request failed");
+    const { detail, code } = parseErrorBody(raw, `${response.status} ${response.statusText}`);
+    throw new ApiError(response.status, detail || "request failed", code);
   }
   return (await response.json()) as T;
 }
@@ -2590,13 +2614,8 @@ export const api = {
           }),
         });
         if (!res.ok) {
-          let detail = `${res.status} ${res.statusText}`;
-          try {
-            const p = (await res.json()) as { detail?: string };
-            if (p?.detail) detail = p.detail;
-          } catch {
-            /* keep status text */
-          }
+          const raw = await res.text().catch(() => "");
+          const { detail } = parseErrorBody(raw, `${res.status} ${res.statusText}`);
           handlers.onFailed?.(detail);
           return;
         }
