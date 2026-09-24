@@ -267,3 +267,37 @@ def test_batch_suffix_allowed_off_windows(proj, monkeypatch):
     monkeypatch.setattr(fs.subprocess, "Popen", _FakePopen)
     out = _tools(_cfg(proj, editor="ed.cmd"))["open_in_editor"].invoke({"project": "repo", "path": "src/router.py"})
     assert out.startswith("Opened")
+
+
+def test_frozen_launch_scrubs_bundle_env(proj, fake_launch, monkeypatch):
+    """The confirmed leak: an editor started by a PyInstaller-frozen server outlives it,
+    so it must not inherit paths into the server's temporary ``_MEIPASS`` dir — a stale
+    ``SSL_CERT_FILE`` there crashed every httpx client the editor later started."""
+    import os
+    import sys
+
+    mei = "/var/folders/xx/T/_MEIabc123"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", mei, raising=False)
+    monkeypatch.setenv("SSL_CERT_FILE", f"{mei}/certifi/cacert.pem")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", f"{mei}/certifi/cacert.pem")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", mei)
+    monkeypatch.setenv("EDITOR_ENV_PROBE", "kept")
+    t = _tools(_cfg(proj))["open_in_editor"]
+    assert t.invoke({"project": "repo", "path": "src/router.py"}).startswith("Opened")
+    (call,) = fake_launch
+    env = call["env"]
+    assert not any(k in env for k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "_PYI_APPLICATION_HOME_DIR"))
+    assert env["EDITOR_ENV_PROBE"] == "kept" and env.get("PATH") == os.environ.get("PATH")
+
+
+def test_unfrozen_launch_passes_env_through(proj, fake_launch, monkeypatch):
+    import os
+    import sys
+
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/cert.pem")
+    t = _tools(_cfg(proj))["open_in_editor"]
+    t.invoke({"project": "repo", "path": "src/router.py"})
+    (call,) = fake_launch
+    assert call["env"] == dict(os.environ)

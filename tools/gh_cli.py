@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import os
 
+from infra.proc import child_env
+
 _COMMAND_TIMEOUT = 30
 
 
@@ -32,7 +34,7 @@ async def run_gh(args: list[str], timeout: int = _COMMAND_TIMEOUT, cwd: str | No
     isn't installed instead of raising. ``cwd`` scopes repo-relative commands
     (``gh pr …``) to a checkout, the way ``gh`` resolves the target repo.
     """
-    env = os.environ.copy()
+    env = child_env()
     token = _resolve_token()
     if token:
         env["GITHUB_TOKEN"] = token
