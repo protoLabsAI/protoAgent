@@ -415,6 +415,7 @@ filesystem:
   allow_run: true                # run_command available (ON); HITL-gated below — false = never built
   run_requires_approval: true    # each run_command pauses for operator approval
   bypass_allowed: true           # false = /bypass can't skip the approval gate
+  editor_command: ""             # e.g. zed / "code -g" / "cursor -g" — binds open_in_editor
   projects:
     - { name: orbis, path: /Users/kj/dev/ORBIS, write: false }   # read-only monitor
     - { name: pixelgen, path: /Users/kj/dev/pixelgen, write: true }
@@ -426,6 +427,7 @@ filesystem:
 | `allow_run` | `true` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). **`false` is the per-agent kill switch**: the tool is never built, so the model can't see or call it. |
 | `run_requires_approval` | `true` | Each `run_command` call pauses for HITL operator approval (A2A `input-required`). Drop to `false` to let commands run unattended. |
 | `bypass_allowed` | `true` | Permit the per-tab `/bypass` chat toggle to skip the approval gate. `false` = approvals enforced regardless of caller-supplied metadata. |
+| `editor_command` | `""` | Your desktop editor's command line — `zed`, `code -g`, `cursor -g`. When set, binds `open_in_editor(project, path, line?)`, which pops a fenced file open in that editor **on the machine the agent runs on** ("open the router for me"). Split with shlex; the target is appended as one argument, `<abs_path>[:<line>]`. Same fence as every fs tool, works in read-only projects, launched detached (never waits). Empty = the tool is not bound — leave it unset on a headless/remote agent. **Windows:** point it at the editor's real `.exe` (quote a path with spaces), e.g. `"C:\Users\<you>\AppData\Local\Programs\Microsoft VS Code\Code.exe" -g` — a `.cmd`/`.bat` launcher (VS Code's `code` is `code.cmd`) is refused, because Windows runs it through `cmd.exe`, which would interpret characters in file names. |
 | `projects` | `[]` | Managed workspaces: `{name, path, write, no_delete}`. **Empty falls back to a default `workspace` dir** (so the tools are usable out of the box). **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; `write:true` + `no_delete:true` is read-write-no-delete (create/edit, never delete — the third Cowork mount mode); invalid paths are skipped. |
 
 The four toggles are editable per agent in the console via the **Shell & filesystem** chip on **Settings ▸ Capabilities ▸ Tools** (hot-reload — a save rebuilds the graph). `tools.disabled: [run_command]` (above) is an equivalent per-tool route — in the console, that's the `run_command` row switch in the same panel's Filesystem group.

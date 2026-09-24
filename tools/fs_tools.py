@@ -26,6 +26,9 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import shlex
+import shutil
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +39,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
+from infra.proc import detached_kwargs
 from tools.shell import run_command as _shell_run
 
 log = logging.getLogger("protoagent.fs")
@@ -299,6 +303,106 @@ def _configured_entries(config, *, create: bool = False) -> list[dict]:
         else (getattr(config, "filesystem_projects", []) or [])
     )
     return [e for e in entries or [] if isinstance(e, dict)]
+
+
+def _is_windows() -> bool:
+    """Seam for tests — the Windows-only launch rules below key on this."""
+    return os.name == "nt"
+
+
+def _strip_quotes(token: str) -> str:
+    """Drop ONE pair of matching surrounding quotes. ``shlex.split(posix=False)`` keeps them,
+    so ``"C:\\Program Files\\Zed\\zed.exe"`` would otherwise reach ``shutil.which`` quoted."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return token
+
+
+def _split_editor_command(editor_command: str) -> list[str]:
+    """Split ``filesystem.editor_command`` into argv tokens.
+
+    POSIX: plain shlex. Windows: ``posix=False`` so backslashed paths survive, then the
+    quotes it retains are stripped per token. Raises ``ValueError`` on an unbalanced quote.
+    """
+    if _is_windows():
+        return [_strip_quotes(t) for t in shlex.split(editor_command, posix=False)]
+    return shlex.split(editor_command)
+
+
+# Windows runs .cmd/.bat launchers through cmd.exe, whose metacharacters (& | < > ^ %) in
+# a managed-project file name would be interpreted — command injection via a file name.
+_WINDOWS_BATCH_SUFFIXES = (".cmd", ".bat")
+
+
+def _editor_argv(editor_command: str, target: Path, line: int | None = None) -> list[str]:
+    """``argv`` that opens ``target`` (at ``line``) in the operator's editor.
+
+    ``editor_command`` is operator config (``zed``, ``code -g``, ``cursor -g``), split
+    with shlex. The target is appended as ONE argv element, ``<abs_path>[:<line>]`` — the
+    ``path:line`` form Zed, VS Code ``-g`` and Cursor ``-g`` all accept. Nothing the model
+    supplies ever becomes an argv element of its own: ``target`` is the fence-resolved
+    absolute path, and ``line`` is an int. The absolute-path assertion is what rules out
+    option injection — an absolute path can never start with ``-``.
+
+    Raises ``ValueError`` on an empty/unparseable command or a non-absolute target.
+    """
+    try:
+        base = _split_editor_command(editor_command)
+    except ValueError as exc:
+        raise ValueError(f"filesystem.editor_command is not a valid command line: {exc}") from exc
+    if not base:
+        raise ValueError("filesystem.editor_command is empty")
+    if not target.is_absolute() or str(target).startswith("-"):
+        raise ValueError(f"refusing a non-absolute editor target: {target}")
+    arg = str(target) if line is None else f"{target}:{int(line)}"
+    return [*base, arg]
+
+
+# How long `open_in_editor` waits to see whether the editor CLI failed outright (bad
+# flag, app missing). Editor CLIs (zed/code/cursor without --wait) hand off to the GUI
+# and exit well inside this; one that is still running is simply left to it.
+_EDITOR_LAUNCH_GRACE_S = 1.5
+
+
+def _launch_editor(argv: list[str]) -> str | None:
+    """Start the editor without blocking on it. ``None`` on success, else an error string.
+
+    Detached (own session / process group) with stdio on DEVNULL, so the editor never
+    holds the server's pipes and a server restart doesn't take the editor with it. A
+    child still running after the grace window is reaped by a daemon thread so it can't
+    linger as a zombie.
+    """
+    exe = shutil.which(argv[0])
+    if exe is None:
+        return f"Error: editor command {argv[0]!r} not found on PATH."
+    if _is_windows() and exe.lower().endswith(_WINDOWS_BATCH_SUFFIXES):
+        # e.g. VS Code's `code` is `code.cmd`. Popen would route it through cmd.exe, which
+        # parses the file-name argument — refuse rather than try to escape cmd.exe quoting.
+        return (
+            f"Error: editor command {argv[0]!r} resolves to a batch launcher ({exe}), which Windows "
+            "runs through cmd.exe — a file name could inject commands. Point "
+            "filesystem.editor_command at the editor's real .exe instead, e.g. "
+            '"C:\\Users\\<you>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe" -g'
+        )
+    try:
+        proc = subprocess.Popen(
+            [exe, *argv[1:]],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            **detached_kwargs(),
+        )
+    except OSError as exc:
+        return f"Error: failed to launch editor {argv[0]!r}: {exc}"
+    try:
+        rc = proc.wait(timeout=_EDITOR_LAUNCH_GRACE_S)
+    except subprocess.TimeoutExpired:
+        threading.Thread(target=proc.wait, name="open-in-editor-reap", daemon=True).start()
+        return None
+    if rc != 0:
+        return f"Error: editor command {argv[0]!r} exited with status {rc}."
+    return None
 
 
 def _registry_from_config(config, *, create: bool = True) -> ProjectRegistry:
@@ -922,6 +1026,55 @@ def build_fs_tools(config) -> list:
         return f"Deleted {path}."
 
     tools = [list_projects, list_dir, read_file, find_files, search_files, write_file, edit_file, delete_file]
+
+    # `open_in_editor` — bound only when the operator named their desktop editor. It is a
+    # side effect on the operator's screen, not on the project, so it works in read-only
+    # projects too; the fence is the same `registry.resolve` every other fs tool uses.
+    editor_command = str(getattr(config, "filesystem_editor_command", "") or "").strip()
+    try:
+        editor_name = (_split_editor_command(editor_command) or [""])[0]
+    except ValueError:
+        # An unbalanced quote is an operator typo — never break the graph build over it.
+        log.warning(
+            "[fs] filesystem.editor_command is not a valid command line: %r — open_in_editor NOT bound", editor_command
+        )
+        editor_name = ""
+    if editor_name:
+
+        @tool
+        def open_in_editor(project: str, path: str, line: int | None = None) -> str:
+            """Open a file from a managed project in the operator's code editor on their
+            machine (optionally jumping to `line`), so THEY can look at it.
+
+            Use it when the operator asks to see/open/show a file ("open the router for
+            me"), or to hand off a specific location worth their attention (the bug you
+            found, the function to review). It does NOT return the file's contents — use
+            `read_file` to read a file yourself. `path` is relative to the project root;
+            works in read-only projects too.
+            """
+            registry = registry_ref.get()
+            try:
+                target = registry.resolve(project, path)
+            except ValueError as exc:
+                return f"Error: {exc}"
+            if not target.exists():
+                return f"Error: no such file: {path}"
+            if not target.is_file():
+                return f"Error: not a file: {path} (open_in_editor opens files, not directories)."
+            if line is not None and line < 1:
+                return f"Error: `line` must be a positive line number (got {line!r} for {path})."
+            try:
+                argv = _editor_argv(editor_command, target, line)
+            except ValueError as exc:
+                return f"Error: {exc}"
+            err = _launch_editor(argv)
+            if err:
+                return err
+            where = f"{path}:{line}" if line is not None else path
+            log.info("[fs] open_in_editor %s/%s via %s", project, where, argv[0])
+            return f"Opened {project}/{where} in {editor_name}."
+
+        tools.append(open_in_editor)
 
     if allow_run:
 

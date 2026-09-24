@@ -1998,6 +1998,11 @@ class LangGraphConfig:
     # FORBID bypass entirely regardless of caller metadata (locked-down hosts); the approval
     # gate is then always enforced.
     filesystem_bypass_allowed: bool = True
+    # Operator's desktop editor for the ``open_in_editor`` tool — a command line
+    # (``zed``, ``code -g``, ``cursor -g``) split with shlex; the fenced target is
+    # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
+    # is not bound. Only meaningful for an agent on the operator's own machine.
+    filesystem_editor_command: str = ""
     filesystem_projects: list[dict] = field(default_factory=list)
 
     # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
@@ -2671,6 +2676,9 @@ class LangGraphConfig:
             filesystem_bypass_allowed=data.get("filesystem", {}).get(
                 "bypass_allowed", cls.filesystem_bypass_allowed
             ),
+            filesystem_editor_command=str(
+                (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
+            ).strip(),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),
             media_retention_days=int(
