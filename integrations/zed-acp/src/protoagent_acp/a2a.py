@@ -37,6 +37,7 @@ TOOL_CALL_EXT_URI = "https://proto-labs.ai/a2a/ext/tool-call-v1"
 COST_EXT_URI = "https://proto-labs.ai/a2a/ext/cost-v1"
 HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
 REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
+STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
 
 _TERMINAL = ("completed", "failed", "canceled", "cancelled", "rejected")
 _PAUSED = ("input-required", "auth-required")
@@ -89,6 +90,13 @@ class ToolEvent:
 
 
 @dataclass
+class SteerConsumedEvent:
+    """The model-call boundary where queued steering was folded in (``steer_consumed``)."""
+
+    ids: list[str]
+
+
+@dataclass
 class StateEvent:
     state: str  # normalized
     task_id: str
@@ -113,7 +121,7 @@ class UsageEvent:
     cost_usd: float | None = None
 
 
-Event = TextEvent | ReasoningEvent | ToolEvent | StateEvent | UsageEvent
+Event = TextEvent | ReasoningEvent | ToolEvent | StateEvent | UsageEvent | SteerConsumedEvent
 
 
 def _text_from_parts(parts: Any) -> str:
@@ -222,6 +230,11 @@ def decode_frame(frame: dict) -> list[Event]:
         reasoning = _data_by_mime(parts, REASONING_MIME)
         if isinstance(reasoning, dict) and reasoning.get("text"):
             events.append(ReasoningEvent(str(reasoning["text"])))
+        steer = _data_by_mime(parts, STEER_CONSUMED_MIME)
+        if isinstance(steer, dict) and isinstance(steer.get("items"), list):
+            ids = [str(i["id"]) for i in steer["items"] if isinstance(i, dict) and i.get("id")]
+            if ids:
+                events.append(SteerConsumedEvent(ids))
         state = norm_state(status.get("state"))
         hitl = _data_by_mime(parts, HITL_MIME)
         events.append(
@@ -369,6 +382,20 @@ class A2AClient:
             return r.json()
         except ValueError:
             return None
+
+    async def send_json(self, method: str, path: str, body: Any = None) -> tuple[int, Any]:
+        """POST/DELETE an operator ``/api`` path → ``(status, json-or-None)``; status 0 on a
+        transport failure. Never raises."""
+        try:
+            r = await self._client.request(
+                method, f"{self.prefix}{path}", headers=self._headers(), json=body, timeout=_RPC_TIMEOUT
+            )
+        except httpx.TransportError:
+            return 0, None
+        try:
+            return r.status_code, r.json()
+        except ValueError:
+            return r.status_code, None
 
     async def stream(
         self,

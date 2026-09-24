@@ -45,9 +45,15 @@ class RecordingConn:
         return "".join(u["content"]["text"] for u in self.of("agent_message_chunk"))
 
 
-async def _agent(fake: fa.FakeA2A, token: str | None = "secret", overrides: dict | None = None, approve: bool | str | None = True):
+async def _agent(
+    fake: fa.FakeA2A,
+    token: str | None = "secret",
+    overrides: dict | None = None,
+    approve: bool | str | None = True,
+    steer_grace: float = 0.0,
+):
     client = A2AClient(fake.url, token)
-    agent = ProtoAgentACP(client, RootMap(overrides))
+    agent = ProtoAgentACP(client, RootMap(overrides), steer_grace=steer_grace)
     conn = RecordingConn(approve)
     agent.on_connect(conn)
     init = await agent.initialize(protocol_version=1)
@@ -427,3 +433,296 @@ async def test_allow_for_session_is_per_session():
     first_b = next(m for m in fake.requests if m["contextId"] == b.session_id)
     assert not _bypassing(first_b)
     assert len(conn.permissions) == 2  # thread B asked again
+
+
+# ── Send Now → steer ───────────────────────────────────────────────────────────
+
+
+async def _running(agent, conn, sid, text="long task"):
+    running = asyncio.create_task(agent.prompt(prompt=[text_block(text)], session_id=sid))
+    for _ in range(200):
+        if conn.text():
+            return running
+        await asyncio.sleep(0.01)
+    raise AssertionError("the turn never started streaming")
+
+
+async def test_send_now_steers_the_running_turn():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [
+            fa.task(ctx),
+            fa.text(ctx, "Reading A.", append=False),
+            fa.after_steer(fake, lambda t: fa.text(ctx, f" Switching to: {t}.", append=True)),
+            fa.done(ctx),
+        ]
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)  # Zed's Send Now: cancel …
+        r1 = await asyncio.wait_for(first, 1)  # … answered at once, the turn keeps running
+        assert r1.stop_reason == "cancelled"
+        r2 = await agent.prompt(prompt=[text_block("look at B instead")], session_id=sess.session_id)  # … then prompt
+        await client.aclose()
+    assert r2.stop_reason == "end_turn"
+    assert fake.cancels == []  # never cancelled for real
+    assert len(fake.requests) == 1  # no second A2A turn: the steer rode the running one
+    assert fake.steers[0]["session"] == sess.session_id  # /steer is keyed by the A2A contextId
+    assert fake.steers[0]["text"] == "look at B instead"
+    assert conn.text() == "Reading A.\n\n↪ steering: look at B instead\n\n Switching to: look at B instead."
+
+
+async def test_stop_without_a_follow_up_cancels_after_the_grace():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t9"), fa.text(ctx, "working", append=False, tid="t9"), "HOLD"]
+        agent, conn, client = await _agent(fake, steer_grace=0.2)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        assert (await asyncio.wait_for(first, 1)).stop_reason == "cancelled"
+        assert fake.cancels == []  # still inside the window
+        await asyncio.sleep(0.6)
+        await client.aclose()
+    assert fake.cancels == ["t9"]
+
+
+async def test_steer_post_failure_falls_back_to_cancel_and_a_new_turn():
+    with fa.FakeA2A() as fake:
+        fake.steer_ok = False
+
+        def script(ctx, msg):
+            if len(fake.requests) == 1:
+                return [fa.task(ctx, tid="t1"), fa.text(ctx, "working", append=False, tid="t1"), "HOLD"]
+            return [fa.task(ctx, tid="t2"), fa.text(ctx, "fresh turn", append=False, tid="t2"), fa.done(ctx, tid="t2")]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        r2 = await agent.prompt(prompt=[text_block("new direction")], session_id=sess.session_id)
+        await client.aclose()
+    assert fake.cancels == ["t1"] and r2.stop_reason == "end_turn"
+    assert fake.requests[1]["parts"][0]["text"] == "new direction"
+    assert conn.text().endswith("fresh turn")
+
+
+async def test_turn_finishing_inside_the_window_makes_the_prompt_a_normal_turn():
+    with fa.FakeA2A() as fake:
+        release = asyncio.Event()
+
+        def script(ctx, msg):
+            if len(fake.requests) == 1:
+                return [fa.task(ctx), fa.text(ctx, "almost", append=False), "HOLD", fa.done(ctx)]
+            return [fa.task(ctx, tid="t2"), fa.text(ctx, "second", append=False, tid="t2"), fa.done(ctx, tid="t2")]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, steer_grace=5.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        fake.hold.set()  # the turn completes while detached
+        for _ in range(100):
+            if agent._sessions[sess.session_id].runner is None:
+                break
+            await asyncio.sleep(0.02)
+        release.set()
+        r2 = await agent.prompt(prompt=[text_block("next")], session_id=sess.session_id)
+        await client.aclose()
+    assert r2.stop_reason == "end_turn" and fake.steers == [] and len(fake.requests) == 2
+    assert "↪ steering" not in conn.text()
+
+
+async def test_a_steer_that_arrived_too_late_is_rerun_as_the_next_turn():
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            if len(fake.requests) == 1:  # the turn ends WITHOUT folding the steer in
+                return [fa.task(ctx), fa.text(ctx, "done A", append=False),
+                        fa.after_steer(fake, lambda t: fa.done(ctx), fold=False)]
+            return [fa.task(ctx, tid="t2"), fa.text(ctx, "now B", append=False, tid="t2"), fa.done(ctx, tid="t2")]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        r2 = await agent.prompt(prompt=[text_block("do B")], session_id=sess.session_id)
+        await client.aclose()
+    assert r2.stop_reason == "end_turn"
+    assert fake.steer_deleted == [fake.steers[0]["id"]]  # taken back out of the queue …
+    assert fake.requests[1]["parts"][0]["text"] == "do B"  # … and sent as the next turn
+    assert conn.text().endswith("now B")
+
+
+async def test_approval_parked_inside_the_window_is_asked_of_the_adopting_prompt():
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            if (msg.get("metadata") or {}).get("hitl_resume"):
+                items = [i for q in fake.steer_queue.values() for i in q]
+                fake.steer_queue.clear()  # the resumed turn's next model call folds the steer in
+                return [fa.tool(ctx, "c1", "run_command", "completed", result="ok"), fa.steer_consumed(ctx, items),
+                        fa.text(ctx, "ran it", append=False), fa.done(ctx)]
+            return [
+                fa.task(ctx),
+                fa.text(ctx, "starting", append=False),
+                "HOLD",  # released by the test once the cancel has detached the turn
+                fa.tool(ctx, "c1", "run_command", "started", args='{"project": "p", "command": "ls"}'),
+                fa.hitl(ctx, SHELL),
+            ]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, steer_grace=3.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        fake.hold.set()  # the park lands while nobody owns the turn
+        await asyncio.sleep(0.3)
+        assert conn.permissions == []  # not asked while detached
+        r2 = await agent.prompt(prompt=[text_block("go on")], session_id=sess.session_id)
+        await client.aclose()
+    assert len(conn.permissions) == 1 and r2.stop_reason == "end_turn"
+    assert fake.requests[1]["parts"][0]["text"] == "approved"
+    assert conn.text().endswith("ran it")
+
+
+# ── thread history ─────────────────────────────────────────────────────────────
+
+
+def _durable_turn(tid, user, answer, *, tools=(), state="TASK_STATE_COMPLETED", preamble=False):
+    history = [{"role": "ROLE_USER", "parts": [{"text": (
+        "[Context: the operator is talking to you from the Zed editor, opened on your project `p` (/repo). "
+        "Paths you read or search there are shown to them in the editor.]\n\n" if preamble else "") + user}]}]
+    for call_id, name, args, result in tools:
+        history.append({"role": "ROLE_AGENT", "parts": [], "metadata": {fa.TOOL_URI: {"toolCallId": call_id, "name": name, "phase": "started", "args": args}}})
+        history.append({"role": "ROLE_AGENT", "parts": [], "metadata": {fa.TOOL_URI: {"toolCallId": call_id, "name": name, "phase": "completed", "result": result}}})
+    history.append({"role": "ROLE_USER", "parts": [{"text": "approved"}], "metadata": {"hitl_resume": True}})
+    return {"task_id": tid, "state": state, "text": answer, "status": {"state": state}, "artifacts": [], "history": history}
+
+
+async def test_list_filters_to_this_shims_threads_and_titles_them():
+    with fa.FakeA2A(roots={"p": "/repo"}) as fake:
+        fake.sessions = [
+            {"session_id": "chat-zed-2-bbb", "last_updated": "2026-09-24T10:00:00", "turn_count": 1},
+            {"session_id": "chat-1790-console", "last_updated": "2026-09-24T09:00:00", "turn_count": 3},
+            {"session_id": "chat-zed-1-aaa", "last_updated": "2026-09-23T10:00:00", "turn_count": 2},
+        ]
+        fake.turns["chat-zed-2-bbb"] = [_durable_turn("t1", "Where is the A2A executor?", "In a2a_impl.", preamble=True)]
+        fake.turns["chat-zed-1-aaa"] = [_durable_turn("t0", "hello", "hi")]
+        agent, _conn, client = await _agent(fake)
+        agent.index.put("chat-zed-1-aaa", cwd="/other/folder", title="Remembered title")
+        init = await agent.initialize(protocol_version=1)
+        caps = init.agent_capabilities
+        assert caps.load_session and caps.session_capabilities.list is not None and caps.session_capabilities.resume is not None
+        every = await agent.list_sessions()
+        here = await agent.list_sessions(cwd="/repo")
+        await client.aclose()
+    assert [s.session_id for s in every.sessions] == ["chat-zed-2-bbb", "chat-zed-1-aaa"]  # console threads excluded
+    assert every.sessions[0].title == "Where is the A2A executor?"  # preamble stripped
+    assert every.sessions[0].updated_at == "2026-09-24T10:00:00Z"
+    assert every.sessions[1].title == "Remembered title" and every.sessions[1].cwd == "/other/folder"
+    assert [s.session_id for s in here.sessions] == ["chat-zed-2-bbb"]  # the /other/folder thread is filtered out
+
+
+async def test_load_replays_the_thread_and_continues_on_the_same_context():
+    with fa.FakeA2A(roots={"p": "/repo"}) as fake:
+        fake.turns["chat-zed-1-aaa"] = [
+            _durable_turn("t0", "Read the README", "It says hello.",
+                          tools=[("c1", "read_file", '{"project": "p", "path": "README.md", "offset": 3}', "hello")], preamble=True),
+            _durable_turn("t1", "Thanks", "Any time."),
+        ]
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t2"), fa.text(ctx, "Still here.", append=False, tid="t2"), fa.done(ctx, tid="t2")]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/repo", session_id="chat-zed-1-aaa")
+        replay = [(u["sessionUpdate"], u["title"] if u["sessionUpdate"] == "tool_call" else u["content"]["text"]) for u in conn.updates]
+        resp = await agent.prompt(prompt=[text_block("what did the README say?")], session_id="chat-zed-1-aaa")
+        await client.aclose()
+    assert replay == [
+        ("user_message_chunk", "Read the README"),
+        ("tool_call", "Read p/README.md (from line 3)"),
+        ("agent_message_chunk", "It says hello."),
+        ("user_message_chunk", "Thanks"),  # the hitl "approved" answer is not replayed as a message
+        ("agent_message_chunk", "Any time."),
+    ]
+    tool = next(u for u in conn.updates if u["sessionUpdate"] == "tool_call")
+    assert tool["status"] == "completed" and tool["locations"] == [{"path": "/repo/README.md", "line": 3}]
+    assert resp.stop_reason == "end_turn"
+    sent = fake.requests[0]
+    assert sent["contextId"] == "chat-zed-1-aaa"  # same A2A context: the agent keeps its memory
+    assert sent["parts"][0]["text"] == "what did the README say?"  # no re-sent preamble
+
+
+async def test_resume_registers_without_replay_and_unknown_threads_are_rejected():
+    with fa.FakeA2A() as fake:
+        fake.turns["chat-zed-1-aaa"] = [_durable_turn("t0", "hi", "hello")]
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.done(ctx)]
+        agent, conn, client = await _agent(fake)
+        await agent.resume_session(cwd="/", session_id="chat-zed-1-aaa")
+        assert conn.updates == []
+        await agent.prompt(prompt=[text_block("again")], session_id="chat-zed-1-aaa")
+        with pytest.raises(RequestError):
+            await agent.load_session(cwd="/", session_id="chat-zed-9-missing")
+        with pytest.raises(RequestError):
+            await agent.load_session(cwd="/", session_id="chat-1790-console")  # not this shim's
+        await client.aclose()
+    assert fake.requests[0]["contextId"] == "chat-zed-1-aaa"
+
+
+async def test_steer_marker_sits_at_the_fold_even_when_output_raced_the_post():
+    """Live navaEngineer: the tail of the pre-steer sentence arrived while the POST was in
+    flight. With the steer_consumed boundary the marker lands where the agent READ it."""
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [
+            fa.task(ctx),
+            fa.text(ctx, "Reading A", append=False),
+            fa.after_steer(fake, lambda t: fa.text(ctx, " to finish.", append=True), fold=False),
+            fa.after_steer(fake, lambda t: fa.text(ctx, "Got it: B.", append=True)),
+            fa.done(ctx),
+        ]
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        await agent.prompt(prompt=[text_block("B please")], session_id=sess.session_id)
+        await client.aclose()
+    assert conn.text() == "Reading A to finish.\n\n↪ steering: B please\n\nGot it: B."
+
+
+async def test_steer_marker_falls_back_to_turn_end_without_a_boundary_frame():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [
+            fa.task(ctx),
+            fa.text(ctx, "A.", append=False),
+            fa.after_steer(fake, lambda t: fa.text(ctx, " B.", append=True), boundary=False),
+            fa.done(ctx),
+        ]
+        agent, conn, client = await _agent(fake, steer_grace=2.0)
+        sess = await agent.new_session(cwd="/")
+        first = await _running(agent, conn, sess.session_id)
+        await agent.cancel(session_id=sess.session_id)
+        await asyncio.wait_for(first, 1)
+        await agent.prompt(prompt=[text_block("B")], session_id=sess.session_id)
+        await client.aclose()
+    assert conn.text().count("↪ steering: B") == 1
+
+
+async def test_load_replays_a_send_now_steer_as_a_user_message_where_it_was_read():
+    turn = _durable_turn("t0", "Survey the folders", "The README says hi.",
+                         tools=[("c1", "list_dir", '{"project": "p", "path": "."}', "a/ b/")])
+    turn["history"].insert(3, {"role": "ROLE_AGENT", "parts": [{"data": {"items": [{"id": "zed-1", "text": "Just the README"}]},
+                                                                  "metadata": {"mimeType": fa.STEER_MIME}}]})
+    with fa.FakeA2A(roots={"p": "/repo"}) as fake:
+        fake.turns["chat-zed-1-aaa"] = [turn]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/repo", session_id="chat-zed-1-aaa")
+        await client.aclose()
+    kinds = [(u["sessionUpdate"], u.get("title") or u["content"]["text"]) for u in conn.updates]
+    assert kinds == [
+        ("user_message_chunk", "Survey the folders"),
+        ("tool_call", "List p/."),
+        ("user_message_chunk", "Just the README"),
+        ("agent_message_chunk", "The README says hi."),
+    ]

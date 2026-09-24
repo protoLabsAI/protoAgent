@@ -44,6 +44,7 @@ from acp import (
     update_agent_message_text,
     update_agent_thought_text,
     update_tool_call,
+    update_user_message_text,
 )
 from acp.schema import (
     AgentCapabilities,
@@ -52,10 +53,17 @@ from acp.schema import (
     EnvVarAuthMethod,
     Implementation,
     InitializeResponse,
+    ListSessionsResponse,
+    LoadSessionResponse,
     NewSessionResponse,
     PermissionOption,
     PromptCapabilities,
     PromptResponse,
+    ResumeSessionResponse,
+    SessionCapabilities,
+    SessionInfo,
+    SessionListCapabilities,
+    SessionResumeCapabilities,
     TerminalAuthMethod,
     ToolCallLocation,
     ToolCallUpdate,
@@ -70,6 +78,7 @@ from .a2a import (
     A2AUnauthorized,
     ReasoningEvent,
     StateEvent,
+    SteerConsumedEvent,
     TextEvent,
     ToolEvent,
     UsageEvent,
@@ -77,6 +86,7 @@ from .a2a import (
     frame_context_id,
     task_snapshot,
 )
+from . import history
 from .roots import RootMap
 
 log = logging.getLogger(__name__)
@@ -110,6 +120,17 @@ class Session:
     parked_task_id: str | None = None  # an input-required task waiting for the next prompt
     runner: asyncio.Task | None = None
     cancelled: bool = False
+    # Steer-by-"Send Now" (ADR 0111): Zed's Send Now is session/cancel → session/prompt. A
+    # cancel DETACHES the running turn for a grace window instead of killing it — the old
+    # prompt answers `cancelled` at once, the stream keeps draining into `held` — and a
+    # prompt arriving inside the window is queued into the running turn as a steer and
+    # ADOPTS the stream. No prompt in time → the real CancelTask.
+    owner: asyncio.Future | None = None  # the prompt currently receiving this turn's result
+    detached: bool = False
+    held: list = field(default_factory=list)  # updates produced while detached
+    attached: asyncio.Event = field(default_factory=asyncio.Event)
+    grace_timer: asyncio.Task | None = None
+    steer: tuple[str, str] | None = None  # (id, text) queued by a Send Now, not yet folded in
     spoke: bool = False  # any answer text sent this prompt (for separators)
     # "Allow for this session" (allow_always on a run_command approval). In memory only —
     # never persisted; a new Zed thread starts prompting again.
@@ -146,6 +167,12 @@ def friendly_error(raw: str) -> str:
     return msg.group(1) + (f" ({', '.join(bits)})" if bits else "")
 
 
+def _text_of_status(status: Any) -> str:
+    msg = status.get("message") if isinstance(status, dict) else None
+    parts = msg.get("parts") if isinstance(msg, dict) else None
+    return "".join(str(p.get("text")) for p in parts or [] if isinstance(p, dict) and p.get("text"))
+
+
 def prompt_text(blocks: list[Any]) -> str:
     """ACP prompt content → one A2A text part. Zed sends ``resource_link`` for an
     @-mentioned file and an embedded ``resource`` when it inlines the contents."""
@@ -178,7 +205,11 @@ class ProtoAgentACP:
         *,
         context_prefix: str = "chat-zed",
         reload_credentials: Any = None,
+        steer_grace: float = 1.5,
+        thread_index: history.ThreadIndex | None = None,
     ) -> None:
+        self.steer_grace = steer_grace
+        self.index = thread_index or history.ThreadIndex(client.base_url)
         self.a2a = client
         self.roots = roots
         self.context_prefix = context_prefix
@@ -197,8 +228,9 @@ class ProtoAgentACP:
         return InitializeResponse(
             protocol_version=PROTOCOL_VERSION,
             agent_capabilities=AgentCapabilities(
-                load_session=False,
+                load_session=True,
                 prompt_capabilities=PromptCapabilities(image=False, audio=False, embedded_context=True),
+                session_capabilities=SessionCapabilities(list=SessionListCapabilities(), resume=SessionResumeCapabilities()),
             ),
             auth_methods=AUTH_METHODS,
             agent_info=Implementation(name="protoagent-acp", title="protoAgent", version=__version__),
@@ -234,18 +266,121 @@ class ProtoAgentACP:
         # a remote instance, and mounting per-session servers is not an A2A concept).
         sid = _new_context_id(self.context_prefix)
         self._sessions[sid] = Session(id=sid, cwd=cwd)
+        self.index.put(sid, cwd=cwd)
         return NewSessionResponse(session_id=sid)
+
+    # ── thread history (session/list, session/load, session/resume) ─────────────
+
+    async def list_sessions(self, cwd: str | None = None, cursor: str | None = None, **_: Any) -> ListSessionsResponse:
+        await self._ensure_auth()
+        rows = await history.list_threads(self.a2a, self.index, self.context_prefix, cwd)
+        return ListSessionsResponse(
+            sessions=[SessionInfo(session_id=r["sessionId"], cwd=r["cwd"], title=r["title"], updated_at=r["updatedAt"]) for r in rows]
+        )
+
+    async def _register(self, session_id: str, cwd: str) -> tuple[Session, list[dict]]:
+        await self._ensure_auth()
+        if not session_id.startswith(self.context_prefix + "-"):
+            raise RequestError.invalid_params({"sessionId": f"not a {self.context_prefix} thread: {session_id!r}"})
+        if not self._roots_loaded:
+            await self.roots.load(self.a2a)
+            self._roots_loaded = True
+        turns = await history.fetch_turns(self.a2a, session_id)
+        if not turns:
+            raise RequestError.resource_not_found(session_id)
+        s = self._sessions.get(session_id) or Session(id=session_id, cwd=cwd)
+        s.cwd, s.first_prompt = cwd, False  # the server already has this thread's context
+        last = turns[-1]
+        if "INPUT_REQUIRED" in str(last.get("state") or "").upper():
+            s.parked_task_id = str(last.get("task_id") or "") or None  # the next prompt answers it
+        self._sessions[session_id] = s
+        self.index.put(session_id, cwd=cwd)
+        return s, turns
+
+    async def resume_session(self, cwd: str, session_id: str, **_: Any) -> ResumeSessionResponse:
+        await self._register(session_id, cwd)
+        return ResumeSessionResponse()
+
+    async def load_session(self, cwd: str, session_id: str, **_: Any) -> LoadSessionResponse:
+        """Replay the durable thread as session/update notifications — the operator's
+        messages, each turn's tool calls (completed, with locations) and its answer — then
+        keep the contextId, so the next prompt continues with the agent's memory intact."""
+        s, turns = await self._register(session_id, cwd)
+        for turn in turns:
+            user = history.clean_user_text(history.first_user_text(turn))
+            if user:
+                await self._send(s, update_user_message_text(user))
+            for kind, item in history.turn_events(turn):
+                if kind == "steer":  # a Send Now redirect, where the agent read it
+                    await self._send(s, update_user_message_text(item))
+                    continue
+                call = item
+                args = toolmap.parse_args(call.get("args"))
+                title, locs = toolmap.describe(call["name"], args, self.roots)
+                locs += toolmap.result_locations(call["name"], args, call.get("result"), self.roots)
+                body = toolmap.result_text(call.get("result"))
+                await self._send(
+                    s,
+                    start_tool_call(
+                        f"replay-{call['id']}",
+                        title,
+                        kind=toolmap.tool_kind(call["name"]),
+                        status="failed" if call.get("error") else "completed",
+                        locations=[ToolCallLocation(**loc) for loc in locs] or None,
+                        content=[tool_content(text_block(body))] if body else None,
+                        raw_input=args or None,
+                    ),
+                )
+            answer = str(turn.get("text") or "").strip()
+            if answer:
+                await self._send(s, update_agent_message_text(answer))
+            elif "FAILED" in str(turn.get("state") or "").upper():
+                reason = _text_of_status(turn.get("status"))
+                await self._send(s, update_agent_message_text(f"⚠️ protoAgent error: {friendly_error(reason or 'the turn failed')}"))
+        return LoadSessionResponse()
 
     async def cancel(self, session_id: str, **_: Any) -> None:
         s = self._sessions.get(session_id)
         if s is None:
             return
+        live = s.runner is not None and not s.runner.done()
+        if live and self.steer_grace > 0 and not s.detached:
+            # Maybe a Send Now: answer the prompt `cancelled` now (Zed waits for that before
+            # sending the queued message), keep the turn running unseen for the grace window.
+            s.detached = True
+            s.attached.clear()
+            self._resolve_owner(s, ("cancelled", None))
+            s.grace_timer = asyncio.create_task(self._grace_expired(s))
+            return
+        await self._hard_cancel(s)
+
+    async def _grace_expired(self, s: Session) -> None:
+        await asyncio.sleep(self.steer_grace)
+        if s.detached:
+            log.info("no prompt within %.1fs of the cancel — cancelling task %s", self.steer_grace, s.task_id)
+            await self._hard_cancel(s)
+
+    async def _hard_cancel(self, s: Session) -> None:
         s.cancelled = True
+        if s.grace_timer is not None and s.grace_timer is not asyncio.current_task():
+            s.grace_timer.cancel()
+        s.grace_timer = None
+        s.detached = False
+        s.held.clear()
+        s.attached.set()  # release anything waiting to ask for permission; it will be cancelled
         if s.task_id:
             with contextlib.suppress(A2AError):
                 await self.a2a.cancel(s.task_id)
         if s.runner is not None and not s.runner.done():
             s.runner.cancel()
+            with contextlib.suppress(BaseException):
+                await s.runner
+        self._resolve_owner(s, ("cancelled", None))
+
+    @staticmethod
+    def _resolve_owner(s: Session, result: tuple[str, Usage | None]) -> None:
+        if s.owner is not None and not s.owner.done():
+            s.owner.set_result(result)
 
     # ── the turn ─────────────────────────────────────────────────────────────
 
@@ -254,6 +389,19 @@ class ProtoAgentACP:
         if s is None:
             raise RequestError.invalid_params({"sessionId": f"unknown session {session_id!r}"})
         text = prompt_text(prompt)
+        if s.detached:
+            if s.runner is not None and not s.runner.done():
+                steered = await self._adopt_as_steer(s, text)
+                if steered is not None:
+                    return steered
+            else:  # the turn finished inside the window: nothing to steer, a normal new turn
+                s.detached = False
+                s.held.clear()
+                if s.grace_timer is not None:
+                    s.grace_timer.cancel()
+        return await self._start_turn(s, text)
+
+    async def _start_turn(self, s: Session, text: str) -> PromptResponse:
         task_id: str | None = None
         metadata: dict | None = None
         if s.parked_task_id:
@@ -262,22 +410,89 @@ class ProtoAgentACP:
         else:
             s.open_tools.clear()  # a fresh turn: nothing from an earlier one is still pending
             if s.first_prompt:
+                self.index.put(s.id, title=history.title_of(text))
                 text = self._preamble(s) + text
         s.first_prompt = False
         s.cancelled = False
         s.spoke = False
         s.auto_approve_turn = False
-        s.runner = asyncio.create_task(self._drive(s, text, task_id, metadata))
-        try:
-            stop, usage = await s.runner
-        except asyncio.CancelledError:
-            if s.cancelled:
-                return PromptResponse(stop_reason="cancelled")
-            raise
-        finally:
+        s.attached.set()
+        runner = asyncio.create_task(self._drive(s, text, task_id, metadata))
+        s.runner = runner
+        runner.add_done_callback(lambda t, s=s: self._turn_finished(s, t))
+        return await self._own(s)
+
+    def _turn_finished(self, s: Session, task: asyncio.Task) -> None:
+        if s.runner is task:
             s.runner = None
             s.task_id = None
+        if s.detached:  # finished while nobody was attached: its output is dropped
+            s.held.clear()
+
+    async def _own(self, s: Session) -> PromptResponse:
+        """Wait for the running turn's result — or for a detach (session/cancel) to answer
+        this prompt `cancelled` while the turn keeps going."""
+        owner: asyncio.Future = asyncio.get_running_loop().create_future()
+        s.owner = owner
+        runner = s.runner
+        assert runner is not None
+        await asyncio.wait({runner, owner}, return_when=asyncio.FIRST_COMPLETED)
+        if owner.done():
+            stop, usage = owner.result()
+            return PromptResponse(stop_reason=stop, usage=usage)
+        s.owner = None
+        try:
+            stop, usage = runner.result()
+        except asyncio.CancelledError:
+            return PromptResponse(stop_reason="cancelled")
         return PromptResponse(stop_reason="cancelled" if s.cancelled else stop, usage=usage)
+
+    async def _adopt_as_steer(self, s: Session, text: str) -> PromptResponse | None:
+        """A prompt inside the grace window: queue it into the running turn
+        (``POST /api/chat/sessions/<contextId>/steer`` — the console's mid-turn steering,
+        folded in at the next model call) and make THIS prompt the stream's owner. ``None``
+        when the steer can't be queued: the caller cancels for real and starts a new turn."""
+        steer_id = f"zed-{uuid.uuid4().hex[:12]}"
+        s.steer = (steer_id, text)  # set BEFORE the POST: the fold frame can race the reply
+        status, body = await self.a2a.send_json("POST", f"/api/chat/sessions/{s.id}/steer", {"id": steer_id, "text": text})
+        if status != 200 or not (isinstance(body, dict) and body.get("ok")):
+            log.warning("steer POST failed (%s) — cancelling and starting a new turn", status)
+            s.steer = None
+            await self._hard_cancel(s)
+            return None
+        if s.grace_timer is not None:
+            s.grace_timer.cancel()
+            s.grace_timer = None
+        s.detached = False
+        s.cancelled = False
+        s.spoke = False
+        held, s.held = s.held, []
+        for update in held:  # in stream order; includes the marker if the fold already happened
+            await self._send(s, update)
+        s.attached.set()
+        resp = await self._own(s)
+        if resp.stop_reason != "end_turn":
+            return resp
+        # Turn over. A steer that arrived after the turn's LAST model call was never folded
+        # in; take it back out of the queue and run it as the next turn (the console does
+        # the same reconciliation at turn end).
+        _, queued = await self.a2a.send_json("GET", f"/api/chat/sessions/{s.id}/steer")
+        pending = [i.get("id") for i in (queued or {}).get("pending") or [] if isinstance(i, dict)]
+        if steer_id in pending:
+            _, gone = await self.a2a.send_json("DELETE", f"/api/chat/sessions/{s.id}/steer/{steer_id}")
+            if isinstance(gone, dict) and gone.get("removed"):
+                s.steer = None
+                await self._steer_marker(s, text)
+                return await self._start_turn(s, text)
+        if s.steer is not None:
+            # Folded in, but this server doesn't emit the boundary frame: mark it at the end.
+            s.steer = None
+            await self._steer_marker(s, text)
+        return resp
+
+    async def _steer_marker(self, s: Session, text: str) -> None:
+        short = " ".join(text.split())
+        await self._send(s, update_agent_message_text(f"\n\n↪ steering: {short[:60]}{'…' if len(short) > 60 else ''}\n\n"))
 
     def _preamble(self, s: Session) -> str:
         """Tell the agent where the operator is, once per session — only when the editor's
@@ -316,6 +531,11 @@ class ProtoAgentACP:
                                 total_tokens=evt.input_tokens + evt.output_tokens,
                                 cached_read_tokens=evt.cache_read_tokens or None,
                             )
+                        elif isinstance(evt, SteerConsumedEvent):
+                            if s.steer is not None and s.steer[0] in evt.ids:
+                                # The exact point the agent read the operator's redirect.
+                                await self._steer_marker(s, s.steer[1])
+                                s.steer = None
                         elif isinstance(evt, StateEvent):
                             if evt.task_id:
                                 s.task_id = evt.task_id
@@ -495,6 +715,10 @@ class ProtoAgentACP:
         return ""
 
     async def _ask_permission(self, s: Session, task_id: str, hitl: dict) -> str:
+        if s.detached:
+            # Parked for approval inside a Send Now window: ask whoever adopts the turn (a
+            # hard cancel sets the event too, and cancels this runner).
+            await s.attached.wait()
         title = str(hitl.get("title") or "Approve this action?")
         detail = str(hitl.get("detail") or hitl.get("command") or "")
         tool = self._pending_tool(s, hitl)
@@ -557,6 +781,9 @@ class ProtoAgentACP:
         return "approved" if approved else "denied"
 
     async def _send(self, s: Session, update: Any) -> None:
+        if s.detached:  # nobody owns the turn right now (the Send Now window): hold it
+            s.held.append(update)
+            return
         if getattr(update, "session_update", None) == "agent_message_chunk":
             s.spoke = True
         if self._conn is not None:

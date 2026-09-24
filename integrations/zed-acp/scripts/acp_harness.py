@@ -94,6 +94,16 @@ class HarnessClient:
         pass
 
 
+async def _prompt(conn: Any, sid: str, text: str, timeout: float) -> int:
+    try:
+        resp = await asyncio.wait_for(conn.prompt(session_id=sid, prompt=[text_block(text)]), timeout)
+    except RequestError as exc:
+        print(f"<<< error {exc.code}: {exc}  data={json.dumps(exc.data)[:400]}", flush=True)
+        return 1
+    print("<<< stopReason:", resp.stop_reason, "usage:", resp.usage.model_dump(by_alias=True, exclude_none=True) if resp.usage else None, flush=True)
+    return 0
+
+
 async def main() -> int:
     argv = sys.argv[1:]
     shim_args: list[str] = []
@@ -101,16 +111,23 @@ async def main() -> int:
         i = argv.index("--")
         argv, shim_args = argv[:i], argv[i + 1 :]
     p = argparse.ArgumentParser()
-    p.add_argument("--prompt", action="append", required=True, help="repeat for a multi-turn session")
-    p.add_argument("--cwd", default=os.getcwd(), help="the editor folder sent in session/new")
+    p.add_argument("--prompt", action="append", default=[], help="repeat for a multi-turn session")
+    p.add_argument("--cwd", default=os.getcwd(), help="the editor folder sent in session/new / load / list")
     p.add_argument("--json", action="store_true")
     p.add_argument("--approve", action="store_true", help="answer permission requests with allow_once (default: deny)")
     p.add_argument("--approve-always", action="store_true", help="answer with allow_always when offered (else allow_once)")
     p.add_argument("--timeout", type=float, default=300.0)
+    p.add_argument("--send-now", metavar="TEXT",
+                   help="simulate Zed's Send Now during the FIRST prompt: session/cancel, then session/prompt TEXT")
+    p.add_argument("--send-now-after", type=float, default=8.0, metavar="SECONDS",
+                   help="seconds into the first prompt to Send Now (default 8)")
+    p.add_argument("--list", action="store_true", help="session/list (filtered to --cwd) and print the threads")
+    p.add_argument("--load", metavar="SESSION_ID", help="session/load this thread (prints its replay), then send --prompt(s) on it")
     args = p.parse_args(argv)
 
     rc = 0
     client = HarnessClient(args.json, approve=args.approve, approve_always=args.approve_always)
+    cwd = os.path.expanduser(args.cwd)
     async with spawn_agent_process(client, sys.executable, "-m", "protoagent_acp", *shim_args) as (conn, _proc):
         init = await conn.initialize(
             protocol_version=PROTOCOL_VERSION,
@@ -118,17 +135,34 @@ async def main() -> int:
             client_info=Implementation(name="acp-harness", title="ACP harness", version="0"),
         )
         print("initialize →", json.dumps(init.model_dump(by_alias=True, exclude_none=True)), flush=True)
-        sess = await conn.new_session(cwd=os.path.expanduser(args.cwd), mcp_servers=[])
-        print("session/new →", sess.session_id, flush=True)
-        for text in args.prompt:
+        if args.list:
+            listed = await conn.list_sessions(cwd=cwd)
+            print(f"session/list (cwd={cwd}) → {len(listed.sessions)} thread(s)", flush=True)
+            for info in listed.sessions:
+                print(f"  {info.session_id}  {info.updated_at or '-':27}  {info.title!r}", flush=True)
+        if args.load:
+            print(f"\n>>> session/load {args.load}", flush=True)
+            await conn.load_session(session_id=args.load, cwd=cwd, mcp_servers=[])
+            print("<<< loaded (replay above)", flush=True)
+            sid = args.load
+        elif args.prompt or args.send_now:
+            sess = await conn.new_session(cwd=cwd, mcp_servers=[])
+            print("session/new →", sess.session_id, flush=True)
+            sid = sess.session_id
+        else:
+            return rc
+        for n, text in enumerate(args.prompt):
             print(f"\n>>> session/prompt {text!r}", flush=True)
-            try:
-                resp = await asyncio.wait_for(conn.prompt(session_id=sess.session_id, prompt=[text_block(text)]), args.timeout)
-            except RequestError as exc:
-                print(f"<<< error {exc.code}: {exc}  data={json.dumps(exc.data)[:400]}", flush=True)
-                rc = 1
+            if n == 0 and args.send_now:
+                first = asyncio.create_task(_prompt(conn, sid, text, args.timeout))
+                await asyncio.sleep(args.send_now_after)
+                if not first.done():
+                    print(f"\n>>> [Send Now] session/cancel, then session/prompt {args.send_now!r}", flush=True)
+                    await conn.cancel(session_id=sid)
+                rc |= await first
+                rc |= await _prompt(conn, sid, args.send_now, args.timeout)
                 continue
-            print("<<< stopReason:", resp.stop_reason, "usage:", resp.usage.model_dump(by_alias=True, exclude_none=True) if resp.usage else None, flush=True)
+            rc |= await _prompt(conn, sid, text, args.timeout)
     return rc
 
 

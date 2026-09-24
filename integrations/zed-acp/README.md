@@ -18,7 +18,9 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | **follow-the-agent** jumps into files | `project` + `path` (+ `offset`) args, resolved to absolute paths |
 | search-hit locations on a finished `search_files` | the `file:line:` hits in its result |
 | a permission prompt: **Allow once / Allow for this session / Deny** | a parked `approval` (e.g. `run_command`, permanent delete) |
-| Stop button | A2A `CancelTask` |
+| Stop button | A2A `CancelTask`, sent after a short grace window (see Send Now below) |
+| **Send Now** on a queued message | **steers the running turn**: the message is queued into it with protoAgent's mid-turn steering, and the turn carries on with it |
+| thread history: list and reopen past threads | `GET /api/chat/sessions` + `…/turns`; a reopened thread continues on the same session, so the agent keeps its memory |
 | an error callout + a "⚠️ protoAgent error: …" line | a turn that FAILED (e.g. the model's 429 usage limit), or a stream that closed without a terminal state and whose task (read back with `GetTask`) failed or is still running |
 
 Each Zed thread is one protoAgent chat session (`chat-zed-…`), so the conversation also
@@ -87,14 +89,48 @@ does the shim; it says so once and never works around the refusal. **Permanent d
 always ask.** They are never offered "for this session" and never auto-approved, which
 matches the server's delete floor.
 
+### Send Now steers the running turn
+
+Zed queues a message you type while the agent is working and sends it when the turn ends.
+**Send Now** (press Enter twice on the queued message) is `session/cancel` followed by
+`session/prompt`. Zed's own steering is disabled for external agents. The shim turns that
+pair back into a steer:
+
+- **On cancel**, the prompt answers `cancelled` at once, but the protoAgent turn keeps running
+  unseen for `--steer-grace` seconds (default 1.5).
+- **If a prompt arrives inside that window**, its text is queued into the running turn
+  (`POST /api/chat/sessions/<id>/steer`, the console's mid-turn steering). The agent folds it
+  in at its next model call. The new prompt picks up the same stream, and a
+  `↪ steering: …` line marks where the agent read it.
+- **If no prompt arrives, it is a real Stop**: `CancelTask` goes out when the window closes.
+  The cost is that a plain Stop cancels up to `--steer-grace` seconds late on the server,
+  though Zed's UI stops immediately. `--steer-grace 0` restores an instant cancel and turns
+  steering off.
+- **Fallbacks**:
+  - If the steer can't be queued, the shim cancels and starts a normal new turn.
+  - If the turn had already finished, the message is a normal new turn.
+  - If the steer arrived after the turn's last model call, the shim takes it back out of the
+    queue and runs it as the next turn, the same reconciliation the console does.
+- **An approval that parks inside the window** is asked of the new prompt. If an approval
+  was already on screen, Zed's cancel dismisses it, which answers "deny".
+
+### Thread history
+
+Zed's thread history lists this instance's Zed threads (`chat-zed-…`) for the current
+folder. Opening one replays it: your messages, including Send Now steers where the agent
+read them, each turn's tool calls with their file locations, and the answers. The next
+message then continues on the same protoAgent session, so the agent remembers the
+conversation. Folder and title come from a small local index
+(`~/.config/protoagent-acp/threads.json`). Threads missing from it still list, titled from
+their first message.
+
 ## What it does not do (yet)
 
 - **Edits are not routed through Zed.** protoAgent writes its own project roots; Zed shows
   the edit tool card and follows the file, but its *Review Changes* / per-hunk accept does
   not apply. See ADR 0111 D4 for why and for the path to change it.
 - A parked **question or form** is shown as text; your next message answers it.
-- Images/audio in the prompt are not forwarded; `session/load` (reopening an old thread)
-  is not implemented; MCP servers Zed offers in `session/new` are ignored (the instance's
+- Images/audio in the prompt are not forwarded; MCP servers Zed offers in `session/new` are ignored (the instance's
   tools are its own config).
 - Tool-call arguments arrive as an 800-char preview, so a huge `write_file` shows its path
   but not its content.
@@ -114,4 +150,7 @@ uv venv && uv pip install -e . pytest pytest-asyncio
   -- --url http://127.0.0.1:7870 --trace-frames /tmp/frames.jsonl
 ```
 
-`examples/protoengineer-transcript.txt` is a real run against a live fleet member.
+`examples/protoengineer-transcript.txt` and `examples/navaengineer-steer-and-history.txt`
+are real runs against live fleet members. The harness also drives the newer flows:
+`--send-now TEXT --send-now-after SECONDS` (Zed's Send Now), and `--list` / `--load ID`
+(thread history).

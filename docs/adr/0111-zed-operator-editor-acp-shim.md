@@ -69,11 +69,14 @@ cites where each one comes from.
 
 | ACP | A2A / protoAgent |
 |---|---|
-| `initialize` | Reports capabilities (`embeddedContext`; no `loadSession`) and `authMethods` |
+| `initialize` | Reports capabilities (`embeddedContext`, `loadSession`, `sessionCapabilities.list` + `resume`) and `authMethods` |
 | `authenticate` | Reloads the credential, then probes with `GetTask` on an id that cannot exist |
 | `session/new` | Creates a fresh `contextId` `chat-zed-<ms>-<rand>`. The ACP sessionId *is* the A2A contextId, so the thread also shows in the console chat list (ADR 0104) |
 | `session/prompt` | `SendStreamingMessage`. The first prompt gets a one-line preamble when Zed's `cwd` is one of the agent's projects |
-| `session/cancel` | `CancelTask` on the streaming task. The prompt returns `stopReason: cancelled` |
+| `session/cancel` | The prompt returns `stopReason: cancelled` at once. `CancelTask` follows after the `--steer-grace` window unless a prompt arrives, in which case that prompt **steers** the running turn (see below) |
+| `session/list` | `GET /api/chat/sessions`, filtered to this shim's `chat-zed-` prefix and the requested `cwd`. Titles come from the first user message |
+| `session/load` | `GET /api/chat/sessions/<id>/turns`, replayed as `user_message_chunk` (including folded-in steers), completed `tool_call` entries with locations, and `agent_message_chunk`. The contextId is kept, so the agent's memory continues |
+| `session/resume` | Registers the thread on its contextId without replay |
 | `agent_message_chunk` | Artifact text on `append: true`. The terminal REPLACE is de-duplicated: ACP can't retract, so only an unseen suffix is emitted |
 | `agent_thought_chunk` | reasoning-v1 DataPart |
 | `tool_call` → `tool_call_update` | tool-call-v1 `started` (announced twice: first with empty args, then with args) → `completed`/`failed` |
@@ -123,6 +126,36 @@ thread.
   offered `allow_always` and never auto-approved, so the shim cannot mask it.
 - **Other approvals** (plugins) are offered only once / deny.
 
+**Send Now steers.** Zed queues a message typed while an external agent works, and its
+native steer is disabled for external agents. **Send Now** is `session/cancel` followed by
+`session/prompt`, and Zed awaits the cancelled prompt before sending the new one. So a
+cancel **detaches** the turn instead of killing it:
+
+- The old prompt answers `cancelled` immediately.
+- The A2A stream keeps draining into a buffer for `--steer-grace` seconds (default 1.5; 0
+  disables steering).
+- **A prompt inside the window** is queued into the running turn through the console's
+  mid-turn steering. `POST /api/chat/sessions/<contextId>/steer`, with our own id, goes to
+  `graph/steering.py`, and `SteeringMiddleware` folds it in at the next model call. The new
+  prompt adopts the stream. The `↪ steering:` marker is placed at the server's
+  `steer_consumed` boundary frame, where the agent actually read it.
+- **Reconciliation at turn end** (the console's rule): a steer still `pending` is
+  `DELETE`d and re-run as the next turn.
+- **Fallbacks:**
+  - The steer POST fails: the shim cancels and starts a new turn.
+  - The turn already ended: the prompt is a normal turn.
+  - An approval parked inside the window waits and is asked of the adopting prompt. An
+    approval already on screen is dismissed by Zed's cancel, which reads as a deny.
+- **Cost:** a plain Stop reaches the server up to `--steer-grace` seconds late. Zed's UI
+  stops at once.
+
+**Thread history.** The server has no folder or title for a thread, and ACP's `SessionInfo`
+needs a `cwd` (Zed groups threads by it). The shim therefore keeps a local
+`threads.json` (`{url: {sessionId: {cwd, title}}}`, mode 0600) of the threads it created. A
+thread missing from the index still lists, titled from its first turn and reported under
+the requested folder. `session/resume` is routed with the SDK's `use_unstable_protocol`,
+because the SDK still marks it unstable, and Zed calls it.
+
 **Credentials** are taken from `--token` / `--token-file`, then `PROTOAGENT_TOKEN` /
 `PROTOAGENT_TOKEN_FILE`, then the file written by `protoagent-acp login`. That file is
 mode 0600 and bound to its URL, so a stored token is never sent to a different instance.
@@ -148,6 +181,21 @@ prompt was a read-only question. The full stream is in
  16.8s text  "Here's exactly where the A2A executor turns …"
 <<< stopReason: end_turn usage: {'totalTokens': 191245, 'inputTokens': 189945, 'outputTokens': 1300, 'cachedReadTokens': 128401}
 ```
+
+**Steer and history, live against navaEngineer (v0.175.0, unmodified).**
+
+- **Steer.** A read-only folder survey was Send-Now'd after 12 seconds with "Change of plan:
+  … just tell me in two sentences what the README says". The old prompt returned
+  `cancelled`, and no `CancelTask` was sent. The same A2A task carried on. The agent
+  answered "Got it — dropping the folder survey. Let me read the README." and summarised it,
+  ending `end_turn`. The server's `steer_consumed` frame was on the stream.
+- **History.** `session/list` returned the four `chat-zed-` threads for `~/dev/nava` with
+  titles. `session/load` replayed the survey thread (user message, 10 completed tool calls
+  with locations, the steer as a user message, and the answer). A follow-up, "Without
+  reading anything again: which three tool names did that README say…", was answered
+  correctly from the agent's memory on the same contextId.
+
+The transcript is `integrations/zed-acp/examples/navaengineer-steer-and-history.txt`.
 
 Streamed text, reasoning, tool kinds and **absolute `locations` into the agent's checkout**
 all work with **no core change**. The A2A stream already carries the tool name and args.

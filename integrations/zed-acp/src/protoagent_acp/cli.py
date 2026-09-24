@@ -36,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="map a project name to a LOCAL absolute path (repeatable; required for remote instances)")
     p.add_argument("--context-prefix", default="chat-zed",
                    help="A2A contextId prefix; the default keeps sessions visible in the console's chat list")
+    p.add_argument("--steer-grace", type=float, default=1.5, metavar="SECONDS",
+                   help="after a Stop, keep the turn running this long in case it was Zed's Send Now "
+                        "(cancel + prompt) — the new message then steers the running turn; 0 disables")
     p.add_argument("--trace-frames", metavar="FILE", help="append every raw A2A frame (JSON lines) to FILE")
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging to stderr")
     p.add_argument("--version", action="version", version=f"protoagent-acp {__version__}")
@@ -58,10 +61,12 @@ async def _serve(args: argparse.Namespace) -> None:
         client,
         roots,
         context_prefix=args.context_prefix,
+        steer_grace=max(0.0, args.steer_grace),
         reload_credentials=lambda: credentials.resolve(args.url, args.token, args.token_file),
     )
     try:
-        await run_agent(agent)
+        # session/resume is still an "unstable" ACP method in the SDK's router; Zed calls it.
+        await run_agent(agent, use_unstable_protocol=True)
     finally:
         await client.aclose()
         if trace is not None:

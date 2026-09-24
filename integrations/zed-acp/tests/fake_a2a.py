@@ -75,6 +75,34 @@ def durable(tid: str, ctx: str, state: str, *, message: str = "", answer: str = 
     return task
 
 
+STEER_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
+
+
+def steer_consumed(ctx: str, items: list[dict], tid: str = "t1") -> dict:
+    return status(ctx, tid, parts=[{"data": {"items": items}, "metadata": {"mimeType": STEER_MIME}}])
+
+
+def after_steer(fake: FakeA2A, make, *, fold: bool = True, boundary: bool = True, timeout: float = 5.0):
+    """A frame callable: wait until a steer lands, optionally FOLD it in (drain the queue,
+    like SteeringMiddleware at the next model call — with the ``steer_consumed`` boundary
+    frame when ``boundary``), then send ``make(steer_text)``."""
+
+    def _frame():
+        fake.steered.wait(timeout)
+        text, folded, ctx = "", [], ""
+        for sid, items in fake.steer_queue.items():
+            if items:
+                text, ctx = items[-1]["text"], sid
+                if fold:
+                    folded, fake.steer_queue[sid] = list(items), []
+        frame = make(text)
+        if folded and boundary:
+            return [steer_consumed(ctx, folded), frame]
+        return frame
+
+    return _frame
+
+
 class FakeA2A:
     """``script(ctx, request_message) -> list[frame]`` is called per SendStreamingMessage."""
 
@@ -85,7 +113,15 @@ class FakeA2A:
         self.requests: list[dict] = []
         self.cancels: list[str] = []
         self.tasks: dict[str, dict] = {}
-        self.gets: list[str] = []  # every GET path, in order  # what GetTask answers (the durable record)
+        self.gets: list[str] = []  # every GET path, in order
+        # Operator-API state: the steering queue + the durable chat index the shim reads.
+        self.steer_ok = True
+        self.steers: list[dict] = []  # every POST /steer body, in order
+        self.steer_queue: dict[str, list[dict]] = {}  # session → still-queued items
+        self.steer_deleted: list[str] = []
+        self.steered = threading.Event()  # set when a steer is POSTed
+        self.sessions: list[dict] = []  # GET /api/chat/sessions rows
+        self.turns: dict[str, list[dict]] = {}  # GET …/turns
         self.hold = threading.Event()  # set() to release a frame list that ends in HOLD
         fake = self
 
@@ -115,14 +151,42 @@ class FakeA2A:
                 if not self._authed():
                     return
                 fake.gets.append(self.path)
-                if self.path == "/api/fs/roots" and fake.roots is not None:
+                path = self.path.split("?")[0]
+                parts = path.strip("/").split("/")
+                if path == "/api/fs/roots" and fake.roots is not None:
                     self._json({"roots": fake.roots})
+                elif path == "/api/chat/sessions":
+                    self._json({"sessions": fake.sessions})
+                elif parts[:3] == ["api", "chat", "sessions"] and len(parts) == 5 and parts[4] == "turns":
+                    self._json({"turns": fake.turns.get(parts[3], [])})
+                elif parts[:3] == ["api", "chat", "sessions"] and len(parts) == 5 and parts[4] == "steer":
+                    self._json({"pending": fake.steer_queue.get(parts[3], []), "drained": []})
                 else:
                     self._json({"detail": "Not Found"}, 404)
+
+            def do_DELETE(self) -> None:
+                if not self._authed():
+                    return
+                parts = self.path.strip("/").split("/")  # api/chat/sessions/<sid>/steer/<id>
+                queue = fake.steer_queue.get(parts[3], [])
+                keep = [i for i in queue if i["id"] != parts[5]]
+                fake.steer_queue[parts[3]] = keep
+                fake.steer_deleted.append(parts[5])
+                self._json({"removed": len(keep) != len(queue), "pending": len(keep)})
 
             def do_POST(self) -> None:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 if not self._authed():
+                    return
+                if self.path.startswith("/api/chat/sessions/") and self.path.endswith("/steer"):
+                    if not fake.steer_ok:
+                        self._json({"detail": "nope"}, 500)
+                        return
+                    sid = self.path.split("/")[4]
+                    fake.steers.append({"session": sid, **body})
+                    fake.steer_queue.setdefault(sid, []).append({"id": body["id"], "text": body["text"]})
+                    fake.steered.set()
+                    self._json({"ok": True, "id": body["id"], "pending": len(fake.steer_queue[sid])})
                     return
                 assert self.headers.get("A2A-Version") == "1.0"
                 method = body.get("method")
@@ -148,9 +212,14 @@ class FakeA2A:
                     if f == "HOLD":
                         fake.hold.wait(10)
                         continue
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.write(f"data: {json.dumps(f)}\n\n".encode())
-                    self.wfile.flush()
+                    if callable(f):  # frame(s) decided at send time (e.g. after a steer landed)
+                        f = f()
+                        if f is None:
+                            continue
+                    for one in f if isinstance(f, list) else [f]:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.write(f"data: {json.dumps(one)}\n\n".encode())
+                        self.wfile.flush()
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"

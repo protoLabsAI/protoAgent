@@ -84,3 +84,42 @@ def test_harness_prints_a_failed_turn_and_exits_nonzero():
                              capture_output=True, text=True, timeout=60)
     assert out.returncode == 1
     assert "<<< error -32603: protoAgent: gateway down" in out.stdout
+
+
+def test_harness_send_now_steers_through_the_real_stdio_shim():
+    harness = Path(__file__).resolve().parents[1] / "scripts" / "acp_harness.py"
+    with fa.FakeA2A(token=None) as fake:
+        fake.script = lambda ctx, msg: [
+            fa.task(ctx),
+            fa.text(ctx, "Reading A.", append=False),
+            fa.after_steer(fake, lambda t: fa.text(ctx, f" Now: {t}", append=True)),
+            fa.done(ctx),
+        ]
+        out = subprocess.run(
+            [sys.executable, str(harness), "--prompt", "long task", "--send-now", "do B", "--send-now-after", "0.5",
+             "--", "--url", fake.url, "--steer-grace", "3"],
+            capture_output=True, text=True, timeout=60,
+        )
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "stopReason: cancelled" in out.stdout and "stopReason: end_turn" in out.stdout
+    assert "↪ steering: do B" in out.stdout and "Now: do B" in out.stdout
+    assert fake.cancels == [] and len(fake.requests) == 1
+
+
+def test_harness_list_and_load_through_stdio():
+    harness = Path(__file__).resolve().parents[1] / "scripts" / "acp_harness.py"
+    with fa.FakeA2A(token=None) as fake:
+        fake.sessions = [{"session_id": "chat-zed-1-aaa", "last_updated": "2026-09-24T10:00:00", "turn_count": 1}]
+        fake.turns["chat-zed-1-aaa"] = [{
+            "task_id": "t0", "state": "TASK_STATE_COMPLETED", "text": "The answer is 42.", "status": {}, "artifacts": [],
+            "history": [{"role": "ROLE_USER", "parts": [{"text": "What is the answer?"}]}],
+        }]
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "Still 42.", append=False), fa.done(ctx)]
+        out = subprocess.run(
+            [sys.executable, str(harness), "--list", "--load", "chat-zed-1-aaa", "--prompt", "and again?", "--", "--url", fake.url],
+            capture_output=True, text=True, timeout=60,
+        )
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "chat-zed-1-aaa" in out.stdout and "'What is the answer?'" in out.stdout
+    assert "user_message_chunk" in out.stdout and "The answer is 42." in out.stdout
+    assert "Still 42." in out.stdout and fake.requests[0]["contextId"] == "chat-zed-1-aaa"
