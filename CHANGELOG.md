@@ -21,19 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **File paths in tool results open in your editor — Zed by default (#3596).** `read_file`,
   `search_files` (each `file:line` hit, at that line), `find_files`, `write_file` and
   `edit_file` results now link their paths via `zed://file/…` (or VS Code / Cursor), chosen
-  under Settings ▸ Chat ▸ Open files in (per browser; Off restores plain text). Roots come
+  under Settings ▸ This console ▸ Chat ▸ Open files in (per browser; Off restores plain text). Roots come
   from a new read-only `GET /api/fs/roots`, computed from the same fence the fs tools resolve
   against, so a link can't point somewhere the tool didn't read.
   In the desktop app the shell hands these links to the OS via `tauri-plugin-opener` under
   a strict `zed:`/`vscode:`/`cursor:` (`://file/` only) allowlist — no other custom scheme
-  passes.
+  passes, and only a link to an existing file on a local disk opens (directories,
+  `.code-workspace` files, `..` paths and Windows UNC paths are refused).
 
 - **`open_in_editor`: an agent on your own machine can pop a file open in your editor (#3597).**
   Set `filesystem.editor_command` (`zed`, `code -g`, `cursor -g`) and the agent gets
   `open_in_editor(project, path, line?)` — "open the router for me" jumps your editor to the
   file and line. It resolves through the same fence as every filesystem tool (nothing outside
   a managed project opens), works in read-only projects, and launches detached without
-  waiting. Unset (the default) = the tool is not bound.
+  waiting; it opens files, never directories. Unset (the default) = the tool is not bound.
+  On Windows, point it at the editor's real `.exe` — a `.cmd`/`.bat` launcher (VS Code's
+  `code`) is refused, because `cmd.exe` would interpret characters in file names.
 
 ## [0.175.0] - 2026-09-24
 
