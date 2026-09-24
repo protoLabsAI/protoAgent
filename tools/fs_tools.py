@@ -305,6 +305,35 @@ def _configured_entries(config, *, create: bool = False) -> list[dict]:
     return [e for e in entries or [] if isinstance(e, dict)]
 
 
+def _is_windows() -> bool:
+    """Seam for tests — the Windows-only launch rules below key on this."""
+    return os.name == "nt"
+
+
+def _strip_quotes(token: str) -> str:
+    """Drop ONE pair of matching surrounding quotes. ``shlex.split(posix=False)`` keeps them,
+    so ``"C:\\Program Files\\Zed\\zed.exe"`` would otherwise reach ``shutil.which`` quoted."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return token
+
+
+def _split_editor_command(editor_command: str) -> list[str]:
+    """Split ``filesystem.editor_command`` into argv tokens.
+
+    POSIX: plain shlex. Windows: ``posix=False`` so backslashed paths survive, then the
+    quotes it retains are stripped per token. Raises ``ValueError`` on an unbalanced quote.
+    """
+    if _is_windows():
+        return [_strip_quotes(t) for t in shlex.split(editor_command, posix=False)]
+    return shlex.split(editor_command)
+
+
+# Windows runs .cmd/.bat launchers through cmd.exe, whose metacharacters (& | < > ^ %) in
+# a managed-project file name would be interpreted — command injection via a file name.
+_WINDOWS_BATCH_SUFFIXES = (".cmd", ".bat")
+
+
 def _editor_argv(editor_command: str, target: Path, line: int | None = None) -> list[str]:
     """``argv`` that opens ``target`` (at ``line``) in the operator's editor.
 
@@ -318,8 +347,7 @@ def _editor_argv(editor_command: str, target: Path, line: int | None = None) -> 
     Raises ``ValueError`` on an empty/unparseable command or a non-absolute target.
     """
     try:
-        # posix=False on Windows so a backslashed exe path (C:\\Tools\\code.cmd) survives.
-        base = shlex.split(editor_command, posix=os.name != "nt")
+        base = _split_editor_command(editor_command)
     except ValueError as exc:
         raise ValueError(f"filesystem.editor_command is not a valid command line: {exc}") from exc
     if not base:
@@ -347,6 +375,15 @@ def _launch_editor(argv: list[str]) -> str | None:
     exe = shutil.which(argv[0])
     if exe is None:
         return f"Error: editor command {argv[0]!r} not found on PATH."
+    if _is_windows() and exe.lower().endswith(_WINDOWS_BATCH_SUFFIXES):
+        # e.g. VS Code's `code` is `code.cmd`. Popen would route it through cmd.exe, which
+        # parses the file-name argument — refuse rather than try to escape cmd.exe quoting.
+        return (
+            f"Error: editor command {argv[0]!r} resolves to a batch launcher ({exe}), which Windows "
+            "runs through cmd.exe — a file name could inject commands. Point "
+            "filesystem.editor_command at the editor's real .exe instead, e.g. "
+            '"C:\\Users\\<you>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe" -g'
+        )
     try:
         proc = subprocess.Popen(
             [exe, *argv[1:]],
@@ -980,10 +1017,12 @@ def build_fs_tools(config) -> list:
     # projects too; the fence is the same `registry.resolve` every other fs tool uses.
     editor_command = str(getattr(config, "filesystem_editor_command", "") or "").strip()
     try:
-        editor_name = (shlex.split(editor_command, posix=os.name != "nt") or [""])[0]
+        editor_name = (_split_editor_command(editor_command) or [""])[0]
     except ValueError:
         # An unbalanced quote is an operator typo — never break the graph build over it.
-        log.warning("[fs] filesystem.editor_command is not a valid command line: %r — open_in_editor NOT bound", editor_command)
+        log.warning(
+            "[fs] filesystem.editor_command is not a valid command line: %r — open_in_editor NOT bound", editor_command
+        )
         editor_name = ""
     if editor_name:
 
@@ -1005,8 +1044,10 @@ def build_fs_tools(config) -> list:
                 return f"Error: {exc}"
             if not target.exists():
                 return f"Error: no such file: {path}"
-            if line is not None and (not target.is_file() or line < 1):
-                return f"Error: `line` must be a positive line number in a file (got {line!r} for {path})."
+            if not target.is_file():
+                return f"Error: not a file: {path} (open_in_editor opens files, not directories)."
+            if line is not None and line < 1:
+                return f"Error: `line` must be a positive line number (got {line!r} for {path})."
             try:
                 argv = _editor_argv(editor_command, target, line)
             except ValueError as exc:

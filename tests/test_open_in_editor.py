@@ -34,7 +34,9 @@ def proj(tmp_path):
 
 
 def _cfg(root: Path, editor: str = "zed", write: bool = False) -> _Cfg:
-    return _Cfg(filesystem_editor_command=editor, filesystem_projects=[{"name": "repo", "path": str(root), "write": write}])
+    return _Cfg(
+        filesystem_editor_command=editor, filesystem_projects=[{"name": "repo", "path": str(root), "write": write}]
+    )
 
 
 def _tools(cfg):
@@ -112,6 +114,13 @@ def test_bad_line_refused(proj, fake_launch):
     t = _tools(_cfg(proj))["open_in_editor"]
     assert t.invoke({"project": "repo", "path": "src/router.py", "line": 0}).startswith("Error:")
     assert t.invoke({"project": "repo", "path": "src", "line": 3}).startswith("Error:")  # line on a dir
+    assert fake_launch == []
+
+
+def test_directory_without_line_refused(proj, fake_launch):
+    """A directory is not a file even when no `line` is given — nothing launches."""
+    out = _tools(_cfg(proj))["open_in_editor"].invoke({"project": "repo", "path": "src"})
+    assert out.startswith("Error: not a file: src")
     assert fake_launch == []
 
 
@@ -197,3 +206,64 @@ def test_not_in_operator_mcp_read_only_profile():
     from runtime.operator_mcp_tools import _READ_ONLY_TOOLS
 
     assert "open_in_editor" not in _READ_ONLY_TOOLS
+
+
+# ── Windows launch rules ──────────────────────────────────────────────────────
+
+
+def test_windows_quoted_exe_path_is_unquoted(proj, monkeypatch):
+    """shlex(posix=False) keeps the quotes around a spaced exe path; they must not reach
+    `shutil.which` (else the editor reads as missing) or the argv."""
+    monkeypatch.setattr(fs, "_is_windows", lambda: True)
+    exe = r"C:\Program Files\Zed\zed.exe"
+    seen: list[str] = []
+
+    def _which(name):
+        seen.append(name)
+        return name if name == exe else None
+
+    monkeypatch.setattr(fs.shutil, "which", _which)
+    _FakePopen.calls = []
+    monkeypatch.setattr(fs.subprocess, "Popen", _FakePopen)
+    tools = _tools(_cfg(proj, editor=f'"{exe}" -g'))
+    out = tools["open_in_editor"].invoke({"project": "repo", "path": "src/router.py", "line": 2})
+    assert out == f"Opened repo/src/router.py:2 in {exe}."
+    assert seen == [exe]
+    (call,) = _FakePopen.calls
+    assert call["argv"][:2] == [exe, "-g"]
+
+
+def test_windows_split_strips_quotes_per_token(monkeypatch):
+    monkeypatch.setattr(fs, "_is_windows", lambda: True)
+    assert fs._split_editor_command(r'"C:\Program Files\Code\Code.exe" "-g"') == [
+        r"C:\Program Files\Code\Code.exe",
+        "-g",
+    ]
+    assert fs._split_editor_command(r"C:\Tools\zed.exe") == [r"C:\Tools\zed.exe"]
+
+
+@pytest.mark.parametrize(
+    "launcher", [r"C:\Users\me\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd", r"C:\tools\ed.BAT"]
+)
+def test_windows_batch_launcher_refused(proj, monkeypatch, launcher):
+    """`code` on Windows is `code.cmd`; Popen would run it via cmd.exe, and a managed-project
+    file named `a&calc&b.py` would inject. Refuse batch launchers outright."""
+    monkeypatch.setattr(fs, "_is_windows", lambda: True)
+    monkeypatch.setattr(fs.shutil, "which", lambda name: launcher)
+    _FakePopen.calls = []
+    monkeypatch.setattr(fs.subprocess, "Popen", _FakePopen)
+    (proj / "a&calc&b.py").write_text("x")
+    out = _tools(_cfg(proj, editor="code -g"))["open_in_editor"].invoke({"project": "repo", "path": "a&calc&b.py"})
+    assert out.startswith("Error: editor command 'code' resolves to a batch launcher")
+    assert "Code.exe" in out and "filesystem.editor_command" in out
+    assert _FakePopen.calls == []
+
+
+def test_batch_suffix_allowed_off_windows(proj, monkeypatch):
+    """The cmd.exe hazard is Windows-only — a `.cmd`-named script elsewhere is exec'd directly."""
+    monkeypatch.setattr(fs, "_is_windows", lambda: False)
+    monkeypatch.setattr(fs.shutil, "which", lambda name: "/opt/bin/ed.cmd")
+    _FakePopen.calls = []
+    monkeypatch.setattr(fs.subprocess, "Popen", _FakePopen)
+    out = _tools(_cfg(proj, editor="ed.cmd"))["open_in_editor"].invoke({"project": "repo", "path": "src/router.py"})
+    assert out.startswith("Opened")
