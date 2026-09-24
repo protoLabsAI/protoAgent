@@ -43,6 +43,7 @@ def _build_delegate_to(registry: DelegateRegistry):
         item_id: str = "",
         resume_task_id: str = "",
         timeout: int = 0,
+        project: str = "",
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str | Command:
@@ -97,6 +98,13 @@ def _build_delegate_to(registry: DelegateRegistry):
                 known-long job — a coding agent running a full TDD cycle, venv
                 setup, or a CI gate — that would otherwise exceed the delegate's
                 default (ACP coding delegates default to 1800s / 30 min).
+            project: coding agents only — the name of a registered project (as
+                `list_projects` shows it) to run THIS call in, instead of the coding
+                agent's configured directory. Use it to hand a focused fix in a specific
+                project to a coder. The project must be read-write (not no-delete). For a
+                git project the reply ends with what the coder changed (a diff stat plus
+                the diff), so you can check the work instead of trusting the coder's
+                summary. Leave empty to use the delegate's own directory.
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
@@ -111,6 +119,23 @@ def _build_delegate_to(registry: DelegateRegistry):
             timeout_s: float | None = float(timeout) if timeout and float(timeout) > 0 else None
         except (TypeError, ValueError):
             timeout_s = None
+        scope = None
+        project = str(project or "").strip()
+        if project:
+            d = registry.get(target)
+            if d is None:
+                return f"Error: unknown delegate {target!r}. Available: {registry.listing() or '(none)'}."
+            if d.type != "acp":
+                return (
+                    f"Error: delegate {target!r} is type {d.type!r} — `project` only applies to acp "
+                    "coding delegates. Describe the project in the query instead."
+                )
+            from .projects import resolve
+
+            try:
+                scope = resolve(project)
+            except DelegateError as exc:
+                return f"Error: {exc}"
         if background:
             return await _spawn_background_delegation(
                 registry,
@@ -121,6 +146,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                 resume_task_id=resume_task_id,
                 timeout=timeout_s,
                 summary=summary,
+                project=scope,
             )
         try:
             return await _dispatch_into_room(
@@ -132,6 +158,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                 item_id=item_id or None,
                 resume_task_id=resume_task_id or None,
                 timeout=timeout_s,
+                project=scope,
             )
         except DelegateError as exc:
             # A stopped member of THIS box's fleet is recoverable: ask, start, retry.
@@ -274,6 +301,7 @@ async def _dispatch_into_room(
     item_id: str | None = None,
     resume_task_id: str | None = None,
     timeout: float | None = None,
+    project=None,
 ) -> str | Command:
     """Dispatch a foreground delegation and atomically add it to the room (#3102).
 
@@ -294,6 +322,10 @@ async def _dispatch_into_room(
     with no key and therefore open a conversation of their own.
     """
     async def plain() -> str:
+        if project is not None:
+            return await registry.dispatch(
+                target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout, project=project
+            )
         return await registry.dispatch(
             target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout
         )
@@ -320,7 +352,11 @@ async def _dispatch_into_room(
         # through host-free `graph/mention_op`, which can't carry a new argument, so the
         # session rides a ContextVar the registry reads. Same session that scopes a later
         # session-DELETE cleanup — the `@` path binds it identically in `server.chat`.
-        with conversations.origin_session(session_id):
+        from .projects import project_scope
+
+        # The project scope rides a ContextVar across host-free `graph/mention_op` for the
+        # same reason the origin session does (see `projects`).
+        with conversations.origin_session(session_id), project_scope(project):
             outcome = await dispatch_into_room(
                 registry,
                 target,
@@ -374,6 +410,7 @@ async def _spawn_background_delegation(
     resume_task_id: str = "",
     timeout: float | None = None,
     summary: str = "",
+    project=None,
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
@@ -394,9 +431,10 @@ async def _spawn_background_delegation(
         mgr = getattr(STATE, "background_mgr", None)
     except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
         mgr = None
+    extra = {"project": project} if project is not None else {}
     if mgr is None:
         return await registry.dispatch(
-            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout
+            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
         )
 
     try:
@@ -419,9 +457,11 @@ async def _spawn_background_delegation(
         # item_id rides into the dispatch itself, so the managed-git claim/dedup
         # applies identically to background and foreground fan-out (one registry,
         # one event loop). timeout rides down the same way so a per-call override
-        # holds for a detached long-running coding job too.
+        # holds for a detached long-running coding job too. The resolved project scope is
+        # captured HERE, at spawn — the job runs in the project it was started for even if
+        # the registry changes before it finishes.
         return await registry.dispatch(
-            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout
+            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
         )
 
     # The job's title everywhere it's listed (the Background panel, the console's delegation
@@ -433,7 +473,7 @@ async def _spawn_background_delegation(
     job_id = await mgr.spawn_work(
         origin_session=session,
         kind="delegate",
-        description=f"delegate → {target}: {label}",
+        description=f"delegate → {target}{f' [{project.name}]' if project is not None else ''}: {label}",
         detail=query,
         work=_work,
         result_author=target,

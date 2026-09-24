@@ -497,6 +497,21 @@ class _RegistryRef:
         return self._cached_registry
 
 
+def live_project_registry(fallback_config=None) -> ProjectRegistry:
+    """The fenced project registry exactly as the fs tools see it RIGHT NOW.
+
+    For callers outside ``build_fs_tools`` that must honour the same fence — e.g.
+    ``delegate_to(project=…)`` scoping a coding delegate to one registered project.
+    Resolves through ``_RegistryRef`` (live ``HOST.config``, else ``fallback_config``),
+    so a project registered mid-turn is visible here too. When the live config has
+    ``filesystem.enabled: false`` the fs tools are not bound at all, so this returns an
+    EMPTY registry rather than a fence nobody else is enforcing."""
+    ref = _RegistryRef(fallback_config)
+    if not bool(getattr(ref._live_config(), "filesystem_enabled", False)):
+        return ProjectRegistry([])
+    return ref.get()
+
+
 def _bypass_requested() -> bool:
     """True when the in-flight turn carries the per-turn ``bypass_permissions`` flag — the
     operator's explicit /bypass toggle, sent in the A2A request metadata (read live, so it's
