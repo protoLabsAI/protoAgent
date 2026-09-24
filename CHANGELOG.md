@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.174.1] - 2026-09-24
+
+### Fixed
+- **MCP server `env:` values now expand `~` (#3580).** A tilde-prefixed path like `~/data` in a per-server `env:` block is expanded to the user's home directory before being passed to the child process, matching every other path-taking config field.
+
+- **The completion guard's give-up log says what the last turn looked like (#3582).** `finish_reason`, output/input tokens and text length — enough to tell a cut-off output from a stripped tool call from a model that stopped after a long think. A lane that ended on "Let me verify X" twice looked the same in every case.
+
+- **A reasoning-only turn ends a subagent lane after one nudge, not two (#3584).** A lane whose reply is 20–30k chars of thinking and no content (or one sentence of intent) never recovered on the second nudge — 0 of 5, ~2 minutes each. The guard now recognises the shape from the reasoning round-trip and ends the lane as a Gap after one such turn; a terse reply with no reasoning behind it keeps both nudges.
+
+- **The small-diff `code-review` recipe's verify step asks for its status line (#3589).** Its prompt never named `VERIFY_STATUS:`, so a verifier that answered in prose was neither asked again by the completion guard nor counted by pr-reviewer — 3 of 49 small-diff reviews posted "the verify pass did not run" over a verification that had refuted the finding. The step now carries the same status-line contract and `<synthesized>` framing as the structural recipe.
+
 ## [0.174.0] - 2026-09-22
 
 ### Fixed

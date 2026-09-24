@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.174.1",
+    "date": "2026-09-24",
+    "changes": [
+      "MCP server env: values now expand ~ (#3580).",
+      "The completion guard's give-up log says what the last turn looked like (#3582).",
+      "A reasoning-only turn ends a subagent lane after one nudge, not two (#3584).",
+      "The small-diff code-review recipe's verify step asks for its status line (#3589)."
+    ]
+  },
+  {
     "version": "v0.174.0",
     "date": "2026-09-22",
     "changes": [
