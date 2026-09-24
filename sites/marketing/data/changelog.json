@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.177.0",
+    "date": "2026-09-24",
+    "changes": [
+      "onboard_project clones from any git host, and a new register_local_project registers a directory already on disk (#3599).",
+      "delegate_to(project=…) sends an ACP coding delegate into one registered project for a call, and returns the diff it made (#3600).",
+      "filesystem.run_auto_approve: a safe-command allowlist so read-mostly run_command calls stop asking for approval (#3602)."
+    ]
+  },
+  {
     "version": "v0.176.0",
     "date": "2026-09-24",
     "changes": [
