@@ -17,6 +17,9 @@ The contract:
 - **Kill by tree**, never by PID alone: :func:`kill_tree` (sync),
   :func:`akill_tree` (asyncio children), :func:`terminate_tree` (graceful
   term → wait → hard-kill escalation).
+- **Hand children a clean env** with :func:`child_env` when spawning anything
+  that isn't this server itself: a PyInstaller-frozen build points env vars into
+  its temporary ``_MEIPASS`` extraction dir, which is deleted when it exits.
 - **Track what you own** (#3428): :func:`track_tree` a ``group_kwargs()`` tree
   once it's spawned, :func:`untrack_tree` it once it's reaped. Whatever is still
   tracked when this process starts to exit is torn down by the process, not by
@@ -39,8 +42,10 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any
 
 # The #1679 liveness probe (Windows: OpenProcess + STILL_ACTIVE — never
@@ -89,6 +94,91 @@ def detached_kwargs() -> dict[str, Any]:
             "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
         }
     return {"start_new_session": True}
+
+
+# ── child environment ────────────────────────────────────────────────────────
+
+#: Dynamic-loader search vars PyInstaller's bootloader may repoint at the bundle,
+#: stashing the operator's original value under ``<VAR>_ORIG`` (PyInstaller docs,
+#: "LD_LIBRARY_PATH / LIBPATH considerations").
+_PYI_LOADER_VARS = ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH", "LIBPATH")
+#: PyInstaller's own bootloader bookkeeping. Inherited by another onefile build of
+#: this app, it makes that process reuse OUR extraction dir instead of its own.
+_PYI_INTERNAL_PREFIX = "_PYI_"
+_PYI_INTERNAL_EXACT = frozenset({"_MEIPASS2"})
+
+
+def _bundle_roots() -> tuple[str, ...]:
+    """The frozen bundle's extraction dir (raw and symlink-resolved — macOS temp
+    lives under ``/var`` → ``/private/var``), or ``()`` when not frozen."""
+    if not getattr(sys, "frozen", False):
+        return ()
+    root = getattr(sys, "_MEIPASS", None)
+    if not root:
+        return ()
+    raw = os.path.normpath(str(root))
+    return tuple(dict.fromkeys((raw, os.path.realpath(raw))))
+
+
+def _inside(entry: str, roots: tuple[str, ...]) -> bool:
+    if not entry:
+        return False
+    path = os.path.normpath(entry)
+    return any(path == r or path.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
+
+
+def child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """A copy of ``base`` (default ``os.environ``) safe to hand an EXTERNAL program.
+
+    A PyInstaller-frozen server (the desktop sidecar) runs out of a temporary
+    ``_MEIPASS`` extraction dir that is deleted when it exits, and its env points
+    into it: ``SSL_CERT_FILE``/``REQUESTS_CA_BUNDLE``/``CURL_CA_BUNDLE`` at the
+    bundled certifi (``server._ensure_ca_bundle_env`` — meant for the frozen
+    process's OWN OpenSSL, whose trust-store discovery doesn't resolve), loader
+    paths, runtime-hook vars. A child that inherits them — worse, a GUI app such
+    as an editor that OUTLIVES the server — keeps dangling paths and hands them to
+    every process it starts: a stale ``SSL_CERT_FILE`` crashes any httpx client at
+    construction (``FileNotFoundError``).
+
+    When frozen this:
+
+    - restores ``LD_LIBRARY_PATH``/``DYLD_*``/``LIBPATH`` from their ``*_ORIG``
+      saves (the documented PyInstaller recipe for launching external programs);
+    - drops PyInstaller's bookkeeping (``_PYI_*``, ``_MEIPASS2``);
+    - drops every path pointing inside the bundle — a whole var, or just those
+      entries of a ``os.pathsep`` list, keeping the rest.
+
+    An external program then uses its own trust-store discovery, same as from
+    the operator's shell. A value NOT inside the bundle (an operator's corporate
+    CA bundle) passes through untouched. A no-op copy when not frozen.
+
+    Not for re-spawning this server's own binary (fleet members, ``protoagent
+    up``): those deliberately share the running bundle.
+    """
+    env = dict(os.environ if base is None else base)
+    roots = _bundle_roots()
+    if not roots:
+        return env
+    for var in _PYI_LOADER_VARS:
+        orig = env.pop(f"{var}_ORIG", None)
+        if orig is not None:
+            if orig:
+                env[var] = orig
+            else:
+                env.pop(var, None)
+    for key in list(env):
+        if key.startswith(_PYI_INTERNAL_PREFIX) or key in _PYI_INTERNAL_EXACT:
+            del env[key]
+            continue
+        parts = env[key].split(os.pathsep)
+        kept = [p for p in parts if not _inside(p, roots)]
+        if len(kept) == len(parts):
+            continue
+        if any(kept):
+            env[key] = os.pathsep.join(kept)
+        else:
+            del env[key]
+    return env
 
 
 # ── tree teardown ────────────────────────────────────────────────────────────
@@ -695,6 +785,7 @@ def sweep_orphaned_trees(*, grace: float = 1.0) -> int:
 __all__ = [
     "akill_tree",
     "begin_tree_teardown",
+    "child_env",
     "detached_kwargs",
     "group_kwargs",
     "kill_tree",

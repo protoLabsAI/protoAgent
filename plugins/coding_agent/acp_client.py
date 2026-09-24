@@ -41,7 +41,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from infra.proc import group_kwargs, signal_tree, track_tree, untrack_tree
+from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack_tree
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
@@ -305,7 +305,8 @@ def _launch_env(extra: dict[str, str] | None, env_remove: list[str] | None = Non
             return True
         return any(k.startswith(p) for p in prefix_removals)
 
-    env = {k: v for k, v in os.environ.items() if not _strip(k)}
+    # child_env: never hand an agent a frozen build's _MEIPASS paths (infra.proc).
+    env = {k: v for k, v in child_env().items() if not _strip(k)}
     env.update(extra or {})  # additive overlay AFTER removal (remove-then-set wins)
 
     path = env.get("PATH") or os.defpath

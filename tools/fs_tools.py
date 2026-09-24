@@ -39,7 +39,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
-from infra.proc import detached_kwargs
+from infra.proc import child_env, detached_kwargs
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 from tools.shell import run_command as _shell_run
 
@@ -372,6 +372,11 @@ def _launch_editor(argv: list[str]) -> str | None:
     holds the server's pipes and a server restart doesn't take the editor with it. A
     child still running after the grace window is reaped by a daemon thread so it can't
     linger as a zombie.
+
+    The env is :func:`infra.proc.child_env`: an editor OUTLIVES the server, so a frozen
+    build's ``_MEIPASS`` paths (``SSL_CERT_FILE`` → the bundled cacert) would dangle once
+    the server exits — and the editor passes them to every process it starts (an ACP
+    agent's httpx client then dies with ``FileNotFoundError`` at startup).
     """
     exe = shutil.which(argv[0])
     if exe is None:
@@ -392,6 +397,7 @@ def _launch_editor(argv: list[str]) -> str | None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            env=child_env(),
             **detached_kwargs(),
         )
     except OSError as exc:
