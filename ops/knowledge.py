@@ -69,6 +69,11 @@ class IngestResult:
     title: str | None
     source_type: str
     source: str  # provenance label the chunks were stored under
+    # How many chunks actually got a vector. Lets callers distinguish "839
+    # chunks, 839 embedded" from "839 chunks, 0 embedded" — a large document
+    # whose embed batch timed out is stored FTS5-only, and used to report plain
+    # success (#3126). ``None`` when the backend has no vector index to report.
+    embedded: int | None = None
 
 
 @dataclass
@@ -81,6 +86,20 @@ class PreviewResult:
     source: str
     snippet: str
     truncated: bool
+
+
+def _count_embedded(store, ids: list[int]) -> int | None:
+    """How many of the just-written chunks got a vector — surfaced on
+    :class:`IngestResult` so a partial embed (e.g. a book-sized batch that timed
+    out) reads as ``839 chunks, 0 embedded`` instead of a silent success (#3126).
+    ``None`` when the backend exposes no vector count (FTS5-only stores)."""
+    counter = getattr(store, "count_vectors", None)
+    if not callable(counter) or not ids:
+        return None
+    try:
+        return counter(list(ids))
+    except Exception:  # noqa: BLE001 — reporting is best-effort; never fail an ingest over a count
+        return None
 
 
 def _media_fns(graph_config):
@@ -164,8 +183,11 @@ async def ingest(source: IngestSource, *, domain: str = "general", title: str | 
 
     heading = (title or "").strip() or result.title or None
     dom = (domain or "general").strip() or "general"
-    ids = await asyncio.to_thread(
-        lambda: add_document(
+
+    def _write() -> tuple[list[int], int | None]:
+        # Count vectors in the same worker thread as the write, so ingest can
+        # report partial embedding without a second thread hop.
+        created = add_document(
             ctx.knowledge_store,
             result.text,
             domain=dom,
@@ -173,7 +195,9 @@ async def ingest(source: IngestSource, *, domain: str = "general", title: str | 
             source=origin,
             source_type=result.source_type,
         )
-    )
+        return created, _count_embedded(ctx.knowledge_store, created)
+
+    ids, embedded = await asyncio.to_thread(_write)
     if not ids:
         raise IngestError("nothing ingested — no text could be extracted from that source", kind="empty")
     return IngestResult(
@@ -183,6 +207,7 @@ async def ingest(source: IngestSource, *, domain: str = "general", title: str | 
         title=heading,
         source_type=result.source_type,
         source=origin,
+        embedded=embedded,
     )
 
 

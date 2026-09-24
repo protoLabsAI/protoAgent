@@ -617,6 +617,7 @@ def register_knowledge_routes(app) -> None:
             "enabled": True,
             "ids": result.ids,
             "chunks": result.chunks,
+            "embedded": result.embedded,  # #3126: how many chunks got a vector (None on FTS5-only stores)
             "title": result.title,
             "source_type": result.source_type,
             "chars": result.chars,

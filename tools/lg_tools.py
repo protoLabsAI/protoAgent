@@ -893,7 +893,18 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             raise _KnowledgeIngestError(_tool_ingest_message(exc)) from exc
 
         label = result.title or result.source
-        return f"Ingested {label!r} ({result.source_type}, {result.chars} chars) → {result.chunks} chunk(s) in {dom!r}."
+        # Surface how many chunks got a vector so a silently-partial embed (a
+        # book-sized batch that timed out) is visible, not reported as success (#3126).
+        if result.embedded is None:
+            embedded_note = ""
+        elif result.embedded >= result.chunks:
+            embedded_note = f", {result.embedded} embedded"
+        else:
+            embedded_note = f", only {result.embedded}/{result.chunks} embedded (semantic recall partial; rest are keyword-only)"
+        return (
+            f"Ingested {label!r} ({result.source_type}, {result.chars} chars) → "
+            f"{result.chunks} chunk(s){embedded_note} in {dom!r}."
+        )
 
     @tool
     async def knowledge_ingest(

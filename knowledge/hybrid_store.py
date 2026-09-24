@@ -45,6 +45,15 @@ log = logging.getLogger(__name__)
 
 EmbedFn = Callable[[str], "list[float]"]
 
+# Max texts per embed request in add_document's batched path (#3126). The shared
+# embeddings client is tuned for the chat query hot-path — request_timeout=8s,
+# max_retries=0 (graph/llm.py) — so embedding a whole book's worth of chunks in
+# ONE request can blow that 8s budget and return nothing, silently leaving every
+# chunk FTS5-only (839 chunks, 0 vectors, reported as success). Slicing bounds
+# each request to something that fits the timeout: a slow slice costs only its
+# own vectors, and the rest of the document still lands.
+_EMBED_BATCH_SIZE = 128
+
 # Reentrancy guard for ingest timing (#2676): add_document's fallback path loops
 # self.add_chunk, and without the guard a 10-chunk document would emit eleven
 # ingest samples (the document + every chunk). A ContextVar, not an instance
@@ -72,6 +81,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         *,
         embed_fn: EmbedFn | None = None,
         embed_batch_fn: Callable[[list[str]], list[list[float]]] | None = None,
+        embed_batch_size: int = _EMBED_BATCH_SIZE,
         vector_k: int = 20,
         rrf_k: int = 60,
         min_score: float = 0.0,
@@ -95,9 +105,11 @@ class HybridKnowledgeStore(KnowledgeStore):
         )
         self._embed_fn = embed_fn
         # Optional batched embedder (texts -> vectors in one request). When set,
-        # add_document embeds a whole document's chunks in a single round-trip
-        # instead of N serial _embed calls.
+        # add_document embeds a document's chunks in batched round-trips (sliced
+        # by _embed_batch_size) instead of N serial _embed calls.
         self._embed_batch_fn = embed_batch_fn
+        # Cap on texts per batched embed request — see _EMBED_BATCH_SIZE.
+        self._embed_batch_size = max(1, int(embed_batch_size))
         self._vector_k = vector_k
         self._rrf_k = rrf_k
         # Relevance floor: drop fused hits whose RRF score is below this. 0 keeps
@@ -256,8 +268,14 @@ class HybridKnowledgeStore(KnowledgeStore):
                 _record_op("ingest", t0)
 
     def add_document(self, content: str, domain: str = "general", heading=None, **kw) -> list[int]:
-        """Chunk + enrich, then embed ALL of the document's chunks in ONE batched
-        request instead of N serial ``_embed`` calls (ADR 0021).
+        """Chunk + enrich, then embed the document's chunks in batched requests
+        (sliced to ``_embed_batch_size`` texts each) instead of N serial
+        ``_embed`` calls (ADR 0021).
+
+        Slicing keeps each embed request within the shared client's query-tuned
+        8s timeout, so a book-sized document can't blow the batch and silently
+        lose every vector (#3126) — a failed slice falls back to per-chunk embed
+        and the other slices still land theirs.
 
         Falls back to the base per-chunk path (each piece embedded via
         ``add_chunk``) when there's nothing to batch — a single chunk, no batched
@@ -286,7 +304,9 @@ class HybridKnowledgeStore(KnowledgeStore):
                 return ids
 
             # Batched path: write rows WITHOUT per-chunk embed (the BASE add_chunk),
-            # then one embed call for the whole document, then bulk-store the vectors.
+            # then embed in timeout-sized slices, then bulk-store each slice's
+            # vectors. Rows land first, so any embed failure still leaves
+            # FTS5-searchable chunks.
             rows: list[tuple[int, str]] = []
             for text in texts:
                 cid = KnowledgeStore.add_chunk(self, text, domain, heading, **kw)
@@ -295,13 +315,74 @@ class HybridKnowledgeStore(KnowledgeStore):
                     rows.append((cid, (heading + "\n" if heading else "") + text))
             if not rows:
                 return []
-            vecs = self._embed_batch([t for _, t in rows])
-            if vecs is not None and len(vecs) == len(rows):
-                self._store_vectors([(cid, v) for (cid, _), v in zip(rows, vecs)])
+            self._embed_rows_in_slices(rows)
             return [cid for cid, _ in rows]
         finally:
             _ingest_ctx.reset(guard)
             _record_op("ingest", t0)
+
+    def _embed_rows_in_slices(self, rows: list[tuple[int, str]]) -> int:
+        """Embed pre-written rows in ``_embed_batch_size``-sized slices, storing
+        each slice's vectors as it returns. Bounds every embed request so a
+        book-sized document (e.g. 839 chunks) can't exceed the shared client's
+        query-tuned 8s timeout and silently drop *all* its vectors (#3126): one
+        slice's failure costs only its own chunks, and the rest still land.
+
+        On a slice failure, fall back to per-chunk ``_embed`` for that slice only
+        — each single embed is small enough to fit the timeout, and rides the
+        circuit breaker — so a transient batch timeout degrades to slower, not
+        zero, coverage. ``_embed`` / ``_embed_batch`` both no-op while the breaker
+        is open, so an open breaker still skips embedding entirely (no calls leak
+        through the fallback). Returns the number of vectors stored."""
+        size = self._embed_batch_size
+        stored = 0
+        for start in range(0, len(rows), size):
+            sl = rows[start : start + size]
+            vecs = self._embed_batch([t for _, t in sl])
+            if vecs is not None and len(vecs) == len(sl):
+                self._store_vectors([(cid, v) for (cid, _), v in zip(sl, vecs)])
+                stored += len(sl)
+                continue
+            # Slice failed (timeout / breaker open / length mismatch): retry each
+            # chunk on its own so a whole slice isn't lost to one bad request.
+            pairs: list[tuple[int, list[float]]] = []
+            for cid, text in sl:
+                vec = self._embed(text)
+                if vec is not None:
+                    pairs.append((cid, vec))
+            if pairs:
+                self._store_vectors(pairs)
+                stored += len(pairs)
+        return stored
+
+    def count_vectors(self, chunk_ids: list[int]) -> int:
+        """How many of ``chunk_ids`` have a stored vector — lets ingest report
+        partial embedding (``820/839 embedded``) instead of reporting success
+        while a timed-out batch silently left the document FTS5-only (#3126).
+        Read-only; returns 0 when embeddings are off or the side table is absent.
+        Windowed so an arbitrarily large document stays under SQLite's variable
+        limit."""
+        if not chunk_ids:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        total = 0
+        try:
+            ids = list(chunk_ids)
+            for start in range(0, len(ids), 900):
+                window = ids[start : start + 900]
+                placeholders = ",".join("?" for _ in window)
+                row = db.execute(
+                    f"SELECT COUNT(*) FROM chunk_vectors WHERE chunk_id IN ({placeholders})",
+                    window,
+                ).fetchone()
+                total += int(row[0]) if row else 0
+        except sqlite3.DatabaseError:
+            return 0
+        finally:
+            db.close()
+        return total
 
     def _store_vectors(self, pairs: list[tuple[int, list[float]]]) -> None:
         """Bulk-insert chunk vectors in one transaction."""
