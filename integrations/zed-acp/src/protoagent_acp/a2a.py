@@ -246,6 +246,26 @@ def decode_frame(frame: dict) -> list[Event]:
     return events
 
 
+def task_snapshot(task: Any) -> tuple[StateEvent | None, str]:
+    """A ``GetTask`` result → ``(state, answer text)``. The durable task holds the final
+    status (a failure's reason rides ``status.message``) and the answer artifact, so it is
+    the ground truth when a live stream closed without delivering its terminal frame."""
+    if not isinstance(task, dict):
+        return None, ""
+    status = task.get("status") if isinstance(task.get("status"), dict) else {}
+    message = status.get("message") if isinstance(status.get("message"), dict) else {}
+    parts = message.get("parts")
+    hitl = _data_by_mime(parts, HITL_MIME)
+    state = StateEvent(
+        state=norm_state(status.get("state")),
+        task_id=str(task.get("id") or ""),
+        text=_text_from_parts(parts),
+        hitl=hitl if isinstance(hitl, dict) else None,
+    )
+    arts = [a for a in task.get("artifacts") or [] if isinstance(a, dict)]
+    return state, "".join(_text_from_parts(a.get("parts")) for a in arts)
+
+
 # ── transport ─────────────────────────────────────────────────────────────────
 
 
@@ -320,6 +340,19 @@ class A2AClient:
         """Cheap auth/liveness check: ``GetTask`` on an id that cannot exist. A JSON-RPC
         "task not found" is success; 401 raises :class:`A2AUnauthorized`."""
         await self.rpc("GetTask", {"id": f"protoagent-acp-probe-{uuid.uuid4().hex[:8]}"})
+
+    async def get_task(self, task_id: str) -> dict | None:
+        """``GetTask`` → the task dict (1.0 puts it flat on ``result``; some responses nest
+        it under ``result.task``), or ``None`` when it can't be read."""
+        try:
+            body = await self.rpc("GetTask", {"id": task_id})
+        except A2AError:
+            return None
+        result = body.get("result") if isinstance(body, dict) else None
+        if not isinstance(result, dict):
+            return None
+        task = result.get("task")
+        return task if isinstance(task, dict) else result
 
     async def cancel(self, task_id: str) -> None:
         await self.rpc("CancelTask", {"id": task_id})

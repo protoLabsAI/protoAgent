@@ -29,10 +29,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NoReturn
 
 from acp import (
     PROTOCOL_VERSION,
@@ -74,6 +75,7 @@ from .a2a import (
     UsageEvent,
     decode_frame,
     frame_context_id,
+    task_snapshot,
 )
 from .roots import RootMap
 
@@ -108,12 +110,34 @@ class Session:
     parked_task_id: str | None = None  # an input-required task waiting for the next prompt
     runner: asyncio.Task | None = None
     cancelled: bool = False
+    spoke: bool = False  # any answer text sent this prompt (for separators)
     announced: set[str] = field(default_factory=set)
     args: dict[str, dict] = field(default_factory=dict)
 
 
 def _new_context_id(prefix: str) -> str:
     return f"{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
+
+
+_HTTP_CODE = re.compile(r"Error code: (\d{3})")
+_ERR_MESSAGE = re.compile(r"""['"]message['"]\s*:\s*['"]([^'"]+)['"]""")
+_ERR_TYPE = re.compile(r"""['"](?:type|code)['"]\s*:\s*['"]([^'"]+)['"]""")
+
+
+def friendly_error(raw: str) -> str:
+    """``Error code: 429 - {'error': {'type': 'usage_limit_reached', 'message': 'The usage
+    limit has been reached', …}}`` → ``The usage limit has been reached (HTTP 429,
+    usage_limit_reached)``. Anything else passes through (trimmed)."""
+    raw = (raw or "").strip()
+    msg = _ERR_MESSAGE.search(raw)
+    if not msg:
+        return raw[:500] or "unknown error"
+    bits = []
+    if code := _HTTP_CODE.search(raw):
+        bits.append(f"HTTP {code.group(1)}")
+    if kind := _ERR_TYPE.search(raw):
+        bits.append(kind.group(1))
+    return msg.group(1) + (f" ({', '.join(bits)})" if bits else "")
 
 
 def prompt_text(blocks: list[Any]) -> str:
@@ -233,6 +257,7 @@ class ProtoAgentACP:
             text = self._preamble(s) + text
         s.first_prompt = False
         s.cancelled = False
+        s.spoke = False
         s.runner = asyncio.create_task(self._drive(s, text, task_id, metadata))
         try:
             stop, usage = await s.runner
@@ -292,14 +317,28 @@ class ProtoAgentACP:
             except A2AUnauthorized as exc:
                 raise RequestError.auth_required({"reason": str(exc)}) from exc
             except A2AError as exc:
-                await self._send(s, update_agent_message_text(f"\n\n⚠ protoAgent: {exc}"))
-                return "end_turn", usage
+                # The stream broke (or the server answered a JSON-RPC error). If a task
+                # exists, its durable record says how the turn actually ended.
+                if s.cancelled:
+                    return "cancelled", usage
+                if not s.task_id:
+                    await self._fail(s, str(exc), state="unreachable")
+                last, streamed = await self._recover(s, streamed, broke=str(exc))
+                paused = last if last.paused else None
+            else:
+                if s.cancelled and (last is None or not last.terminal):
+                    return "cancelled", usage
+                if paused is None and (last is None or not last.terminal):
+                    # The stream closed without a terminal frame. Never report that as a
+                    # normal end_turn: ask the durable task how the turn ended.
+                    last, streamed = await self._recover(s, streamed)
+                    paused = last if last.paused else None
 
             if paused is None:
-                if last is not None and last.state == "failed":
-                    await self._send(s, update_agent_message_text(f"\n\n⚠ the turn failed: {last.text or 'no reason given'}"))
-                elif last is not None and last.state in ("canceled", "cancelled"):
+                if last.state in ("canceled", "cancelled"):
                     return "cancelled", usage
+                if last.state in ("failed", "rejected"):
+                    await self._fail(s, last.text or "the turn failed with no reason given", state=last.state)
                 return "end_turn", usage
 
             hitl = paused.hitl or {}
@@ -311,9 +350,40 @@ class ProtoAgentACP:
             question = str(hitl.get("question") or hitl.get("title") or paused.text or "The agent needs input.")
             if hitl.get("kind") == "form":
                 question += "\n\n(This is a form in the protoAgent console; reply here in words, or answer it there.)"
-            await self._send(s, update_agent_message_text(f"\n\n**Input needed:** {question}"))
+            sep = "\n\n" if s.spoke else ""
+            await self._send(s, update_agent_message_text(f"{sep}**Input needed:** {question}"))
             s.parked_task_id = paused.task_id or None
             return "end_turn", usage
+
+    async def _recover(self, s: Session, streamed: str, broke: str = "") -> tuple[StateEvent, str]:
+        """Ask ``GetTask`` how the turn ended; emit any answer text the stream never
+        delivered. Raises (via :meth:`_fail`) when the outcome can't be established or the
+        task is still running — a silent ``end_turn`` would read as success in the editor."""
+        task = await self.a2a.get_task(s.task_id) if s.task_id else None
+        state, text = task_snapshot(task)
+        if state is None or not state.state:
+            why = f"the connection broke ({broke})" if broke else "the stream closed without a result"
+            await self._fail(s, f"{why}, and the task could not be read back", state="unknown")
+        if state.terminal and state.state == "completed" and text:
+            streamed = await self._on_text(s, TextEvent(text=text, append=False), streamed)
+        if not state.terminal and not state.paused:
+            why = f"the connection broke ({broke})" if broke else "the stream closed early"
+            await self._fail(
+                s,
+                f"{why}; task {state.task_id} is still {state.state} and may finish on its own — "
+                "check the protoAgent console",
+                state=state.state,
+            )
+        return state, streamed
+
+    async def _fail(self, s: Session, raw: str, *, state: str) -> NoReturn:
+        """Surface a failed turn in BOTH places Zed shows it: a message chunk (kept in the
+        thread's history) and a JSON-RPC error on ``session/prompt`` (Zed renders it as an
+        error callout; a plain end_turn would look like an empty success)."""
+        message = friendly_error(raw)
+        sep = "\n\n" if s.spoke else ""
+        await self._send(s, update_agent_message_text(f"{sep}⚠️ protoAgent error: {message}"))
+        raise RequestError(-32603, f"protoAgent: {message}", {"state": state, "taskId": s.task_id, "detail": raw[:2000]})
 
     async def _on_text(self, s: Session, evt: TextEvent, streamed: str) -> str:
         if evt.append:
@@ -345,6 +415,8 @@ class ProtoAgentACP:
             if args:
                 s.args[evt.id] = args
             args = s.args.get(evt.id, {})
+            if args.get("project"):
+                await self.roots.refresh_if_unknown(self.a2a, args.get("project"))
             title, locs = toolmap.describe(evt.name, args, self.roots)
             if evt.parent_id:
                 title = f"↳ {title}"
@@ -413,5 +485,7 @@ class ProtoAgentACP:
         return "approved" if approved else "denied"
 
     async def _send(self, s: Session, update: Any) -> None:
+        if getattr(update, "session_update", None) == "agent_message_chunk":
+            s.spoke = True
         if self._conn is not None:
             await self._conn.session_update(session_id=s.id, update=update)

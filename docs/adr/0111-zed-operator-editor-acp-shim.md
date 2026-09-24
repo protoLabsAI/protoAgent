@@ -82,6 +82,8 @@ cites where each one comes from.
 | `session/request_permission` | A hitl-v1 `approval` park. The answer resumes the same task with `approved`/`denied` in the same prompt, and a failure to ask fails closed |
 | a question / form park | Shown as text and the turn ends. The **next prompt** resumes the task (`metadata.hitl_resume`), the same way the console does it |
 | `PromptResponse.usage` | cost-v1 on the terminal artifact |
+| **a failed turn** | protoAgent emits `SUBMITTED → WORKING → FAILED`, with the exception text as the FAILED status message's only part. For example, `Error code: 429 - {… 'usage_limit_reached' …}` when the model's quota is spent; `server/chat.py` yields `("error", str(e))` and the executor calls `updater.failed(...)`. The shim sends a `⚠️ protoAgent error: <friendly message>` chunk, which stays in the thread history, and returns a **JSON-RPC error** from `session/prompt`. Zed renders that as its error callout (`ThreadError::Other`). A plain `end_turn` would read as an empty success |
+| a stream that ends with no terminal state | The durable task is read back with `GetTask`. `completed` emits any answer text not yet shown. `failed` is handled as above. Still `working` is an error ("may finish on its own; check the console"), and so is an unreadable task. It never ends as a silent `end_turn` |
 
 **Project roots** are resolved in this order:
 
@@ -93,6 +95,11 @@ cites where each one comes from.
    alone misses the explicit roots. On protoEngineer it reports `fence_source: explicit`
    and omits `protoAgent → ~/dev/protoAgent-team`.
 4. Roots learned from a `list_projects` result that went past in the stream.
+
+When a tool names a project that has no root, the map is **reloaded**. That covers an
+agent that `onboard_project`-ed a repo mid-session, which the navaEngineer rehearsal hit.
+Reloads are rate-limited per name, so repeated calls on an unmappable project cost one
+fetch.
 
 **Credentials** are taken from `--token` / `--token-file`, then `PROTOAGENT_TOKEN` /
 `PROTOAGENT_TOKEN_FILE`, then the file written by `protoagent-acp login`. That file is

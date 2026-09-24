@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
 import fake_a2a as fa
 import pytest
 from acp import RequestError, text_block
+from acp.schema import AllowedOutcome, DeniedOutcome, RequestPermissionResponse
 
 from protoagent_acp.a2a import A2AClient
 from protoagent_acp.agent import ProtoAgentACP
@@ -16,7 +16,7 @@ from protoagent_acp.roots import RootMap
 
 
 class RecordingConn:
-    def __init__(self, approve: bool = True) -> None:
+    def __init__(self, approve: bool | None = True) -> None:
         self.updates: list[dict] = []
         self.permissions: list[Any] = []
         self.approve = approve
@@ -26,8 +26,12 @@ class RecordingConn:
 
     async def request_permission(self, session_id: str, tool_call: Any, options: list[Any], **_: Any) -> Any:
         self.permissions.append(tool_call)
+        # The real schema shapes a client sends: picking any option is AllowedOutcome
+        # ("selected"); dismissing the prompt is DeniedOutcome ("cancelled").
+        if self.approve is None:
+            return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
         chosen = "approve" if self.approve else "deny"
-        return SimpleNamespace(outcome=SimpleNamespace(outcome="selected", option_id=chosen))
+        return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=chosen))
 
     def of(self, kind: str) -> list[dict]:
         return [u for u in self.updates if u["sessionUpdate"] == kind]
@@ -36,7 +40,7 @@ class RecordingConn:
         return "".join(u["content"]["text"] for u in self.of("agent_message_chunk"))
 
 
-async def _agent(fake: fa.FakeA2A, token: str | None = "secret", overrides: dict | None = None, approve: bool = True):
+async def _agent(fake: fa.FakeA2A, token: str | None = "secret", overrides: dict | None = None, approve: bool | None = True):
     client = A2AClient(fake.url, token)
     agent = ProtoAgentACP(client, RootMap(overrides))
     conn = RecordingConn(approve)
@@ -109,7 +113,7 @@ async def test_bad_token_is_auth_required():
     assert ei.value.code == RequestError.auth_required().code
 
 
-@pytest.mark.parametrize("approve", [True, False])
+@pytest.mark.parametrize("approve", [True, False, None])
 async def test_approval_maps_to_request_permission_and_resumes(approve):
     with fa.FakeA2A() as fake:
         def script(ctx, msg):
@@ -124,7 +128,7 @@ async def test_approval_maps_to_request_permission_and_resumes(approve):
         await client.aclose()
     assert resp.stop_reason == "end_turn"
     assert len(conn.permissions) == 1
-    word = "approved" if approve else "denied"
+    word = "approved" if approve else "denied"  # a dismissed prompt (None) fails closed
     assert fake.requests[1]["taskId"] == "t1" and fake.requests[1]["parts"][0]["text"] == word
     assert conn.text() == f"resumed with {word}"
 
@@ -147,14 +151,85 @@ async def test_question_parks_and_next_prompt_answers_it():
     assert conn.text().endswith("ok, main")
 
 
-async def test_failed_turn_is_reported_as_text():
+# What protoAgent really emits when the model call dies (reproduced against a live
+# instance whose gateway answers 429 usage_limit_reached, and read back from the flagship
+# navaEngineer's durable task store): SUBMITTED → WORKING → FAILED, with the exception text
+# as the FAILED status message's only part. No artifact, no cost metadata.
+RATE_LIMIT = (
+    "Error code: 429 - {'error': {'type': 'usage_limit_reached', 'message': 'The usage limit has been "
+    "reached', 'plan_type': 'prolite', 'resets_at': 1790758625, 'eligible_promo': None}}"
+)
+
+
+async def _prompt_expecting_error(fake, text="x"):
+    agent, conn, client = await _agent(fake)
+    sess = await agent.new_session(cwd="/")
+    with pytest.raises(RequestError) as ei:
+        await agent.prompt(prompt=[text_block(text)], session_id=sess.session_id)
+    await client.aclose()
+    return ei.value, conn
+
+
+async def test_failed_turn_is_an_error_and_a_visible_message():
     with fa.FakeA2A() as fake:
-        fake.script = lambda ctx, msg: [fa.task(ctx), fa.done(ctx, state="TASK_STATE_FAILED", reason="gateway down")]
+        fake.script = lambda ctx, msg: [
+            fa.task(ctx),
+            fa.status(ctx),
+            fa.done(ctx, state="TASK_STATE_FAILED", reason=RATE_LIMIT),
+        ]
+        err, conn = await _prompt_expecting_error(fake)
+    assert err.code == -32603
+    assert str(err) == "protoAgent: The usage limit has been reached (HTTP 429, usage_limit_reached)"
+    assert err.data["state"] == "failed" and err.data["taskId"] == "t1" and "prolite" in err.data["detail"]
+    assert conn.text() == "⚠️ protoAgent error: The usage limit has been reached (HTTP 429, usage_limit_reached)"
+
+
+async def test_stream_closing_without_terminal_state_reads_back_the_failure():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t2"), fa.status(ctx, tid="t2")]  # then the socket closes
+        fake.tasks["t2"] = fa.durable("t2", "c", "TASK_STATE_FAILED", message=RATE_LIMIT)
+        err, conn = await _prompt_expecting_error(fake)
+    assert "usage limit" in str(err) and "⚠️ protoAgent error" in conn.text()
+
+
+async def test_stream_closing_early_recovers_a_completed_answer():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t3"), fa.text(ctx, "Half", append=False, tid="t3")]
+        fake.tasks["t3"] = fa.durable("t3", "c", "TASK_STATE_COMPLETED", answer="Half and the rest.")
         agent, conn, client = await _agent(fake)
         sess = await agent.new_session(cwd="/")
         resp = await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
         await client.aclose()
-    assert resp.stop_reason == "end_turn" and "gateway down" in conn.text()
+    assert resp.stop_reason == "end_turn" and conn.text() == "Half and the rest."
+
+
+async def test_stream_closing_while_task_still_runs_is_not_success():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t4"), fa.status(ctx, tid="t4")]
+        fake.tasks["t4"] = fa.durable("t4", "c", "TASK_STATE_WORKING")
+        err, _conn = await _prompt_expecting_error(fake)
+    assert "still working" in str(err) and err.data["state"] == "working"
+
+
+async def test_stream_closing_with_nothing_readable_is_not_success():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: []  # 200 + event-stream, zero frames
+        err, conn = await _prompt_expecting_error(fake)
+    assert "without a result" in str(err) and conn.text().startswith("⚠️ protoAgent error")
+
+
+async def test_json_rpc_error_frame_is_an_error():
+    with fa.FakeA2A() as fake:
+        fake.script = lambda ctx, msg: [{"jsonrpc": "2.0", "id": "1", "error": {"code": -32603, "message": "boom"}}]
+        err, _conn = await _prompt_expecting_error(fake)
+    assert str(err) == "protoAgent: boom"
+
+
+def test_friendly_error_passthrough():
+    from protoagent_acp.agent import friendly_error
+
+    assert friendly_error("gateway down") == "gateway down"
+    assert friendly_error('Error code: 500 - {"error": {"message": "upstream exploded"}}') == "upstream exploded (HTTP 500)"
 
 
 async def test_cancel_sends_cancel_task_and_stops():
@@ -194,3 +269,43 @@ async def test_leading_paragraph_break_is_not_rendered():
         await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
         await client.aclose()
     assert conn.text() == "Let me"  # the diverging-whitespace REPLACE adds nothing (can't retract)
+
+
+async def test_project_onboarded_mid_session_gets_locations():
+    """navaEngineer rehearsal: the agent registered a project partway through the session;
+    every later read/edit on it had a title but no location because the roots were only
+    fetched at session/new."""
+    with fa.FakeA2A(roots={"protoAgent": "/repo"}) as fake:
+        def script(ctx, msg):
+            fake.roots["rehearsal"] = "/Users/me/dev/nava/rehearsal"  # onboard_project, mid-turn
+            return [
+                fa.tool(ctx, "c1", "onboard_project", "started", args='{"name": "rehearsal"}'),
+                fa.tool(ctx, "c1", "onboard_project", "completed", result="registered"),
+                fa.tool(ctx, "c2", "read_file", "started", args='{"project": "rehearsal", "path": "src/assistant.ts"}'),
+                fa.tool(ctx, "c3", "edit_file", "started", args='{"project": "rehearsal", "path": "src/assistant.ts", "old": "a", "new": "b"}'),
+                fa.done(ctx),
+            ]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake)
+        sess = await agent.new_session(cwd="/repo")
+        await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
+        await client.aclose()
+    starts = {u["toolCallId"]: u for u in conn.of("tool_call")}
+    assert starts["c2"]["locations"] == [{"path": "/Users/me/dev/nava/rehearsal/src/assistant.ts"}]
+    assert starts["c3"]["locations"] == [{"path": "/Users/me/dev/nava/rehearsal/src/assistant.ts"}]
+    assert starts["c3"]["kind"] == "edit"
+    assert fake.gets.count("/api/fs/roots") == 2  # session/new + ONE refresh for the new name
+
+
+async def test_unknown_project_refresh_is_rate_limited():
+    with fa.FakeA2A(roots={"protoAgent": "/repo"}) as fake:
+        fake.script = lambda ctx, msg: [
+            fa.tool(ctx, f"c{i}", "read_file", "started", args='{"project": "ghost", "path": "a.py"}') for i in range(5)
+        ] + [fa.done(ctx)]
+        agent, conn, client = await _agent(fake)
+        sess = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
+        await client.aclose()
+    assert all("locations" not in u for u in conn.of("tool_call"))
+    assert fake.gets.count("/api/fs/roots") == 2  # session/new + one refresh for five misses

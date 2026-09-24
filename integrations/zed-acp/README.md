@@ -19,6 +19,7 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | search-hit locations on a finished `search_files` | the `file:line:` hits in its result |
 | a permission prompt | a parked `approval` (e.g. `run_command`, permanent delete) |
 | Stop button | A2A `CancelTask` |
+| an error callout + a "⚠️ protoAgent error: …" line | a turn that FAILED (e.g. the model's 429 usage limit), or a stream that closed without a terminal state and whose task (read back with `GetTask`) failed or is still running |
 
 Each Zed thread is one protoAgent chat session (`chat-zed-…`), so the conversation also
 appears in the protoAgent console.
@@ -64,7 +65,8 @@ Panel's new-thread menu:
 - **A fleet member through the hub**: `--url <hub> --slug <member>`.
 - **A remote instance** (its project paths are on another machine): map each project to
   your local checkout with `--root protoAgent=/Users/me/dev/protoAgent` so follow-the-agent
-  lands in *your* files.
+  lands in *your* files. Roots are re-read when the agent names a project it onboarded
+  mid-session.
 - Logs: `dev: open acp logs` in Zed (the shim logs to stderr; stdout is protocol only).
 
 ## What it does not do (yet)
@@ -87,7 +89,7 @@ uv venv && uv pip install -e . pytest pytest-asyncio
 .venv/bin/python -m pytest -q          # unit + fake-A2A + stdio subprocess tests
 
 # drive a live instance exactly as Zed would, printing the session/update stream
-# (permission requests are always DENIED by the harness):
+# (permission requests are DENIED unless you pass --approve, which clicks "Allow once"):
 .venv/bin/python scripts/acp_harness.py --cwd ~/dev/protoAgent \
   --prompt "Read README.md's first 20 lines" \
   -- --url http://127.0.0.1:7870 --trace-frames /tmp/frames.jsonl

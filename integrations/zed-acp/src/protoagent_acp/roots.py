@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -44,6 +45,8 @@ class RootMap:
         self._overrides = {k: os.path.expanduser(v) for k, v in (overrides or {}).items()}
         self._discovered: dict[str, str] = {}
         self.source = "none"
+        self.refresh_interval = 30.0  # seconds before an unmappable name triggers another reload
+        self._missed: dict[str, float] = {}
 
     @property
     def roots(self) -> dict[str, str]:
@@ -58,22 +61,55 @@ class RootMap:
             self._discovered[name] = path
 
     async def load(self, client: Any) -> None:
-        """Best-effort discovery over the operator API; never raises."""
+        """Best-effort discovery over the operator API; never raises. Safe to call again:
+        a successful reload REPLACES the discovered map (a project onboarded mid-session
+        appears, a moved one updates); a reload that finds nothing keeps the old map."""
+        found: dict[str, str] = {}
+
+        def put(name: Any, path: Any) -> None:
+            name, path = str(name or ""), str(path or "")
+            if name and path.startswith("/") and name not in found:  # first source wins
+                found[name] = path
+
         body = await client.get_json("/api/fs/roots")
         if isinstance(body, dict) and isinstance(body.get("roots"), dict):
             for name, path in body["roots"].items():
-                self.add(str(name), str(path))
-            self.source = "/api/fs/roots"
-            return
-        cfg = await client.get_json("/api/config")
-        fs = _dig(cfg, "config", "filesystem")
-        reg = await client.get_json("/api/projects")
-        for rows in (_dig(fs, "projects"), _dig(reg, "projects")):
-            for row in rows if isinstance(rows, list) else []:
-                if isinstance(row, dict):
-                    self.add(str(row.get("name") or ""), str(row.get("path") or ""))
-        if self._discovered:
-            self.source = "/api/config + /api/projects"
+                put(name, path)
+            source = "/api/fs/roots"
+        else:
+            cfg = await client.get_json("/api/config")
+            fs = _dig(cfg, "config", "filesystem")
+            reg = await client.get_json("/api/projects")
+            for rows in (_dig(fs, "projects"), _dig(reg, "projects")):
+                for row in rows if isinstance(rows, list) else []:
+                    if isinstance(row, dict):
+                        put(row.get("name"), row.get("path"))
+            source = "/api/config + /api/projects"
+        if found:
+            # Keep roots learned from list_projects that the API didn't (re)report.
+            self._discovered = {**{k: v for k, v in self._discovered.items() if k not in found}, **found}
+            self.source = source
+
+    async def refresh_if_unknown(self, client: Any, project: Any) -> bool:
+        """Reload when a tool names a project we have no root for — the agent may have
+        onboarded it mid-session (``onboard_project``), after the session-start load.
+        Rate-limited PER NAME: a name that just missed isn't re-fetched for
+        ``refresh_interval`` seconds, so twenty calls on a genuinely unmappable project cost
+        one fetch, while a newly named project is looked up at once. Returns whether the
+        project is known afterwards."""
+        if not project or not isinstance(project, str):
+            return False
+        if project in self.roots:
+            return True
+        now = time.monotonic()
+        if now - self._missed.get(project, float("-inf")) < self.refresh_interval:
+            return False
+        await self.load(client)
+        if project in self.roots:
+            self._missed.pop(project, None)
+            return True
+        self._missed[project] = now
+        return False
 
     def learn_from_list_projects(self, output: Any) -> None:
         for line in str(output or "").splitlines():

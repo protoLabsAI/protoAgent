@@ -3,10 +3,13 @@ client side. Proves stdout carries only protocol (a stray print would break fram
 
 from __future__ import annotations
 
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 import fake_a2a as fa
+import pytest
 from acp import PROTOCOL_VERSION, spawn_agent_process, text_block
 
 
@@ -44,3 +47,34 @@ async def test_stdio_round_trip(tmp_path):
     kinds = [u["sessionUpdate"] for u in client.updates]
     assert kinds == ["tool_call", "tool_call_update", "agent_message_chunk"]
     assert client.updates[0]["locations"] == [{"path": "/abs/proj/README.md", "line": 1}]
+
+
+def _approval_script(ctx, msg):
+    if not (msg.get("metadata") or {}).get("hitl_resume"):
+        return [fa.task(ctx), fa.hitl(ctx, {"kind": "approval", "title": "Approve shell command?", "detail": "git status"})]
+    return [fa.text(ctx, "resumed: " + msg["parts"][0]["text"], append=False), fa.done(ctx)]
+
+
+@pytest.mark.parametrize(("flag", "word"), [([], "denied"), (["--approve"], "approved")])
+def test_harness_denies_by_default_and_approves_with_flag(flag, word):
+    harness = Path(__file__).resolve().parents[1] / "scripts" / "acp_harness.py"
+    with fa.FakeA2A(token=None) as fake:
+        fake.script = _approval_script
+        out = subprocess.run(
+            [sys.executable, str(harness), "--prompt", "run it", *flag, "--", "--url", fake.url],
+            capture_output=True, text=True, timeout=60,
+        )
+    assert out.returncode == 0, out.stderr
+    assert ("→ ALLOW" if flag else "→ DENY") in out.stdout
+    assert f"resumed: {word}" in out.stdout
+    assert fake.requests[1]["parts"][0]["text"] == word
+
+
+def test_harness_prints_a_failed_turn_and_exits_nonzero():
+    harness = Path(__file__).resolve().parents[1] / "scripts" / "acp_harness.py"
+    with fa.FakeA2A(token=None) as fake:
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.done(ctx, state="TASK_STATE_FAILED", reason="gateway down")]
+        out = subprocess.run([sys.executable, str(harness), "--prompt", "x", "--", "--url", fake.url],
+                             capture_output=True, text=True, timeout=60)
+    assert out.returncode == 1
+    assert "<<< error -32603: protoAgent: gateway down" in out.stdout

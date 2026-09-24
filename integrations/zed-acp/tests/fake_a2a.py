@@ -64,6 +64,17 @@ def hitl(ctx: str, payload: dict, tid: str = "t1") -> dict:
     return status(ctx, tid, state="TASK_STATE_INPUT_REQUIRED", parts=[{"data": payload, "metadata": {"mimeType": HITL_MIME}}])
 
 
+def durable(tid: str, ctx: str, state: str, *, message: str = "", answer: str = "") -> dict:
+    """A task as GetTask returns it."""
+    status: dict[str, Any] = {"state": state}
+    if message:
+        status["message"] = {"role": "ROLE_AGENT", "parts": [{"text": message}], "messageId": "m"}
+    task: dict[str, Any] = {"id": tid, "contextId": ctx, "status": status}
+    if answer:
+        task["artifacts"] = [{"artifactId": f"{tid}-answer", "parts": [{"text": answer}]}]
+    return task
+
+
 class FakeA2A:
     """``script(ctx, request_message) -> list[frame]`` is called per SendStreamingMessage."""
 
@@ -73,6 +84,8 @@ class FakeA2A:
         self.script: Any = lambda ctx, msg: [done(ctx)]
         self.requests: list[dict] = []
         self.cancels: list[str] = []
+        self.tasks: dict[str, dict] = {}
+        self.gets: list[str] = []  # every GET path, in order  # what GetTask answers (the durable record)
         self.hold = threading.Event()  # set() to release a frame list that ends in HOLD
         fake = self
 
@@ -101,6 +114,7 @@ class FakeA2A:
             def do_GET(self) -> None:
                 if not self._authed():
                     return
+                fake.gets.append(self.path)
                 if self.path == "/api/fs/roots" and fake.roots is not None:
                     self._json({"roots": fake.roots})
                 else:
@@ -112,6 +126,9 @@ class FakeA2A:
                     return
                 assert self.headers.get("A2A-Version") == "1.0"
                 method = body.get("method")
+                if method == "GetTask" and body["params"]["id"] in fake.tasks:
+                    self._json({"jsonrpc": "2.0", "id": body["id"], "result": fake.tasks[body["params"]["id"]]})
+                    return
                 if method == "GetTask":
                     self._json({"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32001, "message": "Task not found"}})
                     return
