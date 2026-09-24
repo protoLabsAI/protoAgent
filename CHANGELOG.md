@@ -15,6 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.177.0] - 2026-09-24
+
+### Added
+- **`onboard_project` clones from any git host, and a new `register_local_project` registers a directory already on disk (#3599).**
+  Clone sources can now be `owner/repo` (GitHub), `host/owner/repo`, any https/ssh/git URL,
+  or the scp form `git@host:owner/repo`; `onboarding.allow` globs match the normalized
+  `host/owner/repo`, so `gitlab.com/acme/*` and self-hosted hosts work. git receives the URL
+  as given (ssh keys and credential helpers apply), credentials are masked in results, and
+  `file://`, `ext::`, local paths and option-like inputs are refused before git runs.
+  `register_local_project` accepts only a directory that resolves under `onboarding.root`
+  and fills the GitHub binding from its `origin` remote. `github_repo` still works as an
+  alias for the new `repo` argument.
+
+- **`delegate_to(project=…)` sends an ACP coding delegate into one registered project for a call, and returns the diff it made (#3600).**
+  The project is resolved through the same fenced registry the filesystem tools use. Only the
+  coder's working directory changes; its command, args and env stay as configured. Read-only
+  projects and non-ACP delegates are refused. For an unmanaged coder in a git project, the reply
+  now ends with a `--stat`, the new files and the unified diff (capped at 20k characters). Both
+  snapshots are git trees written through a temporary index, so files that were already dirty or
+  untracked beforehand are not attributed to the coder. Turn it off per delegate with
+  `return_diff: false`.
+
+- **`filesystem.run_auto_approve`: a safe-command allowlist so read-mostly `run_command` calls stop asking for approval (#3602).**
+  List command prefixes in argv terms (`git status`, `git diff`, `npx vitest run`,
+  `mise exec -- npm test`); a command that starts with one word-for-word, contains no shell
+  metacharacters or globs, and carries no denylisted option (`--output`, `--exec`,
+  `--config`, … including abbreviations) runs without the prompt — exec'd directly, no shell —
+  and its result is marked `(auto-approved: matches "…")`. Too-broad entries (`npx`, `sh`,
+  bare `git`, `mise exec --`) are dropped with a warning. Editable in **Settings ▸
+  Capabilities ▸ Tools ▸ Shell & filesystem tools**. Default empty — nothing changes until
+  you opt in. It reduces friction, it isn't a sandbox: see the caveats in the sandboxing guide.
+
 ## [0.176.0] - 2026-09-24
 
 ### Added
