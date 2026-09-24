@@ -92,9 +92,20 @@ _DENY_SHORT_LETTERS = frozenset("oOcer")
 # find(1)-style single-dash long predicates (exact token match).
 _DENY_EXACT = frozenset({"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"})
 
+# Programs whose whole job is to run ANOTHER program (or a shell): refused as an entry
+# whatever follows them — `sudo -n`, `env -i`, `timeout 5`, `bash script.sh` all approve
+# an arbitrary command line once prefix-matched.
+_WRAPPERS = frozenset(
+    {
+        "sh", "bash", "zsh", "dash", "ksh", "fish", "env", "xargs", "sudo", "doas", "su",
+        "nohup", "nice", "timeout", "time", "command", "exec", "eval", "builtin", "watch",
+    }
+)  # fmt: skip
 # Entries so broad they approve an arbitrary program: the launcher itself, or a
-# launcher + its "run anything" verb. Compared on the entry's FULL token tuple, so
-# `npx vitest run` / `mise exec -- npm test` stay legal while `npx` / `mise exec --` don't.
+# launcher + its "run anything" verb. Compared on the entry's NON-OPTION words (the
+# program by basename), so appending an option can't sneak one through — `npx --`,
+# `git --no-pager`, `uv run --` are as broad as `npx`, `git`, `uv run` — while
+# `npx vitest run` / `mise exec -- npm test` stay legal.
 _LAUNCHERS = frozenset(
     {
         "sh", "bash", "zsh", "dash", "ksh", "fish", "env", "xargs", "sudo", "doas", "su",
@@ -130,6 +141,17 @@ def _bad_char(text: str) -> str | None:
         if cat[0] in ("C", "Z"):
             return ch
     return None
+
+
+def _too_broad(toks: list[str]) -> bool:
+    """Whether an entry would approve an arbitrary program (see ``_WRAPPERS`` /
+    ``_LAUNCHERS`` / ``_BROAD_PREFIXES``). Option tokens are ignored, and the program is
+    compared by basename (``/bin/sh`` is ``sh``)."""
+    program = toks[0].rsplit("/", 1)[-1]
+    if program in _WRAPPERS:
+        return True
+    core = (program, *(t for t in toks[1:] if not t.startswith("-")))
+    return (len(core) == 1 and program in _LAUNCHERS) or core in _BROAD_PREFIXES
 
 
 def _denied_token(tok: str) -> bool:
@@ -180,7 +202,7 @@ def compile_auto_approve(entries) -> list[AutoApproveRule]:
                 reason = "can't be tokenised (unbalanced quotes?)"
             elif "=" in toks[0] or toks[0].startswith("-"):
                 reason = "must start with a program name (no VAR=… prefix, no leading option)"
-            elif (len(toks) == 1 and toks[0] in _LAUNCHERS) or tuple(toks) in _BROAD_PREFIXES:
+            elif _too_broad(toks):
                 reason = "is too broad — it would approve an arbitrary program; list a specific subcommand"
             elif any(_denied_token(t) for t in toks):
                 reason = "contains a denylisted option (writes/executes arbitrary targets)"

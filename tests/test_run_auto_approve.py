@@ -241,6 +241,23 @@ def test_empty_list_matches_nothing():
         "mise exec",
         "uv run",
         "pnpm dlx",
+        # an option token must not make a too-broad entry pass (CodeRabbit on #3602)
+        "npx --",
+        "uv run --",
+        "npm exec --",
+        "pnpm exec --",
+        "yarn exec --",
+        "sudo -n",
+        "env -i",
+        "timeout 5",
+        "nohup nice",
+        "bash script.sh",
+        "git --no-pager",
+        "python -m",
+        # a path to a launcher is the launcher
+        "/bin/sh",
+        "/usr/bin/env -i",
+        "/usr/local/bin/npx",
         # denylisted option baked into the entry
         "git diff --output=x",
         "npx vitest run --config x",
@@ -266,7 +283,16 @@ def test_entries_normalised_to_tokens():
 
 
 def test_specific_subcommands_of_launchers_are_allowed():
-    entries = ["npx vitest run", "mise exec -- npm test", "npm test", "uv run pytest", "git log"]
+    entries = [
+        "npx vitest run",
+        "mise exec -- npm test",
+        "npm test",
+        "uv run pytest",
+        "git log",
+        "uv run -- pytest",
+        "python -m pytest",
+        "git --no-pager log",
+    ]
     assert [r.entry for r in compile_auto_approve(entries)] == entries
 
 

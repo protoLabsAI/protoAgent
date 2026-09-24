@@ -71,7 +71,10 @@ Entries are checked when the tools build (startup and every settings save): an e
 shell syntax, a `VAR=` prefix, a denylisted option, or one so broad it would approve an
 arbitrary program — `sh`, `bash`, `env`, `xargs`, `sudo`, `node`, `python`, `npx`, bare
 `git`/`npm`/`uv`/`mise`, `npm run`, `npm exec`, `pnpm dlx`, `uv run`, `mise exec --`, … —
-is dropped with a warning in the server log.
+is dropped with a warning in the server log. Options don't change that verdict (`npx --`,
+`git --no-pager` and `uv run --` are as broad as `npx`, `git` and `uv run`), a path to a
+launcher counts as the launcher (`/bin/sh`), and a wrapper — `sudo`, `env`, `xargs`,
+`timeout`, `nohup`, a shell, … — is refused whatever follows it.
 
 **Caveats — read before listing a command:**
 
