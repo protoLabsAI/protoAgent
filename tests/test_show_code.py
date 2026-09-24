@@ -14,6 +14,15 @@ from graph.components import encode_component, extract_component, strip_componen
 from tools.fs_tools import build_fs_tools
 
 
+@pytest.fixture(autouse=True)
+def _unwired_host_config(monkeypatch):
+    """The fs registry prefers the LIVE ``HOST.config`` seam over the config it was given;
+    pin it unwired so a test elsewhere that wired it can't swap this module's projects."""
+    from graph.plugins.host import HOST
+
+    monkeypatch.setattr(HOST, "config", None)
+
+
 @dataclass
 class _Cfg:
     filesystem_enabled: bool = True

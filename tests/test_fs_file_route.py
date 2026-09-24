@@ -22,6 +22,15 @@ from tools.fs_view import LINE_CUT_MARKER, MAX_LINE_CHARS, guess_language, read_
 _needs_symlinks = pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
 
 
+@pytest.fixture(autouse=True)
+def _unwired_host_config(monkeypatch):
+    """The fs registry prefers the LIVE ``HOST.config`` seam over the config it was given;
+    pin it unwired so a test elsewhere that wired it can't swap this module's projects."""
+    from graph.plugins.host import HOST
+
+    monkeypatch.setattr(HOST, "config", None)
+
+
 @pytest.fixture
 def proj(tmp_path: Path) -> Path:
     root = tmp_path / "repo"

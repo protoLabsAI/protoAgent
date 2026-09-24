@@ -24,6 +24,15 @@ from tools.git_read import working_tree_diff
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs the git binary")
 
+@pytest.fixture(autouse=True)
+def _unwired_host_config(monkeypatch):
+    """The fs registry prefers the LIVE ``HOST.config`` seam over the config it was given;
+    pin it unwired so a test elsewhere that wired it can't swap this module's projects."""
+    from graph.plugins.host import HOST
+
+    monkeypatch.setattr(HOST, "config", None)
+
+
 _ENV = {
     **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
     "GIT_AUTHOR_NAME": "t",
