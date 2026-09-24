@@ -568,7 +568,7 @@ async def test_the_give_up_log_carries_the_turn_shape(monkeypatch, probe, caplog
     out = await _run_with(ping, "Review the diff.")
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
     gave_up = [r.getMessage() for r in caplog.records if "letting the run end" in r.getMessage()]
-    assert gave_up and "finish_reason=" in gave_up[-1] and "text_chars=32" in gave_up[-1]
+    assert gave_up and "finish_reason=stop" in gave_up[-1] and "text_chars=32" in gave_up[-1]
 
 
 # ── a reasoning-only turn ends the lane after one nudge (#3584) ─────────────────────────
