@@ -45,6 +45,10 @@ import { useThemeMode } from "./themeMode";
 // the operator reads the evidence at their own pace. Lazy-loaded (CodeSurface.tsx): the
 // highlighter (@pierre/diffs over Shiki) is only fetched once the pane is first shown.
 
+// shiki pinned to the DS's 3.x so @pierre/diffs dedupes — protoContent#519 tracks Shiki 4.
+// (apps/web depends on shiki/@shikijs/{themes,transformers} 3.23.0 directly; the root
+// package.json `overrides` keeps pierre's own copy on 3.23.0 and vite.config's
+// `resolve.dedupe` makes the DS markdown and this pane share ONE copy in the bundle.)
 const THEMES = { dark: "github-dark", light: "github-light" } as const;
 
 /** Past this many lines a window of the file is fetched around the target line; the rows

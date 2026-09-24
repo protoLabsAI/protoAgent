@@ -33,6 +33,11 @@
     "@docsearch/react": {
       "react": "^19.0.0",
       "react-dom": "^19.0.0"
+    },
+    "@pierre/diffs": {
+      "shiki": "3.23.0",
+      "@shikijs/transformers": "3.23.0",
+      "@shikijs/themes": "3.23.0"
     }
   }
 }

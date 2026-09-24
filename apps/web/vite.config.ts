@@ -51,6 +51,24 @@ export default defineConfig(({ mode }) => {
   return {
     base: "/app/",
     plugins: [react()],
+    // ONE Shiki in the bundle. The DS's markdown (@streamdown/code) and the code pane's
+    // @pierre/diffs (ADR 0112) both resolve shiki 3.23, but npm can't hoist it (the docs
+    // site's vitepress holds the root slot with shiki 2), so each gets its own nested copy —
+    // and Rollup emits a full set of grammar/theme chunks per physical copy (~10 MB, ~300
+    // files). `dedupe` resolves these bare imports from apps/web's own direct dependency
+    // instead, so both consumers share one copy. protoContent#519 tracks Shiki 4.
+    resolve: {
+      dedupe: [
+        "shiki",
+        "@shikijs/core",
+        "@shikijs/engine-javascript",
+        "@shikijs/engine-oniguruma",
+        "@shikijs/langs",
+        "@shikijs/themes",
+        "@shikijs/transformers",
+        "@shikijs/types",
+      ],
+    },
     // `preview` serves the rollup build (apps/web/dist) — same proxy as the HMR dev server, but
     // it avoids the esbuild dev dep-optimization (a CJS-interop edge with style-to-js), so it's
     // the reliable way to eyeball a built change against a running backend.
