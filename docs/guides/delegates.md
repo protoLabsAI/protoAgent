@@ -107,6 +107,7 @@ delegates:
     args: ["--acp"]
     workdir: ~/dev/my-repo
     permissions: allowlist          # auto | allowlist | readonly (see ADR 0024)
+    return_diff: true               # default; delegate_to(project=…) returns what it changed
 ```
 
 `delegates` is a **top-level list** (ORBIS-style), not a plugin config section.
@@ -195,6 +196,72 @@ request outright. Those replies come back with an explicit `[incomplete reply �
 note appended, so the delegating agent can tell a truncated answer from a finished
 one and re-dispatch the remainder rather than acting on half a result. A normal
 completion carries no marker.
+
+### Send a coder into a specific project (`project=`)
+
+An `acp` delegate has one configured `workdir`. To hand it a focused job in a
+*different* project for one call, pass the name of a registered project:
+
+```
+delegate_to(target="proto", project="billing-api",
+            query="The /invoices handler 500s on an empty cart — fix it and add a test.")
+```
+
+- **Only registered projects.** `project` is resolved through the same fenced
+  project registry the filesystem tools use (`list_projects`; `filesystem.projects`
+  or the ADR 0095 `projects:` registry). The model names a project; it never passes a
+  path. An unknown name fails with the list of registered projects, and with
+  `filesystem.enabled: false` nothing resolves.
+- **Only the working directory changes.** The coder's command, args, env and
+  permission policy stay exactly as configured. The call runs on a copy of the
+  delegate, so the roster entry is untouched. Each project gets its own pooled ACP
+  client and persisted session, so a second call into the same project continues
+  that project's conversation, and a call into another project never shares it.
+- **Read-write projects only.** A `write: false` project is refused. The ACP
+  `readonly` ceiling is not used as a fallback because it only applies when the
+  coder asks permission before editing. A coder running in its own auto-accept or
+  bypass mode (for example Claude Code with those settings in `~/.claude`) never
+  asks, so the ceiling cannot guarantee a read-only project stays unchanged.
+- **Coding delegates only.** Passing `project` to an `a2a` or `openai` delegate is an
+  error, not a silent no-op. Describe the project in the query instead.
+- Works with `background=True`. The project is resolved when the call is made, and
+  the job runs there even if the registry changes before it finishes.
+  `manage_git` delegates run their usual branch-and-PR lifecycle
+  ([ADR 0076](/adr/0076-managed-git-acp-delegates)) in the project's checkout. That
+  checkout needs an `origin` remote.
+
+**What changed comes back with the reply.** For an unmanaged coder in a git project, the
+reply ends with a change summary:
+
+~~~
+── Changes in project `billing-api` during this delegation ──
+ server/invoices.py      | 4 +++-
+ tests/test_invoices.py  | 12 ++++++++++++
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+New files: tests/test_invoices.py
+```diff
+…unified diff…
+```
+~~~
+
+The summary compares two snapshots of the working tree, one taken before the dispatch
+and one after. Each snapshot is a git tree written through a temporary index. Tracked
+edits and new untracked files are included, ignored files are not. The operator's index
+and stash are never touched. As a result:
+
+- **Pre-existing changes are not attributed to the coder.** A file that was already
+  modified or untracked before the call is excluded, and the summary says how many
+  such paths it left out.
+- Commits the coder makes are still shown (`HEAD moved … (the delegate committed)`).
+- The diff is capped at 20,000 characters. When it's truncated, the footer gives the
+  exact `git -C <root> diff <before-tree> <after-tree>` command for the full change.
+- If two delegations run in the same project at once, their edits can't be told
+  apart, so the summary warns about it.
+- A project that isn't a git repository gets a one-line note instead of a summary.
+
+The edits stay in the working tree, uncommitted. Review them and commit them yourself,
+or use a `manage_git: true` delegate if you want a branch and PR per call. To stop getting
+the summary for one delegate, set `return_diff: false` on it.
 
 ## Share a delegate with the whole fleet (ADR 0105)
 

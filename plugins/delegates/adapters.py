@@ -221,6 +221,14 @@ class Delegate:
     manage_git: bool = False
     base_branch: str = "main"
     branch_prefix: str = ""  # empty ⇒ the delegate's name
+    # acp, unmanaged: append a change summary (stat + capped unified diff) to the reply of
+    # a ``delegate_to(project=…)`` dispatch into a git project. Operator opt-out per
+    # delegate. ``capture_diff`` is the per-invocation switch the registry sets on its
+    # ``dataclasses.replace`` copy (never parsed from or persisted to config), and
+    # ``project_name`` labels that summary.
+    return_diff: bool = True
+    capture_diff: bool = False
+    project_name: str = ""
 
 
 def _secret(raw: dict, value_key: str, env_key: str) -> str:
@@ -1659,6 +1667,16 @@ class AcpAdapter(Adapter):
                 advanced=True,
                 help="Managed git: branch names are <prefix>/<slug>-<id7>. Empty ⇒ the delegate's name.",
             ),
+            FieldSpec(
+                "return_diff",
+                "Return diff",
+                "select",
+                options=["true", "false"],
+                default="true",
+                advanced=True,
+                help="Unmanaged git: when delegate_to(project=…) sends this coder into a registered "
+                "git project, append what it changed (stat + unified diff, capped) to its reply.",
+            ),
             *_env_fields(),
         ]
 
@@ -1690,6 +1708,7 @@ class AcpAdapter(Adapter):
         d.manage_git = str(raw.get("manage_git", "")).strip().lower() in ("1", "true", "yes")
         d.base_branch = str(raw.get("base_branch") or "main").strip() or "main"
         d.branch_prefix = str(raw.get("branch_prefix", "")).strip()
+        d.return_diff = str(raw.get("return_diff", "true")).strip().lower() not in ("0", "false", "no", "off")
         return d
 
     @staticmethod
@@ -1724,7 +1743,40 @@ class AcpAdapter(Adapter):
     ) -> str:
         if d.manage_git:
             return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id)
+        if d.capture_diff:
+            return await self._prompt_with_changes(d, query, timeout=timeout)
         return await self._prompt(d, query, timeout=timeout)
+
+    async def _prompt_with_changes(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
+        """Unmanaged dispatch that hands back what the coder changed (``return_diff``).
+
+        Snapshots the workdir's git tree before and after the turn and appends the
+        difference to the reply (``change_summary``). Capture is best-effort: a
+        non-git workdir or a git failure degrades to a one-line note, never to a
+        failed delegation — the coder's work already happened either way."""
+        from . import change_summary as cs
+
+        root = os.path.expanduser(d.workdir)
+        if not await asyncio.to_thread(cs.is_git_worktree, root):
+            reply = await self._prompt(d, query, timeout=timeout)
+            return f"{reply}\n\n[no change summary — {root} is not a git repository]"
+        try:
+            before = await asyncio.to_thread(cs.snapshot, root)
+        except cs.ChangeCaptureError as exc:
+            reply = await self._prompt(d, query, timeout=timeout)
+            return f"{reply}\n\n[no change summary — pre-dispatch snapshot failed: {exc}]"
+        token = cs.begin(root)
+        try:
+            reply = await self._prompt(d, query, timeout=timeout)
+        finally:
+            overlapped = cs.end(root, token)
+        try:
+            summary = await asyncio.to_thread(
+                lambda: cs.render(before, cs.after(before), project=d.project_name, overlapped=overlapped)
+            )
+        except cs.ChangeCaptureError as exc:
+            summary = f"[no change summary — post-dispatch snapshot failed: {exc}]"
+        return f"{reply}\n\n{summary}"
 
     async def _prompt(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
         # Reuse the ADR 0024 ACP client + by-kind permission policy.

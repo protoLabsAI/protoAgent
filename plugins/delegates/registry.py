@@ -83,6 +83,7 @@ class DelegateRegistry:
         origin_session_id: str | None = None,
         permissions: str | None = None,
         timeout: float | None = None,
+        project=None,
     ) -> str:
         """Dispatch ``query`` to the named delegate.
 
@@ -104,8 +105,14 @@ class DelegateRegistry:
         pass it through the host-free ``graph/mention_op``, so it falls back to the session
         bound by ``recording_session`` (a ContextVar). Blank when neither supplies one.
         ``permissions`` is a per-call ACP ceiling; currently only ``readonly`` is
-        accepted, and delegate types that cannot enforce it are refused."""
-        from . import conversations
+        accepted, and delegate types that cannot enforce it are refused.
+        ``project`` is a resolved ``projects.ProjectScope`` (``delegate_to(project=…)``):
+        an ACP delegate runs THIS call with its workdir set to that fenced project root —
+        only the workdir changes, on a per-call copy — and, unmanaged, hands back the
+        change summary its ``return_diff`` allows. Any other type is refused. Falls back
+        to the scope ``projects.project_scope`` bound, for the room path that reaches here
+        through host-free ``graph/mention_op``."""
+        from . import conversations, projects
 
         d = self._items.get(name)
         if d is None:
@@ -128,6 +135,24 @@ class DelegateRegistry:
             raise DelegateError("permissions must be 'readonly' when an invocation ceiling is requested.")
         if permissions and d.type != "acp":
             raise DelegateError(f"delegate {name!r} is type {d.type!r} and cannot enforce a permissions ceiling.")
+        scope = project if project is not None else projects.current_scope()
+        if scope is not None and d.type != "acp":
+            raise DelegateError(
+                f"delegate {name!r} is type {d.type!r} — `project` only applies to acp coding "
+                "delegates (it sets the coder's working directory). A peer agent or model works "
+                "wherever it runs; describe the project in the query instead."
+            )
+        if scope is not None:
+            import dataclasses
+
+            # The ONLY launch field a call may change is the workdir, and only to a root the
+            # fenced registry resolved — command/args/env stay the operator's.
+            d = dataclasses.replace(
+                d,
+                workdir=scope.root,
+                project_name=scope.name,
+                capture_diff=bool(d.return_diff and not raw),
+            )
         if conversation_key or origin_session_id or permissions or (raw and d.manage_git):
             import dataclasses
 
