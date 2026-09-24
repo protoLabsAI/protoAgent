@@ -1467,7 +1467,9 @@ fn editor_link_file(target: &str) -> Option<std::path::PathBuf> {
     for _ in 0..3 {
         let p = Path::new(cand);
         if p.is_absolute()
+            && is_local_disk_path(p)
             && !p.components().any(|c| matches!(c, Component::ParentDir))
+            && !is_workspace_file(p)
             && p.is_file()
         {
             return Some(p.to_path_buf());
@@ -1480,6 +1482,33 @@ fn editor_link_file(target: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// Windows: only a drive-letter path (`C:\…`, `\\?\C:\…`). A UNC path
+/// (`//attacker/share/x`) would make even the `is_file()` probe reach out over SMB and hand
+/// the host the user's NTLM credentials — so it's refused BEFORE any filesystem access.
+/// Elsewhere every absolute path is local.
+fn is_local_disk_path(p: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        matches!(
+            p.components().next(),
+            Some(Component::Prefix(pre)) if matches!(pre.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = p;
+        true
+    }
+}
+
+/// A `.code-workspace` file opens as a WORKSPACE in VS Code / Cursor (its settings, tasks
+/// and extension recommendations apply) — the same hazard as opening a directory.
+fn is_workspace_file(p: &std::path::Path) -> bool {
+    p.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("code-workspace"))
 }
 
 fn open_editor_link<R: Runtime>(app: &AppHandle<R>, target: &str) {
@@ -2074,6 +2103,31 @@ mod new_window_tests {
         ] {
             assert_eq!(editor_link_file(&bad), None, "{bad} must be refused");
         }
+    }
+
+    #[test]
+    fn editor_link_refuses_a_code_workspace_file() {
+        let d = scratch_dir("ws");
+        for name in ["evil.code-workspace", "EVIL.Code-Workspace"] {
+            let f = d.join(name);
+            std::fs::write(&f, "{}").unwrap();
+            let link = link_for("vscode", &f, "");
+            assert_eq!(editor_link_file(&link), None, "{link} must be refused");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn editor_link_refuses_unc_paths_before_touching_them() {
+        for bad in [
+            "vscode://file//attacker/share/x.rs",
+            "zed://file/%5C%5Cattacker%5Cshare%5Cx.rs",
+            "cursor://file//%3F/UNC/attacker/share/x.rs",
+        ] {
+            assert_eq!(editor_link_file(bad), None, "{bad} must be refused");
+        }
+        assert!(super::is_local_disk_path(std::path::Path::new(r"C:\x\y.rs")));
+        assert!(!super::is_local_disk_path(std::path::Path::new(r"\\srv\share\y.rs")));
     }
 
     #[test]
