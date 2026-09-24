@@ -19,6 +19,78 @@ untrusted-model output. Treat `execute_code`/`run_command`/write-enabled
 `fs_tools` as powerful — enable them only for trusted models **or under
 OpenShell**.
 
+## Reducing approval prompts: `run_auto_approve` {#run-auto-approve}
+
+`run_command` pauses for operator approval on every call (`filesystem.run_requires_approval`).
+On a hands-on coding task that is a lot of prompts — one live debugging session asked eight
+times in a minute for `git diff`, `npx vitest run`, `npx tsc --noEmit` and friends.
+`filesystem.run_auto_approve` lists command **prefixes** that run without the prompt; anything
+else still asks. A starter list for a JS/TS repo:
+
+```yaml
+filesystem:
+  run_auto_approve:
+    - git status
+    - git diff
+    - git log
+    - git show
+    - git branch --show-current
+    - npm test
+    - npx vitest run
+    - npx tsc --noEmit
+    # through a version manager: list the WHOLE prefix, never `mise exec --` alone
+    - mise exec -- npm test
+```
+
+Or edit it per agent in the console: **Settings ▸ Capabilities ▸ Tools ▸ Filesystem ▸ Shell &
+filesystem tools ▸ Auto-approve commands** (one per line; a save hot-reloads).
+
+**How a command qualifies** — every rule fails closed (a miss just means you get asked):
+
+- **No shell syntax at all.** Any of `` ; & | ` $ ( ) < > \ * ? [ ] { } ~ # ! ``, a
+  newline/control character, or non-ASCII whitespace means *ask* — checked on the raw text,
+  so a quoted metacharacter (`git log --format='%H;x'`) asks too. Globs are refused on
+  purpose: an agent that can write files could plant a file named `--output=…` and let
+  `git diff *` expand it into a flag.
+- **Word-by-word prefix.** The command is `shlex`-split and must start with an entry's
+  words exactly: `git diff` covers `git diff --stat main` but not `git difftool` or
+  `git diff-tree`; `FOO=1 git diff` and `env git diff` match nothing.
+- **A small option denylist.** `--output`/`-o`, `--exec`, `--config`/`-c`, `--ext-diff`,
+  `--upload-pack`/`--receive-pack`, `--open-files-in-pager`/`-O`, `--require`/`--import`/
+  `--loader`/`--eval`/`-e`/`-r`, npm's `--prefix`/`--userconfig`/`--script-shell`/`--node-options`, and find's `-exec`/`-execdir`/`-ok`/`-delete`/
+  `-fprint*` always ask — including abbreviations (`git diff --out=/x` *is* `--output`) and
+  bundled short flags (`git grep -iOcmd`). It's a cheap net for common tools, not a
+  complete list of every program's dangerous flags.
+- **Run without a shell.** A matched command is executed directly from those words, so the
+  command that was matched is exactly the command that runs. The tool result starts with
+  `(auto-approved: matches "git diff")` so the transcript shows nobody clicked Approve, and
+  the server logs `[fs] run_command auto-approved by run_auto_approve[git diff]: …` at INFO.
+- **POSIX only.** `shell: powershell` / `cmd` (and every Windows default) always ask.
+
+Entries are checked when the tools build (startup and every settings save): an entry with
+shell syntax, a `VAR=` prefix, a denylisted option, or one so broad it would approve an
+arbitrary program — `sh`, `bash`, `env`, `xargs`, `sudo`, `node`, `python`, `npx`, bare
+`git`/`npm`/`uv`/`mise`, `npm run`, `npm exec`, `pnpm dlx`, `uv run`, `mise exec --`, … —
+is dropped with a warning in the server log. Options don't change that verdict (`npx --`,
+`git --no-pager` and `uv run --` are as broad as `npx`, `git` and `uv run`), a path to a
+launcher counts as the launcher (`/bin/sh`), and a wrapper — `sudo`, `env`, `xargs`,
+`timeout`, `nohup`, a shell, … — is refused whatever follows it.
+
+**Caveats — read before listing a command:**
+
+- **It's a friction reducer, not a sandbox.** Prefix matching still lets the model choose
+  the arguments: `git diff --no-index /etc/hosts /dev/null` reads a file outside the fence.
+  List **read-mostly** commands.
+- **A test runner runs project code.** `npm test`, `npx vitest run`, `pytest`, `make` execute
+  scripts and configs the agent can edit in a `write: true` project — auto-approving them
+  there means "the agent may run code in this repo unattended".
+- **Even git reads repository config.** `.git/config` can set `core.fsmonitor`, diff/textconv
+  drivers and clean filters that `git status`/`git diff` execute. In a writable project the
+  agent can edit that file, so the same caveat applies.
+- **`delete_file` is unaffected** — it always asks, whatever this list says.
+- `/bypass` still skips the gate for everything; the allowlist is only consulted when you'd
+  otherwise be asked.
+
 ## Layer 1 — the native egress allowlist (deny-by-default)
 
 `fetch_url` is the tool where the model picks an arbitrary host — the main

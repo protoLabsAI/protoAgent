@@ -78,6 +78,8 @@ test("Tools panel: the Filesystem group's shell/fs dialog disables run_command",
   // All four gates render while their chain is satisfied (every parent is on).
   await expect(dialog.getByText("Allow run_command")).toBeVisible();
   await expect(dialog.getByText("Require approval per command")).toBeVisible();
+  // The safe-command allowlist renders in the same dialog, under the approval gate it relaxes.
+  await expect(dialog.getByText("Auto-approve commands")).toBeVisible();
 
   const saved = page.waitForRequest(
     (r) => r.url().endsWith("/api/settings") && ["POST", "PUT"].includes(r.method()),
