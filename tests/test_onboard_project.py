@@ -1,11 +1,11 @@
-"""The ``onboard_project`` tool and its factory (#2555).
+"""The ``onboard_project`` / ``register_local_project`` tools and their factory (#2555).
 
 Covers the disposition axis (present only when ``onboarding.enabled``) and the
 tool end-to-end with git + the config writer mocked out — the point is the
 BOUNDS, so most of these are refusal paths:
 
   - disabled  → the factory yields no tool at all
-  - enabled   → exactly one tool named ``onboard_project``
+  - enabled   → ``onboard_project`` + ``register_local_project``
   - outside ``allow``  → refused, naming the pattern set; nothing cloned/registered
   - outside ``root``   → refused, naming the root; nothing cloned/registered
   - happy path → subprocess git clone (no shell=True) + a merged registration
@@ -13,6 +13,11 @@ BOUNDS, so most of these are refusal paths:
   - clone failure → the git stderr is surfaced
   - reuse drift (#3402) → local ahead/behind vs the tracking branch is reported
     (or a bounded not-comparable note), and NO clone/fetch/reset/checkout runs
+  - any git host: the clone-source parse matrix (incl. hostile inputs), the
+    allowlist on non-GitHub hosts, the clone argv shape, credential redaction
+  - ``register_local_project``: inside/outside the root, symlink escape,
+    idempotency, explicit ``filesystem.projects`` mirroring — against REAL git
+    repos in ``tmp_path`` (only the config writer is mocked)
 
 git and the ``HOST.apply_settings`` seam are mocked, so no real clone or config
 write happens; ``tmp_path`` is the onboarding root so the directory checks are real.
@@ -30,6 +35,14 @@ from graph.plugins.host import HOST
 from tools import onboard_tools
 
 
+def _symlink_or_skip(link: Path, to: Path) -> None:
+    """Windows without developer mode can't create symlinks — skip, don't fail."""
+    try:
+        link.symlink_to(to, target_is_directory=True)
+    except OSError as exc:  # pragma: no cover - platform-dependent
+        pytest.skip(f"symlinks unavailable here: {exc}")
+
+
 def _cfg(tmp_path: Path, **over) -> LangGraphConfig:
     """A LangGraphConfig with onboarding enabled and pointed at ``tmp_path``."""
     kw = dict(
@@ -42,10 +55,9 @@ def _cfg(tmp_path: Path, **over) -> LangGraphConfig:
     return LangGraphConfig(**kw)
 
 
-def _tool(config: LangGraphConfig):
-    tools = onboard_tools.build_onboard_tools(config)
-    assert len(tools) == 1
-    return tools[0]
+def _tool(config: LangGraphConfig, name: str = "onboard_project"):
+    tools = {t.name: t for t in onboard_tools.build_onboard_tools(config)}
+    return tools[name]
 
 
 class _Mocks:
@@ -128,7 +140,7 @@ def test_disabled_returns_empty_tools(tmp_path):
 
 def test_enabled_returns_tool(tmp_path):
     tools = onboard_tools.build_onboard_tools(_cfg(tmp_path))
-    assert [t.name for t in tools] == ["onboard_project"]
+    assert [t.name for t in tools] == ["onboard_project", "register_local_project"]
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +154,8 @@ def test_enabled_returns_tool(tmp_path):
 
 
 def test_default_config_surfaces_the_tool():
-    assert [t.name for t in onboard_tools.build_onboard_tools(LangGraphConfig())] == ["onboard_project"]
+    names = [t.name for t in onboard_tools.build_onboard_tools(LangGraphConfig())]
+    assert names == ["onboard_project", "register_local_project"]
 
 
 @pytest.mark.asyncio
@@ -184,17 +197,32 @@ async def test_refuse_outside_allow(tmp_path, mocks):
     assert mocks.apply_calls == []  # nothing registered
 
 
-async def test_refuse_outside_root(tmp_path, mocks):
-    # The allow glob matches (fnmatch '*' spans slashes) so we reach the root check;
-    # the '../' traversal then resolves above the onboarding root.
+async def test_refuse_traversal_in_repo_path(tmp_path, mocks):
+    # A '../' traversal never reaches the filesystem: the parser refuses '..'
+    # segments outright (the checkout dir is named after the last segment, and git
+    # would get a nonsense URL), so nothing is cloned or registered.
     tool = _tool(_cfg(tmp_path, onboarding_allow=["github.com/acme/*"]))
     out = await tool.ainvoke({"github_repo": "acme/../../../../etc/evil"})
 
-    assert out.startswith("Refused:")
-    assert "onboarding root" in out
-    assert str(tmp_path) in out  # names the root bound
+    assert out.startswith("Error:")
+    assert "'..'" in out
     assert mocks.clone_calls == []  # nothing cloned
     assert mocks.apply_calls == []  # nothing registered
+
+
+async def test_refuse_symlink_escape_of_clone_target(tmp_path, mocks):
+    """The checkout path is a symlink out of the root → refused naming the root,
+    before git runs (a reuse would otherwise register a directory outside it)."""
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _symlink_or_skip(root / "widget", outside)
+    out = await _tool(_cfg(root)).ainvoke({"repo": "acme/widget"})
+
+    assert out.startswith("Refused:")
+    assert "onboarding root" in out and str(root) in out
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +239,9 @@ async def test_happy_path_clone_and_register(tmp_path, mocks):
     # git clone: exactly the expected argv, off the event loop, and NEVER shell=True.
     assert len(mocks.clone_calls) == 1
     args, kwargs = mocks.clone_calls[0]
-    assert args[0] == ["git", "clone", "https://github.com/acme/widget.git", str(target)]
+    # `--` ends option parsing; the URL is the caller's own form, verbatim.
+    assert args[0] == ["git", "clone", "--", "https://github.com/acme/widget", str(target)]
+    assert kwargs.get("env", {}).get("GIT_TERMINAL_PROMPT") == "0"  # no hung password prompt
     assert kwargs.get("shell") is not True
     assert "shell" not in kwargs
     assert kwargs.get("timeout") == 120
@@ -584,3 +614,304 @@ async def test_clone_failure_surfaces_error(tmp_path, monkeypatch):
     assert "git clone failed" in out
     assert "repository" in out and "not found" in out
     assert m.apply_calls == []  # a failed clone never reaches registration
+
+
+# ---------------------------------------------------------------------------
+# any git host — the clone-source parse matrix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "normalized", "clone_url", "slug"),
+    [
+        ("acme/widget", "github.com/acme/widget", "https://github.com/acme/widget.git", "acme/widget"),
+        ("github.com/acme/widget", "github.com/acme/widget", "https://github.com/acme/widget.git", "acme/widget"),
+        ("https://github.com/acme/widget", "github.com/acme/widget", "https://github.com/acme/widget", "acme/widget"),
+        ("https://GitHub.com/acme/widget.git/", "github.com/acme/widget", "https://GitHub.com/acme/widget.git/", "acme/widget"),
+        ("git@github.com:acme/widget.git", "github.com/acme/widget", "git@github.com:acme/widget.git", "acme/widget"),
+        ("gitlab.com/acme/widget", "gitlab.com/acme/widget", "https://gitlab.com/acme/widget.git", ""),
+        ("https://gitlab.com/acme/tools/cli.git", "gitlab.com/acme/tools/cli", "https://gitlab.com/acme/tools/cli.git", ""),
+        ("git@gitlab.com:acme/widget.git", "gitlab.com/acme/widget", "git@gitlab.com:acme/widget.git", ""),
+        ("ssh://git@git.example.com:2222/acme/widget", "git.example.com/acme/widget", "ssh://git@git.example.com:2222/acme/widget", ""),
+        ("gh-work:acme/widget", "gh-work/acme/widget", "gh-work:acme/widget", ""),  # an ssh config alias
+        ("git://host.example.org/acme/widget", "host.example.org/acme/widget", "git://host.example.org/acme/widget", ""),
+    ],
+)
+def test_parse_accepts_any_git_host(given, normalized, clone_url, slug):
+    ref = onboard_tools._parse_repo(given)
+    assert ref.normalized == normalized
+    assert ref.clone_url == clone_url  # the caller's own form — ssh keys / helpers apply
+    assert ref.github_slug == slug  # the registry's `github` binding is GitHub-only
+    assert ref.name == normalized.rsplit("/", 1)[-1]
+
+
+@pytest.mark.parametrize(
+    ("given", "why"),
+    [
+        ("", "no repository"),
+        ("acme", "owner and a repo"),
+        ("-uhttps://github.com/a/b", "leading '-'"),
+        ("--upload-pack=touch /tmp/pwned", "leading '-'"),
+        ("ext::sh -c touch% /tmp/pwned", "remote-helper"),
+        ("ext::sh", "remote-helper"),
+        ("fd::17", "remote-helper"),
+        ("file:///etc/passwd", "file://"),
+        ("FILE:///etc/passwd", "file://"),
+        ("ftp://host.org/a/b", "ftp://"),
+        ("/srv/git/widget", "register_local_project"),
+        ("~/dev/widget", "register_local_project"),
+        ("./widget/x", "register_local_project"),
+        ("C:/src/a/b", "register_local_project"),
+        ("C:\\src\\widget", "backslash"),
+        ("acme/../../etc/evil", "'..'"),
+        ("https://github.com/acme/..", "'..'"),
+        ("https://github.com/acme/%2e%2e", "characters"),
+        ("https://github.com/acme/widget?x=1", "characters"),
+        ("https://evil.com#@github.com/acme/widget", "disguise its host"),
+        ("https://evil.com?@github.com/acme/widget", "disguise its host"),
+        ("https://github.com", "no repository path"),
+        ("acme/wid get", "whitespace"),
+        ("acme/widget\n--upload-pack=x", "control"),
+        ("https://bad_host!/a/b", "host name"),
+    ],
+)
+def test_parse_refuses_hostile_or_local_inputs(given, why):
+    with pytest.raises(onboard_tools.RepoRefError) as exc:
+        onboard_tools._parse_repo(given)
+    assert why.lower() in str(exc.value).lower()
+
+
+def test_userinfo_host_confusion_resolves_to_the_real_host():
+    """``https://github.com@evil.com/…`` is evil.com with a user of "github.com" —
+    the allowlist must see evil.com, the host git will actually contact."""
+    assert onboard_tools._parse_repo("https://github.com@evil.com/acme/widget").normalized == "evil.com/acme/widget"
+
+
+def test_redact_masks_credentials_but_keeps_ssh_login():
+    text = "fatal: https://bob:s3cret@h.io/a/b https://ghp_tok@github.com/a/b ssh://git@h.io/a/b ssh://u:pw@h.io/x"
+    out = onboard_tools._redact(text)
+    assert "s3cret" not in out and "ghp_tok" not in out and "pw@" not in out
+    assert "https://bob:***@h.io" in out and "https://***@github.com" in out
+    assert "ssh://git@h.io" in out  # an ssh login name is not a secret
+
+
+# ---------------------------------------------------------------------------
+# any git host — the tool
+# ---------------------------------------------------------------------------
+
+
+async def test_clone_from_non_github_host_uses_given_url_and_no_github_binding(tmp_path, mocks):
+    tool = _tool(_cfg(tmp_path, onboarding_allow=["gitlab.com/acme/*"]))
+    out = await tool.ainvoke({"repo": "git@gitlab.com:acme/widget.git"})
+
+    target = tmp_path / "widget"
+    assert [c[0][0] for c in mocks.clone_calls] == [
+        ["git", "clone", "--", "git@gitlab.com:acme/widget.git", str(target)]
+    ]
+    entry = next(p for p in mocks.apply_calls[0]["projects"] if p["path"] == str(target))
+    assert "github" not in entry  # not GitHub → no GitHub-plugin binding
+    assert entry["name"] == "widget" and entry["write"] is False
+    assert "Cloned and registered" in out and "gitlab.com/acme/widget" in out
+
+
+async def test_allowlist_matches_host_owner_repo_on_other_hosts(tmp_path, mocks):
+    """A github.com glob does NOT admit the same owner/repo on another host."""
+    tool = _tool(_cfg(tmp_path, onboarding_allow=["github.com/acme/*"]))
+    out = await tool.ainvoke({"repo": "https://gitlab.com/acme/widget.git"})
+    assert out.startswith("Refused:") and "gitlab.com/acme/widget" in out
+    out = await tool.ainvoke({"repo": "https://github.com@evil.com/acme/widget"})
+    assert out.startswith("Refused:") and "evil.com/acme/widget" in out
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
+
+
+async def test_github_repo_alias_still_works_and_repo_wins(tmp_path, mocks):
+    tool = _tool(_cfg(tmp_path))
+    await tool.ainvoke({"github_repo": "acme/old"})
+    await tool.ainvoke({"repo": "acme/new", "github_repo": "acme/ignored"})
+    urls = [c[0][0][3] for c in mocks.clone_calls]
+    assert urls == ["https://github.com/acme/old.git", "https://github.com/acme/new.git"]
+
+
+@pytest.mark.parametrize("hostile", ["--upload-pack=touch /tmp/x", "ext::sh -c id", "file:///etc", "/etc"])
+async def test_hostile_source_never_reaches_git(tmp_path, mocks, hostile):
+    out = await _tool(_cfg(tmp_path, onboarding_allow=["*"])).ainvoke({"repo": hostile})
+    assert out.startswith("Error:")
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
+
+
+async def test_credentials_are_redacted_from_clone_errors(tmp_path, monkeypatch):
+    m = _Mocks(returncode=128, stderr="fatal: Authentication failed for 'https://bob:s3cret@gitlab.com/acme/w.git/'")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    out = await _tool(_cfg(tmp_path, onboarding_allow=["gitlab.com/*"])).ainvoke(
+        {"repo": "https://bob:s3cret@gitlab.com/acme/w.git"}
+    )
+    assert m.clone_calls[0][0][0][3] == "https://bob:s3cret@gitlab.com/acme/w.git"  # git still gets it
+    assert "git clone failed" in out and "s3cret" not in out and "bob:***@" in out
+
+    bad = await _tool(_cfg(tmp_path)).ainvoke({"repo": "https://tok123@evil.com#@github.com/a/b"})
+    assert "tok123" not in bad
+
+
+# ---------------------------------------------------------------------------
+# register_local_project — against real git repos; only the config writer is mocked
+# ---------------------------------------------------------------------------
+
+
+def _git(*argv, cwd):
+    import subprocess
+
+    subprocess.run(["git", *argv], cwd=str(cwd), check=True, capture_output=True)
+
+
+def _repo(path: Path, *, origin: str | None = None, branch: str = "trunk") -> Path:
+    path.mkdir(parents=True)
+    _git("init", "-q", "-b", branch, cwd=path)
+    if origin:
+        _git("remote", "add", "origin", origin, cwd=path)
+    return path
+
+
+@pytest.fixture
+def applied(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (calls.append(patch), (True, ["ok"]))[1])
+    monkeypatch.setattr(HOST, "config", None)
+    return calls
+
+
+def _local(config):
+    return _tool(config, "register_local_project")
+
+
+async def test_local_registers_dir_under_root_with_github_from_origin(tmp_path, applied):
+    repo = _repo(tmp_path / "widget", origin="git@github.com:acme/widget.git")
+    out = await _local(_cfg(tmp_path)).ainvoke({"path": str(repo)})
+
+    assert applied[0]["projects"] == [
+        {"name": "widget", "path": str(repo.resolve()), "github": "acme/widget", "default_branch": "trunk", "write": False}
+    ]
+    assert applied[0]["filesystem"] == {"enabled": True}
+    assert out.startswith("Registered widget (read-only)") and "GitHub acme/widget" in out
+
+
+async def test_local_non_github_or_non_git_dir_registers_without_binding(tmp_path, applied):
+    gl = _repo(tmp_path / "gl", origin="https://gitlab.com/acme/gl.git")
+    plain = tmp_path / "notes"
+    plain.mkdir()
+    tool = _local(_cfg(tmp_path))
+    await tool.ainvoke({"path": str(gl), "name": "gitlab-one", "write": True})
+    out = await tool.ainvoke({"path": str(plain)})
+
+    first = applied[0]["projects"][0]
+    assert first["name"] == "gitlab-one" and first["write"] is True and "github" not in first
+    second = applied[1]["projects"][-1]
+    assert second["path"] == str(plain.resolve()) and "github" not in second
+    assert second["default_branch"] == "main"  # not a git repo → the documented fallback
+    assert "no GitHub origin remote" in out
+
+
+async def test_local_expands_tilde(tmp_path, applied, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # what expanduser reads on Windows
+    _repo(tmp_path / "dev" / "widget")
+    await _local(_cfg(tmp_path / "dev")).ainvoke({"path": "~/dev/widget"})
+    assert applied[0]["projects"][0]["path"] == str((tmp_path / "dev" / "widget").resolve())
+
+
+@pytest.mark.parametrize("where", ["sibling", "parent", "traversal"])
+async def test_local_refuses_outside_root(tmp_path, applied, where):
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = _repo(tmp_path / "elsewhere")
+    path = {
+        "sibling": str(outside),
+        "parent": str(tmp_path),
+        "traversal": str(root / ".." / "elsewhere"),
+    }[where]
+    out = await _local(_cfg(root)).ainvoke({"path": path})
+
+    assert out.startswith("Refused:")
+    assert str(root) in out and "onboarding.root" in out  # names the root + how it widens
+    assert applied == []
+
+
+async def test_local_refuses_symlink_escape(tmp_path, applied):
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = _repo(tmp_path / "secret")
+    _symlink_or_skip(root / "innocent", outside)
+    out = await _local(_cfg(root)).ainvoke({"path": str(root / "innocent")})
+
+    assert out.startswith("Refused:") and str(outside.resolve()) in out
+    assert applied == []
+
+
+async def test_local_symlink_inside_root_registers_the_real_path(tmp_path, applied):
+    real = _repo(tmp_path / "real")
+    _symlink_or_skip(tmp_path / "alias", real)
+    await _local(_cfg(tmp_path)).ainvoke({"path": str(tmp_path / "alias")})
+    assert applied[0]["projects"][0]["path"] == str(real.resolve())
+
+
+@pytest.mark.parametrize(
+    ("case", "expect"),
+    [
+        ("relative", "not an absolute path"),
+        ("root", "onboarding root itself"),
+        ("missing", "not an existing directory"),
+        ("file", "not an existing directory"),
+        ("empty", "no path was given"),
+    ],
+)
+async def test_local_refuses_bad_paths(tmp_path, applied, case, expect):
+    (tmp_path / "a-file").write_text("x")
+    path = {
+        "relative": "widget",
+        "root": str(tmp_path),
+        "missing": str(tmp_path / "nope"),
+        "file": str(tmp_path / "a-file"),
+        "empty": "  ",
+    }[case]
+    out = await _local(_cfg(tmp_path)).ainvoke({"path": path})
+    assert out.startswith(("Refused:", "Error:")) and expect in out
+    assert applied == []
+
+
+async def test_local_refuses_without_root(tmp_path, applied):
+    _repo(tmp_path / "widget")
+    out = await _local(_cfg(tmp_path, onboarding_root="")).ainvoke({"path": str(tmp_path / "widget")})
+    assert out.startswith("Refused:") and "onboarding.root isn't set" in out
+    assert applied == []
+
+
+async def test_local_is_idempotent(tmp_path, applied):
+    repo = _repo(tmp_path / "widget")
+    entry = {"name": "widget", "path": str(repo), "write": False}
+    out = await _local(_cfg(tmp_path, projects=[entry])).ainvoke({"path": str(repo)})
+    assert "already registered" in out
+    assert applied == []
+
+
+async def test_local_mirrors_into_explicit_fence_and_keeps_priors(tmp_path, applied):
+    repo = _repo(tmp_path / "widget", origin="https://github.com/acme/widget")
+    prior_reg = {"name": "keep", "path": str(tmp_path / "keep"), "write": True}
+    prior_fence = {"name": "legacy", "path": str(tmp_path / "legacy"), "write": True}
+    out = await _local(_cfg(tmp_path, projects=[prior_reg], filesystem_projects=[prior_fence])).ainvoke(
+        {"path": str(repo)}
+    )
+
+    patch = applied[0]
+    assert prior_reg in patch["projects"]  # superset — nothing dropped
+    assert prior_fence in patch["filesystem"]["projects"]
+    assert {"name": "widget", "path": str(repo.resolve()), "write": False, "github": "acme/widget"} in patch[
+        "filesystem"
+    ]["projects"]
+    assert "explicit filesystem.projects override" in out
+
+
+async def test_local_disabled_means_absent(tmp_path):
+    assert "register_local_project" not in {
+        t.name for t in onboard_tools.build_onboard_tools(_cfg(tmp_path, onboarding_enabled=False))
+    }

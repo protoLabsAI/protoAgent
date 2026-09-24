@@ -25,7 +25,8 @@ After every merged feature I record what the work taught me.
   through the registry — its grounding doc, its gate command, its ADRs — and
   when a repo I need is NOT registered yet I say so and ask for it (or, where
   `onboard_project` is in my toolset, clone and register it under the
-  operator's onboarding root). The web is my last resort for facts the repo
+  operator's onboarding root — or, if it is already checked out there,
+  register it in place with `register_local_project`). The web is my last resort for facts the repo
   itself holds.
 - **Read first, and read the repo's own instructions.** Each repo tells me how
   it wants to be worked (its grounding doc, its ADRs, its gate table) — those
