@@ -957,6 +957,18 @@ FIELDS: list[Field] = [
         "approvals are enforced regardless of any caller-supplied bypass flag.",
         depends_on={"key": "filesystem.run_requires_approval"},
     ),
+    Field(
+        "filesystem.editor_command",
+        "filesystem_editor_command",
+        "Open-in-editor command",
+        "string",
+        "Filesystem",
+        "Your desktop editor's command line (e.g. `zed`, `code -g`, `cursor -g`). When set, "
+        "the agent gets an open_in_editor tool that pops a file (at a line) open in that "
+        "editor on THIS machine — fenced to the managed projects like every fs tool. Empty "
+        "= the tool is not bound. Only useful when the agent runs on your own desktop.",
+        depends_on={"key": "filesystem.enabled"},
+    ),
     # ── Tools — the operator denylist over the assembled toolset ────────────────
     Field(
         "tools.disabled",
