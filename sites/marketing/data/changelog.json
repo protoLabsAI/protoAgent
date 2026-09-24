@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.175.0",
+    "date": "2026-09-24",
+    "changes": [
+      "Langfuse traces carry their input and output, and ACP coder runs are traced (#3587).",
+      "The shipped example config declares its providers: registry explicitly (#3128).",
+      "Large-document knowledge ingest no longer silently loses every vector (#3126).",
+      "npm run --workspaces build no longer hard-fails on the desktop app without a frozen sidecar (#3128)."
+    ]
+  },
+  {
     "version": "v0.174.1",
     "date": "2026-09-24",
     "changes": [
