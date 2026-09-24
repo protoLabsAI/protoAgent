@@ -405,11 +405,11 @@ def _launch_editor(argv: list[str]) -> str | None:
     return None
 
 
-def _registry_from_config(config) -> ProjectRegistry:
+def _registry_from_config(config, *, create: bool = True) -> ProjectRegistry:
     projects: list[Project] = []
     # Explicit projects, or the default workspace dir (created) when none are
     # configured — the on-by-default fenced workspace.
-    entries = _configured_entries(config, create=True)
+    entries = _configured_entries(config, create=create)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -431,6 +431,21 @@ def _registry_from_config(config) -> ProjectRegistry:
             )
         )
     return ProjectRegistry(projects)
+
+
+def project_roots(config) -> dict[str, str]:
+    """``{project name: absolute root}`` for the fence the fs tools resolve against.
+
+    The same ``_registry_from_config`` projection the tools use (explicit
+    ``filesystem.projects`` → ADR 0095 registry → workspace default, minus any root
+    that isn't a directory), so a console turning a tool's project-relative path
+    back into an absolute one can't disagree with where the tool actually read it.
+    Empty when the filesystem primitive is off — the tools aren't bound then.
+    Read-only: never mkdirs the default workspace (the tools' own build does)."""
+    if not bool(getattr(config, "filesystem_enabled", True)):
+        return {}
+    registry = _registry_from_config(config, create=False)
+    return {name: str(registry.get(name).root) for name in registry.names()}
 
 
 class _RegistryRef:

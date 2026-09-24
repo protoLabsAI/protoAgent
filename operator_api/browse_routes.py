@@ -104,6 +104,28 @@ def register_browse_routes(app) -> None:
         except OSError as exc:  # pragma: no cover — resolve rarely raises on posix
             raise HTTPException(status_code=400, detail=f"can't read {path}: {exc}") from exc
 
+    @app.get("/api/fs/roots")
+    async def _api_fs_roots():
+        """``{roots: {project name: absolute root}}`` — the live fs fence.
+
+        The fs tools speak in PROJECT-RELATIVE paths (``read_file(project, path)``),
+        so the console needs each project's absolute root to turn a tool call's path
+        into an "open in editor" link. Computed by ``tools.fs_tools.project_roots``,
+        the same projection the tools resolve against — NOT ``/api/projects``, whose
+        ADR 0095 registry can be shadowed by explicit ``filesystem.projects`` or the
+        workspace default. Read-only; empty when the filesystem primitive is off.
+        """
+        import asyncio
+
+        from runtime.state import STATE
+        from tools.fs_tools import project_roots
+
+        cfg = getattr(STATE, "graph_config", None)
+        if cfg is None:
+            return {"roots": {}}
+        # is_dir() per root — off the event loop, like every other fs call here.
+        return {"roots": await asyncio.to_thread(project_roots, cfg)}
+
     def _browse(path: str, *, files: bool, hidden: bool) -> dict:
         """Resolve + validate + list, entirely inside the worker thread. Raises the
         stdlib OSError subclasses; the handler maps them to status codes."""

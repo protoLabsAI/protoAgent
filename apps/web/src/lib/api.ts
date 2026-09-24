@@ -3016,6 +3016,12 @@ export const api = {
     const q = qs.toString();
     return request<BrowseListing>(`/api/fs/browse${q ? `?${q}` : ""}`);
   },
+  // `{project name: absolute root}` for the LIVE fs fence — the same registry the fs tools
+  // resolve through (not /api/projects, which the fence can shadow). Backs the tool cards'
+  // "open in editor" links, which join a tool's project-relative path onto its root.
+  fsRoots() {
+    return request<{ roots: Record<string, string> }>("/api/fs/roots");
+  },
   uninstallPlugin(id: string) {
     // `superseded_by_bundled` (the bundled version) = only the ignored old copy of a
     // plugin that now ships with protoAgent was removed; the built-in keeps running.

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@protolabsai/ui/primitives";
 
+import { FS_LINK_TOOLS, FsToolOutput } from "./fsToolRenderers";
 import { parseMultimodalEnvelope, type MultimodalEnvelope } from "./multimodalEnvelope";
 import { humanizeSeconds, parseWaitInput, summarizeThen, type WaitInfo } from "./waitInfo";
 
@@ -79,7 +80,17 @@ export function ToolValue({
     const custom = OUTPUT_RENDERERS[tool]?.(text);
     if (custom) return <>{custom}</>;
   }
-  // Generic structured rendering.
+  // Fenced fs tools: file paths become "open in editor" links (Settings ▸ Chat). The
+  // generic render is passed down as the fallback, so with no link to make (pref Off, roots
+  // not loaded, unknown project) the card renders exactly as it did before.
+  if (role === "output" && FS_LINK_TOOLS.has(tool)) {
+    return <FsToolOutput tool={tool} raw={text} input={input} fallback={<GenericValue text={text} />} />;
+  }
+  return <GenericValue text={text} />;
+}
+
+/** Generic structured rendering: JSON objects/arrays as fields/lists, anything else as text. */
+function GenericValue({ text }: { text: string }) {
   const parsed = tryParseJson(text);
   if (parsed !== undefined && typeof parsed === "object" && parsed !== null) {
     return Array.isArray(parsed) ? <ValueList items={parsed} /> : <KeyValueGrid obj={parsed} />;

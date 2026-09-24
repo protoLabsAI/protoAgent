@@ -133,6 +133,34 @@ A path that is **not on the server's filesystem** must stay `type: "string"` —
 local browser would point at the wrong machine entirely. The test for `type: path` is
 "would `ls` on this box resolve it?", not "does it look like a path?".
 
+### Open files in your editor
+
+File paths in the fs tools' results are links: `read_file` gets a header link to the file
+(at its `offset`), each `file:line` hit in `search_files` opens at that line, and every
+path from `find_files` / `write_file` / `edit_file` opens the file. Pick the editor under
+**Settings ▸ Chat ▸ Open files in** — **Zed** (default), **VS Code**, **Cursor**, or
+**Off**. The choice is saved per browser (localStorage `protoagent.editor`), not in agent
+config: it describes the machine you're sitting at, so it stays put when you switch
+fleet agents.
+
+The tools speak project-relative paths, so the console joins them onto each project's
+absolute root from `GET /api/fs/roots` (`{"roots": {"<project>": "<abs root>"}}`) — the
+live fence the tools actually resolve through, not the ADR 0095 registry
+`/api/projects` reports (explicit `filesystem.projects` or the workspace default can
+shadow it). The links are `zed://file/<abs>:<line>` (and `vscode://`, `cursor://`), so
+they only resolve when the console and the agent share a filesystem — a local server or
+the desktop app; a remote fleet member's paths don't exist on your machine. With the
+preference Off, an unknown project, or the roots not loaded, results render as plain
+text exactly as before.
+
+> **Desktop app:** WKWebView/WebView2 can't load `zed://` themselves, so the Tauri shell
+> (`apps/desktop/src-tauri/src/lib.rs`) hands these links to the OS through
+> `tauri-plugin-opener` — on both the same-window navigation path (`serve_navigation`)
+> and the new-window path (`route_new_window`). It is a strict allowlist: only
+> `zed://file/…`, `vscode://file/…` and `cursor://file/…` pass (`is_editor_link`); every
+> other custom scheme is still dropped, so web content can't launch arbitrary URL
+> handlers.
+
 > `operator.allowed_dirs` and `operator.project_dir` are **not** that fence, despite the
 > names. `allowed_dirs` is inert (its enforcement helper has no callers since tasks went
 > instance-global and notes became a plugin); `project_dir` only names the console's
