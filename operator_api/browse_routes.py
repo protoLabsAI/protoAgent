@@ -20,6 +20,12 @@ what to fence. That grants nothing new: the same operator can already type any
 absolute path into the same field, and every ``/api`` route is already
 operator-authed. Kept narrow anyway — directory NAMES only, never file contents,
 never a write.
+
+**The code pane (ADR 0112)** lives here too — ``/api/fs/file`` and ``/api/fs/diff`` —
+but on the opposite side of that line: they return file CONTENT, so they never leave
+the fs fence (``tools.fs_tools.live_project_registry``, the ``read_file`` chokepoint),
+refuse secret-like names (``tools.fs_secrets``), and run git only through the hardened
+argv in ``tools.git_read``. Still read-only.
 """
 
 from __future__ import annotations
@@ -125,6 +131,141 @@ def register_browse_routes(app) -> None:
             return {"roots": {}}
         # is_dir() per root — off the event loop, like every other fs call here.
         return {"roots": await asyncio.to_thread(project_roots, cfg)}
+
+    # ── code pane (ADR 0112) ─────────────────────────────────────────────────────
+    # Unlike /api/fs/browse these return file CONTENT, so they stay INSIDE the fs fence:
+    # every path goes through the same `live_project_registry(cfg).resolve` chokepoint
+    # read_file uses, and a secret-like name (tools/fs_secrets.py) is refused even for
+    # the operator — the pane is a display surface (screen shares, screenshots), not an
+    # exfiltration-proof boundary, so it errs on the side of not painting keys.
+
+    def _fs_error(status: int, code: str, reason: str):
+        return HTTPException(status_code=status, detail={"code": code, "reason": reason})
+
+    def _fence(project: str, path: str):
+        """(registry project root, resolved target) or raise ValueError — the fs-tool fence."""
+        from runtime.state import STATE
+        from tools.fs_tools import live_project_registry
+
+        registry = live_project_registry(getattr(STATE, "graph_config", None))
+        target = registry.resolve(project, path)
+        return registry.get(project).root, target
+
+    def _read_file(project: str, path: str, start: int, end: int | None) -> dict:
+        import os
+
+        from tools.fs_secrets import is_secret_path
+        from tools.fs_view import NotARegularFile, guess_language, open_regular, read_window, sniff_binary
+
+        try:
+            root, target = _fence(project, path)
+        except ValueError as exc:
+            raise _fs_error(400, "bad_path", str(exc)) from exc
+        # Denied BEFORE any existence check — a 403-vs-404 split would be an oracle for
+        # which secret files exist. Checked on the requested name AND on the resolved
+        # target, so `notes.txt -> .env` is refused too.
+        reason = is_secret_path(path) or is_secret_path(target.relative_to(root))
+        if reason:
+            raise _fs_error(403, "denied", f"secret-like file: {reason}")
+        if not target.exists():
+            raise _fs_error(404, "not_found", f"no such file: {path}")
+        if target.is_dir():
+            raise _fs_error(400, "not_a_file", f"not a file: {path}")
+        # Everything below reads ONE descriptor that open_regular has verified is a regular
+        # file — a FIFO would block the worker forever, and a path swapped for a symlink
+        # after `_fence` resolved it must not be followed.
+        try:
+            fh = open_regular(target)
+        except NotARegularFile as exc:
+            raise _fs_error(400, "not_a_file", f"not a file: {path}") from exc
+        except FileNotFoundError as exc:
+            raise _fs_error(404, "not_found", f"no such file: {path}") from exc
+        rel = target.relative_to(root).as_posix()
+        with fh:
+            base = {"project": project, "path": rel, "size": os.fstat(fh.fileno()).st_size, "language": guess_language(rel)}
+            if sniff_binary(fh):
+                return {**base, "line_count": None, "start": None, "end": None, "truncated": False, "binary": True, "text": None}
+            try:
+                win = read_window(fh, start, end)
+            except ValueError as exc:
+                raise _fs_error(400, "bad_range", str(exc)) from exc
+        return {
+            **base,
+            "line_count": win.line_count,
+            "start": win.start,
+            "end": win.end,
+            "truncated": win.truncated,
+            "binary": False,
+            "text": win.text,
+        }
+
+    @app.get("/api/fs/file")
+    async def _api_fs_file(project: str, path: str, start: str = "1", end: str | None = None):
+        """Lines ``start..end`` of a fenced project file for the console code pane.
+
+        Same fence as ``read_file``; secret-like names are 403 ``denied``; a binary file
+        answers with metadata and ``text: null``. Capped per response (2 MB of text,
+        20,000 lines, 2,000 chars per line) with ``truncated`` set — page with
+        ``start=end+1``. Read-only.
+        """
+        import asyncio
+
+        # Parsed by hand, not as `int` params: FastAPI's own 422 has a different shape from
+        # every other error this route returns ({code, reason}), and the console keys on code.
+        try:
+            start_n = int(start.strip()) if start and start.strip() else 1
+            end_n = int(end.strip()) if end is not None and end.strip() else None
+        except ValueError as exc:
+            raise _fs_error(400, "bad_range", f"start/end must be integers (got start={start!r}, end={end!r})") from exc
+        try:
+            return await asyncio.to_thread(_read_file, project, path, start_n, end_n)
+        except HTTPException:
+            raise
+        except OSError as exc:
+            raise _fs_error(400, "unreadable", f"can't read {path}: {exc}") from exc
+
+    def _diff(project: str) -> dict:
+        from tools.git_read import working_tree_diff
+
+        try:
+            root, _ = _fence(project, ".")
+        except ValueError as exc:
+            raise _fs_error(400, "bad_path", str(exc)) from exc
+        d = working_tree_diff(root)
+        if not d.is_git:
+            return {"project": project, "is_git": False, "files": [], "patch": ""}
+        return {
+            "project": project,
+            "is_git": True,
+            "head": d.head,
+            "branch": d.branch,
+            "files": [f.as_dict() for f in d.files],
+            "patch": d.patch,
+            "truncated": d.truncated,
+        }
+
+    @app.get("/api/fs/diff")
+    async def _api_fs_diff(project: str):
+        """The project's working tree vs ``HEAD`` (tracked changes + untracked files).
+
+        Hardened git (tools/git_read.py): no external diff, textconv, filter, fsmonitor or
+        hook can run, whatever the repository's config/attributes say. Secret-like paths
+        are listed ``denied: true`` with their content omitted. Patch capped at 1 MB.
+        """
+        import asyncio
+
+        from tools.git_read import GitError, GitTimeout
+
+        try:
+            return await asyncio.to_thread(_diff, project)
+        except HTTPException:
+            raise
+        except GitTimeout as exc:
+            raise _fs_error(504, "timeout", "git took longer than 10s") from exc
+        except GitError as exc:
+            raise _fs_error(400, "git_error", str(exc)) from exc
+        except OSError as exc:
+            raise _fs_error(400, "unreadable", f"can't read {project}: {exc}") from exc
 
     def _browse(path: str, *, files: bool, hidden: bool) -> dict:
         """Resolve + validate + list, entirely inside the worker thread. Raises the

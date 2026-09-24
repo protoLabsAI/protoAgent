@@ -10,6 +10,8 @@
   (console IA, slug routing), [ADR 0044](./0044-plugin-driven-console-navigation.md)
   (plugins contribute rail surfaces), [ADR 0045](./0045-chat-panel-slot.md) (the
   chat panel is a slot), and [ADR 0048](./0048-settings-ia-two-scope-homes.md).
+- **Amended by:** [ADR 0112](./0112-console-code-pane.md) — the `code` surface is a core
+  view whose programmatic open places it on the dock that does not hold chat.
   Touches `state/uiStore.ts` (`railOrder`/`surface`) and `chat/chat-store.ts`
   (`sessions`).
 

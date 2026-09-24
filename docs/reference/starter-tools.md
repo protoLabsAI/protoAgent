@@ -340,6 +340,11 @@ blob. Data-only and safe — no code execution — and the console renders it th
 
 `title` is an optional heading. An unknown `component` returns an error naming the valid ones.
 
+The fourth registered type, `code-ref` (a pointer into a project file that opens the console's
+code pane — [ADR 0112](/adr/0112-console-code-pane)), is not built here: it is emitted only by
+the filesystem tool `show_code(project, path, line, end_line?, note?)`, which checks the fence,
+the secret-like-name deny list and the line range first. `show_component` refuses it.
+
 Rule of thumb: a data **shape** (table / metrics / steps) → this tool; a generated **visual**
 (chart, diagram, bespoke HTML/React/SVG) → an artifact, which renders generated code in a
 separate sandboxed panel.
