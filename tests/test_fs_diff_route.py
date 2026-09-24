@@ -350,3 +350,14 @@ def test_run_capped_times_out(tmp_path):
     g = git_read._Git(root, timeout=0.0)
     with pytest.raises(git_read.GitTimeout):
         g.run_capped("diff", "HEAD", cap=10)
+
+
+def test_rename_with_edits_reports_its_line_counts(tmp_path, monkeypatch):
+    """numstat -z emits a rename as "adds\tdels\t", OLD, NEW — the counts must land on the
+    entry keyed by the NEW path (a review round claimed they didn't; this pins it)."""
+    root = _repo(tmp_path / "repo")
+    _git(root, "mv", "old_name.txt", "new_name.txt")
+    p = root / "new_name.txt"
+    p.write_bytes(p.read_bytes().replace(b"line 3\n", b"") + b"added 1\nadded 2\n")
+    f = {f["path"]: f for f in _diff(_client(monkeypatch, root)).json()["files"]}["new_name.txt"]
+    assert (f["status"], f["old_path"], f["additions"], f["deletions"]) == ("R", "old_name.txt", 2, 1)

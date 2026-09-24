@@ -326,7 +326,9 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
     while i < len(nfields):
         adds, dels, path = (nfields[i].split("\t", 2) + ["", ""])[:3]
         i += 1
-        if path == "":  # a rename: "adds\tdels\t", then the old and the new path
+        if path == "":
+            # A rename: "adds\tdels\t", then two more fields — nfields[i] is the OLD path,
+            # nfields[i + 1] the NEW one, which is what `files` is keyed by.
             path = nfields[i + 1] if i + 1 < len(nfields) else ""
             i += 2
         f = files.get(path)
