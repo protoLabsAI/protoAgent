@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.175.0] - 2026-09-24
+
+### Added
+- **Langfuse traces carry their input and output, and ACP coder runs are traced (#3587).** A turn's trace now shows the user's message and the agent's answer. Every generation shows the messages it was sent and its reply: credentials are redacted, each message is capped at 8k chars, each call at 32k (newest messages first; prompt capture keeps the full prompt). Traces group under Langfuse Sessions by session id. Incognito turns still record structure, usage and cost, but no content. Before this, IO was left to the LiteLLM gateway, so an agent on a native OAuth provider logged no prompts or replies anywhere. Coder runs (the project board's included) are `acp:<name>` agent spans with each tool call nested under them; before this, no coder run reached Langfuse.
+
+### Changed
+- **The shipped example config declares its `providers:` registry explicitly (#3128).** `config/langgraph-config.example.yaml` now states its `gateway` connection (ADR 0106) instead of leaning on the load-time migration that synthesises one from the retired `model.api_base`/`model.api_key`. A config with those fields removed resolves the same gateway endpoint and key it does today — the precondition for retiring the three fields. The migration stays as a fallback for configs that declare nothing.
+
+### Fixed
+- **Large-document knowledge ingest no longer silently loses every vector (#3126).** `HybridKnowledgeStore.add_document` embedded a whole document's chunks in one request; on a book-sized ingest (e.g. 839 chunks from a 336-page PDF) that blew the shared embeddings client's query-tuned 8s timeout, the batch returned nothing, and the rows were kept FTS5-only while the ingest reported success — so semantic recall never surfaced the document. The embed batch is now sliced into timeout-sized requests (128 chunks each): one slow slice costs only its own vectors, the rest still land, and a failed slice falls back to per-chunk embedding. `IngestResult` now carries an `embedded` count, which the `knowledge_ingest` tool and `POST /api/knowledge/ingest` surface so a partial embed reads as "839 chunks, 0 embedded" instead of a silent success. The shared client's `request_timeout`/`max_retries` (correct for the chat query hot-path, #1681) are unchanged.
+
+- **`npm run --workspaces build` no longer hard-fails on the desktop app without a frozen sidecar (#3128).** `apps/desktop`'s `build` now skips `tauri build` (exit 0) when the PyInstaller server sidecar is absent — a fresh clone, the console CI sweep, any contributor machine — and runs the real bundle, forwarding every arg, once the sidecar exists. The Desktop Build workflow is unchanged: it freezes the sidecar first, so it still bundles as before.
+
 ## [0.174.1] - 2026-09-24
 
 ### Fixed
