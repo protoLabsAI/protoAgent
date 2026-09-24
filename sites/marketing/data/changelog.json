@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.176.0",
+    "date": "2026-09-24",
+    "changes": [
+      "File paths in tool results open in your editor — Zed by default (#3596).",
+      "open_in_editor: an agent on your own machine can pop a file open in your editor (#3597)."
+    ]
+  },
+  {
     "version": "v0.175.0",
     "date": "2026-09-24",
     "changes": [
