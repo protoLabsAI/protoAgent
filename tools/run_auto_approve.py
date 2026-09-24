@@ -99,6 +99,12 @@ _WRAPPERS = frozenset(
     {
         "sh", "bash", "zsh", "dash", "ksh", "fish", "env", "xargs", "sudo", "doas", "su",
         "nohup", "nice", "timeout", "time", "command", "exec", "eval", "builtin", "watch",
+        # process/priority/tracing wrappers and privilege/namespace switchers
+        "setsid", "stdbuf", "unbuffer", "chroot", "ionice", "taskset", "chrt", "flock",
+        "caffeinate", "arch", "script", "strace", "ltrace", "dtruss", "gdb", "lldb", "valgrind",
+        "busybox", "runuser", "pkexec", "systemd-run", "firejail", "nsenter", "unshare",
+        # remote / session / app launchers and other shells
+        "ssh", "tmux", "screen", "expect", "open", "osascript", "pwsh", "powershell",
     }
 )  # fmt: skip
 # Entries so broad they approve an arbitrary program: the launcher itself, or a
@@ -114,6 +120,7 @@ _LAUNCHERS = frozenset(
         "npx", "bunx", "pnpx", "uvx", "pipx",
         # multi-verb tools: the bare name reaches `-c`, aliases, `exec`, … — list a subcommand.
         "git", "npm", "pnpm", "yarn", "uv", "mise", "cargo", "go", "make", "poetry", "bundle", "gh",
+        "lua", "tclsh", "Rscript", "julia", "java", "docker", "podman", "kubectl",
     }
 )  # fmt: skip
 _BROAD_PREFIXES = frozenset(
@@ -124,6 +131,8 @@ _BROAD_PREFIXES = frozenset(
         ("yarn", "exec"), ("yarn", "dlx"), ("yarn", "run"),
         ("bun", "run"), ("bun", "x"), ("uv", "run"), ("uv", "tool", "run"), ("poetry", "run"),
         ("bundle", "exec"), ("cargo", "run"), ("go", "run"), ("gh", "api"), ("gh", "alias"),
+        ("docker", "run"), ("docker", "exec"), ("podman", "run"), ("podman", "exec"),
+        ("kubectl", "exec"), ("kubectl", "run"),
     }
 )  # fmt: skip
 

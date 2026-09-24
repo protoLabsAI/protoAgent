@@ -254,6 +254,13 @@ def test_empty_list_matches_nothing():
         "bash script.sh",
         "git --no-pager",
         "python -m",
+        "setsid",
+        "stdbuf -oL",
+        "caffeinate -i",
+        "ssh buildbox",
+        "strace -f",
+        "docker run",
+        "kubectl exec",
         # a path to a launcher is the launcher
         "/bin/sh",
         "/usr/bin/env -i",
