@@ -1614,7 +1614,8 @@ FIELDS: list[Field] = [
         "Onboarding root",
         "path",
         "Project onboarding",
-        "Clones land here; registrations must resolve under this directory.",
+        "Clones land here, and existing local directories can be registered only "
+        "if they resolve under this directory — widen it to let the agent register more.",
         depends_on={"key": "onboarding.enabled"},
     ),
     Field(
@@ -1623,9 +1624,10 @@ FIELDS: list[Field] = [
         "Allowed sources",
         "string_list",
         "Project onboarding",
-        "Clone source globs — same semantics as plugins.sources.allow "
-        "(e.g. github.com/protoLabsAI/*). Only repos matching at least one "
-        "pattern can be onboarded.",
+        "Clone source globs on host/owner/repo — same semantics as "
+        "plugins.sources.allow, any git host (e.g. github.com/protoLabsAI/*, "
+        "gitlab.com/acme/*). Only repos matching at least one pattern can be "
+        "cloned; registering a local directory needs only the root.",
         depends_on={"key": "onboarding.enabled"},
     ),
     Field(

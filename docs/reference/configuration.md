@@ -465,26 +465,30 @@ projects:
 | `no_delete` | `false` | With `write: true`, forbid `delete_file` (create/edit, never delete). |
 | `fs` | `true` | `false` keeps the entry for GitHub/board consumers only — no filesystem tools reach it. |
 
-Two things write entries here besides you. A bundle's Configure step: a `config_inputs` `path` prompt flagged `project: true` registers the answered checkout at create time (core ≥ 0.146, #2977) — `{name: <dir name>, path, github: <owner/name from its origin remote>, write: <onboarding.write_default, i.e. false unless set>}` — and, **only when no `onboarding:` section exists and a GitHub remote was parsed**, seeds `onboarding: {enabled: true, root: <the checkout's parent>, allow: ["github.com/<owner>/<name>"]}` — exactly the typed repo, nothing wider (no remote → registered only, `onboarding` untouched). Once this list is non-empty it *is* the filesystem fence, same as a tool-driven `onboard_project` — the default writable workspace entry no longer applies. The full wording is in the [bundles guide](../guides/bundles.md). And the `onboard_project` tool itself (when `onboarding` below allows it). `show_config(section="projects")` shows what the running agent resolved.
+Two things write entries here besides you. A bundle's Configure step: a `config_inputs` `path` prompt flagged `project: true` registers the answered checkout at create time (core ≥ 0.146, #2977) — `{name: <dir name>, path, github: <owner/name from its origin remote>, write: <onboarding.write_default, i.e. false unless set>}` — and, **only when no `onboarding:` section exists and a GitHub remote was parsed**, seeds `onboarding: {enabled: true, root: <the checkout's parent>, allow: ["github.com/<owner>/<name>"]}` — exactly the typed repo, nothing wider (no remote → registered only, `onboarding` untouched). Once this list is non-empty it *is* the filesystem fence, same as a tool-driven `onboard_project` — the default writable workspace entry no longer applies. The full wording is in the [bundles guide](../guides/bundles.md). And the `onboard_project` / `register_local_project` tools themselves (when `onboarding` below allows it). `show_config(section="projects")` shows what the running agent resolved.
 
 ## `onboarding`
 
-The consent gate for an agent **registering a repository itself** — the `onboard_project` tool (and the `onboard-project` skill the project-manager archetype ships) scans a repo for what a coding-agent loop needs, can clone it, and registers it in `projects` above. Off by default: an agent that can add project roots can widen its own filesystem fence, so the operator declares where that is allowed.
+The consent gate for an agent **registering a repository itself** — the `onboard_project` tool (clone a repo, then register it), the `register_local_project` tool (register a directory already on disk), and the `onboard-project` skill the project-manager archetype ships. Both tools write the `projects` registry above. An agent that can add project roots can widen its own filesystem fence, so the operator declares where that is allowed: `root` bounds every registration, and `allow` bounds what may be cloned.
 
 ```yaml
 onboarding:
   enabled: true
   root: ~/dev                         # clones land here; every registration must resolve UNDER it
-  allow: ["github.com/protoLabsAI/*"] # clone sources the agent may onboard (glob); empty = local paths only
+  allow:                              # clone sources the agent may onboard (glob on host/owner/repo)
+    - "github.com/protoLabsAI/*"
+    - "gitlab.com/acme/*"
   write_default: false                # registered read-only unless the call asks for write
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `false` | Off → the `onboard_project` tool is **absent from the toolset entirely** (the skill's readiness scan still works read-only through the fs tools). |
-| `root` | `""` | Required when enabled. Clones go here; a path outside it is refused. |
-| `allow` | `[]` | Glob allowlist for clone URLs. Empty = no cloning, local paths under `root` only. |
+| `enabled` | `true` | A discoverability switch, not the consent — `root` and `allow` are, and both are empty by default, so a stock install onboards nothing (the tools refuse, naming what to set). Off → both tools are **absent from the toolset entirely**. |
+| `root` | `""` | Clones land here, and `register_local_project` accepts only a directory that **resolves** (symlinks followed) strictly inside it. Unset → every registration is refused. To let the agent register something elsewhere, widen this — the agent cannot. |
+| `allow` | `[]` | `fnmatch` globs (same semantics as `plugins.sources.allow`) matched against a clone source's canonical **`host/owner/repo`**, for any git host: `github.com/acme/*`, `gitlab.com/acme/*`, `git.example.com/team/*`. A bare `owner/repo` means `github.com`; an https URL, an ssh URL and the scp form `git@host:owner/repo` of the same repo all normalize to the same string (port and credentials dropped). Empty = nothing may be cloned; it does not gate `register_local_project`, which fetches nothing. |
 | `write_default` | `false` | Whether a registration is fenced read-write unless the call says otherwise. |
+
+git receives the clone URL exactly as given, so the host's ssh keys and credential helpers apply; a credential embedded in an https URL is masked in everything the tool reports (git itself still stores the URL in the checkout's `.git/config`, so prefer a credential helper). Refused before git runs: local paths and `file://`, remote-helper transports such as `ext::`, and anything starting with `-`.
 
 ## `egress`
 
