@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "node scripts/build-if-sidecar.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2"

@@ -19,25 +19,30 @@
 # (`providers: {gateway: sk-...}`), which wins over an inline `api_key`; the Host file
 # cannot hand one out.
 #
-# Left commented on purpose: an active list here would be copied into every new
-# instance, shadowing its box's connections and turning off the load-time migration —
-# which, for a config with NO `providers:` block, builds `gateway` from the App default
-# endpoint (http://gateway:4000/v1) with its key from secrets.yaml `model.api_key` or
-# OPENAI_API_KEY. That is how this template runs until you declare connections here or
-# in Settings ▸ Model ▸ Connections.
-#
-# providers:
-#   - id: gateway
-#     type: openai-compat
-#     label: LiteLLM gateway
-#     base_url: http://gateway:4000/v1
-#   - id: local
-#     type: openai-compat
-#     base_url: http://127.0.0.1:8080/v1   # a local vLLM / Ollama / LM Studio
-#   - id: anthropic-oauth
-#     type: anthropic-oauth                # Claude Pro/Max — no endpoint, no key
-#   - id: openai-codex
-#     type: openai-codex                   # ChatGPT/Codex plan — no endpoint, no key
+# Declared explicitly below (ADR 0106 / #3128): the template no longer leans on the
+# load-time migration that synthesises a `gateway` connection from the retired
+# `model.api_base`/`model.api_key`. `base_url` here is exactly the App-default endpoint
+# that migration used, so a config with the retired fields removed keeps resolving the
+# SAME gateway. The key is NOT carried in this file — put it in secrets.yaml under
+# `providers: {gateway: sk-...}` (an OPENAI_API_KEY env key is a migration-only
+# convenience; a declared connection reads its key only from its own fields/secrets).
+# On a fleet box, set the endpoint ONCE in the Host layer (host-config.yaml /
+# Settings ▸ Host) and DROP `base_url` here so this agent inherits it instead of
+# shadowing the box.
+providers:
+  - id: gateway
+    type: openai-compat
+    label: LiteLLM gateway
+    base_url: http://gateway:4000/v1
+  # More connections an agent can reach — uncomment to add. A local runtime, or a
+  # native Claude / ChatGPT subscription (ADR 0097; no endpoint, no key):
+  # - id: local
+  #   type: openai-compat
+  #   base_url: http://127.0.0.1:8080/v1   # a local vLLM / Ollama / LM Studio
+  # - id: anthropic-oauth
+  #   type: anthropic-oauth                # Claude Pro/Max — no endpoint, no key
+  # - id: openai-codex
+  #   type: openai-codex                   # ChatGPT/Codex plan — no endpoint, no key
 
 model:
   # `name` is HOST-scoped (ADR 0047) — a box-wide default set on the Host console
