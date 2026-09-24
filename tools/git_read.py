@@ -35,11 +35,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from tools.fs_secrets import is_secret_path
+from tools.fs_view import open_regular
 
 DIFF_TIMEOUT_S = 10.0
 MAX_PATCH_BYTES = 1024 * 1024
@@ -151,6 +153,57 @@ class _Git:
             msg = proc.stderr.decode("utf-8", errors="replace").strip()
             raise GitError(f"git {args[0]} failed ({proc.returncode}): {msg[:300]}")
         return proc.stdout
+
+    def run_capped(self, *args: str, cap: int) -> tuple[bytes, bool]:
+        """Like :meth:`run`, but STREAMS stdout and stops at ``cap`` bytes.
+
+        ``git diff`` over a changed multi-GB file would otherwise be buffered whole before
+        any cap applied. Past ``cap`` the process is killed and ``(first cap bytes, True)``
+        returned; the deadline is enforced by a timer that kills git (a blocking pipe read
+        can't time out on its own). stderr is discarded so it can't fill and deadlock.
+        """
+        left = self.deadline - time.monotonic()
+        if left <= 0:
+            raise GitTimeout()
+        argv = ["git", "--no-pager", *_BASE_CONFIG, *self.extra_config, *args]
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(self.cwd),
+                env=self.env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise GitError("git is not installed") from exc
+        timed_out = threading.Event()
+
+        def _expire() -> None:
+            timed_out.set()
+            proc.kill()
+
+        timer = threading.Timer(left, _expire)
+        timer.daemon = True
+        timer.start()
+        buf = bytearray()
+        capped = False
+        try:
+            while chunk := proc.stdout.read(65536):
+                buf += chunk
+                if len(buf) > cap:
+                    capped = True
+                    proc.kill()
+                    break
+        finally:
+            timer.cancel()
+            proc.stdout.close()
+            proc.wait()
+        if timed_out.is_set() and not capped:
+            raise GitTimeout()
+        if not capped and proc.returncode != 0:
+            raise GitError(f"git {args[0]} failed ({proc.returncode})")
+        return bytes(buf[:cap]), capped
 
 
 def _neutralise_filters(git: _Git) -> None:
@@ -269,7 +322,8 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
             if f.old_path:
                 denied_specs.append(f":(exclude,literal){f.old_path}")
 
-    patch = git.run("diff", *diff_opts, base, "--", ".", *denied_specs).decode("utf-8", errors="replace")
+    raw_patch, patch_capped = git.run_capped("diff", *diff_opts, base, "--", ".", *denied_specs, cap=MAX_PATCH_BYTES)
+    patch = raw_patch.decode("utf-8", errors="replace")
 
     # Untracked files. Porcelain paths are relative to the repository top, so strip the
     # project's prefix within it (empty when the project IS the repository).
@@ -321,15 +375,22 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
             if is_secret_path(resolved.relative_to(root_resolved)):
                 f.denied = True
                 continue
-            if not target.is_file():
+            if not resolved.is_file():
                 continue  # a nested repo's directory, a FIFO (reading one blocks forever), …
-            size = target.stat().st_size
-            if size > MAX_UNTRACKED_BYTES or len(patch) + extra_bytes > MAX_PATCH_BYTES:
-                # Too big to show — or the patch is already past its cap, so reading more
-                # content would only be thrown away.
+            if patch_capped or len(patch) + extra_bytes > MAX_PATCH_BYTES:
+                # The patch is already past its cap: reading more content would only be
+                # thrown away.
                 extra.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n")
                 continue
-            data = target.read_bytes()
+            # A verified-regular descriptor (a FIFO or symlink swapped in after the checks
+            # above is refused, never blocked on or followed), read no further than needed.
+            with open_regular(resolved) as fh:
+                size = os.fstat(fh.fileno()).st_size
+                data = fh.read(MAX_UNTRACKED_BYTES + 1) if size <= MAX_UNTRACKED_BYTES else b""
+            if size > MAX_UNTRACKED_BYTES or len(data) > MAX_UNTRACKED_BYTES:
+                # Too big to show.
+                extra.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n")
+                continue
         except OSError:
             continue
         if _looks_binary(data):
@@ -342,9 +403,9 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
         extra_bytes += len(chunk)
 
     full = patch + "".join(extra)
-    truncated = files_truncated
+    truncated = files_truncated or patch_capped
     encoded = full.encode("utf-8")
-    if len(encoded) > MAX_PATCH_BYTES:
+    if len(encoded) > MAX_PATCH_BYTES or patch_capped:
         cut = encoded[:MAX_PATCH_BYTES]
         # End on a line boundary so the client's parser never sees half a line.
         nl = cut.rfind(b"\n")

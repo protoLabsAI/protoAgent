@@ -1064,7 +1064,7 @@ def build_fs_tools(config) -> list:
         """
         from graph.components import CODE_REF_NOTE_MAX, encode_component
         from tools.fs_secrets import is_secret_path
-        from tools.fs_view import count_lines
+        from tools.fs_view import count_lines, open_regular, sniff_binary
 
         registry = registry_ref.get()
         try:
@@ -1077,13 +1077,16 @@ def build_fs_tools(config) -> list:
             return f"Error: {path} looks like a secret ({reason}) — the code pane won't show it."
         if not target.is_file():
             return f"Error: no such file: {path}"
-        if _is_probably_binary(target):
-            return f"Error: {path} is a binary file — the code pane shows text only."
         note = (note or "").strip()
         if len(note) > CODE_REF_NOTE_MAX:
             return f"Error: `note` is {len(note)} chars; keep it to one sentence (≤ {CODE_REF_NOTE_MAX})."
         try:
-            total = count_lines(target)
+            # One verified-regular descriptor for both the sniff and the count (a FIFO
+            # swapped in after is_file() must not block the tool).
+            with open_regular(target) as fh:
+                if sniff_binary(fh):
+                    return f"Error: {path} is a binary file — the code pane shows text only."
+                total = count_lines(fh)
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
         if not isinstance(line, int) or line < 1 or line > total:

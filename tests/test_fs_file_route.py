@@ -252,3 +252,24 @@ def test_fifo_is_not_a_file_and_never_blocks(client, proj):
     os.mkfifo(proj / "pipe")
     r = _get(client, "pipe")
     assert r.status_code == 400 and r.json()["detail"]["code"] == "not_a_file"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
+def test_open_regular_refuses_a_fifo_without_blocking(tmp_path):
+    """The race CodeRabbit flagged: even if a caller's is_file() check passed and the path
+    was then swapped for a FIFO, the open itself must neither block nor read it."""
+    from tools.fs_view import NotARegularFile, open_regular
+
+    os.mkfifo(tmp_path / "pipe")
+    with pytest.raises(NotARegularFile):
+        open_regular(tmp_path / "pipe")
+
+
+@_needs_symlinks
+def test_open_regular_refuses_a_final_symlink(tmp_path):
+    from tools.fs_view import open_regular
+
+    (tmp_path / "real").write_bytes(b"x")
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    with pytest.raises(OSError):
+        open_regular(tmp_path / "link")

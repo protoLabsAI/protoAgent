@@ -281,3 +281,30 @@ def test_file_list_cap_sets_truncated(tmp_path, monkeypatch):
     monkeypatch.setattr(git_read, "MAX_FILES", 3)
     body = _diff(_client(monkeypatch, root)).json()
     assert len(body["files"]) == 3 and body["truncated"] is True
+
+
+def test_patch_is_streamed_and_git_killed_past_the_cap(tmp_path, monkeypatch):
+    """The tracked patch must be capped WHILE reading git's output, not after buffering
+    it — a changed multi-GB file would otherwise be held in memory whole."""
+    root = _repo(tmp_path / "repo")
+    (root / "src" / "app.py").write_bytes(b"".join(f"row {i}\n".encode() for i in range(200_000)))
+    monkeypatch.setattr(git_read, "MAX_PATCH_BYTES", 4096)
+    seen = []
+    real = git_read._Git.run_capped
+
+    def spy(self, *args, cap):
+        out, capped = real(self, *args, cap=cap)
+        seen.append((len(out), capped))
+        return out, capped
+
+    monkeypatch.setattr(git_read._Git, "run_capped", spy)
+    body = _diff(_client(monkeypatch, root)).json()
+    assert seen == [(4096, True)]
+    assert body["truncated"] is True and len(body["patch"].encode()) <= 4096
+
+
+def test_run_capped_times_out(tmp_path):
+    root = _repo(tmp_path / "repo")
+    g = git_read._Git(root, timeout=0.0)
+    with pytest.raises(git_read.GitTimeout):
+        g.run_capped("diff", "HEAD", cap=10)

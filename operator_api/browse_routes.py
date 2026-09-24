@@ -152,9 +152,10 @@ def register_browse_routes(app) -> None:
         return registry.get(project).root, target
 
     def _read_file(project: str, path: str, start: int, end: int | None) -> dict:
+        import os
+
         from tools.fs_secrets import is_secret_path
-        from tools.fs_tools import _is_probably_binary
-        from tools.fs_view import guess_language, read_window
+        from tools.fs_view import NotARegularFile, guess_language, open_regular, read_window, sniff_binary
 
         try:
             root, target = _fence(project, path)
@@ -168,17 +169,26 @@ def register_browse_routes(app) -> None:
             raise _fs_error(403, "denied", f"secret-like file: {reason}")
         if not target.exists():
             raise _fs_error(404, "not_found", f"no such file: {path}")
-        if not target.is_file():
-            # A directory — or a FIFO/socket/device, which would block the reader forever.
+        if target.is_dir():
             raise _fs_error(400, "not_a_file", f"not a file: {path}")
-        rel = target.relative_to(root).as_posix()
-        base = {"project": project, "path": rel, "size": target.stat().st_size, "language": guess_language(rel)}
-        if _is_probably_binary(target):
-            return {**base, "line_count": None, "start": None, "end": None, "truncated": False, "binary": True, "text": None}
+        # Everything below reads ONE descriptor that open_regular has verified is a regular
+        # file — a FIFO would block the worker forever, and a path swapped for a symlink
+        # after `_fence` resolved it must not be followed.
         try:
-            win = read_window(target, start, end)
-        except ValueError as exc:
-            raise _fs_error(400, "bad_range", str(exc)) from exc
+            fh = open_regular(target)
+        except NotARegularFile as exc:
+            raise _fs_error(400, "not_a_file", f"not a file: {path}") from exc
+        except FileNotFoundError as exc:
+            raise _fs_error(404, "not_found", f"no such file: {path}") from exc
+        rel = target.relative_to(root).as_posix()
+        with fh:
+            base = {"project": project, "path": rel, "size": os.fstat(fh.fileno()).st_size, "language": guess_language(rel)}
+            if sniff_binary(fh):
+                return {**base, "line_count": None, "start": None, "end": None, "truncated": False, "binary": True, "text": None}
+            try:
+                win = read_window(fh, start, end)
+            except ValueError as exc:
+                raise _fs_error(400, "bad_range", str(exc)) from exc
         return {
             **base,
             "line_count": win.line_count,

@@ -15,8 +15,11 @@ cap, and only :data:`MAX_LINE_CHARS` of any one line.
 
 from __future__ import annotations
 
+import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # text returned per response
 MAX_LINES = 20_000  # lines returned per response
@@ -49,20 +52,57 @@ def _finish_line(buf: bytearray, overflow: bool, newline: bytes) -> tuple[str, b
     return text + newline.decode("ascii"), cut
 
 
-def count_lines(path: Path) -> int:
+class NotARegularFile(OSError):
+    """The path is a directory, FIFO, socket or device — never read it."""
+
+
+_BINARY_SNIFF_BYTES = 8192
+
+
+def open_regular(path: Path) -> BinaryIO:
+    """Open ``path`` for binary reading, refusing anything but a regular file.
+
+    Checks the OPENED descriptor, not the path, so a file swapped for a FIFO or a symlink
+    between a caller's checks and this open can't slip through: ``O_NONBLOCK`` keeps the
+    open itself from blocking on a FIFO with no writer, ``O_NOFOLLOW`` refuses a final
+    component that became a symlink (callers pass an already-resolved path), and ``fstat``
+    must say ``S_ISREG``. Flags a platform lacks (Windows) are simply omitted.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise NotARegularFile(f"not a regular file: {path}")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def sniff_binary(fh: BinaryIO) -> bool:
+    """``grep -I`` semantics on an open file (a NUL in the first 8 KB); rewinds after."""
+    head = fh.read(_BINARY_SNIFF_BYTES)
+    fh.seek(0)
+    return b"\x00" in head
+
+
+def count_lines(src: Path | BinaryIO) -> int:
     """Number of lines — ``\\n`` count, plus one for a trailing unterminated line."""
+    if isinstance(src, Path):
+        with open_regular(src) as fh:
+            return count_lines(fh)
     total = 0
     last = b""
-    with path.open("rb") as fh:
-        while chunk := fh.read(_CHUNK):
-            total += chunk.count(b"\n")
-            last = chunk[-1:]
+    fh = src
+    while chunk := fh.read(_CHUNK):
+        total += chunk.count(b"\n")
+        last = chunk[-1:]
     if last and last != b"\n":
         total += 1
     return total
 
 
-def read_window(path: Path, start: int = 1, end: int | None = None) -> Window:
+def read_window(src: Path | BinaryIO, start: int = 1, end: int | None = None) -> Window:
     """Lines ``start..end`` (1-based, inclusive) of ``path``, capped.
 
     ``end`` omitted means "to EOF". The response is capped at :data:`MAX_LINES` lines and
@@ -71,8 +111,13 @@ def read_window(path: Path, start: int = 1, end: int | None = None) -> Window:
     kept back part of what was asked for. ``end`` in the result is the last line
     actually returned, so the caller pages on with ``start=end+1``.
 
+    ``src`` is a path (opened with :func:`open_regular`) or an already-open binary file.
     Raises ``ValueError`` when ``start`` is past the end of a non-empty file.
     """
+    if isinstance(src, Path):
+        with open_regular(src) as fh:
+            return read_window(fh, start, end)
+    fh = src
     start = max(1, int(start))
     want_end = None if end is None else int(end)
     if want_end is not None and want_end < start:
@@ -104,30 +149,29 @@ def read_window(path: Path, start: int = 1, end: int | None = None) -> Window:
         out_bytes += size
         truncated = truncated or cut
 
-    with path.open("rb") as fh:
-        while chunk := fh.read(_CHUNK):
-            last_byte = chunk[-1:]
-            pieces = chunk.split(b"\n")
-            for i, piece in enumerate(pieces):
-                terminated = i < len(pieces) - 1
-                in_window = collecting and start <= line_no <= stop_at
-                if piece:
-                    cur_last = piece[-1:]
-                if in_window and not cur_overflow:
-                    room = _LINE_BYTES_KEPT - len(cur)
-                    if len(piece) > room:
-                        cur += piece[:room]
-                        cur_overflow = True
-                    else:
-                        cur += piece
-                if terminated:
-                    total_nl += 1
-                    if in_window:
-                        take(b"\r\n" if cur_last == b"\r" else b"\n")
-                    cur = bytearray()
-                    cur_overflow = False
-                    cur_last = b""
-                    line_no += 1
+    while chunk := fh.read(_CHUNK):
+        last_byte = chunk[-1:]
+        pieces = chunk.split(b"\n")
+        for i, piece in enumerate(pieces):
+            terminated = i < len(pieces) - 1
+            in_window = collecting and start <= line_no <= stop_at
+            if piece:
+                cur_last = piece[-1:]
+            if in_window and not cur_overflow:
+                room = _LINE_BYTES_KEPT - len(cur)
+                if len(piece) > room:
+                    cur += piece[:room]
+                    cur_overflow = True
+                else:
+                    cur += piece
+            if terminated:
+                total_nl += 1
+                if in_window:
+                    take(b"\r\n" if cur_last == b"\r" else b"\n")
+                cur = bytearray()
+                cur_overflow = False
+                cur_last = b""
+                line_no += 1
     line_count = total_nl + (1 if last_byte and last_byte != b"\n" else 0)
     # The trailing unterminated line, if there is one and it is still wanted.
     if line_count > total_nl and collecting and start <= line_no <= stop_at:

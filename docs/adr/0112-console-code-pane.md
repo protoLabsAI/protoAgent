@@ -96,7 +96,8 @@ and runs in `asyncio.to_thread`.
   `text: null`, `line_count`/`start`/`end` null.
 - **Errors** are `{"detail": {"code", "reason"}}`: `bad_path` 400 (unknown project, fence
   escape — also what every project reports when `filesystem.enabled` is false), `denied`
-  403 (D4), `not_found` 404, `not_a_file` 400 (directory), `bad_range` 400 (`start` past
+  403 (D4), `not_found` 404, `not_a_file` 400 (directory, FIFO, socket, device — the read goes through
+one `open_regular` descriptor, verified with `fstat`), `bad_range` 400 (`start` past
   EOF, `end < start`), `unreadable` 400 (other `OSError`).
 
 ### D3 — `GET /api/fs/diff`: hardened git, scoped to the project
@@ -106,8 +107,9 @@ and runs in `asyncio.to_thread`.
 200 → `{project, is_git: true, head, branch, files, patch, truncated}`, each of `files`
 being `{path, status, additions, deletions, binary, denied, old_path?}`; `status` is `M | A | D | R | ?`
 (`?` = untracked; `old_path` only on `R`). Not a repository →
-`{project, is_git: false, files: [], patch: ""}`. The patch is capped at 1 MB, cut on a line
-boundary, `truncated: true`. A 10 s overall deadline → 504 `timeout`; other git failures →
+`{project, is_git: false, files: [], patch: ""}`. The patch is capped at 1 MB — streamed from git, which is killed
+at the cap, so a changed multi-GB file is never buffered whole — cut on a line boundary,
+`truncated: true`. A 10 s overall deadline → 504 `timeout`; other git failures →
 400 `git_error`.
 
 The git primitives live in a new `tools/git_read.py` (not `plugins.delegates`: core must not
@@ -136,8 +138,9 @@ untracked text file ≤ 256 KB gets a synthetic `new file` patch built in Python
 `git diff --no-index` (another git run over repository attributes, and one that can be aimed
 outside the fence). A symlink is shown as git would record it (its target string, mode
 `120000`) and never followed. Larger files get a header only; binaries a
-`Binary files … differ` line. Only regular files are read (a FIFO would block the reader
-forever), the untracked loop honors the deadline, and the file list stops at 5,000 entries
+`Binary files … differ` line. Only regular files are read, through `tools.fs_view.open_regular` (`O_NONBLOCK | O_NOFOLLOW`,
+then `fstat` must say `S_ISREG`, so a FIFO or symlink swapped in after the path checks is
+refused rather than blocked on or followed), the untracked loop honors the deadline, and the file list stops at 5,000 entries
 (`truncated: true`).
 
 An unborn branch diffs against the empty tree (computed with `git hash-object -t tree`, so it
