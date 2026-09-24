@@ -93,6 +93,18 @@ def tool_rounds(messages) -> int:
     return sum(1 for m in messages or [] if isinstance(m, AIMessage) and getattr(m, "tool_calls", None))
 
 
+REASONING_ONLY_MIN_CHARS = 4_000  # of reasoning — a real deliberation, not a preamble
+REASONING_ONLY_MAX_TEXT = 200  # of content — nothing, or one sentence of intent
+
+
+def reasoning_only(message) -> bool:
+    """Did this turn spend itself thinking and deliver (almost) nothing? Reads the
+    `reasoning_content` the reasoning round-trip keeps on the message (#2642)."""
+    extra = getattr(message, "additional_kwargs", None) or {}
+    reasoning = str(extra.get("reasoning_content") or extra.get("reasoning") or "")
+    return len(reasoning) >= REASONING_ONLY_MIN_CHARS and len(_text(message).strip()) <= REASONING_ONLY_MAX_TEXT
+
+
 def describe_turn(message) -> str:
     """``finish_reason=… out_tokens=… in_tokens=… text_chars=…`` for the give-up log (#3582)."""
     meta = getattr(message, "response_metadata", None) or {}
@@ -205,6 +217,16 @@ class CompletionGuardMiddleware(AgentMiddleware):
         if has_deliverable and not owed:
             return None
         sent = nudges_sent(messages)
+        # A reasoning-only turn (#3584): the model spent its output thinking — 20–30k chars of
+        # `reasoning_content` — and emitted no content, or one sentence of intent. A nudge buys
+        # another ~8k tokens of the same (0 of 5 recovered on the second nudge, ~4 minutes
+        # each). One nudge is the fair ask; a second reasoning-only turn ends the lane.
+        if sent >= 1 and reasoning_only(last):
+            log.warning(
+                "[completion-guard] reasoning-only turn after a nudge; letting the run end (%s)",
+                describe_turn(last),
+            )
+            return None
         if sent >= self._max_nudges:
             # What the record cannot say otherwise (#3582): a lane that ends on "Let me verify
             # X" twice looks the same whether its output was cut (finish_reason=length), its
