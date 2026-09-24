@@ -1409,7 +1409,84 @@ fn is_editor_link(target: &str) -> bool {
         && rest.starts_with("//file/")
 }
 
+/// Strict percent-decoding (UTF-8). `None` on a malformed escape or invalid UTF-8 — a
+/// link we can't decode unambiguously is not opened.
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b.get(i + 1..i + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            out.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// The local file an allowlisted editor link points at — `Some` ONLY when the decoded path
+/// (minus an optional `:line[:col]` suffix) is an absolute path to an EXISTING REGULAR FILE,
+/// with no `..` component and no query/fragment. The scheme allowlist alone would still let
+/// any script in the window (a plugin view, agent-authored content) launch the editor on
+/// an arbitrary path with no click — and a DIRECTORY opens as a workspace, whose project
+/// settings (`.zed/settings.json`, `.vscode/tasks.json`) an agent with fenced write access
+/// could have planted. The console only ever links files, so nothing legitimate is lost.
+fn editor_link_file(target: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Component, Path};
+    if !is_editor_link(target) {
+        return None;
+    }
+    let (_, rest) = target.split_once(':')?;
+    let raw = rest.strip_prefix("//file")?; // keeps the leading '/'
+    if raw.contains('?') || raw.contains('#') {
+        return None;
+    }
+    let decoded = percent_decode(raw)?;
+    if decoded.contains('\0') {
+        return None;
+    }
+    // `vscode://file/C:/x` → `/C:/x`: drop the slash before a Windows drive letter.
+    #[cfg(windows)]
+    let decoded = {
+        let b = decoded.as_bytes();
+        if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+            decoded[1..].to_string()
+        } else {
+            decoded
+        }
+    };
+    let mut cand = decoded.as_str();
+    // The path itself, then with up to two trailing `:<digits>` (line, column) removed.
+    for _ in 0..3 {
+        let p = Path::new(cand);
+        if p.is_absolute()
+            && !p.components().any(|c| matches!(c, Component::ParentDir))
+            && p.is_file()
+        {
+            return Some(p.to_path_buf());
+        }
+        match cand.rsplit_once(':') {
+            Some((head, tail)) if !tail.is_empty() && tail.bytes().all(|c| c.is_ascii_digit()) => {
+                cand = head
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn open_editor_link<R: Runtime>(app: &AppHandle<R>, target: &str) {
+    if editor_link_file(target).is_none() {
+        log::warn!("desktop: refused editor link (not an existing file): {target}");
+        return;
+    }
     if let Err(e) = app.opener().open_url(target, None::<&str>) {
         log::error!("desktop: failed to open editor link {target}: {e}");
     }
@@ -1921,7 +1998,91 @@ mod auth_token_tests {
 
 #[cfg(test)]
 mod new_window_tests {
-    use super::{is_editor_link, is_own_origin, own_origin_path, route_new_window, NewWindow};
+    use super::{
+        editor_link_file, is_editor_link, is_own_origin, own_origin_path, percent_decode,
+        route_new_window, NewWindow,
+    };
+
+    /// `<scheme>://file/<abs>` the way the console builds it: each byte outside the
+    /// unreserved set (and `/`, `:`) percent-encoded, a Windows drive given a leading `/`.
+    fn link_for(scheme: &str, p: &std::path::Path, suffix: &str) -> String {
+        let s = p.to_string_lossy().replace('\\', "/");
+        let s = if s.starts_with('/') {
+            s
+        } else {
+            format!("/{s}")
+        };
+        let mut enc = String::new();
+        for b in s.bytes() {
+            if b.is_ascii_alphanumeric() || b"/:.-_~".contains(&b) {
+                enc.push(b as char);
+            } else {
+                enc.push_str(&format!("%{b:02X}"));
+            }
+        }
+        format!("{scheme}://file{enc}{suffix}")
+    }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("pa-editor-link-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // ── #3596 review: the allowlist opens only an EXISTING REGULAR FILE ──────────
+    #[test]
+    fn editor_link_resolves_an_existing_file_with_position() {
+        let d = scratch_dir("file");
+        let f = d.join("a b é#1.rs");
+        std::fs::write(&f, "x").unwrap();
+        for (scheme, suffix) in [
+            ("zed", ""),
+            ("zed", ":42"),
+            ("vscode", ":42:7"),
+            ("cursor", ":1"),
+        ] {
+            let link = link_for(scheme, &f, suffix);
+            assert_eq!(
+                editor_link_file(&link).as_deref(),
+                Some(f.as_path()),
+                "{link}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_link_refuses_dirs_missing_files_and_odd_shapes() {
+        let d = scratch_dir("refuse");
+        let f = d.join("ok.rs");
+        std::fs::write(&f, "x").unwrap();
+        let file_link = link_for("zed", &f, "");
+        for bad in [
+            link_for("zed", &d, ""),                      // a directory = a workspace
+            link_for("vscode", &d, ":3"),                 // …even with a line
+            link_for("zed", &d.join("missing.rs"), ":1"), // not there
+            format!("{file_link}?windowId=_blank"),       // query smuggling
+            format!("{file_link}#frag"),
+            link_for(
+                "zed",
+                &d.join("..").join(d.file_name().unwrap()).join("ok.rs"),
+                "",
+            ), // `..`
+            file_link.replace("ok.rs", "%2E%2E/ok.rs"), // encoded `..`
+            file_link.replace("ok.rs", "ok%zz.rs"),     // malformed escape
+            file_link.replace("ok.rs", "ok.rs:x"),      // non-numeric suffix
+            link_for("zedx", &f, ""),                   // scheme still gated
+        ] {
+            assert_eq!(editor_link_file(&bad), None, "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn percent_decode_is_strict() {
+        assert_eq!(percent_decode("a%20b%C3%A9").as_deref(), Some("a bé"));
+        assert_eq!(percent_decode("%2"), None);
+        assert_eq!(percent_decode("%+1"), None);
+        assert_eq!(percent_decode("%FF"), None); // not UTF-8
+    }
 
     // ── #3596: "open in editor" links — a STRICT scheme allowlist ─────────────
     #[test]

@@ -191,6 +191,18 @@ describe("no link → exactly today's plain render", () => {
     expect(hrefs(el)).toEqual([]);
     expect(el.querySelector(".tool-error")).toBeTruthy();
   });
+
+  // #3596 review: a failed find/write returns "Error: …" — never a path to link.
+  for (const [tool, input] of [
+    ["find_files", '{"project": "app", "pattern": "[bad"}'],
+    ["write_file", '{"project": "app", "path": "src/x.ts", "content": "y"}'],
+  ] as const) {
+    it(`a ${tool} error is not linked`, async () => {
+      const el = await render({ tool, raw: "Error: bad pattern: [bad", input });
+      expect(hrefs(el)).toEqual([]);
+      expect(el.querySelector(".tool-error")).toBeTruthy();
+    });
+  }
 });
 
 describe("parseFsArgs", () => {
