@@ -82,8 +82,11 @@ and runs in `asyncio.to_thread`.
   `start..end` (1-based, inclusive), UTF-8 with replacement, line endings preserved (a CRLF
   file keeps its `\r\n`).
 - **A line ends at `\n`** — what an editor gutter counts — not `str.splitlines`'s wider set
-  that `read_file` inherits, so "line 42" means the same thing to `show_code`, the pane and
-  the operator's editor. Both the route and `show_code` use `tools/fs_view.py`.
+  (`\f`, a lone `\r`, `\x0b`, `\x1c`–`\x1e`, `\x85`, `\u2028`/`\u2029`). This PR moves
+  `read_file` and `search_files` onto the same rule (`tools.fs_view.split_lines`; endings kept,
+  CRLF still one line), so "line 42" means the same thing to `search_files`' `file:line`,
+  `read_file(offset=)`, `show_code`, the pane and the operator's editor. Before, one form feed
+  put `search_files`' hit a row below where the pane opened.
 - **Caps**, streamed in fixed chunks so a 1 GB log or a one-line minified bundle costs
   bounded memory: 2 MB of returned text, 20,000 lines, 2,000 chars per line (the rest of a
   line is replaced by the marker ` … [line truncated]`, before its newline). At least one
@@ -105,7 +108,9 @@ one `open_regular` descriptor, verified with `fstat`), `bad_range` 400 (`start` 
 `GET /api/fs/diff?project=P` → the working tree vs `HEAD`, for the Diff tab.
 
 200 → `{project, is_git: true, head, branch, files, patch, truncated}`, each of `files`
-being `{path, status, additions, deletions, binary, denied, old_path?}`; `status` is `M | A | D | R | ?`
+being `{path, status, additions, deletions, binary, denied, old_path?, reason?, too_large?}`
+(`reason` on denied entries; `too_large: true` on an untracked text file over 256 KB, whose
+content is omitted); `status` is `M | A | D | R | ?`
 (`?` = untracked; `old_path` only on `R`). Not a repository →
 `{project, is_git: false, files: [], patch: ""}`. The patch is capped at 1 MB — streamed from git, which is killed
 at the cap, so a changed multi-GB file is never buffered whole — cut on a line boundary,
@@ -137,7 +142,10 @@ larger repo; `--relative` plus a `.` pathspec keep sibling changes out, and porc
 untracked text file ≤ 256 KB gets a synthetic `new file` patch built in Python — no
 `git diff --no-index` (another git run over repository attributes, and one that can be aimed
 outside the fence). A symlink is shown as git would record it (its target string, mode
-`120000`) and never followed. Larger files get a header only; binaries a
+`120000`) and never followed — unless it resolves outside the project or onto a
+secret-like path, which `/api/fs/file` refuses: then the entry is `denied` (`reason`
+"symlink outside the project" / "symlink to secret-like path") and its content omitted. The
+same applies to a TRACKED symlink in the working tree, which is also excluded from git's patch. Larger files get a header only; binaries a
 `Binary files … differ` line. Only regular files are read, through `tools.fs_view.open_regular` (`O_NONBLOCK | O_NOFOLLOW`,
 then `fstat` must say `S_ISREG`, so a FIFO or symlink swapped in after the path checks is
 refused rather than blocked on or followed), the untracked loop honors the deadline, and the file list stops at 5,000 entries
@@ -255,7 +263,16 @@ console reads:
 - diff `files[]` entries may carry `old_path` (renames); denied entries report zero counts;
 - a binary `/api/fs/file` answer has `line_count`/`start`/`end` null; `path` is the canonical
   resolved relative path;
-- `show_component` refuses `code-ref`.
+- `show_component` refuses `code-ref`;
+- **line numbering (integration finding):** `read_file` and `search_files` now count lines on
+  `\n` only (D2), matching the pane — the one behavior change outside the new surfaces;
+- diff entries carry `reason` when denied and `too_large: true` for untracked text files past
+  256 KB; symlinks resolving outside the project or onto a secret-like path are denied (D3);
+- a non-integer `start`/`end` is 400 `bad_range` (parsed by hand), not FastAPI's 422;
+- `show_code`'s text part echoes the first and last line of the range
+  (``… to the operator. L35: `if (…`  L38: `}` ``, each trimmed to ≤ 80 chars) so the model can
+  check it pointed where it meant and re-point; its docstring sends it to `search_files`
+  (`file:line`) or `read_file(offset=)` for exact numbers. `read_file`'s output is unchanged.
 
 ## References
 

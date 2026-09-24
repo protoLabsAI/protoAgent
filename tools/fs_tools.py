@@ -40,6 +40,7 @@ from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
 from infra.proc import detached_kwargs
+from tools.fs_view import split_lines
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 from tools.shell import run_command as _shell_run
 
@@ -127,6 +128,20 @@ def _to_crlf(text: str) -> str:
     effect of a one-line edit. So the needle moves to the file's convention instead.
     """
     return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
+_ECHO_CHARS = 80
+
+
+def _echo_line(text: str) -> str:
+    """One source line for ``show_code``'s self-check echo: trimmed, ≤ 80 chars, in backticks."""
+    t = text.strip()
+    if not t:
+        return "(blank line)"
+    if len(t) > _ECHO_CHARS:
+        t = t[: _ECHO_CHARS - 1] + "…"
+    t = t.replace("`", "'")
+    return f"`{t}`"
 
 
 def _is_probably_binary(path: Path) -> bool:
@@ -725,7 +740,10 @@ def build_fs_tools(config) -> list:
             text = _read_text_verbatim(target)
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
-        lines = text.splitlines(keepends=True)
+        # `\n`-only numbering (ADR 0112): the same lines search_files reports, the code pane
+        # shows and the operator's editor counts — str.splitlines also breaks on \f, lone
+        # \r, \x85, \u2028 … and put `search_files`'s hits on the wrong row.
+        lines = split_lines(text, keepends=True)
         total = len(lines)
         # offset=1 must stay valid for an empty file (total=0) — `max(total, 1)`
         # keeps that floor without letting a LARGER offset silently skip the
@@ -877,7 +895,10 @@ def build_fs_tools(config) -> list:
                     skipped_binary = True
                     continue
                 try:
-                    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+                    # Verbatim + `\n`-only lines: `read_text` translates a lone `\r` into a
+                    # line break and `splitlines` adds \f, \x85, \u2028 …, so the `file:N` this
+                    # prints disagreed with read_file(offset=N), the code pane and editors.
+                    lines = split_lines(_read_text_verbatim(f))
                 except OSError:
                     continue
                 # Stop SCANNING once the match cap is reached — a huge file with more
@@ -1058,13 +1079,18 @@ def build_fs_tools(config) -> list:
         NOT read the file for you (use `read_file` for that), and it can't show secret-like
         files (.env, keys, credentials) or binary files.
 
+        Get EXACT line numbers first — `search_files` prints `file:line` for every hit, or
+        `read_file` with an `offset` tells you where a chunk starts — never count lines by
+        eye in a plain `read_file` result. The result echoes the first and last line of the
+        range you pointed at; if they aren't the code you meant, call again with the right lines.
+
         `path` is relative to the project root; `line` is 1-based and `end_line` (inclusive,
         defaults to `line`) is clamped to the end of the file. `note` is at most 280 chars.
         Works in read-only projects.
         """
         from graph.components import CODE_REF_NOTE_MAX, encode_component
         from tools.fs_secrets import is_secret_path
-        from tools.fs_view import count_lines, open_regular, sniff_binary
+        from tools.fs_view import count_lines, open_regular, read_window, sniff_binary
 
         registry = registry_ref.get()
         try:
@@ -1087,20 +1113,29 @@ def build_fs_tools(config) -> list:
                 if sniff_binary(fh):
                     return f"Error: {path} is a binary file — the code pane shows text only."
                 total = count_lines(fh)
+                if not isinstance(line, int) or line < 1 or line > total:
+                    return f"Error: line {line!r} is out of range for {path} ({total} lines)."
+                end = line if end_line is None else end_line
+                if end < line:
+                    return f"Error: end_line ({end}) is before line ({line})."
+                end = min(end, total)
+                # Echo the range's first and last lines so the model can check it pointed
+                # where it meant to (it often counts lines by eye) and re-point if not.
+                fh.seek(0)
+                first = read_window(fh, line, line).text
+                fh.seek(0)
+                last = read_window(fh, end, end).text if end != line else first
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
-        if not isinstance(line, int) or line < 1 or line > total:
-            return f"Error: line {line!r} is out of range for {path} ({total} lines)."
-        end = line if end_line is None else end_line
-        if end < line:
-            return f"Error: end_line ({end}) is before line ({line})."
-        end = min(end, total)
         rel = target.relative_to(root).as_posix()
         where = f"{line}" if end == line else f"{line}-{end}"
+        echo = f"L{line}: {_echo_line(first)}"
+        if end != line:
+            echo += f"  L{end}: {_echo_line(last)}"
         props = {"project": project, "path": rel, "line": line, "end_line": end, "note": note}
         # The human/model-facing text comes FIRST: server/chat.py lifts everything from the
         # sentinel on into the component frame and keeps this prefix as the tool card.
-        return f"Showing {project}/{rel}:{where} to the operator.\n" + encode_component("code-ref", props)
+        return f"Showing {project}/{rel}:{where} to the operator. {echo}\n" + encode_component("code-ref", props)
 
     tools = [
         list_projects,

@@ -273,3 +273,15 @@ def test_open_regular_refuses_a_final_symlink(tmp_path):
     (tmp_path / "link").symlink_to(tmp_path / "real")
     with pytest.raises(OSError):
         open_regular(tmp_path / "link")
+
+
+@pytest.mark.parametrize("params", [{"start": "abc"}, {"end": "x"}, {"start": "1.5"}, {"start": "1", "end": "two"}])
+def test_non_numeric_range_is_bad_range_not_422(client, params):
+    r = _get(client, "src/app.py", **params)
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "bad_range" and "reason" in r.json()["detail"]
+
+
+def test_blank_range_params_mean_defaults(client):
+    body = _get(client, "src/app.py", start="", end="").json()
+    assert (body["start"], body["end"]) == (1, 3)

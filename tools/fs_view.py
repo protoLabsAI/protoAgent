@@ -52,6 +52,29 @@ def _finish_line(buf: bytearray, overflow: bool, newline: bytes) -> tuple[str, b
     return text + newline.decode("ascii"), cut
 
 
+def split_lines(text: str, keepends: bool = False) -> list[str]:
+    """Split ``text`` into lines on ``\\n`` ONLY — the numbering every fs tool shares.
+
+    ``str.splitlines`` also breaks on ``\\r``, ``\\f``, ``\\v``, ``\\x1c``-``\\x1e``, ``\\x85``,
+    ``\\u2028``/``\\u2029``, so a file with one form feed numbered differently in
+    ``read_file``/``search_files`` than in the code pane and the operator's editor, and
+    ``search_files``'s ``file:4`` opened the wrong row. With ``keepends`` each line keeps its
+    ``\\n`` (a CRLF line keeps ``\\r\\n``); without, a CRLF line's trailing ``\\r`` is dropped
+    too. A trailing newline does not start an extra empty line (``"a\\n"`` is one line).
+    """
+    if not text:
+        return []
+    parts = text.split("\n")
+    last = parts.pop()  # "" when the text ends with a newline
+    if keepends:
+        out = [p + "\n" for p in parts]
+    else:
+        out = [p[:-1] if p.endswith("\r") else p for p in parts]
+    if last:
+        out.append(last)
+    return out
+
+
 class NotARegularFile(OSError):
     """The path is a directory, FIFO, socket or device — never read it."""
 

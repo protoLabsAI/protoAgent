@@ -200,7 +200,7 @@ def register_browse_routes(app) -> None:
         }
 
     @app.get("/api/fs/file")
-    async def _api_fs_file(project: str, path: str, start: int = 1, end: int | None = None):
+    async def _api_fs_file(project: str, path: str, start: str = "1", end: str | None = None):
         """Lines ``start..end`` of a fenced project file for the console code pane.
 
         Same fence as ``read_file``; secret-like names are 403 ``denied``; a binary file
@@ -210,8 +210,15 @@ def register_browse_routes(app) -> None:
         """
         import asyncio
 
+        # Parsed by hand, not as `int` params: FastAPI's own 422 has a different shape from
+        # every other error this route returns ({code, reason}), and the console keys on code.
         try:
-            return await asyncio.to_thread(_read_file, project, path, start, end)
+            start_n = int(start.strip()) if start and start.strip() else 1
+            end_n = int(end.strip()) if end is not None and end.strip() else None
+        except ValueError as exc:
+            raise _fs_error(400, "bad_range", f"start/end must be integers (got start={start!r}, end={end!r})") from exc
+        try:
+            return await asyncio.to_thread(_read_file, project, path, start_n, end_n)
         except HTTPException:
             raise
         except OSError as exc:

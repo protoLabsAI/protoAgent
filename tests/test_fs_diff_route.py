@@ -151,16 +151,55 @@ def test_project_that_is_a_repo_subdirectory_stays_fenced(tmp_path, monkeypatch)
     assert "sibling change" not in body["patch"] and "not in the fence" not in body["patch"]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
-def test_untracked_symlink_is_never_followed(tmp_path, monkeypatch):
+_needs_symlinks = pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+
+
+@_needs_symlinks
+def test_untracked_symlink_inside_is_shown_as_link_text(tmp_path, monkeypatch):
     root = _repo(tmp_path / "repo")
-    (tmp_path / "outside.txt").write_bytes(b"outside the fence\n")
-    (root / "link.txt").symlink_to(tmp_path / "outside.txt")
+    (root / "link.py").symlink_to("src/app.py")
     body = _diff(_client(monkeypatch, root)).json()
     files = {f["path"]: f for f in body["files"]}
-    assert files["link.txt"]["status"] == "?"
-    assert "outside the fence" not in body["patch"]
-    assert "new file mode 120000" in body["patch"]
+    assert files["link.py"]["status"] == "?" and files["link.py"]["denied"] is False
+    assert "new file mode 120000" in body["patch"] and "+src/app.py" in body["patch"]
+    assert "+one" not in body["patch"]  # never followed
+
+
+@_needs_symlinks
+@pytest.mark.parametrize(
+    "target,reason",
+    [("../../outside.txt", "symlink outside the project"), ("../.env", "symlink to secret-like path")],
+)
+def test_untracked_symlink_out_of_fence_or_to_secret_is_denied(tmp_path, monkeypatch, target, reason):
+    """The Diff tab must agree with /api/fs/file, which refuses both."""
+    root = _repo(tmp_path / "repo")
+    (tmp_path / "outside.txt").write_bytes(b"outside the fence\n")
+    (root / "src" / "sneaky.txt").symlink_to(target)
+    body = _diff(_client(monkeypatch, root)).json()
+    f = {f["path"]: f for f in body["files"]}["src/sneaky.txt"]
+    assert (f["denied"], f["reason"], f["additions"]) == (True, reason, 0)
+    assert "sneaky" not in body["patch"] and target not in body["patch"] and "outside the fence" not in body["patch"]
+
+
+@_needs_symlinks
+def test_tracked_symlink_to_secret_is_denied_and_excluded_from_the_patch(tmp_path, monkeypatch):
+    root = _repo(tmp_path / "repo")
+    (root / "src" / "cfg").symlink_to("app.py")
+    _git(root, "add", "src/cfg")
+    _git(root, "commit", "-q", "-m", "link")
+    (root / "src" / "cfg").unlink()
+    (root / "src" / "cfg").symlink_to("../.env")  # retargeted onto a secret
+    body = _diff(_client(monkeypatch, root)).json()
+    f = {f["path"]: f for f in body["files"]}["src/cfg"]
+    assert f["denied"] is True and f["reason"] == "symlink to secret-like path"
+    assert "../.env" not in body["patch"] and "src/cfg" not in body["patch"]
+
+
+def test_denied_secret_carries_a_reason(tmp_path, monkeypatch):
+    root = _repo(tmp_path / "repo")
+    (root / ".env").write_bytes(b"API_KEY=changed\n")
+    f = {f["path"]: f for f in _diff(_client(monkeypatch, root)).json()["files"]}[".env"]
+    assert f["denied"] is True and f["reason"].startswith("secret-like file")
 
 
 def test_unborn_head(tmp_path, monkeypatch):
@@ -183,13 +222,16 @@ def test_patch_cap_truncates_on_a_line(tmp_path, monkeypatch):
     assert len(body["patch"].encode()) <= 1000 and body["patch"].endswith("\n")
 
 
-def test_large_untracked_file_content_omitted(tmp_path, monkeypatch):
+def test_large_untracked_file_is_flagged_too_large(tmp_path, monkeypatch):
     root = _repo(tmp_path / "repo")
     monkeypatch.setattr(git_read, "MAX_UNTRACKED_BYTES", 10)
     (root / "big.txt").write_bytes(b"0123456789abcdef\n")
+    (root / "small.txt").write_bytes(b"ok\n")
     body = _diff(_client(monkeypatch, root)).json()
     assert "0123456789" not in body["patch"]
-    assert any(f["path"] == "big.txt" for f in body["files"])
+    files = {f["path"]: f for f in body["files"]}
+    assert files["big.txt"]["too_large"] is True
+    assert "too_large" not in files["small.txt"]  # only emitted when true
 
 
 def test_timeout_is_504(tmp_path, monkeypatch):

@@ -58,13 +58,13 @@ def test_emits_code_ref_with_text_prefix(proj):
     out = _show(proj).invoke(
         {"project": "repo", "path": "src/router.py", "line": 3, "end_line": 5, "note": "the retry reset"}
     )
-    assert out.startswith("Showing repo/src/router.py:3-5 to the operator.")
+    assert out.startswith("Showing repo/src/router.py:3-5 to the operator. L3: `line 3`  L5: `line 5`\n")
     comp = extract_component(out)
     assert comp == {
         "component": "code-ref",
         "props": {"project": "repo", "path": "src/router.py", "line": 3, "end_line": 5, "note": "the retry reset"},
     }
-    assert strip_component(out) == "Showing repo/src/router.py:3-5 to the operator."
+    assert strip_component(out) == "Showing repo/src/router.py:3-5 to the operator. L3: `line 3`  L5: `line 5`"
 
 
 def test_end_line_defaults_and_clamps(proj):
@@ -153,7 +153,7 @@ async def test_chat_stream_lifts_the_code_ref_frame(proj, monkeypatch):
     assert comp["component"] == "code-ref"
     assert comp["props"] == {"project": "repo", "path": "src/router.py", "line": 2, "end_line": 2, "note": "why"}
     end = next(p for k, p in frames if k == "tool_end")
-    assert end["output"] == "Showing repo/src/router.py:2 to the operator."
+    assert end["output"] == "Showing repo/src/router.py:2 to the operator. L2: `line 2`"
     assert [k for k, _ in frames].index("component") < [k for k, _ in frames].index("tool_end")
 
 
@@ -193,3 +193,25 @@ async def test_show_component_refuses_code_ref():
     )
     assert out.startswith("Error:") and "show_code" in out
     assert extract_component(out) is None
+
+
+def test_echo_trims_blank_and_long_lines(proj):
+    long = "    " + "x" * 200 + "   "
+    (proj / "e.py").write_bytes(f"first\n\n{long}\nuses `tick`\n".encode())
+    t = _show(proj)
+    out = strip_component(t.invoke({"project": "repo", "path": "e.py", "line": 2, "end_line": 3}))
+    assert out.startswith("Showing repo/e.py:2-3 to the operator. L2: (blank line)  L3: `" + "x" * 79 + "…`")
+    out = strip_component(t.invoke({"project": "repo", "path": "e.py", "line": 4}))
+    assert out.endswith("L4: `uses 'tick'`")  # a backtick in the source can't break the echo
+
+
+def test_echo_uses_newline_numbering(proj):
+    """A form feed does not start a line — the echo and the pane agree with editors."""
+    (proj / "ff.txt").write_bytes(b"a\n\x0cb\nc\n")
+    out = strip_component(_show(proj).invoke({"project": "repo", "path": "ff.txt", "line": 2, "end_line": 3}))
+    assert "L2: `b`" in out and "L3: `c`" in out  # strip() eats the \f
+
+
+def test_docstring_says_where_line_numbers_come_from(proj):
+    doc = _show(proj).description
+    assert "search_files" in doc and "offset" in doc

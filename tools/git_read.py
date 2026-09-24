@@ -69,6 +69,8 @@ class DiffFile:
     binary: bool = False
     denied: bool = False
     old_path: str | None = None
+    reason: str | None = None  # why it is denied (only emitted when denied)
+    too_large: bool = False  # untracked text file over MAX_UNTRACKED_BYTES: content omitted
 
     def as_dict(self) -> dict:
         d = {
@@ -81,6 +83,10 @@ class DiffFile:
         }
         if self.old_path is not None:
             d["old_path"] = self.old_path
+        if self.denied and self.reason:
+            d["reason"] = self.reason
+        if self.too_large:
+            d["too_large"] = True
         return d
 
 
@@ -226,6 +232,24 @@ def _neutralise_filters(git: _Git) -> None:
             git.extra_config += ["-c", f"filter.{name}.{var}={value}"]
 
 
+def _symlink_denial(root_resolved: Path, link: Path) -> str | None:
+    """Why a symlink's diff entry must be hidden, or None.
+
+    ``/api/fs/file`` refuses a link that resolves outside the project (fence) or onto a
+    secret-like path (deny list); the Diff tab has to agree, or the link text — and for a
+    tracked link, git's patch of it — would advertise exactly what the pane refuses.
+    """
+    try:
+        resolved = link.resolve()
+    except (OSError, RuntimeError):  # a loop, an unreadable component
+        return "symlink that cannot be resolved"
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        return "symlink outside the project"
+    if is_secret_path(resolved.relative_to(root_resolved)):
+        return "symlink to secret-like path"
+    return None
+
+
 def _z_fields(raw: bytes) -> list[str]:
     # "replace", not surrogateescape: these strings end up in a JSON response.
     parts = raw.decode("utf-8", errors="replace").split("\0")
@@ -314,9 +338,14 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
             f.additions, f.deletions = int(adds or 0), int(dels or 0)
 
     denied_specs: list[str] = []
+    root_resolved = root.resolve()
     for f in files.values():
-        if is_secret_path(f.path) or (f.old_path and is_secret_path(f.old_path)):
+        reason = is_secret_path(f.path) or (f.old_path and is_secret_path(f.old_path))
+        if not reason and (root / f.path).is_symlink():
+            reason = _symlink_denial(root_resolved, root / f.path)
+        if reason:
             f.denied = True
+            f.reason = f"secret-like file: {reason}" if not reason.startswith("symlink") else reason
             f.additions = f.deletions = 0
             denied_specs.append(f":(exclude,literal){f.path}")
             if f.old_path:
@@ -341,7 +370,6 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
     sfields = _z_fields(st)
     extra: list[str] = []
     files_truncated = False
-    root_resolved = root.resolve()
     extra_bytes = 0
     for entry in sfields:
         if not entry.startswith("?? "):
@@ -357,14 +385,19 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
         rel = top_rel[len(prefix) :]
         f = DiffFile(path=rel, status="?")
         files[rel] = f
-        if is_secret_path(rel):
-            f.denied = True
+        reason = is_secret_path(rel)
+        if reason:
+            f.denied, f.reason = True, f"secret-like file: {reason}"
             continue
         target = root / rel
         try:
             if target.is_symlink():
+                reason = _symlink_denial(root_resolved, target)
+                if reason:
+                    f.denied, f.reason = True, reason
+                    continue
                 # git records a symlink as its target string — show exactly that, and
-                # never follow it (it may point outside the fence).
+                # never follow it.
                 chunk, adds = _synthetic_new_file(rel, os.readlink(target).encode(), mode="120000")
                 f.additions = adds
                 extra.append(chunk)
@@ -372,8 +405,9 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
             resolved = target.resolve()
             if resolved != root_resolved and root_resolved not in resolved.parents:
                 continue
-            if is_secret_path(resolved.relative_to(root_resolved)):
-                f.denied = True
+            reason = is_secret_path(resolved.relative_to(root_resolved))
+            if reason:
+                f.denied, f.reason = True, f"secret-like file: {reason}"
                 continue
             if not resolved.is_file():
                 continue  # a nested repo's directory, a FIFO (reading one blocks forever), …
@@ -381,6 +415,7 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
                 # The patch is already past its cap: reading more content would only be
                 # thrown away.
                 extra.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n")
+                files_truncated = True
                 continue
             # A verified-regular descriptor (a FIFO or symlink swapped in after the checks
             # above is refused, never blocked on or followed), read no further than needed.
@@ -388,7 +423,8 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
                 size = os.fstat(fh.fileno()).st_size
                 data = fh.read(MAX_UNTRACKED_BYTES + 1) if size <= MAX_UNTRACKED_BYTES else b""
             if size > MAX_UNTRACKED_BYTES or len(data) > MAX_UNTRACKED_BYTES:
-                # Too big to show.
+                # Too big to show — say so per file, not with a silent empty header.
+                f.too_large = True
                 extra.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n")
                 continue
         except OSError:
