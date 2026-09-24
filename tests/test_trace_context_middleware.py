@@ -139,9 +139,9 @@ async def test_awrap_model_call_passes_stamped_request_to_handler(monkeypatch, m
 
 
 # ─── Fleet generation node (whole-trace in the agent's OWN project) ──────────
-# The gateway logs the full-detail generation into ITS project; when the agent
-# runs in a different (fleet) project, the middleware also emits a lightweight
-# model+usage+cost generation into the agent's project so its trace is whole.
+# The gateway logs the full-detail generation into ITS project; the middleware
+# also emits the generation (model + usage + cost + capped IO) into the agent's
+# own project, so its trace is whole even when the call never touched the gateway.
 
 
 class _Resp:
@@ -168,6 +168,7 @@ def test_emit_fleet_generation_records_model_usage_cost(monkeypatch, mw):
     monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
 
     mw._emit_fleet_generation(
+        None,
         _Resp([_ai(usage={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})]),
         1234,
     )
@@ -185,7 +186,7 @@ def test_emit_handles_bare_aimessage_response(monkeypatch, mw):
     calls = []
     monkeypatch.setattr(tracing, "trace_generation", lambda **kw: calls.append(kw))
 
-    mw._emit_fleet_generation(_ai(usage={"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}), 0)
+    mw._emit_fleet_generation(None, _ai(usage={"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}), 0)
 
     assert calls and calls[0]["model"] == "gw/model"
 
@@ -195,9 +196,7 @@ def test_emit_noop_when_tracing_disabled(monkeypatch, mw):
     calls = []
     monkeypatch.setattr(tracing, "trace_generation", lambda **kw: calls.append(kw))
 
-    mw._emit_fleet_generation(
-        _Resp([_ai(usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})]), 0
-    )
+    mw._emit_fleet_generation(None, _Resp([_ai(usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})]), 0)
 
     assert not calls
 
@@ -210,11 +209,9 @@ def test_emit_never_raises_on_garbage_or_sink_blowup(monkeypatch, mw):
 
     monkeypatch.setattr(tracing, "trace_generation", _boom)
     # garbage response (no .result / no usage) → nothing to emit, no raise
-    mw._emit_fleet_generation(object(), 0)
+    mw._emit_fleet_generation(None, object(), 0)
     # valid response but the sink throws → still swallowed
-    mw._emit_fleet_generation(
-        _Resp([_ai(usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})]), 0
-    )
+    mw._emit_fleet_generation(None, _Resp([_ai(usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})]), 0)
 
 
 async def test_awrap_emits_generation_and_returns_response(monkeypatch, mw):
@@ -231,3 +228,125 @@ async def test_awrap_emits_generation_and_returns_response(monkeypatch, mw):
 
     assert out is resp  # response passes through untouched
     assert calls and calls[0]["usage"]["output_tokens"] == 2
+
+
+# ─── Generation IO + the turn's answer ────────────────────────────────────────
+
+
+class _IORequest:
+    def __init__(self, system, messages):
+        self.system_message = system
+        self.messages = messages
+
+
+def test_generation_carries_the_calls_messages_and_reply(monkeypatch, mw):
+    """Without IO an agent on a native OAuth provider (no gateway) logged its
+    prompts and replies NOWHERE — every generation showed blank input/output."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    monkeypatch.setattr(tracing, "set_session_output", lambda out: seen.setdefault("answer", out))
+    req = _IORequest(
+        SystemMessage(content="you are the PM"),
+        [
+            HumanMessage(content="status?"),
+            AIMessage(content="", tool_calls=[{"name": "board_list", "args": {"q": "open"}, "id": "c1"}]),
+            ToolMessage(content="3 open", tool_call_id="c1", name="board_list"),
+        ],
+    )
+
+    mw._emit_fleet_generation(req, _Resp([AIMessage(content=[{"type": "text", "text": "Three open."}])]), 0)
+
+    assert [m["role"] for m in seen["input"]] == ["system", "user", "assistant", "tool"]
+    assert seen["input"][0]["content"] == "you are the PM"
+    assert seen["input"][2]["tool_calls"] == [{"name": "board_list", "args": "{'q': 'open'}"}]
+    assert seen["input"][3] == {"role": "tool", "content": "3 open", "name": "board_list"}
+    assert seen["output"] == {"role": "assistant", "content": "Three open."}
+    # A tool-call-free reply is the turn's answer.
+    assert seen["answer"] == "Three open."
+
+
+def test_a_tool_call_reply_is_not_the_turns_answer(monkeypatch, mw):
+    from langchain_core.messages import AIMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: None)
+    answers = []
+    monkeypatch.setattr(tracing, "set_session_output", answers.append)
+
+    reply = AIMessage(content="checking", tool_calls=[{"name": "t", "args": {}, "id": "c1"}])
+    mw._emit_fleet_generation(None, _Resp([reply]), 0)
+
+    assert answers == []
+
+
+def test_io_is_capped_per_message(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, SystemMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    monkeypatch.setattr(tracing, "MAX_IO_CHARS", 10)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    monkeypatch.setattr(tracing, "set_session_output", lambda out: None)
+
+    mw._emit_fleet_generation(_IORequest(SystemMessage(content="x" * 25), []), _Resp([AIMessage(content="ok")]), 0)
+
+    assert seen["input"][0]["content"] == "x" * 10 + "… [15 more chars]"
+
+
+def test_incognito_call_records_usage_but_no_content(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    answers = []
+    monkeypatch.setattr(tracing, "set_session_output", answers.append)
+    req = _IORequest(None, [HumanMessage(content="my SSN is 123-45-6789")])
+    req.state = {"incognito": True}
+
+    mw._emit_fleet_generation(
+        req,
+        _Resp([AIMessage(content="noted", usage_metadata={"input_tokens": 3, "output_tokens": 1, "total_tokens": 4})]),
+        0,
+    )
+
+    assert seen["usage"]["input_tokens"] == 3
+    assert "input" not in seen and "output" not in seen
+    assert answers == []
+
+
+def test_io_is_redacted(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    monkeypatch.setattr(tracing, "set_session_output", lambda out: None)
+    secret = "sk-" + "A" * 40
+    req = _IORequest(None, [HumanMessage(content=f"use {secret}")])
+    reply = AIMessage(content="", tool_calls=[{"name": "call_api", "args": {"api_key": secret}, "id": "c1"}])
+
+    mw._emit_fleet_generation(req, _Resp([reply]), 0)
+
+    assert secret not in str(seen["input"]) and secret not in str(seen["output"])
+
+
+def test_history_beyond_the_call_budget_is_counted_not_sent(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    monkeypatch.setattr(tracing, "MAX_IO_CALL_CHARS", 250)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    monkeypatch.setattr(tracing, "set_session_output", lambda out: None)
+    history = [HumanMessage(content=f"m{i:02d}" + "x" * 47) for i in range(10)]  # 50 chars each
+
+    mw._emit_fleet_generation(_IORequest(SystemMessage(content="s" * 50), history), _Resp([AIMessage(content="ok")]), 0)
+
+    sent = seen["input"]
+    assert sent[0]["content"] == "s" * 50
+    assert sent[1] == {"role": "system", "content": "[6 earlier messages omitted]"}
+    assert [m["content"][:3] for m in sent[2:]] == ["m06", "m07", "m08", "m09"]
