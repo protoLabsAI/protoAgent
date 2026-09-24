@@ -436,8 +436,21 @@ async def trace_session(
     token = None
     span_token = None
     attrs = None
+    root_token = None
     try:
         trace_context = _caller_trace_context(metadata)
+        if trace_context is None:
+            # A turn with no caller trace is a ROOT, whatever OTel span happens to be
+            # current. The a2a-sdk wraps its request handlers in its own OTel spans
+            # (scope ``a2a-python-sdk``), and the Langfuse SDK's default export filter
+            # drops non-Langfuse spans — so inheriting one made every A2A-driven turn
+            # (the console's chat included) a child of a parent that never reaches
+            # Langfuse: a trace with no root, hence no name and no input/output. A fresh
+            # ``trace_context`` can't fix it: the SDK invents a random parent span id
+            # for one without ``parent_span_id``. Start from an empty context instead.
+            from opentelemetry import context as otel_context
+
+            root_token = otel_context.attach(otel_context.Context())
         # Surface the request's classified trust tier as a bounded, non-secret dimension
         # (#1504). The value comes only from the auth middleware's contextvar, not caller
         # metadata; absent (unclassified) → the key is omitted, so prior telemetry is
@@ -513,6 +526,13 @@ async def trace_session(
         if ctx is not None:
             try:
                 ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+        if root_token is not None:
+            try:
+                from opentelemetry import context as otel_context
+
+                otel_context.detach(root_token)
             except Exception:
                 pass
 
