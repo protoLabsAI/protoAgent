@@ -307,6 +307,15 @@ class _Cfg:
     tools_memoize_reads_enabled: bool = False
 
 
+@pytest.fixture(autouse=True)
+def _no_live_host_config(monkeypatch):
+    """The fs tools resolve projects through ``HOST.config`` when it's wired; an earlier test
+    in a full-suite run can leave it pointing at another config. Pin the build-time config."""
+    from graph.plugins.host import HOST
+
+    monkeypatch.setattr(HOST, "config", None)
+
+
 @pytest.fixture
 def proj(tmp_path):
     p = tmp_path / "proj"
