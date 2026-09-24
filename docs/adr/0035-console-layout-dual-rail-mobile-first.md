@@ -2,6 +2,8 @@
 
 **Status:** Accepted (shipped) — **D6 amended by
 [ADR 0086](0086-chat-first-mobile-shell.md)** (chat-first mobile shell). D1–D5 and D7 stand.
+**Amended by [ADR 0112](0112-console-code-pane.md)** (D1/D2): a new core `code` surface
+defaults to the right dock and opens on whichever dock is *not* holding chat.
 
 ## Context
 

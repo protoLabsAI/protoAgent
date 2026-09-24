@@ -42,7 +42,7 @@ class TestCodec:
 
     def test_mime_and_types(self):
         assert COMPONENT_MIME.endswith("component-v1+json")
-        assert set(COMPONENT_TYPES) == {"table", "keyvalue", "timeline"}
+        assert set(COMPONENT_TYPES) == {"table", "keyvalue", "timeline", "code-ref"}
 
     def test_large_payload_extracts_but_truncated_preview_does_not(self):
         """Regression (#1323): a rich component (a 9-step timeline) exceeds the tool-card
