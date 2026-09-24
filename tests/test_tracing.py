@@ -1060,10 +1060,10 @@ async def test_trace_session_records_input_and_the_turns_answer(session_langfuse
     async with tracing.trace_session("s1", name="chat", input="status?"):
         tracing.set_session_output("Three open.")
 
+    # On the ROOT span — Langfuse shows its IO as the trace's (set_trace_io is deprecated).
     span.update.assert_any_call(input="status?")
-    span.set_trace_io.assert_any_call(input="status?")
     span.update.assert_any_call(output="Three open.")
-    span.set_trace_io.assert_any_call(output="Three open.")
+    span.set_trace_io.assert_not_called()
 
 
 async def test_a_subagents_answer_is_not_the_turns(session_langfuse):
@@ -1073,9 +1073,20 @@ async def test_a_subagents_answer_is_not_the_turns(session_langfuse):
             tracing.set_session_output("worker's closing line")
         tracing.set_session_output("the answer")
 
-    outputs = [c.kwargs["output"] for c in span.set_trace_io.call_args_list if "output" in c.kwargs]
+    outputs = [c.kwargs["output"] for c in span.update.call_args_list if "output" in c.kwargs]
     assert outputs == ["the answer"]
 
 
 def test_set_session_output_outside_a_session_is_a_no_op():
     _reload_tracing().set_session_output("nothing to attach to")
+
+
+async def test_an_incognito_session_records_no_content(session_langfuse):
+    """ADR 0069 D3b: prompt capture and trace export already skip incognito turns."""
+    tracing, span = session_langfuse
+    async with tracing.trace_session("s1", name="chat", input="my SSN is 123-45-6789", incognito=True):
+        assert tracing.io_allowed() is False
+        tracing.set_session_output("noted")
+    assert tracing.io_allowed() is True
+
+    assert not [c for c in span.update.call_args_list if "input" in c.kwargs or "output" in c.kwargs]

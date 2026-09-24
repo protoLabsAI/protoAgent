@@ -521,6 +521,12 @@ class AcpClient:
         # pooled client's reader outlives every turn it reports on.
         self._turn_span: Any = None
         self._turn_tool_starts: dict[str, tuple[float, str, str]] = {}
+        # Read at turn start for the same reason: an incognito turn (ADR 0069 D3b)
+        # records the coder's tool spans without their content.
+        self._turn_trace_io = True
+        # Tool calls already ended this turn. ACP lets a call arrive terminal AND still
+        # send the (recommended) follow-up update; end it once.
+        self._turn_ended_tool_ids: set[str] = set()
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -934,6 +940,7 @@ class AcpClient:
             # never ends and its trace span is never recorded.
             status = str(update.get("status") or "")
             if status in ("completed", "failed"):
+                self._turn_ended_tool_ids.add(str(update.get("toolCallId") or title))
                 await self._emit_tool(
                     {
                         "phase": "end",
@@ -946,11 +953,13 @@ class AcpClient:
         elif kind == "tool_call_update":
             # Status transition — emit an end event when it finishes (tool_end card).
             status = str(update.get("status") or "")
-            if status in ("completed", "failed"):
+            tool_id = str(update.get("toolCallId") or "")
+            if status in ("completed", "failed") and tool_id not in self._turn_ended_tool_ids:
+                self._turn_ended_tool_ids.add(tool_id)
                 await self._emit_tool(
                     {
                         "phase": "end",
-                        "id": str(update.get("toolCallId") or ""),
+                        "id": tool_id,
                         "name": _short_tool_name(str(update.get("title") or "")),
                         "output": _tool_output_preview(update),
                         "status": status,
@@ -1039,12 +1048,16 @@ class AcpClient:
             )
             return
         started, name, tool_input = self._turn_tool_starts.pop(tool_id, (time.monotonic(), "", ""))
+        from graph.middleware.redaction import redact
         from observability import tracing
 
+        # Redacted like every other tool span (AuditMiddleware): a coder running `env`
+        # or `cat .env` must not ship the values to Langfuse.
+        io = self._turn_trace_io
         tracing.trace_tool_call(
             name or str(event.get("name") or "tool"),
-            {"input": tool_input},
-            str(event.get("output") or ""),
+            {"input": redact(tool_input) if io else ""},
+            redact(str(event.get("output") or "")) if io else "",
             int((time.monotonic() - started) * 1000),
             event.get("status") == "completed",
             session_id=self._turn_session_id or "",
@@ -1324,6 +1337,7 @@ class AcpClient:
         session_id = ""
         reply = ""
         stop_reason: str | None = None
+        from graph.middleware.redaction import redact as _redact
         from observability import tracing
 
         # One Langfuse agent span per coder run, for the same reason the telemetry row is
@@ -1349,6 +1363,7 @@ class AcpClient:
                 # Set only once the lock is ours: a queued turn must not re-parent the
                 # in-flight turn's tool calls onto its own span.
                 self._turn_span = span
+                self._turn_trace_io = tracing.io_allowed()
                 try:
                     answer = await self._prompt_locked(
                         text,
@@ -1385,7 +1400,7 @@ class AcpClient:
                 self._record_run_telemetry(state, started, tool_calls, session_id)
                 tracing.update_span(
                     span,
-                    output=reply[:2000],
+                    output=_redact(reply[:2000]) if tracing.io_allowed() else "",
                     metadata={
                         "state": state,
                         "stop_reason": stop_reason,
@@ -1478,6 +1493,7 @@ class AcpClient:
         self._text_after_tool = False
         self._last_chunk = ""
         self._turn_tool_calls = 0
+        self._turn_ended_tool_ids = set()
         self._turn_session_id = None
         self._progress = progress_callback
         self._on_tool = tool_callback

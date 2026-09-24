@@ -2474,7 +2474,12 @@ async def _chat_langgraph_stream_impl(
 
     from graph.config_io import soul_revision
 
-    trace_meta: dict = {"message_preview": message[:100], "soul_rev": soul_revision()}
+    # Incognito (ADR 0069 D3b): the trace keeps its structure, usage and cost, but no
+    # content — not the preview, the input, or any generation's messages.
+    _trace_incognito = bool((request_metadata or {}).get("incognito"))
+    trace_meta: dict = {"soul_rev": soul_revision()}
+    if not _trace_incognito:
+        trace_meta["message_preview"] = message[:100]
     if caller_trace:
         if caller_trace.get("traceId"):
             trace_meta["caller_trace_id"] = caller_trace["traceId"]
@@ -2497,6 +2502,7 @@ async def _chat_langgraph_stream_impl(
             name="a2a-stream",
             metadata=trace_meta,
             input=message,
+            incognito=_trace_incognito,
         ),
         request_metadata_scope(request_metadata),
     ):
@@ -3795,8 +3801,9 @@ async def _chat_langgraph_impl(
     async with tracing.trace_session(
         session_id=session_id,
         name="chat",
-        metadata={"message_preview": message[:100], "soul_rev": soul_revision()},
+        metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": message[:100]})},
         input=message,
+        incognito=bool(incognito),
     ):
         try:
             # STEP 0 — @-delegate dispatch (S1): same short-circuit as the streaming path,

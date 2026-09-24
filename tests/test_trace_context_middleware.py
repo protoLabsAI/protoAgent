@@ -294,3 +294,59 @@ def test_io_is_capped_per_message(monkeypatch, mw):
     mw._emit_fleet_generation(_IORequest(SystemMessage(content="x" * 25), []), _Resp([AIMessage(content="ok")]), 0)
 
     assert seen["input"][0]["content"] == "x" * 10 + "… [15 more chars]"
+
+
+def test_incognito_call_records_usage_but_no_content(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    answers = []
+    monkeypatch.setattr(tracing, "set_session_output", answers.append)
+    req = _IORequest(None, [HumanMessage(content="my SSN is 123-45-6789")])
+    req.state = {"incognito": True}
+
+    mw._emit_fleet_generation(
+        req,
+        _Resp([AIMessage(content="noted", usage_metadata={"input_tokens": 3, "output_tokens": 1, "total_tokens": 4})]),
+        0,
+    )
+
+    assert seen["usage"]["input_tokens"] == 3
+    assert "input" not in seen and "output" not in seen
+    assert answers == []
+
+
+def test_io_is_redacted(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    monkeypatch.setattr(tracing, "set_session_output", lambda out: None)
+    secret = "sk-" + "A" * 40
+    req = _IORequest(None, [HumanMessage(content=f"use {secret}")])
+    reply = AIMessage(content="", tool_calls=[{"name": "call_api", "args": {"api_key": secret}, "id": "c1"}])
+
+    mw._emit_fleet_generation(req, _Resp([reply]), 0)
+
+    assert secret not in str(seen["input"]) and secret not in str(seen["output"])
+
+
+def test_history_beyond_the_call_budget_is_counted_not_sent(monkeypatch, mw):
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: True)
+    monkeypatch.setattr(tracing, "MAX_IO_CALL_CHARS", 250)
+    seen = {}
+    monkeypatch.setattr(tracing, "trace_generation", lambda **kw: seen.update(kw))
+    monkeypatch.setattr(tracing, "set_session_output", lambda out: None)
+    history = [HumanMessage(content=f"m{i:02d}" + "x" * 47) for i in range(10)]  # 50 chars each
+
+    mw._emit_fleet_generation(_IORequest(SystemMessage(content="s" * 50), history), _Resp([AIMessage(content="ok")]), 0)
+
+    sent = seen["input"]
+    assert sent[0]["content"] == "s" * 50
+    assert sent[1] == {"role": "system", "content": "[6 earlier messages omitted]"}
+    assert [m["content"][:3] for m in sent[2:]] == ["m06", "m07", "m08", "m09"]

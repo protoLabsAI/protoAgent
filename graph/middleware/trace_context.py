@@ -72,20 +72,43 @@ def _io_message(msg) -> dict:
     out: dict = {"role": role, "content": _cap(_content_text(getattr(msg, "content", "")))}
     calls = getattr(msg, "tool_calls", None) or []
     if calls:
-        out["tool_calls"] = [{"name": c.get("name"), "args": _cap(str(c.get("args") or {}))} for c in calls]
+        from graph.middleware.redaction import redact
+
+        # Redacted as a DICT, before stringifying — key-based rules (``api_key``, …)
+        # can't see into the repr.
+        out["tool_calls"] = [{"name": c.get("name"), "args": _cap(str(redact(c.get("args") or {})))} for c in calls]
     if role == "tool":
         out["name"] = getattr(msg, "name", None) or ""
     return out
 
 
+def _size(msg: dict) -> int:
+    return len(msg.get("content") or "") + sum(len(c.get("args") or "") for c in msg.get("tool_calls") or [])
+
+
 def _request_io(request) -> list[dict]:
-    """The call's input: the system prompt, then the conversation it was sent."""
-    msgs: list[dict] = []
+    """The call's input: the system prompt, then the NEWEST messages that fit the
+    per-call budget (``MAX_IO_CALL_CHARS``) — the whole history rides every call, so
+    per-message caps alone still ship megabytes a turn. Older messages are counted in
+    a marker, not sent; the full prompt is in prompt capture."""
+    from observability.tracing import MAX_IO_CALL_CHARS
+
+    head: list[dict] = []
     system = getattr(request, "system_message", None)
     if system is not None:
-        msgs.append(_io_message(system))
-    msgs.extend(_io_message(m) for m in (getattr(request, "messages", None) or []))
-    return msgs
+        head.append(_io_message(system))
+    budget = MAX_IO_CALL_CHARS - sum(_size(m) for m in head)
+    history = [_io_message(m) for m in (getattr(request, "messages", None) or [])]
+    kept: list[dict] = []
+    for msg in reversed(history):
+        if kept and _size(msg) > budget:
+            break
+        kept.append(msg)
+        budget -= _size(msg)
+    kept.reverse()
+    if len(kept) < len(history):
+        head.append({"role": "system", "content": f"[{len(history) - len(kept)} earlier messages omitted]"})
+    return head + kept
 
 
 class TraceContextMiddleware(AgentMiddleware):
@@ -154,14 +177,22 @@ class TraceContextMiddleware(AgentMiddleware):
             model = (getattr(msg, "response_metadata", None) or {}).get("model_name", "") or ""
             cost = pricing.cost_usd(model, usage) if usage else 0.0
             name = f"{os.environ.get('AGENT_NAME', 'protoagent')}-turn"
-            output = _io_message(msg)
+            # Incognito (ADR 0069 D3b) — from the turn's state, and from the session
+            # scope as a backstop: the call still lands, its content does not.
+            incognito = bool((getattr(request, "state", None) or {}).get("incognito"))
+            if incognito or not tracing.io_allowed():
+                tracing.trace_generation(name=name, model=model, usage=usage, cost_usd=cost, duration_ms=duration_ms)
+                return
+            from graph.middleware.redaction import redact
+
+            output = redact(_io_message(msg))
             tracing.trace_generation(
                 name=name,
                 model=model,
                 usage=usage,
                 cost_usd=cost,
                 duration_ms=duration_ms,
-                input=_request_io(request),
+                input=redact(_request_io(request)),
                 output=output,
             )
             if not output.get("tool_calls") and output.get("content"):

@@ -117,11 +117,21 @@ _span_depth_ctx: contextvars.ContextVar[int] = contextvars.ContextVar(
     default=0,
 )
 
-# Per-message cap on the text that goes into a generation's input/output. A lead
-# agent's system prompt is ~50k tokens and rides EVERY call of a turn; uncapped, one
-# 30-call turn ships megabytes. The exact prompt is kept in full by prompt capture
-# (``prompts.capture``) — the trace needs enough to read the exchange.
+# Caps on the text that goes into a generation's input/output. A lead agent's system
+# prompt is ~50k tokens and the whole history rides EVERY call of a turn; uncapped, one
+# 30-call turn ships tens of megabytes. Per message, then per call (system prompt + the
+# NEWEST messages that fit; older ones are counted, not sent). The exact prompt is kept
+# in full by prompt capture (``prompts.capture``) — the trace needs enough to read the
+# exchange.
 MAX_IO_CHARS = 8000
+MAX_IO_CALL_CHARS = 32000
+
+# True inside an incognito turn (ADR 0069 D3b): spans still record structure, timing,
+# usage and cost, but NO content — the same line prompt capture and trace export draw.
+_io_suppressed_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_protoagent_io_suppressed",
+    default=False,
+)
 
 # Holds the request's ALREADY-classified trust tier (a2a_impl.auth sets this from
 # request.state.trust_tier) so the structured request telemetry can carry it as a
@@ -361,6 +371,7 @@ async def trace_session(
     name: str = "agent-session",
     metadata: dict | None = None,
     input: Any = None,
+    incognito: bool = False,
 ) -> AsyncIterator[Any]:
     """Open a session-level Langfuse observation that child observations nest under.
 
@@ -390,14 +401,19 @@ async def trace_session(
     delegation renders as ONE distributed trace. The ids are still stamped
     into the span metadata; malformed ids degrade to a fresh trace.
 
-    ``input`` (the user's message) becomes the span's and the trace's input; the
-    turn's answer is written back as their output by ``set_session_output``. The
-    session id and agent tag are propagated as real trace attributes, so Langfuse's
-    Sessions view groups a conversation's turns.
+    ``input`` (the user's message) becomes the root span's input — which Langfuse
+    shows as the trace's — and the turn's answer is written back as its output by
+    ``set_session_output``. The session id and agent tag are propagated as real trace
+    attributes, so Langfuse's Sessions view groups a conversation's turns.
+
+    ``incognito`` suppresses ALL content for the scope — the input here, the answer,
+    and every generation's messages (see ``io_allowed``) — while the structure,
+    timing, usage and cost still land.
     """
     # Always set session_id so AuditMiddleware can read it even when
     # Langfuse is disabled.
     sid_token = _session_id_ctx.set(session_id)
+    io_token = _io_suppressed_ctx.set(bool(incognito) or _io_suppressed_ctx.get())
 
     if not _enabled or _langfuse is None:
         try:
@@ -408,10 +424,11 @@ async def trace_session(
             # disconnects mid-stream and the async generator is closed by a
             # different task). The contextvar resets itself on context exit,
             # so swallowing here is safe.
-            try:
-                _session_id_ctx.reset(sid_token)
-            except ValueError:
-                pass
+            for var, tok in ((_session_id_ctx, sid_token), (_io_suppressed_ctx, io_token)):
+                try:
+                    var.reset(tok)
+                except ValueError:
+                    pass
         return
 
     ctx = None
@@ -448,10 +465,9 @@ async def trace_session(
             attrs.__enter__()
         except Exception:  # noqa: BLE001 — older SDK: metadata still carries both
             attrs = None
-        if input is not None:
+        if input is not None and io_allowed():
             try:
                 span.update(input=input)
-                span.set_trace_io(input=input)
             except Exception:  # noqa: BLE001
                 pass
         span_token = _session_span_ctx.set(span)
@@ -470,6 +486,10 @@ async def trace_session(
     finally:
         try:
             _session_id_ctx.reset(sid_token)
+        except Exception:
+            pass
+        try:
+            _io_suppressed_ctx.reset(io_token)
         except Exception:
             pass
         if token is not None:
@@ -606,18 +626,23 @@ def update_span(span: Any, **fields: Any) -> None:
         pass
 
 
+def io_allowed() -> bool:
+    """False inside an incognito turn — callers then send no message content."""
+    return not _io_suppressed_ctx.get()
+
+
 def set_session_output(output: Any) -> None:
-    """Record ``output`` as the active turn's answer — on its ``trace_session`` span
-    and on the trace. Called after each final (tool-call-free) model reply; the last
-    one wins, which is the turn's answer. Ignored inside a ``trace_span`` boundary: a
-    subagent's or coder's closing line is that span's business, not the turn's.
+    """Record ``output`` as the active turn's answer, on its ``trace_session`` root
+    span (which Langfuse shows as the trace's output). Called after each final
+    (tool-call-free) model reply; the last one wins, which is the turn's answer.
+    Ignored inside a ``trace_span`` boundary — a subagent's or coder's closing line is
+    that span's business, not the turn's — and in an incognito turn.
     """
     span = _session_span_ctx.get()
-    if span is None or _span_depth_ctx.get() > 0:
+    if span is None or _span_depth_ctx.get() > 0 or not io_allowed():
         return
     try:
         span.update(output=output)
-        span.set_trace_io(output=output)
     except Exception:  # noqa: BLE001
         pass
 
