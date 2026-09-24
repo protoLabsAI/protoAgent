@@ -1090,3 +1090,12 @@ async def test_an_incognito_session_records_no_content(session_langfuse):
     assert tracing.io_allowed() is True
 
     assert not [c for c in span.update.call_args_list if "input" in c.kwargs or "output" in c.kwargs]
+
+
+async def test_session_input_is_capped(session_langfuse):
+    tracing, span = session_langfuse
+    big = "x" * (tracing.MAX_IO_CHARS + 5)
+    async with tracing.trace_session("s1", name="chat", input=big):
+        pass
+
+    span.update.assert_any_call(input="x" * tracing.MAX_IO_CHARS + "… [5 more chars]")

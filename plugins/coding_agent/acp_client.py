@@ -933,7 +933,8 @@ class AcpClient:
                     "id": str(update.get("toolCallId") or title),
                     "name": name,
                     "input": tool_input,
-                }
+                },
+                raw_input=raw_input,
             )
             # ACP lets a tool call arrive already terminal, and the follow-up
             # ``tool_call_update`` is only recommended — so close it here, or its card
@@ -1035,17 +1036,24 @@ class AcpClient:
             except Exception as exc:  # progress is best-effort
                 logger.warning("[acp/%s] progress_callback raised: %s", self.name, exc)
 
-    def _trace_tool(self, event: dict) -> None:
-        """Record a finished coder tool call as a child of the turn's ``acp:`` span."""
+    def _trace_tool(self, event: dict, raw_input: Any = None) -> None:
+        """Record a finished coder tool call as a child of the turn's ``acp:`` span.
+
+        ``raw_input`` is the STRUCTURED ``rawInput``, redacted as data before it is
+        stringified: the event's ``input`` is already JSON text, where key-based rules
+        (``api_key``, …) can no longer see the keys.
+        """
         if self._turn_span is None:
             return
         tool_id = str(event.get("id") or "")
         if event.get("phase") == "start":
-            self._turn_tool_starts[tool_id] = (
-                time.monotonic(),
-                str(event.get("name") or ""),
-                str(event.get("input") or ""),
-            )
+            from graph.middleware.redaction import redact
+
+            if raw_input not in (None, "", {}, []):
+                safe_input = json.dumps(redact(raw_input), ensure_ascii=False, default=str)
+            else:
+                safe_input = redact(str(event.get("input") or ""))
+            self._turn_tool_starts[tool_id] = (time.monotonic(), str(event.get("name") or ""), safe_input)
             return
         started, name, tool_input = self._turn_tool_starts.pop(tool_id, (time.monotonic(), "", ""))
         from graph.middleware.redaction import redact
@@ -1056,7 +1064,7 @@ class AcpClient:
         io = self._turn_trace_io
         tracing.trace_tool_call(
             name or str(event.get("name") or "tool"),
-            {"input": redact(tool_input) if io else ""},
+            {"input": tool_input if io else ""},
             redact(str(event.get("output") or "")) if io else "",
             int((time.monotonic() - started) * 1000),
             event.get("status") == "completed",
@@ -1064,8 +1072,8 @@ class AcpClient:
             parent=self._turn_span,
         )
 
-    async def _emit_tool(self, event: dict) -> None:
-        self._trace_tool(event)
+    async def _emit_tool(self, event: dict, *, raw_input: Any = None) -> None:
+        self._trace_tool(event, raw_input)
         if self._on_tool:
             try:
                 await self._on_tool(event)

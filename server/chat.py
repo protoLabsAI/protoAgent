@@ -24,6 +24,7 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
+from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
 from runtime.state import STATE
 
@@ -2479,7 +2480,7 @@ async def _chat_langgraph_stream_impl(
     _trace_incognito = bool((request_metadata or {}).get("incognito"))
     trace_meta: dict = {"soul_rev": soul_revision()}
     if not _trace_incognito:
-        trace_meta["message_preview"] = message[:100]
+        trace_meta["message_preview"] = _redact(message[:100])
     if caller_trace:
         if caller_trace.get("traceId"):
             trace_meta["caller_trace_id"] = caller_trace["traceId"]
@@ -2501,7 +2502,7 @@ async def _chat_langgraph_stream_impl(
             session_id=session_id,
             name="a2a-stream",
             metadata=trace_meta,
-            input=message,
+            input=_redact(message),
             incognito=_trace_incognito,
         ),
         request_metadata_scope(request_metadata),
@@ -3801,8 +3802,8 @@ async def _chat_langgraph_impl(
     async with tracing.trace_session(
         session_id=session_id,
         name="chat",
-        metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": message[:100]})},
-        input=message,
+        metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": _redact(message[:100])})},
+        input=_redact(message),
         incognito=bool(incognito),
     ):
         try:

@@ -40,7 +40,7 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
     elif method == "session/prompt":
         update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read app.py",
-                "rawInput": {"path": "app.py"}})
+                "rawInput": {"path": "app.py", "api_key": "hunter2"}})
         update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "Read app.py",
                 "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]})
         update({"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "Run tests",
@@ -111,7 +111,9 @@ async def test_coder_tool_call_is_parented_explicitly_on_the_run_span(fake_agent
     tool, terminal, env = (c.kwargs for c in span.start_observation.call_args_list)
     assert tool["name"] == "tool:Read app.py"
     assert tool["as_type"] == "tool"
-    assert tool["input"] == {"input": '{"path": "app.py"}'}
+    # Redacted as DATA: a key-based rule catches `api_key` even though "hunter2"
+    # matches no secret pattern (the event's JSON text would have hidden the key).
+    assert tool["input"] == {"input": '{"path": "app.py", "api_key": "[REDACTED]"}'}
     assert tool["output"] == "ok"
     assert tool["level"] == "DEFAULT"
     # Arrived terminal on the initial tool_call: still recorded, its rawOutput kept.

@@ -401,7 +401,8 @@ async def trace_session(
     delegation renders as ONE distributed trace. The ids are still stamped
     into the span metadata; malformed ids degrade to a fresh trace.
 
-    ``input`` (the user's message) becomes the root span's input — which Langfuse
+    ``input`` (the user's message — callers pass it REDACTED; capped here at
+    ``MAX_IO_CHARS``) becomes the root span's input — which Langfuse
     shows as the trace's — and the turn's answer is written back as its output by
     ``set_session_output``. The session id and agent tag are propagated as real trace
     attributes, so Langfuse's Sessions view groups a conversation's turns.
@@ -466,6 +467,8 @@ async def trace_session(
         except Exception:  # noqa: BLE001 — older SDK: metadata still carries both
             attrs = None
         if input is not None and io_allowed():
+            if isinstance(input, str) and len(input) > MAX_IO_CHARS:
+                input = f"{input[:MAX_IO_CHARS]}… [{len(input) - MAX_IO_CHARS} more chars]"
             try:
                 span.update(input=input)
             except Exception:  # noqa: BLE001
