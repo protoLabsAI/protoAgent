@@ -64,11 +64,24 @@ def _repo(root: Path) -> Path:
 
 
 def _client(monkeypatch, root: Path, name: str = "repo") -> TestClient:
-    cfg = LangGraphConfig(filesystem_projects=[{"name": name, "path": str(root)}])
+    cfg = LangGraphConfig(filesystem_code_pane=True, filesystem_projects=[{"name": name, "path": str(root)}])
     monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
     app = FastAPI()
     register_browse_routes(app)
     return TestClient(app)
+
+
+def test_code_pane_off_is_404_disabled(monkeypatch, tmp_path):
+    """``filesystem.code_pane`` off (the default) → 404 ``disabled``; git never runs."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(
+        STATE, "graph_config", LangGraphConfig(filesystem_projects=[{"name": "repo", "path": str(repo)}]), raising=False
+    )
+    app = FastAPI()
+    register_browse_routes(app)
+    r = TestClient(app).get("/api/fs/diff", params={"project": "repo"})
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "disabled"
 
 
 def _diff(client, project="repo"):

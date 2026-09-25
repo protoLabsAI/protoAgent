@@ -37,6 +37,7 @@ class _Cfg:
     filesystem_run_requires_approval: bool = True
     filesystem_bypass_allowed: bool = True
     filesystem_editor_command: str = ""
+    filesystem_code_pane: bool = True
     filesystem_projects: list = field(default_factory=list)
     tools_memoize_reads_enabled: bool = False
 
@@ -66,7 +67,10 @@ def _tools(root):
 
 def _pane(monkeypatch, root) -> TestClient:
     monkeypatch.setattr(
-        STATE, "graph_config", LangGraphConfig(filesystem_projects=[{"name": "repo", "path": str(root)}]), raising=False
+        STATE,
+        "graph_config",
+        LangGraphConfig(filesystem_code_pane=True, filesystem_projects=[{"name": "repo", "path": str(root)}]),
+        raising=False,
     )
     app = FastAPI()
     register_browse_routes(app)

@@ -133,6 +133,9 @@ function QuickSettingDialog({
       }
       toast({ tone: "success", title: "Saved", message: "Settings applied." });
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+      // …and the runtime status, which reports config-derived capabilities the shell gates
+      // on (e.g. `code_pane.enabled` — the Code surface appears/disappears without a reload).
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
       onClose();
     },
     onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),

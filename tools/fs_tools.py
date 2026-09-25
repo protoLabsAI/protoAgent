@@ -588,6 +588,20 @@ class _RegistryRef:
         return self._cached_registry
 
 
+def code_pane_enabled(config) -> bool:
+    """The console code pane toolset is on (ADR 0112, ``filesystem.code_pane``, default off).
+
+    The pane reads through the fs fence, so it also needs ``filesystem.enabled``. The ONE
+    predicate every consumer shares — ``show_code``'s binding, the ``/api/fs/file`` +
+    ``/api/fs/diff`` gate and the ``code_pane`` block of ``/api/runtime/status`` that the
+    console hides or shows the pane by — so they can't disagree about the state."""
+    return bool(
+        config is not None
+        and getattr(config, "filesystem_enabled", False)
+        and getattr(config, "filesystem_code_pane", False)
+    )
+
+
 def live_project_registry(fallback_config=None) -> ProjectRegistry:
     """The fenced project registry exactly as the fs tools see it RIGHT NOW.
 
@@ -1212,17 +1226,13 @@ def build_fs_tools(config) -> list:
         # sentinel on into the component frame and keeps this prefix as the tool card.
         return f"Showing {project}/{rel}:{where} to the operator. {echo}\n" + encode_component("code-ref", props)
 
-    tools = [
-        list_projects,
-        list_dir,
-        read_file,
-        find_files,
-        search_files,
-        show_code,
-        write_file,
-        edit_file,
-        delete_file,
-    ]
+    tools = [list_projects, list_dir, read_file, find_files, search_files]
+    # `show_code` — the code pane's pointer tool (ADR 0112), an opt-in toolset
+    # (`filesystem.code_pane`, default off): without the console pane there is nothing for
+    # its `code-ref` chip to open, so the model never sees it. A save rebuilds the graph.
+    if code_pane_enabled(config):
+        tools.append(show_code)
+    tools += [write_file, edit_file, delete_file]
 
     # `open_in_editor` — bound only when the operator named their desktop editor. It is a
     # side effect on the operator's screen, not on the project, so it works in read-only

@@ -1,11 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { withCodePane } from "./codePane";
 import { expandToolCard } from "./toolcard";
 
 // The code pane (ADR 0112): a read-only file + diff viewer docked beside chat. The agent
 // points (show_code → a `code-ref` chip that auto-opens the pane on the live stream), tool
 // results link their paths into it, and the Diff tab shows the working tree vs HEAD. Mock
-// data: e2e/codeFixtures.mjs.
+// data: e2e/codeFixtures.mjs. The pane is an opt-in toolset (`filesystem.code_pane`, default
+// off) — every test here runs with it ON; the OFF console is code-pane-off.spec.ts.
+
+test.beforeEach(async ({ page }) => {
+  await withCodePane(page);
+});
 
 async function send(page: Page, prompt: string) {
   await page.goto("/app/", { waitUntil: "load" });

@@ -182,7 +182,7 @@ def show_component(component: str, props: dict, title: str = "") -> str:
     if component == "code-ref":
         # A code-ref is a pointer into a fenced file; only show_code (ADR 0112) validates
         # the fence, the secret deny-list and the line range before emitting one.
-        return "Error: use the show_code tool to point the operator at code."
+        return "Error: use the show_code tool to point the operator at code (bound when the code pane is on)."
     if component not in COMPONENT_TYPES:
         return f"Error: unknown component '{component}'. Use one of: {', '.join(t for t in COMPONENT_TYPES if t != 'code-ref')}."
     payload = dict(props or {})

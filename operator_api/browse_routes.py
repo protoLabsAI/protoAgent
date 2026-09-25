@@ -25,7 +25,10 @@ never a write.
 but on the opposite side of that line: they return file CONTENT, so they never leave
 the fs fence (``tools.fs_tools.live_project_registry``, the ``read_file`` chokepoint),
 refuse secret-like names (``tools.fs_secrets``), and run git only through the hardened
-argv in ``tools.git_read``. Still read-only.
+argv in ``tools.git_read``. Still read-only. They are an opt-in toolset
+(``filesystem.code_pane``, default off): off, both answer 404 ``{code: "disabled"}`` —
+checked per request against the live config, so a settings save flips them without a
+restart.
 """
 
 from __future__ import annotations
@@ -142,6 +145,15 @@ def register_browse_routes(app) -> None:
     def _fs_error(status: int, code: str, reason: str):
         return HTTPException(status_code=status, detail={"code": code, "reason": reason})
 
+    def _require_code_pane() -> None:
+        """404 ``disabled`` unless the code pane toolset is on — read LIVE per request, so
+        the routes follow a hot-reloaded ``filesystem.code_pane`` with no restart."""
+        from runtime.state import STATE
+        from tools.fs_tools import code_pane_enabled
+
+        if not code_pane_enabled(getattr(STATE, "graph_config", None)):
+            raise _fs_error(404, "disabled", "the code pane is off (filesystem.code_pane)")
+
     def _fence(project: str, path: str):
         """(registry project root, resolved target) or raise ValueError — the fs-tool fence."""
         from runtime.state import STATE
@@ -210,6 +222,7 @@ def register_browse_routes(app) -> None:
         """
         import asyncio
 
+        _require_code_pane()
         # Parsed by hand, not as `int` params: FastAPI's own 422 has a different shape from
         # every other error this route returns ({code, reason}), and the console keys on code.
         try:
@@ -255,6 +268,8 @@ def register_browse_routes(app) -> None:
         import asyncio
 
         from tools.git_read import GitError, GitTimeout
+
+        _require_code_pane()
 
         try:
             return await asyncio.to_thread(_diff, project)

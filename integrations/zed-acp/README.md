@@ -22,7 +22,7 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | **Send Now** on a queued message | **steers the running turn**: the message is queued into it with protoAgent's mid-turn steering, and the turn carries on with it |
 | thread history: list and reopen past threads, **console chats included** | `GET /api/chat/sessions` + `…/turns`; a reopened thread continues on the same session, so the agent keeps its memory |
 | a new thread that picks up the chat you handed off from the console | `POST /api/editor/handoff/claim` on `session/new` |
-| `show_code` / `open_in_editor` cards you can follow | the file and line in their args |
+| `show_code` / `open_in_editor` cards you can follow (each only when its toolset is on: `filesystem.code_pane` / `filesystem.editor_command`) | the file and line in their args |
 | an error callout + a "⚠️ protoAgent error: …" line | a turn that FAILED (e.g. the model's 429 usage limit), or a stream that closed without a terminal state and whose task (read back with `GetTask`) failed or is still running |
 
 Each Zed thread is one protoAgent chat session (`chat-zed-…`), so the conversation also

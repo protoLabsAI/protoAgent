@@ -74,3 +74,16 @@ describe("makeFileLinker — editor mode", () => {
     expect(open).toHaveBeenCalledWith({ project: "app", path: "a.ts", line: 3, endLine: undefined, source: "link" });
   });
 });
+
+describe("makeFileLinker — code pane toolset OFF (open = null)", () => {
+  it("every link is the plain editor link, whatever the stored choice", () => {
+    for (const mode of ["protoagent", "editor"] as const) {
+      const link = makeFileLinker(mode, "zed", ext, null)!("app", "a.ts", 3)!;
+      expect(link).toEqual({ href: "zed://file/r/app/a.ts:3", title: "Open in Zed" });
+    }
+  });
+
+  it("is null without an external linker — there is no pane to fall back on", () => {
+    expect(makeFileLinker("protoagent", "zed", null, null)).toBeNull();
+  });
+});

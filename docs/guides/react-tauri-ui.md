@@ -139,6 +139,17 @@ A read-only file and diff viewer docked beside chat (ADR 0112) — the **Code** 
 on the right dock by default and always on a dock that isn't chat's. It's built for the
 operator as navigator: the agent points at evidence, and you read it at your own pace.
 
+**It's an opt-in toolset, off by default.** Turn it on per agent in **Settings ▸
+Capabilities ▸ Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane** (config
+`filesystem.code_pane: true`). The switch applies on
+save — the Code surface appears (or goes) without a reload, because the console reads it
+from `/api/runtime/status` `code_pane.enabled`, per fleet window. While it's off: the agent
+has no `show_code` tool, `GET /api/fs/file` and `GET /api/fs/diff` answer 404
+`{code: "disabled"}`, there's no Code surface in the rail, command palette or launcher, no
+follow mode, file links open your external editor (below), and a `show_code` chip from an
+earlier chat renders as plain text (`project/path:lines — note`). Everything below
+describes the pane with the toolset **on**.
+
 - **The agent points.** The `show_code(project, path, line, end_line, note)` tool drops a
   chip in the transcript (`path:12-18` plus a one-line "why") and, on the live turn,
   opens the pane at that range with the note as a banner. A reload or a replayed
@@ -171,9 +182,11 @@ Files over 5,000 lines render as plain text, and the view is virtualized.
 File paths in the fs tools' results are links: `read_file` gets a header link to the file
 (at its `offset`), each `file:line` hit in `search_files` opens at that line, and every
 path from `find_files` / `write_file` / `edit_file` opens the file. **Settings ▸ Chat ▸
-Open files in** picks where a click goes: **protoAgent** (the default) opens the code
-pane; **Zed**, **VS Code** or **Cursor** open your editor; **Off** keeps paths as plain
-text. With protoAgent selected, **External editor** picks what ⌘/Ctrl-click and the pane's
+Open files in** picks where a click goes: **protoAgent** (the default while the code pane
+toolset is on) opens the code pane; **Zed**, **VS Code** or **Cursor** open your editor;
+**Off** keeps paths as plain text. With the code pane off, **protoAgent** isn't offered and
+a saved protoAgent choice opens your external editor (Zed unless you picked another)
+instead, until the pane is turned back on. With protoAgent selected, **External editor** picks what ⌘/Ctrl-click and the pane's
 ↗ open. With an editor selected, ⌘/Ctrl-click opens the pane instead. Both choices are
 saved per browser (localStorage `protoagent.openFilesIn` and `protoagent.editor`), not in
 agent config. They describe the machine you're sitting at, so they stay put when you switch

@@ -7,6 +7,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { setEditorPref, setOpenFilesIn } from "../lib/editorPref";
+import { setCodePaneEnabled } from "../codeviewer/enabled";
 import { resetCodeViewer, useCodeViewer } from "../codeviewer/store";
 import { queryClient } from "../lib/queryClient";
 import { ToolValue } from "./tool-renderers";
@@ -213,7 +214,9 @@ describe("protoAgent mode (ADR 0112): a click opens the code pane", () => {
   beforeEach(() => {
     resetCodeViewer();
     setOpenFilesIn("protoagent");
+    setCodePaneEnabled(true); // the code pane toolset is ON for this agent
   });
+  afterEach(() => setCodePaneEnabled(false));
 
   const click = (a: Element, init: MouseEventInit = {}) =>
     act(async () => {
@@ -274,6 +277,45 @@ describe("protoAgent mode (ADR 0112): a click opens the code pane", () => {
     setEditorPref("off");
     const el = await render({ tool: "search_files", raw: "src/a.py:10: x = 1", input: '{"project": "app"}' });
     expect(hrefs(el)).toEqual([]);
+  });
+});
+
+describe("code pane toolset OFF (the default): links go to the external editor", () => {
+  beforeEach(() => {
+    resetCodeViewer();
+    setCodePaneEnabled(false);
+  });
+
+  it("a stored 'protoagent' choice falls back to the editor link — no pane, no ⌘-click pane", async () => {
+    setOpenFilesIn("protoagent");
+    const el = await render({
+      tool: "search_files",
+      raw: "src/a.py:10: x = 1",
+      input: '{"project": "app", "query": "x"}',
+    });
+    expect(hrefs(el)).toEqual(["zed://file/Users/me/My%20Repo/src/a.py:10"]);
+    const a = el.querySelector("a.tool-editor-link")!;
+    expect(a.getAttribute("title")).toBe("Open in Zed");
+    await act(async () => {
+      a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    });
+    expect(useCodeViewer.getState().current).toBeNull();
+  });
+
+  it("without /api/fs/roots there is nothing to link (no pane to fall back on)", async () => {
+    setOpenFilesIn("protoagent");
+    queryClient.clear();
+    const el = await render({ tool: "search_files", raw: "src/a.py:10: x = 1", input: '{"project": "app"}' });
+    expect(hrefs(el)).toEqual([]);
+  });
+
+  it("turning the toolset on re-routes the SAME mounted links to the pane, no remount", async () => {
+    setOpenFilesIn("protoagent");
+    const el = await render({ tool: "search_files", raw: "src/a.py:10: x = 1", input: '{"project": "app"}' });
+    expect(el.querySelector("a.tool-editor-link")?.getAttribute("title")).toBe("Open in Zed");
+    await act(async () => setCodePaneEnabled(true));
+    expect(el.querySelector("a.tool-editor-link")?.getAttribute("title")).toMatch(/Open in protoAgent/);
+    setCodePaneEnabled(false);
   });
 });
 

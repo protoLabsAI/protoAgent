@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { withCodePane } from "./codePane";
+
 // "Continue in Zed" (chat tab menu): POSTs a hand-off for the current chat — scoped to the
 // code pane's project + file when one is open — and toasts the operator to start a thread in
 // Zed within 2 minutes (the protoagent-acp shim claims it). Only offered while the external
@@ -43,6 +45,7 @@ test("with no file open: offers the chat for any folder and says to switch to Ze
 });
 
 test("with a file in the code pane: scopes the hand-off to its project + line", async ({ page }) => {
+  await withCodePane(page); // the code pane is an opt-in toolset (ADR 0112 amendment)
   await send(page, "SHOWCODE: show me the auth check");
   await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
 
@@ -87,7 +90,27 @@ test("not offered on an incognito chat (a Zed thread would continue it without t
   await expect(menu.getByText("Continue in Zed", { exact: true })).toHaveCount(0);
 });
 
+test("code pane toolset OFF: the hand-off degrades to the chat alone (no project/file)", async ({ page }) => {
+  // show_code's chip renders inert and nothing opens, so there is no pane file to send: the
+  // item still works, offering the chat for any folder (ChatSurface reads the pane's
+  // `current` only while the toolset is on).
+  await send(page, "SHOWCODE: show me the auth check");
+  await expect(page.getByTestId("code-ref-inert")).toBeVisible();
+  const menu = await openTabMenu(page);
+  const req = handoffRequest(page);
+  await menu.getByText("Continue in Zed", { exact: true }).click();
+  const body = (await req).postDataJSON();
+  expect(body.project).toBeUndefined();
+  expect(body.path).toBeUndefined();
+  await expect(
+    page.locator(".pl-toast", {
+      hasText: "Switch to Zed and start a protoAgent thread within 2 minutes to continue this chat.",
+    }),
+  ).toBeVisible();
+});
+
 test("the pane's file only rides along for the chat it was opened from", async ({ page }) => {
+  await withCodePane(page);
   await send(page, "SHOWCODE: show me the auth check");
   await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
   const tabs = page.locator(".pl-tabbar__tab");

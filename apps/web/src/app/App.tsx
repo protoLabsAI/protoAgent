@@ -12,7 +12,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
@@ -52,6 +52,8 @@ import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { MemorySurface } from "../memory/MemorySurface";
 import { CodeSurface } from "../codeviewer/CodeSurface";
+import { codePaneEnabledFrom, setCodePaneEnabled } from "../codeviewer/enabled";
+import { CODE_SURFACE_ID } from "../codeviewer/open";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { PluginRailManage } from "../plugins/PluginRailManage";
@@ -346,6 +348,16 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   useActiveTheme(); // apply the focused agent's saved theme on boot + repaint on switch (ADR 0042)
   const mobileActive = useUI((s) => s.mobileActive);
   const setMobileActive = useUI((s) => s.setMobileActive);
+  // The code pane is an opt-in toolset (ADR 0112 amendment, `filesystem.code_pane`, default
+  // off): its surface exists only while the connected agent reports it on. Synced into the
+  // pane's module store for its non-React callers (live stream hooks, openCode, file links);
+  // a settings save re-polls the status, so a toggle lights it up / takes it down in place.
+  const codePane = codePaneEnabledFrom(runtime);
+  useLayoutEffect(() => setCodePaneEnabled(codePane), [codePane]);
+  const coreSurfaces = useMemo(
+    () => (codePane ? CORE_SURFACES : CORE_SURFACES.filter((s) => s.id !== CODE_SURFACE_ID)),
+    [codePane],
+  );
   const quickBar = useUI((s) => s.quickBar);
   const setRailOrder = useUI((s) => s.setRailOrder);
   const [live, setLive] = useState(false);
@@ -470,7 +482,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     if (runtime && mobileActive.startsWith("plugin:") && !allPluginViews.some((v) => v.key === mobileActive)) {
       setMobileActive("chat");
     }
-  }, [runtime, surface, activePluginView, mobileActive, allPluginViews, setMobileActive]);
+    // …and for the code pane once its toolset is off (ADR 0112 amendment): a phone left on the
+    // pushed Code surface drops back to chat rather than a blank layer.
+    if (runtime && !codePane && mobileActive === CODE_SURFACE_ID) setMobileActive("chat");
+  }, [runtime, surface, activePluginView, mobileActive, allPluginViews, setMobileActive, codePane]);
   // White-label the window/tab title to the configured identity (default
   // protoAgent), so a fork's title follows its name without a rebuild.
   // brandName() display-cases a bare lower-case slug (e.g. `gina` → `Gina`).
@@ -559,7 +574,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // Chat. Metadata resolves from core or the live plugin-view set; a freshly-appeared plugin not
   // yet reconciled is appended so it still shows.
   type RailItem = { id: string; label: string; icon: ReactNode };
-  const coreMeta = new globalThis.Map<string, RailItem>(CORE_SURFACES.map((s) => [s.id, s] as const));
+  const coreMeta = new globalThis.Map<string, RailItem>(coreSurfaces.map((s) => [s.id, s] as const));
   const pluginMeta = new globalThis.Map<string, RailItem>(
     allPluginViews.map((v) => [v.key, { id: v.key, label: v.label, icon: pluginViewIcon(v.icon) }] as const),
   );
@@ -604,7 +619,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // The WHOLE facade, not just `.views`: the palette resolves each surface by id through
   // `viewFor` (ADR 0056), so this is the first real consumer of the resolver half.
   const paletteFacade = buildViews({
-    core: CORE_SURFACES,
+    core: coreSurfaces,
     plugins: allPluginViews.map((v) => ({ key: v.key, label: v.label, icon: pluginViewIcon(v.icon) })),
     ext: registeredSurfaces()
       .filter((s) => s.id !== "chat") // the chat slot isn't a separate surface
@@ -699,7 +714,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         return <MemorySurface />;
       // The code pane (ADR 0112) — read-only file + diff viewer; the heavy part is lazy.
       case "code":
-        return <CodeSurface />;
+        return codePane ? <CodeSurface /> : null;
       // Settings is no longer a rail surface (2026-06 consolidation) — it's a utility-bar
       // pill opening the settings dialog (SettingsOverlay). Notes is the first-party `notes`
       // plugin (ADR 0034 S4) — rendered via the default

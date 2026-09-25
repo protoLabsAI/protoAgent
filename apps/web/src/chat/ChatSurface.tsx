@@ -46,6 +46,7 @@ import { FS_ROOTS_QUERY_KEY } from "./useEditorLinker";
 import { useEditorPref } from "../lib/editorPref";
 import { brandName } from "../lib/brand";
 import { queryClient } from "../lib/queryClient";
+import { isCodePaneEnabled } from "../codeviewer/enabled";
 import { useCodeViewer } from "../codeviewer/store";
 import { PublishDialog } from "./PublishDialog";
 import { openPublishDialog } from "./publishDialogStore";
@@ -290,8 +291,10 @@ export function ChatSurface({
       {
         sessionId: id,
         title: session?.title,
-        // Read at click time — the pane may have moved since the menu opened.
-        current: useCodeViewer.getState().current,
+        // Read at click time — the pane may have moved since the menu opened. Only while the
+        // code pane toolset is on (ADR 0112 amendment): off, the persisted `current` is a stale
+        // leftover, so the hand-off degrades to the chat alone (no project/file).
+        current: isCodePaneEnabled() ? useCodeViewer.getState().current : null,
         agentName: agentDisplayName,
       },
       {

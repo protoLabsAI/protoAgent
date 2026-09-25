@@ -212,6 +212,9 @@ function ToolsBody() {
                             "filesystem.run_requires_approval",
                             "filesystem.bypass_allowed",
                             "filesystem.run_auto_approve",
+                            // The code pane toolset (ADR 0112 amendment) — show_code + the
+                            // console's read-only file/diff pane, off by default.
+                            "filesystem.code_pane",
                           ]}
                           title="Shell & filesystem tools"
                           label="Shell & filesystem tools"

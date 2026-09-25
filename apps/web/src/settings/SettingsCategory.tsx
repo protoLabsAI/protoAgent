@@ -227,6 +227,9 @@ export function SettingsCategory({
       toast({ tone: "success", title: "Settings saved", message: restartNote || r.messages.join(" · ") || "Applied." });
       setDirty({});
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+      // The runtime status reports config-derived capabilities the shell gates on (e.g.
+      // `code_pane.enabled`), so a save refreshes it too — the toggle applies without a reload.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
     },
     onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),
   });
@@ -242,6 +245,7 @@ export function SettingsCategory({
       // Drop any pending edit on the reset keys — the inherited value is now authoritative.
       setDirty((d) => { const next = { ...d }; for (const k of keys) delete next[k]; return next; });
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
     },
     onError: (e) => toast({ tone: "error", title: "Reset failed", message: errMsg(e) }),
   });

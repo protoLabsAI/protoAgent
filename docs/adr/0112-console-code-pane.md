@@ -2,6 +2,8 @@
 
 - Status: Proposed
 - Date: 2026-09-24
+- Amended: 2026-09-25 — the code pane is an **opt-in toolset, off by default**
+  (`filesystem.code_pane`); see [Amendment](#amendment-an-opt-in-toolset-off-by-default) (#3613)
 - Implemented in: the server half (this PR): `tools/fs_secrets.py`, `tools/fs_view.py`,
   `tools/git_read.py`, `operator_api/browse_routes.py` (`GET /api/fs/file`,
   `GET /api/fs/diff`), `tools/fs_tools.py` (`show_code`), `graph/components.py`
@@ -246,6 +248,38 @@ renderer. The spike met every acceptance criterion:
   `@shikijs/*` (vitepress's Shiki 2 holds the root `node_modules` slot, so three physical 3.23
   copies still exist on disk). Result: `dist/assets` 15 MB. The Shiki 4 move is tracked
   upstream in protoContent#519.
+
+## Amendment — an opt-in toolset, off by default (2026-09-25) {#amendment-an-opt-in-toolset-off-by-default}
+
+v0.178.0 shipped the pane always-on. Josh, 2026-09-25: *"we need to not have the code and show
+code stuff on by default"* — then, on how: *"it can be core and using native react, but it
+should be … toggleable as a toolset."* So the pane stays core and native React (D1 — an iframe
+plugin view would break the chat ↔ pane loop), and becomes a per-agent toolset like its
+siblings under `filesystem.*`:
+
+- **The switch is `filesystem.code_pane`** (bool, default `false`, needs `filesystem.enabled`),
+  in **Settings ▸ Capabilities ▸ Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane**.
+  Per agent; hot-reloaded like the other fs toggles (a save
+  rebuilds the graph). One predicate — `tools.fs_tools.code_pane_enabled(config)` — answers
+  for every consumer below, so they can't disagree.
+- **Off:** `show_code` is not built (the model never sees it, so no `code-ref` is emitted);
+  `GET /api/fs/file` and `GET /api/fs/diff` answer **404 `{code: "disabled"}`** (checked
+  against the live config per request, so a toggle needs no restart; the paths stay
+  registered). `/api/fs/roots` and `/api/fs/browse` are unaffected — the external-editor links
+  (#3596) and the path pickers use them. `show_component` still refuses `code-ref`.
+- **The console learns the state from `/api/runtime/status` `code_pane.enabled`** — the status
+  it already polls, per fleet window, so each member's window reads its own agent. A settings
+  save invalidates that query, so the pane appears or disappears without a reload. Off, the
+  console has **no Code surface** (rail, command palette, desktop launcher), **no "protoAgent"
+  choice** under Settings ▸ Chat ▸ Open files in (a stored `protoagent` choice is kept but
+  reads as the external editor — Zed by default — until the pane is back), fs path links are
+  the plain editor links they were before the pane (#3596), **no follow mode**, and a `code-ref`
+  replayed from history renders as inert text (`project/path:lines — note`). Unknown (before
+  the first status, or an older server that doesn't report it) reads as off.
+- **Unchanged when on:** everything in D1–D6.
+
+The primitives stay core regardless of the toggle — `tools/fs_secrets.py`, `tools/fs_view.py`
+(`read_file`/`search_files` use its `split_lines`) and `tools/git_read.py`.
 
 ## Consequences
 

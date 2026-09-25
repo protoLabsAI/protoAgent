@@ -55,15 +55,16 @@ continues it. A chat has at most one pending offer: offering it again replaces t
 earlier one. It keeps the same A2A context, and the history is
 replayed into Zed. You can do the same by hand: right-click a chat tab and choose
 **Continue in Zed**. That item appears only while Settings ▸ Chat's external editor is
-Zed, and it's hidden for incognito chats. If the code pane has a file open that was
+Zed, and it's hidden for incognito chats. If the code pane is on and has a file open that was
 opened from that chat, the offer is scoped to that project and Zed jumps to the file. Otherwise any folder can claim it,
 so switch to Zed yourself. The shim checks `GET /api/chat/sessions/{id}` → `active`
 before sending, so a Zed prompt waits while a console turn on the same chat is still
 running. Turn the tool's offer off with `filesystem.editor_handoff: false`.
 
-Independently of that, every fs toolset includes
-`show_code(project, path, line, end_line?, note?)`: it points the **console's** code pane at a line range with a
-one-sentence note on why it matters ([ADR 0112](../adr/0112-console-code-pane.md)).
+Independently of that, the opt-in **code pane** toolset (`filesystem.code_pane: true`, off by
+default) adds `show_code(project, path, line, end_line?, note?)`: it points the **console's** code
+pane at a line range with a one-sentence note on why it matters
+([ADR 0112](../adr/0112-console-code-pane.md)).
 It needs no editor and works for remote members too, because the console fetches the
 file through the fenced `GET /api/fs/file`. Secret-like files (`.env`, keys,
 credentials) and binaries are refused.

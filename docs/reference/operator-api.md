@@ -14,7 +14,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | Liveness probe |
-| GET | `/api/runtime/status` | Setup state, model, enabled middleware, knowledge/scheduler/skills counts |
+| GET | `/api/runtime/status` | Setup state, model, enabled middleware, knowledge/scheduler/skills counts, `code_pane: {enabled}` (the console gates the code pane on it) |
 
 ## Chat & sessions
 
@@ -126,8 +126,8 @@ and `file`/`diff` never return a secret-like file's content ([ADR 0112](../adr/0
 |---|---|---|
 | GET | `/api/fs/browse` | List the server's directories for a path picker (`?path=&files=&hidden=`) |
 | GET | `/api/fs/roots` | `{roots: {project: absolute root}}` — the live fs fence |
-| GET | `/api/fs/file` | `?project=&path=[&start=&end=]` → `{project, path, size, line_count, start, end, truncated, language, binary, text}`. Lines are `\n`-delimited, endings preserved; capped at 2 MB / 20,000 lines / 2,000 chars per line (`truncated: true`, page with `start=end+1`). Binary → `text: null`. Errors carry `detail: {code, reason}`: `bad_path` 400 (unknown project / fence escape), `denied` 403 (secret-like name, checked before existence), `not_found` 404, `not_a_file` / `bad_range` (also a non-integer `start`/`end`) / `unreadable` 400 |
-| GET | `/api/fs/diff` | `?project=` → the working tree vs `HEAD`: `{project, is_git, head, branch, files: [{path, status: M\|A\|D\|R\|?, additions, deletions, binary, denied, old_path?, reason?, too_large?}], patch, truncated}`. Hardened git (no external diff, textconv, filter, fsmonitor, hook or submodule recursion can run), scoped to the project root, untracked text files ≤ 256 KB as synthetic new-file patches, secret-like paths — and symlinks resolving outside the project or onto one — listed `denied` (with a `reason`) and content omitted, larger untracked files flagged `too_large`, patch capped at 1 MB and the file list at 5,000 entries (`truncated: true`). Not a repo → `{is_git: false, files: [], patch: ""}`; 10 s timeout → 504 |
+| GET | `/api/fs/file` | Code pane toolset only (`filesystem.code_pane`, default off — otherwise 404 `{code: "disabled"}`). `?project=&path=[&start=&end=]` → `{project, path, size, line_count, start, end, truncated, language, binary, text}`. Lines are `\n`-delimited, endings preserved; capped at 2 MB / 20,000 lines / 2,000 chars per line (`truncated: true`, page with `start=end+1`). Binary → `text: null`. Errors carry `detail: {code, reason}`: `bad_path` 400 (unknown project / fence escape), `denied` 403 (secret-like name, checked before existence), `not_found` 404, `not_a_file` / `bad_range` (also a non-integer `start`/`end`) / `unreadable` 400 |
+| GET | `/api/fs/diff` | Code pane toolset only (off → 404 `{code: "disabled"}`). `?project=` → the working tree vs `HEAD`: `{project, is_git, head, branch, files: [{path, status: M\|A\|D\|R\|?, additions, deletions, binary, denied, old_path?, reason?, too_large?}], patch, truncated}`. Hardened git (no external diff, textconv, filter, fsmonitor, hook or submodule recursion can run), scoped to the project root, untracked text files ≤ 256 KB as synthetic new-file patches, secret-like paths — and symlinks resolving outside the project or onto one — listed `denied` (with a `reason`) and content omitted, larger untracked files flagged `too_large`, patch capped at 1 MB and the file list at 5,000 entries (`truncated: true`). Not a repo → `{is_git: false, files: [], patch: ""}`; 10 s timeout → 504 |
 
 ## Editor hand-off
 

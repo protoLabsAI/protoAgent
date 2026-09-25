@@ -2009,6 +2009,13 @@ class LangGraphConfig:
     # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
     # is not bound. Only meaningful for an agent on the operator's own machine.
     filesystem_editor_command: str = ""
+    # The console code pane (ADR 0112) as an opt-in toolset — OFF by default. On: the
+    # ``show_code`` fs tool is bound (it emits the ``code-ref`` chip) and the console's
+    # read-only ``/api/fs/file`` + ``/api/fs/diff`` routes answer; the console shows the
+    # Code surface. Off: none of that exists — no tool, the routes answer 404
+    # ``{code: "disabled"}``, and file links go to the external editor. Needs
+    # ``filesystem.enabled`` (it reads through the same fence). Hot-reloadable.
+    filesystem_code_pane: bool = False
     # When ``open_in_editor`` opens a file, also OFFER the calling chat to the editor: a
     # new agent thread started in Zed (via the protoagent-acp shim) under that project
     # within 2 minutes continues this chat instead of starting fresh
@@ -2693,6 +2700,9 @@ class LangGraphConfig:
             filesystem_editor_command=str(
                 (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
             ).strip(),
+            filesystem_code_pane=not _falsey(
+                (data.get("filesystem", {}) or {}).get("code_pane"), default=not cls.filesystem_code_pane
+            ),
             # not _falsey(), never bool(): a string "false" (JSON overlay, env, hand-edit)
             # must switch the hand-off OFF.
             filesystem_editor_handoff=not _falsey(
