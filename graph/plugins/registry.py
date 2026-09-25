@@ -128,7 +128,9 @@ class PluginRegistry:
         — the target is forced to this plugin, it can't aim at another;
         ``"global_settings"`` opens global settings at an optional section ``target``;
         ``"plugin_setup"`` names a ``step`` THIS plugin registered with
-        ``register_setup_step`` and renders as a button that runs it) plus
+        ``register_setup_step`` and renders as a button that runs it; ``"install_deps"``
+        renders as an "Install dependencies" button that installs THIS plugin's declared
+        ``requires_pip`` through the host's install-deps route) plus
         optional bounded ``label``/``fields`` plain text; any other key is dropped. The host
         sanitizes on the way in: an unknown kind, a callback, an arbitrary URL, HTML, or an
         oversized payload is dropped, not stored, and a malformed action never raises into

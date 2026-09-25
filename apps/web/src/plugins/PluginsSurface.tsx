@@ -17,6 +17,7 @@ import { StatusPill } from "../app/StatusPill";
 import { InstallPluginDialog } from "./InstallPluginDialog";
 import { PluginSettingsDialog } from "./PluginSettingsDialog";
 import { useTrustAck } from "./TrustAckDialog";
+import { optionalOnlyNames, useDepsPrompt } from "./depsInstall";
 import { PluginFreshness } from "./PluginFreshness";
 import { usePluginManage, usePluginRefresh } from "./usePluginManage";
 import { catalogCardState, catalogCategories, filterCatalog } from "./catalog";
@@ -741,6 +742,7 @@ function DiscoverTab() {
   const { requestAck, ackDialog } = useTrustAck({
     onAckError: (m) => toast({ tone: "error", title: "Couldn't record the trust confirmation", message: m }),
   });
+  const { prompt: promptDeps, dialog: depsDialog } = useDepsPrompt();
   const install = useMutation({
     mutationFn: (p: CatalogPlugin) => api.installPlugin(p.repo),
     onSuccess: (res, p) => {
@@ -764,8 +766,18 @@ function DiscoverTab() {
           message: `${p.name}: ${failed.map(([, e]) => e).join("; ")}`,
         });
       } else {
-        toast({ tone: "success", title: "Plugin installed", message: `${p.name}${res.reloaded ? " — enabled and live" : ""}.` });
+        const soft = optionalOnlyNames(res.deps_needed);
+        toast({
+          tone: "success",
+          title: "Plugin installed",
+          message:
+            `${p.name}${res.reloaded ? " — enabled and live" : ""}.` +
+            (soft.length ? ` Optional packages not installed: ${soft.join(", ")} (Install deps on its row).` : ""),
+        });
       }
+      // Missing REQUIRED packages on this machine → ask once, install on confirm (same
+      // install-deps route as the row). Declining leaves the banner + its action.
+      promptDeps(res.deps_needed);
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
@@ -778,6 +790,7 @@ function DiscoverTab() {
   return (
     <>
       {ackDialog}
+      {depsDialog}
       <PanelHeader title="Discover" kicker={`${plugins.length} official plugins`} />
       <div className="stage-body">
         <div className="plugin-discover-controls">

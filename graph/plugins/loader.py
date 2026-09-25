@@ -684,11 +684,18 @@ def _report_deps_gap(manifest: PluginManifest) -> list[str]:
         DEPS_GAP_KEY,
         message,
         label=str(manifest.name or manifest.id),
-        # The one fix, as closed data. NOT `plugin_config`: that opens the per-plugin
-        # Configure dialog, which renders the plugin's settings and has no deps UI. The
-        # "Install deps" button lives on the plugin's row in Settings ▸ Plugins, which is
-        # the `plugins` settings section. Never a URL or a callback (ACTION_KINDS).
-        action={"kind": "global_settings", "target": "plugins", "label": "Open Plugins"},
+        # The fixes, as closed data (ACTION_KINDS) — never a URL or a callback:
+        #  • `install_deps` — the banner's own "Install dependencies" button: it posts the
+        #    SAME /api/plugins/install-deps route as the Plugins row, for THIS plugin only
+        #    (the target is forced to the reporting plugin). A console that predates the
+        #    kind renders no button for it and falls back to the next one.
+        #  • `global_settings` → `plugins` — the Plugins section, where the row's Install
+        #    deps lives. NOT `plugin_config`: that opens the per-plugin Configure dialog,
+        #    which renders the plugin's settings and has no deps UI.
+        action=[
+            {"kind": "install_deps", "label": "Install dependencies"},
+            {"kind": "global_settings", "target": "plugins", "label": "Open Plugins"},
+        ],
     )
     return sorted([*hard_missing, *soft_missing])
 

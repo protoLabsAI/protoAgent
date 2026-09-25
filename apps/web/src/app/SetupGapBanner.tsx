@@ -6,6 +6,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
+import { depsInstallToast, useDepsInstaller } from "../plugins/depsInstall";
 import { useUI } from "../state/uiStore";
 
 // Structured plugin SETUP GAP delivered on runtime status `setup_gaps[]` (server side:
@@ -27,6 +28,10 @@ import { useUI } from "../state/uiStore";
 // server-validated step identifier (never a URL from the payload), and the host runs only the
 // callable that plugin registered for that step ("Download the CLI", "Install Chrome"). The
 // route is core and outside /api/plugins/<id>/, so no plugin manifest can un-gate it.
+//
+// `install_deps` (the loader's "can't run until its Python packages are installed" gap) POSTs
+// the existing /api/plugins/install-deps with THIS gap's plugin id — the Plugins row's Install
+// deps, reached from the banner (InstallDepsButton below; plugins/depsInstall.tsx).
 export type SetupGapAction = {
   kind: string;
   target?: string;
@@ -215,6 +220,7 @@ function ctaLabel(action: SetupGapAction, gap: SetupGap): string {
   if (typeof action.label === "string" && action.label.trim()) return action.label.trim();
   if (action.kind === "plugin_config") return `Configure ${gap.label}`;
   if (action.kind === "plugin_setup") return "Run setup";
+  if (action.kind === "install_deps") return "Install dependencies";
   return "Open settings";
 }
 
@@ -289,6 +295,47 @@ function SetupStepButton({ gap, action }: { gap: SetupGap; action: SetupGapActio
 }
 
 /**
+ * An `install_deps` CTA: installs THIS gap's plugin's declared Python packages right from the
+ * banner, through the same POST /api/plugins/install-deps the Plugins row uses (the id is the
+ * gap's own plugin — the host forces the action's target to it). The button shows progress;
+ * the result is a toast (pip's error summary on failure). On success the route recomputes the
+ * plugin's deps gap and the installer refreshes runtime status, so the banner clears itself.
+ */
+function InstallDepsButton({ gap, action }: { gap: SetupGap; action: SetupGapAction }) {
+  const toast = useToast();
+  const { run, ackDialog } = useDepsInstaller();
+  const [busy, setBusy] = useState(false);
+  const label = ctaLabel(action, gap);
+
+  const install = useCallback(async () => {
+    setBusy(true);
+    try {
+      const t = depsInstallToast(gap.label, await run(gap.plugin));
+      if (t) toast(t);
+    } finally {
+      setBusy(false);
+    }
+  }, [gap.plugin, gap.label, run, toast]);
+
+  return (
+    <>
+      <Button
+        variant="primary"
+        size="sm"
+        type="button"
+        loading={busy}
+        disabled={busy}
+        onClick={() => void install()}
+        data-testid="setup-gap-install-deps"
+      >
+        {busy ? "Installing…" : label}
+      </Button>
+      {ackDialog}
+    </>
+  );
+}
+
+/**
  * One structured setup gap, rendered as an accessible, actionable, dismissible warning
  * banner. Shared verbatim by the desktop strip and the mobile banner stack (App wires both
  * from the same split), so behavior can't drift between form factors.
@@ -326,6 +373,9 @@ export function SetupGapBanner({ gap, onDismiss }: { gap: SetupGap; onDismiss: (
         return typeof action.step === "string" && action.step ? (
           <SetupStepButton key={`${action.kind}:${action.step}:${index}`} gap={gap} action={action} />
         ) : null;
+      }
+      if (action.kind === "install_deps") {
+        return <InstallDepsButton key={`${action.kind}:${index}`} gap={gap} action={action} />;
       }
       const onClick = handlerFor(action);
       if (!onClick) return null; // unknown/malformed → render no interactive control

@@ -194,10 +194,14 @@ def test_an_enabled_plugins_missing_hard_deps_raise_a_setup_gap(tmp_path, monkey
     [gap] = _deps_gaps()
     assert "can't run until its Python packages are installed: nope-pkg-a, nope-pkg-b" in gap["message"]
     assert "install-deps hardp" in gap["message"]
-    # The one fix, as closed declarative data, aimed where the Install deps button
-    # actually lives — the Plugins section — NOT the per-plugin Configure dialog, which
-    # renders the plugin's settings and has no deps UI at all.
-    assert gap["actions"] == [{"kind": "global_settings", "target": "plugins", "label": "Open Plugins"}]
+    # The fixes, as closed declarative data: the banner's own Install dependencies button
+    # (target forced to THIS plugin — it posts the same install-deps route as the Plugins
+    # row), then the Plugins section where that row lives — NOT the per-plugin Configure
+    # dialog, which renders the plugin's settings and has no deps UI at all.
+    assert gap["actions"] == [
+        {"kind": "install_deps", "target": "hardp", "label": "Install dependencies"},
+        {"kind": "global_settings", "target": "plugins", "label": "Open Plugins"},
+    ]
     setup_gaps.reset()
 
 
