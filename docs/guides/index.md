@@ -74,6 +74,7 @@ Add capability without forking — external tools, drop-in packages, channels.
 | [Bundles](/guides/bundles) | You want several plugins installed, updated, and removed as one tested set — or to publish an archetype repo of your own (manifest, pin lifecycle, verify CI, archetype card) |
 | [Discord surface](/guides/discord) | You want the agent reachable from Discord (the first-party `discord` plugin) |
 | [File GitHub issues (`/issue`)](/guides/file-github-issues) | You want to file a GitHub issue straight from the console — the `/issue` command or the util-bar widget |
+| [Friction log](/guides/friction-log) | You want to triage what keeps getting in the agent's way: the Friction view, `/friction`, filing rows as issues, tuning what reaches its working state, and clearing noise |
 
 ## Console & UI
 
