@@ -3087,6 +3087,15 @@ export const api = {
   fsDiff(project: string) {
     return request<FsDiff>(`/api/fs/diff?${new URLSearchParams({ project }).toString()}`);
   },
+  // "Continue in Zed": offer this chat to the next agent thread the operator starts in Zed
+  // under `project`'s root (no project = any folder). The protoagent-acp shim claims it on
+  // session/new and continues the same A2A context. 120 s TTL, one-shot, latest wins.
+  editorHandoff(body: { session_id: string; project?: string; path?: string; line?: number; title?: string }) {
+    return request<{ id: string; expires_at: string; root: string | null }>("/api/editor/handoff", {
+      method: "POST",
+      body,
+    });
+  },
   uninstallPlugin(id: string) {
     // `superseded_by_bundled` (the bundled version) = only the ignored old copy of a
     // plugin that now ships with protoAgent was removed; the built-in keeps running.

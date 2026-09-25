@@ -26,6 +26,7 @@ from typing import Any
 
 from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
+from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
@@ -2346,16 +2347,20 @@ _ACTIVE_TURNS: int = 0
 _LAST_TURN_MONOTONIC: float = 0.0
 
 
-def _turn_started() -> None:
+def _turn_started(session_id: str = "") -> None:
     global _ACTIVE_TURNS, _LAST_TURN_MONOTONIC
     _ACTIVE_TURNS += 1
     _LAST_TURN_MONOTONIC = time.monotonic()
+    # Per-session half of the same bracket: the busy signal `GET /api/chat/sessions/{id}`
+    # reports as `active` (the Zed shim waits on it instead of interleaving two turns).
+    _turn_activity.begin(session_id)
 
 
-def _turn_ended() -> None:
+def _turn_ended(session_id: str = "") -> None:
     global _ACTIVE_TURNS, _LAST_TURN_MONOTONIC
     _ACTIVE_TURNS = max(0, _ACTIVE_TURNS - 1)
     _LAST_TURN_MONOTONIC = time.monotonic()
+    _turn_activity.end(session_id)
 
 
 def active_turns() -> int:
@@ -2424,7 +2429,7 @@ async def _chat_langgraph_stream(
     """Idle-beacon wrapper (#1720): mark a turn in flight for the whole generator
     lifetime — including early ``aclose()`` and errors — then delegate. Keeps the
     public name/signature so every caller (A2A executor, console) is unchanged."""
-    _turn_started()
+    _turn_started(session_id)
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
         async for _ev in _chat_langgraph_stream_impl(
@@ -2437,7 +2442,7 @@ async def _chat_langgraph_stream(
         ):
             yield _ev
     finally:
-        _turn_ended()
+        _turn_ended(session_id)
 
 
 async def _chat_langgraph_stream_impl(
@@ -3737,7 +3742,7 @@ async def _chat_langgraph(
     to describe the agent. The row is written HERE rather than inside the impl
     because the impl has a dozen return points; the wrapper has exactly one exit.
     """
-    _turn_started()
+    _turn_started(session_id)
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     started = time.monotonic()
     sink: dict[str, Any] = {}
@@ -3760,7 +3765,7 @@ async def _chat_langgraph(
         state = "failed" if any(isinstance(m, dict) and m.get("error") for m in result) else "completed"
         return result
     finally:
-        _turn_ended()
+        _turn_ended(session_id)
         _record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
 
 

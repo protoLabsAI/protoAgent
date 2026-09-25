@@ -1059,6 +1059,12 @@ def _main():
     from operator_api.browse_routes import register_browse_routes
 
     register_browse_routes(fastapi_app)
+
+    # Console ↔ Zed chat hand-off (offer from the console / open_in_editor, claim from the
+    # Zed ACP shim) — operator_api/editor_routes.py over runtime/editor_handoff.py.
+    from operator_api.editor_routes import register_editor_routes
+
+    register_editor_routes(fastapi_app)
     register_mcp_routes(fastapi_app)
 
     # --- Telemetry (ADR 0006 Slice 2) --------------------------------------

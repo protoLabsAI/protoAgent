@@ -16,7 +16,7 @@ import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
 import { chatCommandsQuery, chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
-import { ConfirmDialog } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import type {
   ChatMessage,
   ChatPart,
@@ -41,6 +41,12 @@ import {
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { ChatMemoryChoices, ClearConversationDialog } from "./ClearConversationDialog";
 import { exportChatToFile } from "./exportChat";
+import { continueInZed } from "./continueInZed";
+import { FS_ROOTS_QUERY_KEY } from "./useEditorLinker";
+import { useEditorPref } from "../lib/editorPref";
+import { brandName } from "../lib/brand";
+import { queryClient } from "../lib/queryClient";
+import { useCodeViewer } from "../codeviewer/store";
 import { PublishDialog } from "./PublishDialog";
 import { openPublishDialog } from "./publishDialogStore";
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
@@ -271,6 +277,37 @@ export function ChatSurface({
   // Pre-release (chat.publish, ADR 0068) — gates the tab context-menu item; the /publish
   // slash command gates itself via its own `flag:` tag through the registry.
   const publishEnabled = useFlag("chat.publish");
+  // "Continue in Zed" (tab menu) — offered only while the operator's external editor is Zed:
+  // the hand-off is claimed by the Zed ACP shim, nothing else reads it.
+  const editorPref = useEditorPref();
+  const toast = useToast();
+  const { data: runtimeInfo } = useQuery(runtimeStatusQuery());
+  const agentDisplayName = brandName(runtimeInfo?.identity?.name);
+
+  function handOffToZed(id: string) {
+    const session = chat.sessions.find((s) => s.id === id);
+    void continueInZed(
+      {
+        sessionId: id,
+        title: session?.title,
+        // Read at click time — the pane may have moved since the menu opened.
+        current: useCodeViewer.getState().current,
+        agentName: agentDisplayName,
+      },
+      {
+        post: (body) => api.editorHandoff(body),
+        roots: async () =>
+          (await queryClient.fetchQuery({ queryKey: FS_ROOTS_QUERY_KEY, queryFn: () => api.fsRoots(), staleTime: 60_000 }))
+            .roots,
+        navigate: (href) => {
+          // Same-window hand-off like the tool-card links: a custom scheme goes to the OS
+          // (the desktop shell intercepts the navigation) without unloading the page.
+          window.location.href = href;
+        },
+        toast,
+      },
+    );
+  }
 
   useEffect(() => {
     if (!chat.currentSessionId && chat.sessions.length === 0) {
@@ -459,6 +496,9 @@ export function ChatSurface({
       // Pre-release (chat.publish, ADR 0068): the menu item is simply absent while the
       // flag is off, same pattern as the flag-tagged slash commands below.
       onPublish: publishEnabled ? () => openPublishDialog(id) : undefined,
+      // Hidden for incognito chats: a Zed thread would continue them WITHOUT the incognito
+      // flag (the shim sends ordinary turns), silently writing the chat to memory.
+      onContinueInZed: editorPref === "zed" && !target?.incognito ? () => handOffToZed(id) : undefined,
       onClose: () => setPendingClose(id),
       onCloseOthers: others.length ? () => startBulkClose(others) : undefined,
       onCloseLeft: left.length ? () => startBulkClose(left) : undefined,

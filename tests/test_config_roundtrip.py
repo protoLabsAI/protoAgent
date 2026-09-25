@@ -135,6 +135,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_allow_run": True,
     "filesystem_bypass_allowed": True,
     "filesystem_editor_command": "",
+    "filesystem_editor_handoff": True,
     "filesystem_enabled": True,
     "filesystem_projects": [],
     "filesystem_run_requires_approval": True,

@@ -117,3 +117,24 @@ describe("chat-tab bulk-close menu", () => {
     }
   });
 });
+
+// "Continue in Zed": ChatSurface passes the closure only while the external editor is Zed
+// (and the chat isn't incognito), and the menu shows the entry only when it got one.
+describe("chat-tab Continue in Zed", () => {
+  const noop = () => {};
+
+  it("appears only when the closure is supplied, and runs it", () => {
+    let ran = 0;
+    const items = resolveMenu("chat-tab", { sessionId: "s1", onClose: noop, onContinueInZed: () => ran++ }) as Item[];
+    const item = items.find((i) => i.id === "continue-in-zed") as Item & { run: () => void };
+    expect(item?.label).toBe("Continue in Zed");
+    expect(item?.danger).toBeFalsy();
+    item.run();
+    expect(ran).toBe(1);
+    expect(ids(resolveMenu("chat-tab", { sessionId: "s1", onClose: noop }))).not.toContain("continue-in-zed");
+  });
+
+  it("is never on the empty-space menu", () => {
+    expect(ids(resolveMenu("chat-tab", { onNew: noop, onContinueInZed: noop }))).not.toContain("continue-in-zed");
+  });
+});

@@ -1243,6 +1243,22 @@ const server = createServer(async (req, res) => {
         complete: Boolean(supplied),
       });
     }
+    // "Continue in Zed" hand-off (runtime/editor_handoff.py): offer → {id, expires_at, root}
+    // (root = the fixture root of the named project, null when none); a spec sends
+    // `x-e2e-handoff: missing` to drive the unknown-session 404. Claim (the Zed shim's half)
+    // has nothing to hand back here → 204.
+    if (pathname === "/api/editor/handoff" && req.method === "POST") {
+      const body = await readBody(req);
+      if (req.headers["x-e2e-handoff"] === "missing") {
+        return sendJson(res, { detail: { code: "not_found", reason: `unknown session: ${body.session_id}` } }, 404);
+      }
+      const root = body.project ? (CODE_ROOTS.roots[body.project] ?? null) : null;
+      return sendJson(res, { id: "ho-e2e", expires_at: new Date(Date.now() + 120_000).toISOString(), root });
+    }
+    if (pathname === "/api/editor/handoff/claim" && req.method === "POST") {
+      res.writeHead(204);
+      return res.end();
+    }
     // Mid-turn steering enqueue — accept + echo (the console ignores the body). A steer whose
     // text says "too late" is REMEMBERED as already drained, so its DELETE answers
     // `removed: false` below: the sentinel that makes the agent-already-read-it path drivable
