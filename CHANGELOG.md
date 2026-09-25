@@ -15,6 +15,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.179.0] - 2026-09-25
+
+### Added
+- **Use a protoAgent from Zed's Agent Panel over ACP — ADR 0111 (#3598).** New standalone
+  `protoagent-acp` package (`integrations/zed-acp/`, run with `uvx`) is a stdio Agent Client
+  Protocol server that talks to any running instance over A2A. Zed streams the agent's answer
+  and thinking, shows its tool calls as typed cards, follows it into the files it reads and
+  searches, turns approval requests into Zed permission prompts, and maps Stop to
+  `CancelTask`. It needs no core change and works against local, fleet-member and remote
+  instances. Paste-ready Zed `agent_servers` snippet in the package README.
+
+- **Continue a console chat in Zed's agent panel (#3610).** Right-click a chat tab and choose
+  **Continue in Zed**, or let `open_in_editor` offer the chat. A new agent thread started in Zed
+  (through the `protoagent-acp` shim) under that project within 2 minutes then picks up the same
+  conversation. New routes: `POST /api/editor/handoff` (+ `/claim`), and `GET /api/chat/sessions/{id}`,
+  whose `active` flag tells a client whether a turn is already running. Switch the tool's offer off
+  with `filesystem.editor_handoff: false`. Incognito chats are never offered.
+
+### Changed
+- **The code pane and `show_code` are now an opt-in toolset, off by default (#3613).**
+  v0.178.0 shipped the console code pane (ADR 0112) always on. It is now a per-agent toolset,
+  `filesystem.code_pane` (default `false`): enable it in **Settings ▸ Capabilities ▸ Tools ▸
+  Filesystem ▸ Shell & filesystem tools ▸ Code pane**. It applies on
+  save, with no restart and no console reload. While it's off, the agent has no `show_code` tool,
+  `GET /api/fs/file` and `GET /api/fs/diff` answer 404 `{code: "disabled"}`, and the console shows
+  no Code surface (rail, command palette, launcher), no follow mode and no "protoAgent" choice under Settings ▸
+  Chat ▸ Open files in. File paths in tool output open your external editor (Zed by default), as
+  they did before the pane. A `show_code` chip from an earlier chat renders as plain
+  `project/path:lines — note` text. `/api/runtime/status` gains `code_pane: {enabled}`, which the
+  console reads for each fleet window. With the toolset on, the pane behaves exactly as it did in
+  v0.178.0. **Upgrading:** set `filesystem.code_pane: true` on each agent that should keep the pane.
+
+### Fixed
+- **Console and A2A turns land in Langfuse as proper traces again, with a name, input and output (#3607).** The a2a-sdk wraps its request handlers in OpenTelemetry spans, and the Langfuse SDK doesn't export those. So every A2A-driven turn (the console's chat included) was parented under a span that never reached Langfuse, leaving a trace with no root: no name, and blank trace-level input/output. A turn with no caller trace now starts its own root. Real cross-agent joins via `a2a.trace` are unchanged.
+
+- **The boot gate no longer flashes "the engine isn't responding" during a normal slow cold start (#3609).**
+  The App-level runtime probe's retry budget was ~30s (30 retries × 1s `retryDelay`), shorter than the
+  45s `bootStuck` grace timer — so a cold start that took longer than ~30s tripped the harsh failure
+  gate before the gentler "taking longer than usual / Continue anyway" message could appear. The retry
+  cap is now 60 (~60s), outlasting `bootStuck`, so a slow start progresses loading → stuck → ready and
+  the failure gate is reserved for an engine that is genuinely down.
+
+- **The boot gate's "isn't responding" failure now waits for elapsed time, not the probe's retry count (#3611).**
+  Follow-up to #3609. `bootFailed` flipped the moment React Query exhausted its retry budget — a
+  count, not a clock: when the desktop sidecar hadn't bound its port yet each fetch failed instantly,
+  so the "budget" was really just a stopwatch that drifted from the separate 45s `bootStuck` timer,
+  and because `refetchInterval` keeps polling after the error the shell often appeared seconds after
+  the failure screen. The "failed" phase is now time-based like "stuck": a new `BOOT_FAILED_MS`
+  (120s) timer must elapse *and* the probe must be erroring before the gate shows "isn't responding".
+  Before 120s an errored probe stays on loading/stuck while polling continues, matching the gate's own
+  "first launch can take up to a minute" promise.
+
 ## [0.178.0] - 2026-09-25
 
 ### Added
