@@ -523,7 +523,9 @@ def page_sdk() -> str:
     banners = _section_banners(sdk)
     placed: list[tuple[str, str, Any]] = []
     for name, fn in _public_functions(sdk):
-        line = fn.__code__.co_firstlineno
+        # unwrap: a decorated function (``@asynccontextmanager``) reports the DECORATOR's
+        # code object, whose line would file it under the wrong section.
+        line = inspect.unwrap(fn).__code__.co_firstlineno
         section = ""
         for bline, title in sorted(banners.items()):
             if bline < line:

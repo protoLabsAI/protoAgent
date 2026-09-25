@@ -165,17 +165,21 @@ async def _run_prepared(
         return run_store.pause(step_id, completed)
 
     try:
-        result = await execute_workflow(
-            recipe,
-            resolved,
-            run_step=_run_step,
-            # Caller default only — a recipe declaring its own fan-out width wins inside
-            # the engine (a 5-step parallel stage must not be serialized by a cap of 4).
-            max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
-            gate_check=_gate_check,
-            pause_fn=_pause,
-            seed_outputs=seed_outputs,
-        )
+        # One trace per run: every step's `subagent:` span nests under it, instead of each
+        # becoming its own root trace when the run has no turn around it (Studio, REST).
+        async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=resolved) as traced:
+            result = await execute_workflow(
+                recipe,
+                resolved,
+                run_step=_run_step,
+                # Caller default only — a recipe declaring its own fan-out width wins inside
+                # the engine (a 5-step parallel stage must not be serialized by a cap of 4).
+                max_concurrency=getattr(sdk.config(), "subagent_max_concurrency", 3),
+                gate_check=_gate_check,
+                pause_fn=_pause,
+                seed_outputs=seed_outputs,
+            )
+            _trace_outcome(traced, result)
     except Exception:
         run_store.finish(STATUS_FAILED)
         raise
@@ -248,6 +252,17 @@ async def _start_background(
 
     _spawn(_run())
     return run_id
+
+
+def _trace_outcome(traced: sdk.TracedRun, result: dict) -> None:
+    # A paused run's operator message is composed after the run returns; the trace
+    # just says where it parked.
+    paused = result.get("paused_step") if result.get("paused") else None
+    traced.output(
+        f"paused at gated step {paused!r}" if paused else result.get("output", ""),
+        failed=bool(result.get("failed")),
+        metadata={"failed_steps": list(result.get("failed") or []), "paused_step": result.get("paused_step")},
+    )
 
 
 async def _safe(cb: Callable[[dict], Awaitable[None]], event: dict) -> None:
@@ -373,7 +388,11 @@ async def _resume(
         kwargs["prompt_overrides"] = {pending_step: edited}
 
     try:
-        result = await execute_workflow(recipe, inputs, **kwargs)
+        async with sdk.trace_run(
+            f"workflow:{name}", run_id=run_id, input={"resume": action, "step": pending_step}
+        ) as traced:
+            result = await execute_workflow(recipe, inputs, **kwargs)
+            _trace_outcome(traced, result)
     except Exception:
         run_store.finish(STATUS_FAILED)
         raise

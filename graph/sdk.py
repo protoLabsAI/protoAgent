@@ -17,6 +17,8 @@ its engine injects ``run_subagent`` as the per-step runner).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -1147,6 +1149,72 @@ def metric_last(name: str, *, plugin_id: str) -> tuple[float, float] | None:
     if store is None or series is None:
         return None
     return store.last(series)
+
+
+# ── run tracing (one Langfuse trace per multi-step plugin run) ─────────────────────────
+
+
+class TracedRun:
+    """Handle yielded by ``trace_run`` — records the run's outcome on its observation."""
+
+    def __init__(self, span: Any) -> None:
+        self._span = span
+
+    def output(self, value: Any, *, failed: bool = False, metadata: dict | None = None) -> None:
+        from observability import tracing
+
+        fields: dict[str, Any] = {"output": _trace_io(value), "level": "ERROR" if failed else "DEFAULT"}
+        if metadata:
+            fields["metadata"] = metadata
+        tracing.update_span(self._span, **fields)
+
+
+def _trace_io(value: Any) -> Any:
+    """Redacted, and capped like every other trace payload (``tracing.MAX_IO_CHARS``)."""
+    from graph.middleware.redaction import redact
+    from observability.tracing import MAX_IO_CHARS
+
+    value = redact(value)
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= MAX_IO_CHARS:
+        return value
+    return f"{text[:MAX_IO_CHARS]}… [{len(text) - MAX_IO_CHARS} more chars]"
+
+
+@contextlib.asynccontextmanager
+async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata: dict | None = None):
+    """Group a plugin's multi-step run into ONE Langfuse observation.
+
+    Every ``run_subagent`` call opens a ``subagent:<type>`` span in the CURRENT trace.
+    Called from a turn (the ``run_workflow`` tool), that nests; called with no turn
+    around it (a REST route, a detached Studio run, a scheduled fire), each step became
+    its own sessionless ROOT trace — a 9-step review panel was 9 unrelated traces, and
+    a busy reviewer buried every agent's turns under them.
+
+    Inside a traced turn this opens a nested span; otherwise it opens the run's own
+    root trace (session ``run_id`` when given). Input/output are redacted and capped.
+    A no-op when tracing is disabled — the block always runs, exceptions propagate::
+
+        async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=inputs) as run:
+            result = await execute(...)
+            run.output(result["output"], failed=bool(result["failed"]))
+    """
+    from observability import tracing
+
+    meta = dict(metadata or {})
+    if run_id:
+        meta.setdefault("run_id", run_id)
+    safe_input = _trace_io(input) if input is not None else None
+    # Our own session contextvar, NOT ``current_trace_context()``: that also reports a
+    # foreign OTel span (the a2a-sdk's), and nesting under one orphans the run.
+    if tracing.current_trace_id():
+        with tracing.trace_span(name, metadata=meta, as_type="chain") as span:
+            if safe_input is not None:
+                tracing.update_span(span, input=safe_input)
+            yield TracedRun(span)
+    else:
+        async with tracing.trace_session(run_id or name, name=name, metadata=meta, input=safe_input) as span:
+            yield TracedRun(span)
 
 
 # ── delegation ledger (who handed what work to whom) ────────────────────────────
