@@ -10,7 +10,9 @@ description: >-
 # Recording friction
 
 The friction ledger is how this system improves itself. Auto-capture already logs
-tool errors and escape-hatch reaches; it cannot see the thing only you know — that
+tool errors and shell commands that duplicate a tool you have (`cat` when
+`read_file` is bound); `git`, tests and builds through a shell tool are normal work,
+not friction. It cannot see the thing only you know — that
 a tool was *there* and *awkward*, that an error message sent you the wrong way, or
 that you got the right answer by the wrong route.
 

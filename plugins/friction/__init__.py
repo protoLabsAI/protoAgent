@@ -9,10 +9,12 @@ agent captures where it hit friction and feeds that back into improving its harn
     (a shell tool) for something that should be first-class, a wrong path it recognizes.
     High-signal: the model knows when it's frustrated. (Prompt it to use this in your
     agent's persona/system prompt — the tool exists, but the model has to reach for it.)
-  * AUTO-CAPTURE — `FrictionMiddleware.wrap_tool_call`: escape-hatch reaches (a shell/exec
-    tool being invoked = a missing-tool signal, logged with the command) and genuine tool
-    errors, with no agent effort. HITL/interrupt control-flow is filtered out (a tool
-    pausing for approval or delegating is not friction).
+  * AUTO-CAPTURE — `FrictionMiddleware.wrap_tool_call`: genuine tool errors, and shell
+    commands that duplicate a first-class tool the agent has bound (`cat` via run_command
+    when `read_file` is there — see `_FIRST_CLASS_EQUIVALENTS`), with no agent effort.
+    `git`, test runners and builds through a shell tool are real work, not friction.
+    HITL/interrupt control-flow is filtered out (a tool pausing for approval or
+    delegating is not friction).
 
 `kind` splits the backlog: `"harness"` → an improvement to the tools/framework;
 `"model"` → a labeled trace worth learning from. `friction_review` surfaces it;
@@ -83,26 +85,23 @@ _SEVERITY_RANK = {"minor": 1, "major": 2}
 def _issue_repo() -> str:
     """The ``owner/name`` this instance files friction against, or "" if it can't tell.
 
-    Two sources, in order: this plugin's own ``issue_repo`` when an operator has pinned
-    one, then the managed-projects registry (ADR 0095) — "the ONE place a project is
-    declared" — whose ``projects[].github`` already answers "what is this on GitHub".
+    ONE source: this plugin's own ``issue_repo`` when an operator has pinned one. Empty
+    means the view offers copy-to-clipboard instead of a prefilled-issue link.
 
-    Deliberately NOT the github plugin's ``default_repo``: plugins coordinate through the
-    host, never by reading each other's config (ADR 0039), and ADR 0095 lists that field as
-    a CONSUMER projecting from the same registry. Reading the registry gets the same answer
-    without the coupling, and works when the github plugin isn't installed at all."""
+    It used to fall back to the FIRST managed project's ``github`` (ADR 0095). That was
+    wrong for the friction this ledger mostly holds: harness friction is about the agent
+    RUNTIME — its tools, errors and framework — not about whatever repo the agent happens
+    to be working on. A coding agent that onboards someone else's repo (a private
+    interview repo, a client's project) would have had its harness friction pointed at
+    that repo, which is filing protoAgent's bugs in a stranger's tracker. The view files
+    every row against one repo, with no per-kind split, so there is no row the registry
+    answer is right for; a guessed repo is worse than a paste.
+
+    Deliberately NOT the github plugin's ``default_repo`` either: plugins coordinate
+    through the host, never by reading each other's config (ADR 0039)."""
     pinned = str(_cfg("issue_repo", "") or "").strip()
     if pinned:
         return pinned.removeprefix("https://github.com/").strip("/")
-    try:
-        from graph.sdk import config
-
-        for project in getattr(config(), "projects", []) or []:
-            repo = str((project or {}).get("github") or "").strip()
-            if repo:
-                return repo.removeprefix("https://github.com/").strip("/")
-    except Exception:  # noqa: BLE001 — no host, no registry, no problem: the view falls
-        pass          # back to copy-to-clipboard rather than losing the affordance
     return ""
 
 
@@ -116,9 +115,187 @@ def _triage_rank(group: dict) -> tuple:
         str(group.get("last_seen") or ""),
     )
 
-# A general shell/exec tool being reached for is itself a friction signal — the agent
-# wanted a capability that isn't a first-class tool yet.
+# General shell/exec tools. Reaching for one is only SOMETIMES friction — see
+# ``_duplicated_tool``: a shell hatch is friction when the command duplicates a
+# first-class tool the agent has bound, never for `git diff` or `npm test`.
 _ESCAPE_HATCHES = {"run_command", "execute_command", "shell", "bash", "python", "exec"}
+# The hatches whose args carry a SHELL COMMAND we can parse. `python`/`exec` run code,
+# which has no first-word to classify, so they keep the old always-log behaviour.
+_SHELL_HATCHES = {"run_command", "execute_command", "shell", "bash"}
+_COMMAND_ARG_KEYS = ("command", "cmd", "script")
+
+# ── Which shell commands duplicate a first-class tool ─────────────────────────
+#
+# navaEngineer (a hands-on coding agent) had 131 auto entries, EVERY one "reached for
+# escape hatch 'run_command'". 127 of them were git, test runners, builds and package
+# managers — legitimate work with no first-class equivalent — and only 4 (`ls`, `cat`,
+# `grep`) duplicated a tool it already had. Logging every reach made the signal ~97%
+# noise, and the working-state projection then told the agent "minor x131: reached for
+# escape hatch 'run_command'" every turn, nudging it away from its main tool.
+#
+# So the table below is the WHOLE definition of escape-hatch friction for a shell
+# hatch: the command's first word (after wrappers are stripped — see ``_command_word``)
+# is on this list AND the tool it maps to is actually bound for this agent. Rows are
+# checked in order, so the redirect row for `cat > f` wins over `cat` → read_file.
+# Conservative on purpose: a row that fires on real work is the bug this fixes.
+
+
+def _has_redirect(tokens: list[str]) -> bool:
+    """A stdout redirect into a file — not ``2>/dev/null`` or ``2> err.log``."""
+    for i, t in enumerate(tokens):
+        if t not in (">", ">>"):
+            continue
+        if i > 0 and tokens[i - 1].isdigit() and tokens[i - 1] != "1":
+            continue  # an fd redirect (stderr), not the command's output
+        if i + 1 < len(tokens) and tokens[i + 1] == "/dev/null":
+            continue
+        return True
+    return False
+
+
+def _sed_in_place(tokens: list[str]) -> bool:
+    # `-i`, `-i.bak`, `-Ei`, `--in-place[=SUFFIX]`. No other sed short flag is `i`.
+    return any(
+        t.startswith("--in-place") or (t.startswith("-") and not t.startswith("--") and "i" in t[1:])
+        for t in tokens[1:]
+    )
+
+
+def _awk_in_place(tokens: list[str]) -> bool:
+    # gawk's `-i inplace` (or `--include=inplace`); a plain awk program is a read.
+    return "inplace" in tokens or any(t in ("--include=inplace", "-iinplace") for t in tokens)
+
+
+# (command words, the first-class tool that does this, extra condition or None)
+_FIRST_CLASS_EQUIVALENTS: tuple[tuple[frozenset[str], str, object], ...] = (
+    (frozenset({"cat", "echo", "printf"}), "write_file", _has_redirect),
+    (frozenset({"cat", "head", "tail", "less", "more"}), "read_file", None),
+    (frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"}), "search_files", None),
+    (frozenset({"ls", "tree"}), "list_dir", None),
+    (frozenset({"find", "fd"}), "find_files", None),
+    (frozenset({"sed"}), "edit_file", _sed_in_place),
+    (frozenset({"awk", "gawk"}), "edit_file", _awk_in_place),
+    (frozenset({"tee"}), "write_file", None),
+)
+
+# Prefixes that run the REAL command: `sudo cat`, `env FOO=1 grep`, `time npm test`.
+_WRAPPERS = {"sudo", "env", "time", "nohup", "command", "nice"}
+# Wrapper flags that take a separate VALUE: `nice -n 10 cat`, `sudo -u app cat`,
+# `env -u HOME grep`. Without these the value would be read as the command.
+_WRAPPER_VALUE_FLAGS = {
+    "sudo": {"-u", "-g", "-C", "-D", "-U", "-p", "-h", "-r", "-t"},
+    "env": {"-u", "-C"},
+    "nice": {"-n"},
+}
+_SEGMENT_OPERATORS = {"&&", "||", ";", "|", "&", "\n"}
+
+
+def _split_shell(command: str) -> list[str]:
+    import shlex
+
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        return list(lexer)
+    except ValueError:  # unbalanced quotes — a best-effort split beats giving up
+        return command.split()
+
+
+def _command_word(command: str, _depth: int = 0) -> tuple[str, list[str]]:
+    """The command a shell line actually runs, and that command's tokens.
+
+    Strips what is not the command: leading ``cd X &&`` / ``cd X;`` hops, ``VAR=value``
+    assignments, wrappers (``sudo``, ``env …``, ``time``), ``mise exec … --`` and
+    ``sh -c '…'``. For a pipeline or a chain, only the FIRST remaining segment counts —
+    ``cat foo | grep x`` is a read, ``git diff | grep x`` is git."""
+    tokens = _split_shell(command)
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in _SEGMENT_OPERATORS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    segments = [s for s in segments if s]
+    # Drop directory hops: `cd x && cat y` reads y.
+    while len(segments) > 1 and segments[0][0] in ("cd", "pushd"):
+        segments.pop(0)
+    if not segments:
+        return "", []
+    seg = segments[0]
+    i = 0
+    while i < len(seg):
+        tok = seg[i]
+        if "=" in tok and not tok.startswith("-") and tok.split("=", 1)[0].isidentifier():
+            i += 1  # VAR=value
+        elif tok in _WRAPPERS:
+            i += 1
+            while i < len(seg) and (seg[i].startswith("-") or ("=" in seg[i] and seg[i].split("=", 1)[0].isidentifier())):
+                # the wrapper's own flags / env assignments, and a flag's separate value
+                i += 2 if seg[i] in _WRAPPER_VALUE_FLAGS.get(tok, ()) else 1
+        elif tok == "mise" and i + 1 < len(seg) and seg[i + 1] in ("exec", "x"):
+            if "--" not in seg[i:]:
+                break  # `mise exec` without `--` is mise's own business
+            i = seg.index("--", i) + 1
+        elif (
+            tok.rsplit("/", 1)[-1] in ("sh", "bash", "zsh")
+            and i + 2 < len(seg)
+            and seg[i + 1] in ("-c", "-lc", "-ic")
+            and _depth < 3
+        ):
+            return _command_word(seg[i + 2], _depth + 1)
+        else:
+            break
+    rest = seg[i:]
+    if not rest:
+        return "", []
+    return rest[0].rsplit("/", 1)[-1], rest
+
+
+def _duplicated_tool(command: str, bound: set[str] | frozenset[str]) -> tuple[str, str] | None:
+    """``(command word, first-class tool)`` when ``command`` duplicates a BOUND tool.
+
+    None for everything else — git, test runners, builds, package managers, project
+    scripts — and for a duplicate whose first-class tool this agent does not have: an
+    agent with no ``list_dir`` running ``ls`` is using the only tool it has, which is
+    not friction."""
+    word, tokens = _command_word(command)
+    if not word:
+        return None
+    for words, tool_name, condition in _FIRST_CLASS_EQUIVALENTS:
+        if word in words and (condition is None or condition(tokens)):
+            return (word, tool_name) if tool_name in bound else None
+    return None
+
+
+def _command_arg(args) -> str | None:
+    """The shell command a hatch was called with, or None if its args carry none."""
+    if not isinstance(args, dict):
+        return None
+    for key in _COMMAND_ARG_KEYS:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+        if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+            import shlex
+
+            return shlex.join(value)
+    return None
+
+
+def _count_bucket(count: int) -> str:
+    """A working-state count that doesn't change on every occurrence.
+
+    The projection is re-rendered into the prompt every turn; an exact count ("x131",
+    "x132", …) rewrote that line on every call — churning the prompt text (and its
+    cache) to say nothing new. Small counts stay exact (x3 is meaningfully different
+    from x7); past ten, the order of magnitude is the signal: x10+, x100+, x1000+.
+    Exact counts stay in the ledger, the view and ``/friction``."""
+    if count < 10:
+        return f"x{count}"
+    bucket = 10
+    while bucket * 10 <= count:
+        bucket *= 10
+    return f"x{bucket}+"
 # LangGraph control-flow raised through the tool path (HITL approval, delegation,
 # cancellation) is NOT friction — don't log it as a tool error.
 _CONTROL_FLOW = {"GraphInterrupt", "Interrupt", "NodeInterrupt", "GraphBubbleUp",
@@ -182,7 +359,9 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "\u2026"
 
 
-def _log(kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "") -> None:
+def _log(
+    kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "", suggest: str = ""
+) -> None:
     path = _ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     rec = {
@@ -195,6 +374,8 @@ def _log(kind: str, summary: str, detail: str, severity: str, source: str, tool_
     }
     if tool_name:
         rec["tool"] = tool_name
+    if suggest:
+        rec["suggest"] = suggest  # the first-class tool an escape-hatch command duplicated
     # encoding is explicit for the same reason it is everywhere else in this repo (#2521):
     # the default is the locale code page on Windows, and a friction summary quoting an
     # error with an em dash or a non-ASCII path would be written as CP1252 and read back
@@ -267,6 +448,7 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
                 "severity": rec.get("severity", "minor"),
                 "source": rec.get("source", ""),
                 "tool": rec.get("tool", ""),
+                "suggest": rec.get("suggest", ""),
                 "detail": rec.get("detail", ""),
                 "count": 1,
                 "first_seen": ts,
@@ -498,34 +680,83 @@ def open_friction_work() -> list[dict]:
         count = int(g.get("count") or 1)
         state = str(g.get("severity") or "minor")
         if count > 1:
-            state += f" x{count}"
-        out.append({
-            "state": state,
-            "title": str(g.get("summary") or ""),
+            state += f" {_count_bucket(count)}"
+        if g.get("suggest"):
+            # An escape-hatch duplicate: the fix is the agent's own — use the tool it has.
+            hint = f"use {g['suggest']}"
+        elif g.get("tool"):
             # The hint names the escape hatch, because "what would have helped" is the
             # actionable half and it is the half the agent is being asked to fix.
-            "hint": f"tool: {g['tool']}" if g.get("tool") else "resolve_friction when fixed",
-        })
+            hint = f"tool: {g['tool']}"
+        else:
+            hint = "resolve_friction when fixed"
+        out.append({"state": state, "title": str(g.get("summary") or ""), "hint": hint})
     return out
 
 
 class FrictionMiddleware(AgentMiddleware):
     """Auto-capture: escape-hatch reaches (missing-tool signal) + genuine tool errors,
-    logged without the agent's help. HITL/interrupt control-flow is filtered out."""
+    logged without the agent's help. HITL/interrupt control-flow is filtered out.
+
+    Also a pass-through ``wrap_model_call``, used ONLY to learn which tools are bound: a
+    tool call carries no view of the toolset, and "``ls`` via run_command" is friction
+    only when ``list_dir`` is actually there to use. The set accumulates across model
+    calls (a deferred tool that surfaces later still counts as available)."""
+
+    def __init__(self, bound_tools=None) -> None:
+        super().__init__()
+        self._bound_tools: set[str] = set(bound_tools or ())
+
+    def observe_tools(self, tools) -> None:
+        """Record the names of the tools a model call was bound with."""
+        for t in tools or ():
+            if isinstance(t, dict):
+                name = t.get("name") or (t.get("function") or {}).get("name")
+            else:
+                name = getattr(t, "name", None)
+            if isinstance(name, str) and name:
+                self._bound_tools.add(name)
+
+    def wrap_model_call(self, request, handler):
+        self.observe_tools(getattr(request, "tools", None))
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        self.observe_tools(getattr(request, "tools", None))
+        return await handler(request)
 
     def _note_escape_hatch(self, request) -> None:
         name = request.tool_call.get("name", "?")
-        if name in _ESCAPE_HATCHES:
-            # json.dumps, not str(): a Python dict repr ({'command': 'git diff'}) is not
-            # parseable by anything downstream, and the console rendered it verbatim —
-            # single quotes, u-prefixes and all — as the "detail" an operator is meant to
-            # read. JSON is the same information the view can pretty-print.
-            try:
-                args = json.dumps(request.tool_call.get("args", {}), default=str)
-            except (TypeError, ValueError):
-                args = str(request.tool_call.get("args", {}))
-            _log("harness", f"reached for escape hatch '{name}' — candidate for a first-class tool",
-                 detail=_clip(args, 300), severity="minor", source="auto", tool_name=name)
+        if name not in _ESCAPE_HATCHES:
+            return
+        exempt = _cfg("escape_hatch_exempt", []) or []
+        if isinstance(exempt, str):  # a hand-edited "a, b" is the same intent as a list
+            exempt = [p.strip() for p in exempt.split(",")]
+        if name in {str(e).strip() for e in exempt}:
+            return
+        raw_args = request.tool_call.get("args", {})
+        # json.dumps, not str(): a Python dict repr ({'command': 'git diff'}) is not
+        # parseable by anything downstream, and the console rendered it verbatim —
+        # single quotes, u-prefixes and all — as the "detail" an operator is meant to
+        # read. JSON is the same information the view can pretty-print.
+        try:
+            args = json.dumps(raw_args, default=str)
+        except (TypeError, ValueError):
+            args = str(raw_args)
+        command = _command_arg(raw_args) if name in _SHELL_HATCHES else None
+        if command is not None:
+            hit = _duplicated_tool(command, self._bound_tools)
+            if hit is None:
+                return  # git, a test runner, a build — real work, not friction
+            word, suggest = hit
+            _log("harness", f"used `{word}` via {name} — {suggest} does this",
+                 detail=_clip(args, 300), severity="minor", source="auto",
+                 tool_name=name, suggest=suggest)
+            return
+        # No command to classify (`python`/`exec`, or a shell hatch with an unknown arg
+        # shape): the original, coarser signal.
+        _log("harness", f"reached for escape hatch '{name}' — candidate for a first-class tool",
+             detail=_clip(args, 300), severity="minor", source="auto", tool_name=name)
 
     def _note_error(self, request, e: Exception) -> None:
         if type(e).__name__ in _CONTROL_FLOW:

@@ -71,29 +71,30 @@ def test_middleware_logs_real_error_and_reraises(ledger):
 
 
 def test_middleware_filters_control_flow(ledger):
-    mw = FrictionMiddleware()
+    mw = FrictionMiddleware(bound_tools={"read_file"})
     interrupt = type("GraphInterrupt", (Exception,), {})  # name is in _CONTROL_FLOW
 
     def pause(_req):
         raise interrupt("approval needed")
 
     with pytest.raises(interrupt):
-        mw.wrap_tool_call(_Req("run_command", {"command": "df -h"}), pause)
+        mw.wrap_tool_call(_Req("run_command", {"command": "cat app.log"}), pause)
     recs = _recs(ledger)
     # the escape-hatch reach IS logged; the HITL interrupt is NOT logged as an error
-    assert any("escape hatch" in r["summary"] for r in recs)
+    assert any(r.get("suggest") == "read_file" for r in recs)
     assert not any("raised" in r["summary"] for r in recs)
 
 
 def test_middleware_notes_escape_hatch(ledger):
-    mw = FrictionMiddleware()
+    mw = FrictionMiddleware(bound_tools={"list_dir"})
 
     def ok(_req):
         return "fine"
 
     assert mw.wrap_tool_call(_Req("run_command", {"command": "ls"}), ok) == "fine"
     recs = _recs(ledger)
-    assert any(r.get("tool") == "run_command" and "escape hatch" in r["summary"] for r in recs)
+    assert [r["summary"] for r in recs] == ["used `ls` via run_command — list_dir does this"]
+    assert recs[0]["tool"] == "run_command" and recs[0]["suggest"] == "list_dir"
 
 
 def test_middleware_ignores_normal_tools(ledger):
@@ -467,11 +468,11 @@ def test_a_resolve_never_truncates_the_ledger(monkeypatch, tmp_path):
 def test_auto_capture_detail_is_json_the_view_can_render(ledger):
     """The captured args are stored as JSON, not a Python dict repr — the console shows
     this string to an operator, and `{'command': 'git diff'}` parses as nothing."""
-    mw = FrictionMiddleware()
-    mw._note_escape_hatch(_Req("shell", {"command": "git diff", "cwd": "/repo"}))
+    mw = FrictionMiddleware(bound_tools={"read_file"})
+    mw._note_escape_hatch(_Req("shell", {"command": "cat README.md", "cwd": "/repo"}))
 
     detail = _recs(ledger)[0]["detail"]
-    assert json.loads(detail) == {"command": "git diff", "cwd": "/repo"}
+    assert json.loads(detail) == {"command": "cat README.md", "cwd": "/repo"}
 
 
 # ── ADR 0079 seam: the backlog reaches the agent's working state ─────────────
@@ -818,7 +819,7 @@ def test_auto_captured_payloads_are_clipped_with_a_marker_too(ledger):
     bare 300-char slice, so the payload an operator actually reads still stopped
     mid-word — and the view's "capped on write" notice never fired for it."""
     mw = FrictionMiddleware()
-    mw._note_escape_hatch(_Req("shell", {"command": "x" * 500}))
+    mw._note_escape_hatch(_Req("python", {"code": "x" * 500}))
 
     detail = _recs(ledger)[0]["detail"]
     assert len(detail) == 300 and detail.endswith("…")
@@ -973,20 +974,22 @@ def test_issue_repo_prefers_the_operators_pin(wired):
     assert _issue_repo() == "protoLabsAI/protoAgent"  # a pasted URL is the same answer
 
 
-def test_issue_repo_falls_back_to_the_managed_projects_registry(wired, monkeypatch):
-    """ADR 0095: projects[] is "the ONE place a project is declared". Reading it beats
-    reading the github plugin's own config — plugins coordinate through the host, and this
-    works when that plugin isn't installed at all."""
+def test_issue_repo_is_not_derived_from_the_managed_projects_registry(wired, monkeypatch):
+    """Harness friction is about the runtime, not the repo the agent is working on. A
+    coding agent that onboards someone else's repo (a private interview repo) must not
+    have its harness friction filed there just because that repo is projects[0]."""
     from plugins.friction import _issue_repo
 
     class _Cfg:
-        projects = [{"name": "local-only", "path": "/x"},
-                    {"name": "protoAgent", "github": "protoLabsAI/protoAgent"}]
+        projects = [{"name": "interview", "github": "someone/private-interview-repo"}]
 
     monkeypatch.setattr("graph.sdk.config", lambda: _Cfg())
     wired.config = {}
 
-    assert _issue_repo() == "protoLabsAI/protoAgent"
+    assert _issue_repo() == ""  # the view falls back to copy-to-clipboard
+
+    wired.config = {"issue_repo": "protoLabsAI/protoAgent"}
+    assert _issue_repo() == "protoLabsAI/protoAgent"  # an operator's pin still wins
 
 
 def test_issue_repo_is_empty_when_nothing_declares_one(wired, monkeypatch):
@@ -1158,3 +1161,184 @@ def test_agent_names_are_not_lowercased_by_the_badge_style(monkeypatch):
 
     assert '"pl-tag agents"' in code
     assert "badge(" not in code and "pl-badge" not in code
+
+
+# ── Escape-hatch noise: only a command that duplicates a BOUND first-class tool ──
+#
+# navaEngineer's ledger held 131 auto entries, all "reached for escape hatch
+# 'run_command'", and 127 of them were git / test runners / builds — real work with no
+# first-class equivalent. These pin the classifier that replaced "every reach".
+
+_ALL_FS = frozenset({"read_file", "search_files", "list_dir", "find_files", "edit_file", "write_file"})
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        # real work — never friction
+        ("git diff", None),
+        ("git log --oneline -5", None),
+        ("git diff | grep TODO", None),               # a pipeline is its FIRST segment
+        ("mise exec -- npm test", None),
+        ("mise exec node@20 -- npx tsc --noEmit", None),
+        ("npx vitest run", None),
+        ("npm ci", None),
+        ("FOO=1 npm run demo", None),
+        ("uv run pytest -q", None),
+        ("make build", None),
+        ("./scripts/dev.sh", None),
+        ("sed -n 1,20p file.py", None),               # a read-only sed is not an edit
+        ("awk '{print $1}' f", None),
+        ("echo done", None),
+        ("git status 2>/dev/null", None),
+        ("cat f 2>/dev/null", ("cat", "read_file")),  # a stderr redirect is not a write
+        # duplicates of a first-class tool
+        ("cat foo | grep x", ("cat", "read_file")),
+        ("cd x && cat y", ("cat", "read_file")),
+        ("cd a; ls", ("ls", "list_dir")),
+        ("ls -la", ("ls", "list_dir")),
+        ("head -n 50 src/app.ts", ("head", "read_file")),
+        ("/bin/cat f", ("cat", "read_file")),
+        ("rg -n foo src", ("rg", "search_files")),
+        ("env LC_ALL=C sudo -E grep -r x .", ("grep", "search_files")),
+        ("mise exec -- cat package.json", ("cat", "read_file")),
+        ("nice -n 10 cat foo", ("cat", "read_file")),  # a wrapper flag's value is not the command
+        ("sudo -u app grep x /var/log/app.log", ("grep", "search_files")),
+        ("env -u HOME ls", ("ls", "list_dir")),
+        ("time npm test", None),
+        ("bash -c 'tail -n 5 log.txt'", ("tail", "read_file")),
+        ("find . -name '*.py'", ("find", "find_files")),
+        ("tree -L 2", ("tree", "list_dir")),
+        ("sed -i 's/a/b/' f.py", ("sed", "edit_file")),
+        ("sed -Ei.bak 's/a/b/' f.py", ("sed", "edit_file")),
+        ("awk -i inplace '{print}' f", ("awk", "edit_file")),
+        ("echo hi > out.txt", ("echo", "write_file")),
+        ("cat > out.txt <<'EOF'\nhello\nEOF", ("cat", "write_file")),
+        ("tee out.txt", ("tee", "write_file")),
+        ("cat 'unbalanced", ("cat", "read_file")),     # bad quoting degrades, never raises
+        ("", None),
+    ],
+)
+def test_the_command_classifier_matrix(command, expected):
+    from plugins.friction import _duplicated_tool
+
+    assert _duplicated_tool(command, _ALL_FS) == expected
+
+
+def test_a_duplicate_is_friction_only_when_its_tool_is_bound():
+    """An agent without list_dir running `ls` is using the only tool it has."""
+    from plugins.friction import _duplicated_tool
+
+    assert _duplicated_tool("ls -la", {"list_dir"}) == ("ls", "list_dir")
+    assert _duplicated_tool("ls -la", {"read_file", "search_files"}) is None
+    assert _duplicated_tool("cat f", set()) is None
+
+
+def test_real_work_through_run_command_is_not_logged(ledger):
+    mw = FrictionMiddleware(bound_tools=_ALL_FS | {"run_command"})
+    for cmd in ("git diff", "mise exec -- npm test", "npx tsc --noEmit", "git fetch origin"):
+        mw.wrap_tool_call(_Req("run_command", {"project": "p", "command": cmd}), lambda _r: "ok")
+    assert not ledger.exists()
+
+
+def test_a_duplicate_names_the_tool_that_does_it(ledger):
+    mw = FrictionMiddleware(bound_tools=_ALL_FS)
+    mw.wrap_tool_call(_Req("run_command", {"project": "p", "command": "cat foo | grep x"}), lambda _r: "ok")
+
+    (rec,) = _recs(ledger)
+    assert rec["summary"] == "used `cat` via run_command — read_file does this"
+    assert rec["suggest"] == "read_file" and rec["tool"] == "run_command"
+    assert grouped_entries()[0]["suggest"] == "read_file"
+
+
+def test_bound_tools_are_learned_from_the_model_call(ledger):
+    """A tool call carries no view of the toolset; the model call that emitted it does."""
+    from types import SimpleNamespace
+
+    mw = FrictionMiddleware()
+    mw.wrap_tool_call(_Req("run_command", {"command": "ls"}), lambda _r: "ok")
+    assert not ledger.exists()  # nothing bound yet → nothing to duplicate
+
+    tool = SimpleNamespace(name="list_dir")
+    req = SimpleNamespace(tools=[tool, {"type": "function", "function": {"name": "read_file"}}])
+    assert mw.wrap_model_call(req, lambda r: "resp") == "resp"
+    assert asyncio.run(mw.awrap_model_call(req, _async_ok)) == "resp"
+
+    mw.wrap_tool_call(_Req("run_command", {"command": "ls"}), lambda _r: "ok")
+    assert _recs(ledger)[0]["suggest"] == "list_dir"
+
+
+async def _async_ok(_req):
+    return "resp"
+
+
+def test_code_hatches_keep_the_coarse_signal(ledger):
+    """`python`/`exec` carry code, not a shell line — there is no first word to classify."""
+    mw = FrictionMiddleware()
+    mw._note_escape_hatch(_Req("python", {"code": "print(1)"}))
+    assert _recs(ledger)[0]["summary"].startswith("reached for escape hatch 'python'")
+
+
+def test_escape_hatch_exempt_silences_a_tool_entirely(wired, tmp_path):
+    ledger = tmp_path / "friction.jsonl"
+    mw = FrictionMiddleware(bound_tools=_ALL_FS)
+
+    wired.config = {"escape_hatch_exempt": ["run_command", "python"]}
+    mw._note_escape_hatch(_Req("run_command", {"command": "cat f"}))
+    mw._note_escape_hatch(_Req("python", {"code": "x"}))
+    assert not ledger.exists()
+
+    wired.config = {"escape_hatch_exempt": "python, exec"}  # a hand-edited string is a list too
+    mw._note_escape_hatch(_Req("python", {"code": "x"}))
+    assert not ledger.exists()
+    mw._note_escape_hatch(_Req("run_command", {"command": "cat f"}))
+    assert len(_recs(ledger)) == 1  # not exempt any more
+
+
+def test_the_manifest_declares_the_exempt_list():
+    import yaml
+
+    from plugins import friction
+
+    manifest = yaml.safe_load((Path(friction.__file__).parent / "protoagent.plugin.yaml").read_text())
+    assert manifest["config"]["escape_hatch_exempt"] == []
+    setting = {s["key"]: s for s in manifest["settings"]}["escape_hatch_exempt"]
+    assert setting["type"] == "string_list"
+
+
+@pytest.mark.parametrize(
+    ("count", "bucket"),
+    [(1, "x1"), (3, "x3"), (9, "x9"), (10, "x10+"), (99, "x10+"),
+     (100, "x100+"), (131, "x100+"), (999, "x100+"), (1000, "x1000+")],
+)
+def test_count_buckets(count, bucket):
+    from plugins.friction import _count_bucket
+
+    assert _count_bucket(count) == bucket
+
+
+def test_working_state_count_is_stable_between_calls(wired):
+    """The projection is in the prompt every turn; x131 → x132 rewrote it to say nothing new."""
+    from plugins import friction
+
+    for _ in range(131):
+        friction._log("harness", "keeps happening", "", "minor", source="auto")
+    first = friction.open_friction_work()
+    friction._log("harness", "keeps happening", "", "minor", source="auto")
+    second = friction.open_friction_work()
+
+    assert first == second
+    assert first[0]["state"] == "minor x100+"
+    assert grouped_entries()[0]["count"] == 132  # the ledger keeps the exact count
+
+
+def test_a_duplicate_hint_says_which_tool_to_use(wired):
+    from plugins import friction
+
+    mw = FrictionMiddleware(bound_tools=_ALL_FS)
+    for _ in range(3):
+        mw._note_escape_hatch(_Req("run_command", {"command": "grep -rn foo ."}))
+
+    (item,) = friction.open_friction_work()
+    assert item["title"] == "used `grep` via run_command — search_files does this"
+    assert item["hint"] == "use search_files"
