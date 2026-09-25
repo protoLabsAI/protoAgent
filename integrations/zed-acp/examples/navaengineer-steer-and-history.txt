@@ -1,0 +1,76 @@
+# Live runs: scripts/acp_harness.py -> protoagent-acp -> navaEngineer (:7889, v0.175.0), 2026-09-24.
+# Token via --token-file (never printed). Long runs of streamed text chunks are elided.
+# (1) Send Now steer. The '↪ steering' marker here predates placing it at the steer_consumed frame.
+session/new → chat-zed-1790245307144-28c0e1
+
+>>> session/prompt "Read-only, change nothing: look through the top-level folders of the nava project one at a time (list each one's contents) and describe what each folder is for."
+   2.9s text  'I'
+   3.3s text  "'ll list"
+   3.3s text  ' the contents of each top'
+   3.3s text  '-level folder in the project one'
+   3.4s text  ' at a time.'
+   3.6s text  ' Let me start by seeing'
+   4.0s tool_call        toolu_016hzMpv kind='read' status='in_progress' title='List dir'
+   4.9s tool_call_update toolu_016hzMpv title='List benefits-assistant-rehearsal/.' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal"}]
+   4.9s tool_call_update toolu_016hzMpv status='completed'
+   8.0s tool_call        toolu_01LztZTy kind='read' status='in_progress' title='List dir'
+   8.8s tool_call        toolu_01FpdTpi kind='read' status='in_progress' title='List dir'
+   9.2s tool_call        toolu_01CUoK6E kind='read' status='in_progress' title='List dir'
+   9.6s tool_call_update toolu_01LztZTy title='List benefits-assistant-rehearsal/data' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/data"}]
+   9.7s tool_call_update toolu_01FpdTpi title='List benefits-assistant-rehearsal/src' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/src"}]
+   9.7s tool_call_update toolu_01CUoK6E title='List benefits-assistant-rehearsal/test' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/test"}]
+   9.7s tool_call_update toolu_01LztZTy status='completed'
+   9.7s tool_call_update toolu_01CUoK6E status='completed'
+   9.7s tool_call_update toolu_01FpdTpi status='completed'
+
+>>> [Send Now] session/cancel, then session/prompt "Change of plan: stop the folder survey. Just tell me in two sentences what nava's top-level README says."
+<<< stopReason: cancelled usage: None
+  12.4s text  '\n\n↪ steering: Change of plan: stop the folder survey. Just tell me in two …\n\n'
+  12.7s tool_call        toolu_013WvcSq kind='read' status='in_progress' title='List dir'
+  13.6s tool_call        toolu_01W1qALA kind='read' status='in_progress' title='List dir'
+  14.0s tool_call_update toolu_013WvcSq title='List benefits-assistant-rehearsal/src/llm' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/src/llm"}]
+  14.0s tool_call_update toolu_01W1qALA title='List benefits-assistant-rehearsal/src/tools' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/src/tools"}]
+  14.0s tool_call_update toolu_013WvcSq status='completed'
+  14.0s tool_call_update toolu_01W1qALA status='completed'
+  16.5s text  ' dropping the folder survey'
+  17.0s tool_call        toolu_01NBFwHo kind='read' status='in_progress' title='Read file'
+  17.9s tool_call_update toolu_01NBFwHo title='Read benefits-assistant-rehearsal/README.md' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/README.md"}]
+  17.9s tool_call_update toolu_01NBFwHo status='completed'
+<<< stopReason: end_turn usage: {'totalTokens': 139783, 'inputTokens': 139095, 'outputTokens': 688, 'cachedReadTokens': 127241}
+
+# Answer text after the Send Now, reassembled from the chunks above:
+#   ↪ steering: Change of plan: stop the folder survey. Just tell me in two …
+#    to complete the picture.
+#   Got it — dropping the folder survey. Let me read the README.
+#   The README describes **Benefits Assistant** as a small CLI tool-using agent that answers health coverage questions — it takes a natural-language query, calls three tools (`lookupPlan`, `checkEligibility`, `estimateCost`) against a local benefits catalogue in `data/`, and loops until it has an answer. It's a TypeScript/Node project using the Anthropic API, with a fake/scripted LLM client for offline demos and tests, and the data is explicitly illustrative rather than real program rules.
+
+# (2) Thread history: list, load (replay) and a follow-up relying on earlier context.
+session/list (cwd=/Users/kj/dev/nava) → 4 thread(s)
+  chat-zed-1790245307144-28c0e1  2026-09-24T10:22:10.986764Z  'Read-only, change nothing: look through the top-level folders of the nava projec…'
+  chat-zed-1790244769742-2783e6  2026-09-24T10:12:56.764121Z  'Remember this codeword for me: pineapple. Reply only with OK.'
+  chat-zed-1790244395141-a5baf3  2026-09-24T10:08:36.037855Z  "We're going to work in github.com/mabry1985/benefits-assistant-rehearsal — clone…"
+  chat-zed-1790241542237-0012b2  2026-09-24T09:21:16.697515Z  'Switch the benefits-assistant-rehearsal repo (already cloned under ~/dev/nava) t…'
+
+>>> session/load chat-zed-1790245307144-28c0e1
+   0.5s user_message_chunk {"content": {"text": "Read-only, change nothing: look through the top-level folders of the nava project one at a time (list each one's contents) and describe what each folder is for.", "type": "text"}
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='List benefits-assistant-rehearsal/.' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal"}]
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='List benefits-assistant-rehearsal/data' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/data"}]
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='List benefits-assistant-rehearsal/src' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/src"}]
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='List benefits-assistant-rehearsal/test' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/test"}]
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='List benefits-assistant-rehearsal/src/llm' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/src/llm"}]
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='List benefits-assistant-rehearsal/src/tools' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/src/tools"}]
+   0.5s tool_call        replay-toolu_0 kind='read' status='completed' title='Read benefits-assistant-rehearsal/README.md' locations=[{"path": "/Users/kj/dev/nava/benefits-assistant-rehearsal/README.md"}]
+   0.5s text  "I'll list the contents of each top-level folder in the project one at a time. Let me start by seeing what's at the root.\n\nGood, I can see the top-level structure. Now let me list the contents of each folder one by one.\n\nNow let me look inside the `src` subdirectories to complete the picture.\n\nGot it — droppi
+<<< loaded (replay above)
+
+>>> session/prompt 'Without reading anything again: in one sentence, which three tool names did that README say the assistant calls?'
+   2.5s text  'The'
+   2.9s text  ' README'
+   3.0s text  ' lists **`lookupPlan`**,'
+   3.1s text  ' **`checkE'
+   3.2s text  'ligibility`**, and **`estim'
+   3.3s text  'ateCost`** as the'
+   3.4s text  ' three tools the'
+   3.5s text  ' assistant calls'
+   3.7s text  '.'
+<<< stopReason: end_turn usage: {'totalTokens': 28989, 'inputTokens': 28950, 'outputTokens': 39, 'cachedReadTokens': 26842}
