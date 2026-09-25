@@ -1201,6 +1201,11 @@ async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata:
     """
     from observability import tracing
 
+    if not tracing.is_enabled():
+        # Nothing to trace, and a disabled ``trace_session`` still sets the session
+        # contextvar — which would re-attribute a run inside a chat turn to its run_id.
+        yield TracedRun(None)
+        return
     meta = dict(metadata or {})
     if run_id:
         meta.setdefault("run_id", run_id)

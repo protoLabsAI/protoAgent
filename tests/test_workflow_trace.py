@@ -100,3 +100,28 @@ async def test_trace_run_is_a_no_op_when_tracing_is_off(monkeypatch):
     monkeypatch.setattr(tracing, "_langfuse", None)
     async with sdk.trace_run("workflow:x", run_id="r1", input={"a": 1}) as run:
         run.output("done")
+
+
+async def test_a_failing_run_raises_its_own_error(tmp_path, monkeypatch, fake_langfuse):
+    import plugins.workflows as wf
+    from plugins.workflows.run_state import STATUS_FAILED, WorkflowRunStore
+
+    async def boom(*_a, **_k):
+        raise KeyError("engine bug")
+
+    _patch_sdk(monkeypatch, _subagent([]))
+    monkeypatch.setattr(wf, "execute_workflow", boom)
+    store = WorkflowRunStore(tmp_path)
+
+    with pytest.raises(KeyError, match="engine bug"):
+        await wf._execute(_GatedReg(), "gated", {"topic": "ai"}, run_store=store)
+    assert store.load(store.run_id)["status"] == STATUS_FAILED
+
+
+async def test_tracing_off_keeps_the_chats_session(monkeypatch):
+    monkeypatch.setattr(tracing, "_enabled", False)
+    monkeypatch.setattr(tracing, "_langfuse", None)
+
+    async with tracing.trace_session("chat-1", name="chat"):
+        async with sdk.trace_run("workflow:x", run_id="run-9"):
+            assert tracing.current_session_id() == "chat-1"
