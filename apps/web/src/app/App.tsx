@@ -160,7 +160,10 @@ function useLocalStorageState(key: string, fallback: string) {
 export function App() {
   const runtimeQ = useQuery({
     ...runtimeStatusQuery(),
-    retry: (failureCount, error) => !is401(error) && failureCount < 30,
+    // Retry budget must outlast the bootStuck timer (45s) so a slow cold start shows the gentle
+    // "taking longer than usual / Continue anyway" path, not the harsh "engine isn't responding"
+    // error. ~60s of retries makes bootFailed a genuine timeout for a truly-down engine.
+    retry: (failureCount, error) => !is401(error) && failureCount < 60,
     retryDelay: 1000,
     // Poll until the graph loads — and while a setup step the operator started from a banner is
     // still running server-side (a CLI download, a Chrome install), so its progress and outcome
