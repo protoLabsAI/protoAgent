@@ -141,7 +141,9 @@ operator as navigator: the agent points at evidence, and you read it at your own
 
 **It's an opt-in toolset, off by default.** Turn it on per agent in **Settings ▸
 Capabilities ▸ Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane** (config
-`filesystem.code_pane: true`). The switch applies on
+`filesystem.code_pane: true`). It needs the filesystem toolset itself switched on too
+(`filesystem.enabled: true`). With filesystem tools off, `code_pane: true` does nothing,
+so enable both. The switch applies on
 save — the Code surface appears (or goes) without a reload, because the console reads it
 from `/api/runtime/status` `code_pane.enabled`, per fleet window. While it's off: the agent
 has no `show_code` tool, `GET /api/fs/file` and `GET /api/fs/diff` answer 404
