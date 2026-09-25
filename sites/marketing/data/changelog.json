@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.180.0",
+    "date": "2026-09-25",
+    "changes": [
+      "Artifact chips in chat open the Artifact panel on the exact artifact and version (#3617).",
+      "Plugin dependency checks honour PEP 508 environment markers, and missing deps install from the banner or right at install time (#3618).",
+      "Friction auto-capture no longer logs every shell command as an escape hatch (#3620)."
+    ]
+  },
+  {
     "version": "v0.179.0",
     "date": "2026-09-25",
     "changes": [

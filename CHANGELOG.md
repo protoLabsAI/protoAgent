@@ -15,6 +15,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.180.0] - 2026-09-25
+
+### Added
+- **Artifact chips in chat open the Artifact panel on the exact artifact and version (#3617).**
+  Every artifact create or revision (`show_artifact`, `update_artifact`, `rewrite_artifact`,
+  `save_file_artifact`) now leaves a chip in the transcript, `✨ <title> · v<n>` with its kind,
+  the sibling of the code pane's `code-ref` chip. Clicking it opens the panel on that version.
+  An older version opens as itself, reads "v2 of 5", and pauses the panel's follow-newest. A
+  deleted or evicted artifact renders the chip inert. On desktop the live turn opens the panel
+  by itself; a reload or reattach never does, and on a phone a tap pushes the panel instead.
+  Plugins can now register their own chat component kinds with a props validator
+  (`registry.register_component`) and a live-turn hook (`registerChatComponent(..., { onLive })`),
+  and a console host can queue messages for a plugin view until its page is listening. The
+  panel's version label now counts lifetime versions ("v48 of 52" past the version cap).
+
+### Fixed
+- **Plugin dependency checks honour PEP 508 environment markers, and missing deps install from the banner or right at install time (#3618).**
+  A platform-gated dep such as the Terminal plugin's `pywinpty>=2.0; sys_platform == 'win32'` read as
+  missing forever on macOS/Linux — Install deps said "installed" while the warning banner stayed up,
+  because the gate checked only the package name. Every "what's missing" answer (banner, Plugins row,
+  frozen desktop installs, the CLI) now evaluates the marker, and a marker-excluded dep is never pip'd.
+  The missing-deps banner gains an **Install dependencies** button, and installing a plugin from
+  Discover or a git URL now asks once — listing the exact package specs, the plugin's source and where
+  they install — then installs them in the same flow through the existing install-deps route.
+
+- **Friction auto-capture no longer logs every shell command as an escape hatch (#3620).**
+  A coding agent's ledger held 131 "reached for escape hatch 'run_command'" entries, and 127
+  of them were git, test runners and builds. The agent was also shown "minor x131" in its
+  working state every turn. Now a shell command counts as friction only when it duplicates
+  a first-class tool the agent has bound (`cat` → `read_file`, `grep` → `search_files`,
+  `ls` → `list_dir`, `sed -i` → `edit_file`), and the entry names the tool to use. New
+  `friction.escape_hatch_exempt` setting. Working-state counts are bucketed (`x10+`,
+  `x100+`) so the prompt line stays stable. `friction.issue_repo` is no longer guessed from
+  the first managed project, because harness friction is about the runtime, not the repo
+  being worked on. Old noise rows can be resolved as described in the plugin README.
+
 ## [0.179.0] - 2026-09-25
 
 ### Added
