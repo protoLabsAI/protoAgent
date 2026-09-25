@@ -339,9 +339,11 @@ the core change is contained: fs tools plus one hitl kind. The spike does not bu
 - Any ACP client (Zed, JetBrains, Neovim, Emacs) can drive any protoAgent the operator can
   reach, with follow-the-agent into its files, and with no core change for read, search
   and follow.
-- A new first-party package lives outside the core gates. Its tests
-  (`integrations/zed-acp/tests`: tool mapping, a fake A2A server, a stdio subprocess
-  round-trip) are **not** run by `checks.yml` yet. Adding a small CI leg is a follow-up.
+- A new first-party package lives outside the core import graph and wheel, so the core
+  `Lint` and `Python tests` jobs don't see its suite. `checks.yml` therefore runs a
+  dedicated **`zed-acp package tests`** job on every PR. It covers tool mapping, a fake A2A
+  server, and stdio subprocess round-trips, and installs the package's own deps into an
+  isolated venv, as `uvx --from` would. It is not (yet) a required check.
 - **Known Zed caveats.**
   - External agents don't get Zed Agent profiles, Zed Skills, or Zed's model picker. The
     model is gateway config (ADR 0033).
