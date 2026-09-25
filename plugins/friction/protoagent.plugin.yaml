@@ -1,6 +1,6 @@
 id: friction
 name: Friction Log
-version: 0.2.0
+version: 0.3.0
 description: >
   The agent records its own friction — missing or awkward tools, confusing errors,
   wrong paths it recognizes — alongside auto-captured tool errors and escape-hatch
@@ -10,7 +10,8 @@ description: >
   the same rough edge for weeks. A self-report pattern in the spirit of
   NousResearch/hermes-agent.
 # First-party, on by default (2026-09). The plugin is self-limiting: auto-capture only
-# fires on real tool errors and escape-hatch reaches, and the working-state projection
+# fires on real tool errors and on shell commands that duplicate a bound first-class tool
+# (`cat` via run_command when read_file exists — never git/tests/builds), and the working-state projection
 # adds NOTHING until there is major or repeated friction to report. Disable per-instance
 # via `plugins.disabled: [friction]`.
 enabled: true
@@ -35,8 +36,10 @@ config:
   working_state: true                 # project open friction into <working_state> (ADR 0079)
   working_state_limit: 3              # at most N lines — the block is a shared budget
   working_state_repeat_threshold: 3   # a minor signal must repeat this often to be carried
-  issue_repo: ""                      # owner/name to file friction against; empty = derive
-                                      # it from the managed-projects registry (ADR 0095)
+  issue_repo: ""                      # owner/name to file friction against; empty = the view
+                                      # offers copy-to-clipboard. NOT derived from projects[]:
+                                      # harness friction is about the runtime, not a work repo
+  escape_hatch_exempt: []             # tool names whose calls are never escape-hatch friction
 
 settings:
   - key: working_state
@@ -49,8 +52,12 @@ settings:
     label: "Repeats before a minor friction is carried (major always is)"
     type: number
   - key: issue_repo
-    label: "File friction against this repo (owner/name — empty derives it from projects)"
+    label: "File friction against this repo (owner/name — empty = copy to clipboard)"
     type: string
+  - key: escape_hatch_exempt
+    label: "Never count calls to these tools as escape-hatch friction"
+    type: string_list
+    description: "Tool names (one per line), e.g. run_command. A shell tool is only friction when its command duplicates a bound first-class tool (cat → read_file); this silences it entirely."
 
 # Console surface (ADR 0026): a rail icon opening the ledger view this plugin's router
 # serves at /plugins/friction/view (public page; its data comes from the bearer-gated
