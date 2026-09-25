@@ -86,3 +86,28 @@ test("not offered on an incognito chat (a Zed thread would continue it without t
   await expect(menu.getByText("Turn incognito off", { exact: true })).toBeVisible();
   await expect(menu.getByText("Continue in Zed", { exact: true })).toHaveCount(0);
 });
+
+test("the pane's file only rides along for the chat it was opened from", async ({ page }) => {
+  await send(page, "SHOWCODE: show me the auth check");
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
+  const tabs = page.locator(".pl-tabbar__tab");
+
+  // A fresh tab (now the active chat) must NOT send the first chat's file.
+  await page.locator(".pl-tabbar__tab").first().click({ button: "right" });
+  await page.locator(".pl-menu").getByText("New chat", { exact: true }).click();
+  await expect(tabs).toHaveCount(2);
+  await tabs.nth(1).click({ button: "right" });
+  let req = handoffRequest(page);
+  await page.locator(".pl-menu").getByText("Continue in Zed", { exact: true }).click();
+  const fresh = (await req).postDataJSON();
+  expect(fresh.project).toBeUndefined();
+  expect(fresh.path).toBeUndefined();
+
+  // The chat that opened it still scopes to it — even right-clicked from another tab.
+  await tabs.first().click({ button: "right" });
+  req = handoffRequest(page);
+  await page.locator(".pl-menu").getByText("Continue in Zed", { exact: true }).click();
+  const origin = (await req).postDataJSON();
+  expect(origin).toMatchObject({ project: "app", path: "src/server.ts", line: 23 });
+  expect(origin.session_id).not.toBe(fresh.session_id);
+});

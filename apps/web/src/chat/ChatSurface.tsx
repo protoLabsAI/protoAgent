@@ -2585,7 +2585,7 @@ function ChatSessionSlot({
           // second start frame carries them); the end frame need not repeat them.
           if (evt.phase === "end") {
             const card = next.find((m) => m.id === assistantId)?.toolCalls?.find((c) => c.id === evt.id);
-            onLiveToolEvent(evt, card?.input);
+            onLiveToolEvent(evt, card?.input, session.id);
           }
         },
         onComponent: (spec) => {
@@ -2598,7 +2598,7 @@ function ChatSessionSlot({
           );
           // A `code-ref` (show_code) opens the code pane — here, on the live stream, and never
           // on hydration/replay, where the same component re-renders from history.
-          onLiveComponent(spec);
+          onLiveComponent(spec, session.id);
         },
         onRoomReply: (reply) => {
           // A delegation rendered inline as a mini-conversation (#3042): the lead's

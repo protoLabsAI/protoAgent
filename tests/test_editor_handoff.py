@@ -45,6 +45,57 @@ def test_match_rule_root_inside_parent(tmp_path):
     assert eh.matches(None, "/anywhere")
 
 
+def test_ancestor_match_is_bounded(tmp_path):
+    root = tmp_path / "a" / "b" / "c" / "repo"
+    root.mkdir(parents=True)
+    r = str(root)
+    assert eh.MAX_PARENT_DEPTH == 3
+    assert eh.matches(r, str(tmp_path / "a" / "b" / "c"))  # 1 up
+    assert eh.matches(r, str(tmp_path / "a"))  # 3 up
+    assert not eh.matches(r, str(tmp_path))  # 4 up — too far
+
+
+def test_volume_root_and_home_never_claim(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    root = home / "dev" / "repo"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(eh.Path, "home", classmethod(lambda cls: home))
+    r = str(root)
+    assert not eh.matches(r, "/")  # the filesystem root claims nothing
+    assert not eh.matches(None, "/")  # …not even an "any" offer
+    assert not eh.matches(r, str(home))  # home itself is not a usable ancestor (2 up)
+    assert eh.matches(r, str(home / "dev"))  # but a real parent folder is
+    assert eh.matches(None, str(home))  # an "any" offer still matches Zed opened on ~
+    assert eh.matches(str(home), str(home))  # a project AT home is still its own root
+
+
+def test_new_offer_replaces_the_sessions_older_offers_under_every_root(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    eh.offer("chat-1", root=None, now=100.0)  # "Continue in Zed" with no file
+    eh.offer("chat-1", root=str(a), now=101.0)  # …then with a file in project a
+    assert [(h.session_id, h.root) for h in eh.pending(now=101.0)] == [("chat-1", str(a.resolve()))]
+    eh.offer("chat-2", root=str(b), now=102.0)  # another chat is untouched
+    assert {h.session_id for h in eh.pending(now=102.0)} == {"chat-1", "chat-2"}
+
+
+def test_claim_removes_every_offer_for_the_session(tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    # Two offers for one chat can only coexist if written before this rule existed or raced;
+    # force it through the store to prove the claim side cleans up on its own.
+    eh.offer("chat-1", root=str(a), now=100.0)
+    eh._STORE["*"] = eh.Handoff("ho-x", "chat-1", None, None, None, None, None, 101.0, 101.0 + eh.TTL_SECONDS)
+    eh.offer("chat-2", root=str(b), now=102.0)
+    got = eh.claim(str(a), now=103.0)
+    assert got and got.session_id == "chat-1"
+    # A second thread on an unrelated folder must NOT get chat-1 again (it gets nothing).
+    assert eh.claim(str(tmp_path / "elsewhere"), now=103.0) is None
+    assert [h.session_id for h in eh.pending(now=103.0)] == ["chat-2"]
+
+
 def test_match_follows_symlinked_cwd(tmp_path):
     root = tmp_path / "real"
     root.mkdir()
@@ -162,6 +213,17 @@ def test_offer_then_claim_round_trip(monkeypatch, repo, tmp_path):
     assert c.json() == {"session_id": "chat-1", "project": "repo", "path": "src/router.py", "line": 2, "title": "Router bug"}
     # One-shot.
     assert client.post("/api/editor/handoff/claim", json={"cwd": str(repo)}).status_code == 204
+
+
+def test_second_console_offer_for_a_chat_replaces_the_first(monkeypatch, repo, tmp_path):
+    client = _app(monkeypatch, repo, _engine_with(tmp_path, "chat-1"))
+    assert client.post("/api/editor/handoff", json={"session_id": "chat-1"}).status_code == 200
+    r = client.post("/api/editor/handoff", json={"session_id": "chat-1", "project": "repo", "path": "src/router.py"})
+    assert r.status_code == 200
+    assert client.post("/api/editor/handoff/claim", json={"cwd": str(repo)}).json()["session_id"] == "chat-1"
+    # The earlier "any folder" offer is gone — an unrelated thread gets nothing.
+    assert client.post("/api/editor/handoff/claim", json={"cwd": str(repo.parent / "elsewhere")}).status_code == 204
+    assert client.post("/api/editor/handoff/claim", json={"cwd": "/"}).status_code == 204
 
 
 def test_claim_miss_is_204(monkeypatch, repo, tmp_path):
@@ -296,12 +358,13 @@ def _open_tool(repo: Path, **kw):
     return {t.name: t for t in fs.build_fs_tools(cfg)}["open_in_editor"]
 
 
-def test_open_in_editor_offers_the_injected_session(repo, fake_launch, monkeypatch):
+def test_open_in_editor_offers_the_injected_session(repo, fake_launch, monkeypatch, caplog):
     from langchain_core.messages import HumanMessage
 
     from observability import tracing
 
     monkeypatch.setattr(tracing, "current_session_id", lambda: "")  # empty in a tool body
+    caplog.set_level("INFO", logger="protoagent.fs")
     out = _open_tool(repo).invoke(
         {
             "project": "repo",
@@ -311,6 +374,7 @@ def test_open_in_editor_offers_the_injected_session(repo, fake_launch, monkeypat
         }
     )
     assert out.startswith("Opened repo/src/router.py:2 in zed.")
+    assert f"[handoff] offered session=chat-123 root={repo.resolve()} via open_in_editor" in caplog.text
     assert "navaEngineer thread in Zed's agent panel within 2 minutes, it continues this chat" in out
     got = eh.claim(str(repo / "src"))
     assert got is not None

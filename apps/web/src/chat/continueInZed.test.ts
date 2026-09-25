@@ -31,7 +31,7 @@ describe("continueInZed", () => {
       {
         sessionId: "chat-1",
         title: "  Router bug ",
-        current: { project: "repo", path: "src/router.py", line: 42, source: "link" },
+        current: { project: "repo", path: "src/router.py", line: 42, source: "link", sessionId: "chat-1" },
         agentName: "navaEngineer",
       },
       h.deps,
@@ -65,7 +65,7 @@ describe("continueInZed", () => {
       },
     });
     const href = await continueInZed(
-      { sessionId: "chat-new", current: { project: "repo", path: "a.ts", source: "link" }, agentName: "x" },
+      { sessionId: "chat-new", current: { project: "repo", path: "a.ts", source: "link", sessionId: "chat-new" }, agentName: "x" },
       h.deps,
     );
     expect(href).toBeNull();
@@ -79,7 +79,7 @@ describe("continueInZed", () => {
         throw new ApiError(400, "not a registered project: 'gone'", "unknown_project");
       },
     });
-    await continueInZed({ sessionId: "c", current: { project: "gone", path: "a.ts", source: "link" }, agentName: "x" }, h.deps);
+    await continueInZed({ sessionId: "c", current: { project: "gone", path: "a.ts", source: "link", sessionId: "c" }, agentName: "x" }, h.deps);
     expect(h.toasts[0]).toMatchObject({ tone: "error", title: "Couldn't hand off to Zed", message: "not a registered project: 'gone'" });
   });
 
@@ -90,12 +90,30 @@ describe("continueInZed", () => {
       },
     });
     const href = await continueInZed(
-      { sessionId: "c", current: { project: "repo", path: "a.ts", source: "link" }, agentName: "Nava" },
+      { sessionId: "c", current: { project: "repo", path: "a.ts", source: "link", sessionId: "c" }, agentName: "Nava" },
       h.deps,
     );
     expect(href).toBeNull();
     expect(h.posted).toHaveLength(1);
     expect(h.toasts[0]).toMatchObject({ tone: "success" });
     expect(h.toasts[0].message).toContain("Switch to Zed");
+  });
+
+  it("ignores the pane's file when it was opened from ANOTHER chat (or from no known chat)", async () => {
+    for (const origin of ["chat-other", undefined]) {
+      const h = harness();
+      const href = await continueInZed(
+        {
+          sessionId: "chat-empty",
+          current: { project: "repo", path: "src/router.py", line: 3, source: "link", sessionId: origin },
+          agentName: "Nava",
+        },
+        h.deps,
+      );
+      expect(h.posted).toEqual([{ session_id: "chat-empty" }]);
+      expect(href).toBeNull();
+      expect(h.opened).toEqual([]);
+      expect(h.rootsCalls()).toBe(0);
+    }
   });
 });

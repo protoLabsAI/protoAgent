@@ -134,12 +134,13 @@ and `file`/`diff` never return a secret-like file's content ([ADR 0112](../adr/0
 Continue a console chat in Zed's agent panel. Zed can't deep-link into an agent thread, so the
 console (**Continue in Zed**) or `open_in_editor` *offers* the session and the `protoagent-acp`
 shim *claims* it when the operator starts a thread. In memory, per instance; one offer per
-project root (latest wins), 120 s TTL, one-shot.
+project root (latest wins) and one per chat (a new offer for a chat replaces its older ones
+under every root; a claim removes them all), 120 s TTL, one-shot.
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/editor/handoff` | Body `{session_id, project?, path?, line?, title?}` → `{id, expires_at, root}`. `project` resolves through the fs fence to its root; omitted → `root: null`, which matches any folder. Unknown session → 404 `not_found`; a project outside the fence → 400 `unknown_project`; a `path` escaping it → 400 `bad_path` |
-| POST | `/api/editor/handoff/claim` | Body `{cwd}` → 200 `{session_id, project, path, line, title}` (and the offer is removed) or 204. Matches when `cwd` is the root, inside it, or a **parent** of it; the newest unexpired match wins |
+| POST | `/api/editor/handoff/claim` | Body `{cwd}` → 200 `{session_id, project, path, line, title}` (and the offer is removed) or 204. Matches when `cwd` is the root, inside it, or a **parent** of it at most 3 levels up; the newest unexpired match wins. A filesystem/volume root (`/`) never matches, and the home directory itself never matches a project offer (only a project-less one) |
 
 ## Fleet & agents
 

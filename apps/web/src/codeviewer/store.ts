@@ -23,6 +23,10 @@ export type CodeRef = {
   /** The agent's one-sentence "why this matters" (show_code), shown as a banner. */
   note?: string;
   source: CodeRefSource;
+  /** The chat session this ref was opened FROM (the live stream's session, or the chat that
+   *  was active when the operator clicked). "Continue in Zed" only scopes a hand-off to the
+   *  pane's file when it belongs to the chat being handed off — the pane is global. */
+  sessionId?: string;
 };
 
 export type CodeTab = "file" | "diff";
@@ -108,7 +112,8 @@ export function normalizeRef(ref: CodeRef): CodeRef | null {
   if (line && endLine && endLine < line) endLine = line;
   if (endLine === line) endLine = undefined;
   const note = typeof ref.note === "string" && ref.note.trim() ? ref.note.trim() : undefined;
-  return { project, path, line, endLine, note, source: ref.source };
+  const sessionId = typeof ref.sessionId === "string" && ref.sessionId ? ref.sessionId : undefined;
+  return { project, path, line, endLine, note, source: ref.source, ...(sessionId ? { sessionId } : {}) };
 }
 
 /** Put `ref` in front of the pane (File tab) and at the head of the Recent trail. Pure

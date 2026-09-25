@@ -515,9 +515,10 @@ def _offer_editor_handoff(
 
     try:
         rel = target.relative_to(proj.root).as_posix()
-        editor_handoff.offer(
+        h = editor_handoff.offer(
             session_id, root=str(proj.root), project=project, path=rel, line=line, title=_handoff_title(state)
         )
+        log.info("[handoff] offered session=%s root=%s via open_in_editor", session_id, h.root)
     except Exception:  # noqa: BLE001 — the file DID open; a hand-off failure must not turn that into an error
         log.warning("[fs] open_in_editor hand-off failed", exc_info=True)
         return ""

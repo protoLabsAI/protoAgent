@@ -7,8 +7,8 @@
 //
 // Pure orchestration with every side effect injected, so the rules are unit-tested without a
 // server or a browser (continueInZed.test.ts):
-//   - project = the code pane's current file's project, if one is open; else omitted, which the
-//     server stores as "any folder".
+//   - project = the code pane's current file's project, if one is open AND it was opened from
+//     this chat (CodeRef.sessionId); else omitted, which the server stores as "any folder".
 //   - the editor opens on the pane's current FILE (zed://file/<abs>:<line>) — never on a bare
 //     project directory: the desktop shell refuses directory links on purpose (a directory
 //     opens as a workspace, whose `.zed/settings.json` an agent with write access could have
@@ -34,7 +34,7 @@ export type ContinueInZedDeps = {
 export type ContinueInZedArgs = {
   sessionId: string;
   title?: string;
-  /** The code pane's current file, if any. */
+  /** The code pane's current file, if any — used only when its `sessionId` is this chat's. */
   current: CodeRef | null;
   /** The agent's display name — what the operator picks in Zed's agent panel. */
   agentName: string;
@@ -42,7 +42,10 @@ export type ContinueInZedArgs = {
 
 /** Returns the editor URL it opened (or null) — handy for tests and the e2e spec. */
 export async function continueInZed(args: ContinueInZedArgs, deps: ContinueInZedDeps): Promise<string | null> {
-  const { sessionId, title, current, agentName } = args;
+  const { sessionId, title, agentName } = args;
+  // The code pane is GLOBAL: only scope the hand-off to its file when that file was opened
+  // from THIS chat — never send one chat's file with another chat's session.
+  const current = args.current && args.current.sessionId === sessionId ? args.current : null;
   const body: HandoffBody = { session_id: sessionId };
   const t = (title || "").trim();
   if (t) body.title = t;
