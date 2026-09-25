@@ -2693,8 +2693,11 @@ class LangGraphConfig:
             filesystem_editor_command=str(
                 (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
             ).strip(),
-            filesystem_editor_handoff=bool(
-                (data.get("filesystem", {}) or {}).get("editor_handoff", cls.filesystem_editor_handoff)
+            # not _falsey(), never bool(): a string "false" (JSON overlay, env, hand-edit)
+            # must switch the hand-off OFF.
+            filesystem_editor_handoff=not _falsey(
+                (data.get("filesystem", {}) or {}).get("editor_handoff"),
+                default=not cls.filesystem_editor_handoff,
             ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),

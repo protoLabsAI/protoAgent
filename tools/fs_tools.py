@@ -491,13 +491,18 @@ def _offer_editor_handoff(
     """``open_in_editor``'s chat hand-off: offer the CALLING chat session to the next agent
     thread started in the editor under ``project``'s root (runtime/editor_handoff.py), so
     the operator can pick the conversation up in Zed. Returns the sentence the tool result
-    appends, or "" when nothing was offered (``filesystem.editor_handoff: false``, or no
-    session — a tool invoked outside a graph turn). ``config`` is the LIVE config, so
+    appends, or "" when nothing was offered (``filesystem.editor_handoff: false``, an
+    incognito chat, or no session — a tool invoked outside a graph turn). ``config`` is the LIVE config, so
     turning the switch off takes effect without a graph rebuild.
 
     The session id comes from the INJECTED graph state: ``current_session_id()`` reads
     empty inside a tool body (see ``tools.lg_tools._session_id_from``)."""
     if not bool(getattr(config, "filesystem_editor_handoff", True)):
+        return ""
+    # Never offer an INCOGNITO chat (ADR 0069): the Zed shim continues it with ordinary
+    # turns, so the chat would silently lose its no-memory contract. The console's
+    # "Continue in Zed" item is hidden for incognito tabs for the same reason.
+    if isinstance(state, dict) and state.get("incognito"):
         return ""
     # Same resolution as ``tools.lg_tools._session_id_from`` (not imported: lg_tools is the
     # whole core toolset and drags the scheduler in) — injected state first, contextvar only

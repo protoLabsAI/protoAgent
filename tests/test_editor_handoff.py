@@ -390,6 +390,14 @@ def test_open_in_editor_handoff_can_be_disabled(repo, fake_launch):
     assert eh.pending() == []
 
 
+def test_open_in_editor_never_offers_an_incognito_chat(repo, fake_launch):
+    out = _open_tool(repo).invoke(
+        {"project": "repo", "path": "src/router.py", "state": {"session_id": "chat-123", "incognito": True}}
+    )
+    assert out == "Opened repo/src/router.py in zed."
+    assert eh.pending() == []
+
+
 def test_open_in_editor_without_a_session_offers_nothing(repo, fake_launch, monkeypatch):
     from observability import tracing
 
@@ -402,6 +410,10 @@ def test_open_in_editor_without_a_session_offers_nothing(repo, fake_launch, monk
 def test_config_default_and_parse():
     assert LangGraphConfig().filesystem_editor_handoff is True
     assert LangGraphConfig.from_dict({"filesystem": {"editor_handoff": False}}).filesystem_editor_handoff is False
+    assert LangGraphConfig.from_dict({"filesystem": {"editor_handoff": "false"}}).filesystem_editor_handoff is False
+    assert LangGraphConfig.from_dict({"filesystem": {"editor_handoff": "off"}}).filesystem_editor_handoff is False
+    assert LangGraphConfig.from_dict({"filesystem": {"editor_handoff": True}}).filesystem_editor_handoff is True
+    assert LangGraphConfig.from_dict({"filesystem": {}}).filesystem_editor_handoff is True
 
 
 @pytest.mark.asyncio
