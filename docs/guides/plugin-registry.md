@@ -272,6 +272,46 @@ drop the dependency, or ship it in the app bundle.
 An unrecognized `scope` warns and falls back to the default rather than rejecting the
 plugin.
 
+### Platform-specific deps (environment markers)
+
+A `requires_pip` entry may carry a [PEP 508 environment marker](https://peps.python.org/pep-0508/#environment-markers)
+after a `;` — the same syntax pip accepts:
+
+```yaml
+requires_pip:
+  - "pywinpty>=2.0; sys_platform == 'win32'"      # Windows only (the Terminal plugin)
+  - "tomli>=2; python_version < '3.11'"            # only on older Pythons
+```
+
+A dep whose marker is **false on this machine isn't required here**: it never shows as
+missing (the banner, the Plugins row, the install dialog, the CLI), and Install deps never
+hands it to pip. So the Terminal plugin needs nothing on macOS or Linux (it uses the stdlib
+`pty`), and asks for `pywinpty` only on Windows. A spec that can't be parsed is checked by
+its package name, as before, and pip gets the final say on it.
+
+### Installing a plugin's deps from the console
+
+Install never runs pip (see Safety). When the plugin you just installed — from Discover or
+from a git URL — declares packages this machine is missing, the console asks **once**:
+*"&lt;Plugin&gt; needs these Python packages — install them now?"*. The dialog lists the
+**exact specs** pip will be handed (only the ones that apply to this platform, with the
+optional tier marked best-effort), the plugin's **source**, and **where** they install
+(this server's Python environment, or the desktop app's managed Python runtime). Confirming
+installs them in the same flow and shows the result — pip's error summary on failure, with
+Retry. **Not now** leaves the plugin installed; it then shows the warning banner below. A
+plugin missing only optional packages doesn't prompt — the install toast names them.
+(Exception: on the desktop app, a required dep missing at install time is still installed
+into the managed runtime as part of the install itself (#2226), so there the dialog rarely
+has anything to ask.)
+
+An enabled plugin whose required packages are missing raises a warning banner
+(*"can't run until its Python packages are installed: …"*) with an **Install dependencies**
+button: it installs them right there, shows progress on the button, reports the result as a
+toast, and the banner clears once they land — no trip to Settings. It, the install dialog
+and the Plugins row's **Install deps** all call the same route,
+`POST /api/plugins/install-deps` (source-trust re-check, one install at a time), and the CLI
+equivalent is `plugin install-deps <id>`.
+
 `min_protoagent_version` is enforced at load: the plugin is refused when it needs a
 newer host. The host version it's compared against is the same shared resolver the
 A2A agent card advertises (`infra.paths.package_version()` — the repo
@@ -318,8 +358,10 @@ enabled plugin runs in-process *as the agent* (like a pip dependency). So:
   (data); it never imports the plugin. Enabling (`plugins.enabled`) is the trust
   decision — review the manifest + capabilities first.
 - **Deps are explicit.** `requires_pip` is declared, never auto-installed (pip runs
-  arbitrary build code). Run `plugin install-deps <id>` after reviewing them; a
-  missing dep gives a clear "run install-deps" message on enable.
+  arbitrary build code). Run `plugin install-deps <id>` after reviewing them, or confirm
+  the console's install-time dialog, which lists the exact specs and the plugin's source
+  before anything runs; a missing dep gives a clear "run install-deps" message and an
+  Install dependencies banner on enable.
 - **Pinned + reproducible.** Installs pin a commit SHA in `plugins.lock`.
 - **Optional source allowlist.** Lock installs down to trusted orgs:
   ```yaml

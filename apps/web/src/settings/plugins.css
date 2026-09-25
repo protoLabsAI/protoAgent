@@ -140,3 +140,15 @@
   scrollbar-width: thin;
 }
 .plugin-discover-controls .pl-tabs--segmented > * { flex: 0 0 auto; }
+
+/* Install-time "install these Python packages?" dialog (plugins/depsInstall.tsx). */
+.plugin-deps-list {
+  margin: 4px 0 12px;
+  padding-left: 18px;
+}
+.plugin-deps-list code {
+  overflow-wrap: anywhere;
+}
+.plugin-deps-dialog .pl-alert {
+  margin-top: 8px;
+}

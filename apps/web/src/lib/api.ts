@@ -36,6 +36,7 @@ import type {
   CatalogPlugin,
   McpCatalogEntry,
   InstalledPlugin,
+  PluginDepsNeeded,
   PluginInstallSummary,
   PluginUpdate,
   KnowledgeChunk,
@@ -3030,6 +3031,10 @@ export const api = {
       restart_recommended: boolean;
       enable_error: string | null;
       load_errors?: Record<string, string>;
+      // Packages the just-installed plugins still need HERE (install never pips — ADR 0027
+      // D4). The console asks once and, on confirm, calls installPluginDeps. Optional so
+      // older backends parse fine.
+      deps_needed?: PluginDepsNeeded[];
       // Consent gate (ADR 0071 D3, #2721): set INSTEAD of the fields above when the
       // source needs a one-time "this runs code" confirm — nothing was fetched.
       // Ack via ackPluginSource, then retry the install.

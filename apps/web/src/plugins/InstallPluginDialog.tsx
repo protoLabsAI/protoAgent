@@ -3,10 +3,11 @@ import { Input } from "@protolabsai/ui/forms";
 import { Dialog } from "@protolabsai/ui/overlays";
 import { useMutation } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { useTrustAck } from "./TrustAckDialog";
+import { useDepsPrompt } from "./depsInstall";
 import { usePluginRefresh } from "./usePluginManage";
 
 const REGISTRY_GUIDE_URL = "https://protolabsai.github.io/protoAgent/guides/plugin-registry";
@@ -26,6 +27,16 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
     onCancel: () => setStatus("Install cancelled — the source wasn't trusted."),
   });
   const refreshAll = usePluginRefresh();
+  const { prompt: promptDeps, dialog: depsDialog } = useDepsPrompt();
+  // A clean install that still needs packages hands over to the deps dialog; when that one
+  // closes (installed or "Not now"), this one is done too.
+  const [closeAfterDeps, setCloseAfterDeps] = useState(false);
+  useEffect(() => {
+    if (closeAfterDeps && !depsDialog) {
+      setCloseAfterDeps(false);
+      onClose();
+    }
+  }, [closeAfterDeps, depsDialog, onClose]);
 
   const install = useMutation({
     mutationFn: () => api.installPlugin(url.trim(), ref.trim() || undefined),
@@ -42,17 +53,34 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
       refreshAll();
       setUrl("");
       setRef("");
-      // Clean install (auto-enabled, everything loaded, nothing to flag) → close; the
-      // new row shows in the list. If auto-enable failed, a plugin failed to LOAD on
-      // the reload (#2716), or there are deps to install manually, keep the dialog
-      // open with the note so it isn't lost.
+      // Packages the plugin still needs ON THIS MACHINE (the server evaluates PEP 508
+      // markers, so a Windows-only dep never shows on macOS/Linux): a missing required one
+      // opens the "install them now?" dialog in place of this one (same install-deps route
+      // as the row; declining leaves the banner + its action). Clean names, never raw specs.
+      const asking = promptDeps(res.deps_needed);
+      // An older backend sends no `deps_needed`: fall back to the declared specs (clean names,
+      // marker stripped — that backend can't say which apply here) so the note isn't lost.
+      const needed =
+        res.deps_needed === undefined
+          ? (s.requires_pip ?? []).map((spec) => spec.split(/[<>=!~[;\s]/, 1)[0]).filter(Boolean)
+          : res.deps_needed.flatMap((n) => n.deps.map((d) => d.name));
+      // Clean install (auto-enabled, everything loaded, nothing to flag) → close; the new
+      // row shows in the list. If auto-enable failed or a plugin failed to LOAD on the
+      // reload (#2716), keep the dialog open with the note so it isn't lost.
       const loadErrs = Object.entries(res.load_errors ?? {});
-      if (!res.enable_error && !loadErrs.length && !s.requires_pip?.length) {
-        onClose();
+      if (!res.enable_error && !loadErrs.length) {
+        if (asking) setCloseAfterDeps(true);
+        else if (needed.length)
+          setStatus(
+            res.deps_needed === undefined
+              ? `Installed ${s.name || s.id} — declares Python packages: ${needed.join(", ")} (Install deps on its row).`
+              : `Installed ${s.name || s.id} — optional packages not installed: ${needed.join(", ")} (Install deps on its row).`,
+          );
+        else onClose();
         return;
       }
       const who = res.enabled.length ? res.enabled.join(", ") : (s.id ?? "plugin");
-      const deps = s.requires_pip?.length ? ` — declares deps (install manually): ${s.requires_pip.join(", ")}` : "";
+      const deps = needed.length ? ` — needs Python packages: ${needed.join(", ")}` : "";
       setStatus(
         res.enable_error
           ? `Installed ${who} — auto-enable failed (${res.enable_error}); enable it from the list${deps}`
@@ -65,6 +93,8 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
   });
 
   if (!open) return null;
+  // The deps prompt takes over the modal slot (one dialog at a time, not a stack).
+  if (depsDialog) return <>{depsDialog}</>;
   return (
     <Dialog open onClose={onClose} title="Install a plugin from a git URL" width="min(620px, 94vw)">
       <p className="settings-section-sub">

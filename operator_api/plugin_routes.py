@@ -205,6 +205,33 @@ def _install_deps_and_refresh(plugin_id: str) -> tuple[list[str], list[str], lis
     return satisfied, failed, newly, refresh
 
 
+def _deps_needed(plugin_ids: list[str]) -> list[dict]:
+    """For each just-installed plugin with packages still missing HERE: ``{"id", "name",
+    "source", "target", "deps": [{"name", "spec", "optional"}]}`` (see
+    ``installer.missing_deps_detail``). ``source`` is where the code came from (the lock's
+    recorded origin, else the manifest's repository) and ``target`` names the environment
+    ``install_deps`` would write into — both are part of what the operator consents to.
+    Best-effort: a plugin that can't be resolved is simply left out."""
+    if not plugin_ids:
+        return []
+    running = installer.effective_copies()
+    _, target = installer.deps_install_target()
+    out: list[dict] = []
+    for pid in plugin_ids:
+        m = running.get(pid)
+        if m is None:
+            continue
+        try:
+            deps = installer.missing_deps_detail(m)
+        except Exception:  # noqa: BLE001 — a dep probe must never fail an install that landed
+            log.debug("[plugins] %s: deps probe failed after install (ignored)", pid, exc_info=True)
+            continue
+        if deps:
+            source = installer.effective_source_url(pid) or str(m.repository or "")
+            out.append({"id": pid, "name": m.name or pid, "source": source, "target": target, "deps": deps})
+    return out
+
+
 def register_plugin_routes(app) -> None:
     """Register `/api/plugins/installed`, `/install`, `/updates`, `/{id}/enabled`,
     `/{id}/update`, and DELETE `/{id}`."""
@@ -279,8 +306,7 @@ def register_plugin_routes(app) -> None:
                 # Scope-aware (#2246): a `scope: host` dep isn't satisfied by the managed
                 # runtime, so the console must keep showing it as missing rather than
                 # reporting a plugin ready that will ModuleNotFoundError at tool time.
-                _, missing = installer._deps_satisfied(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
-                item["deps_missing"] = missing
+                item["deps_missing"] = installer.missing_deps(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
             out.append(item)
         # The dependency install this server is running, if any: `{id, target, since}` or
         # null. The console shows that row as installing and every other Install deps
@@ -478,6 +504,7 @@ def register_plugin_routes(app) -> None:
         stale_after_reload = [
             pid for pid in result.installed_ids if pid in mounted_before or _has_surface(prev_meta.get(pid))
         ]
+        deps_needed = await asyncio.to_thread(_deps_needed, result.installed_ids)
         if result.enable_error:
             log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
         for pid, err in result.load_errors.items():
@@ -497,6 +524,12 @@ def register_plugin_routes(app) -> None:
             "mcp_seeded": result.mcp_seeded,
             # Dotted config keys the bundle's declared config_inputs wrote (#2934).
             "config_written": result.config_written,
+            # The just-installed plugins' Python packages that still need installing ON THIS
+            # MACHINE (marker-excluded ones never appear), with the exact specs + source — the
+            # console asks once ("<Plugin> needs these packages… install them now?") and on
+            # confirm calls POST /api/plugins/install-deps. Install itself never pips (ADR 0027
+            # D4); only that explicit click does. Empty when nothing is missing.
+            "deps_needed": deps_needed,
         }
 
     @app.post("/api/plugins/{plugin_id}/enabled")

@@ -49,7 +49,14 @@ _GAPS: dict[tuple[str, str], dict] = {}
 # step must always take the operator credential. It exists for fixes that are a COMMAND, not a
 # setting — "download the CLI", "install Chrome" — which the operator would otherwise be told to
 # go and run in a terminal.
-ACTION_KINDS = ("plugin_config", "global_settings", "plugin_setup")
+#
+# ``install_deps`` is the host's own "install this plugin's declared Python packages" fix (the
+# loader's deps gap). Like ``plugin_config`` its target is FORCED to the reporting plugin — a
+# plugin can only ever offer to install its OWN declared ``requires_pip`` — and the console
+# posts the existing ``/api/plugins/install-deps`` route with that id, the same call the
+# Plugins row's Install deps button makes (source-trust re-check, one-install-at-a-time hold,
+# marker-aware pre-check and all). Nothing in the action is executed or turned into a URL.
+ACTION_KINDS = ("plugin_config", "global_settings", "plugin_setup", "install_deps")
 MAX_ACTIONS = 4  # a gap offering more than a handful of fixes is a bug, not a banner
 MAX_ACTION_STR_CHARS = 120
 MAX_ACTION_FIELDS = 8
@@ -114,7 +121,7 @@ def _sanitize_action(action, plugin_id: str) -> dict | None:
     # target — scoped and safe. ``plugin_config`` always points at the REPORTING plugin's
     # own section (a plugin can't aim the fix at another plugin, mirroring navigate()'s
     # scoping); a ``global_settings`` target must be a bounded settings-section identifier.
-    if kind == "plugin_config":
+    if kind in ("plugin_config", "install_deps"):
         out["target"] = plugin_id
     elif kind == "plugin_setup":
         # A run-this action with nothing (valid) to run is no action at all — dropped, not

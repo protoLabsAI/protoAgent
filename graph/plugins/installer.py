@@ -766,8 +766,72 @@ def _importable(pkg: str) -> bool:
         return False
 
 
+def _marker_environment() -> dict | None:
+    """Overrides for the PEP 508 marker environment — None means "this process, as-is".
+    A seam: ``packaging`` (26.3+) caches the process environment on first use, so a test
+    can't evaluate "as if on Windows" by patching ``sys.platform``; it patches this."""
+    return None
+
+
+def _dep_applies(spec: str) -> bool:
+    """Does ``spec`` apply to THIS platform/Python — i.e. is its PEP 508 environment marker
+    (``; sys_platform == 'win32'``, ``; python_version < '3.12'``) true here?
+
+    A dep whose marker is false is NOT REQUIRED on this machine: pip itself skips it, so
+    every "what's missing" answer must too. Without this the Terminal plugin's Windows-only
+    ``pywinpty>=2.0; sys_platform == 'win32'`` read as missing forever on macOS/Linux —
+    Install deps "succeeded" (``_spec_satisfied`` already honoured the marker) while the
+    banner and the Plugins row kept asking for it. No marker → applies. An unparsable spec,
+    or a marker that can't be evaluated, also counts as applying: that keeps the name-only
+    behaviour this had before markers were read, and ``_validate_pip_specs`` / pip still
+    get the final say on the spec itself."""
+    if ";" not in str(spec or ""):
+        return True
+    try:
+        from packaging.requirements import Requirement
+
+        req = Requirement(str(spec))
+        return req.marker is None or bool(req.marker.evaluate(_marker_environment()))
+    except Exception:  # noqa: BLE001 — unparsable/unevaluable: keep the name-only answer
+        return True
+
+
+def applicable_deps(specs: list[str]) -> list[str]:
+    """The subset of ``specs`` whose environment marker holds here (see ``_dep_applies``),
+    in order — what this machine would actually install."""
+    return [s for s in specs or [] if _dep_applies(s)]
+
+
+def missing_deps(specs: list[str], scopes: dict[str, str] | None = None) -> list[str]:
+    """Clean dist names of the ``specs`` that apply here and aren't satisfied — the public
+    face of ``_deps_satisfied`` for callers outside this module (the operator API)."""
+    return _deps_satisfied(list(specs or []), scopes)[1]
+
+
+def missing_deps_detail(manifest: PluginManifest) -> list[dict]:
+    """The deps this plugin still needs HERE, as ``[{"name", "spec", "optional"}]`` —
+    hard deps first, then optional, each in manifest order. ``spec`` is the exact PEP 508
+    requirement pip will be handed (what an operator consents to); ``name`` the clean dist
+    name to show. Marker-excluded deps never appear. Same answer as the loader's
+    ``deps_missing`` (both go through ``_deps_satisfied``)."""
+    scopes = getattr(manifest, "pip_scopes", {}) or {}
+    out: list[dict] = []
+    for specs, optional in ((list(manifest.requires_pip or []), False), (list(manifest.optional_pip or []), True)):
+        if not specs:
+            continue
+        missing = set(_deps_satisfied(specs, scopes)[1])
+        for spec in specs:
+            name = _dep_pkg_name(spec)
+            if name in missing and _dep_applies(spec):
+                out.append({"name": name, "spec": str(spec).strip(), "optional": optional})
+    return out
+
+
 def _deps_satisfied(deps: list[str], scopes: dict[str, str] | None = None) -> tuple[bool, list[str]]:
     """(all satisfied?, [missing dist names]) for a plugin's ``requires_pip``.
+
+    Only deps that APPLY here count (``_dep_applies``): a spec whose PEP 508 marker is
+    false on this platform/Python is not required, so it is neither missing nor installed.
 
     A dep is satisfied when it's importable in THIS process — or, in the frozen desktop
     app, when it's installed in the managed Python runtime (ADR 0094 P2). The two have
@@ -799,6 +863,10 @@ def _deps_satisfied(deps: list[str], scopes: dict[str, str] | None = None) -> tu
         name = _dep_pkg_name(spec)
         if not name:
             continue
+        # A marker that rules the dep out here means it isn't needed here (pip would skip it
+        # too) — never "missing", never installed. Same rule as ``_spec_satisfied``.
+        if not _dep_applies(spec):
+            continue
         if _importable(name):
             continue
         # A host-scoped dep can only be satisfied by THIS interpreter, never the child.
@@ -826,7 +894,7 @@ def _spec_satisfied(spec: str) -> bool:
         req = Requirement(spec)
     except Exception:  # noqa: BLE001 — _validate_pip_specs vetted it; when unsure, let pip decide
         return False
-    if req.marker is not None and not req.marker.evaluate():
+    if not _dep_applies(spec):
         return True
     import importlib.metadata as md
 
@@ -889,7 +957,9 @@ def _frozen_install_missing_deps(
             f"app bundle. (Declare scope: runtime if it is only imported by execute_code.)"
         )
 
-    to_install = [s for s in requires_pip if _dep_pkg_name(s) in missing]
+    # Only the specs that apply here: a name can appear twice with complementary markers
+    # (``foo; sys_platform == 'win32'`` + ``foo>=2; sys_platform != 'win32'``).
+    to_install = [s for s in applicable_deps(requires_pip) if _dep_pkg_name(s) in missing]
     _validate_pip_specs(pid, to_install)
     if pr.managed_python_exe() is None:
         raise InstallError(
@@ -1512,7 +1582,7 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     if refusal:
         raise InstallError(refusal)
     section = (manifest.config_section if manifest else "") or plugin_id
-    deps_left = [*manifest.requires_pip, *manifest.optional_pip] if manifest else []
+    deps_left = applicable_deps([*manifest.requires_pip, *manifest.optional_pip]) if manifest else []
 
     removed: list[str] = []
     if target.exists() or _is_link(target):
@@ -1990,8 +2060,8 @@ def _install_deps(
         if ok and not soft_missing:
             log.info("[plugins] %s deps already satisfied (bundled / wheel-deps / managed runtime)", plugin_id)
             return deps + optional
-        to_install = [s for s in deps if _dep_pkg_name(s) in missing]
-        to_install_soft = [s for s in optional if _dep_pkg_name(s) in soft_missing]
+        to_install = [s for s in applicable_deps(deps) if _dep_pkg_name(s) in missing]
+        to_install_soft = [s for s in applicable_deps(optional) if _dep_pkg_name(s) in soft_missing]
         targets_tried: list[str] = []
         errors: list[str] = []
 

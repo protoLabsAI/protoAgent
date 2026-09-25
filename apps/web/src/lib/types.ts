@@ -144,7 +144,10 @@ export type RuntimeStatus = {
 // `label`/`fields` are bounded plain text. The host sanitizes all of this on the way
 // in (graph/plugins/setup_gaps.py), so anything unrecognized/unsafe is already gone.
 export type SetupGapAction = {
-  kind: "plugin_config" | "global_settings" | "plugin_setup";
+  // `install_deps` (target forced to the reporting plugin) is the loader's missing-packages
+  // gap: its button POSTs /api/plugins/install-deps for THIS gap's plugin — the same route
+  // as the Plugins row's Install deps.
+  kind: "plugin_config" | "global_settings" | "plugin_setup" | "install_deps";
   target?: string;
   step?: string;
   label?: string;
@@ -443,6 +446,22 @@ export type PluginUpdate = {
 };
 
 // The summary returned right after installing (the review card).
+// One Python package a just-installed plugin still needs on THIS machine (marker-excluded
+// deps never appear): `spec` is the exact PEP 508 requirement pip is handed — what the
+// operator consents to — and `name` the clean dist name to show.
+export type PluginDepSpec = { name: string; spec: string; optional: boolean };
+
+// The install response's `deps_needed[]` entry (operator_api/plugin_routes.py `_deps_needed`):
+// a just-installed plugin with packages missing here, where its code came from, and the
+// environment POST /api/plugins/install-deps would write into.
+export type PluginDepsNeeded = {
+  id: string;
+  name: string;
+  source: string;
+  target: string;
+  deps: PluginDepSpec[];
+};
+
 export type PluginInstallSummary = {
   id: string;
   name: string;

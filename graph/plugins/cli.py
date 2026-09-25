@@ -195,7 +195,9 @@ def run_plugin_cli(argv: list[str]) -> int:
                     )
                 for w in s.get("warnings") or []:
                     print(f"  ⚠ {w}")
-                deps = sorted({d for p in s["installed"] for d in p.get("requires_pip", [])})
+                # Only the deps that apply on THIS platform (a Windows-only marker is no
+                # action item on macOS/Linux — pip would skip it anyway).
+                deps = sorted({d for p in s["installed"] for d in installer.applicable_deps(p.get("requires_pip", []))})
                 if deps:
                     print(
                         f"  ⚠ member deps (NOT installed — review, then `plugin install-deps <id>`): {', '.join(deps)}"
@@ -217,11 +219,17 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print(f"  {s['description']}")
             if s["repository"]:
                 print(f"  repo: {s['repository']}")
-            if s["requires_pip"]:
-                print(f"  ⚠ declared deps (NOT installed — review, then install): {', '.join(s['requires_pip'])}")
-                print(f"    pip install {' '.join(s['requires_pip'])}")
-            if s.get("optional_pip"):
-                print(f"  · optional deps (features degrade without them): {', '.join(s['optional_pip'])}")
+            # Only the deps that apply on this platform (PEP 508 markers): a Windows-only dep
+            # is no action item on macOS/Linux. The advice points at install-deps, which runs
+            # the same pre-check + marker rules, rather than a raw pip line that would lose
+            # the marker's quoting in a shell.
+            hard_here = installer.applicable_deps(s["requires_pip"])
+            soft_here = installer.applicable_deps(s.get("optional_pip") or [])
+            if hard_here:
+                print(f"  ⚠ declared deps (NOT installed — review, then install): {', '.join(hard_here)}")
+                print(f"    protoagent plugin install-deps {s['id']}")
+            if soft_here:
+                print(f"  · optional deps (features degrade without them): {', '.join(soft_here)}")
             for w in s.get("warnings") or []:
                 print(f"  ⚠ {w}")
             if s["contributes"]["views"]:
