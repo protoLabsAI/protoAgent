@@ -63,6 +63,7 @@ class PluginLoadResult:
     mcp_servers: list = field(default_factory=list)  # factories: config -> entry|None (ADR 0019)
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
     chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only chat control commands
+    components: dict = field(default_factory=dict)  # component-v1 kind -> props validator (#3617)
     meta: list[dict] = field(default_factory=list)
 
 
@@ -1078,6 +1079,11 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 log.warning("[plugins] %s: chat command /%s collides — skipped", manifest.id, token)
                 continue
             result.chat_commands[token] = handler
+        for name, validator in getattr(registry, "components", {}).items():  # plugin component kinds (#3617)
+            if name in result.components:
+                log.warning("[plugins] %s: component %s collides — skipped", manifest.id, name)
+                continue
+            result.components[name] = validator
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         # Count the conventional skills/ dir too (auto-discovered above) — counting only
@@ -1089,6 +1095,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         entry["subagents"] = [getattr(c, "name", "?") for c in registry.subagents]
         entry["mcp_servers"] = len(registry.mcp_servers)
         entry["chat_commands"] = [f"/{t}" for t in registry.chat_commands]
+        entry["components"] = sorted(getattr(registry, "components", {}))
         result.meta.append(entry)
         log.info(
             "[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "

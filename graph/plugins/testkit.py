@@ -280,6 +280,7 @@ class FakeRegistry:
         self.knowledge_stores: dict = {}
         self.embedders: dict = {}
         self.chat_commands: dict = {}  # slugified token -> handler
+        self.components: dict = {}  # component-v1 kind -> props validator (#3617)
         self.late_tool_factories: list = []
         self.saved_media: list = []  # (data, mime, meta) — save_media captures (#1929)
         self.handlers: dict = {}  # topic -> [handlers]
@@ -325,6 +326,12 @@ class FakeRegistry:
 
     def register_tools(self, tools) -> None:
         self.tools.extend(tools)
+
+    def register_component(self, name: str, validator) -> None:
+        """Capture a component-v1 kind (``self.components[name] = validator``) so a plugin
+        test can run its validator the way the host does. Same signature as the host method;
+        the host also refuses a core/invalid name."""
+        self.components[name] = validator
 
     def register_chat_command(self, name: str, handler) -> None:
         """Capture a user-only ``/<name>`` control command — with the real registry's

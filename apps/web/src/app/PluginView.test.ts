@@ -19,6 +19,7 @@ import { resolveMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useUI } from "../state/uiStore";
+import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import type { PluginView as PluginViewType } from "../lib/types";
 
@@ -531,3 +532,93 @@ describe("PluginView — the plugin context-menu bridge (#3030)", () => {
     root = createRoot(container); // afterEach unmounts again — harmless on a fresh root
   });
 });
+
+// ── Host → page deliveries (#3617) ──────────────────────────────────────────────────────
+// A chat chip queues "show v2" for the Artifact view and opens it; the view may not be
+// mounted yet, or mounted but still loading. The host posts the queued message only once
+// the page says it is LISTENING (`protoagent:ready`), and straight away after that.
+describe("PluginView — the host → page inbox (#3617)", () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    resetPluginViewInbox();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+    resetPluginViewInbox();
+  });
+
+  const view: PluginViewType = {
+    id: "artifact", label: "Artifact", path: "/plugins/artifact/view", key: "plugin:artifact:artifact",
+  };
+
+  async function mountFrame() {
+    await act(async () => {
+      root.render(h(PluginView, { view }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => Promise.resolve());
+    }
+    return container.querySelector("iframe")!;
+  }
+
+  const ready = (frame: HTMLIFrameElement, origin = window.location.origin) =>
+    act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, origin, data: { type: "protoagent:ready" } }));
+    });
+
+  it("holds a message queued before the page is ready, then delivers it on ready", async () => {
+    postToPluginView(view.key!, { type: "protoArtifact:select", id: "a-1", ver: 2 });
+    const frame = await mountFrame();
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    const selects = () => post.mock.calls.filter((c) => (c[0] as { type?: string })?.type === "protoArtifact:select");
+    expect(selects()).toHaveLength(0); // loaded ≠ listening
+    await ready(frame);
+    expect(selects()).toHaveLength(1);
+    expect(selects()[0]).toEqual([{ type: "protoArtifact:select", id: "a-1", ver: 2 }, window.location.origin]);
+    // Delivered once — drained, not replayed on the next ready ping.
+    await ready(frame);
+    expect(selects()).toHaveLength(1);
+    // Once ready, a new message goes straight in.
+    act(() => {
+      postToPluginView(view.key!, { type: "protoArtifact:select", id: "a-1", ver: 3 });
+    });
+    expect(selects()).toHaveLength(2);
+    expect(takePluginViewMessages(view.key!)).toEqual([]);
+  });
+
+  it("a ready ping from a foreign origin or another window doesn't release the queue", async () => {
+    const frame = await mountFrame();
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    postToPluginView(view.key!, { type: "protoArtifact:select", id: "a-1", ver: 1 });
+    await ready(frame, "https://foreign.example");
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { source: window, origin: window.location.origin, data: { type: "protoagent:ready" } }));
+    });
+    expect(post.mock.calls.some((c) => (c[0] as { type?: string })?.type === "protoArtifact:select")).toBe(false);
+    expect(takePluginViewMessages(view.key!)).toHaveLength(1); // still queued for the real page
+  });
+
+  it("another view's queue is left alone", async () => {
+    const frame = await mountFrame();
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    await ready(frame);
+    act(() => {
+      postToPluginView("plugin:other:main", { type: "other:x" });
+    });
+    expect(post.mock.calls.some((c) => (c[0] as { type?: string })?.type === "other:x")).toBe(false);
+    expect(takePluginViewMessages("plugin:other:main")).toEqual([{ type: "other:x" }]);
+  });
+});
+

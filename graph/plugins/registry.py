@@ -39,6 +39,9 @@ class PluginRegistry:
       injected into MCP discovery (``register_mcp_server``).
     - ``chat_commands`` — user-only ``/<name>`` control commands that short-circuit
       the turn, like ``/goal`` (``register_chat_command``).
+    - ``components`` — component-v1 kinds + their props validators, emitted by the
+      plugin's own tools and rendered by a console chat-component renderer
+      (``register_component``, #3617).
 
     Routes and surfaces both wire at process init. Routes now ALSO hot-mount on a
     config reload — a newly-enabled plugin's routers, public paths, verifiers, and
@@ -104,6 +107,7 @@ class PluginRegistry:
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
         self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
+        self.components: dict = {}  # component-v1 kind -> props validator (#3617)
 
     def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None, action=None) -> None:
         """Tell the operator this plugin can't do its job until something is fixed
@@ -259,6 +263,39 @@ class PluginRegistry:
             log.warning("[plugins] %s: chat command /%s registered twice — keeping the first", self.plugin_id, token)
             return
         self.chat_commands[token] = handler
+
+    def register_component(self, name: str, validator) -> None:
+        """Contribute a component-v1 KIND (ADR 0051) the chat stream may carry — e.g. a chip
+        that points into this plugin's console view (the artifact plugin's ``artifact-ref``,
+        #3617).
+
+        Your TOOL emits it: return ``graph.components.encode_component(name, props)`` after
+        the model-facing text, and the server lifts it into a ``component`` frame. The host
+        forwards a payload only when ``validator(props)`` returns ``None``; return a short
+        reason string to drop it (a raise also drops it). Keep props a POINTER — ids,
+        numbers, short labels — never content: they persist in chat history. The console
+        renders the kind through a ``registerChatComponent`` renderer (``apps/web/src/ext``);
+        without one it shows a labeled "[unsupported component]" note.
+
+        ``name`` is lowercase kebab (``[a-z][a-z0-9-]*``, ≤ 64 chars) and can't be a core kind
+        (``table``/``keyvalue``/``timeline``/``code-ref``); an invalid name or non-callable
+        validator is refused with a warning. The kind is live only while the plugin is
+        loaded — disabling it stops extraction on the next reload. ``show_component`` never
+        builds a plugin kind. Guard with ``getattr(registry, "register_component", None)`` on
+        hosts older than this seam."""
+        from graph.components import is_plugin_component_name
+
+        if not is_plugin_component_name(name) or not callable(validator):
+            log.warning(
+                "[plugins] %s: component %r refused — not a lowercase-kebab non-core name, or validator not callable",
+                self.plugin_id,
+                name,
+            )
+            return
+        if name in self.components:
+            log.warning("[plugins] %s: component %s registered twice — keeping the first", self.plugin_id, name)
+            return
+        self.components[name] = validator
 
     def emit(self, topic: str, data: dict | None = None) -> None:
         """Broadcast an event on the bus (ADR 0039) — fire-and-forget.

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { seedCurrentChat } from "./chat-helpers";
+import { withArtifactPanel } from "./artifactPanel";
 import { withCodePane } from "./codePane";
 
 // Runs under the `mobile` Playwright project (iPhone 13 device profile) — see
@@ -209,3 +210,29 @@ test("mobile: show_code never auto-opens the pane; tapping the chip pushes it", 
   await page.locator('button[aria-label="Back"]').click();
   await expect(page.locator(".mshell-pushed")).toHaveCount(0);
 });
+
+// ── Artifact chip on a phone (#3617 × ADR 0086) ─────────────────────────────────────────
+// Same rule as code-ref: the agent writing an artifact never takes over the screen — the
+// chip lands in chat, and a tap pushes the Artifact panel over it, on the chip's version.
+test("mobile: an artifact-ref never auto-opens the panel; tapping the chip pushes it on that version", async ({ page }) => {
+  await withArtifactPanel(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("ARTIFACTREF V1 on the phone");
+  await composer.press("Enter");
+
+  const chip = page.getByTestId("artifact-ref-chip");
+  await expect(chip).toBeVisible();
+  await expect(chip).toContainText("v1 of 3");
+  await page.waitForTimeout(400);
+  await expect(page.locator(".mshell-pushed")).toHaveCount(0);
+
+  await chip.click();
+  await expect(page.locator(".mshell-pushed")).toBeVisible();
+  await expect(page.locator(".mshell-title-text")).toHaveText("Artifact");
+  const panel = page.frameLocator('iframe[title="Artifact"]');
+  await expect(panel.locator("#vlabel")).toHaveText("v1 of 3");
+  await expect(panel.frameLocator("#frame").locator("svg#v1")).toHaveCount(1);
+});
+

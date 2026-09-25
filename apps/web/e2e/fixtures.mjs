@@ -778,6 +778,27 @@ const MENTION_FAILURE_LINE = "Delegate @protoEngineer failed: connection refused
 // matches the real starter-tool string format the per-tool renderer expects.
 function scenarioFor(prompt) {
   const t = (prompt || "").toUpperCase();
+  // artifact-ref (#3617): an artifact create/revise tool appends a pointer to the version it
+  // wrote — a chip in the transcript that (live, desktop) opens the Artifact panel on it.
+  // `ARTIFACTREF V<n>` points at v<n> of `art-chain`; `ARTIFACTREF GONE` at a deleted one.
+  // The store it points into is artifact-chip.spec.ts's own (it routes /history + /refs).
+  const artRef = t.match(/ARTIFACTREF (GONE|V(\d+))/);
+  if (artRef) {
+    const gone = artRef[1] === "GONE";
+    const version = gone ? 1 : Number(artRef[2]);
+    const id = gone ? "art-deleted" : "art-chain";
+    return {
+      events: [
+        { id: "art-1", name: "rewrite_artifact", phase: "start", input: JSON.stringify({ artifact_id: id, code: "<svg/>" }) },
+        { id: "art-1", name: "rewrite_artifact", phase: "end", output: `Rewrote artifact ${id} → version ${version}.` },
+      ],
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: id, version, versions_total: version, title: "Signal chart", kind: "svg" },
+      },
+      answer: `Revised the chart (v${version}).`,
+    };
+  }
   // code-ref edge states (ADR 0112): a secret-like path (403), a vanished file (404), a binary.
   // …and a 20k-line file (virtualized, plain past the highlight cap) pointed deep inside.
   for (const [key, path, line] of [

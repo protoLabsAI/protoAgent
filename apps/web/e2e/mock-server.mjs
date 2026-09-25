@@ -837,6 +837,17 @@ const server = createServer(async (req, res) => {
   if (pathname === "/api/plugins/artifact/history" && req.method === "GET") {
     return sendJson(res, ARTIFACT_STORE);
   }
+  if (pathname === "/api/plugins/artifact/refs" && req.method === "GET") {
+    // The artifact-ref chips' metadata (#3617), off the same canned store.
+    const ids = (url.searchParams.get("ids") || "").split(",").filter(Boolean);
+    const artifacts = {};
+    for (const a of ARTIFACT_STORE.artifacts) {
+      if (!ids.includes(a.id)) continue;
+      const total = a.version_count || a.versions.length;
+      artifacts[a.id] = { title: a.title, kind: a.kind, version_count: total, oldest: total - a.versions.length + 1 };
+    }
+    return sendJson(res, { artifacts });
+  }
   if (pathname === "/api/plugins/artifact/render-status" && req.method === "POST") {
     return sendJson(res, { ok: true, recorded: false });
   }

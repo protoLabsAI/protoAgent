@@ -2491,6 +2491,11 @@ def _apply_plugin_registries(plugins) -> None:
     _goal_hooks.set_goal_hooks(plugins.goal_hooks)
     _watch_hooks.set_watch_hooks(plugins.watch_hooks)  # ADR 0067
     _lifecycle_hooks.set_lifecycle_hooks(plugins.lifecycle_hooks)  # ADR 0074
+    # Plugin component-v1 kinds (#3617) — re-applied on reload so a disabled plugin's kind
+    # stops extracting and a newly-enabled one starts, without a restart.
+    from graph import components as _components
+
+    _components.set_plugin_components(getattr(plugins, "components", None))
 
 
 def _reload_for_soul_edit() -> tuple[bool, str]:

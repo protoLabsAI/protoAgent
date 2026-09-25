@@ -92,6 +92,17 @@ dep); a new widget is a registry entry + a render fn, no new transport.
 > payload is dropped at extraction), is emitted only by the `show_code` fs tool, and
 > `show_component` refuses to build one. The transport is unchanged.
 
+> **Amended 2026-09-25 (#3617) — plugin-contributed kinds.** A plugin can add its OWN kind with
+> `registry.register_component(name, validator)`: the loader collects it, `server/agent_init`
+> pushes the live set into `graph/components.py` on every (re)load, and extraction forwards a
+> payload only when that plugin's validator accepts it (a raising validator drops it). A plugin
+> kind can never shadow a core one (so nothing loosens `code-ref`), `show_component` never
+> builds one, and a disabled plugin's kind stops extracting on the next reload. The console
+> renders it through `registerChatComponent(name, render, { onLive })` (`src/ext/`), whose
+> `onLive` hook fires only for a component on the LIVE turn stream — never on hydration or
+> reattach. First consumer: the artifact plugin's `artifact-ref` chip (ADR 0038). The transport
+> is unchanged.
+
 ### Slice 3 — alignment polish (shipped)
 
 - **Outbound `A2A-Version` fix (real bug).** The delegate A2A client (`plugins/delegates/

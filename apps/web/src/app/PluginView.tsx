@@ -12,6 +12,7 @@ import { onTopic, replaySince } from "../lib/events";
 import { registerKeybinding } from "../ext/keybindingRegistry";
 import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
+import { onPluginViewMessage, takePluginViewMessages } from "../lib/pluginViewInbox";
 import {
   parsePluginMenuOpen,
   parsePluginMenuRegistration,
@@ -161,6 +162,13 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
   // catch-up (#1640). A message can only come from the navigated page; about:blank has no
   // script. Reset when the frame is re-pointed.
   const navigatedRef = useRef(false);
+  // Has the page said it's LISTENING (`protoagent:ready`, posted by the DS plugin-kit)? Gates
+  // host → page deliveries (lib/pluginViewInbox.ts, #3617): a message posted before the page
+  // registered its listener is simply lost, so queued ones wait for this. Reset per page load.
+  const pageReadyRef = useRef(false);
+  useEffect(() => {
+    pageReadyRef.current = false;
+  }, [src]);
   const pluginId = useMemo(() => pluginIdFromView(view), [view.key, view.path]);
   // A rail/background view and its Configure page can be mounted simultaneously.
   // Keep the established plugin-wide ids for rail views, but give embedded pages a
@@ -374,6 +382,24 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
       replaySince,
     });
 
+    // Host → page deliveries queued for this view (#3617) — posted only once the page is
+    // listening, targeted at the plugin page's origin like every other host post.
+    const flushInbox = () => {
+      if (embedded || !view.key || !pageReadyRef.current) return;
+      const win = frameRef.current?.contentWindow;
+      if (!win) return;
+      for (const msg of takePluginViewMessages(view.key)) {
+        try {
+          win.postMessage(msg, origin);
+        } catch {
+          /* detached — best effort */
+        }
+      }
+    };
+    const offInbox = onPluginViewMessage((key) => {
+      if (key === view.key) flushInbox();
+    });
+
     const onWindowMessage = (e: MessageEvent) => {
       // Only trust messages from THIS iframe's window.
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
@@ -394,6 +420,8 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // listening, so it themes immediately. (Older kits don't ping; handleLoad's
         // retry covers those.)
         if (frameRef.current?.contentWindow) postInit(frameRef.current.contentWindow);
+        pageReadyRef.current = true;
+        flushInbox();
       } else if (m.type === "protoagent:subscribe") {
         const req = parseSubscribe(m);
         if (!req) return;
@@ -465,8 +493,13 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
 
     const off = onTopic("#", (data, topic, seq) => relay.deliver(topic, data, seq));
 
+    // A page that went ready before this (re)subscription (the effect re-runs on a key or
+    // background change while the frame stays loaded) still gets anything queued meanwhile.
+    flushInbox();
+
     return () => {
       window.removeEventListener("message", onWindowMessage);
+      offInbox();
       off();
       // Drop any pending init re-posts — the iframe is being torn down / re-pointed.
       initTimers.current.forEach(clearTimeout);

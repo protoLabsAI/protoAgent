@@ -8,6 +8,15 @@ ships with the agent and iterates in the monorepo. It ships **on by default** (`
 a first-party surface like notes/docs; turn it off per-instance via `plugins.disabled: [artifact]`.
 The sandbox model (D1) is unchanged.
 
+**Update (2026-09-25, #3617):** the create/revise tools also leave an **`artifact-ref` chip** in
+chat that opens the panel on that exact artifact + version (the code pane's `code-ref` pattern,
+ADR 0112). It is a plugin-registered component kind (ADR 0051 amendment); the console deep-links
+the panel with an inbound `protoArtifact:select {id, ver}` postMessage, which the shell accepts only
+from its embedding window — never from the nested artifact frame — so D1's sandbox boundary is
+unchanged. Host → view messages wait for the page's `protoagent:ready` ping
+(`apps/web/src/lib/pluginViewInbox.ts`), so a collapsed (unmounted) panel still lands on the right
+version.
+
 ## Context
 
 ADR 0034 made plugin React views first-class via **Module Federation** (in-process remotes sharing

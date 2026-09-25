@@ -30,6 +30,7 @@ import logging
 #   _render_status  browser render feedback (#1458)
 #   _bundle         chat-bundle consumption seam (#2681)
 #   _tools          the nine agent-facing tools + the full-body-write nudge
+#   _ref            the `artifact-ref` chat chip the create/revise tools emit (#3617)
 #   _routes         the public PAGE router + the gated DATA router
 #   _shell          the console shell page as one static string
 # Cross-module references are MODULE-QUALIFIED (``_store._now()``) so a test that
@@ -39,6 +40,7 @@ from ._config import _ask_enabled, _max_history, _max_pinned
 from ._preview import _PREVIEW_TRUNC, _clip
 from ._render_status import _RENDER_ERR_MAX, _render_suffix, _renderer_live
 from ._routes import _VENDOR_FILES, _build_data_router, _build_view_router
+from ._ref import ARTIFACT_REF, validate_artifact_ref
 from ._shell import _SHELL_HTML, _SHELL_JS
 from ._store import (
     _blob_path,
@@ -62,6 +64,7 @@ from ._tools import (
     show_artifact,
     update_artifact,
 )
+from . import _ref as _ref_mod
 from . import _store as _store_mod
 
 log = logging.getLogger("protoagent.plugins.artifact")
@@ -95,6 +98,15 @@ def register(registry) -> None:
         delete_artifact,
     ):
         registry.register_tool(t)
+    # The `artifact-ref` chip (#3617): each create/revise reply carries a pointer to the version
+    # it wrote, which the console renders as a chip that opens the panel on it. Registered as a
+    # plugin component kind so the host validates it with OUR schema. A host without the seam
+    # can't extract it, so the tools stop appending the tail there (else the raw sentinel JSON
+    # would show in the tool card) — the tools themselves work exactly as before.
+    register_component = getattr(registry, "register_component", None)
+    _ref_mod.EMIT = register_component is not None
+    if register_component is not None:
+        register_component(ARTIFACT_REF, validate_artifact_ref)
     registry.register_skill_dir(
         "skills"
     )  # teaches: render with show_artifact, edit with update/rewrite, don't write files

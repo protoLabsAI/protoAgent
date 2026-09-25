@@ -12,6 +12,11 @@ iframe/artifact path).
 from __future__ import annotations
 
 import json
+import logging
+import re
+from collections.abc import Callable, Mapping
+
+log = logging.getLogger("protoagent.components")
 
 # MIME the executor stamps on the DataPart and the console matches on.
 COMPONENT_MIME = "application/vnd.protolabs.component-v1+json"
@@ -28,12 +33,63 @@ CODE_REF_NOTE_MAX = 280
 _CODE_REF_STR_MAX = {"project": 200, "path": 4096, "note": CODE_REF_NOTE_MAX}
 
 
+# ── Plugin-contributed component types (#3617) ─────────────────────────────────────────
+# A plugin can add its OWN component-v1 kind — a pointer chip into its console view, say —
+# via ``registry.register_component(name, validator)``; the loader collects them and the
+# server pushes the live set here on every (re)load (``set_plugin_components``). The core
+# widgets above stay the only kinds ``show_component`` builds: a plugin kind is emitted by
+# the plugin's own tools, which own its schema, and its validator is the ONLY gate — a
+# payload that fails it (or raises) is dropped, never forwarded. A plugin kind can never
+# shadow a core one, so a plugin can't loosen ``code-ref``'s strict schema.
+PluginComponentValidator = Callable[[dict], "str | None"]
+_PLUGIN_COMPONENT_NAME = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_plugin_components: dict[str, PluginComponentValidator] = {}
+
+
+def is_plugin_component_name(name: object) -> bool:
+    """A kind a plugin may register: lowercase kebab, ≤ 64 chars, never a core kind."""
+    return isinstance(name, str) and bool(_PLUGIN_COMPONENT_NAME.match(name)) and name not in COMPONENT_TYPES
+
+
+def set_plugin_components(components: Mapping[str, PluginComponentValidator] | None) -> None:
+    """Replace the live plugin component set (called at init + every plugin reload, so a
+    disabled plugin's kind stops extracting). Invalid names / non-callables are skipped."""
+    global _plugin_components
+    fresh: dict[str, PluginComponentValidator] = {}
+    for name, fn in (components or {}).items():
+        if is_plugin_component_name(name) and callable(fn):
+            fresh[name] = fn
+    _plugin_components = fresh  # one GIL-atomic rebind, like the other plugin registries
+
+
+def plugin_component_types() -> tuple[str, ...]:
+    """The kinds plugins currently contribute (read-only snapshot)."""
+    return tuple(_plugin_components)
+
+
+def is_known_component(component: object) -> bool:
+    """A core widget or a live plugin-contributed kind."""
+    return isinstance(component, str) and (component in COMPONENT_TYPES or component in _plugin_components)
+
+
 def validate_component_props(component: str, props: dict) -> str | None:
     """Why ``props`` is not a valid payload for ``component``, or ``None`` when it is.
 
     Only ``code-ref`` has a strict schema (ADR 0112); the ADR 0051 widgets are
-    free-form data the console renders defensively, so they pass unchanged.
+    free-form data the console renders defensively, so they pass unchanged. A
+    plugin-contributed kind (#3617) is checked by the validator its plugin registered;
+    a validator that raises counts as a rejection.
     """
+    plugin_validator = _plugin_components.get(component) if component not in COMPONENT_TYPES else None
+    if plugin_validator is not None:
+        if not isinstance(props, dict):
+            return "props must be an object"
+        try:
+            why = plugin_validator(props)
+        except Exception as exc:  # noqa: BLE001 — a plugin bug must drop the payload, not the turn
+            log.warning("[components] %s validator raised: %s", component, exc)
+            return f"{component} validator failed"
+        return None if why is None else str(why)
     if component != "code-ref":
         return None
     if not isinstance(props, dict):
@@ -80,7 +136,7 @@ def extract_component(text: str) -> dict | None:
         payload = json.loads(text[i + len(_SENTINEL) :])
     except (ValueError, TypeError):
         return None
-    if not isinstance(payload, dict) or payload.get("component") not in COMPONENT_TYPES:
+    if not isinstance(payload, dict) or not is_known_component(payload.get("component")):
         return None
     props = payload.get("props")
     props = props if isinstance(props, dict) else {}

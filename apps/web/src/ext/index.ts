@@ -13,7 +13,7 @@ export type { ClientSlashCommand, SlashContext } from "./slashRegistry";
 export { registerComposerAction, registeredComposerActions } from "./composerRegistry";
 export type { ComposerAction, ComposerActionContext } from "./composerRegistry";
 export { registerChatComponent, registeredChatComponents } from "./componentRegistry";
-export type { ChatComponentRenderer } from "./componentRegistry";
+export type { ChatComponentRenderer, ChatComponentOptions, LiveComponentHandler } from "./componentRegistry";
 export {
   registerPaletteCommand,
   registerPaletteCommands,

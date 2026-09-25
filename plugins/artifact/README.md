@@ -48,6 +48,27 @@ console view.
   navigation** (step back/forward through edits), an **in-panel code editor** (edit the source and
   *Run & save* → a new `user` version, never overwriting the agent's), **download** (this version),
   and **delete**.
+- **Chat chip** `artifact-ref` (#3617) — every create/revise (`show_artifact`, `update_artifact`,
+  `rewrite_artifact`, `save_file_artifact`) leaves a chip in the transcript — `✨ <title> · v<n>`
+  plus the kind — that opens the panel on **exactly that artifact and version**, the way the
+  code pane's `code-ref` chip does. The model still sees the same text ("Updated artifact X →
+  version N"); the chip rides behind it as a component-v1 payload the host lifts out (the plugin
+  registers the kind + its validator with `registry.register_component`). Behaviour:
+  - the **live** turn opens the panel on the new version (desktop only, only for the chat on
+    screen, and never onto chat's own dock); history hydration and reattach never do, so a reload
+    doesn't reopen it. On a phone nothing opens by itself — a tap pushes the panel (ADR 0086);
+  - a chip for an **older version** opens that version, reads `v2 of 5`, and turns the panel's
+    follow-newest off so the next agent edit doesn't yank the operator away from it;
+  - a **deleted/evicted** artifact (or a version trimmed at the *Versions per artifact* cap)
+    renders the chip inert — "no longer available" — and a chip whose panel is off (plugin
+    disabled) renders inert too;
+  - the chip carries a POINTER only (id, lifetime version number, title, kind) — never the code —
+    so nothing more persists in chat history than the tool's own text already did (incognito
+    included).
+
+  `version` is the artifact's **lifetime** version number: past the cap the oldest versions are
+  trimmed, and the panel labels versions the same way (`v48 of 52`), so a chip keeps naming the
+  version it was made for.
 - **Events** `artifact.created` / `artifact.updated` / `artifact.deleted` (ADR 0039) — broadcast on
   the bus so the console lights the Artifact rail icon even when the panel is closed.
 - **Skill** `rendering-artifacts` — teaches render-don't-write-files and the edit-don't-recreate
@@ -117,8 +138,9 @@ the only channel out.
 
 The shell **page** is public at `/plugins/artifact/view` (an iframe page-load can't carry a
 bearer, and the page derives its slug base from `/plugins/…`); its **data/action** routes
-(`/current`, `/history`, `PUT`/`DELETE` `/artifact/{id}`, `POST /ask`) are gated under
-`/api/plugins/artifact`. Page chrome is the protoLabs design-system kit
+(`/current`, `/history`, `/refs`, `PUT`/`DELETE` `/artifact/{id}`, `POST /ask`) are gated under
+`/api/plugins/artifact`. `GET /refs?ids=a,b` is the chat chips' metadata — for each id still in
+the store its title, kind, lifetime `version_count` and `oldest` kept version, never code. Page chrome is the protoLabs design-system kit
 (`/_ds/plugin-kit.{css,js}`), so the panel follows the operator's live theme.
 
 ## Security
@@ -128,6 +150,12 @@ Generated artifacts are untrusted (prompt injection) and run **sandboxed** — a
 reach the console, its cookies, or its APIs (the Claude Artifacts / Open WebUI model). See
 protoAgent's
 [security & trust model](https://github.com/protoLabsAI/protoAgent/blob/main/docs/explanation/security-and-trust.md).
+
+The chat chip's deep-link is an inbound `protoArtifact:select {id, ver}` message. The shell honours
+it only from the window that **embeds** it (`e.source === window.parent`, and `e.origin` must equal
+`location.ancestorOrigins[0]` where the browser provides it) — never from the nested artifact
+frame, so model-authored code can't drive the panel's selection. The console posts it only after
+the page announces it is listening (`protoagent:ready`), targeted at the page's own origin.
 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no
