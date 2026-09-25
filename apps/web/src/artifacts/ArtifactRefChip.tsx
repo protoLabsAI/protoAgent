@@ -76,7 +76,7 @@ export function ArtifactRefChip({ props }: { props: Record<string, unknown> }) {
     return <Inert name={name} version={label} reason="no longer available" testId="artifact-ref-gone" />;
   }
   if (state.kind === "trimmed") {
-    return <Inert name={name} version={label} reason="this version is no longer kept" testId="artifact-ref-gone" />;
+    return <Inert name={name} version={label} reason="this version is no longer kept" testId="artifact-ref-trimmed" />;
   }
   const older = state.kind === "older";
   return (

@@ -170,9 +170,12 @@ def _save_file(
 # (_store._version_key) pins the verdict to the version THIS call wrote — its reported number is a
 # position, and a later commit at the version cap shifts it onto the next edit.
 _RenderTarget = tuple[str, int, tuple[int, int]]
+# A locked create/edit's result: ``(msg, None)`` for a refusal, ``(msg, target, ref_tail)`` for
+# a write — the tail being the ``artifact-ref`` chip for the version it wrote (#3617).
+_LockedResult = tuple[str, None] | tuple[str, _RenderTarget, str]
 
 
-def _then_render(result: tuple) -> str:
+def _then_render(result: _LockedResult) -> str:
     """A locked create/edit's reply plus the inline render verdict for the version it wrote,
     then the ``artifact-ref`` chip pointing at that version (#3617).
 
@@ -224,7 +227,7 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
 
 
 @_store.serialized
-def _show(kind: str, code: str, title: str) -> tuple[str, _RenderTarget | None]:
+def _show(kind: str, code: str, title: str) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
         return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}.", None
@@ -267,7 +270,7 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
 
 
 @_store.serialized
-def _update(old_string: str, new_string: str, artifact_id: str) -> tuple[str, _RenderTarget | None]:
+def _update(old_string: str, new_string: str, artifact_id: str) -> _LockedResult:
     if not old_string:
         return "old_string must not be empty.", None
     store = _store._read_store()
@@ -312,7 +315,7 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
 
 
 @_store.serialized
-def _rewrite(code: str, title: str, artifact_id: str) -> tuple[str, _RenderTarget | None]:
+def _rewrite(code: str, title: str, artifact_id: str) -> _LockedResult:
     code = code or ""
     if err := _store._too_big(code):
         return err, None
