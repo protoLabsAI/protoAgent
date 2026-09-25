@@ -22,6 +22,7 @@ import "./chatTabPalette"; // core's live ⌘K rows: one per open chat tab (side
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { codePaneEnabledFrom } from "../codeviewer/enabled";
+import { CODE_SURFACE_ID } from "../codeviewer/open";
 import { buildViews } from "../lib/viewRegistry";
 import { runtimeStatusQuery } from "../lib/queries";
 import { apiUrl, authToken } from "../lib/api";
@@ -56,7 +57,7 @@ export function Launcher() {
   // id through it), rather than destructured down to the id list.
   const paletteFacade = buildViews({
     // The Code surface only while the agent has the code pane toolset on (ADR 0112 amendment).
-    core: codePaneEnabledFrom(runtime) ? CORE_SURFACES : CORE_SURFACES.filter((s) => s.id !== "code"),
+    core: codePaneEnabledFrom(runtime) ? CORE_SURFACES : CORE_SURFACES.filter((s) => s.id !== CODE_SURFACE_ID),
     plugins: allPluginViews.map((v) => ({ key: v.key, label: v.label, icon: pluginIcon() })),
     ext: [], // fork/ext surfaces are build-time host concerns — not surfaced from the launcher
   });
