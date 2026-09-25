@@ -300,9 +300,19 @@ optional tier marked best-effort), the plugin's **source**, and **where** they i
 installs them in the same flow and shows the result — pip's error summary on failure, with
 Retry. **Not now** leaves the plugin installed; it then shows the warning banner below. A
 plugin missing only optional packages doesn't prompt — the install toast names them.
-(Exception: on the desktop app, a required dep missing at install time is still installed
-into the managed runtime as part of the install itself (#2226), so there the dialog rarely
-has anything to ask.)
+
+**The desktop app asks the same way.** Its install no longer pips a missing required dep
+into the managed Python runtime on its own (it did, #2226): the plugin lands, and the same
+dialog lists the packages with *where* reading "the desktop app's managed Python runtime".
+Confirming installs them there through the same route; if the runtime isn't provisioned yet,
+the error names Settings ▸ Tools. One refusal stays: a **required `scope: host` dep** the app
+doesn't bundle still refuses the install — the plugin imports it in the app's own process,
+which the managed runtime can't serve, so no confirm could fix it (see *Dep scope* above).
+Unattended installs that have no dialog to show — creating a fleet agent from an archetype
+and importing an agent snapshot — pass the explicit opt-in `plugin install
+--install-runtime-deps`, which keeps installing required deps into the managed runtime as
+part of the install (no effect on a server, where install never pips). Plugin updates and
+auto-updates don't ask: a dep a new version adds shows up as the warning banner below.
 
 An enabled plugin whose required packages are missing raises a warning banner
 (*"can't run until its Python packages are installed: …"*) with an **Install dependencies**

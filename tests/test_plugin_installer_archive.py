@@ -148,9 +148,10 @@ def test_install_via_archive_pins_sha_and_writes_lock(env, monkeypatch):
     assert locked[0]["id"] == "demo_ext" and locked[0]["resolved_sha"] == _SHA
 
 
-def test_frozen_dep_gate_refuses_unbundled_dep(env, monkeypatch):
-    """#2226: the gate refuses only when NO managed runtime is provisioned — and the
-    message points at the runtime install instead of 'use a server build'."""
+def test_frozen_dep_gate_refuses_unbundled_dep_under_the_opt_in(env, monkeypatch):
+    """#2226, under the non-interactive opt-in: the gate refuses only when NO managed
+    runtime is provisioned — and the message points at the runtime install instead of
+    'use a server build'."""
     import infra.python_runtime as pr
 
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
@@ -160,8 +161,24 @@ def test_frozen_dep_gate_refuses_unbundled_dep(env, monkeypatch):
         installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip="definitely_not_real_xyz>=1"))
     )
     with pytest.raises(installer.InstallError, match="POST /api/runtime/python/install"):
-        installer.install("https://github.com/acme/demo_ext")
+        installer.install("https://github.com/acme/demo_ext", install_runtime_deps=True)
     assert not (installer.live_plugins_dir() / "demo_ext").exists()  # refused before landing
+
+
+def test_frozen_archive_install_lands_an_unbundled_dep_plugin_for_the_dialog(env, monkeypatch):
+    """Without the opt-in (every console/CLI install) the plugin lands; the missing dep is
+    what the consent dialog then asks about."""
+    import infra.python_runtime as pr
+
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: None)
+    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
+    monkeypatch.setattr(
+        installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip="definitely_not_real_xyz>=1"))
+    )
+    summary = installer.install("https://github.com/acme/demo_ext")
+    assert summary["id"] == "demo_ext"
+    assert (installer.live_plugins_dir() / "demo_ext").exists()
 
 
 def test_frozen_install_ok_when_deps_bundled(env, monkeypatch):
@@ -207,8 +224,10 @@ def test_frozen_missing_optional_dep_warns_and_installs(env, monkeypatch, caplog
 
 
 def test_frozen_missing_hard_dep_still_refuses_with_optional_present(env, monkeypatch):
-    """Hard wins: a mixed manifest with a missing hard dep still refuses when no
-    managed runtime is provisioned — a missing optional alone wouldn't (#2226)."""
+    """Hard wins: under the non-interactive opt-in (``install_runtime_deps``), a mixed
+    manifest with a missing hard dep still refuses when no managed runtime is provisioned —
+    a missing optional alone wouldn't (#2226). Without the opt-in the plugin lands and the
+    console's consent dialog asks (see test_plugin_installer.py)."""
     import infra.python_runtime as pr
 
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
@@ -220,7 +239,7 @@ def test_frozen_missing_hard_dep_still_refuses_with_optional_present(env, monkey
         lambda url, **kw: _Resp(content=_tarball(requires_pip=f"also_not_real_abc>=1, {_SOFT_MISSING}")),
     )
     with pytest.raises(installer.InstallError, match="isn't in the desktop runtime"):
-        installer.install("https://github.com/acme/demo_ext")
+        installer.install("https://github.com/acme/demo_ext", install_runtime_deps=True)
     assert not (installer.live_plugins_dir() / "demo_ext").exists()
 
 

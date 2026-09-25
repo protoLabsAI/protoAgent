@@ -86,7 +86,7 @@ const DEPS_NEEDED = [
 ];
 
 /** Answer POST /api/plugins/install as a clean install that still needs packages here. */
-async function routeInstallNeedingDeps(page: Page) {
+async function routeInstallNeedingDeps(page: Page, needed: typeof DEPS_NEEDED = DEPS_NEEDED) {
   await page.route("**/api/plugins/install", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     await route.fulfill({
@@ -101,7 +101,7 @@ async function routeInstallNeedingDeps(page: Page) {
         restart_recommended: false,
         enable_error: null,
         load_errors: {},
-        deps_needed: DEPS_NEEDED,
+        deps_needed: needed,
       },
     });
   });
@@ -138,6 +138,38 @@ test("Discover install asks once for the missing packages and installs them on c
   expect(posted).toEqual([{ id: "artifact-plugin" }]);
   await dialog.getByRole("button", { name: "Done" }).click();
   await expect(dialog).toHaveCount(0);
+});
+
+// The desktop app (the same console in the Tauri shell, over its frozen sidecar) no longer
+// pips a plugin's required packages during the install itself: its install response reports
+// them like a server's, with the managed Python runtime as the target
+// (graph/plugins/installer.py deps_install_target), and the same dialog asks first.
+test("desktop: a frozen install's deps open the same dialog, naming the managed Python runtime", async ({ page }) => {
+  await routeInstallNeedingDeps(page, [
+    {
+      ...DEPS_NEEDED[0],
+      target: "the desktop app's managed Python runtime",
+      deps: [{ name: "python-docx", spec: "python-docx>=1.1", optional: false }],
+    },
+  ]);
+  const posted: unknown[] = [];
+  await page.route("**/api/plugins/install-deps", async (route) => {
+    posted.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true, installed: ["python-docx>=1.1"], refresh: "plugin" } });
+  });
+  await openDiscover(page);
+  await page.locator(".plugin-card", { hasText: "Artifact" }).getByRole("button", { name: "Install", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Install Python packages for Artifact?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("list", { name: "required packages" })).toHaveText("python-docx>=1.1");
+  await expect(dialog).toContainText("pip installs them into the desktop app's managed Python runtime");
+  await expect(dialog).toContainText("https://github.com/protoLabsAI/artifact-plugin");
+  expect(posted).toEqual([]); // the install itself pip'd nothing; only the click does
+
+  await dialog.getByRole("button", { name: "Install packages" }).click();
+  await expect(dialog).toContainText("Dependencies installed");
+  expect(posted).toEqual([{ id: "artifact-plugin" }]);
 });
 
 test("Discover install: a failed package install shows pip's error with Retry", async ({ page }) => {

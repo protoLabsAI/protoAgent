@@ -1043,7 +1043,35 @@ async def install_plugin(url: str, ref: str = "", activate: bool = True) -> str:
         lines.append(f"  ⚠ enable-reload failed: {res.enable_error}")
     if res.mcp_seeded:
         lines.append(f"  seeded MCP server(s): {', '.join(res.mcp_seeded)}")
+    # Install never pips — not on a server, and (since the consent dialog) not on the desktop
+    # app either. Name what's still missing so the agent can tell the operator instead of
+    # reporting a plugin ready that can't import: the operator installs them with the
+    # plugin's "Install dependencies" banner / Settings ▸ Plugins ▸ Install deps.
+    lines.extend(await asyncio.to_thread(_deps_still_needed, list(getattr(res, "installed_ids", None) or [])))
     return "\n".join(lines)
+
+
+def _deps_still_needed(plugin_ids: list[str]) -> list[str]:
+    """One ``⚠`` line per just-installed plugin whose required Python packages are missing
+    HERE (platform markers honoured). Best-effort: a probe failure adds nothing."""
+    from graph.plugins import installer
+
+    out: list[str] = []
+    try:
+        running = installer.effective_copies()
+        for pid in plugin_ids:
+            m = running.get(pid)
+            if m is None:
+                continue
+            hard = [d["spec"] for d in installer.missing_deps_detail(m) if not d["optional"]]
+            if hard:
+                out.append(
+                    f"  ⚠ {pid} needs Python package(s) not installed yet: {', '.join(hard)} — ask the operator "
+                    f"to install them (the plugin's 'Install dependencies' banner, or Settings ▸ Plugins ▸ Install deps)"
+                )
+    except Exception:  # noqa: BLE001 — advisory only; never fail a landed install over it
+        return out
+    return out
 
 
 @tool

@@ -10,7 +10,9 @@ Generated from the argparse definition in `graph/plugins/cli.py`.
 Two deliberate non-behaviors, because both are consent boundaries
 ([ADR 0027](/adr/0027-install-plugins-from-git-url)): **install does not enable** a
 plugin, and **install does not install its Python dependencies**. Fetching code is not
-running it, so each step is a separate, explicit act.
+running it, so each step is a separate, explicit act — on the desktop app too, where the
+one exception is the explicit `--install-runtime-deps` opt-in unattended provisioning
+passes (required deps go into the app's managed Python runtime as part of the install).
 
 | Command | Purpose |
 |---|---|
@@ -63,7 +65,7 @@ Scaffold a plugin BUNDLE (protoagent.bundle.yaml, ADR 0040).
 ## `install` {#cmd-install}
 
 ```
-python -m server plugin install [-h] [--ref REF] [--force] url
+python -m server plugin install [-h] [--ref REF] [--force] [--install-runtime-deps] url
 ```
 
 Install a plugin — or a bundle of plugins — from a git URL (does NOT enable it).
@@ -73,6 +75,7 @@ Install a plugin — or a bundle of plugins — from a git URL (does NOT enable 
 | `url` | git URL (https://, ssh://, git@, or a local path) of a plugin or a bundle repo |
 | `--ref` | tag, branch, or commit SHA to pin (default: default branch HEAD) |
 | `--force` | replace an already-installed plugin of the same id |
+| `--install-runtime-deps` | desktop app only: also pip missing required deps into its managed Python runtime as part of the install (the non-interactive opt-in fleet/archetype provisioning uses; by default they are left for `plugin install-deps` or the console's confirm). No effect on a server install. |
 
 ## `list` {#cmd-list}
 
@@ -98,7 +101,7 @@ Remove a git-installed plugin (code + lock + enabled ref).
 ## `update-bundle` {#cmd-update-bundle}
 
 ```
-python -m server plugin update-bundle [-h] [--ref REF] id
+python -m server plugin update-bundle [-h] [--ref REF] [--install-runtime-deps] id
 ```
 
 Re-resolve a bundle's ref + reinstall members at the new pins (#2718; code+lock only — a running server picks the new code up on restart/reload).
@@ -107,6 +110,7 @@ Re-resolve a bundle's ref + reinstall members at the new pins (#2718; code+lock 
 |---|---|
 | `id` | the bundle id (see plugins.lock bundles[]) |
 | `--ref` | override the recorded ref (tag/branch/SHA) |
+| `--install-runtime-deps` | desktop app only: also pip missing required deps into its managed Python runtime as part of the install (the non-interactive opt-in fleet/archetype provisioning uses; by default they are left for `plugin install-deps` or the console's confirm). No effect on a server install. |
 
 ## `uninstall-bundle` {#cmd-uninstall-bundle}
 

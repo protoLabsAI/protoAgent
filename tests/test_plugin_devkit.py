@@ -1165,3 +1165,25 @@ def test_skill_md_problems_is_the_loader_contract(tmp_path):
         problems = skill_md_problems(text)
         parsed = parse_skill_md(f)
         assert (parsed is not None) == (problems == []), (i, problems, parsed)
+
+
+def test_install_plugin_names_required_deps_still_missing(monkeypatch, tmp_path):
+    """Install never pips (on the desktop app too, since the consent dialog), so the agent
+    tool must say what's missing instead of reporting a plugin ready that can't import."""
+    from graph.plugins import installer
+    from graph.plugins.manifest import load_manifest
+
+    mod = _load_devkit_module(tmp_path)
+    d = tmp_path / "widgets"
+    d.mkdir()
+    (d / "protoagent.plugin.yaml").write_text(
+        "id: widgets\nname: Widgets\nrequires_pip:\n  - definitely-not-real-xyz>=1\n"
+        "  - {pkg: 'also-not-real-xyz>=1', optional: true}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(installer, "effective_copies", lambda: {"widgets": load_manifest(d)})
+    lines = mod._deps_still_needed(["widgets", "unknown"])
+    assert len(lines) == 1
+    assert "widgets needs Python package(s) not installed yet: definitely-not-real-xyz>=1" in lines[0]
+    assert "also-not-real" not in lines[0]  # optional ones aren't a blocker
+    assert mod._deps_still_needed([]) == []

@@ -67,10 +67,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function render(onClose = () => {}) {
+function render(onClose = () => {}, need: PluginDepsNeeded = NEED) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   act(() => {
-    root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(DepsInstallDialog, { need: NEED, onClose }))));
+    root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(DepsInstallDialog, { need, onClose }))));
   });
 }
 
@@ -97,6 +97,13 @@ describe("DepsInstallDialog", () => {
     expect(text).toContain("this server's Python environment");
     expect(btn("Install packages")).toBeTruthy();
     expect(btn("Not now")).toBeTruthy();
+  });
+
+  it("on the desktop app it names the managed Python runtime as where they install", () => {
+    // The frozen sidecar's install response targets the managed runtime (ADR 0094); the
+    // dialog shows the server's own wording for it.
+    render(() => {}, { ...NEED, target: "the desktop app's managed Python runtime" });
+    expect(dialog()?.textContent || "").toContain("pip installs them into the desktop app's managed Python runtime");
   });
 
   it("Not now closes without installing anything", async () => {

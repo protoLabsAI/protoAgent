@@ -928,25 +928,15 @@ def _normalize_dist(name: str) -> str:
     return _norm(name)
 
 
-def _frozen_install_missing_deps(
-    pid: str, requires_pip: list[str], missing: list[str], scopes: dict[str, str] | None = None
-) -> None:
-    """Frozen desktop, hard deps missing at install/update time: pip them into the
-    managed Python runtime (ADR 0094 P2) — the same target ``install_deps`` uses —
-    instead of the pre-ADR-0093 flat refusal (#2226). Refuses only when the runtime
-    isn't provisioned (naming the install route) or the install itself fails
-    (surfacing pip's real error).
-
-    A ``host``-scoped dep (#2246) is refused up front and NOT sent to the runtime:
-    installing it there would "succeed" while leaving the in-process import that
-    actually needs it just as broken, which is the whole failure this scope exists to
-    stop. On a frozen host that dep is genuinely unsatisfiable, so say so — and say why
-    — rather than passing the gate and crashing at tool time."""
-    # Module (not from-) imports: callables resolve through the source module at call
-    # time, so test monkeypatches on infra.python_runtime / runtime.python_install bind.
-    import infra.python_runtime as pr
-    import runtime.python_install as pi
-
+def _refuse_frozen_host_scoped(pid: str, missing: list[str], scopes: dict[str, str] | None = None) -> None:
+    """Frozen desktop: refuse a plugin whose MISSING hard deps include a ``host``-scoped one
+    (#2246). Such a dep must be importable in THIS process, and the frozen app has no pip
+    for its own interpreter — the managed Python runtime (where deps get installed) only
+    serves execute_code children, a separate site-packages. Installing it there would
+    "succeed" while leaving the in-process import that actually needs it just as broken, so
+    the dep is genuinely unsatisfiable here: say so, and why, before any code lands —
+    rather than passing the gate and crashing at tool time. Applies whether or not deps are
+    installed at install time (a consent dialog can't fix it either)."""
     host_scoped = [n for n in missing if (scopes or {}).get(n) == "host"]
     if host_scoped:
         raise InstallError(
@@ -956,6 +946,31 @@ def _frozen_install_missing_deps(
             f"separate site-packages. Vendor the code, drop the dependency, or ship it in the "
             f"app bundle. (Declare scope: runtime if it is only imported by execute_code.)"
         )
+
+
+def _frozen_install_missing_deps(
+    pid: str, requires_pip: list[str], missing: list[str], scopes: dict[str, str] | None = None
+) -> None:
+    """Frozen desktop, hard deps missing at install/update time, and the CALLER OPTED IN
+    (``install(..., install_runtime_deps=True)`` — the non-interactive provisioning paths:
+    fleet/archetype workspace creation and snapshot import, via the CLI's
+    ``--install-runtime-deps``): pip them into the managed Python runtime (ADR 0094 P2) —
+    the same target ``install_deps`` uses. Refuses only when the runtime isn't provisioned
+    (naming the install route) or the install itself fails (surfacing pip's real error).
+
+    Without the opt-in the frozen install no longer pips at all (it used to, #2226): it
+    lands the plugin and the missing deps are reported like on a server, so the console's
+    consent dialog / the deps banner / ``plugin install-deps`` install them on an explicit
+    act — pip runs the packages' own install code.
+
+    A ``host``-scoped dep (#2246) is refused up front and NOT sent to the runtime (see
+    ``_refuse_frozen_host_scoped``)."""
+    # Module (not from-) imports: callables resolve through the source module at call
+    # time, so test monkeypatches on infra.python_runtime / runtime.python_install bind.
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    _refuse_frozen_host_scoped(pid, missing, scopes)
 
     # Only the specs that apply here: a name can appear twice with complementary markers
     # (``foo; sys_platform == 'win32'`` + ``foo>=2; sys_platform != 'win32'``).
@@ -986,11 +1001,26 @@ def _frozen_install_missing_deps(
 
 
 def install(
-    url: str, ref: str | None = None, *, force: bool = False, by: str = "cli", allow: list[str] | None = None
+    url: str,
+    ref: str | None = None,
+    *,
+    force: bool = False,
+    by: str = "cli",
+    allow: list[str] | None = None,
+    install_runtime_deps: bool = False,
 ) -> dict:
     """Clone a plugin from ``url`` (at ``ref``) into the live plugins dir, pinned
     to its resolved SHA, and record it in ``plugins.lock``. Does NOT enable it or
     install its deps. Returns the install summary.
+
+    ``install_runtime_deps`` is the explicit opt-in for NON-interactive callers on the
+    frozen desktop app (fleet/archetype provisioning, snapshot import — the CLI's
+    ``--install-runtime-deps``): missing hard deps are pip'd into the managed Python
+    runtime as part of the install, as every frozen install did before the consent dialog.
+    Default off: a frozen install lands the plugin and leaves missing deps to the console's
+    consent dialog / deps banner / ``plugin install-deps``, exactly like a server install.
+    It does nothing off the frozen app (a server install never pips — ADR 0027 D4), and it
+    never overrides the HOST-scoped refusal. A bundle passes it to every member.
 
     A ``url`` a bundled plugin ``supersedes`` fetches nothing: that plugin ships with
     protoAgent now, so the summary describes the bundled copy and carries
@@ -1031,7 +1061,9 @@ def install(
         # plugin repos to install together. Fan out to per-plugin install().
         bundle = load_bundle(staging)
         if bundle is not None:
-            return _install_bundle(bundle, url, sha, ref, force=force, by=by, allow=allow)
+            return _install_bundle(
+                bundle, url, sha, ref, force=force, by=by, allow=allow, install_runtime_deps=install_runtime_deps
+            )
 
         manifest = load_manifest(staging)
         if manifest is None:
@@ -1045,11 +1077,16 @@ def install(
         if _is_builtin(pid):
             raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
 
-        # Frozen runtime (desktop): no host pip — a missing hard dep used to be a flat
-        # ADR 0058 D2 refusal ("install it on a server instead"). The managed Python
-        # runtime (ADR 0094 P2) is a real install target now, so when it's provisioned
-        # the missing deps are pip'd into it right here (#2226), and we refuse only when
-        # the runtime is absent or that install actually fails.
+        # Frozen runtime (desktop): no host pip. A missing hard dep used to be a flat
+        # ADR 0058 D2 refusal, then (#2226) was pip'd into the managed Python runtime
+        # (ADR 0094 P2) right here, silently. Now the install asks nothing of pip: the
+        # plugin lands, and the missing deps are reported exactly as on a server — the
+        # install route's `deps_needed` drives the console's consent dialog (the specs,
+        # the source, "into the desktop app's managed Python runtime"), and confirming
+        # runs the existing install-deps route, which targets that runtime. Only an
+        # explicit `install_runtime_deps=True` (non-interactive provisioning) still pips
+        # here. A HOST-scoped hard dep stays a refusal either way: the managed runtime
+        # can't satisfy an in-process import, so no dialog could fix it (#2246).
         # OPTIONAL deps (#1953) don't gate: the plugin degrades gracefully without
         # them, so a missing one warns (in the summary + log) and install proceeds.
         warnings: list[str] = []
@@ -1057,7 +1094,16 @@ def install(
             if manifest.requires_pip:
                 ok, missing = _deps_satisfied(manifest.requires_pip, manifest.pip_scopes)
                 if not ok:
-                    _frozen_install_missing_deps(pid, manifest.requires_pip, missing, manifest.pip_scopes)
+                    if install_runtime_deps:
+                        _frozen_install_missing_deps(pid, manifest.requires_pip, missing, manifest.pip_scopes)
+                    else:
+                        _refuse_frozen_host_scoped(pid, missing, manifest.pip_scopes)
+                        log.info(
+                            "[plugins] %s: required dep(s) %s aren't in the desktop runtime — installing the "
+                            "plugin; they install on the operator's confirm (install-deps)",
+                            pid,
+                            ", ".join(missing),
+                        )
             if manifest.optional_pip:
                 _, soft_missing = _deps_satisfied(manifest.optional_pip, manifest.pip_scopes)
                 if soft_missing:
@@ -1310,7 +1356,15 @@ def _checked_archetype_block(bundle_id: str, arch: dict | None) -> dict:
 
 
 def _install_bundle(
-    bundle: dict, bundle_url: str, bundle_sha: str, ref: str | None, *, force: bool, by: str, allow: list[str] | None
+    bundle: dict,
+    bundle_url: str,
+    bundle_sha: str,
+    ref: str | None,
+    *,
+    force: bool,
+    by: str,
+    allow: list[str] | None,
+    install_runtime_deps: bool = False,
 ) -> dict:
     """Install every plugin a bundle names (reusing single-plugin ``install()`` for
     each — so each member is allow-checked + pinned in ``plugins.lock`` exactly as a
@@ -1398,7 +1452,16 @@ def _install_bundle(
             except Exception:  # noqa: BLE001 — best-effort; fall back to the manifest pin
                 pass
 
-        installed.append(install(str(purl), member_ref, force=force, by=f"bundle:{bid}", allow=allow))
+        installed.append(
+            install(
+                str(purl),
+                member_ref,
+                force=force,
+                by=f"bundle:{bid}",
+                allow=allow,
+                install_runtime_deps=install_runtime_deps,
+            )
+        )
 
     lock = _read_lock()
     lock.setdefault("bundles", [])
@@ -1937,7 +2000,7 @@ def deps_install_target() -> tuple[Path, str]:
     if _frozen_like():
         from infra.python_runtime import managed_python_root
 
-        return managed_python_root(), "the managed Python runtime"
+        return managed_python_root(), "the desktop app's managed Python runtime"
     return Path(sys.prefix), "this server's Python environment"
 
 
