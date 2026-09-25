@@ -102,6 +102,11 @@ Provision a **managed CPython runtime** with the ADR 0085 mechanics, and make it
 - **P2:** plugin-declared child deps — an enabled plugin's `requires_pip` can be
   installed into the managed runtime (per-plugin console action / manifest hint), so
   third-party compute plugins stop being desktop-dead too.
+  *Amendment (#3618 follow-up, 2026-09):* installing a plugin no longer pips its
+  missing hard deps into the runtime as a side effect (#2226 did); the console's consent
+  dialog lists the exact specs + source + "the desktop app's managed Python runtime" and
+  installs on the click via the install-deps route. Non-interactive provisioning keeps
+  install-time pip behind `plugin install --install-runtime-deps`.
 - **P3 (deferred):** convergence with ADR 0093 (shared pin/lock format for host-side
   and child-side deps); optional PATH exposure if a second consumer materializes.
 

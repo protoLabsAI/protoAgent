@@ -44,6 +44,16 @@ def _live_servers() -> list[dict]:
         return []
 
 
+# The explicit opt-in that keeps NON-interactive provisioning working on the desktop app
+# (graph/workspaces/manager.py's fleet/archetype create, graph/snapshot_import.py): a frozen
+# install no longer pips missing deps on its own — the console asks first (#3618).
+_RUNTIME_DEPS_HELP = (
+    "desktop app only: also pip missing required deps into its managed Python runtime as part of "
+    "the install (the non-interactive opt-in fleet/archetype provisioning uses; by default they are "
+    "left for `plugin install-deps` or the console's confirm). No effect on a server install."
+)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m server plugin",
@@ -97,6 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pi.add_argument("url", help="git URL (https://, ssh://, git@, or a local path) of a plugin or a bundle repo")
     pi.add_argument("--ref", default=None, help="tag, branch, or commit SHA to pin (default: default branch HEAD)")
     pi.add_argument("--force", action="store_true", help="replace an already-installed plugin of the same id")
+    pi.add_argument("--install-runtime-deps", action="store_true", help=_RUNTIME_DEPS_HELP)
 
     sub.add_parser("list", help="list git-installed plugins (from plugins.lock)")
     pu = sub.add_parser("uninstall", help="remove a git-installed plugin (code + lock + enabled ref)")
@@ -109,6 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pub.add_argument("id", help="the bundle id (see plugins.lock bundles[])")
     pub.add_argument("--ref", default=None, help="override the recorded ref (tag/branch/SHA)")
+    pub.add_argument("--install-runtime-deps", action="store_true", help=_RUNTIME_DEPS_HELP)
     pux = sub.add_parser(
         "uninstall-bundle",
         help="remove a bundle: its exclusively-owned members + the lock row (shared members stay)",
@@ -179,7 +191,13 @@ def run_plugin_cli(argv: list[str]) -> int:
             print("  commit/push it, then `plugin install <repo-url>` to install the bundle (ADR 0040).")
             return 0
         if args.cmd == "install":
-            s = installer.install(args.url, args.ref, force=args.force, allow=installer.configured_allowlist())
+            s = installer.install(
+                args.url,
+                args.ref,
+                force=args.force,
+                allow=installer.configured_allowlist(),
+                install_runtime_deps=args.install_runtime_deps,
+            )
             if "bundle" in s:  # a bundle: a set of plugins installed together
                 print(f"✓ installed bundle {s['bundle']}" + (f" — {s['name']}" if s["name"] else ""))
                 if s["description"]:
@@ -198,7 +216,9 @@ def run_plugin_cli(argv: list[str]) -> int:
                 # Only the deps that apply on THIS platform (a Windows-only marker is no
                 # action item on macOS/Linux — pip would skip it anyway).
                 deps = sorted({d for p in s["installed"] for d in installer.applicable_deps(p.get("requires_pip", []))})
-                if deps:
+                if deps and args.install_runtime_deps and installer._frozen_like():
+                    print(f"  ✓ member deps (installed into the managed Python runtime where missing): {', '.join(deps)}")
+                elif deps:
                     print(
                         f"  ⚠ member deps (NOT installed — review, then `plugin install-deps <id>`): {', '.join(deps)}"
                     )
@@ -225,7 +245,11 @@ def run_plugin_cli(argv: list[str]) -> int:
             # the marker's quoting in a shell.
             hard_here = installer.applicable_deps(s["requires_pip"])
             soft_here = installer.applicable_deps(s.get("optional_pip") or [])
-            if hard_here:
+            if hard_here and args.install_runtime_deps and installer._frozen_like():
+                # The opt-in pip'd whatever was missing into the managed runtime (or the
+                # install would have failed with pip's error).
+                print(f"  ✓ declared deps (installed into the managed Python runtime where missing): {', '.join(hard_here)}")
+            elif hard_here:
                 print(f"  ⚠ declared deps (NOT installed — review, then install): {', '.join(hard_here)}")
                 print(f"    protoagent plugin install-deps {s['id']}")
             if soft_here:
@@ -321,7 +345,7 @@ def run_plugin_cli(argv: list[str]) -> int:
                 ref = status.get("latest_ref") or ref
             s = installer.install(
                 str(entry.get("source_url") or ""), ref, force=True, by=f"cli-update-bundle:{args.id}",
-                allow=installer.configured_allowlist(),
+                allow=installer.configured_allowlist(), install_runtime_deps=args.install_runtime_deps,
             )
             print(f"✓ updated bundle {s.get('bundle', args.id)} @ {s.get('resolved_sha', '')[:10]}")
             for p in s.get("installed") or []:

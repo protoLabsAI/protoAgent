@@ -79,6 +79,16 @@ the 0027 pip path is unchanged. Communication channels (Discord, Slack, Telegram
 > optional deps too, best-effort: a failed optional install warns (audited) instead
 > of failing the command. The `_validate_pip_specs` rails apply to both tiers.
 
+> **Amendment (#3618 follow-up, 2026-09) — frozen installs ask before pip.** After
+> ADR 0094 P2, #2226 turned D2's refusal into an automatic pip of missing hard deps into
+> the managed Python runtime during the install. The frozen install now does neither: it
+> lands the plugin and reports the missing deps exactly like a server install
+> (`deps_needed`), and the console's consent dialog installs them through
+> `POST /api/plugins/install-deps` (target: the managed runtime) on the operator's click.
+> The refusal survives only for a missing **hard `scope: host`** dep (#2246), which the
+> runtime can't satisfy. Unattended provisioning (fleet archetype create, snapshot import)
+> opts back into install-time pip explicitly with `plugin install --install-runtime-deps`.
+
 ### D3 — Opt-in everywhere; Discord leaves the default bundle
 
 Discord is **removed from the default bundle on all surfaces** (server bundle +

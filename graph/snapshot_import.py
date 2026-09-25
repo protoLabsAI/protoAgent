@@ -662,7 +662,11 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
     installed: list[str] = []
     failed: list[dict] = []
     for pin in pins:
-        argv = [*_server_argv(), "plugin", "install", pin.url]
+        # `--install-runtime-deps`: an import restores the agent unattended, like the fleet's
+        # archetype create, so on the desktop app a pinned plugin's missing required deps are
+        # installed into the managed Python runtime here rather than left for a console
+        # dialog nobody is watching. No effect on a source/server run (install never pips).
+        argv = [*_server_argv(), "plugin", "install", pin.url, "--install-runtime-deps"]
         if pin.ref:
             argv += ["--ref", pin.ref]
         try:

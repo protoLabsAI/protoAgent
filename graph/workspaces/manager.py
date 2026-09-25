@@ -1346,8 +1346,14 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
         **os.environ,
         "PROTOAGENT_HOME": str(ws),
     }
+    # `--install-runtime-deps`: creating a fleet member from an archetype is NON-interactive
+    # (no console dialog runs inside this subprocess), so on the desktop app it keeps the
+    # behaviour it always had — required deps missing from the managed Python runtime are
+    # pip'd into it as part of the install. The operator's pick of the archetype is the act;
+    # a plain `plugin install` on the desktop now leaves deps for the consent dialog (#3618
+    # follow-up). No effect on a source/server run, where install never pips (ADR 0027 D4).
     proc = subprocess.run(
-        [*_server_argv(), "plugin", "install", bundle],
+        [*_server_argv(), "plugin", "install", bundle, "--install-runtime-deps"],
         env=env,
         capture_output=True,
         text=True,

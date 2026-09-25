@@ -398,36 +398,72 @@ def test_frozen_install_deps_optional_only_failure_keeps_satisfied_optionals(env
     assert "optional dep(s) definitely_not_real_xyz aren't in the desktop runtime" in caplog.text
 
 
-# ── frozen install/update gate routes deps into the managed runtime (#2226) ──
+# ── frozen install/update: deps wait for the operator's confirm (#3618 follow-up) ──
+# #2226 made a frozen install pip missing hard deps into the managed runtime on its own.
+# The desktop now gets the same consent dialog as the browser console: install lands the
+# plugin and reports the deps; only an explicit ``install_runtime_deps=True`` (the
+# non-interactive provisioning paths, via the CLI's --install-runtime-deps) still pips.
 
 
-def test_frozen_install_pips_missing_deps_into_managed_runtime(env, monkeypatch):
-    """#2226: a frozen install/update with a provisioned managed runtime no longer
-    refuses on missing hard deps with the pre-ADR-0093 message — it pips them into
-    the runtime (the install_deps target) and the install proceeds."""
+def _frozen_repo_missing_docx(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
     _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")  # frozen forces archive fetch; keep the local-repo clone
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())  # dep not satisfied anywhere
+    return repo
+
+
+def test_frozen_install_does_not_pip_missing_deps_without_the_opt_in(env, monkeypatch):
+    """The consent change: a frozen install lands the plugin and leaves the missing
+    required dep MISSING — reported, never pip'd — so the console's dialog can ask."""
+    repo = _frozen_repo_missing_docx(env, monkeypatch)
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: Path("/fake/runtime/bin/python3"))
+    monkeypatch.setattr(
+        pi,
+        "install_requirements_into_managed_runtime",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("install must not pip without the operator's confirm")),
+    )
+    summary = installer.install(str(repo))
+    assert summary["id"] == "demo_ext"
+    assert (installer.live_plugins_dir() / "demo_ext" / "protoagent.plugin.yaml").exists()
+    # Reported exactly like a server install: the dep is still missing for the running copy.
+    m = installer.effective_copies()["demo_ext"]
+    assert installer.missing_deps_detail(m) == [{"name": "python-docx", "spec": "python-docx>=1.1", "optional": False}]
+
+
+def test_frozen_install_without_a_runtime_still_lands_the_plugin(env, monkeypatch):
+    """No managed runtime provisioned used to REFUSE the install. Now the plugin lands and
+    the dialog's install (install-deps) is what names the missing runtime."""
+    repo = _frozen_repo_missing_docx(env, monkeypatch)
+    import infra.python_runtime as pr
+
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: None)  # runtime absent
+    summary = installer.install(str(repo))
+    assert summary["id"] == "demo_ext"
+    assert (installer.live_plugins_dir() / "demo_ext").exists()
+
+
+def test_frozen_install_with_the_opt_in_pips_missing_deps_into_managed_runtime(env, monkeypatch):
+    """#2226's behaviour, now behind the explicit opt-in (fleet/archetype provisioning)."""
+    repo = _frozen_repo_missing_docx(env, monkeypatch)
     import infra.python_runtime as pr
     import runtime.python_install as pi
 
     monkeypatch.setattr(pr, "managed_python_exe", lambda: Path("/fake/runtime/bin/python3"))
     got = {}
     monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", lambda reqs, **k: got.setdefault("reqs", reqs))
-    summary = installer.install(str(repo))
-    assert got["reqs"] == ["python-docx>=1.1"]  # wheel install attempted, into the managed runtime
+    summary = installer.install(str(repo), install_runtime_deps=True)
+    assert got["reqs"] == ["python-docx>=1.1"]  # into the managed runtime
     assert summary["id"] == "demo_ext"
     assert (installer.live_plugins_dir() / "demo_ext" / "protoagent.plugin.yaml").exists()
 
 
-def test_frozen_install_refuses_without_managed_runtime_and_names_the_install_route(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
-    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
-    _host_lacks(monkeypatch, "python-docx")
-    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
-    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+def test_frozen_install_opt_in_refuses_without_managed_runtime_and_names_the_install_route(env, monkeypatch):
+    repo = _frozen_repo_missing_docx(env, monkeypatch)
     import infra.python_runtime as pr
     import runtime.python_install as pi
 
@@ -438,16 +474,12 @@ def test_frozen_install_refuses_without_managed_runtime_and_names_the_install_ro
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not attempt an install without a runtime")),
     )
     with pytest.raises(installer.InstallError, match="POST /api/runtime/python/install"):
-        installer.install(str(repo))
+        installer.install(str(repo), install_runtime_deps=True)
     assert not (installer.live_plugins_dir() / "demo_ext").exists()  # refused before landing code
 
 
-def test_frozen_install_surfaces_the_real_error_when_runtime_install_fails(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
-    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
-    _host_lacks(monkeypatch, "python-docx")
-    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
-    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
+def test_frozen_install_opt_in_surfaces_the_real_error_when_runtime_install_fails(env, monkeypatch):
+    repo = _frozen_repo_missing_docx(env, monkeypatch)
     import infra.python_runtime as pr
     import runtime.python_install as pi
 
@@ -460,8 +492,51 @@ def test_frozen_install_surfaces_the_real_error_when_runtime_install_fails(env, 
 
     monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _boom)
     with pytest.raises(installer.InstallError, match="No matching distribution found"):
-        installer.install(str(repo))
+        installer.install(str(repo), install_runtime_deps=True)
     assert not (installer.live_plugins_dir() / "demo_ext").exists()
+
+
+@pytest.mark.parametrize("opt_in", [False, True])
+def test_frozen_install_still_refuses_a_hard_host_scoped_dep(env, monkeypatch, opt_in):
+    """Unchanged (#2246, the prototrader-finance case): a HARD host-scoped dep the frozen
+    host lacks can't be satisfied by the managed runtime, so no confirm could fix it —
+    refuse before any code lands, with or without the opt-in, and never pip it."""
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip:\n  - {pkg: 'numpy>=1', scope: host}\n")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "numpy")
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
+    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: {"numpy"})  # even in the runtime: host needs it
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    monkeypatch.setattr(pr, "managed_python_exe", lambda: Path("/fake/runtime/bin/python3"))
+    monkeypatch.setattr(
+        pi,
+        "install_requirements_into_managed_runtime",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("a host-scoped dep must never go to the runtime")),
+    )
+    with pytest.raises(installer.InstallError, match="HOST-scoped dep, which a frozen app cannot satisfy"):
+        installer.install(str(repo), install_runtime_deps=opt_in)
+    assert not (installer.live_plugins_dir() / "demo_ext").exists()
+
+
+def test_frozen_bundle_passes_the_opt_in_to_every_member(env, monkeypatch):
+    """A bundle install (the fleet's archetype create) hands the opt-in to each member."""
+    seen: list = []
+    real_install = installer.install
+
+    def _spy(url, ref=None, **k):
+        if "member" in str(url):
+            seen.append(k.get("install_runtime_deps"))
+            return {"id": "m", "requires_pip": []}
+        return real_install(url, ref, **k)
+
+    monkeypatch.setattr(installer, "install", _spy)
+    bundle = {"id": "stack", "plugins": [{"id": "m", "url": "https://github.com/acme/member"}]}
+    installer._install_bundle(bundle, "https://github.com/acme/stack", "a" * 40, None, force=False, by="t", allow=None,
+                              install_runtime_deps=True)
+    installer._install_bundle(bundle, "https://github.com/acme/stack", "a" * 40, None, force=False, by="t", allow=None)
+    assert seen == [True, False]
 
 
 def test_managed_runtime_dists_read_failure_degrades_to_empty(monkeypatch, caplog):
