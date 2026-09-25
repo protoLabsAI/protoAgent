@@ -1,0 +1,49 @@
+# Live run: scripts/acp_harness.py -> protoagent-acp -> protoEngineer (:7875, v0.172.0), 2026-09-23.
+# Captured BEFORE two cosmetic fixes now in the shim: the leading '\n\n' is stripped, and the
+# early no-args announce is titled 'Search files' instead of "Search for ''".
+# cwd=~/dev/protoAgent-team; token passed via --token-file (never printed). Text chunks elided mid-answer.
+initialize → {"protocolVersion": 1, "agentCapabilities": {"loadSession": false, "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true}, "mcpCapabilities": {"http": false, "sse": false, "acp": false}, "sessionCapabilities": {}, ...
+session/new → chat-zed-1790230509887-c2b6fc
+
+>>> session/prompt 'Read-only question, do not dispatch or change anything: in the protoAgent project, find where the A2A executor turns tool_start/tool_end events into tool-call frames, and show me the relevant lines with file:line.'
+   4.3s text  '\n\nLet'
+   4.5s text  ' me search the pr'
+   4.5s text  'otoAgent codebase for where'
+   4.7s text  ' the A2'
+   4.8s text  'A executor handles'
+   4.9s text  ' `tool'
+   5.0s text  '_start`'
+   5.1s text  '/`tool_end` events and turns'
+   5.3s text  ' them into tool-'
+   5.4s text  'call frames.'
+   5.7s tool_call        toolu_01WRAGmu kind='search' status='in_progress' title="Search for ''"
+   6.9s tool_call        toolu_01Kfea77 kind='search' status='in_progress' title="Search for ''"
+   7.6s tool_call_update toolu_01WRAGmu title="Search protoAgent for 'tool_start'"
+   7.6s tool_call_update toolu_01Kfea77 title="Search protoAgent for 'tool_end'"
+   8.2s tool_call_update toolu_01Kfea77 status='completed' locations=[{"path": "/Users/kj/dev/protoAgent-team/CHANGELOG-THROUGH-2026-07.md", "line": 6328}, {"path": "/Users/kj/dev/protoAgent-team/CHANGELOG.md", "line": 4096}]
+   8.2s tool_call_update toolu_01WRAGmu status='completed' locations=[{"path": "/Users/kj/dev/protoAgent-team/CHANGELOG-THROUGH-2026-07.md", "line": 6328}, {"path": "/Users/kj/dev/protoAgent-team/CHANGELOG.md", "line": 4301}]
+  11.2s text  '\n\nNow'
+  11.6s text  ' let me read the core'
+  11.6s text  ' function `_tool_call_frame'
+  11.7s text  "` and the executor's dispatch"
+  11.8s text  ' block in'
+  12.0s text  ' detail'
+  12.2s text  ':'
+  12.2s tool_call        toolu_01YGciFn kind='read' status='in_progress' title='Read file'
+  13.3s tool_call        toolu_018f5GE5 kind='read' status='in_progress' title='Read file'
+  14.2s tool_call_update toolu_01YGciFn title='Read protoAgent/a2a_impl/executor.py (lines 785–839)' locations=[{"path": "/Users/kj/dev/protoAgent-team/a2a_impl/executor.py", "line": 785}]
+  14.2s tool_call_update toolu_018f5GE5 title='Read protoAgent/a2a_impl/executor.py (lines 1205–1264)' locations=[{"path": "/Users/kj/dev/protoAgent-team/a2a_impl/executor.py", "line": 1205}]
+  14.2s tool_call_update toolu_01YGciFn status='completed'
+  14.2s tool_call_update toolu_018f5GE5 status='completed'
+  16.8s text  '\n\nHere'
+  17.3s text  "'s exactly"
+  17.3s text  ' where the A2A executor turns'
+  17.4s text  ' `tool_start`/`tool_end` events'
+  17.5s text  ' into tool-'
+  17.7s text  'call frames'
+  17.9s text  '. There are two pieces'
+   ... (~130 more text chunks) ...
+  33.7s text  'Part` in'
+  33.8s text  ' `parts'
+  34.0s text  '[]`'
+<<< stopReason: end_turn usage: {'totalTokens': 191245, 'inputTokens': 189945, 'outputTokens': 1300, 'cachedReadTokens': 128401}

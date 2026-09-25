@@ -1,0 +1,18 @@
+# Live run: all-chats history against navaEngineer (:7889), 2026-09-25.
+# The console-format chat chat-1790305034974-zedchk was created for this test through A2A (one 'remember the codeword' turn),
+# so the operator's real console chat was listed but never written to.
+session/list (cwd=/Users/kj/dev/nava) → 3 thread(s)
+  chat-1790305034974-zedchk  2026-09-25T02:57:17.607684Z  'This is a quick test of chat continuity (no work needed). Remember this codeword…'
+  chat-1790294944966-qkf93w  2026-09-25T02:48:51.946394Z  'lets dig into the benefits agent practice'
+  chat-zed-1790303412561-7d669c  2026-09-25T02:31:40.439440Z  "Let's work on the benefits-assistant-rehearsal repo (already cloned in ~/dev/nav…"
+
+>>> session/load chat-1790305034974-zedchk
+   0.5s user_message_chunk {"content": {"text": "This is a quick test of chat continuity (no work needed). Remember this codeword: marmalade. Reply only with OK.", "type": "text"}, "sessionUpdate": "user_message_chunk"}
+   0.5s text  'OK'
+<<< loaded (replay above)
+
+>>> session/prompt 'What codeword did I give you earlier in this chat? Answer with the one word.'
+   2.3s text  'mar'
+   2.4s text  'ma'
+   2.6s text  'lade'
+<<< stopReason: end_turn usage: {'totalTokens': 28977, 'inputTokens': 28971, 'outputTokens': 6, 'cachedReadTokens': 27005}

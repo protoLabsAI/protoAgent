@@ -425,6 +425,31 @@ jobs:
           . .venv/bin/activate
           PA_RUN_INTEGRATION=1 python -m pytest tests/integration -q
 
+  zed-acp:
+    name: zed-acp package tests
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    # integrations/zed-acp (ADR 0111) is a standalone package OUTSIDE the core import
+    # graph and the wheel, with its own pyproject — so neither `tests` nor `lint`'s pytest
+    # sees its suite. Cheap (~1 min: a fake A2A server + stdio subprocesses, no model), so
+    # it runs on every PR rather than behind a paths filter that would leave the check
+    # pending. It installs the package's OWN deps (agent-client-protocol, httpx) into an
+    # isolated venv, exactly as `uvx --from integrations/zed-acp` would.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          # Same uv as the other jobs.
+          version: "0.11.29"
+      - name: Install the package + test deps (isolated venv)
+        working-directory: integrations/zed-acp
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e . pytest pytest-asyncio
+      - name: Run the package tests
+        working-directory: integrations/zed-acp
+        run: .venv/bin/python -m pytest -q --basetemp="$RUNNER_TEMP/zed-acp-pytest"
+
   live-smoke:
     name: A2A live smoke (lean tier)
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
