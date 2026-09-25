@@ -252,6 +252,31 @@ def test_design_system_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+def test_engineer_archetype_row() -> None:
+    """The Engineer archetype (a hands-on navigator coding agent) ships as a standard
+    picker row backed by the engineer-archetype bundle: unique id, a `soul_preset` that
+    resolves to a really-bundled file, the in-tree `engineer` skill pack its persona
+    leans on, and `custom` still LAST."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert ids.count("engineer") == 1, f"'engineer' must appear exactly once, got {ids}"
+    held = [a["id"] for a in catalog.get("held") or []]
+    assert "engineer" not in held, f"'engineer' is listed — it must not also be parked in `held`, got {held}"
+
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "engineer")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"archetype 'engineer' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — the persona step would silently seed nothing."
+    )
+    assert row.get("bundle") == "https://github.com/protoLabsAI/engineer-archetype"
+    assert (ROOT / "plugins" / "engineer" / "protoagent.plugin.yaml").is_file(), (
+        "the engineer bundle enables the in-tree `engineer` skill pack — it must ship"
+    )
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def test_social_marketing_archetype_is_held() -> None:
     """The Social Marketing archetype is HELD from the picker (operator call,
     2026-08-20: not ready for release). JSON has no comments, so 'commented out'

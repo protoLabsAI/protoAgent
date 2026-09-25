@@ -24,6 +24,14 @@
       ]
     },
     {
+      "id": "engineer",
+      "label": "Engineer",
+      "icon": "Compass",
+      "bundle": "https://github.com/protoLabsAI/engineer-archetype",
+      "blurb": "A hands-on pair-programming navigator — onboards any repo, reproduces the bug, and points at the evidence; you write the fix, it reviews. A code pane beside chat, a real terminal, and your editor one click away.",
+      "soul_preset": "engineer"
+    },
+    {
       "id": "design-system",
       "label": "Design System Engineer",
       "icon": "Component",

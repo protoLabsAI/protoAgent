@@ -121,7 +121,7 @@ Unknown keys in the block warn at install time; the full annotated field set liv
 The picker draws from **two** sources:
 
 - **The archetype catalog** — `config/archetype-catalog.json`, served by `GET /api/archetypes`.
-  The shipped catalog carries the starter set (2026-08: Basic, Cowork, and — under the
+  The shipped catalog carries the starter set (Basic, Cowork, Engineer, and — under the
   *Advanced* toggle — Design System Engineer and Project Manager, then Custom; the two
   code-free personas are Basic and Custom, the rest reference published archetype repos)
   and is **data-driven**: add or remove archetypes by editing the JSON, no code change. A
@@ -140,6 +140,32 @@ The picker draws from **two** sources:
 Picking an archetype seeds the new agent's **persona** (its `SOUL.md`) from that base, and — if
 it carries a bundle — installs the bundle's plugins into the new agent. See
 [Install & publish plugins](./plugin-registry.md).
+
+### The Engineer archetype — a navigator, not a solver
+
+**Engineer** ([engineer-archetype](https://github.com/protoLabsAI/engineer-archetype)) is a
+hands-on pair-programming *navigator* for the operator's own machine: point it at a repo
+(a git URL or a folder), and it clones or registers it, proves the toolchain, writes a short
+repo card, and then works through a problem **one checkpoint per turn** — reproduce, narrow,
+*your* hypothesis first, you type the fix, it reviews and runs the checks, you commit. It
+never edits or commits unless your latest message says so. The design follows research that
+passive, delegated AI help costs the operator comprehension; the bundle's README has the
+references.
+
+What it turns on: the in-tree `engineer` skill pack (`repo-onboard`, `debug-loop`; off for
+every other agent), `craft`, `friction`, `delegates`, and the
+[terminal plugin](https://github.com/protoLabsAI/terminal-plugin) — the operator's own shell
+beside chat, not an agent tool — and the [github plugin](https://github.com/protoLabsAI/github-plugin)
+**read-only** (issues, PRs, diffs, CI over `gh`; `github.write` stays off unless the operator
+flips it, and even then the persona only posts when asked). Its recommended config enables the filesystem with
+per-command approval (read-only `git` commands auto-approved via
+`filesystem.run_auto_approve`), the code pane (`filesystem.code_pane`, so `show_code` can
+point at exact lines), `open_in_editor` for Zed (`filesystem.editor_command: zed`; change it
+to `code -g` / `cursor -g`), and project onboarding under `~/code` from any GitHub repo
+(Settings ▸ Capabilities ▸ Project onboarding narrows or moves it). The Configure step asks
+two optional things: a local checkout to start in (registered as a project and used as the
+terminal's starting directory) and whether the GitHub write tools bind. The model is left to your host. Pair it with Zed's Agent
+Panel through the `protoagent-acp` shim ([ADR 0111](../adr/0111-zed-operator-editor-acp-shim.md)).
 
 ## Tiered stores — private by default, share what should be shared
 

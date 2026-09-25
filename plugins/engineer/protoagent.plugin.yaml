@@ -1,0 +1,24 @@
+id: engineer
+# The console's plugin table renders only this name, so it says what you get.
+name: Engineer (navigator skills)
+version: 0.1.0
+# The skills point with `show_code` — the code-pane toolset (filesystem.code_pane)
+# first shipped in 0.179.0.
+min_protoagent_version: "0.179.0"
+description: >-
+  The skill pack behind protoAgent's Engineer archetype — a hands-on pair-programming
+  NAVIGATOR. repo-onboard gets the operator up to speed in an unfamiliar repository
+  (clone or register it, prove the toolchain, a short repo card, then a guided tour
+  one stop per turn); debug-loop walks them through a bug one checkpoint per turn —
+  reproduce, narrow, their hypothesis first, they write the fix, the agent reviews
+  and verifies, they commit. Built so the operator ends up understanding and owning
+  the change, not watching the agent make it. Prompt-only: no tools, routes,
+  network, or filesystem access of its own.
+# OFF by default, unlike craft: these skills make an agent hold back and ask instead of
+# solving, which is right for the Engineer persona and wrong for an autonomous one. The
+# engineer-archetype bundle turns it on; enable it by hand with
+# `plugins: { enabled: [engineer] }`.
+enabled: false
+capabilities:
+  network: []
+  filesystem: none
