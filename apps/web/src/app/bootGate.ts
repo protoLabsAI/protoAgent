@@ -4,6 +4,14 @@
 // is unit-tested without rendering App (the gate covers the whole app, so its logic is
 // high-blast-radius — worth testing in isolation).
 
+// Elapsed-time thresholds for the two generic engine boot states (both measured from mount, in
+// App.tsx). "stuck" (the gentle "taking longer than usual / Continue anyway" copy) shows first;
+// "failed" (the harsh "isn't responding" gate) only after the longer budget — so a probe that
+// errors early during a slow cold start never jumps straight to "failed". The gate's own copy
+// promises first launch "can take up to a minute", so FAILED must comfortably outlast that.
+export const BOOT_STUCK_MS = 45_000;
+export const BOOT_FAILED_MS = 120_000;
+
 export type BootGatePhase =
   | "memberAuth" // a focused REMOTE member's stored token is wrong/missing (its probe 401s)
   | "unreachable" // a focused REMOTE member's box is offline / URL wrong (its probe 502s)

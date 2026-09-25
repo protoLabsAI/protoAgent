@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { bootGatePhase, bootGateReady } from "./bootGate";
+import { bootGatePhase, bootGateReady, BOOT_STUCK_MS, BOOT_FAILED_MS } from "./bootGate";
 
 const NONE = {
   memberAuthFailed: false,
@@ -9,6 +9,16 @@ const NONE = {
   bootFailed: false,
   bootStuck: false,
 };
+
+describe("boot-gate elapsed-time thresholds", () => {
+  it("failed outlasts stuck, so the gentle path always shows first", () => {
+    // "stuck" (taking longer than usual) must precede "failed" (isn't responding); if these ever
+    // crossed, a slow cold start would flash the harsh gate before the reassuring one.
+    expect(BOOT_STUCK_MS).toBe(45_000);
+    expect(BOOT_FAILED_MS).toBe(120_000);
+    expect(BOOT_FAILED_MS).toBeGreaterThan(BOOT_STUCK_MS);
+  });
+});
 
 describe("bootGatePhase — focused-agent recovery precedence (ADR 0042 §I)", () => {
   it("no faults → the normal cold-start wait", () => {

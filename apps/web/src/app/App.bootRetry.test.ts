@@ -23,8 +23,10 @@ import { App } from "./App";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// bootStuck fires at 45s; the probe's retry budget (60 retries × retryDelay 1000ms) is ~60s.
+// bootStuck fires at 45s; the probe's retry budget (60 retries × retryDelay 1000ms) errors at ~60s;
+// bootFailed is now gated on its own 120s elapsed-time timer (bd-wrdh), NOT on the retry count.
 const BOOT_STUCK_S = 45;
+const BOOT_FAILED_S = 120;
 
 let container: HTMLElement;
 let root: Root;
@@ -52,8 +54,8 @@ function bootPhase(): "loading" | "stuck" | "failed" | "none" {
   return "loading";
 }
 
-describe("App boot probe retry budget outlasts the bootStuck timer", () => {
-  it("never shows the harsh failure gate before the 45s stuck path, then times out only past the ~60s budget", async () => {
+describe("App boot 'isn't responding' gate is time-based, not retry-count-based", () => {
+  it("stays stuck (not failed) after the probe errors, until the 120s elapsed-time timeout", async () => {
     vi.useFakeTimers();
     // Every runtime probe fails as if the sidecar hasn't bound its port yet. A plain rejection
     // (not an ApiError 401/409/502) keeps this on the generic engine boot path, not a
@@ -67,29 +69,33 @@ describe("App boot probe retry budget outlasts the bootStuck timer", () => {
       root.render(h(QueryClientProvider, { client: queryClient }, h(App)));
     });
 
-    // Walk second-by-second so a transient failure gate can't slip between coarse samples.
+    // Walk second-by-second (past the 120s failed timer, with margin) so a transient failure gate
+    // can't slip between coarse samples. The probe's retry budget errors in a short pulse each ~60s
+    // cycle (isError flips true the instant retries exhaust, then refetchInterval starts the next
+    // cycle) — the first pulse falls at ~60s, the next at ~120s+, deterministic under fake timers.
     const timeline: Array<ReturnType<typeof bootPhase>> = [];
-    for (let s = 1; s <= 66; s++) {
+    for (let s = 1; s <= BOOT_FAILED_S + 15; s++) {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
       timeline.push(bootPhase());
     }
 
-    // The core guarantee: while a slow cold start is still probing, the operator must NEVER see
-    // the alarming "isn't responding" gate before the gentle bootStuck message. With the old
-    // 30-retry budget the probe gave up (~30s) and flashed "failed" at ~31s — well before the
-    // 45s stuck timer. The 60-retry budget outlasts bootStuck, so this window stays "loading".
-    const beforeStuck = timeline.slice(0, BOOT_STUCK_S - 1); // seconds 1..44
-    expect(beforeStuck).not.toContain("failed");
-
     // At the 45s threshold the gate switches to the reassuring "taking longer than usual /
-    // Continue anyway" copy — the gentle path the retry budget is meant to reveal first.
+    // Continue anyway" copy — the gentle path shown before any failure gate.
     expect(timeline[BOOT_STUCK_S - 1]).toBe("stuck"); // second 45
 
-    // Once the ~60s budget is genuinely spent the failure gate DOES surface — bootFailed is now a
-    // real timeout for an engine that never came up, not a false alarm during normal startup.
-    const afterBudget = timeline.slice(BOOT_STUCK_S); // seconds 46..66
-    expect(afterBudget).toContain("failed");
+    // The core guarantee of bd-wrdh: for the WHOLE first 120s the operator must NEVER see the
+    // alarming "isn't responding" gate — not before the 45s stuck path, and crucially not even once
+    // the ~60s retry budget is spent and the probe query ERRORS. bootFailed is gated on 120s of
+    // elapsed time, not on the retry count, so the ~60s error pulse still reads as "stuck".
+    const beforeFailedTimeout = timeline.slice(0, BOOT_FAILED_S - 1); // seconds 1..119
+    expect(beforeFailedTimeout).not.toContain("failed");
+
+    // Only once the 120s elapsed-time budget is genuinely spent does the failure gate surface (the
+    // first errored probe at/after 120s) — a real timeout for an engine that never came up, not a
+    // false alarm mid-startup.
+    const afterTimeout = timeline.slice(BOOT_FAILED_S - 1); // seconds 120..135
+    expect(afterTimeout).toContain("failed");
   });
 });
