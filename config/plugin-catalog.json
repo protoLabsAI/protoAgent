@@ -357,6 +357,18 @@
       "docs": "https://agent.protolabs.studio/docs/guides/plugins"
     },
     {
+      "id": "engineer",
+      "name": "Engineer (navigator skills)",
+      "category": "Engineering",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/engineer",
+      "tagline": "The skill pack behind the Engineer archetype — onboard a repo with a guided tour, then debug one checkpoint per turn: you write the fix, the agent reviews. Prompt-only; off by default.",
+      "adds": [
+        "skill"
+      ],
+      "docs": "https://agent.protolabs.studio/docs/guides/plugins"
+    },
+    {
       "id": "cowork",
       "name": "Cowork (document skills)",
       "category": "Productivity",

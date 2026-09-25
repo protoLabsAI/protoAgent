@@ -278,6 +278,16 @@ plugins:
     tagline: "Engineering rituals you invoke by typing them — /grill, /standup, /code-review, /due-diligence — plus an ADR-authoring skill and a skill_writer subagent. Prompt-only: no tools, routes, network, or filesystem access."
     adds: [skill, subagent]
 
+  # The navigator skill pack behind the Engineer archetype. Bundled but OFF by default:
+  # its skills make an agent hold back and ask instead of solving, which only suits the
+  # Engineer persona. The engineer-archetype bundle turns it on.
+  - id: engineer
+    name: Engineer (navigator skills)
+    category: Engineering
+    bundled: true
+    tagline: "The skill pack behind the Engineer archetype — onboard a repo with a guided tour, then debug one checkpoint per turn: you write the fix, the agent reviews. Prompt-only; off by default."
+    adds: [skill]
+
   # Moved in-tree in #3450 from cowork-plugin (now retired; the bundled manifest's
   # `supersedes` retires an installed copy). On by default, like notes/docs/craft.
   - id: cowork
@@ -426,6 +436,10 @@ archetype_repos:
     repo: protoLabsAI/cowork-archetype
     archetype: cowork
     tagline: "Cowork — document skills, Google connectors, schedules, memory, Claude Code state import (ADR 0083)."
+  - id: engineer-archetype
+    repo: protoLabsAI/engineer-archetype
+    archetype: engineer
+    tagline: "Engineer — a hands-on pair-programming navigator: onboards any repo, points at the evidence, you write the fix."
   - id: social-archetype
     repo: protoLabsAI/social-archetype
     archetype: social-marketing
