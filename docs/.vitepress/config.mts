@@ -109,6 +109,7 @@ export default defineConfig({
             { text: "Watches", link: "/guides/watches" },
             { text: "System lifecycle events", link: "/guides/lifecycle-events" },
             { text: "File GitHub issues (/issue)", link: "/guides/file-github-issues" },
+            { text: "Friction log (triage the agent's rough edges)", link: "/guides/friction-log" },
             { text: "Schedule future work", link: "/guides/scheduler" },
             { text: "Middleware", link: "/guides/middleware" },
             { text: "Run on a coding agent (ACP runtime)", link: "/guides/acp-runtime" },

@@ -75,6 +75,10 @@
           "title": "File GitHub issues (/issue)"
         },
         {
+          "path": "guides/friction-log.md",
+          "title": "Friction log (triage the agent's rough edges)"
+        },
+        {
           "path": "guides/scheduler.md",
           "title": "Schedule future work"
         },

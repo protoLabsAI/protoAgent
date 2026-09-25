@@ -6,6 +6,8 @@ split into **harness** friction (an improvement to the tools/framework) and **mo
 friction (a labeled trace worth learning from). First-party, **on by default**; disable
 with `plugins: { disabled: [friction] }`.
 
+**Operator guide:** [Friction log](../../docs/guides/friction-log.md) covers the view, triage, working-state tuning and cleanup.
+
 | Surface | What it does |
 |---|---|
 | `record_friction` / `friction_review` / `resolve_friction` | The agent's tools: record, read, and resolve once fixed |
