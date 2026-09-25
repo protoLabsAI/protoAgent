@@ -10,7 +10,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import _config, _preview, _render_status, _store
+from . import _config, _preview, _ref, _render_status, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -162,7 +162,7 @@ def _save_file(
     kb = len(data) // 1024
     return (
         f"Saved file artifact {art_id} → v{v}: {filename} ({mime}, {kb} KB) — now in the "
-        f"Artifact panel with a preview and a Download button." + _save_nudge(art_id)
+        f"Artifact panel with a preview and a Download button." + _save_nudge(art_id) + _ref.ref_tail(art)
     )
 
 
@@ -172,17 +172,23 @@ def _save_file(
 _RenderTarget = tuple[str, int, tuple[int, int]]
 
 
-def _then_render(result: tuple[str, _RenderTarget | None]) -> str:
-    """A locked create/edit's reply plus the inline render verdict for the version it wrote.
+def _then_render(result: tuple) -> str:
+    """A locked create/edit's reply plus the inline render verdict for the version it wrote,
+    then the ``artifact-ref`` chip pointing at that version (#3617).
+
+    ``result`` is ``(msg, None)`` for a refusal, or ``(msg, target, ref_tail)`` for a write —
+    the tail is built INSIDE the lock (from the art dict the call just committed), so it names
+    exactly the version this call wrote even if another edit lands right after.
 
     Called AFTER the store lock is released, on purpose: the verdict is written by the panel's
     /render-status route, which takes that same lock — so waiting for it while still holding
     the lock could only ever time out (and would stall every other writer, in any process,
-    for the whole wait)."""
-    msg, target = result
+    for the whole wait). The chip tail goes LAST: the server lifts everything from its
+    sentinel on into the component frame and keeps the text before it as the tool card."""
+    msg, target, *rest = result
     if target is None:
         return msg
-    return msg + _render_status._render_suffix(*target)
+    return msg + _render_status._render_suffix(*target) + (rest[0] if rest else "")
 
 
 @tool
@@ -244,7 +250,7 @@ def _show(kind: str, code: str, title: str) -> tuple[str, _RenderTarget | None]:
         f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
         f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
     )
-    return msg, (art["id"], 1, _store._version_key(art))
+    return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art)
 
 
 @tool
@@ -285,7 +291,11 @@ def _update(old_string: str, new_string: str, artifact_id: str) -> tuple[str, _R
     if err := _store._too_big(new_code):
         return err, None
     v = _store._commit_version(store, art, new_code)
-    return f"Updated artifact {art['id']} → version {v}.", (art["id"], v, _store._version_key(art))
+    return (
+        f"Updated artifact {art['id']} → version {v}.",
+        (art["id"], v, _store._version_key(art)),
+        _ref.ref_tail(art),
+    )
 
 
 @tool
@@ -315,7 +325,11 @@ def _rewrite(code: str, title: str, artifact_id: str) -> tuple[str, _RenderTarge
     if title:
         art["title"] = title
     v = _store._commit_version(store, art, code)
-    return f"Rewrote artifact {art['id']} → version {v}." + _save_nudge(art["id"]), (art["id"], v, _store._version_key(art))
+    return (
+        f"Rewrote artifact {art['id']} → version {v}." + _save_nudge(art["id"]),
+        (art["id"], v, _store._version_key(art)),
+        _ref.ref_tail(art),
+    )
 
 
 def _pin_mark(art: dict) -> str:

@@ -3087,6 +3087,13 @@ export const api = {
   fsDiff(project: string) {
     return request<FsDiff>(`/api/fs/diff?${new URLSearchParams({ project }).toString()}`);
   },
+  // The artifact plugin's chip metadata (#3617): for each id still in the store, its lifetime
+  // version count and the oldest version it still keeps. An evicted/deleted id is absent.
+  artifactRefs(ids: string[]) {
+    return request<{
+      artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }>;
+    }>(`/api/plugins/artifact/refs?${new URLSearchParams({ ids: ids.join(",") }).toString()}`);
+  },
   // "Continue in Zed": offer this chat to the next agent thread the operator starts in Zed
   // under `project`'s root (no project = any folder). The protoagent-acp shim claims it on
   // session/new and continues the same A2A context. 120 s TTL, one-shot, latest wins.

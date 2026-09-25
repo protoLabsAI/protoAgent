@@ -328,6 +328,7 @@
   function loadSel(){ try{ var s=JSON.parse(localStorage.getItem(SEL_KEY)||"null");
     if(s&&typeof s==="object"){ selId=s.selId||null; selVer=(s.selVer==null?null:s.selVer); followNewest=(s.followNewest!==false); } }catch(_){} }
 
+  function total(a){ return (a && (a.version_count||a.versions.length)) || 0; }
   function selArt(){ for(var i=0;i<arts.length;i++) if(arts[i].id===selId) return arts[i]; return arts[0]||null; }
   function verIdx(a){ // selVer clamped to a's range; null/out-of-range → latest (auto-follow)
     if(!a) return 0; var n=a.versions.length;
@@ -347,7 +348,11 @@
     var a=selArt();
     if(!a){ $empty.style.display="flex"; $frame.style.display="none"; lastRendered=""; return; }
     var vi=verIdx(a), v=a.versions[vi];
-    $vlabel.textContent="v"+(vi+1)+"/"+a.versions.length;
+    // LIFETIME numbers (#3617) — the ones the chat's artifact-ref chips carry. Past the
+    // max_versions cap the oldest versions are trimmed, so a position would drift from the
+    // number the agent reported; "v48 of 52" stays true. Identical to positions until then.
+    var vtot=total(a);
+    $vlabel.textContent="v"+(vtot-a.versions.length+vi+1)+" of "+vtot;
     $vprev.disabled = vi<=0; $vnext.disabled = vi>=a.versions.length-1;
     $empty.style.display="none";
     $edit.style.display = a.kind==="file" ? "none" : "";  // a file's preview isn't user-editable
@@ -483,6 +488,51 @@
     }catch(err){ reply({error:String(err).slice(0,300)}); }
   });
 
+  // Deep-link from the console (#3617): a chat `artifact-ref` chip asks the panel to show ONE
+  // artifact at ONE version — `{type:"protoArtifact:select", id, ver}`, ver = the LIFETIME
+  // version number the agent's tool reported. Trusted only from the window that EMBEDS this
+  // page (the console, via its PluginView bridge): never from the nested artifact frame (model
+  // code), never from a sibling or an opener. The origin is checked against the embedder's
+  // origin where the browser tells us (location.ancestorOrigins — Chromium/WebKit, which is
+  // every console host; the desktop embeds from tauri://, a different origin than this page).
+  // Low-stakes by design either way: a select only changes which stored artifact is on screen.
+  function fromEmbedder(e){
+    if(window.parent===window || e.source!==window.parent) return false;
+    var anc=location.ancestorOrigins;
+    if(anc && anc.length) return e.origin===anc[0];
+    return true;
+  }
+  // The request waits for the store mirror: the panel may still be booting (a collapsed dock
+  // mounts it on this very open), or its last poll may predate the artifact the agent just
+  // made. Applied after every poll until it resolves; an id still absent after a fresh poll
+  // was deleted/evicted, so the request is dropped and the panel keeps what it showed.
+  var pendingSel=null;
+  function applyPendingSel(fresh){
+    if(!pendingSel) return;
+    var a=null; for(var i=0;i<arts.length;i++) if(arts[i].id===pendingSel.id){ a=arts[i]; break; }
+    if(!a){ if(fresh) pendingSel=null; return; }
+    var want=pendingSel.ver; pendingSel=null;
+    var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
+    selId=a.id;
+    // The newest version → follow it (selVer null), and follow newest ARTIFACTS only when this
+    // is also the panel's current one (the picker's own rule). An older version pins it: auto-
+    // follow off, so the next agent edit doesn't yank the operator off the version they asked
+    // for. A version trimmed at the cap falls back to the oldest one still kept.
+    if(idx>=a.versions.length-1){ selVer=null; followNewest=(a.id===(curId||(arts[0]&&arts[0].id))); }
+    else { selVer=Math.max(0,idx); followNewest=false; }
+    if(editing) exitEdit();
+    saveSel(); rebuildArtSelect(); render();
+  }
+  window.addEventListener("message", function(e){
+    var m=e.data;
+    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e)) return;
+    var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
+    var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
+    if(!id || ver<1) return;
+    pendingSel={id:id, ver:ver};
+    if(booted){ applyPendingSel(false); if(pendingSel) kickPoll(); }
+  });
+
   // Adaptive cadence + conditional requests (#2256): fast (1.5s) while the store is
   // actually changing, decaying to a slow idle tick; unchanged polls are ETag 304s the
   // server answers without reading the store and the panel skips without re-rendering.
@@ -511,7 +561,7 @@
     try {
       var r = await kit.apiFetch("/api/plugins/artifact/history",
         lastEtag ? {headers:{"If-None-Match": lastEtag}} : undefined);
-      if (r.status === 304) { pollOk(); return; }  // unchanged — no parse, no DOM churn
+      if (r.status === 304) { pollOk(); applyPendingSel(true); return; }  // unchanged — no parse, no DOM churn
       // A non-2xx parses as JSON too ({"detail":…} → arts=[]) — the exact empty-state
       // lie #2885 fixes. Count it as a failure instead of feeding it to the store mirror.
       if (!r.ok) { pollFailed(r.status + (r.statusText ? " " + r.statusText : "")); return; }
@@ -526,6 +576,7 @@
       }
       rebuildArtSelect(); render();
       pollOk();
+      applyPendingSel(true);  // a chip's deep-link (#3617) — after the follow rules, so it wins
     } catch (e) { pollFailed(""); /* network-level — no HTTP status to name */ }
   }
   function schedulePoll(){
@@ -538,6 +589,8 @@
   // protoagent:init, so the gated history poll authenticates) or a short timer
   // for the no-handshake case (standalone page / older host).
   var booted = false;
+  // loadSel() restores the operator's last selection — a pending deep-link (#3617) that arrived
+  // before boot still wins, applied by the first poll right after.
   function boot(){ if (booted) return; booted = true; loadSel(); poll(); schedulePoll(); }
   kit.initPluginView(boot);
   setTimeout(boot, 800);

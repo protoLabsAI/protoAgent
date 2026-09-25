@@ -58,6 +58,7 @@ Host services (agent invoke + event bus) a surface/route can use — the server 
 | [`on()`](#registry-on) | Subscribe an in-process handler to bus topics ([ADR 0039](/adr/0039-plugin-event-bus)) |
 | [`register_a2a_skill()`](#registry-register-a2a-skill) | Contribute an A2A *card* skill — advertised on the agent card and, when it declares `output_schema` + `result_mime`, enforced by the executor's structured finalizer… |
 | [`register_chat_command()`](#registry-register-chat-command) | Own a user-only chat control command — `/<name> …` short-circuits the turn with the handler's reply, like the core `/goal` (and the old, now plugin-owned, `/issue`) |
+| [`register_component()`](#registry-register-component) | Contribute a component-v1 KIND ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)) the chat stream may carry — e.g. a chip that points into this plugin's console view (the artifact… |
 | [`register_embedder()`](#registry-register-embedder) | Contribute an in-process embedder ([ADR 0031](/adr/0031-pluggable-knowledge-backend) follow-up) — `factory(config) -> (text: str) -> list[float]` |
 | [`register_goal_hook()`](#registry-register-goal-hook) | React when a goal reaches a terminal state ([ADR 0028](/adr/0028-plugin-goal-verifiers) D4) |
 | [`register_goal_verifier()`](#registry-register-goal-verifier) | Contribute an in-process goal/watch verifier ([ADR 0028](/adr/0028-plugin-goal-verifiers)) — an async `(spec, ctx) -> VerifyResult` referenced by a `{"type":"plugin", "check":"<name>"}` goal or watch |
@@ -181,6 +182,31 @@ a reply string or another form (a multi-step wizard).
 The token is slugified + lowercased (`/Issue` == `/issue`). The reserved
 core tokens `goal` / `lifecycle` are refused; a collision with a token another
 enabled plugin already registered keeps the first and warns (resolved in the loader).
+
+### `registry.register_component` {#registry-register-component}
+
+```python
+registry.register_component(name: str, validator) -> None
+```
+
+Contribute a component-v1 KIND ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)) the chat stream may carry — e.g. a chip
+that points into this plugin's console view (the artifact plugin's `artifact-ref`,
+[#3617](https://github.com/protoLabsAI/protoAgent/issues/3617)).
+
+Your TOOL emits it: return `graph.components.encode_component(name, props)` after
+the model-facing text, and the server lifts it into a `component` frame. The host
+forwards a payload only when `validator(props)` returns `None`; return a short
+reason string to drop it (a raise also drops it). Keep props a POINTER — ids,
+numbers, short labels — never content: they persist in chat history. The console
+renders the kind through a `registerChatComponent` renderer (`apps/web/src/ext`);
+without one it shows a labeled "[unsupported component]" note.
+
+`name` is lowercase kebab (`[a-z][a-z0-9-]*`, ≤ 64 chars) and can't be a core kind
+(`table`/`keyvalue`/`timeline`/`code-ref`); an invalid name or non-callable
+validator is refused with a warning. The kind is live only while the plugin is
+loaded — disabling it stops extraction on the next reload. `show_component` never
+builds a plugin kind. Guard with `getattr(registry, "register_component", None)` on
+hosts older than this seam.
 
 ### `registry.register_embedder` {#registry-register-embedder}
 

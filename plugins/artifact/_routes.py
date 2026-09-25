@@ -187,6 +187,11 @@ def _build_view_router():
     return router
 
 
+# Max ids one /refs call resolves — a long transcript's chips each ask for their own id, so
+# this only bounds a hand-crafted request.
+_REFS_MAX = 50
+
+
 def _build_data_router():
     """The DATA routes — mounted under ``/api/plugins/artifact`` so they inherit the
     operator bearer gate (plugin-view rule 2). The shell page reads them with the
@@ -248,6 +253,33 @@ def _build_data_router():
         if etag and if_none_match == etag:
             return Response(status_code=304, headers={"ETag": etag})
         return JSONResponse(_store._read_store(), headers={"ETag": etag})
+
+    @router.get("/refs")
+    async def _refs(ids: str = "") -> dict:
+        """Metadata for the console's ``artifact-ref`` chips (#3617): for each requested id
+        still in the store, its title, kind, lifetime ``version_count`` and the lifetime
+        number of its OLDEST kept version (``oldest`` — anything below it was trimmed at the
+        ``max_versions`` cap). An evicted/deleted id is simply absent. No code: a chip needs
+        "does v2 still exist, and how many are there now", never the source.
+
+        Deliberately NOT a renderer poll (no ``_note_poll``): a chip in the transcript is not a
+        live panel, so it must not make create/edit wait on a render verdict nothing will send."""
+        wanted = [i for i in dict.fromkeys(x.strip() for x in (ids or "").split(",")) if i][:_REFS_MAX]
+        out: dict = {}
+        if wanted:
+            store = _store._read_store()
+            for art_id in wanted:
+                art = _store._find(store, art_id)
+                if art is None:
+                    continue
+                total = int(_store._version_key(art)[0])
+                out[art_id] = {
+                    "title": art.get("title") or "",
+                    "kind": art.get("kind") or "",
+                    "version_count": total,
+                    "oldest": total - len(art.get("versions") or []) + 1,
+                }
+        return {"artifacts": out}
 
     @router.post("/render-status")
     @_busy_503

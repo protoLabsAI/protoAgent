@@ -347,6 +347,11 @@ the secret-like-name deny list and the line range first. `show_component` refuse
 `show_code` is bound only while the code pane toolset is on (`filesystem.code_pane`, default
 off).
 
+Plugins can add kinds of their own (`registry.register_component`, validated by the plugin's own
+schema — [ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)); `show_component`
+builds none of them. The artifact plugin's `artifact-ref` is one: every artifact create/revise
+leaves a chip that opens the Artifact panel on that exact version.
+
 Rule of thumb: a data **shape** (table / metrics / steps) → this tool; a generated **visual**
 (chart, diagram, bespoke HTML/React/SVG) → an artifact, which renders generated code in a
 separate sandboxed panel.

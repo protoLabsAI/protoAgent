@@ -473,6 +473,34 @@ can't shadow a core menu item or collide with another plugin — and the action 
 with **your** id. The console appends its own **Configure…** below your items, so a view
 that suppressed the native menu never leaves the operator with an empty one.
 
+## Deep-linking your view from chat (#3617)
+
+A tool can leave a **chip** in the transcript that opens your view on a specific thing — the
+artifact plugin's `artifact-ref` chip opens the Artifact panel on one artifact version. Three
+pieces, none of them core edits:
+
+1. **Register the component kind** (Python, in `register`), with a validator that is the ONLY
+   gate on its props — keep them a pointer (ids, numbers, short labels), never content:
+
+   ```python
+   registry.register_component("thing-ref", lambda props: None if isinstance(props.get("id"), str) else "id required")
+   ```
+
+   Your tool appends the payload after its model-facing text:
+   `return text + "\n" + graph.sdk.encode_component("thing-ref", {"id": thing_id})`. The server
+   lifts it into a component frame; the card keeps `text`.
+2. **Render it** from a console `src/ext/<name>.tsx` module: `registerChatComponent("thing-ref",
+   ThingChip, { onLive })`. `onLive(spec, {sessionId})` fires only when the component arrives on
+   the **live** turn stream — never on history hydration or reattach — so it's where an
+   auto-open belongs (a reload must not reopen your view). Mobile: don't auto-open (ADR 0086).
+3. **Tell the view what to show**: `postToPluginView("plugin:<id>:<view>", {type: "<id>:select",
+   …})` (`apps/web/src/lib/pluginViewInbox.ts`), then `openView(...)`. The message waits until
+   your page posts `protoagent:ready` — the kit does that inside `initPluginView()` — so a
+   collapsed, unmounted view still gets it once it loads. **Register your `message` listener
+   before calling `initPluginView()`**, and accept the message only from `window.parent`
+   (`e.source === window.parent`; check `e.origin` against `location.ancestorOrigins[0]` where
+   available) — never from a frame you embed. A delivery type can't be `protoagent:*`.
+
 ## Fleet-proxied requests: the 20-second read lane
 
 When your view runs on a fleet **member**, every request rides the hub's reverse

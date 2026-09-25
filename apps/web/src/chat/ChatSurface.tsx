@@ -80,6 +80,7 @@ import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
+import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
 import { reattachKeyForMessages, reattachOrReconcile } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
@@ -2602,6 +2603,9 @@ function ChatSessionSlot({
           // A `code-ref` (show_code) opens the code pane — here, on the live stream, and never
           // on hydration/replay, where the same component re-renders from history.
           onLiveComponent(spec, session.id);
+          // …and any registered kind's live hook (#3617 — the artifact-ref chip opens the
+          // Artifact panel on the version the agent just wrote). Same rule: live stream only.
+          dispatchLiveComponent(spec, session.id);
         },
         onRoomReply: (reply) => {
           // A delegation rendered inline as a mini-conversation (#3042): the lead's

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { registerChatComponent, registeredChatComponents } from "./componentRegistry";
+import { dispatchLiveComponent, registerChatComponent, registeredChatComponents } from "./componentRegistry";
 
 // The fork/plugin seam for inline chat-component renderers (#1323) — add a new kind, override
 // a built-in (last-wins), and unregister.
@@ -33,5 +33,36 @@ describe("registerChatComponent", () => {
     registerChatComponent("bad", null);
     expect(registeredChatComponents()[""]).toBeUndefined();
     expect(registeredChatComponents().bad).toBeUndefined();
+  });
+});
+
+describe("live component hooks (#3617)", () => {
+  it("fire only for their kind, contain a throw, and unregister with the renderer", () => {
+    const calls: Array<[string, string | undefined]> = [];
+    const off = registerChatComponent("pin", render, {
+      onLive: (spec, ctx) => calls.push([String(spec.props.id), ctx.sessionId]),
+    });
+    dispatchLiveComponent({ component: "pin", props: { id: "x" } }, "s1");
+    dispatchLiveComponent({ component: "other", props: { id: "y" } }, "s1");
+    expect(calls).toEqual([["x", "s1"]]);
+    const offBoom = registerChatComponent("boom", render, {
+      onLive: () => {
+        throw new Error("plugin bug");
+      },
+    });
+    expect(() => dispatchLiveComponent({ component: "boom", props: {} })).not.toThrow();
+    offBoom();
+    off();
+    dispatchLiveComponent({ component: "pin", props: { id: "z" } }, "s1");
+    expect(calls).toEqual([["x", "s1"]]);
+  });
+
+  it("a re-registration without a hook drops the old hook", () => {
+    const calls: string[] = [];
+    registerChatComponent("pin2", render, { onLive: () => calls.push("old") });
+    const off = registerChatComponent("pin2", render);
+    dispatchLiveComponent({ component: "pin2", props: {} });
+    expect(calls).toEqual([]);
+    off();
   });
 });

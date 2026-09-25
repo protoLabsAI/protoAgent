@@ -149,3 +149,30 @@
 .code-ref-inert__path {
   font-family: var(--pl-font-mono, ui-monospace, monospace);
 }
+
+/* artifact-ref (#3617) — the artifact plugin's pointer at one artifact version; a sibling of
+   code-ref (it reuses .code-ref-chip / .code-ref-inert) with a title · version · kind head. */
+.artifact-ref-chip__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  min-width: 0;
+}
+.artifact-ref-chip__title {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.artifact-ref-chip__version {
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.artifact-ref-chip__kind {
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--pl-color-border, #2a2a31);
+  border-radius: 999px;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+  font-size: 11px;
+  line-height: 16px;
+}

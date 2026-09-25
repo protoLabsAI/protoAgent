@@ -52,6 +52,13 @@ from graph.knobs import Knobs, make_knob_tools  # noqa: F401
 # decoded bytes each — over-limit images are dropped with an inline note (graph/multimodal.py).
 from graph.multimodal import MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT, multimodal_tool_result  # noqa: F401
 
+# Re-export the component-v1 envelope (ADR 0051), so a tool that points at something in its
+# plugin's console view writes `from graph.sdk import encode_component` and returns
+# `text + "\n" + encode_component(kind, props)` — the server lifts the tail into a chat
+# component frame and the model-facing text stays the card. A plugin-owned kind must be
+# registered first with `registry.register_component(kind, validator)` (#3617).
+from graph.components import encode_component  # noqa: F401
+
 
 # ── agent + model access (the plugin↔agent channel, ADR 0043) ──────────────────────────
 
