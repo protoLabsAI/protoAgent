@@ -2009,6 +2009,11 @@ class LangGraphConfig:
     # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
     # is not bound. Only meaningful for an agent on the operator's own machine.
     filesystem_editor_command: str = ""
+    # When ``open_in_editor`` opens a file, also OFFER the calling chat to the editor: a
+    # new agent thread started in Zed (via the protoagent-acp shim) under that project
+    # within 2 minutes continues this chat instead of starting fresh
+    # (runtime/editor_handoff.py). False = the tool only opens the file.
+    filesystem_editor_handoff: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
 
     # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
@@ -2688,6 +2693,12 @@ class LangGraphConfig:
             filesystem_editor_command=str(
                 (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
             ).strip(),
+            # not _falsey(), never bool(): a string "false" (JSON overlay, env, hand-edit)
+            # must switch the hand-off OFF.
+            filesystem_editor_handoff=not _falsey(
+                (data.get("filesystem", {}) or {}).get("editor_handoff"),
+                default=not cls.filesystem_editor_handoff,
+            ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),
             media_retention_days=int(

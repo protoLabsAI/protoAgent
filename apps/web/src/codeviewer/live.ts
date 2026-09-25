@@ -10,16 +10,16 @@ import { followCode, openCode } from "./open";
 // operator.
 
 /** A live component-v1 part: a `code-ref` auto-opens the pane (desktop only — see openCode). */
-export function onLiveComponent(spec: ComponentSpec): void {
+export function onLiveComponent(spec: ComponentSpec, sessionId?: string): void {
   if (spec.component !== CODE_REF_COMPONENT) return;
   const ref = codeRefFromProps(spec.props);
-  if (ref) openCode({ ...ref, source: "component" }, { auto: true });
+  if (ref) openCode({ ...ref, source: "component", ...(sessionId ? { sessionId } : {}) }, { auto: true });
 }
 
 /** A live tool frame: a COMPLETED fs call feeds follow mode. `input` is the call's args as the
  *  card holds them — the end frame itself may not repeat them. */
-export function onLiveToolEvent(evt: ToolEvent, input: string | undefined): void {
+export function onLiveToolEvent(evt: ToolEvent, input: string | undefined, sessionId?: string): void {
   if (evt.phase !== "end" || evt.error) return;
   const ref = followRefFromTool(evt.name, input ?? evt.input, evt.output);
-  if (ref) followCode(ref);
+  if (ref) followCode(sessionId ? { ...ref, sessionId } : ref);
 }

@@ -983,6 +983,17 @@ FIELDS: list[Field] = [
         "= the tool is not bound. Only useful when the agent runs on your own desktop.",
         depends_on={"key": "filesystem.enabled"},
     ),
+    Field(
+        "filesystem.editor_handoff",
+        "filesystem_editor_handoff",
+        "Continue chat in the editor",
+        "bool",
+        "Filesystem",
+        "When open_in_editor opens a file, also hand this chat to the editor: a new agent "
+        "thread started in Zed (protoagent-acp) under that project within 2 minutes "
+        "continues this conversation instead of starting a fresh one. Off = just open the file.",
+        depends_on={"key": "filesystem.editor_command"},
+    ),
     # ── Tools — the operator denylist over the assembled toolset ────────────────
     Field(
         "tools.disabled",

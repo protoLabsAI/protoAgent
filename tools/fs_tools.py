@@ -470,6 +470,75 @@ def project_roots(config) -> dict[str, str]:
     return {name: str(registry.get(name).root) for name in registry.names()}
 
 
+def _handoff_title(state: Any) -> str | None:
+    """A short title for a hand-off offered from inside a turn: the chat's first user
+    message, trimmed (the console's own tab title isn't known server-side)."""
+    messages = state.get("messages") if isinstance(state, dict) else None
+    for m in messages or []:
+        if isinstance(m, HumanMessage):
+            text = m.content if isinstance(m.content, str) else " ".join(
+                str(p.get("text") or "") for p in m.content if isinstance(p, dict)
+            )
+            text = " ".join(text.split())
+            if text:
+                return text[:80] + ("…" if len(text) > 80 else "")
+    return None
+
+
+def _offer_editor_handoff(
+    state: Any, config: Any, registry: ProjectRegistry, project: str, target: Path, line, editor_name: str
+) -> str:
+    """``open_in_editor``'s chat hand-off: offer the CALLING chat session to the next agent
+    thread started in the editor under ``project``'s root (runtime/editor_handoff.py), so
+    the operator can pick the conversation up in Zed. Returns the sentence the tool result
+    appends, or "" when nothing was offered (``filesystem.editor_handoff: false``, an
+    incognito chat, or no session — a tool invoked outside a graph turn). ``config`` is the LIVE config, so
+    turning the switch off takes effect without a graph rebuild.
+
+    The session id comes from the INJECTED graph state: ``current_session_id()`` reads
+    empty inside a tool body (see ``tools.lg_tools._session_id_from``)."""
+    if not bool(getattr(config, "filesystem_editor_handoff", True)):
+        return ""
+    # Never offer an INCOGNITO chat (ADR 0069): the Zed shim continues it with ordinary
+    # turns, so the chat would silently lose its no-memory contract. The console's
+    # "Continue in Zed" item is hidden for incognito tabs for the same reason.
+    if isinstance(state, dict) and state.get("incognito"):
+        return ""
+    # Same resolution as ``tools.lg_tools._session_id_from`` (not imported: lg_tools is the
+    # whole core toolset and drags the scheduler in) — injected state first, contextvar only
+    # as the off-graph fallback.
+    from observability import tracing
+
+    session_id = (state.get("session_id") or "").strip() if isinstance(state, dict) else ""
+    session_id = session_id or (tracing.current_session_id() or "")
+    if not session_id:
+        return ""
+    proj = registry.get(project)
+    if proj is None:
+        return ""
+    from runtime import editor_handoff
+
+    try:
+        rel = target.relative_to(proj.root).as_posix()
+        h = editor_handoff.offer(
+            session_id, root=str(proj.root), project=project, path=rel, line=line, title=_handoff_title(state)
+        )
+        log.info("[handoff] offered session=%s root=%s via open_in_editor", session_id, h.root)
+    except Exception:  # noqa: BLE001 — the file DID open; a hand-off failure must not turn that into an error
+        log.warning("[fs] open_in_editor hand-off failed", exc_info=True)
+        return ""
+    who = _agent_display_name(config)
+    where = "Zed's agent panel" if "zed" in Path(editor_name).name.lower() else "your editor's agent panel"
+    return f"If you start a {who} thread in {where} within 2 minutes, it continues this chat."
+
+
+def _agent_display_name(config: Any) -> str:
+    name = str(getattr(config, "identity_name", "") or "").strip()
+    if name and name != "protoagent":
+        return name
+    return (os.environ.get("AGENT_NAME") or "").strip() or "protoAgent"
+
+
 class _RegistryRef:
     """Live project-registry handle — every fs tool resolves through this (#2836).
 
@@ -1170,7 +1239,12 @@ def build_fs_tools(config) -> list:
     if editor_name:
 
         @tool
-        def open_in_editor(project: str, path: str, line: int | None = None) -> str:
+        def open_in_editor(
+            project: str,
+            path: str,
+            line: int | None = None,
+            state: Annotated[Any, InjectedState] = None,
+        ) -> str:
             """Open a file from a managed project in the operator's code editor on their
             machine (optionally jumping to `line`), so THEY can look at it.
 
@@ -1200,7 +1274,11 @@ def build_fs_tools(config) -> list:
                 return err
             where = f"{path}:{line}" if line is not None else path
             log.info("[fs] open_in_editor %s/%s via %s", project, where, argv[0])
-            return f"Opened {project}/{where} in {editor_name}."
+            opened = f"Opened {project}/{where} in {editor_name}."
+            handoff = _offer_editor_handoff(
+                state, registry_ref._live_config(), registry, project, target, line, editor_name
+            )
+            return f"{opened} {handoff}" if handoff else opened
 
         tools.append(open_in_editor)
 

@@ -45,6 +45,22 @@ fence (nothing outside a managed project opens), works in `write: false` project
 and returns immediately. It is for showing *you* a file — the agent still reads
 with `read_file`. Leave it unset on a headless or remote deploy.
 
+**Continuing the chat in Zed.** With the `protoagent-acp` shim registered as a Zed
+agent server, a conversation can move from the console to Zed's agent panel. Zed can't
+link straight into an agent thread, so the hand-off is claimed: `open_in_editor`
+offers the calling chat for that project (its tool result says so), and a new agent
+thread you start in Zed within **2 minutes**, in the project folder, a folder inside it,
+or a parent folder up to three levels above it (never `/` or your home folder itself),
+continues it. A chat has at most one pending offer: offering it again replaces the
+earlier one. It keeps the same A2A context, and the history is
+replayed into Zed. You can do the same by hand: right-click a chat tab and choose
+**Continue in Zed**. That item appears only while Settings ▸ Chat's external editor is
+Zed, and it's hidden for incognito chats. If the code pane has a file open that was
+opened from that chat, the offer is scoped to that project and Zed jumps to the file. Otherwise any folder can claim it,
+so switch to Zed yourself. The shim checks `GET /api/chat/sessions/{id}` → `active`
+before sending, so a Zed prompt waits while a console turn on the same chat is still
+running. Turn the tool's offer off with `filesystem.editor_handoff: false`.
+
 Independently of that, every fs toolset includes
 `show_code(project, path, line, end_line?, note?)`: it points the **console's** code pane at a line range with a
 one-sentence note on why it matters ([ADR 0112](../adr/0112-console-code-pane.md)).

@@ -1,6 +1,7 @@
 import { flushSync } from "react-dom";
 
 import { openView } from "../app/palette/nav";
+import { chatStore } from "../chat/chat-store";
 import { useUI } from "../state/uiStore";
 import { showCodeRef, useCodeViewer, type CodeRef } from "./store";
 
@@ -80,9 +81,23 @@ export type OpenCodeOptions = {
   auto?: boolean;
 };
 
+/** Stamp the originating chat on a ref that doesn't carry one: an operator click (tool-card
+ *  link, chip, palette) happens in the chat on screen, i.e. the active one. The live stream
+ *  passes its own session explicitly (a background tab's turn is not the active chat). */
+export function withOrigin<T extends { sessionId?: string }>(ref: T): T {
+  if (ref.sessionId) return ref;
+  let sid: string | null = null;
+  try {
+    sid = chatStore.getSnapshot().currentSessionId;
+  } catch {
+    sid = null;
+  }
+  return sid ? { ...ref, sessionId: sid } : ref;
+}
+
 /** Show `ref` in the code pane and bring the pane on screen. */
 export function openCode(ref: CodeRef, opts: OpenCodeOptions = {}): void {
-  if (!showCodeRef(ref)) return;
+  if (!showCodeRef(withOrigin(ref))) return;
   const mobile = isMobileViewport();
   if (opts.auto && mobile) return;
   if (!mobile) widenOnce(placeCodeSurface());
@@ -107,7 +122,7 @@ let pendingRef: CodeRef | null = null;
 export function followCode(ref: Omit<CodeRef, "source">, now: number = Date.now()): void {
   const s = useCodeViewer.getState();
   if (!s.follow || s.pinned || isMobileViewport()) return;
-  const next: CodeRef = { ...ref, source: "follow" };
+  const next: CodeRef = withOrigin({ ...ref, source: "follow" });
   const wait = lastJump + FOLLOW_THROTTLE_MS - now;
   if (wait <= 0 && !pendingTimer) {
     lastJump = now;
