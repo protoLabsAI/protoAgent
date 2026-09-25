@@ -180,6 +180,13 @@ _FIRST_CLASS_EQUIVALENTS: tuple[tuple[frozenset[str], str, object], ...] = (
 
 # Prefixes that run the REAL command: `sudo cat`, `env FOO=1 grep`, `time npm test`.
 _WRAPPERS = {"sudo", "env", "time", "nohup", "command", "nice"}
+# Wrapper flags that take a separate VALUE: `nice -n 10 cat`, `sudo -u app cat`,
+# `env -u HOME grep`. Without these the value would be read as the command.
+_WRAPPER_VALUE_FLAGS = {
+    "sudo": {"-u", "-g", "-C", "-D", "-U", "-p", "-h", "-r", "-t"},
+    "env": {"-u", "-C"},
+    "nice": {"-n"},
+}
 _SEGMENT_OPERATORS = {"&&", "||", ";", "|", "&", "\n"}
 
 
@@ -223,7 +230,8 @@ def _command_word(command: str, _depth: int = 0) -> tuple[str, list[str]]:
         elif tok in _WRAPPERS:
             i += 1
             while i < len(seg) and (seg[i].startswith("-") or ("=" in seg[i] and seg[i].split("=", 1)[0].isidentifier())):
-                i += 1  # the wrapper's own flags / env assignments
+                # the wrapper's own flags / env assignments, and a flag's separate value
+                i += 2 if seg[i] in _WRAPPER_VALUE_FLAGS.get(tok, ()) else 1
         elif tok == "mise" and i + 1 < len(seg) and seg[i + 1] in ("exec", "x"):
             if "--" not in seg[i:]:
                 break  # `mise exec` without `--` is mise's own business

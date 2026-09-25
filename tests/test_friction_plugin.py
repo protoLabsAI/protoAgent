@@ -1202,6 +1202,10 @@ _ALL_FS = frozenset({"read_file", "search_files", "list_dir", "find_files", "edi
         ("rg -n foo src", ("rg", "search_files")),
         ("env LC_ALL=C sudo -E grep -r x .", ("grep", "search_files")),
         ("mise exec -- cat package.json", ("cat", "read_file")),
+        ("nice -n 10 cat foo", ("cat", "read_file")),  # a wrapper flag's value is not the command
+        ("sudo -u app grep x /var/log/app.log", ("grep", "search_files")),
+        ("env -u HOME ls", ("ls", "list_dir")),
+        ("time npm test", None),
         ("bash -c 'tail -n 5 log.txt'", ("tail", "read_file")),
         ("find . -name '*.py'", ("find", "find_files")),
         ("tree -L 2", ("tree", "list_dir")),
