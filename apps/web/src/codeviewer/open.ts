@@ -2,6 +2,7 @@ import { flushSync } from "react-dom";
 
 import { openView } from "../app/palette/nav";
 import { useUI } from "../state/uiStore";
+import { isCodePaneEnabled } from "./enabled";
 import { showCodeRef, useCodeViewer, type CodeRef } from "./store";
 
 // Routing the code pane onto a dock (ADR 0112). The store (store.ts) says WHAT to show; this
@@ -80,8 +81,10 @@ export type OpenCodeOptions = {
   auto?: boolean;
 };
 
-/** Show `ref` in the code pane and bring the pane on screen. */
+/** Show `ref` in the code pane and bring the pane on screen. A no-op while the code pane
+ *  toolset is off (ADR 0112 amendment) — there is no surface to open and its routes 404. */
 export function openCode(ref: CodeRef, opts: OpenCodeOptions = {}): void {
+  if (!isCodePaneEnabled()) return;
   if (!showCodeRef(ref)) return;
   const mobile = isMobileViewport();
   if (opts.auto && mobile) return;
@@ -106,7 +109,7 @@ let pendingRef: CodeRef | null = null;
  *  re-routes docks: follow updates the pane the operator already opened. */
 export function followCode(ref: Omit<CodeRef, "source">, now: number = Date.now()): void {
   const s = useCodeViewer.getState();
-  if (!s.follow || s.pinned || isMobileViewport()) return;
+  if (!isCodePaneEnabled() || !s.follow || s.pinned || isMobileViewport()) return;
   const next: CodeRef = { ...ref, source: "follow" };
   const wait = lastJump + FOLLOW_THROTTLE_MS - now;
   if (wait <= 0 && !pendingTimer) {
@@ -122,7 +125,7 @@ export function followCode(ref: Omit<CodeRef, "source">, now: number = Date.now(
       const r = pendingRef;
       pendingRef = null;
       const st = useCodeViewer.getState();
-      if (!r || !st.follow || st.pinned) return;
+      if (!r || !isCodePaneEnabled() || !st.follow || st.pinned) return;
       lastJump = Date.now();
       showCodeRef(r);
     },

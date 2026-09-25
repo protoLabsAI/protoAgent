@@ -130,3 +130,22 @@
   color: var(--pl-color-fg-muted, #9a9aa3);
   line-height: 1.4;
 }
+/* code-ref with the code pane toolset OFF (ADR 0112 amendment): the same pointer as plain,
+   inert text — nothing to click, nothing to open. */
+.code-ref-inert {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.code-ref-inert__icon {
+  flex: none;
+  margin-top: 2px;
+}
+.code-ref-inert__path {
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+}

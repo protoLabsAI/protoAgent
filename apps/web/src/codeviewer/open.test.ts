@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useUI } from "../state/uiStore";
+import { setCodePaneEnabled } from "./enabled";
 import { CODE_PANE_WIDTH, FOLLOW_THROTTLE_MS, followCode, openCode, placeCodeSurface, resetFollowThrottle } from "./open";
 import { resetCodeViewer, setFollow, setPinned, useCodeViewer } from "./store";
 
@@ -23,10 +24,25 @@ beforeEach(() => {
   setMobile(false);
   useUI.setState({ rightWidth: 360, rightCollapsed: true, rightPanel: "work", mobileActive: "chat" });
   rail(["chat", "knowledge"], ["work", "code"]);
+  setCodePaneEnabled(true); // the code pane toolset is ON for these suites
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  setCodePaneEnabled(false);
+});
+
+describe("code pane toolset OFF (ADR 0112 amendment)", () => {
+  it("openCode and followCode are no-ops — nothing shown, no dock moved or widened", () => {
+    setCodePaneEnabled(false);
+    rail(["chat", "code"], ["work"]);
+    openCode({ project: "app", path: "a.ts", line: 3, source: "link" });
+    setFollow(true);
+    followCode({ project: "app", path: "b.ts" }, 10_000);
+    expect(useCodeViewer.getState().current).toBeNull();
+    expect(useUI.getState().railOrder.left).toContain("code");
+    expect(useUI.getState().rightWidth).toBe(360);
+  });
 });
 
 describe("placeCodeSurface — never on chat's dock", () => {

@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { seedCurrentChat } from "./chat-helpers";
+import { withCodePane } from "./codePane";
 
 // Runs under the `mobile` Playwright project (iPhone 13 device profile) — see
 // playwright.config.ts. The desktop project ignores this file: the chat-first shell
@@ -185,6 +186,7 @@ test("mobile shell: the palette is reachable without a keyboard", async ({ page 
 // show_code never takes over the screen: the chip lands in chat and the pane stays closed;
 // a tap on the chip pushes the Code surface over chat, with a back affordance.
 test("mobile: show_code never auto-opens the pane; tapping the chip pushes it", async ({ page }) => {
+  await withCodePane(page); // the code pane toolset is opt-in (default off)
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
   await composer.waitFor({ state: "visible" });

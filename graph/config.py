@@ -2009,6 +2009,13 @@ class LangGraphConfig:
     # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
     # is not bound. Only meaningful for an agent on the operator's own machine.
     filesystem_editor_command: str = ""
+    # The console code pane (ADR 0112) as an opt-in toolset — OFF by default. On: the
+    # ``show_code`` fs tool is bound (it emits the ``code-ref`` chip) and the console's
+    # read-only ``/api/fs/file`` + ``/api/fs/diff`` routes answer; the console shows the
+    # Code surface. Off: none of that exists — no tool, the routes answer 404
+    # ``{code: "disabled"}``, and file links go to the external editor. Needs
+    # ``filesystem.enabled`` (it reads through the same fence). Hot-reloadable.
+    filesystem_code_pane: bool = False
     filesystem_projects: list[dict] = field(default_factory=list)
 
     # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
@@ -2688,6 +2695,9 @@ class LangGraphConfig:
             filesystem_editor_command=str(
                 (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
             ).strip(),
+            filesystem_code_pane=not _falsey(
+                (data.get("filesystem", {}) or {}).get("code_pane"), default=not cls.filesystem_code_pane
+            ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),
             media_retention_days=int(

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, type MouseEvent as ReactMouseEvent } from "react";
 
+import { useCodePaneEnabled } from "../codeviewer/enabled";
 import { openCode } from "../codeviewer/open";
 import type { CodeRef } from "../codeviewer/store";
 import { api } from "../lib/api";
@@ -59,16 +60,26 @@ const modifierClick = (e: ReactMouseEvent) => e.metaKey || e.ctrlKey;
  *  - "protoagent": a click opens the code pane — needs NO /api/fs/roots, so it works for a
  *    remote fleet member too; ⌘/Ctrl-click hands off to the external editor when there is one.
  *  - "editor": today's behavior — the link IS the editor URL (null without roots); ⌘/Ctrl-
- *    click opens the pane instead. */
+ *    click opens the pane instead.
+ *  `open` is null while the code pane toolset is OFF (ADR 0112 amendment): then there is no
+ *  pane at all — every link is the plain editor link, whatever `openIn` says, exactly as
+ *  before the pane existed (a stored "protoagent" falls back to the external editor). */
 export function makeFileLinker(
   openIn: OpenFilesIn,
   editor: EditorId,
   external: EditorLinker | null,
-  open: (ref: CodeRef) => void,
+  open: ((ref: CodeRef) => void) | null,
   navigate: (href: string) => void = (href) => {
     window.location.href = href;
   },
 ): FileLinker | null {
+  if (!open) {
+    if (!external) return null;
+    return (project, path, line) => {
+      const href = external(project, path, line);
+      return href ? { href, title: `Open in ${editorLabel(editor)}` } : null;
+    };
+  }
   const pane = (project: string, path: string, line?: number, endLine?: number) =>
     open({ project, path, line, endLine, source: "link" });
   if (openIn === "editor") {
@@ -109,10 +120,15 @@ export function makeFileLinker(
   };
 }
 
-/** The file linker for fs tool output under the operator's current preferences. */
+/** The file linker for fs tool output under the operator's current preferences — and the
+ *  connected agent's code pane toolset (off → editor links only). */
 export function useFileLinker(): FileLinker | null {
   const openIn = useOpenFilesIn();
   const editor = useEditorPref();
   const external = useEditorLinker();
-  return useMemo(() => makeFileLinker(openIn, editor, external, (ref) => openCode(ref)), [openIn, editor, external]);
+  const paneOn = useCodePaneEnabled();
+  return useMemo(
+    () => makeFileLinker(openIn, editor, external, paneOn ? (ref) => openCode(ref) : null),
+    [openIn, editor, external, paneOn],
+  );
 }

@@ -30,6 +30,7 @@ class _Cfg:
     filesystem_run_requires_approval: bool = True
     filesystem_bypass_allowed: bool = True
     filesystem_editor_command: str = ""
+    filesystem_code_pane: bool = True
     filesystem_projects: list = field(default_factory=list)
     tools_memoize_reads_enabled: bool = False
 
@@ -52,6 +53,20 @@ def _show(root: Path, write: bool = False):
 
 def test_bound_with_the_fs_tools_even_read_only(proj):
     assert _show(proj, write=False) is not None
+
+
+def test_not_bound_while_the_code_pane_toolset_is_off(proj):
+    """``filesystem.code_pane`` is opt-in (default off): off, the model never sees show_code,
+    while every other fs tool stays."""
+    from graph.config import LangGraphConfig
+
+    assert LangGraphConfig().filesystem_code_pane is False
+    assert LangGraphConfig.from_dict({"filesystem": {"code_pane": True}}).filesystem_code_pane is True
+    assert LangGraphConfig.from_dict({"filesystem": {"code_pane": "false"}}).filesystem_code_pane is False
+    cfg = _Cfg(filesystem_code_pane=False, filesystem_projects=[{"name": "repo", "path": str(proj)}])
+    names = {t.name for t in build_fs_tools(cfg)}
+    assert "show_code" not in names
+    assert {"read_file", "search_files", "list_dir"} <= names
 
 
 def test_emits_code_ref_with_text_prefix(proj):

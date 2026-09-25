@@ -59,6 +59,9 @@ export const RUNTIME_STATUS = {
   scheduler: { enabled: true, backend: "local" },
   goal: { enabled: true, controller_loaded: true, max_iterations: 6 },
   cache_warmer: { enabled: false, loaded: false, interval_seconds: null },
+  // The code pane toolset (ADR 0112 amendment, `filesystem.code_pane`) — OFF, the server
+  // default. code-pane.spec.ts turns it on per page (e2e/codePane.ts `withCodePane`).
+  code_pane: { enabled: false },
   // Surfaced in the Runtime panel — the extensibility features.
   skills: { enabled: true, count: 3, top_k: 4 },
   mcp: {
@@ -557,6 +560,7 @@ export const SETTINGS_SCHEMA = [
       { key: "filesystem.run_requires_approval", label: "Require approval per command", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.allow_run" } },
       { key: "filesystem.bypass_allowed", label: "Allow /bypass", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: true, default: true, scope: "agent", source: "agent", depends_on: { key: "filesystem.run_requires_approval" } },
       { key: "filesystem.run_auto_approve", label: "Auto-approve commands", type: "string_list", section: "Filesystem", restart: false, description: "", options: [], value: [], default: [], scope: "agent", source: "agent", depends_on: { key: "filesystem.run_requires_approval" } },
+      { key: "filesystem.code_pane", label: "Code pane", type: "bool", section: "Filesystem", restart: false, description: "", options: [], value: false, default: false, scope: "agent", source: "default", depends_on: { key: "filesystem.enabled" } },
     ],
   },
   {

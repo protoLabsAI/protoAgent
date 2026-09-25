@@ -44,7 +44,7 @@ def proj(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def client(monkeypatch, proj):
-    cfg = LangGraphConfig(filesystem_projects=[{"name": "repo", "path": str(proj)}])
+    cfg = LangGraphConfig(filesystem_code_pane=True, filesystem_projects=[{"name": "repo", "path": str(proj)}])
     monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
     app = FastAPI()
     register_browse_routes(app)
@@ -161,13 +161,45 @@ def test_binary_returns_metadata_only(client, proj):
     assert body["size"] == len(data) and body["path"] == "logo.png"
 
 
-def test_filesystem_disabled_means_no_projects(monkeypatch, proj):
-    cfg = LangGraphConfig(filesystem_enabled=False, filesystem_projects=[{"name": "repo", "path": str(proj)}])
+def test_filesystem_disabled_means_no_code_pane(monkeypatch, proj):
+    cfg = LangGraphConfig(
+        filesystem_enabled=False, filesystem_code_pane=True, filesystem_projects=[{"name": "repo", "path": str(proj)}]
+    )
     monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
     app = FastAPI()
     register_browse_routes(app)
     r = TestClient(app).get("/api/fs/file", params={"project": "repo", "path": "src/app.py"})
-    assert r.status_code == 400 and r.json()["detail"]["code"] == "bad_path"
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "disabled"
+
+
+def test_runtime_status_reports_the_code_pane_toolset():
+    """The console hides/shows the pane by ``/api/runtime/status`` ``code_pane.enabled``."""
+    from operator_api.runtime import build_runtime_status
+
+    def status(**kw):
+        return build_runtime_status(config=LangGraphConfig(**kw), setup_complete=True, graph_loaded=True)
+
+    assert status()["code_pane"] == {"enabled": False}
+    assert status(filesystem_code_pane=True)["code_pane"] == {"enabled": True}
+    assert status(filesystem_code_pane=True, filesystem_enabled=False)["code_pane"] == {"enabled": False}
+    assert build_runtime_status(config=None, setup_complete=True, graph_loaded=False)["code_pane"] == {"enabled": False}
+
+
+def test_code_pane_off_by_default_is_404_disabled(monkeypatch, proj):
+    """The code pane is an opt-in toolset (``filesystem.code_pane``, default off): off,
+    the route answers 404 ``disabled`` before touching the fence — a real file included."""
+    cfg = LangGraphConfig(filesystem_projects=[{"name": "repo", "path": str(proj)}])
+    assert cfg.filesystem_code_pane is False
+    monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
+    app = FastAPI()
+    register_browse_routes(app)
+    c = TestClient(app)
+    r = c.get("/api/fs/file", params={"project": "repo", "path": "src/app.py"})
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "disabled"
+    # Flipping the LIVE config (a hot-reloaded settings save) turns it on — no restart.
+    on = LangGraphConfig(filesystem_code_pane=True, filesystem_projects=cfg.filesystem_projects)
+    monkeypatch.setattr(STATE, "graph_config", on, raising=False)
+    assert c.get("/api/fs/file", params={"project": "repo", "path": "src/app.py"}).status_code == 200
 
 
 # ── caps ──────────────────────────────────────────────────────────────────────

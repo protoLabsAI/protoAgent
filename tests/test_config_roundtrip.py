@@ -134,6 +134,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "enforcement_rate_limits": {},
     "filesystem_allow_run": True,
     "filesystem_bypass_allowed": True,
+    "filesystem_code_pane": False,
     "filesystem_editor_command": "",
     "filesystem_enabled": True,
     "filesystem_projects": [],

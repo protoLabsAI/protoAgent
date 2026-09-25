@@ -75,6 +75,7 @@ def build_runtime_status(
             "plugins": plugins_block,
             "scheduler": {"enabled": False, "backend": "disabled"},
             "cache_warmer": {"enabled": False, "loaded": False},
+            "code_pane": {"enabled": False},
             "warnings": warnings_block,
             "instance_uid": instance_uid,
             "version": version,
@@ -148,6 +149,10 @@ def build_runtime_status(
             "loaded": cache_warmer is not None,
             "interval_seconds": getattr(config, "cache_warming_interval_seconds", None),
         },
+        # The code pane toolset (ADR 0112, `filesystem.code_pane`, default off). The console
+        # shows the Code surface, the "Open files in ▸ protoAgent" choice and pane-routed
+        # file links only while this is on — per agent, so each fleet window reads its own.
+        "code_pane": {"enabled": _code_pane_enabled(config)},
         # On-disk store sizes (bytes) so growth is visible from the console.
         "storage": {
             "knowledge_bytes": _file_size(getattr(knowledge_store, "path", None)),
@@ -162,6 +167,17 @@ def build_runtime_status(
         "instance_uid": instance_uid,
         "version": version,
     }
+
+
+def _code_pane_enabled(config: Any) -> bool:
+    """``tools.fs_tools.code_pane_enabled`` — the one predicate the tool binding and the
+    routes share. Status must never raise, so a failed import reads as off."""
+    try:
+        from tools.fs_tools import code_pane_enabled
+
+        return code_pane_enabled(config)
+    except Exception:  # noqa: BLE001 — status must never raise
+        return False
 
 
 def _file_size(path: Any) -> int | None:

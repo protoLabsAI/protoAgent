@@ -983,6 +983,19 @@ FIELDS: list[Field] = [
         "= the tool is not bound. Only useful when the agent runs on your own desktop.",
         depends_on={"key": "filesystem.enabled"},
     ),
+    Field(
+        "filesystem.code_pane",
+        "filesystem_code_pane",
+        "Code pane",
+        "bool",
+        "Filesystem",
+        "A read-only file + diff viewer beside chat (ADR 0112). On: the agent gets a "
+        "show_code tool that points you at a file:line with a note, file paths in tool "
+        "output open in the console's Code pane, and Settings ▸ Chat ▸ Open files in "
+        "offers protoAgent. Off (default): no tool, no pane — file links open your "
+        "external editor.",
+        depends_on={"key": "filesystem.enabled"},
+    ),
     # ── Tools — the operator denylist over the assembled toolset ────────────────
     Field(
         "tools.disabled",

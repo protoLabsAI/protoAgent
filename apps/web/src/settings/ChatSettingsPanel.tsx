@@ -1,6 +1,7 @@
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { DropdownSelect, Switch } from "@protolabsai/ui/forms";
 
+import { useCodePaneEnabled } from "../codeviewer/enabled";
 import { EDITOR_OPTIONS, isEditorId } from "../lib/editorLinks";
 import { setExternalEditor, setOpenFilesChoice, useEditorPref, useOpenFilesIn } from "../lib/editorPref";
 import { useUI } from "../state/uiStore";
@@ -13,7 +14,12 @@ export function ChatSettingsPanel() {
   const setShowChatUsage = useUI((s) => s.setShowChatUsage);
   const editor = useEditorPref();
   const openIn = useOpenFilesIn();
-  const choice = openIn === "protoagent" ? "protoagent" : editor;
+  // The code pane is an opt-in toolset (ADR 0112 amendment): while the connected agent has it
+  // off, "protoAgent" isn't a choice and a stored one reads as the external editor it falls
+  // back to — the stored value is kept, so turning the pane back on restores it.
+  const paneOn = useCodePaneEnabled();
+  const pane = paneOn && openIn === "protoagent";
+  const choice = pane ? "protoagent" : editor;
 
   return (
     <section className="panel stage-panel">
@@ -39,27 +45,36 @@ export function ChatSettingsPanel() {
         <div className="setting-row" data-key="chat.openFilesIn">
           <div className="setting-meta">
             <span className="setting-label">Open files in</span>
-            <p className="setting-desc">
-              File paths in tool results (read, search, find, write, edit) become links. protoAgent
-              opens them in the code pane beside chat, at the line — ⌘/Ctrl-click opens your editor
-              instead. An editor link works when this console and the agent share a filesystem (the
-              desktop app or a local server).
-            </p>
+            {paneOn ? (
+              <p className="setting-desc">
+                File paths in tool results (read, search, find, write, edit) become links. protoAgent
+                opens them in the code pane beside chat, at the line — ⌘/Ctrl-click opens your editor
+                instead. An editor link works when this console and the agent share a filesystem (the
+                desktop app or a local server).
+              </p>
+            ) : (
+              <p className="setting-desc">
+                File paths in tool results (read, search, find, write, edit) become links that open in
+                this editor, at the line when there is one. Works when this console and the agent share
+                a filesystem — the desktop app or a local server. Turn on the Code pane (Tools ▸
+                Filesystem ▸ Shell &amp; filesystem tools) to open them beside chat instead.
+              </p>
+            )}
           </div>
           <DropdownSelect
             id="chat-open-files-in"
             aria-label="Open files in"
             value={choice}
             onValueChange={(v) => {
-              if (v === "protoagent" || isEditorId(v)) setOpenFilesChoice(v);
+              if ((v === "protoagent" && paneOn) || isEditorId(v)) setOpenFilesChoice(v);
             }}
             options={[
-              { value: "protoagent", label: "protoAgent (code pane)" },
+              ...(paneOn ? [{ value: "protoagent", label: "protoAgent (code pane)" }] : []),
               ...EDITOR_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
             ]}
           />
         </div>
-        {openIn === "protoagent" ? (
+        {pane ? (
           <div className="setting-row" data-key="chat.externalEditor">
             <div className="setting-meta">
               <span className="setting-label">External editor</span>

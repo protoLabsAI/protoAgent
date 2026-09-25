@@ -62,6 +62,10 @@ export type RuntimeStatus = {
     loaded: boolean;
     interval_seconds?: number | null;
   };
+  /** The code pane toolset (ADR 0112, `filesystem.code_pane`, default off). The console
+   *  shows the Code surface, the "Open files in ▸ protoAgent" choice and pane-routed file
+   *  links only while this is on; absent (a server older than the toggle) reads as off. */
+  code_pane?: { enabled: boolean };
   storage?: {
     knowledge_bytes?: number | null;
     telemetry_bytes?: number | null;

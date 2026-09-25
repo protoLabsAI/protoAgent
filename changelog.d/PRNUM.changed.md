@@ -1,0 +1,12 @@
+- **The code pane and `show_code` are now an opt-in toolset, off by default (#PRNUM).**
+  v0.178.0 shipped the console code pane (ADR 0112) always on. It is now a per-agent toolset,
+  `filesystem.code_pane` (default `false`): enable it in **Settings ▸ Capabilities ▸ Tools ▸
+  Filesystem ▸ Shell & filesystem tools ▸ Code pane**. It applies on
+  save, with no restart and no console reload. While it's off, the agent has no `show_code` tool,
+  `GET /api/fs/file` and `GET /api/fs/diff` answer 404 `{code: "disabled"}`, and the console shows
+  no Code surface (rail, command palette, launcher), no follow mode and no "protoAgent" choice under Settings ▸
+  Chat ▸ Open files in. File paths in tool output open your external editor (Zed by default), as
+  they did before the pane. A `show_code` chip from an earlier chat renders as plain
+  `project/path:lines — note` text. `/api/runtime/status` gains `code_pane: {enabled}`, which the
+  console reads for each fleet window. With the toolset on, the pane behaves exactly as it did in
+  v0.178.0. **Upgrading:** set `filesystem.code_pane: true` on each agent that should keep the pane.
