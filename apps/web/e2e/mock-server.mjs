@@ -9,6 +9,8 @@
 // Run: node e2e/mock-server.mjs [port]   (defaults to 4319)
 
 import { createServer } from "node:http";
+
+import { CODE_ROOTS, fsDiffResponse, fsFileResponse } from "./codeFixtures.mjs";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1139,6 +1141,16 @@ const server = createServer(async (req, res) => {
           const id = decodeURIComponent(m[1]);
           return sendJson(res, ARCHETYPE_PREVIEWS[id] ?? { id, bundle: null });
         }
+      }
+      // The code pane (ADR 0112): fs roots, one file's text, the working-tree diff.
+      if (pathname === "/api/fs/roots") return sendJson(res, CODE_ROOTS);
+      if (pathname === "/api/fs/file") {
+        const r = fsFileResponse(url.searchParams);
+        return sendJson(res, r.body, r.status);
+      }
+      if (pathname === "/api/fs/diff") {
+        const r = fsDiffResponse(url.searchParams);
+        return sendJson(res, r.body, r.status);
       }
       if (pathname === "/api/telemetry/fleet") {
         // Fleet telemetry rollup (ADR 0006 fleet extension). Multi-box only when a

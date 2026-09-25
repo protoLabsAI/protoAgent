@@ -220,12 +220,32 @@ members — no `/api/fs/roots` join, no shared filesystem.
   `protoAgent (default) | Zed | VS Code | Cursor | Off`.
 - **Errors.** `denied` → "Hidden: secret-like file"; binary → metadata only; 404 → "file no
   longer exists".
-- **Library.** *(Decided in the console PR: a `@pierre/diffs` spike — accepted only if it
-  follows light/dark, works inside our CSS/Shadow DOM, supports scroll-to-line + range
-  highlight, stays ≤ ~250 KB gz as a lazy chunk, and logs no console errors — vs reusing the
-  Shiki the DS already ships via `@streamdown/code`, with our own line-numbered renderer,
-  simple windowing, and a unified-diff renderer. The decision and its numbers are recorded
-  here when that PR lands.)*
+- **Library.** See *Library decision* below.
+
+### Library decision
+
+**Accepted: `@pierre/diffs` 1.5.0, exact pin**, over reusing the DS's Shiki with a hand-rolled
+renderer. The spike met every acceptance criterion:
+
+| Criterion | Result |
+|---|---|
+| Follows light/dark | `theme: {dark: github-dark, light: github-light}`; `themeType` tracks the console mode live |
+| Works inside our CSS | Renders in a Shadow DOM, styled through `--diffs-*` custom properties (console mono font, accent selection) |
+| Scroll-to-line + range highlight | `selectedLines`; scrolling goes through the `Virtualizer` instance (a raw `scrollTop` write is undone by its anchor fix). e2e covers line 15,000 of a 20,000-line file |
+| ≤ ~250 KB gz lazy chunk | `CodePane` chunk 105.1 KB gz; full static closure 169.8 KB gz, of which 66 KB is Shiki's JS regex engine shared with the chat markdown pipeline. Grammars and themes load on demand |
+| No console errors | None from the pane, light or dark |
+
+- **Main bundle:** 494.2 → 497.1 KB gz (+2.9 KB: store, chip, settings, routing).
+- **Large files:** the `Virtualizer` plus `tokenizeMaxLength: 5000` brings a 20k-line file from
+  7.4 s to ~0.45 s to first paint; files over 5,000 lines render as plain text.
+- **One Shiki (the DS's 3.23).** pierre accepts `shiki ^3 || ^4`; left alone npm resolved 4.x
+  beside the DS's 3.23 (via `@streamdown/code`) and Rollup emitted a second full set of grammar
+  and theme chunks (`dist/assets` 14 MB → 25 MB). `apps/web` pins `shiki`, `@shikijs/themes`
+  and `@shikijs/transformers` to 3.23.0 directly, the root `package.json` `overrides` pins
+  pierre's copies to the same, and `vite.config.ts` adds `resolve.dedupe` for `shiki` and
+  `@shikijs/*` (vitepress's Shiki 2 holds the root `node_modules` slot, so three physical 3.23
+  copies still exist on disk). Result: `dist/assets` 15 MB. The Shiki 4 move is tracked
+  upstream in protoContent#519.
 
 ## Consequences
 
@@ -242,13 +262,12 @@ members — no `/api/fs/roots` join, no shared filesystem.
 - **The deny list will be wrong at the edges** — a project's own secret file with an unusual
   name renders; `id_rsa.pub` (public) is hidden. It is a small, conservative list in one module
   so it can be tuned in one place; content scanning is out of scope.
-- **Line semantics diverge from `read_file`** (`\n` only vs `splitlines`). The fs tools' own
-  paging is unchanged; a file with bare `\r` or form feeds numbers differently in the two.
-  Revisit if an agent's `read_file` offsets and `show_code` lines are seen to disagree in
-  practice.
+- **One line model.** `read_file`, `search_files`, `/api/fs/file` and `show_code` all end a
+  line at `\n` (`tools.fs_view.split_lines`), so an agent's offsets, a `file:N` hit and the
+  pane's gutter agree. `str.splitlines`' extra breaks (`\r`, `\f`, `\x85`, …) are not lines.
 - **Revisit triggers:** the follow-up on `read_file` and the deny list (D4 non-goal); a
-  second consumer of `tools/git_read.py` (it should then grow, not be forked); the console's
-  library decision landing in D6.
+  second consumer of `tools/git_read.py` (it should then grow, not be forked); a Shiki 4 move
+  in the DS (protoContent#519), which lets the console drop its 3.23 pin and overrides.
 
 ## Contract notes (server PR vs the shared draft)
 

@@ -60,3 +60,84 @@ function subscribe(cb: () => void): () => void {
 export function useEditorPref(): EditorId {
   return useSyncExternalStore(subscribe, getEditorPref, getEditorPref);
 }
+
+// ── "Open files in" (ADR 0112) ──────────────────────────────────────────────────────────
+// A click on a file path opens either the in-app code pane ("protoagent", the default) or the
+// external editor above ("editor"). Kept as its OWN key so the external editor stays
+// remembered while the pane is the click target — it's what ⌘-click and the pane's ↗ use.
+
+export type OpenFilesIn = "protoagent" | "editor";
+
+export const OPEN_FILES_IN_KEY = "protoagent.openFilesIn";
+
+let openInMemory: OpenFilesIn | null = null;
+
+export function getOpenFilesIn(): OpenFilesIn {
+  try {
+    const raw = globalThis.localStorage?.getItem(OPEN_FILES_IN_KEY);
+    if (raw === "protoagent" || raw === "editor") return raw;
+    // An operator who explicitly turned file links OFF before the pane existed keeps them
+    // off: their stored "off" meant "no links", and a new default must not overrule it.
+    if (openInMemory) return openInMemory;
+    if (globalThis.localStorage?.getItem(EDITOR_PREF_KEY) === "off") return "editor";
+  } catch {
+    /* storage unavailable — fall through */
+  }
+  return openInMemory ?? "protoagent";
+}
+
+export function setOpenFilesIn(v: OpenFilesIn): void {
+  openInMemory = v;
+  try {
+    globalThis.localStorage?.setItem(OPEN_FILES_IN_KEY, v);
+  } catch {
+    /* storage unavailable — the in-memory value still applies this session */
+  }
+  listeners.forEach((l) => l());
+}
+
+export function useOpenFilesIn(): OpenFilesIn {
+  return useSyncExternalStore(subscribeAny, getOpenFilesIn, getOpenFilesIn);
+}
+
+function subscribeAny(cb: () => void): () => void {
+  const off = subscribe(cb);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === OPEN_FILES_IN_KEY) cb();
+  };
+  try {
+    globalThis.addEventListener?.("storage", onStorage);
+  } catch {
+    /* no window */
+  }
+  return () => {
+    off();
+    try {
+      globalThis.removeEventListener?.("storage", onStorage);
+    } catch {
+      /* ignore */
+    }
+  };
+}
+
+/** The single "Open files in" choice the Settings select shows: the pane, or an editor id
+ *  (incl. "off"). */
+export type OpenFilesChoice = "protoagent" | EditorId;
+
+/** The "External editor" row (shown only while the pane is the click target). Pins the pane
+ *  choice FIRST: a default user has no stored `openFilesIn`, and a stored editor "off" alone is
+ *  read as the legacy "links off" opt-out — so picking "None" here would otherwise turn every
+ *  file link off instead of only removing the ⌘/Ctrl-click target. */
+export function setExternalEditor(id: EditorId): void {
+  setOpenFilesIn("protoagent");
+  setEditorPref(id);
+}
+
+export function setOpenFilesChoice(choice: OpenFilesChoice): void {
+  if (choice === "protoagent") {
+    setOpenFilesIn("protoagent");
+    return;
+  }
+  setEditorPref(choice);
+  setOpenFilesIn("editor");
+}

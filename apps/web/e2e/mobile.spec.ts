@@ -180,3 +180,30 @@ test("mobile shell: the palette is reachable without a keyboard", async ({ page 
     page.locator(".pl-cmdk__panel .pl-cmdk-commands__label", { hasText: /^Memory$/ }),
   ).toBeVisible();
 });
+
+// ── Code pane on a phone (ADR 0112 × ADR 0086) ──────────────────────────────────────────
+// show_code never takes over the screen: the chip lands in chat and the pane stays closed;
+// a tap on the chip pushes the Code surface over chat, with a back affordance.
+test("mobile: show_code never auto-opens the pane; tapping the chip pushes it", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("SHOWCODE: on the phone");
+  await composer.press("Enter");
+
+  const chip = page.getByTestId("code-ref-chip");
+  await expect(chip).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.locator(".mshell-pushed")).toHaveCount(0);
+
+  await chip.click();
+  await expect(page.locator(".mshell-pushed")).toBeVisible();
+  await expect(page.locator(".mshell-title-text")).toHaveText("Code");
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
+  await expect(page.getByTestId("code-pane-note")).toBeVisible();
+  // Follow mode is desktop-only.
+  await expect(page.getByTestId("code-follow")).toHaveCount(0);
+
+  await page.locator('button[aria-label="Back"]').click();
+  await expect(page.locator(".mshell-pushed")).toHaveCount(0);
+});

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import {
   ApiError,
+  parseErrorBody,
   api,
   apiUrl,
   artifactAppends,
@@ -735,5 +736,25 @@ describe("api soul version history (#1691)", () => {
     expect(res.messages).toEqual(["reloaded"]);
     expect(seen[0].path).toBe("/api/config/soul/history/20260101T000000.000000Z-abcd1234/restore");
     expect(seen[0].method).toBe("POST");
+  });
+});
+
+describe("parseErrorBody", () => {
+  it("reads a plain string detail", () => {
+    expect(parseErrorBody('{"detail":"nope"}', "500 x")).toEqual({ detail: "nope" });
+  });
+  it("reads a structured {code, reason} detail — never '[object Object]'", () => {
+    expect(parseErrorBody('{"detail":{"code":"denied","reason":"secret-like path"}}', "403 x")).toEqual({
+      detail: "secret-like path",
+      code: "denied",
+    });
+    expect(parseErrorBody('{"detail":{"code":"timeout"}}', "504 x")).toEqual({ detail: "timeout", code: "timeout" });
+  });
+  it("reads a validation-error list", () => {
+    expect(parseErrorBody('{"detail":[{"msg":"field required"}]}', "422 x")).toEqual({ detail: "field required" });
+  });
+  it("falls back to the raw text, then the status", () => {
+    expect(parseErrorBody("Bad Gateway", "502 x")).toEqual({ detail: "Bad Gateway" });
+    expect(parseErrorBody("", "502 Bad Gateway")).toEqual({ detail: "502 Bad Gateway" });
   });
 });
