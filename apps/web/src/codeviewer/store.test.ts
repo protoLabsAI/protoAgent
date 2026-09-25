@@ -120,3 +120,10 @@ describe("session restore", () => {
     spy.mockRestore();
   });
 });
+
+describe("normalizeRef keeps the origin session", () => {
+  it("carries a non-empty sessionId and drops an empty one", () => {
+    expect(normalizeRef({ project: "p", path: "a", source: "link", sessionId: "chat-1" })?.sessionId).toBe("chat-1");
+    expect(normalizeRef({ project: "p", path: "a", source: "link", sessionId: "" })).not.toHaveProperty("sessionId");
+  });
+});

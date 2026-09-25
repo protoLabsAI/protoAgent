@@ -95,6 +95,62 @@ async def _record_chat_tombstone(conn, session_id: str) -> None:
     )
 
 
+async def session_summary(session_id: str) -> dict | None:
+    """``{session_id, active, turn_count, last_updated, last_state}`` for one chat session,
+    or ``None`` when the server has never seen it (no stored turn, none running) or it was
+    deleted (tombstoned).
+
+    ``active`` is the per-session busy signal (``runtime.turn_activity``, fed by the turn
+    bracket in ``server.chat``): true while a turn is running on the session from ANY
+    surface — console stream, A2A, ``/api/chat``. The Zed shim polls it before sending so
+    it never interleaves a prompt with the operator's console turn. Without a task store
+    (a headless test app) existence can't be checked, so the session is reported as known
+    with ``turn_count: None``."""
+    from runtime import turn_activity
+
+    active = turn_activity.is_active(session_id)
+    base = {"session_id": session_id, "active": active, "turn_count": None, "last_updated": None, "last_state": None}
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return base
+    from sqlalchemy import func, select
+
+    from a2a.server.tasks.database_task_store import TaskModel
+
+    async with engine.begin() as conn:
+        tombstones = await _ensure_chat_tombstones(conn)
+        if (await conn.execute(select(tombstones.c.context_id).where(tombstones.c.context_id == session_id))).first():
+            return None
+        agg = (
+            await conn.execute(
+                select(func.count(TaskModel.id), func.max(TaskModel.last_updated)).where(
+                    TaskModel.context_id == session_id
+                )
+            )
+        ).first()
+        count = int(agg[0] or 0) if agg else 0
+        last = agg[1] if agg else None
+        newest = None
+        if count:
+            newest = (
+                await conn.execute(
+                    select(TaskModel.status)
+                    .where(TaskModel.context_id == session_id)
+                    .order_by(TaskModel.last_updated.desc().nulls_last(), TaskModel.id.desc())
+                    .limit(1)
+                )
+            ).first()
+    if not count and not active:
+        return None
+    status = newest[0] if newest else None
+    return {
+        **base,
+        "turn_count": count,
+        "last_updated": last.isoformat() if last else None,
+        "last_state": ((status or {}).get("state") or None) if isinstance(status, dict) else None,
+    }
+
+
 class ChatRequest(BaseModel):
     # Omitted/blank session_id → a unique per-call id is minted (ADR 0069 D4).
     # The old literal "api-default" pooled every anonymous caller into ONE
@@ -555,6 +611,27 @@ def register_chat_routes(app, ui: str) -> None:
                 for r in rows
             ]
         }
+
+    @app.get("/api/chat/sessions/{session_id}")
+    async def _api_chat_session(session_id: str):
+        """One session's summary + BUSY SIGNAL: ``{session_id, active, turn_count,
+        last_updated, last_state}``. ``active`` is true while a turn is running on the
+        session (any surface). Unknown or deleted → 404 ``{detail: {code: "not_found"}}``.
+        Cheap enough to poll (the Zed shim does, ≤ every 2 s, while it waits for a busy
+        console turn to finish)."""
+        from fastapi import HTTPException
+
+        try:
+            summary = await session_summary(session_id)
+        except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the caller
+            log.warning("[chat] session summary read failed for %s: %s", session_id, exc)
+            from runtime import turn_activity
+
+            return {"session_id": session_id, "active": turn_activity.is_active(session_id), "turn_count": None,
+                    "last_updated": None, "last_state": None, "reason": f"read failed: {type(exc).__name__}"}
+        if summary is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "reason": f"unknown session: {session_id}"})
+        return summary
 
     @app.get("/api/chat/sessions/{session_id}/turns")
     async def _api_session_turns(session_id: str, limit: int = 50):

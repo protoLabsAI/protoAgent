@@ -2016,6 +2016,11 @@ class LangGraphConfig:
     # ``{code: "disabled"}``, and file links go to the external editor. Needs
     # ``filesystem.enabled`` (it reads through the same fence). Hot-reloadable.
     filesystem_code_pane: bool = False
+    # When ``open_in_editor`` opens a file, also OFFER the calling chat to the editor: a
+    # new agent thread started in Zed (via the protoagent-acp shim) under that project
+    # within 2 minutes continues this chat instead of starting fresh
+    # (runtime/editor_handoff.py). False = the tool only opens the file.
+    filesystem_editor_handoff: bool = True
     filesystem_projects: list[dict] = field(default_factory=list)
 
     # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
@@ -2697,6 +2702,12 @@ class LangGraphConfig:
             ).strip(),
             filesystem_code_pane=not _falsey(
                 (data.get("filesystem", {}) or {}).get("code_pane"), default=not cls.filesystem_code_pane
+            ),
+            # not _falsey(), never bool(): a string "false" (JSON overlay, env, hand-edit)
+            # must switch the hand-off OFF.
+            filesystem_editor_handoff=not _falsey(
+                (data.get("filesystem", {}) or {}).get("editor_handoff"),
+                default=not cls.filesystem_editor_handoff,
             ),
             filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
             media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),

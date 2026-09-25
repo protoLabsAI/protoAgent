@@ -21,6 +21,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/chat` | Run a non-streaming chat turn (the streaming path is A2A `/a2a`) |
+| GET | `/api/chat/sessions/{id}` | One session + its **busy signal**: `{session_id, active, turn_count, last_updated, last_state}`. `active` is true while a turn is running on the session from any surface (console, A2A, `/api/chat`); the Zed shim polls it before sending so two turns never interleave. Unknown or deleted → 404 `{detail: {code: "not_found"}}` |
 | DELETE | `/api/chat/sessions/{id}` | Delete a session (`?harvest=true` to extract memory first; `?forget=true` to remove what it already wrote to memory: its compaction archives and harvested summaries/facts; `?retire=false` clears it but keeps the id) |
 | GET | `/api/chat/commands` | Slash-command inventory (workflows / subagents / skills) |
 | POST | `/api/chat/sessions/{id}/steer` | Enqueue a mid-turn [steering](/explanation/steering) message |
@@ -127,6 +128,19 @@ and `file`/`diff` never return a secret-like file's content ([ADR 0112](../adr/0
 | GET | `/api/fs/roots` | `{roots: {project: absolute root}}` — the live fs fence |
 | GET | `/api/fs/file` | Code pane toolset only (`filesystem.code_pane`, default off — otherwise 404 `{code: "disabled"}`). `?project=&path=[&start=&end=]` → `{project, path, size, line_count, start, end, truncated, language, binary, text}`. Lines are `\n`-delimited, endings preserved; capped at 2 MB / 20,000 lines / 2,000 chars per line (`truncated: true`, page with `start=end+1`). Binary → `text: null`. Errors carry `detail: {code, reason}`: `bad_path` 400 (unknown project / fence escape), `denied` 403 (secret-like name, checked before existence), `not_found` 404, `not_a_file` / `bad_range` (also a non-integer `start`/`end`) / `unreadable` 400 |
 | GET | `/api/fs/diff` | Code pane toolset only (off → 404 `{code: "disabled"}`). `?project=` → the working tree vs `HEAD`: `{project, is_git, head, branch, files: [{path, status: M\|A\|D\|R\|?, additions, deletions, binary, denied, old_path?, reason?, too_large?}], patch, truncated}`. Hardened git (no external diff, textconv, filter, fsmonitor, hook or submodule recursion can run), scoped to the project root, untracked text files ≤ 256 KB as synthetic new-file patches, secret-like paths — and symlinks resolving outside the project or onto one — listed `denied` (with a `reason`) and content omitted, larger untracked files flagged `too_large`, patch capped at 1 MB and the file list at 5,000 entries (`truncated: true`). Not a repo → `{is_git: false, files: [], patch: ""}`; 10 s timeout → 504 |
+
+## Editor hand-off
+
+Continue a console chat in Zed's agent panel. Zed can't deep-link into an agent thread, so the
+console (**Continue in Zed**) or `open_in_editor` *offers* the session and the `protoagent-acp`
+shim *claims* it when the operator starts a thread. In memory, per instance; one offer per
+project root (latest wins) and one per chat (a new offer for a chat replaces its older ones
+under every root; a claim removes them all), 120 s TTL, one-shot.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/editor/handoff` | Body `{session_id, project?, path?, line?, title?}` → `{id, expires_at, root}`. `project` resolves through the fs fence to its root; omitted → `root: null`, which matches any folder. Unknown session → 404 `not_found`; a project outside the fence → 400 `unknown_project`; a `path` escaping it → 400 `bad_path`; a missing `session_id`, a `path` without a `project`, or a `line` that isn't a positive integer → 400 `bad_request` |
+| POST | `/api/editor/handoff/claim` | Body `{cwd}` → 200 `{session_id, project, path, line, title}` (and the offer is removed) or 204. Matches when `cwd` is the root, inside it, or a **parent** of it at most 3 levels up; the newest unexpired match wins. A filesystem/volume root (`/`) never matches, and the home directory itself never matches a project offer (only a project-less one) |
 
 ## Fleet & agents
 

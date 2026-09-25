@@ -140,3 +140,18 @@ describe("followCode", () => {
     expect(useUI.getState().rightCollapsed).toBe(true);
   });
 });
+
+// "Continue in Zed" scopes a hand-off to the pane's file only when it came from the chat being
+// handed off, so every open records its originating chat.
+describe("origin session", () => {
+  it("an operator open is stamped with the ACTIVE chat; an explicit origin wins", async () => {
+    const { chatStore } = await import("../chat/chat-store");
+    chatStore.createSession();
+    const active = chatStore.getSnapshot().currentSessionId;
+    expect(active).toMatch(/^chat-/);
+    openCode({ project: "p", path: "a.ts", source: "link" });
+    expect(useCodeViewer.getState().current?.sessionId).toBe(active);
+    openCode({ project: "p", path: "b.ts", source: "component", sessionId: "chat-bg" });
+    expect(useCodeViewer.getState().current?.sessionId).toBe("chat-bg");
+  });
+});
