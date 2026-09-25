@@ -15,6 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.178.0] - 2026-09-25
+
+### Added
+- **The code pane's server half: fenced `GET /api/fs/file` + `GET /api/fs/diff`, and a `show_code` tool (#3605).**
+  The console can now fetch a project file's line window (the `read_file` fence, `\n`-addressed,
+  capped and paged) and the working-tree diff vs `HEAD` — through hardened git that runs no
+  external diff, textconv, filter driver, fsmonitor, hook or submodule, whatever the repository's
+  config or `.gitattributes` say. Secret-like names (`.env`, keys, credentials) are never shown.
+  The agent points the operator at code with `show_code(project, path, line, end_line?, note?)`,
+  which emits a validated `code-ref` component. [ADR 0112](docs/adr/0112-console-code-pane.md).
+  `read_file` and `search_files` now number lines on `\n` only (a form feed or lone `\r` no
+  longer starts a line), so `search_files`' `file:line`, `read_file(offset=)`, `show_code`
+  and the pane all point at the same row.
+
+- **Code pane: a read-only file and diff viewer docked beside chat (#3606).** When the agent
+  calls `show_code`, a chip lands in the transcript and the pane opens at the range with the
+  agent's note (desktop only; a phone waits for a tap). A file path in a tool result now
+  opens the pane by default, and ⌘/Ctrl-click opens your editor (Settings ▸ Chat ▸ Open
+  files in). The Diff tab shows the working tree vs HEAD, and an opt-in Follow mode moves
+  the pane to each file the agent reads or edits. ADR 0112.
+
+### Fixed
+- **Apps launched by the desktop server no longer inherit paths into its temporary bundle dir (#3604).**
+  The frozen desktop server exports `SSL_CERT_FILE` at its bundled CA file inside a
+  temporary extraction dir that is deleted on exit. An editor opened with `open_in_editor`
+  outlived the server, kept the dangling path, and passed it on — Zed's protoAgent agent
+  then failed at startup with `FileNotFoundError`. External children (editors,
+  `run_command`, `gh`, MCP servers, ACP delegates) now get an env with those paths removed
+  and PyInstaller's loader variables restored.
+
 ## [0.177.0] - 2026-09-24
 
 ### Added
