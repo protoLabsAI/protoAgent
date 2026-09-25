@@ -125,3 +125,32 @@ async def test_tracing_off_keeps_the_chats_session(monkeypatch):
     async with tracing.trace_session("chat-1", name="chat"):
         async with sdk.trace_run("workflow:x", run_id="run-9"):
             assert tracing.current_session_id() == "chat-1"
+
+
+async def test_a_run_that_raises_is_marked_failed(monkeypatch, fake_langfuse):
+    _opened, span = fake_langfuse
+
+    with pytest.raises(KeyError, match="engine bug"):
+        async with sdk.trace_run("workflow:x", run_id="r1"):
+            raise KeyError("engine bug")
+
+    marked = [c.kwargs for c in span.update.call_args_list if c.kwargs.get("level") == "ERROR"]
+    assert marked and "KeyError" in marked[0]["status_message"]
+
+
+async def test_bytes_are_recorded_by_size_not_content(fake_langfuse):
+    _opened, span = fake_langfuse
+    blob = b"Authorization: Bearer hunter2-" + b"x" * 10
+
+    async with sdk.trace_run("workflow:x", run_id="r1", input={"body": blob}) as run:
+        run.output({"raw": blob, ("tuple", "key"): 1})
+
+    sent = str([c.kwargs for c in span.update.call_args_list])
+    assert "hunter2" not in sent and "<40 bytes>" in sent
+
+
+async def test_output_with_tracing_off_never_serializes(monkeypatch):
+    monkeypatch.setattr(tracing, "_enabled", False)
+    monkeypatch.setattr(tracing, "_langfuse", None)
+    async with sdk.trace_run("workflow:x", run_id="r1") as run:
+        run.output({("tuple", "key"): object()})

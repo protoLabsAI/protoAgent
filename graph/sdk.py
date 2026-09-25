@@ -1161,6 +1161,8 @@ class TracedRun:
         self._span = span
 
     def output(self, value: Any, *, failed: bool = False, metadata: dict | None = None) -> None:
+        if self._span is None:  # tracing off (or setup failed): nothing to record, nothing to serialize
+            return
         from observability import tracing
 
         fields: dict[str, Any] = {"output": _trace_io(value), "level": "ERROR" if failed else "DEFAULT"}
@@ -1169,13 +1171,33 @@ class TracedRun:
         tracing.update_span(self._span, **fields)
 
 
+def _no_bytes(value: Any, _depth: int = 0) -> Any:
+    """Bytes are recorded by SIZE, never content: ``redact`` only reads text, and
+    ``json.dumps(default=str)`` would write their contents out verbatim."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"<{len(value)} bytes>"
+    if _depth > 8:
+        return value
+    if isinstance(value, dict):
+        return {k: _no_bytes(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_no_bytes(v, _depth + 1) for v in value]
+    return value
+
+
 def _trace_io(value: Any) -> Any:
     """Redacted, and capped like every other trace payload (``tracing.MAX_IO_CHARS``)."""
     from graph.middleware.redaction import redact
     from observability.tracing import MAX_IO_CHARS
 
-    value = redact(value)
-    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    value = redact(_no_bytes(value))
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):  # e.g. a dict with tuple keys — trace the repr instead
+            value = text = str(value)
     if len(text) <= MAX_IO_CHARS:
         return value
     return f"{text[:MAX_IO_CHARS]}… [{len(text) - MAX_IO_CHARS} more chars]"
@@ -1186,14 +1208,19 @@ async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata:
     """Group a plugin's multi-step run into ONE Langfuse observation.
 
     Every ``run_subagent`` call opens a ``subagent:<type>`` span in the CURRENT trace.
+    One trace per execution SEGMENT: a run that parks (a human gate) and later
+    resumes is two traces, grouped in Langfuse's Sessions view by the shared
+    ``run_id``. The OTel context isn't persisted across a pause of unbounded length.
+
     Called from a turn (the ``run_workflow`` tool), that nests; called with no turn
     around it (a REST route, a detached Studio run, a scheduled fire), each step became
     its own sessionless ROOT trace — a 9-step review panel was 9 unrelated traces, and
     a busy reviewer buried every agent's turns under them.
 
     Inside a traced turn this opens a nested span; otherwise it opens the run's own
-    root trace (session ``run_id`` when given). Input/output are redacted and capped.
-    A no-op when tracing is disabled — the block always runs, exceptions propagate::
+    root trace (session ``run_id`` when given). Input/output are redacted and capped;
+    a block that raises marks the observation ``ERROR`` and re-raises unchanged. A
+    no-op when tracing is disabled — the block always runs::
 
         async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=inputs) as run:
             result = await execute(...)
@@ -1216,10 +1243,26 @@ async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata:
         with tracing.trace_span(name, metadata=meta, as_type="chain") as span:
             if safe_input is not None:
                 tracing.update_span(span, input=safe_input)
-            yield TracedRun(span)
+            with _failed_on_raise(span):
+                yield TracedRun(span)
     else:
         async with tracing.trace_session(run_id or name, name=name, metadata=meta, input=safe_input) as span:
-            yield TracedRun(span)
+            with _failed_on_raise(span):
+                yield TracedRun(span)
+
+
+@contextlib.contextmanager
+def _failed_on_raise(span: Any):
+    """Mark the run's observation ERROR when its block raises — otherwise the run
+    store says ``failed`` while the trace closes looking fine — then re-raise."""
+    try:
+        yield
+    except Exception as exc:
+        from graph.middleware.redaction import redact
+        from observability import tracing
+
+        tracing.update_span(span, level="ERROR", status_message=redact(f"{type(exc).__name__}: {exc}")[:500])
+        raise
 
 
 # ── delegation ledger (who handed what work to whom) ────────────────────────────
