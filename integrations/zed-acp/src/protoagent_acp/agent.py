@@ -131,7 +131,15 @@ class Session:
     attached: asyncio.Event = field(default_factory=asyncio.Event)
     grace_timer: asyncio.Task | None = None
     steer: tuple[str, str] | None = None  # (id, text) queued by a Send Now, not yet folded in
-    handoff: asyncio.Task | None = None  # the console hand-off replay, sent after session/new returns
+    handoff: asyncio.Task | None = None  # a replay/notice sent after the handler's response (the barrier)
+    # Durable-history bookkeeping, so a replay never repeats a turn and never shows a
+    # half-written answer as final: task ids already shown in full (replayed, or streamed
+    # live here), and ones shown only as "(still running in the console…)".
+    shown: set[str] = field(default_factory=set)
+    shown_running: set[str] = field(default_factory=set)  # also parked turns: they continue later
+    shown_tools: set[str] = field(default_factory=set)
+    shown_text: dict[str, str] = field(default_factory=dict)  # tid → answer text already shown
+    parked_hitl: dict | None = None  # the pending question/form a loaded chat is parked on
     spoke: bool = False  # any answer text sent this prompt (for separators)
     # "Allow for this session" (allow_always on a run_command approval). In memory only —
     # never persisted; a new Zed thread starts prompting again.
@@ -166,6 +174,27 @@ def friendly_error(raw: str) -> str:
     if kind := _ERR_TYPE.search(raw):
         bits.append(kind.group(1))
     return msg.group(1) + (f" ({', '.join(bits)})" if bits else "")
+
+
+def _is_busy(summary: dict | None) -> bool:
+    return bool(summary) and summary.get("active") is True
+
+
+def _still_parked(summary: dict | None) -> bool:
+    """Is the session still parked on its question? Without a ``last_state`` the server
+    can't say — trust what we saw at load time."""
+    if not summary or not summary.get("last_state"):
+        return True
+    return "INPUT_REQUIRED" in str(summary["last_state"]).upper()
+
+
+def continuing_notice(title: str) -> str:
+    """↪ Continuing your console chat “<title>”. — one terminal mark, never “…briefly.”."""
+    title = " ".join((title or "").split())
+    if not title:
+        return "\u21aa Continuing your console chat."
+    end = "" if title[-1] in ".!?\u2026" else "."
+    return f"\u21aa Continuing your console chat \u201c{title}\u201d{end}"
 
 
 def _text_of_status(status: Any) -> str:
@@ -301,15 +330,10 @@ class ProtoAgentACP:
         )
         if title:
             self.index.put(sid, title=title)
-        s.handoff = asyncio.create_task(self._replay_handoff(s, turns, title, body))
+        s.handoff = asyncio.create_task(self._after_response(s, self._replay_handoff(s, turns, title, body)))
         return sid
 
     async def _replay_handoff(self, s: Session, turns: list[dict], title: str, claim: dict) -> None:
-        # The SDK writes messages through one FIFO queue and the session/new response is
-        # queued the moment the handler returns; a short beat makes sure the replay's
-        # session/update notifications can never overtake it (a client drops updates for a
-        # session it hasn't been told about yet).
-        await asyncio.sleep(0.05)
         await self._replay(s, turns)
         where = self.roots.resolve(claim.get("project"), claim.get("path")) if claim.get("path") else None
         if where:  # the file the console was looking at: a location follow-the-agent can jump to
@@ -322,8 +346,8 @@ class ProtoAgentACP:
                 start_tool_call(f"handoff-{uuid.uuid4().hex[:6]}", f"Open {claim.get('path')}", kind="read",
                                 status="completed", locations=[ToolCallLocation(**loc)]),
             )
-        label = f" \u201c{title}\u201d" if title else ""
-        await self._send(s, update_agent_message_text(f"\u21aa Continuing your console chat{label}."))
+        await self._send(s, update_agent_message_text("\n\n" + continuing_notice(title)))
+        await self._announce_pending(s)
 
     # ── thread history (session/list, session/load, session/resume) ─────────────
 
@@ -348,15 +372,23 @@ class ProtoAgentACP:
             raise RequestError.resource_not_found(session_id)
         s = self._sessions.get(session_id) or Session(id=session_id, cwd=cwd)
         s.cwd, s.first_prompt = cwd, False  # the server already has this thread's context
-        last = turns[-1]
-        if "INPUT_REQUIRED" in str(last.get("state") or "").upper():
-            s.parked_task_id = str(last.get("task_id") or "") or None  # the next prompt answers it
+        # A parked turn is NOT answered implicitly: _replay records it and the caller shows
+        # the pending question + an explicit notice before the next prompt may resume it.
         self._sessions[session_id] = s
         self.index.put(session_id, cwd=cwd)
         return s, turns
 
     async def resume_session(self, cwd: str, session_id: str, **_: Any) -> ResumeSessionResponse:
-        await self._register(session_id, cwd)
+        """Re-attach without replaying history — but a chat parked on a question or form still
+        gets its question and the explicit notice (after the response: the replay barrier),
+        or the next prompt would be swallowed as the answer unannounced."""
+        s, turns = await self._register(session_id, cwd)
+        for turn in turns:
+            if turn.get("task_id"):
+                s.shown.add(str(turn["task_id"]))  # the client already has these
+        self._note_pending(s, turns)
+        if s.parked_hitl is not None:
+            s.handoff = asyncio.create_task(self._after_response(s, self._announce_pending(s, show_question=True)))
         return ResumeSessionResponse()
 
     async def load_session(self, cwd: str, session_id: str, **_: Any) -> LoadSessionResponse:
@@ -365,18 +397,53 @@ class ProtoAgentACP:
         keep the contextId, so the next prompt continues with the agent's memory intact."""
         s, turns = await self._register(session_id, cwd)
         await self._replay(s, turns)
+        await self._announce_pending(s)
         return LoadSessionResponse()
 
+    def _note_pending(self, s: Session, turns: list[dict]) -> None:
+        """Record the chat's pending question/form — only the LAST turn counts (an older
+        parked turn the operator moved on from is history, not a pending question)."""
+        s.parked_task_id, s.parked_hitl = None, None
+        last = turns[-1] if turns else None
+        if last is not None and history.turn_state(last) == "input-required" and last.get("task_id"):
+            hitl = history.pending_hitl(last) or {}
+            s.parked_hitl = hitl
+            # An approval is a decision, not text: it's answered in the console (a stray
+            # message here must never read as "approved"). Questions and forms can be
+            # answered from here, explicitly.
+            if history.hitl_kind(hitl) != "approval":
+                s.parked_task_id = str(last["task_id"])
+
     async def _replay(self, s: Session, turns: list[dict]) -> None:
-        for turn in turns:
-            user = history.clean_user_text(history.first_user_text(turn))
-            if user:
-                await self._send(s, update_user_message_text(user))
+        """Replay durable turns not yet shown in this thread: the operator's message, steers
+        and tool calls (completed, with locations) and the answer. A turn still RUNNING is
+        shown as "(still running in the console…)" instead of its half-written text, and
+        finished on a later replay. The pending question of a parked last turn is rendered."""
+        self._note_pending(s, turns)
+        for i, turn in enumerate(turns):
+            tid = str(turn.get("task_id") or "")
+            if tid and tid in s.shown:
+                continue
+            state = history.turn_state(turn)
+            header_shown = tid in s.shown_running
+            if not header_shown:
+                user = history.clean_user_text(history.first_user_text(turn))
+                if user:
+                    await self._send(s, update_user_message_text(user))
+            if state in history.RUNNING_STATES:
+                if not header_shown:
+                    await self._send(s, update_agent_message_text("(still running in the console…)"))
+                    s.shown_running.add(tid)
+                continue
             for kind, item in history.turn_events(turn):
                 if kind == "steer":  # a Send Now redirect, where the agent read it
-                    await self._send(s, update_user_message_text(item))
+                    if not header_shown:
+                        await self._send(s, update_user_message_text(item))
                     continue
                 call = item
+                if call["id"] in s.shown_tools:
+                    continue
+                s.shown_tools.add(call["id"])
                 args = toolmap.parse_args(call.get("args"))
                 title, locs = toolmap.describe(call["name"], args, self.roots)
                 locs += toolmap.result_locations(call["name"], args, call.get("result"), self.roots)
@@ -394,12 +461,51 @@ class ProtoAgentACP:
                     ),
                 )
             answer = str(turn.get("text") or "").strip()
-            if answer:
-                await self._send(s, update_agent_message_text(answer))
-            elif "FAILED" in str(turn.get("state") or "").upper():
+            seen = s.shown_text.get(tid, "")
+            fresh = answer[len(seen):].strip() if seen and answer.startswith(seen) else ("" if answer == seen else answer)
+            if fresh:
+                await self._send(s, update_agent_message_text(fresh))
+            elif state == "failed" and not seen:
                 reason = _text_of_status(turn.get("status"))
                 await self._send(s, update_agent_message_text(f"⚠️ protoAgent error: {friendly_error(reason or 'the turn failed')}"))
+            if state == "input-required":
+                if i == len(turns) - 1:
+                    await self._send(s, update_agent_message_text("\n\n" + history.render_hitl(s.parked_hitl or {})))
+                if tid:  # parked: it may continue (answered here or in the console) — not final
+                    s.shown_running.add(tid)
+                    s.shown_text[tid] = answer
+                continue
+            if tid:
+                s.shown.add(tid)
+                s.shown_running.discard(tid)
+                s.shown_text.pop(tid, None)
 
+    async def _announce_pending(self, s: Session, *, show_question: bool = False) -> None:
+        """The explicit notice that makes the NEXT prompt the parked question's answer."""
+        hitl = s.parked_hitl
+        if hitl is None:
+            return
+        if show_question:
+            await self._send(s, update_agent_message_text(history.render_hitl(hitl) + "\n\n"))
+        what = history.hitl_prompt(hitl).rstrip(" :")
+        what += "" if what[-1:] in (".", "?", "!", "\u2026") else "."
+        kind = history.hitl_kind(hitl)
+        if kind == "approval":
+            text = (f"This chat is waiting on an approval in the console: {what} Approve or deny it there — "
+                    "a message here won't answer it.")
+        else:
+            noun = "a form" if kind == "form" else "a question"
+            text = (f"This chat is waiting on {noun} from the console: {what} Your next message here will be "
+                    "sent as the answer — or answer it in the console.")
+        await self._send(s, update_agent_message_text(("\n\n" if s.spoke else "") + text))
+
+    async def _after_response(self, s: Session, coro: Any) -> None:
+        """The replay barrier: run ``coro`` only once the current handler's response is on
+        the wire. The SDK writes through one FIFO queue and queues the response the moment
+        the handler returns; a short beat means our session/update notifications can never
+        overtake it (a client drops updates for a session it hasn't been told about)."""
+        await asyncio.sleep(0.05)
+        await coro
 
     async def cancel(self, session_id: str, **_: Any) -> None:
         s = self._sessions.get(session_id)
@@ -464,19 +570,37 @@ class ProtoAgentACP:
         return await self._start_turn(s, text)
 
     async def _start_turn(self, s: Session, text: str) -> PromptResponse:
+        # Every path — a fresh turn AND a resume — waits for any pending replay (the
+        # barrier) and for a console turn to finish (the busy check).
+        if s.handoff is not None:
+            with contextlib.suppress(Exception):
+                await s.handoff
+            s.handoff = None
+        s.cancelled = False
+        s.spoke = False
+        summary, waited = await self._wait_until_free(s)
+        if s.cancelled:
+            return PromptResponse(stop_reason="cancelled")
+        if waited or (s.parked_task_id and not _still_parked(summary)):
+            # The console moved the chat on while we waited (or answered the form there):
+            # show what happened before sending, so the operator isn't answering blind.
+            before = s.parked_task_id
+            turns = await history.fetch_turns(self.a2a, s.id)
+            if turns:
+                await self._replay(s, turns)
+            if s.parked_task_id and s.parked_task_id != before:
+                # The console turn ended on a NEW question/form — which this message was not
+                # written to answer. Announce it; don't consume the message as the answer.
+                await self._announce_pending(s)
+                await self._send(s, update_agent_message_text(
+                    "\n\nYour message wasn't sent. Send it again to answer, or answer in the console."))
+                return PromptResponse(stop_reason="end_turn")
         task_id: str | None = None
         metadata: dict | None = None
-        if s.parked_task_id:
+        if s.parked_task_id:  # announced explicitly (live park, load/claim/resume notice): once
             task_id, metadata = s.parked_task_id, {"hitl_resume": True}
-            s.parked_task_id = None
+            s.parked_task_id, s.parked_hitl = None, None
         else:
-            if s.handoff is not None:  # never answer before the hand-off replay has landed
-                with contextlib.suppress(Exception):
-                    await s.handoff
-                s.handoff = None
-            s.cancelled = False
-            if not await self._wait_until_free(s):
-                return PromptResponse(stop_reason="cancelled")
             s.open_tools.clear()  # a fresh turn: nothing from an earlier one is still pending
             if s.first_prompt:
                 self.index.put(s.id, title=history.title_of(text))
@@ -499,34 +623,35 @@ class ProtoAgentACP:
             # Finished while nobody was attached and no Send Now is adopting it: dropped.
             s.held.clear()
 
-    async def _busy(self, s: Session) -> bool | None:
-        """Is a turn running on this session right now (e.g. the operator is chatting in
-        the console)? ``GET /api/chat/sessions/<id>`` → ``active``. ``None`` = the server
-        can't say (older server, no such field, an error) — the caller doesn't wait."""
+    async def _summary(self, s: Session) -> dict | None:
+        """``GET /api/chat/sessions/<id>`` → ``{active, last_state, …}``, or ``None`` when the
+        server can't say (older server, unknown session, an error)."""
         status, body = await self.a2a.send_json("GET", f"/api/chat/sessions/{s.id}")
-        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("active"), bool):
-            return None
-        return body["active"]
+        return body if status == 200 and isinstance(body, dict) else None
 
-    async def _wait_until_free(self, s: Session) -> bool:
-        """Never interleave with a console turn: wait while the session is busy. ``False``
-        when the operator cancelled while waiting; a RequestError after ``busy_timeout``."""
-        if not await self._busy(s):
-            return True
+    async def _wait_until_free(self, s: Session) -> tuple[dict | None, bool]:
+        """Never interleave with a console turn: wait while the session is busy. Returns
+        ``(latest summary, waited)``; sets ``s.cancelled`` if the operator cancelled while
+        waiting; a RequestError after ``busy_timeout``. No ``active`` field → no wait."""
+        summary = await self._summary(s)
+        if not _is_busy(summary):
+            return summary, False
         # The server brackets a turn as active until its stream fully unwinds, so right
         # after OUR previous turn (a Send Now re-run, a quick follow-up) it can still read
         # busy for a moment. Re-check once, silently, before telling the operator.
         await asyncio.sleep(0.3)
-        if not await self._busy(s):
-            return True
+        summary = await self._summary(s)
+        if not _is_busy(summary):
+            return summary, False
         await self._send(s, update_agent_message_text("This chat is busy in the console. I'll send when it's free.\n\n"))
         deadline = time.monotonic() + self.busy_timeout
         while time.monotonic() < deadline:
             await asyncio.sleep(min(self.busy_poll, 2.0))
             if s.cancelled:
-                return False
-            if not await self._busy(s):
-                return True
+                return summary, True
+            summary = await self._summary(s)
+            if not _is_busy(summary):
+                return summary, True
         raise RequestError(
             -32603,
             f"protoAgent: this chat stayed busy in the console for {int(self.busy_timeout)}s — "
@@ -646,6 +771,7 @@ class ProtoAgentACP:
                         elif isinstance(evt, StateEvent):
                             if evt.task_id:
                                 s.task_id = evt.task_id
+                                s.shown.add(evt.task_id)  # shown live: never replay it
                             if evt.state:
                                 last = evt
                             if evt.paused:
@@ -689,6 +815,7 @@ class ProtoAgentACP:
             sep = "\n\n" if s.spoke else ""
             await self._send(s, update_agent_message_text(f"{sep}**Input needed:** {question}"))
             s.parked_task_id = paused.task_id or None
+            s.parked_hitl = hitl
             return "end_turn", usage
 
     async def _recover(self, s: Session, streamed: str, broke: str = "") -> tuple[StateEvent, str]:

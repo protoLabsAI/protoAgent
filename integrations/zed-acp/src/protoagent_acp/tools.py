@@ -21,6 +21,10 @@ _KINDS: dict[str, str] = {
     "read_file": "read",
     "list_dir": "read",
     "list_projects": "read",
+    # ADR 0112 / the editor hand-off: the agent POINTING at code (console code pane, the
+    # operator's editor). No content to show, but a precise place to follow.
+    "show_code": "read",
+    "open_in_editor": "read",
     "find_files": "search",
     "search_files": "search",
     "session_search": "search",
@@ -38,7 +42,7 @@ _KINDS: dict[str, str] = {
     "task_batch": "think",
 }
 
-_SCALAR = re.compile(r'"(?P<k>project|path|pattern|query|command|offset|limit|subagent_type|description|url)"\s*:\s*'
+_SCALAR = re.compile(r'"(?P<k>project|path|pattern|query|command|offset|limit|line|end_line|subagent_type|description|url)"\s*:\s*'
                      r'(?P<v>"(?:[^"\\]|\\.)*"|-?\d+)')
 
 # search_files hit lines: "rel/path.py:342: text" (or "rel/path.py-341- ctx" with context).
@@ -106,6 +110,15 @@ def describe(name: str, args: dict[str, Any], roots: RootMap) -> tuple[str, list
             lim = _int(args.get("limit"))
             suffix = f" (lines {start}–{start + lim - 1})" if lim else f" (from line {start})"
         return f"{verb} {shown or 'file'}{suffix}", locations
+    if name in ("show_code", "open_in_editor"):
+        abs_path = roots.resolve(project, path)
+        line = _int(args.get("line"))
+        if abs_path:
+            locations.append({"path": abs_path, **({"line": line} if line else {})})
+        end = _int(args.get("end_line"))
+        span = f":{line}" + (f"–{end}" if end and line and end > line else "") if line else ""
+        verb = "Show" if name == "show_code" else "Open in editor"
+        return f"{verb} {shown or 'file'}{span}", locations
     if name == "search_files":
         q = args.get("query") or ""
         return f"Search {project or ''} for {q!r}".replace("  ", " "), locations

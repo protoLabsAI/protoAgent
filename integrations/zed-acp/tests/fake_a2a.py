@@ -133,6 +133,8 @@ class FakeA2A:
         # per GET (the last one sticks); a session absent here answers 405 like a server
         # that predates the signal.
         self.active: dict[str, list[bool]] = {}
+        self.last_state: dict[str, str] = {}  # the summary's last_state, when set
+        self.on_summary: Any = None  # called (sid, active) on every summary GET — tests flip state here
         self.hold = threading.Event()  # set() to release a frame list that ends in HOLD
         fake = self
 
@@ -170,7 +172,12 @@ class FakeA2A:
                         self._json({"detail": "Method Not Allowed"}, 405)
                     else:
                         value = seq.pop(0) if len(seq) > 1 else seq[0]
-                        self._json({"session_id": parts[3], "active": value})
+                        if fake.on_summary is not None:
+                            fake.on_summary(parts[3], value)
+                        body = {"session_id": parts[3], "active": value}
+                        if parts[3] in fake.last_state:
+                            body["last_state"] = fake.last_state[parts[3]]
+                        self._json(body)
                     return
                 if path == "/api/fs/roots" and fake.roots is not None:
                     self._json({"roots": fake.roots})

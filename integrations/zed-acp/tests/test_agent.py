@@ -807,7 +807,7 @@ async def test_handoff_claim_adopts_the_console_chat_and_replays_it():
         ("tool_call", "Read rehearsal/src/agent.ts (from line 40)"),
         ("agent_message_chunk", "The loop exits on the first tool call."),
         ("tool_call", "Open src/agent.ts"),
-        ("agent_message_chunk", "\u21aa Continuing your console chat \u201cEarly-stop bug\u201d."),
+        ("agent_message_chunk", "\n\n\u21aa Continuing your console chat \u201cEarly-stop bug\u201d."),
     ]
     open_card = [u for u in conn.updates if u.get("title") == "Open src/agent.ts"][0]
     assert open_card["locations"] == [{"path": "/Users/me/dev/nava/rehearsal/src/agent.ts", "line": 42}]
@@ -918,3 +918,185 @@ async def test_a_momentary_busy_right_after_our_own_turn_is_not_announced():
         await agent.prompt(prompt=[text_block("x")], session_id=sid)
         await client.aclose()
     assert conn.text() == "ok"
+
+
+# ── parked chats, running turns, and the replay barrier (integration-test findings) ──
+
+FORM = {
+    "kind": "form",
+    "question": "Which environment should I deploy to?",
+    "steps": [{"schema": {
+        "properties": {
+            "env": {"title": "Environment", "type": "string", "enum": ["staging", "prod"]},
+            "notes": {"title": "Notes", "type": "string", "description": "anything else"},
+        },
+        "required": ["env"],
+    }}],
+}
+
+
+def _parked_turn(tid, user, hitl, text=""):
+    t = _durable_turn(tid, user, text, state="TASK_STATE_INPUT_REQUIRED")
+    t["status"] = {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [
+        {"data": hitl, "metadata": {"mimeType": fa.HITL_MIME}}]}}
+    t["history"] = t["history"][:-1]  # no hitl answer yet
+    return t
+
+
+def _texts(conn):
+    return [u["content"]["text"] for u in conn.updates if u["sessionUpdate"] == "agent_message_chunk"]
+
+
+async def test_loaded_form_park_is_shown_and_only_then_answered_by_the_next_prompt():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-form"
+        fake.turns[sid] = [_parked_turn("t0", "Deploy it", FORM, text="Before I deploy:")]
+        fake.active[sid] = [False]
+        fake.last_state[sid] = "TASK_STATE_INPUT_REQUIRED"
+        fake.script = lambda ctx, msg: [fa.text(ctx, "Deploying to staging.", append=False, tid="t0"), fa.done(ctx, tid="t0")]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/", session_id=sid)
+        shown = "\n".join(_texts(conn))
+        await agent.prompt(prompt=[text_block("staging")], session_id=sid)
+        await client.aclose()
+    assert "**Which environment should I deploy to?**" in shown
+    assert "- Environment (one of: staging, prod; required)" in shown and "- Notes (string) — anything else" in shown
+    assert shown.endswith("This chat is waiting on a form from the console: Which environment should I deploy to? "
+                          "Your next message here will be sent as the answer — or answer it in the console.")
+    assert fake.requests[0]["taskId"] == "t0" and fake.requests[0]["metadata"] == {"hitl_resume": True}
+    assert f"/api/chat/sessions/{sid}" in fake.gets  # the busy check ran on the resume path too
+
+
+async def test_a_form_answered_in_the_console_meanwhile_is_not_answered_again():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-form"
+        fake.turns[sid] = [_parked_turn("t0", "Deploy it", FORM)]
+        fake.active[sid] = [False]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/", session_id=sid)
+        # … the operator answers the form in the console; the turn completes there.
+        fake.turns[sid] = [_durable_turn("t0", "Deploy it", "Deployed to prod.")]
+        fake.last_state[sid] = "TASK_STATE_COMPLETED"
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t1"), fa.text(ctx, "3 files.", append=False, tid="t1"), fa.done(ctx, tid="t1")]
+        await agent.prompt(prompt=[text_block("How many files are in src?")], session_id=sid)
+        await client.aclose()
+    sent = fake.requests[0]
+    assert "taskId" not in sent and not (sent.get("metadata") or {}).get("hitl_resume")  # a NEW turn, not the answer
+    assert "Deployed to prod." in _texts(conn)  # the console's outcome shown first
+
+
+async def test_an_approval_park_is_announced_but_never_answered_from_zed():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-appr"
+        fake.turns[sid] = [_parked_turn("t0", "clean up", SHELL)]
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t1"), fa.done(ctx, tid="t1")]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/", session_id=sid)
+        await agent.prompt(prompt=[text_block("unrelated question")], session_id=sid)
+        await client.aclose()
+    assert any("waiting on an approval in the console" in t for t in _texts(conn))
+    assert "taskId" not in fake.requests[0]  # "unrelated question" is not an approval
+
+
+async def test_an_old_parked_turn_is_history_not_a_pending_question():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-old"
+        fake.turns[sid] = [_parked_turn("t0", "first", {"question": "Which branch?"}), _durable_turn("t1", "moved on", "ok")]
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t2"), fa.done(ctx, tid="t2")]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/", session_id=sid)
+        await agent.prompt(prompt=[text_block("next")], session_id=sid)
+        await client.aclose()
+    assert not any("waiting on" in t for t in _texts(conn))
+    assert "taskId" not in fake.requests[0]
+
+
+async def test_resume_of_a_parked_chat_shows_the_question_after_the_response():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-q"
+        fake.turns[sid] = [_parked_turn("t0", "go", {"question": "Which branch?"})]
+        agent, conn, client = await _agent(fake)
+        await agent.resume_session(cwd="/", session_id=sid)
+        assert conn.updates == []  # nothing before the response (the barrier)
+        await agent._sessions[sid].handoff
+        await client.aclose()
+    texts = _texts(conn)
+    assert texts[0].startswith("**Which branch?**")
+    assert "waiting on a question from the console: Which branch? Your next message" in texts[-1]
+
+
+async def test_claim_of_a_parked_chat_replays_before_the_resumed_turn_streams():
+    """The integration test: a prompt sent right after session/new raced the replay — the
+    resumed turn's events arrived first. The barrier now holds every path."""
+    with fa.FakeA2A() as fake:
+        sid = "chat-1790294944966-qkf93w"
+        fake.turns[sid] = [_parked_turn("t0", "Summarise briefly.", {"question": "Which file?"})]
+        fake.handoff = {"session_id": sid, "title": "Summarise briefly."}
+        fake.script = lambda ctx, msg: [fa.text(ctx, "Reading README.md.", append=False, tid="t0"), fa.done(ctx, tid="t0")]
+        agent, conn, client = await _agent(fake)
+        resp = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("README.md")], session_id=resp.session_id)  # no settle: race it
+        await client.aclose()
+    texts = _texts(conn)
+    assert texts.index("\n\n\u21aa Continuing your console chat \u201cSummarise briefly.\u201d") < texts.index("Reading README.md.")
+    assert any("waiting on a question from the console: Which file" in t for t in texts)
+    assert fake.requests[0]["taskId"] == "t0"  # announced, then answered — once
+
+
+async def test_a_running_console_turn_is_not_replayed_half_written_and_is_finished_before_sending():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-run"
+        running = _durable_turn("t1", "Explain the loop", "The loop begins by", state="TASK_STATE_WORKING")
+        fake.turns[sid] = [_durable_turn("t0", "hi", "hello"), running]
+        fake.active[sid] = [True, True, True, False]
+
+        def finish(_sid, active):
+            if not active:
+                fake.turns[sid] = [_durable_turn("t0", "hi", "hello"),
+                                   _durable_turn("t1", "Explain the loop", "The loop begins by reading the queue.")]
+
+        fake.on_summary = finish
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t2"), fa.text(ctx, "Next answer.", append=False, tid="t2"), fa.done(ctx, tid="t2")]
+        agent, conn, client = await _agent(fake)
+        agent.busy_poll = 0.05
+        await agent.load_session(cwd="/", session_id=sid)
+        loaded = _texts(conn)
+        await agent.prompt(prompt=[text_block("and then?")], session_id=sid)
+        await client.aclose()
+    assert loaded == ["hello", "(still running in the console…)"]  # never the half-written text
+    texts = _texts(conn)
+    finished = texts.index("The loop begins by reading the queue.")
+    assert texts.index("This chat is busy in the console. I'll send when it's free.\n\n") < finished < texts.index("Next answer.")
+    users = [u["content"]["text"] for u in conn.updates if u["sessionUpdate"] == "user_message_chunk"]
+    assert users.count("Explain the loop") == 1  # finishing the turn doesn't repeat its message
+
+
+async def test_a_console_turn_ending_on_a_new_form_does_not_swallow_the_message():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-new-form"
+        fake.turns[sid] = [_durable_turn("t0", "hi", "hello")]
+        fake.active[sid] = [True, True, True, False]
+
+        def park(_sid, active):
+            if not active:
+                fake.turns[sid] = [_durable_turn("t0", "hi", "hello"), _parked_turn("t1", "deploy", FORM)]
+
+        fake.on_summary = park
+        agent, conn, client = await _agent(fake)
+        agent.busy_poll = 0.05
+        await agent.resume_session(cwd="/", session_id=sid)
+        resp = await agent.prompt(prompt=[text_block("How many files are in src?")], session_id=sid)
+        await client.aclose()
+    assert resp.stop_reason == "end_turn" and fake.requests == []  # not sent — and not taken as the form's answer
+    texts = _texts(conn)
+    assert any("waiting on a form from the console" in t for t in texts)
+    assert texts[-1].startswith("\n\nYour message wasn't sent")
+
+
+def test_continuing_notice_never_doubles_the_full_stop():
+    from protoagent_acp.agent import continuing_notice
+
+    assert continuing_notice("Summarise the README briefly.") == "\u21aa Continuing your console chat \u201cSummarise the README briefly.\u201d"
+    assert continuing_notice("Fix the bug") == "\u21aa Continuing your console chat \u201cFix the bug\u201d."
+    assert continuing_notice("Really?") .endswith("\u201d")
+    assert continuing_notice("") == "\u21aa Continuing your console chat."

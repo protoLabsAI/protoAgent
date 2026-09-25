@@ -73,3 +73,15 @@ async def test_load_unions_explicit_fence_and_registry():
     r = RootMap()
     await r.load(Api())
     assert r.roots == {"protoAgent": "/team", "b": "/b"}  # the explicit fence wins a name clash
+
+
+
+def test_show_code_and_open_in_editor_are_followable_reads():
+    for name, verb in (("show_code", "Show"), ("open_in_editor", "Open in editor")):
+        assert tools.tool_kind(name) == "read"
+        title, locs = tools.describe(name, {"project": "protoAgent", "path": "src/a.ts", "line": 42, "end_line": 50}, roots())
+        assert locs == [{"path": "/repo/src/a.ts", "line": 42}]
+        assert title.startswith(f"{verb} protoAgent/src/a.ts:42")
+    # the 800-char args preview can cut a long `note`; the scalars before it survive
+    cut = '{"project": "protoAgent", "path": "src/a.ts", "line": 7, "end_line": 9, "note": "this is where the retry budg'
+    assert tools.describe("show_code", tools.parse_args(cut), roots())[1] == [{"path": "/repo/src/a.ts", "line": 7}]

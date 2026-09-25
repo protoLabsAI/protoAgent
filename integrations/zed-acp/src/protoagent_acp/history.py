@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .a2a import STEER_CONSUMED_MIME, TOOL_CALL_EXT_URI, _data_by_mime, _text_from_parts
+from .a2a import HITL_MIME, STEER_CONSUMED_MIME, TOOL_CALL_EXT_URI, _data_by_mime, _text_from_parts, norm_state
 from .credentials import credentials_path
 
 _PREAMBLE = re.compile(r"^\[Context: the operator is talking to you from the Zed editor[^\]]*\]\s*", re.S)
@@ -117,6 +117,70 @@ def turn_events(turn: dict) -> list[tuple[str, Any]]:
             c["result"] = d.get("result") if d.get("result") is not None else d.get("error")
             c["error"] = d.get("phase") == "failed"
     return out
+
+
+RUNNING_STATES = ("submitted", "working")
+
+
+def turn_state(turn: dict) -> str:
+    """``completed`` / ``failed`` / ``input-required`` / ``working`` … (normalized)."""
+    return norm_state(turn.get("state") or (turn.get("status") or {}).get("state"))
+
+
+def pending_hitl(turn: dict) -> dict | None:
+    """The question / form / approval a parked (input-required) turn is waiting on."""
+    status = turn.get("status") if isinstance(turn.get("status"), dict) else {}
+    msg = status.get("message") if isinstance(status.get("message"), dict) else {}
+    hitl = _data_by_mime(msg.get("parts"), HITL_MIME)
+    if isinstance(hitl, dict):
+        return hitl
+    text = _text_from_parts(msg.get("parts"))
+    return {"question": text} if text else {}
+
+
+def hitl_kind(hitl: dict) -> str:
+    if hitl.get("kind") == "approval":
+        return "approval"
+    if hitl.get("kind") == "form" or isinstance(hitl.get("steps"), list):
+        return "form"
+    return "question"
+
+
+def hitl_prompt(hitl: dict) -> str:
+    return str(hitl.get("question") or hitl.get("title") or "input required").strip()
+
+
+def render_hitl(hitl: dict) -> str:
+    """A parked question / form / approval as plain text for the editor — Zed can't render
+    protoAgent's form widgets, so a form's fields become a readable list."""
+    kind = hitl_kind(hitl)
+    lines = [f"**{hitl_prompt(hitl)}**"]
+    if kind == "approval" and hitl.get("detail"):
+        lines.append(f"```\n{hitl['detail']}\n```")
+    for step in hitl.get("steps") or [] if kind == "form" else []:
+        if not isinstance(step, dict):
+            continue
+        if step.get("title") and len(hitl.get("steps") or []) > 1:
+            lines.append(f"_{step['title']}_")
+        schema = step.get("schema") if isinstance(step.get("schema"), dict) else step
+        required = set(schema.get("required") or [])
+        for key, field in (schema.get("properties") or {}).items():
+            if not isinstance(field, dict):
+                continue
+            label = str(field.get("title") or key)
+            bits = []
+            options = field.get("enum") or [o.get("const") if isinstance(o, dict) else o for o in field.get("oneOf") or []]
+            items = field.get("items") if isinstance(field.get("items"), dict) else {}
+            options = options or items.get("enum") or []
+            if options:
+                bits.append(("choose any of: " if field.get("type") == "array" else "one of: ") + ", ".join(str(o) for o in options if o is not None))
+            elif field.get("type"):
+                bits.append(str(field["type"]))
+            if key in required:
+                bits.append("required")
+            desc = f" — {field['description']}" if field.get("description") else ""
+            lines.append(f"- {label}" + (f" ({'; '.join(bits)})" if bits else "") + desc)
+    return "\n".join(lines)
 
 
 async def fetch_turns(client: Any, sid: str, limit: int = 200) -> list[dict]:

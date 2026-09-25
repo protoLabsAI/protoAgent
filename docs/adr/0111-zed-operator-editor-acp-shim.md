@@ -170,8 +170,27 @@ claims it on the next `session/new` whose `cwd` is that root, inside it, or a pa
 - **Older servers:** if the route or the `active` field is missing, the shim doesn't wait.
   It never guesses from task states, because an orphaned `working` task would block
   forever.
-- **What skips the check:** HITL resumes and Send Now steers, since both belong to a turn
-  that is already this thread's.
+- **Every path waits:** new turns and resumes alike wait on the busy check and on the
+  replay barrier. The claim and resume notices are sent only after the handler's
+  response, and a prompt first waits for them to land. Only Send Now steers skip the
+  check, because they ride this thread's own running turn.
+- **A parked chat is never answered implicitly.** It is found as the last `/turns` entry
+  being `input-required`; an older parked turn the operator moved on from is history.
+  - Load, claim and resume render the pending question or form: the form's fields become
+    text, since Zed can't draw protoAgent's form widgets. An explicit notice follows.
+  - Only a prompt after that notice resumes the task (`hitl_resume`), and only once.
+  - The prompt re-checks `last_state` first. If the form was answered in the console
+    meanwhile, the message becomes a new turn.
+  - A console turn that ends on a NEW form while the shim waits is announced, and the
+    message is not sent.
+  - An approval park is announced but can't be answered from Zed.
+
+  (Found by an integration test: an unrelated "How many files are in src?" was taken as a
+  form's answer.)
+- **No half-written answers.** A turn that is still running is replayed as "(still running
+  in the console…)". After a busy wait, the history delta is re-fetched and the finished
+  answer replayed before the prompt is sent. Turns already shown, whether replayed or
+  streamed live, are never repeated.
 
 **Credentials** are taken from `--token` / `--token-file`, then `PROTOAGENT_TOKEN` /
 `PROTOAGENT_TOKEN_FILE`, then the file written by `protoagent-acp login`. That file is

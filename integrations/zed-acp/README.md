@@ -22,6 +22,7 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | **Send Now** on a queued message | **steers the running turn**: the message is queued into it with protoAgent's mid-turn steering, and the turn carries on with it |
 | thread history: list and reopen past threads, **console chats included** | `GET /api/chat/sessions` + `…/turns`; a reopened thread continues on the same session, so the agent keeps its memory |
 | a new thread that picks up the chat you handed off from the console | `POST /api/editor/handoff/claim` on `session/new` |
+| `show_code` / `open_in_editor` cards you can follow | the file and line in their args |
 | an error callout + a "⚠️ protoAgent error: …" line | a turn that FAILED (e.g. the model's 429 usage limit), or a stream that closed without a terminal state and whose task (read back with `GetTask`) failed or is still running |
 
 Each Zed thread is one protoAgent chat session (`chat-zed-…`), so the conversation also
@@ -142,6 +143,20 @@ chat:
 
 With no hand-off waiting (204), an expired one, or a server without the route, you get a
 fresh thread as usual.
+
+**A chat waiting on a question or form.** If the chat you open or continue is parked on
+a question or a form (for example `request_user_input`), the replay shows it, with a
+form's fields as a list, followed by: "This chat is waiting on a form from the console:
+<question> Your next message here will be sent as the answer — or answer it in the
+console."
+
+- **Only after that notice** is your next message sent as the answer, and only once.
+- **If you answered it in the console meanwhile,** your message starts a normal new turn.
+- **A pending approval** is never answered from Zed: a stray message must not read as
+  "approved". Approve or deny it in the console.
+- **A turn still running in the console** is shown as "(still running in the console…)"
+  rather than as a half-written answer. The shim fills in its finished answer before your
+  message goes out.
 
 **It never talks over the console.** Before each message, the shim checks whether a turn is
 already running on that chat (`GET /api/chat/sessions/<id>` → `active`). If one is, it says
