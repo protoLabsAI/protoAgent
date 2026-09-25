@@ -3,7 +3,7 @@
 - Status: Proposed
 - Date: 2026-09-24
 - Amended: 2026-09-25 — the code pane is an **opt-in toolset, off by default**
-  (`filesystem.code_pane`); see [Amendment](#amendment-an-opt-in-toolset-off-by-default) (#PRNUM)
+  (`filesystem.code_pane`); see [Amendment](#amendment-an-opt-in-toolset-off-by-default) (#3613)
 - Implemented in: the server half (this PR): `tools/fs_secrets.py`, `tools/fs_view.py`,
   `tools/git_read.py`, `operator_api/browse_routes.py` (`GET /api/fs/file`,
   `GET /api/fs/diff`), `tools/fs_tools.py` (`show_code`), `graph/components.py`
