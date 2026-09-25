@@ -1099,3 +1099,64 @@ async def test_session_input_is_capped(session_langfuse):
         pass
 
     span.update.assert_any_call(input="x" * tracing.MAX_IO_CHARS + "… [5 more chars]")
+
+
+# ─── A turn with no caller is a ROOT, whatever foreign OTel span is current ─────
+
+
+def _recording_langfuse(monkeypatch, tracing):
+    """Fake client that records whether ANY OTel span was current when the session
+    observation started — i.e. what the real SDK would have parented it under."""
+    from opentelemetry import trace as otel_trace
+
+    seen = {}
+    fake = MagicMock()
+    span = MagicMock()
+    span.trace_id = "d" * 32
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=span)
+    cm.__exit__ = MagicMock(return_value=None)
+
+    def start(**kw):
+        seen["parent_valid"] = otel_trace.get_current_span().get_span_context().is_valid
+        seen["trace_context"] = kw.get("trace_context")
+        return cm
+
+    fake.start_as_current_observation.side_effect = start
+    monkeypatch.setattr(tracing, "_langfuse", fake)
+    monkeypatch.setattr(tracing, "_enabled", True)
+    return seen
+
+
+async def test_session_root_ignores_a_foreign_otel_parent(monkeypatch):
+    """The a2a-sdk wraps its handlers in OTel spans the Langfuse SDK never exports; a
+    turn that inherited one had no root in Langfuse — no name, no input/output."""
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracing = _reload_tracing()
+    seen = _recording_langfuse(monkeypatch, tracing)
+    foreign = TracerProvider().get_tracer("a2a-python-sdk")
+
+    with foreign.start_as_current_span("DefaultRequestHandler.on_message_send_stream"):
+        async with tracing.trace_session("s1", name="a2a-stream", input="hi"):
+            pass
+        # ...and the handler's own span is current again afterwards.
+        assert otel_trace.get_current_span().get_span_context().is_valid
+
+    assert seen["parent_valid"] is False
+    assert seen["trace_context"] is None
+
+
+async def test_a_caller_trace_still_joins(monkeypatch):
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracing = _reload_tracing()
+    seen = _recording_langfuse(monkeypatch, tracing)
+    caller = {"caller_trace_id": "a" * 32, "caller_span_id": "b" * 16}
+
+    with TracerProvider().get_tracer("a2a-python-sdk").start_as_current_span("handler"):
+        async with tracing.trace_session("s1", name="a2a-stream", metadata=caller):
+            pass
+
+    assert seen["trace_context"] == {"trace_id": "a" * 32, "parent_span_id": "b" * 16}
