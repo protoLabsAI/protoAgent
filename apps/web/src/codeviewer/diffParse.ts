@@ -88,9 +88,9 @@ export function splitPatch(patch: string): PatchFile[] {
         const p = ln.slice(4);
         cur.path = p.trim() === "/dev/null" ? (cur.oldPath ?? cur.path) : stripPrefix(p);
       } else if (ln.startsWith("rename from ")) {
-        cur.oldPath = ln.slice("rename from ".length);
+        cur.oldPath = unquote(ln.slice("rename from ".length));
       } else if (ln.startsWith("rename to ")) {
-        cur.path = ln.slice("rename to ".length);
+        cur.path = unquote(ln.slice("rename to ".length));
       } else if (ln.startsWith("Binary files ") || ln === "GIT binary patch") {
         cur.binary = true;
       } else if (ln.startsWith("@@")) {

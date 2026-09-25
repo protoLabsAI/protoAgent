@@ -51,6 +51,12 @@ describe("splitPatch", () => {
     const [f] = splitPatch('diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"\n--- "a/caf\\303\\251.txt"\n+++ "b/caf\\303\\251.txt"\n@@ -1 +1 @@\n-a\n+b\n');
     expect(f.path).toBe("café.txt");
   });
+  it("decodes C-quoted rename headers too", () => {
+    const [f] = splitPatch(
+      'diff --git "a/caf\\303\\251.md" "b/new caf\\303\\251.md"\nsimilarity index 100%\nrename from "caf\\303\\251.md"\nrename to "new caf\\303\\251.md"\n',
+    );
+    expect(f).toMatchObject({ path: "new café.md", oldPath: "café.md" });
+  });
   it("is empty for nothing", () => {
     expect(splitPatch("")).toEqual([]);
     expect(splitPatch("not a diff")).toEqual([]);

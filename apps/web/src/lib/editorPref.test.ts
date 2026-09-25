@@ -6,6 +6,7 @@ import {
   getOpenFilesIn,
   OPEN_FILES_IN_KEY,
   setEditorPref,
+  setExternalEditor,
   setOpenFilesChoice,
   setOpenFilesIn,
 } from "./editorPref";
@@ -56,6 +57,22 @@ describe("open files in (ADR 0112)", () => {
     setOpenFilesChoice("protoagent");
     expect(getOpenFilesIn()).toBe("protoagent");
     expect(getEditorPref()).toBe("cursor"); // still what ⌘-click / ↗ use
+  });
+
+  it("a default user picking External editor 'None' keeps the pane links on", async () => {
+    localStorage.clear();
+    // A fresh page with nothing stored: no in-memory choice either.
+    vi.resetModules();
+    const fresh = await import("./editorPref");
+    expect(fresh.getOpenFilesIn()).toBe("protoagent");
+    fresh.setExternalEditor("off");
+    expect(fresh.getEditorPref()).toBe("off");
+    expect(fresh.getOpenFilesIn()).toBe("protoagent");
+    // …and still after a reload (a new module instance reading only storage).
+    vi.resetModules();
+    const reloaded = await import("./editorPref");
+    expect(reloaded.getOpenFilesIn()).toBe("protoagent");
+    setExternalEditor("zed"); // keep the imported name in use
   });
 
   it("an operator who had turned links OFF keeps them off under the new default", async () => {

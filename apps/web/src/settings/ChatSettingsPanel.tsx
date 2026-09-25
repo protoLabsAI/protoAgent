@@ -2,7 +2,7 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { DropdownSelect, Switch } from "@protolabsai/ui/forms";
 
 import { EDITOR_OPTIONS, isEditorId } from "../lib/editorLinks";
-import { setEditorPref, setOpenFilesChoice, useEditorPref, useOpenFilesIn } from "../lib/editorPref";
+import { setExternalEditor, setOpenFilesChoice, useEditorPref, useOpenFilesIn } from "../lib/editorPref";
 import { useUI } from "../state/uiStore";
 
 // Settings → Chat: client-side display preferences for the chat transcript. These live in the
@@ -72,7 +72,7 @@ export function ChatSettingsPanel() {
               aria-label="External editor"
               value={editor}
               onValueChange={(v) => {
-                if (isEditorId(v)) setEditorPref(v);
+                if (isEditorId(v)) setExternalEditor(v);
               }}
               options={EDITOR_OPTIONS.map((o) => ({ value: o.value, label: o.value === "off" ? "None" : o.label }))}
             />

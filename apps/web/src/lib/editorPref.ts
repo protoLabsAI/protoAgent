@@ -124,6 +124,15 @@ function subscribeAny(cb: () => void): () => void {
  *  (incl. "off"). */
 export type OpenFilesChoice = "protoagent" | EditorId;
 
+/** The "External editor" row (shown only while the pane is the click target). Pins the pane
+ *  choice FIRST: a default user has no stored `openFilesIn`, and a stored editor "off" alone is
+ *  read as the legacy "links off" opt-out — so picking "None" here would otherwise turn every
+ *  file link off instead of only removing the ⌘/Ctrl-click target. */
+export function setExternalEditor(id: EditorId): void {
+  setOpenFilesIn("protoagent");
+  setEditorPref(id);
+}
+
 export function setOpenFilesChoice(choice: OpenFilesChoice): void {
   if (choice === "protoagent") {
     setOpenFilesIn("protoagent");
