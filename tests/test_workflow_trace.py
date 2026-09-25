@@ -146,7 +146,7 @@ async def test_bytes_are_recorded_by_size_not_content(fake_langfuse):
         run.output({"raw": blob, ("tuple", "key"): 1})
 
     sent = str([c.kwargs for c in span.update.call_args_list])
-    assert "hunter2" not in sent and "<40 bytes>" in sent
+    assert "hunter2" not in sent and f"<{len(blob)} bytes>" in sent
 
 
 async def test_output_with_tracing_off_never_serializes(monkeypatch):
