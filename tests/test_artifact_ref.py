@@ -95,16 +95,18 @@ def test_show_component_never_builds_a_plugin_kind():
     assert extract_component(out) is None
 
 
-_KIND_PLUGIN = '''
+_KIND_PLUGIN = """
 def register(registry):
     registry.register_component("thing-ref", lambda props: None)
-'''
+"""
 
 
 def _make_plugin(root: Path, pid: str, body: str) -> None:
     d = root / pid
     d.mkdir(parents=True, exist_ok=True)
-    (d / "protoagent.plugin.yaml").write_text(f"id: {pid}\nname: {pid}\nversion: 0.1.0\nenabled: true\n", encoding="utf-8")
+    (d / "protoagent.plugin.yaml").write_text(
+        f"id: {pid}\nname: {pid}\nversion: 0.1.0\nenabled: true\n", encoding="utf-8"
+    )
     (d / "__init__.py").write_text(body, encoding="utf-8")
 
 

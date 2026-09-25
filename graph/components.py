@@ -17,6 +17,7 @@ import re
 from collections.abc import Callable, Mapping
 
 log = logging.getLogger("protoagent.components")
+
 # MIME the executor stamps on the DataPart and the console matches on.
 COMPONENT_MIME = "application/vnd.protolabs.component-v1+json"
 
