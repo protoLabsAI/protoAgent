@@ -86,6 +86,12 @@ first registry: **`table`** (columns/rows), **`keyvalue`** (label/value items), 
 (steps with done/active/todo state). Chart was deliberately skipped (would add a charting
 dep); a new widget is a registry entry + a render fn, no new transport.
 
+> **Amended by [ADR 0112](./0112-console-code-pane.md).** A fourth type, **`code-ref`**, joins the
+> registry — a pointer into a fenced project file that opens the console code pane. Unlike the
+> free-form widgets above it has a strict prop schema (`validate_component_props`; an invalid
+> payload is dropped at extraction), is emitted only by the `show_code` fs tool, and
+> `show_component` refuses to build one. The transport is unchanged.
+
 ### Slice 3 — alignment polish (shipped)
 
 - **Outbound `A2A-Version` fix (real bug).** The delegate A2A client (`plugins/delegates/

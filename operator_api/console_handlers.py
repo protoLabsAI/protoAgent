@@ -194,6 +194,8 @@ _TOOL_CATEGORY = {
     "edit_file": "Filesystem",
     "delete_file": "Filesystem",
     "run_command": "Filesystem",
+    "open_in_editor": "Filesystem",
+    "show_code": "Filesystem",
     "list_projects": "Filesystem",
     # Skills
     "load_skill": "Skills",

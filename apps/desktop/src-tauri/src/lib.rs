@@ -1265,6 +1265,10 @@ fn open_chat_window<R: Runtime>(app: &AppHandle<R>, path: Option<String>) -> Res
             let app = app.clone();
             move |url, _features| serve_new_window(&app, port, url.as_str())
         })
+        .on_navigation({
+            let app = app.clone();
+            move |url| serve_navigation(&app, url.as_str())
+        })
         .initialization_script(&init);
     #[cfg(target_os = "macos")]
     {
@@ -1332,6 +1336,9 @@ enum NewWindow {
     Managed(Option<String>),
     /// The wider web — hand it to the system browser.
     External,
+    /// An editor deep link (`zed://file/…`, `vscode://file/…`, `cursor://file/…`) from a
+    /// tool card's "open in editor" link — hand it to the OS, which launches the editor.
+    Editor,
     /// Some other scheme we don't serve (mailto:, a custom protocol): drop it.
     Ignore,
 }
@@ -1341,6 +1348,8 @@ fn route_new_window(target: &str, port: u16) -> NewWindow {
         NewWindow::Managed(own_origin_path(target))
     } else if target.starts_with("http://") || target.starts_with("https://") {
         NewWindow::External
+    } else if is_editor_link(target) {
+        NewWindow::Editor
     } else {
         NewWindow::Ignore
     }
@@ -1374,10 +1383,156 @@ fn serve_new_window<R: Runtime>(
                 log::error!("desktop: failed to open external link {target}: {e}");
             }
         }
+        NewWindow::Editor => open_editor_link(app, target),
         NewWindow::Ignore => {}
     }
     // Deny either way: we've already served the request ourselves.
     tauri::webview::NewWindowResponse::Deny
+}
+
+/// The ONLY custom schemes the shell will hand to the OS: the console's "open in editor"
+/// links (apps/web/src/lib/editorLinks.ts). A STRICT allowlist on purpose — the webview
+/// hosts plugin views and agent-authored content, and a generic custom-scheme passthrough
+/// would let any of it launch an arbitrary registered URL handler (`ms-settings:`,
+/// `file:`, some other app's protocol). Only the `://file/` form is accepted, which is
+/// exactly what the console emits; anything else (other schemes, a look-alike prefix such
+/// as `zedx:`, a non-file editor action) is not an editor link.
+const EDITOR_SCHEMES: [&str; 3] = ["zed", "vscode", "cursor"];
+
+fn is_editor_link(target: &str) -> bool {
+    let Some((scheme, rest)) = target.split_once(':') else {
+        return false;
+    };
+    EDITOR_SCHEMES
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s))
+        && rest.starts_with("//file/")
+}
+
+/// Strict percent-decoding (UTF-8). `None` on a malformed escape or invalid UTF-8 — a
+/// link we can't decode unambiguously is not opened.
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b.get(i + 1..i + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            out.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// The local file an allowlisted editor link points at — `Some` ONLY when the decoded path
+/// (minus an optional `:line[:col]` suffix) is an absolute path to an EXISTING REGULAR FILE,
+/// with no `..` component and no query/fragment. The scheme allowlist alone would still let
+/// any script in the window (a plugin view, agent-authored content) launch the editor on
+/// an arbitrary path with no click — and a DIRECTORY opens as a workspace, whose project
+/// settings (`.zed/settings.json`, `.vscode/tasks.json`) an agent with fenced write access
+/// could have planted. The console only ever links files, so nothing legitimate is lost.
+fn editor_link_file(target: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Component, Path};
+    if !is_editor_link(target) {
+        return None;
+    }
+    let (_, rest) = target.split_once(':')?;
+    let raw = rest.strip_prefix("//file")?; // keeps the leading '/'
+    if raw.contains('?') || raw.contains('#') {
+        return None;
+    }
+    let decoded = percent_decode(raw)?;
+    if decoded.contains('\0') {
+        return None;
+    }
+    // `vscode://file/C:/x` → `/C:/x`: drop the slash before a Windows drive letter.
+    #[cfg(windows)]
+    let decoded = {
+        let b = decoded.as_bytes();
+        if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+            decoded[1..].to_string()
+        } else {
+            decoded
+        }
+    };
+    let mut cand = decoded.as_str();
+    // The path itself, then with up to two trailing `:<digits>` (line, column) removed.
+    for _ in 0..3 {
+        let p = Path::new(cand);
+        if p.is_absolute()
+            && is_local_disk_path(p)
+            && !p.components().any(|c| matches!(c, Component::ParentDir))
+            && !is_workspace_file(p)
+            && p.is_file()
+        {
+            return Some(p.to_path_buf());
+        }
+        match cand.rsplit_once(':') {
+            Some((head, tail)) if !tail.is_empty() && tail.bytes().all(|c| c.is_ascii_digit()) => {
+                cand = head
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Windows: only a drive-letter path (`C:\…`, `\\?\C:\…`). A UNC path
+/// (`//attacker/share/x`) would make even the `is_file()` probe reach out over SMB and hand
+/// the host the user's NTLM credentials — so it's refused BEFORE any filesystem access.
+/// Elsewhere every absolute path is local.
+fn is_local_disk_path(p: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        matches!(
+            p.components().next(),
+            Some(Component::Prefix(pre)) if matches!(pre.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = p;
+        true
+    }
+}
+
+/// A `.code-workspace` file opens as a WORKSPACE in VS Code / Cursor (its settings, tasks
+/// and extension recommendations apply) — the same hazard as opening a directory.
+fn is_workspace_file(p: &std::path::Path) -> bool {
+    p.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("code-workspace"))
+}
+
+fn open_editor_link<R: Runtime>(app: &AppHandle<R>, target: &str) {
+    if editor_link_file(target).is_none() {
+        log::warn!("desktop: refused editor link (not an existing file): {target}");
+        return;
+    }
+    if let Err(e) = app.opener().open_url(target, None::<&str>) {
+        log::error!("desktop: failed to open editor link {target}: {e}");
+    }
+}
+
+/// Same-window navigation guard, wired on every shell-built window alongside
+/// `serve_new_window`. The console's editor links are plain `<a href>` with no target (a
+/// browser hands a custom scheme to the OS without unloading the page), so in the webview
+/// they arrive as a NAVIGATION, not a new-window request — and WKWebView/WebView2 can't
+/// load `zed://`, so the click did nothing. Allowlisted editor links go to the OS and the
+/// navigation is cancelled; everything else proceeds exactly as before (returns true).
+fn serve_navigation<R: Runtime>(app: &AppHandle<R>, target: &str) -> bool {
+    if is_editor_link(target) {
+        open_editor_link(app, target);
+        return false;
+    }
+    true
 }
 
 /// Check the updater manifest for a newer build, returning its version + notes for the
@@ -1637,6 +1792,10 @@ pub fn run() {
                 .initialization_script(&init)
                 .on_new_window(move |url, _features| {
                     serve_new_window(&link_opener, sidecar_port, url.as_str())
+                })
+                .on_navigation({
+                    let app = app.handle().clone();
+                    move |url| serve_navigation(&app, url.as_str())
                 });
             // Invisible title bar (macOS): no opaque chrome — content fills the
             // frame and the native traffic lights float top-left. The web shell
@@ -1681,6 +1840,10 @@ pub fn run() {
                 .on_new_window({
                     let app = app.handle().clone();
                     move |url, _features| serve_new_window(&app, port, url.as_str())
+                })
+                .on_navigation({
+                    let app = app.handle().clone();
+                    move |url| serve_navigation(&app, url.as_str())
                 })
                 .initialization_script(&launcher_init)
                 .build()?;
@@ -1864,7 +2027,163 @@ mod auth_token_tests {
 
 #[cfg(test)]
 mod new_window_tests {
-    use super::{is_own_origin, own_origin_path, route_new_window, NewWindow};
+    use super::{
+        editor_link_file, is_editor_link, is_own_origin, own_origin_path, percent_decode,
+        route_new_window, NewWindow,
+    };
+
+    /// `<scheme>://file/<abs>` the way the console builds it: each byte outside the
+    /// unreserved set (and `/`, `:`) percent-encoded, a Windows drive given a leading `/`.
+    fn link_for(scheme: &str, p: &std::path::Path, suffix: &str) -> String {
+        let s = p.to_string_lossy().replace('\\', "/");
+        let s = if s.starts_with('/') {
+            s
+        } else {
+            format!("/{s}")
+        };
+        let mut enc = String::new();
+        for b in s.bytes() {
+            if b.is_ascii_alphanumeric() || b"/:.-_~".contains(&b) {
+                enc.push(b as char);
+            } else {
+                enc.push_str(&format!("%{b:02X}"));
+            }
+        }
+        format!("{scheme}://file{enc}{suffix}")
+    }
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("pa-editor-link-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // ── #3596 review: the allowlist opens only an EXISTING REGULAR FILE ──────────
+    #[test]
+    fn editor_link_resolves_an_existing_file_with_position() {
+        let d = scratch_dir("file");
+        let f = d.join("a b é#1.rs");
+        std::fs::write(&f, "x").unwrap();
+        for (scheme, suffix) in [
+            ("zed", ""),
+            ("zed", ":42"),
+            ("vscode", ":42:7"),
+            ("cursor", ":1"),
+        ] {
+            let link = link_for(scheme, &f, suffix);
+            assert_eq!(
+                editor_link_file(&link).as_deref(),
+                Some(f.as_path()),
+                "{link}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_link_refuses_dirs_missing_files_and_odd_shapes() {
+        let d = scratch_dir("refuse");
+        let f = d.join("ok.rs");
+        std::fs::write(&f, "x").unwrap();
+        let file_link = link_for("zed", &f, "");
+        for bad in [
+            link_for("zed", &d, ""),                      // a directory = a workspace
+            link_for("vscode", &d, ":3"),                 // …even with a line
+            link_for("zed", &d.join("missing.rs"), ":1"), // not there
+            format!("{file_link}?windowId=_blank"),       // query smuggling
+            format!("{file_link}#frag"),
+            link_for(
+                "zed",
+                &d.join("..").join(d.file_name().unwrap()).join("ok.rs"),
+                "",
+            ), // `..`
+            file_link.replace("ok.rs", "%2E%2E/ok.rs"), // encoded `..`
+            file_link.replace("ok.rs", "ok%zz.rs"),     // malformed escape
+            file_link.replace("ok.rs", "ok.rs:x"),      // non-numeric suffix
+            link_for("zedx", &f, ""),                   // scheme still gated
+        ] {
+            assert_eq!(editor_link_file(&bad), None, "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn editor_link_refuses_a_code_workspace_file() {
+        let d = scratch_dir("ws");
+        for name in ["evil.code-workspace", "EVIL.Code-Workspace"] {
+            let f = d.join(name);
+            std::fs::write(&f, "{}").unwrap();
+            let link = link_for("vscode", &f, "");
+            assert_eq!(editor_link_file(&link), None, "{link} must be refused");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn editor_link_refuses_unc_paths_before_touching_them() {
+        for bad in [
+            "vscode://file//attacker/share/x.rs",
+            "zed://file/%5C%5Cattacker%5Cshare%5Cx.rs",
+            "cursor://file//%3F/UNC/attacker/share/x.rs",
+        ] {
+            assert_eq!(editor_link_file(bad), None, "{bad} must be refused");
+        }
+        assert!(super::is_local_disk_path(std::path::Path::new(r"C:\x\y.rs")));
+        assert!(!super::is_local_disk_path(std::path::Path::new(r"\\srv\share\y.rs")));
+    }
+
+    #[test]
+    fn percent_decode_is_strict() {
+        assert_eq!(percent_decode("a%20b%C3%A9").as_deref(), Some("a bé"));
+        assert_eq!(percent_decode("%2"), None);
+        assert_eq!(percent_decode("%+1"), None);
+        assert_eq!(percent_decode("%FF"), None); // not UTF-8
+    }
+
+    // ── #3596: "open in editor" links — a STRICT scheme allowlist ─────────────
+    #[test]
+    fn editor_file_links_are_allowlisted() {
+        assert!(is_editor_link("zed://file/Users/me/app/src/main.ts:42:7"));
+        assert!(is_editor_link("vscode://file/C:/proj/a%20b.ts:10"));
+        assert!(is_editor_link("cursor://file/home/jos%C3%A9/x.rs:1"));
+        // Url normalizes the scheme's case; accept either spelling.
+        assert!(is_editor_link("ZED://file/tmp/x"));
+    }
+
+    #[test]
+    fn everything_else_is_not_an_editor_link() {
+        for target in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "ms-settings:privacy",
+            "zedx://file/tmp/x", // look-alike prefix
+            "xzed://file/tmp/x",
+            "zed:file/tmp/x",   // not the //file/ form
+            "zed://ssh/host/x", // an editor action, not a file open
+            "vscode://ms-vscode.remote/x",
+            "cursor:",
+            "zed",
+            "",
+            "https://zed.dev/",
+            "mailto:hi@example.com",
+        ] {
+            assert!(
+                !is_editor_link(target),
+                "{target} must not pass the allowlist"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_links_route_to_the_os_not_a_window() {
+        assert_eq!(
+            route_new_window("zed://file/Users/me/x.py:3", 7870),
+            NewWindow::Editor
+        );
+        assert_eq!(route_new_window("zedx://file/x", 7870), NewWindow::Ignore);
+        assert_eq!(
+            route_new_window("ms-settings:privacy", 7870),
+            NewWindow::Ignore
+        );
+    }
 
     // ── #3316: the triage every shell-built window shares ─────────────────────
     // These ran on the MAIN window only; a link clicked in a second window skipped

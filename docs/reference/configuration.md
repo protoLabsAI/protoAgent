@@ -415,6 +415,8 @@ filesystem:
   allow_run: true                # run_command available (ON); HITL-gated below — false = never built
   run_requires_approval: true    # each run_command pauses for operator approval
   bypass_allowed: true           # false = /bypass can't skip the approval gate
+  run_auto_approve: []           # command prefixes that skip the approval prompt (see below)
+  editor_command: ""             # e.g. zed / "code -g" / "cursor -g" — binds open_in_editor
   projects:
     - { name: orbis, path: /Users/kj/dev/ORBIS, write: false }   # read-only monitor
     - { name: pixelgen, path: /Users/kj/dev/pixelgen, write: true }
@@ -426,11 +428,13 @@ filesystem:
 | `allow_run` | `true` | Also expose `run_command` (fenced `cwd`, but arbitrary argv — dual-use, like `execute_code`). **`false` is the per-agent kill switch**: the tool is never built, so the model can't see or call it. |
 | `run_requires_approval` | `true` | Each `run_command` call pauses for HITL operator approval (A2A `input-required`). Drop to `false` to let commands run unattended. |
 | `bypass_allowed` | `true` | Permit the per-tab `/bypass` chat toggle to skip the approval gate. `false` = approvals enforced regardless of caller-supplied metadata. |
+| `run_auto_approve` | `[]` | Safe-command allowlist: command **prefixes** in argv terms (`git status`, `git diff`, `npx vitest run`, `mise exec -- npm test`) whose matching `run_command` calls skip the approval prompt. Matched **token by token** from the start after `shlex` splitting — `git diff` covers `git diff --stat` but not `git difftool`, and `FOO=1 git diff` matches nothing. A command containing any of `` ; & \| ` $ ( ) < > \ * ? [ ] { } ~ # ! ``, a newline/control character or non-ASCII whitespace **always asks**, even inside quotes (`git log --format='%H;x'` asks); so does any denylisted option (`--output`/`-o`, `--exec`, `--config`/`-c`, `--ext-diff`, `--upload-pack`, `--require`, `--prefix`, find's `-exec`/`-delete`, … — including abbreviations like `--out=` and bundled short flags like `-po`). A matched command runs **directly from its tokens, with no shell**, and its result starts with `(auto-approved: matches "<entry>")`; each one is logged at INFO. POSIX `/bin/sh` grammar only — `shell: powershell`/`cmd` always ask. Entries are validated when the tools build: one with a metacharacter, a `VAR=` prefix, a denylisted option, or that is too broad (`sh`, `env`, `npx`, `node`, bare `git`/`npm`, `npm run`, `mise exec --`, `uv run`, …) is **dropped with a warning**. Only consulted when approval is on and `/bypass` isn't. Empty = every command asks. See [the guide](../guides/sandboxing.md#run-auto-approve) for a starter list and the caveats. |
+| `editor_command` | `""` | Your desktop editor's command line — `zed`, `code -g`, `cursor -g`. When set, binds `open_in_editor(project, path, line?)`, which pops a fenced file open in that editor **on the machine the agent runs on** ("open the router for me"). Split with shlex; the target is appended as one argument, `<abs_path>[:<line>]`. Same fence as every fs tool, works in read-only projects, launched detached (never waits). Empty = the tool is not bound — leave it unset on a headless/remote agent. **Windows:** point it at the editor's real `.exe` (quote a path with spaces), e.g. `"C:\Users\<you>\AppData\Local\Programs\Microsoft VS Code\Code.exe" -g` — a `.cmd`/`.bat` launcher (VS Code's `code` is `code.cmd`) is refused, because Windows runs it through `cmd.exe`, which would interpret characters in file names. |
 | `projects` | `[]` | Managed workspaces: `{name, path, write, no_delete}`. **Empty falls back to a default `workspace` dir** (so the tools are usable out of the box). **Every path is fenced under a project root** (`..`/symlink escapes refused); `write:false` makes a project read-only; `write:true` + `no_delete:true` is read-write-no-delete (create/edit, never delete — the third Cowork mount mode); invalid paths are skipped. |
 
-The four toggles are editable per agent in the console via the **Shell & filesystem** chip on **Settings ▸ Capabilities ▸ Tools** (hot-reload — a save rebuilds the graph). `tools.disabled: [run_command]` (above) is an equivalent per-tool route — in the console, that's the `run_command` row switch in the same panel's Filesystem group.
+The four toggles and the auto-approve list are editable per agent in the console via the **Shell & filesystem** chip on **Settings ▸ Capabilities ▸ Tools** (hot-reload — a save rebuilds the graph). `tools.disabled: [run_command]` (above) is an equivalent per-tool route — in the console, that's the `run_command` row switch in the same panel's Filesystem group.
 
-**Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; `delete_file` additionally needs `no_delete:false` and **always** pauses for approval (a permanent-delete floor the `/bypass` toggle can't skip); the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4 and ADR 0083 D5.
+**Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; `delete_file` additionally needs `no_delete:false` and **always** pauses for approval (a permanent-delete floor the `/bypass` toggle and `run_auto_approve` can't skip); the agent's own repo is not a project unless you add it. All mutations are audited. `run_auto_approve` is a friction reducer, **not a boundary**: a listed test runner (`npm test`, `npx vitest run`) executes project code, and even `git status`/`git diff` honour repository config (`core.fsmonitor`, diff drivers, filters) — all of which an agent with `write:true` on that project can edit. List read-mostly commands, and treat an allowlisted runner in a writable project as "the agent may run code here unattended". See ADR 0007 §4 and ADR 0083 D5.
 
 ## `projects`
 
@@ -461,26 +465,30 @@ projects:
 | `no_delete` | `false` | With `write: true`, forbid `delete_file` (create/edit, never delete). |
 | `fs` | `true` | `false` keeps the entry for GitHub/board consumers only — no filesystem tools reach it. |
 
-Two things write entries here besides you. A bundle's Configure step: a `config_inputs` `path` prompt flagged `project: true` registers the answered checkout at create time (core ≥ 0.146, #2977) — `{name: <dir name>, path, github: <owner/name from its origin remote>, write: <onboarding.write_default, i.e. false unless set>}` — and, **only when no `onboarding:` section exists and a GitHub remote was parsed**, seeds `onboarding: {enabled: true, root: <the checkout's parent>, allow: ["github.com/<owner>/<name>"]}` — exactly the typed repo, nothing wider (no remote → registered only, `onboarding` untouched). Once this list is non-empty it *is* the filesystem fence, same as a tool-driven `onboard_project` — the default writable workspace entry no longer applies. The full wording is in the [bundles guide](../guides/bundles.md). And the `onboard_project` tool itself (when `onboarding` below allows it). `show_config(section="projects")` shows what the running agent resolved.
+Two things write entries here besides you. A bundle's Configure step: a `config_inputs` `path` prompt flagged `project: true` registers the answered checkout at create time (core ≥ 0.146, #2977) — `{name: <dir name>, path, github: <owner/name from its origin remote>, write: <onboarding.write_default, i.e. false unless set>}` — and, **only when no `onboarding:` section exists and a GitHub remote was parsed**, seeds `onboarding: {enabled: true, root: <the checkout's parent>, allow: ["github.com/<owner>/<name>"]}` — exactly the typed repo, nothing wider (no remote → registered only, `onboarding` untouched). Once this list is non-empty it *is* the filesystem fence, same as a tool-driven `onboard_project` — the default writable workspace entry no longer applies. The full wording is in the [bundles guide](../guides/bundles.md). And the `onboard_project` / `register_local_project` tools themselves (when `onboarding` below allows it). `show_config(section="projects")` shows what the running agent resolved.
 
 ## `onboarding`
 
-The consent gate for an agent **registering a repository itself** — the `onboard_project` tool (and the `onboard-project` skill the project-manager archetype ships) scans a repo for what a coding-agent loop needs, can clone it, and registers it in `projects` above. Off by default: an agent that can add project roots can widen its own filesystem fence, so the operator declares where that is allowed.
+The consent gate for an agent **registering a repository itself** — the `onboard_project` tool (clone a repo, then register it), the `register_local_project` tool (register a directory already on disk), and the `onboard-project` skill the project-manager archetype ships. Both tools write the `projects` registry above. An agent that can add project roots can widen its own filesystem fence, so the operator declares where that is allowed: `root` bounds every registration, and `allow` bounds what may be cloned.
 
 ```yaml
 onboarding:
   enabled: true
   root: ~/dev                         # clones land here; every registration must resolve UNDER it
-  allow: ["github.com/protoLabsAI/*"] # clone sources the agent may onboard (glob); empty = local paths only
+  allow:                              # clone sources the agent may onboard (glob on host/owner/repo)
+    - "github.com/protoLabsAI/*"
+    - "gitlab.com/acme/*"
   write_default: false                # registered read-only unless the call asks for write
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `false` | Off → the `onboard_project` tool is **absent from the toolset entirely** (the skill's readiness scan still works read-only through the fs tools). |
-| `root` | `""` | Required when enabled. Clones go here; a path outside it is refused. |
-| `allow` | `[]` | Glob allowlist for clone URLs. Empty = no cloning, local paths under `root` only. |
+| `enabled` | `true` | A discoverability switch, not the consent — `root` and `allow` are, and both are empty by default, so a stock install onboards nothing (the tools refuse, naming what to set). Off → both tools are **absent from the toolset entirely**. |
+| `root` | `""` | Clones land here, and `register_local_project` accepts only a directory that **resolves** (symlinks followed) strictly inside it. Unset → every registration is refused. To let the agent register something elsewhere, widen this — the agent cannot. |
+| `allow` | `[]` | `fnmatch` globs (same semantics as `plugins.sources.allow`) matched against a clone source's canonical **`host/owner/repo`**, for any git host: `github.com/acme/*`, `gitlab.com/acme/*`, `git.example.com/team/*`. A bare `owner/repo` means `github.com`; an https URL, an ssh URL and the scp form `git@host:owner/repo` of the same repo all normalize to the same string (port and credentials dropped). Empty = nothing may be cloned; it does not gate `register_local_project`, which fetches nothing. |
 | `write_default` | `false` | Whether a registration is fenced read-write unless the call says otherwise. |
+
+git receives the clone URL exactly as given, so the host's ssh keys and credential helpers apply; a credential embedded in an https URL is masked in everything the tool reports (git itself still stores the URL in the checkout's `.git/config`, so prefer a credential helper). Refused before git runs: local paths and `file://`, remote-helper transports such as `ext::`, and anything starting with `-`.
 
 ## `egress`
 

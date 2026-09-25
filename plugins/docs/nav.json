@@ -911,6 +911,10 @@
           "title": "0111 — Zed as the operator's editor: ACP agent shim, editor deep-links, operator MCP"
         },
         {
+          "path": "adr/0112-console-code-pane.md",
+          "title": "0112 — Console code pane: a read-only navigator surface the agent points into"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

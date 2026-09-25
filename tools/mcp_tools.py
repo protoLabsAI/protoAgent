@@ -25,6 +25,8 @@ import os
 import re
 from typing import Any
 
+from infra.proc import child_env
+
 log = logging.getLogger("protoagent.mcp")
 
 
@@ -121,9 +123,11 @@ def _inherited_env(server_env: dict[str, str], *, inherit) -> dict[str, str] | N
     """
     if inherit is False:
         return dict(server_env) if server_env else None
+    # child_env: a frozen build's temporary _MEIPASS paths must not reach a server process.
+    parent = child_env()
     if inherit is True:
-        return {**os.environ, **server_env}
-    base = {k: v for k, v in os.environ.items() if not _SECRET_ENV_RE.search(k)}
+        return {**parent, **server_env}
+    base = {k: v for k, v in parent.items() if not _SECRET_ENV_RE.search(k)}
     return {**base, **server_env}
 
 

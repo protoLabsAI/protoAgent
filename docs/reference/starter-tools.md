@@ -146,7 +146,8 @@ Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) 
 | Tool | What it does | Bound when |
 |---|---|---|
 | [`show_config(section="", offset=0, limit=0)`](#show_config) | Read the agent's own effective, merged config, secrets masked. | a config is available (always, in the server) |
-| [`onboard_project(github_repo, name=None, write=None)`](#onboard_project) | Clone a repo into the onboarding root and register it as a managed project. | `onboarding.enabled: true` (default **off**) |
+| [`onboard_project(repo, name=None, write=None)`](#onboard_project) | Clone a repo from any git host into the onboarding root and register it as a managed project. | `onboarding.enabled` (default **on**; refuses until `root` + `allow` are set) |
+| [`register_local_project(path, name=None, write=None)`](#register_local_project) | Register a directory already on disk, under the onboarding root, as a managed project. | `onboarding.enabled` (default **on**; refuses until `root` is set) |
 
 ### Opt-in singles
 
@@ -338,6 +339,11 @@ blob. Data-only and safe — no code execution — and the console renders it th
 | `timeline` | `{"steps": [{"label": "Buy hauler", "state": "done\|active\|todo", "detail": "…"}, …]}` |
 
 `title` is an optional heading. An unknown `component` returns an error naming the valid ones.
+
+The fourth registered type, `code-ref` (a pointer into a project file that opens the console's
+code pane — [ADR 0112](/adr/0112-console-code-pane)), is not built here: it is emitted only by
+the filesystem tool `show_code(project, path, line, end_line?, note?)`, which checks the fence,
+the secret-like-name deny list and the line range first. `show_component` refuses it.
 
 Rule of thumb: a data **shape** (table / metrics / steps) → this tool; a generated **visual**
 (chart, diagram, bespoke HTML/React/SVG) → an artifact, which renders generated code in a
@@ -889,16 +895,42 @@ set — a blank stays blank, because masking one would claim a token is present 
 ### `onboard_project`
 
 ```python
-async def onboard_project(github_repo: str, name: str | None = None, write: bool | None = None) -> str
+async def onboard_project(repo: str = "", name: str | None = None, write: bool | None = None, github_repo: str = "") -> str
 ```
 
-Clone a GitHub repo into the configured onboarding root and register it in the managed
-[`projects`](/adr/0095-managed-projects-registry) registry, so the filesystem tools can reach
-it. `github_repo` accepts `owner/repo`, `github.com/owner/repo` or the full URL; `name`
-defaults to the repo name; `write` overrides the operator's default access mode.
+Clone a git repository into the configured onboarding root and register it in the managed
+[`projects`](/adr/0095-managed-projects-registry) registry, so the filesystem tools, the GitHub
+plugin and the project board can reach it. `repo` accepts any git host: a bare `owner/repo`
+(GitHub), `gitlab.com/owner/repo`, `https://host/owner/repo(.git)`, `git@host:owner/repo(.git)`
+or `ssh://git@host/owner/repo`. git gets the URL as given, so ssh keys and credential helpers
+apply; credentials in a URL are masked in the result. `github_repo` is the older name for `repo`
+and still works. `name` defaults to the repo name; `write` overrides the operator's default
+access mode. The registry's `github` binding is filled only for a github.com source.
 
-**Off unless `onboarding.enabled: true`** — and off means *absent*, not a tool that exists only
-to refuse. An operator who hasn't opted in gets no onboarding surface at all.
+The source must match an [`onboarding.allow`](/reference/configuration#onboarding) glob on its
+`host/owner/repo` (so `gitlab.com/acme/*` admits GitLab, and a `github.com/*` glob does not);
+local paths, `file://`, `ext::`-style transports and anything starting with `-` are refused
+before git runs. An existing checkout is reused untouched (no fetch), with its drift from the
+tracking branch reported.
+
+### `register_local_project`
+
+```python
+async def register_local_project(path: str, name: str | None = None, write: bool | None = None) -> str
+```
+
+Register a directory that is already on disk — a checkout the operator made, or one the agent
+created — in the same registry, without cloning. `path` must be absolute (`~` is expanded) and
+must **resolve** (symlinks followed) to an existing directory strictly inside
+`onboarding.root`; anything else is refused, naming the root. The root is the whole fence here
+(`allow` does not apply — nothing is fetched), and only the operator can widen it. The `github`
+binding comes from the directory's `origin` remote when that is GitHub; `default_branch` from
+`origin/HEAD`, else the current branch. Idempotent: an already-registered path is reported, not
+re-written.
+
+Both tools are **present unless `onboarding.enabled: false`**, which removes them entirely. With
+`enabled` on but `root`/`allow` unset they refuse by naming the setting to change — that is how
+the agent tells the operator what to configure.
 
 ## Self-configuration
 

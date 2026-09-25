@@ -957,6 +957,32 @@ FIELDS: list[Field] = [
         "approvals are enforced regardless of any caller-supplied bypass flag.",
         depends_on={"key": "filesystem.run_requires_approval"},
     ),
+    Field(
+        "filesystem.run_auto_approve",
+        "filesystem_run_auto_approve",
+        "Auto-approve commands",
+        "string_list",
+        "Filesystem",
+        "Command prefixes (one per line, e.g. `git status`, `git diff`, `npx vitest run`) that "
+        "run WITHOUT the approval prompt. Matched word-by-word from the start, so `git diff` "
+        "also covers `git diff --stat` but not `git difftool`. A command containing any shell "
+        "metacharacter (; & | $ ` ( ) < > * ? ~ …) always asks. List read-mostly commands only: "
+        "a test runner executes project code the agent can edit. Too-broad entries (`npx`, "
+        "`sh`, bare `git`) are ignored.",
+        depends_on={"key": "filesystem.run_requires_approval"},
+    ),
+    Field(
+        "filesystem.editor_command",
+        "filesystem_editor_command",
+        "Open-in-editor command",
+        "string",
+        "Filesystem",
+        "Your desktop editor's command line (e.g. `zed`, `code -g`, `cursor -g`). When set, "
+        "the agent gets an open_in_editor tool that pops a file (at a line) open in that "
+        "editor on THIS machine — fenced to the managed projects like every fs tool. Empty "
+        "= the tool is not bound. Only useful when the agent runs on your own desktop.",
+        depends_on={"key": "filesystem.enabled"},
+    ),
     # ── Tools — the operator denylist over the assembled toolset ────────────────
     Field(
         "tools.disabled",
@@ -1588,7 +1614,8 @@ FIELDS: list[Field] = [
         "Onboarding root",
         "path",
         "Project onboarding",
-        "Clones land here; registrations must resolve under this directory.",
+        "Clones land here, and existing local directories can be registered only "
+        "if they resolve under this directory — widen it to let the agent register more.",
         depends_on={"key": "onboarding.enabled"},
     ),
     Field(
@@ -1597,9 +1624,10 @@ FIELDS: list[Field] = [
         "Allowed sources",
         "string_list",
         "Project onboarding",
-        "Clone source globs — same semantics as plugins.sources.allow "
-        "(e.g. github.com/protoLabsAI/*). Only repos matching at least one "
-        "pattern can be onboarded.",
+        "Clone source globs on host/owner/repo — same semantics as "
+        "plugins.sources.allow, any git host (e.g. github.com/protoLabsAI/*, "
+        "gitlab.com/acme/*). Only repos matching at least one pattern can be "
+        "cloned; registering a local directory needs only the root.",
         depends_on={"key": "onboarding.enabled"},
     ),
     Field(

@@ -7,6 +7,9 @@ state](0035-console-layout-dual-rail-mobile-first.md), decision **D6** only. D1â
 (the desktop dual-rail split, swappable surfaces, unified rail style, resize handle,
 persisted UI state, DS/theming) are unchanged.
 
+**Amended by:** [ADR 0112](0112-console-code-pane.md) â€” the code pane is a pushed surface on
+mobile like any other: a `code-ref` chip pushes it on tap, and it **never auto-opens** over chat.
+
 ## Context
 
 ADR 0035 D6 specified mobile as:

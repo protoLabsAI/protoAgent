@@ -1,0 +1,303 @@
+/* The code pane (ADR 0112) — a read-only file + diff viewer docked beside chat.
+   Pierre renders inside a shadow root; only its CSS custom properties cross in. */
+.code-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.code-pane__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px 0 4px;
+  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
+  flex: none;
+}
+.code-pane__bar .pl-tabs {
+  border-bottom: 0;
+}
+.code-pane__follow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.code-pane__file,
+.code-pane__diff {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.code-pane__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  flex: none;
+  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
+}
+.code-pane__where {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.code-pane__project,
+.code-pane__sep {
+  color: var(--pl-color-fg-muted, #9a9aa3);
+  flex: none;
+}
+.code-pane__path {
+  color: var(--pl-color-fg, #e8e8ea);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.code-pane__range {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--pl-color-bg-subtle, #1b1b21);
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.code-pane__note {
+  flex: none;
+  margin: 8px 10px 0;
+  padding: 7px 10px;
+  border-left: 3px solid var(--pl-color-accent, #9b87f2);
+  border-radius: 4px;
+  background: var(--pl-color-bg-subtle, #1b1b21);
+  color: var(--pl-color-fg, #e8e8ea);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.code-pane__notice {
+  flex: none;
+  margin: 6px 10px 0;
+  color: var(--pl-color-status-warning, #e0b050);
+  font-size: 12px;
+}
+.code-pane__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin-top: 8px;
+}
+.code-pane__body--empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 16px;
+}
+.code-pane__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 12px;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+  font-size: 13px;
+}
+.code-pane__status--denied {
+  color: var(--pl-color-status-warning, #e0b050);
+}
+/* pierre's host element: hand it the console's mono face and an accent-tinted range. */
+.code-pane__view {
+  display: block;
+  --diffs-font-family: var(--pl-font-mono, ui-monospace, monospace);
+  --diffs-font-size: 12px;
+  --diffs-bg-selection-override: color-mix(in srgb, var(--pl-color-accent, #9b87f2) 22%, transparent);
+  --diffs-bg-selection-number-override: color-mix(in srgb, var(--pl-color-accent, #9b87f2) 34%, transparent);
+}
+
+/* Recent trail */
+.code-pane__recent {
+  flex: none;
+  border-top: 1px solid var(--pl-color-border, #2a2a31);
+  padding: 4px 6px;
+  max-height: 40%;
+  overflow: auto;
+}
+.code-pane__recent-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.code-pane__recent-toggle:hover {
+  color: var(--pl-color-fg, #e8e8ea);
+}
+.code-pane__count {
+  color: var(--pl-color-fg-subtle, #6b6b75);
+}
+.code-pane__recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.code-pane__recent-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--pl-color-fg, #e8e8ea);
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.code-pane__recent-item:hover,
+.code-pane__recent-item.is-active {
+  background: var(--pl-color-bg-hover, #1d1d23);
+}
+.code-pane__recent-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.code-pane__recent-project {
+  flex: none;
+  color: var(--pl-color-fg-subtle, #6b6b75);
+}
+
+/* Diff tab: the changed-file list */
+.code-pane__files {
+  flex: none;
+  list-style: none;
+  margin: 0;
+  padding: 4px 6px;
+  max-height: 35%;
+  overflow: auto;
+  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
+}
+.code-pane__files li {
+  flex: none;
+}
+.code-pane__file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--pl-color-fg, #e8e8ea);
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.code-pane__file-row:hover:not(:disabled),
+.code-pane__file-row.is-active {
+  background: var(--pl-color-bg-hover, #1d1d23);
+}
+.code-pane__file-row:disabled {
+  cursor: default;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__file-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.code-pane__file-meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__status-letter {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__status-letter.is-a,
+.code-pane__status-letter.is-u,
+.code-pane__add {
+  color: var(--pl-color-status-success, #4cc38a);
+}
+.code-pane__status-letter.is-d,
+.code-pane__del {
+  color: var(--pl-color-status-error, #e5484d);
+}
+.code-pane__status-letter.is-m,
+.code-pane__status-letter.is-r {
+  color: var(--pl-color-status-warning, #e0b050);
+}
+/* The File tab's body doesn't scroll itself: pierre's Virtualizer is the scroll container. */
+.code-pane__body:has(> .code-pane__virt) {
+  overflow: hidden;
+}
+.code-pane__virt {
+  height: 100%;
+  overflow: auto;
+}
+.code-pane__branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A windowed read of a big file: which lines are on screen, and paging either way. */
+.code-pane__pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__pager > span {
+  margin-right: auto;
+}
+/* A quiet line under the header — cut long lines, a rename's old name. */
+.code-pane__subnote {
+  flex: none;
+  margin: 6px 10px 0;
+  color: var(--pl-color-fg-subtle, #6b6b75);
+  font-size: 12px;
+}
+.code-pane__subnote code {
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}
+.code-pane__file-old {
+  color: var(--pl-color-fg-muted, #9a9aa3);
+}

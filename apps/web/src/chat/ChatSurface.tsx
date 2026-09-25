@@ -72,6 +72,7 @@ import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
+import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
 import { reattachKeyForMessages, reattachOrReconcile } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
@@ -2536,10 +2537,16 @@ function ChatSessionSlot({
           if (evt.name === "show_component") return;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => (message.id === assistantId ? applyToolEvent(message, evt) : message)),
+          const next = latest.messages.map((message) =>
+            message.id === assistantId ? applyToolEvent(message, evt) : message,
           );
+          chatStore.updateMessages(session.id, next);
+          // Follow mode (ADR 0112) — the LIVE path only. The args live on the card (the
+          // second start frame carries them); the end frame need not repeat them.
+          if (evt.phase === "end") {
+            const card = next.find((m) => m.id === assistantId)?.toolCalls?.find((c) => c.id === evt.id);
+            onLiveToolEvent(evt, card?.input);
+          }
         },
         onComponent: (spec) => {
           reveal.flush(); // part ordering — the component lands AFTER the text already streamed
@@ -2549,6 +2556,9 @@ function ChatSessionSlot({
             session.id,
             latest.messages.map((message) => (message.id === assistantId ? applyComponent(message, spec) : message)),
           );
+          // A `code-ref` (show_code) opens the code pane — here, on the live stream, and never
+          // on hydration/replay, where the same component re-renders from history.
+          onLiveComponent(spec);
         },
         onRoomReply: (reply) => {
           // A delegation rendered inline as a mini-conversation (#3042): the lead's

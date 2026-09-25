@@ -133,6 +133,70 @@ A path that is **not on the server's filesystem** must stay `type: "string"` —
 local browser would point at the wrong machine entirely. The test for `type: path` is
 "would `ls` on this box resolve it?", not "does it look like a path?".
 
+### The code pane
+
+A read-only file and diff viewer docked beside chat (ADR 0112) — the **Code** surface,
+on the right dock by default and always on a dock that isn't chat's. It's built for the
+operator as navigator: the agent points at evidence, and you read it at your own pace.
+
+- **The agent points.** The `show_code(project, path, line, end_line, note)` tool drops a
+  chip in the transcript (`path:12-18` plus a one-line "why") and, on the live turn,
+  opens the pane at that range with the note as a banner. A reload or a replayed
+  transcript never reopens it, and on a phone nothing opens by itself: tap the chip.
+- **You click.** A file path in a tool result opens in the pane at the line (see below).
+- **File tab.** Syntax-highlighted and line-numbered, with the range highlighted and
+  scrolled into view. The header has copy-path and ↗ to open the file in your external
+  editor. **Recent** lists the last 20 files you opened; click one to go back to it. The
+  open file and Recent survive a reload of the tab (sessionStorage). A file longer than
+  20,000 lines is shown as a window around the target line, with **Earlier** / **Later**
+  paging. A line longer than 2,000 characters is cut by the server, and the pane says so.
+  Secret-like files (`.env`, keys, `secrets.yaml`, …) show as *Hidden*. A binary file
+  shows its size, and a deleted file says it no longer exists.
+- **Diff tab.** The project's working tree vs `HEAD` (`GET /api/fs/diff`): changed files
+  with +/- counts (untracked ones included, secret-like ones listed but hidden), and a
+  unified patch for the file you pick. A pure rename shows *Renamed from …*, and a new
+  file over the server's 256 KB limit shows *Too large to show*. Click a line to open it
+  in the File tab. A deleted line opens the current file where that line used to be.
+- **Follow** (desktop only, off by default). While it's on, each `read_file`,
+  `search_files`, `edit_file` or `write_file` the agent finishes moves the pane to that
+  file, at most once every 800 ms. **Pin** holds the pane where it is while you read.
+
+The pane reads through `GET /api/fs/file`, the same fence `read_file` uses. It needs no
+`/api/fs/roots`, so it works for a remote fleet member too. The highlighter
+(`@pierre/diffs` over Shiki) is a lazy chunk that loads the first time the pane opens.
+Files over 5,000 lines render as plain text, and the view is virtualized.
+
+### Open files in your editor
+
+File paths in the fs tools' results are links: `read_file` gets a header link to the file
+(at its `offset`), each `file:line` hit in `search_files` opens at that line, and every
+path from `find_files` / `write_file` / `edit_file` opens the file. **Settings ▸ Chat ▸
+Open files in** picks where a click goes: **protoAgent** (the default) opens the code
+pane; **Zed**, **VS Code** or **Cursor** open your editor; **Off** keeps paths as plain
+text. With protoAgent selected, **External editor** picks what ⌘/Ctrl-click and the pane's
+↗ open. With an editor selected, ⌘/Ctrl-click opens the pane instead. Both choices are
+saved per browser (localStorage `protoagent.openFilesIn` and `protoagent.editor`), not in
+agent config. They describe the machine you're sitting at, so they stay put when you switch
+fleet agents. If you had set the editor to Off before the pane shipped, links stay off.
+
+The tools speak project-relative paths, so the console joins them onto each project's
+absolute root from `GET /api/fs/roots` (`{"roots": {"<project>": "<abs root>"}}`) — the
+live fence the tools actually resolve through, not the ADR 0095 registry
+`/api/projects` reports (explicit `filesystem.projects` or the workspace default can
+shadow it). The links are `zed://file/<abs>:<line>` (and `vscode://`, `cursor://`), so
+they only resolve when the console and the agent share a filesystem — a local server or
+the desktop app; a remote fleet member's paths don't exist on your machine. When an editor
+is the click target, results render as plain text exactly as before if the preference is
+Off, the project is unknown, or the roots haven't loaded.
+
+> **Desktop app:** WKWebView/WebView2 can't load `zed://` themselves, so the Tauri shell
+> (`apps/desktop/src-tauri/src/lib.rs`) hands these links to the OS through
+> `tauri-plugin-opener` — on both the same-window navigation path (`serve_navigation`)
+> and the new-window path (`route_new_window`). It is a strict allowlist: only
+> `zed://file/…`, `vscode://file/…` and `cursor://file/…` pass (`is_editor_link`); every
+> other custom scheme is still dropped, so web content can't launch arbitrary URL
+> handlers.
+
 > `operator.allowed_dirs` and `operator.project_dir` are **not** that fence, despite the
 > names. `allowed_dirs` is inert (its enforcement helper has no callers since tasks went
 > instance-global and notes became a plugin); `project_dir` only names the console's

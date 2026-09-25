@@ -200,7 +200,7 @@ function ToolsBody() {
                 >
                   <div className="tools-list">
                     {/* Contextual group settings (ADR 0048): the shell/fs EXECUTION policy (enable ·
-                        run · approval · /bypass) and the Work-folders fence live WITH the tools they
+                        run · approval · /bypass · auto-approve list) and the Work-folders fence live WITH the tools they
                         gate — chips on the group that open a dialog (like a plugin's Configure), not
                         global chrome above the search. Same /api/settings + fs-projects save paths. */}
                     {cat === "Filesystem" ? (
@@ -211,6 +211,7 @@ function ToolsBody() {
                             "filesystem.allow_run",
                             "filesystem.run_requires_approval",
                             "filesystem.bypass_allowed",
+                            "filesystem.run_auto_approve",
                           ]}
                           title="Shell & filesystem tools"
                           label="Shell & filesystem tools"

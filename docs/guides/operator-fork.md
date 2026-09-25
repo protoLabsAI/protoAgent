@@ -32,6 +32,26 @@ A monitor sets every project `write: false` — `read_file`/`list_dir`/
 *sense* state; `write_file`/`edit_file` are refused. (A coding fork would set
 `write: true` and lean on git-as-seatbelt.)
 
+**Running on your own desktop?** Name your editor and the agent can hand you a
+location instead of pasting it — "open the router for me" jumps Zed to the file:
+
+```yaml
+filesystem:
+  editor_command: zed        # or "code -g" / "cursor -g"
+```
+
+That binds `open_in_editor(project, path, line?)`. It resolves through the same
+fence (nothing outside a managed project opens), works in `write: false` projects,
+and returns immediately. It is for showing *you* a file — the agent still reads
+with `read_file`. Leave it unset on a headless or remote deploy.
+
+Independently of that, every fs toolset includes
+`show_code(project, path, line, end_line?, note?)`: it points the **console's** code pane at a line range with a
+one-sentence note on why it matters ([ADR 0112](../adr/0112-console-code-pane.md)).
+It needs no editor and works for remote members too, because the console fetches the
+file through the fenced `GET /api/fs/file`. Secret-like files (`.env`, keys,
+credentials) and binaries are refused.
+
 ## 3. Write the operator persona (`config/SOUL.md`)
 
 The persona makes it a monitor-and-unblock manager, not a coder. Sketch:

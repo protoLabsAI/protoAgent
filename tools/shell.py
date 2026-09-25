@@ -17,10 +17,9 @@ offensive-security specifics. Complements ``tools/gh_cli.py`` (which is
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 
-from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
+from infra.proc import akill_tree, child_env, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
 
 
 @dataclass
@@ -48,11 +47,12 @@ async def run_command(
 
     Never raises for the common failure modes: a missing binary or a timeout
     come back as ``error`` / ``timed_out`` so callers can return a clean tool
-    string. ``env`` is merged over the current environment.
+    string. ``env`` is merged over the current environment — the frozen-bundle-scrubbed
+    one (:func:`infra.proc.child_env`), since a command can start something that
+    outlives this server (``zed .``, a daemon).
     """
-    merged_env = None
+    merged_env = child_env()
     if env is not None:
-        merged_env = os.environ.copy()
         merged_env.update(env)
 
     proc = None

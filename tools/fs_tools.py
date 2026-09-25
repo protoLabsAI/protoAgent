@@ -26,6 +26,9 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import shlex
+import shutil
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +39,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
+from infra.proc import child_env, detached_kwargs
+from tools.fs_view import split_lines
+from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 from tools.shell import run_command as _shell_run
 
 log = logging.getLogger("protoagent.fs")
@@ -122,6 +128,20 @@ def _to_crlf(text: str) -> str:
     effect of a one-line edit. So the needle moves to the file's convention instead.
     """
     return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
+_ECHO_CHARS = 80
+
+
+def _echo_line(text: str) -> str:
+    """One source line for ``show_code``'s self-check echo: trimmed, ≤ 80 chars, in backticks."""
+    t = text.strip()
+    if not t:
+        return "(blank line)"
+    if len(t) > _ECHO_CHARS:
+        t = t[: _ECHO_CHARS - 1] + "…"
+    t = t.replace("`", "'")
+    return f"`{t}`"
 
 
 def _is_probably_binary(path: Path) -> bool:
@@ -301,11 +321,117 @@ def _configured_entries(config, *, create: bool = False) -> list[dict]:
     return [e for e in entries or [] if isinstance(e, dict)]
 
 
-def _registry_from_config(config) -> ProjectRegistry:
+def _is_windows() -> bool:
+    """Seam for tests — the Windows-only launch rules below key on this."""
+    return os.name == "nt"
+
+
+def _strip_quotes(token: str) -> str:
+    """Drop ONE pair of matching surrounding quotes. ``shlex.split(posix=False)`` keeps them,
+    so ``"C:\\Program Files\\Zed\\zed.exe"`` would otherwise reach ``shutil.which`` quoted."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return token
+
+
+def _split_editor_command(editor_command: str) -> list[str]:
+    """Split ``filesystem.editor_command`` into argv tokens.
+
+    POSIX: plain shlex. Windows: ``posix=False`` so backslashed paths survive, then the
+    quotes it retains are stripped per token. Raises ``ValueError`` on an unbalanced quote.
+    """
+    if _is_windows():
+        return [_strip_quotes(t) for t in shlex.split(editor_command, posix=False)]
+    return shlex.split(editor_command)
+
+
+# Windows runs .cmd/.bat launchers through cmd.exe, whose metacharacters (& | < > ^ %) in
+# a managed-project file name would be interpreted — command injection via a file name.
+_WINDOWS_BATCH_SUFFIXES = (".cmd", ".bat")
+
+
+def _editor_argv(editor_command: str, target: Path, line: int | None = None) -> list[str]:
+    """``argv`` that opens ``target`` (at ``line``) in the operator's editor.
+
+    ``editor_command`` is operator config (``zed``, ``code -g``, ``cursor -g``), split
+    with shlex. The target is appended as ONE argv element, ``<abs_path>[:<line>]`` — the
+    ``path:line`` form Zed, VS Code ``-g`` and Cursor ``-g`` all accept. Nothing the model
+    supplies ever becomes an argv element of its own: ``target`` is the fence-resolved
+    absolute path, and ``line`` is an int. The absolute-path assertion is what rules out
+    option injection — an absolute path can never start with ``-``.
+
+    Raises ``ValueError`` on an empty/unparseable command or a non-absolute target.
+    """
+    try:
+        base = _split_editor_command(editor_command)
+    except ValueError as exc:
+        raise ValueError(f"filesystem.editor_command is not a valid command line: {exc}") from exc
+    if not base:
+        raise ValueError("filesystem.editor_command is empty")
+    if not target.is_absolute() or str(target).startswith("-"):
+        raise ValueError(f"refusing a non-absolute editor target: {target}")
+    arg = str(target) if line is None else f"{target}:{int(line)}"
+    return [*base, arg]
+
+
+# How long `open_in_editor` waits to see whether the editor CLI failed outright (bad
+# flag, app missing). Editor CLIs (zed/code/cursor without --wait) hand off to the GUI
+# and exit well inside this; one that is still running is simply left to it.
+_EDITOR_LAUNCH_GRACE_S = 1.5
+
+
+def _launch_editor(argv: list[str]) -> str | None:
+    """Start the editor without blocking on it. ``None`` on success, else an error string.
+
+    Detached (own session / process group) with stdio on DEVNULL, so the editor never
+    holds the server's pipes and a server restart doesn't take the editor with it. A
+    child still running after the grace window is reaped by a daemon thread so it can't
+    linger as a zombie.
+
+    The env is :func:`infra.proc.child_env`: an editor OUTLIVES the server, so a frozen
+    build's ``_MEIPASS`` paths (``SSL_CERT_FILE`` → the bundled cacert) would dangle once
+    the server exits — and the editor passes them to every process it starts (an ACP
+    agent's httpx client then dies with ``FileNotFoundError`` at startup).
+    """
+    exe = shutil.which(argv[0])
+    if exe is None:
+        return f"Error: editor command {argv[0]!r} not found on PATH."
+    if _is_windows() and exe.lower().endswith(_WINDOWS_BATCH_SUFFIXES):
+        # e.g. VS Code's `code` is `code.cmd`. Popen would route it through cmd.exe, which
+        # parses the file-name argument — refuse rather than try to escape cmd.exe quoting.
+        return (
+            f"Error: editor command {argv[0]!r} resolves to a batch launcher ({exe}), which Windows "
+            "runs through cmd.exe — a file name could inject commands. Point "
+            "filesystem.editor_command at the editor's real .exe instead, e.g. "
+            '"C:\\Users\\<you>\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe" -g'
+        )
+    try:
+        proc = subprocess.Popen(
+            [exe, *argv[1:]],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            env=child_env(),
+            **detached_kwargs(),
+        )
+    except OSError as exc:
+        return f"Error: failed to launch editor {argv[0]!r}: {exc}"
+    try:
+        rc = proc.wait(timeout=_EDITOR_LAUNCH_GRACE_S)
+    except subprocess.TimeoutExpired:
+        threading.Thread(target=proc.wait, name="open-in-editor-reap", daemon=True).start()
+        return None
+    if rc != 0:
+        return f"Error: editor command {argv[0]!r} exited with status {rc}."
+    return None
+
+
+def _registry_from_config(config, *, create: bool = True) -> ProjectRegistry:
     projects: list[Project] = []
     # Explicit projects, or the default workspace dir (created) when none are
     # configured — the on-by-default fenced workspace.
-    entries = _configured_entries(config, create=True)
+    entries = _configured_entries(config, create=create)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -327,6 +453,21 @@ def _registry_from_config(config) -> ProjectRegistry:
             )
         )
     return ProjectRegistry(projects)
+
+
+def project_roots(config) -> dict[str, str]:
+    """``{project name: absolute root}`` for the fence the fs tools resolve against.
+
+    The same ``_registry_from_config`` projection the tools use (explicit
+    ``filesystem.projects`` → ADR 0095 registry → workspace default, minus any root
+    that isn't a directory), so a console turning a tool's project-relative path
+    back into an absolute one can't disagree with where the tool actually read it.
+    Empty when the filesystem primitive is off — the tools aren't bound then.
+    Read-only: never mkdirs the default workspace (the tools' own build does)."""
+    if not bool(getattr(config, "filesystem_enabled", True)):
+        return {}
+    registry = _registry_from_config(config, create=False)
+    return {name: str(registry.get(name).root) for name in registry.names()}
 
 
 class _RegistryRef:
@@ -376,6 +517,21 @@ class _RegistryRef:
             self._cached_registry = _registry_from_config(cfg)
             self._cached_config = cfg
         return self._cached_registry
+
+
+def live_project_registry(fallback_config=None) -> ProjectRegistry:
+    """The fenced project registry exactly as the fs tools see it RIGHT NOW.
+
+    For callers outside ``build_fs_tools`` that must honour the same fence — e.g.
+    ``delegate_to(project=…)`` scoping a coding delegate to one registered project.
+    Resolves through ``_RegistryRef`` (live ``HOST.config``, else ``fallback_config``),
+    so a project registered mid-turn is visible here too. When the live config has
+    ``filesystem.enabled: false`` the fs tools are not bound at all, so this returns an
+    EMPTY registry rather than a fence nobody else is enforcing."""
+    ref = _RegistryRef(fallback_config)
+    if not bool(getattr(ref._live_config(), "filesystem_enabled", False)):
+        return ProjectRegistry([])
+    return ref.get()
 
 
 def _bypass_requested() -> bool:
@@ -504,6 +660,11 @@ def build_fs_tools(config) -> list:
     # Whether this HOST permits bypass-permissions mode at all (default True). When False, the
     # approval gate is enforced regardless of any caller-supplied bypass metadata.
     bypass_allowed = bool(getattr(config, "filesystem_bypass_allowed", True))
+    # Safe-command allowlist (``filesystem.run_auto_approve``): argv-prefix entries whose
+    # matching commands skip the approval prompt. Validated HERE — at every graph build,
+    # so a settings save (hot reload) re-validates — with unusable entries dropped + warned.
+    # Only consulted when the gate would otherwise fire; see tools/run_auto_approve.py.
+    auto_approve_rules = compile_auto_approve(getattr(config, "filesystem_run_auto_approve", None)) if allow_run else []
 
     def _mode(p: Project) -> str:
         if not p.write:
@@ -585,7 +746,10 @@ def build_fs_tools(config) -> list:
             text = _read_text_verbatim(target)
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
-        lines = text.splitlines(keepends=True)
+        # `\n`-only numbering (ADR 0112): the same lines search_files reports, the code pane
+        # shows and the operator's editor counts — str.splitlines also breaks on \f, lone
+        # \r, \x85, \u2028 … and put `search_files`'s hits on the wrong row.
+        lines = split_lines(text, keepends=True)
         total = len(lines)
         # offset=1 must stay valid for an empty file (total=0) — `max(total, 1)`
         # keeps that floor without letting a LARGER offset silently skip the
@@ -737,7 +901,10 @@ def build_fs_tools(config) -> list:
                     skipped_binary = True
                     continue
                 try:
-                    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+                    # Verbatim + `\n`-only lines: `read_text` translates a lone `\r` into a
+                    # line break and `splitlines` adds \f, \x85, \u2028 …, so the `file:N` this
+                    # prints disagreed with read_file(offset=N), the code pane and editors.
+                    lines = split_lines(_read_text_verbatim(f))
                 except OSError:
                     continue
                 # Stop SCANNING once the match cap is reached — a huge file with more
@@ -906,7 +1073,136 @@ def build_fs_tools(config) -> list:
             return f"Error: cannot delete {path}: {exc}"
         return f"Deleted {path}."
 
-    tools = [list_projects, list_dir, read_file, find_files, search_files, write_file, edit_file, delete_file]
+    @tool
+    def show_code(project: str, path: str, line: int, end_line: int | None = None, note: str = "") -> str:
+        """Put a specific piece of code in front of the operator, in the console's code pane,
+        WITH a one-sentence `note` on why it matters ("this is where the retry budget is
+        reset", "the bug: the lock is released before the write").
+
+        Use it to point at evidence — the function you're about to change, the line that
+        explains a failure, the call site you found — so the operator can follow and check
+        your reasoning. Prefer it over pasting large code blocks into your reply. It does
+        NOT read the file for you (use `read_file` for that), and it can't show secret-like
+        files (.env, keys, credentials) or binary files.
+
+        Get EXACT line numbers first — `search_files` prints `file:line` for every hit, or
+        `read_file` with an `offset` tells you where a chunk starts — never count lines by
+        eye in a plain `read_file` result. The result echoes the first and last line of the
+        range you pointed at; if they aren't the code you meant, call again with the right lines.
+
+        `path` is relative to the project root; `line` is 1-based and `end_line` (inclusive,
+        defaults to `line`) is clamped to the end of the file. `note` is at most 280 chars.
+        Works in read-only projects.
+        """
+        from graph.components import CODE_REF_NOTE_MAX, encode_component
+        from tools.fs_secrets import is_secret_path
+        from tools.fs_view import count_lines, open_regular, read_window, sniff_binary
+
+        registry = registry_ref.get()
+        try:
+            target = registry.resolve(project, path)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        root = registry.get(project).root
+        reason = is_secret_path(path) or is_secret_path(target.relative_to(root))
+        if reason:
+            return f"Error: {path} looks like a secret ({reason}) — the code pane won't show it."
+        if not target.is_file():
+            return f"Error: no such file: {path}"
+        note = (note or "").strip()
+        if len(note) > CODE_REF_NOTE_MAX:
+            return f"Error: `note` is {len(note)} chars; keep it to one sentence (≤ {CODE_REF_NOTE_MAX})."
+        try:
+            # One verified-regular descriptor for both the sniff and the count (a FIFO
+            # swapped in after is_file() must not block the tool).
+            with open_regular(target) as fh:
+                if sniff_binary(fh):
+                    return f"Error: {path} is a binary file — the code pane shows text only."
+                total = count_lines(fh)
+                if not isinstance(line, int) or line < 1 or line > total:
+                    return f"Error: line {line!r} is out of range for {path} ({total} lines)."
+                end = line if end_line is None else end_line
+                if end < line:
+                    return f"Error: end_line ({end}) is before line ({line})."
+                end = min(end, total)
+                # Echo the range's first and last lines so the model can check it pointed
+                # where it meant to (it often counts lines by eye) and re-point if not.
+                fh.seek(0)
+                first = read_window(fh, line, line).text
+                fh.seek(0)
+                last = read_window(fh, end, end).text if end != line else first
+        except OSError as exc:
+            return f"Error: cannot read {path}: {exc}"
+        rel = target.relative_to(root).as_posix()
+        where = f"{line}" if end == line else f"{line}-{end}"
+        echo = f"L{line}: {_echo_line(first)}"
+        if end != line:
+            echo += f"  L{end}: {_echo_line(last)}"
+        props = {"project": project, "path": rel, "line": line, "end_line": end, "note": note}
+        # The human/model-facing text comes FIRST: server/chat.py lifts everything from the
+        # sentinel on into the component frame and keeps this prefix as the tool card.
+        return f"Showing {project}/{rel}:{where} to the operator. {echo}\n" + encode_component("code-ref", props)
+
+    tools = [
+        list_projects,
+        list_dir,
+        read_file,
+        find_files,
+        search_files,
+        show_code,
+        write_file,
+        edit_file,
+        delete_file,
+    ]
+
+    # `open_in_editor` — bound only when the operator named their desktop editor. It is a
+    # side effect on the operator's screen, not on the project, so it works in read-only
+    # projects too; the fence is the same `registry.resolve` every other fs tool uses.
+    editor_command = str(getattr(config, "filesystem_editor_command", "") or "").strip()
+    try:
+        editor_name = (_split_editor_command(editor_command) or [""])[0]
+    except ValueError:
+        # An unbalanced quote is an operator typo — never break the graph build over it.
+        log.warning(
+            "[fs] filesystem.editor_command is not a valid command line: %r — open_in_editor NOT bound", editor_command
+        )
+        editor_name = ""
+    if editor_name:
+
+        @tool
+        def open_in_editor(project: str, path: str, line: int | None = None) -> str:
+            """Open a file from a managed project in the operator's code editor on their
+            machine (optionally jumping to `line`), so THEY can look at it.
+
+            Use it when the operator asks to see/open/show a file ("open the router for
+            me"), or to hand off a specific location worth their attention (the bug you
+            found, the function to review). It does NOT return the file's contents — use
+            `read_file` to read a file yourself. `path` is relative to the project root;
+            works in read-only projects too.
+            """
+            registry = registry_ref.get()
+            try:
+                target = registry.resolve(project, path)
+            except ValueError as exc:
+                return f"Error: {exc}"
+            if not target.exists():
+                return f"Error: no such file: {path}"
+            if not target.is_file():
+                return f"Error: not a file: {path} (open_in_editor opens files, not directories)."
+            if line is not None and line < 1:
+                return f"Error: `line` must be a positive line number (got {line!r} for {path})."
+            try:
+                argv = _editor_argv(editor_command, target, line)
+            except ValueError as exc:
+                return f"Error: {exc}"
+            err = _launch_editor(argv)
+            if err:
+                return err
+            where = f"{path}:{line}" if line is not None else path
+            log.info("[fs] open_in_editor %s/%s via %s", project, where, argv[0])
+            return f"Opened {project}/{where} in {editor_name}."
+
+        tools.append(open_in_editor)
 
     if allow_run:
 
@@ -938,7 +1234,24 @@ def build_fs_tools(config) -> list:
             # the command before it runs. interrupt() re-runs this fn from the
             # top on resume (the validation above is idempotent) and returns the
             # operator's decision. Denied → don't run.
-            if run_requires_approval and not (bypass_allowed and _bypass_requested()):
+            # Safe-command allowlist: only where the gate would otherwise fire, and only for
+            # the POSIX grammar (cmd.exe / PowerShell have their own metacharacters the
+            # matcher doesn't model). A match runs its shlex tokens DIRECTLY — no shell —
+            # so the command that was matched is exactly the one that runs.
+            auto = None
+            if (
+                auto_approve_rules
+                and run_requires_approval
+                and argv[:2] == ["/bin/sh", "-c"]
+                and not (bypass_allowed and _bypass_requested())
+            ):
+                auto = match_auto_approve(command, auto_approve_rules)
+            marker = ""
+            if auto is not None:
+                rule, argv = auto
+                marker = f'(auto-approved: matches "{rule.entry}")\n'
+                log.info("[fs] run_command auto-approved by run_auto_approve[%s]: %s", rule.entry, command)
+            elif run_requires_approval and not (bypass_allowed and _bypass_requested()):
                 from langgraph.types import interrupt
 
                 decision = interrupt(
@@ -977,7 +1290,7 @@ def build_fs_tools(config) -> list:
             body = res.stdout or "(no output)"
             if res.stderr:
                 body += f"\n[stderr]\n{res.stderr}"
-            return body[:_MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
+            return marker + body[:_MAX_READ_CHARS] + (f"\n(exit {res.returncode})" if res.returncode else "")
 
         tools.append(run_command)
 

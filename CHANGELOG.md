@@ -15,6 +15,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.178.0] - 2026-09-25
+
+### Added
+- **The code pane's server half: fenced `GET /api/fs/file` + `GET /api/fs/diff`, and a `show_code` tool (#3605).**
+  The console can now fetch a project file's line window (the `read_file` fence, `\n`-addressed,
+  capped and paged) and the working-tree diff vs `HEAD` — through hardened git that runs no
+  external diff, textconv, filter driver, fsmonitor, hook or submodule, whatever the repository's
+  config or `.gitattributes` say. Secret-like names (`.env`, keys, credentials) are never shown.
+  The agent points the operator at code with `show_code(project, path, line, end_line?, note?)`,
+  which emits a validated `code-ref` component. [ADR 0112](docs/adr/0112-console-code-pane.md).
+  `read_file` and `search_files` now number lines on `\n` only (a form feed or lone `\r` no
+  longer starts a line), so `search_files`' `file:line`, `read_file(offset=)`, `show_code`
+  and the pane all point at the same row.
+
+- **Code pane: a read-only file and diff viewer docked beside chat (#3606).** When the agent
+  calls `show_code`, a chip lands in the transcript and the pane opens at the range with the
+  agent's note (desktop only; a phone waits for a tap). A file path in a tool result now
+  opens the pane by default, and ⌘/Ctrl-click opens your editor (Settings ▸ Chat ▸ Open
+  files in). The Diff tab shows the working tree vs HEAD, and an opt-in Follow mode moves
+  the pane to each file the agent reads or edits. ADR 0112.
+
+### Fixed
+- **Apps launched by the desktop server no longer inherit paths into its temporary bundle dir (#3604).**
+  The frozen desktop server exports `SSL_CERT_FILE` at its bundled CA file inside a
+  temporary extraction dir that is deleted on exit. An editor opened with `open_in_editor`
+  outlived the server, kept the dangling path, and passed it on — Zed's protoAgent agent
+  then failed at startup with `FileNotFoundError`. External children (editors,
+  `run_command`, `gh`, MCP servers, ACP delegates) now get an env with those paths removed
+  and PyInstaller's loader variables restored.
+
+## [0.177.0] - 2026-09-24
+
+### Added
+- **`onboard_project` clones from any git host, and a new `register_local_project` registers a directory already on disk (#3599).**
+  Clone sources can now be `owner/repo` (GitHub), `host/owner/repo`, any https/ssh/git URL,
+  or the scp form `git@host:owner/repo`; `onboarding.allow` globs match the normalized
+  `host/owner/repo`, so `gitlab.com/acme/*` and self-hosted hosts work. git receives the URL
+  as given (ssh keys and credential helpers apply), credentials are masked in results, and
+  `file://`, `ext::`, local paths and option-like inputs are refused before git runs.
+  `register_local_project` accepts only a directory that resolves under `onboarding.root`
+  and fills the GitHub binding from its `origin` remote. `github_repo` still works as an
+  alias for the new `repo` argument.
+
+- **`delegate_to(project=…)` sends an ACP coding delegate into one registered project for a call, and returns the diff it made (#3600).**
+  The project is resolved through the same fenced registry the filesystem tools use. Only the
+  coder's working directory changes; its command, args and env stay as configured. Read-only
+  projects and non-ACP delegates are refused. For an unmanaged coder in a git project, the reply
+  now ends with a `--stat`, the new files and the unified diff (capped at 20k characters). Both
+  snapshots are git trees written through a temporary index, so files that were already dirty or
+  untracked beforehand are not attributed to the coder. Turn it off per delegate with
+  `return_diff: false`.
+
+- **`filesystem.run_auto_approve`: a safe-command allowlist so read-mostly `run_command` calls stop asking for approval (#3602).**
+  List command prefixes in argv terms (`git status`, `git diff`, `npx vitest run`,
+  `mise exec -- npm test`); a command that starts with one word-for-word, contains no shell
+  metacharacters or globs, and carries no denylisted option (`--output`, `--exec`,
+  `--config`, … including abbreviations) runs without the prompt — exec'd directly, no shell —
+  and its result is marked `(auto-approved: matches "…")`. Too-broad entries (`npx`, `sh`,
+  bare `git`, `mise exec --`) are dropped with a warning. Editable in **Settings ▸
+  Capabilities ▸ Tools ▸ Shell & filesystem tools**. Default empty — nothing changes until
+  you opt in. It reduces friction, it isn't a sandbox: see the caveats in the sandboxing guide.
+
+## [0.176.0] - 2026-09-24
+
+### Added
+- **File paths in tool results open in your editor — Zed by default (#3596).** `read_file`,
+  `search_files` (each `file:line` hit, at that line), `find_files`, `write_file` and
+  `edit_file` results now link their paths via `zed://file/…` (or VS Code / Cursor), chosen
+  under Settings ▸ This console ▸ Chat ▸ Open files in (per browser; Off restores plain text). Roots come
+  from a new read-only `GET /api/fs/roots`, computed from the same fence the fs tools resolve
+  against, so a link can't point somewhere the tool didn't read.
+  In the desktop app the shell hands these links to the OS via `tauri-plugin-opener` under
+  a strict `zed:`/`vscode:`/`cursor:` (`://file/` only) allowlist — no other custom scheme
+  passes, and only a link to an existing file on a local disk opens (directories,
+  `.code-workspace` files, `..` paths and Windows UNC paths are refused).
+
+- **`open_in_editor`: an agent on your own machine can pop a file open in your editor (#3597).**
+  Set `filesystem.editor_command` (`zed`, `code -g`, `cursor -g`) and the agent gets
+  `open_in_editor(project, path, line?)` — "open the router for me" jumps your editor to the
+  file and line. It resolves through the same fence as every filesystem tool (nothing outside
+  a managed project opens), works in read-only projects, and launches detached without
+  waiting; it opens files, never directories. Unset (the default) = the tool is not bound.
+  On Windows, point it at the editor's real `.exe` — a `.cmd`/`.bat` launcher (VS Code's
+  `code`) is refused, because `cmd.exe` would interpret characters in file names.
+
+## [0.175.0] - 2026-09-24
+
+### Added
+- **Langfuse traces carry their input and output, and ACP coder runs are traced (#3587).** A turn's trace now shows the user's message and the agent's answer. Every generation shows the messages it was sent and its reply: credentials are redacted, each message is capped at 8k chars, each call at 32k (newest messages first; prompt capture keeps the full prompt). Traces group under Langfuse Sessions by session id. Incognito turns still record structure, usage and cost, but no content. Before this, IO was left to the LiteLLM gateway, so an agent on a native OAuth provider logged no prompts or replies anywhere. Coder runs (the project board's included) are `acp:<name>` agent spans with each tool call nested under them; before this, no coder run reached Langfuse.
+
+### Changed
+- **The shipped example config declares its `providers:` registry explicitly (#3128).** `config/langgraph-config.example.yaml` now states its `gateway` connection (ADR 0106) instead of leaning on the load-time migration that synthesises one from the retired `model.api_base`/`model.api_key`. A config with those fields removed resolves the same gateway endpoint and key it does today — the precondition for retiring the three fields. The migration stays as a fallback for configs that declare nothing.
+
+### Fixed
+- **Large-document knowledge ingest no longer silently loses every vector (#3126).** `HybridKnowledgeStore.add_document` embedded a whole document's chunks in one request; on a book-sized ingest (e.g. 839 chunks from a 336-page PDF) that blew the shared embeddings client's query-tuned 8s timeout, the batch returned nothing, and the rows were kept FTS5-only while the ingest reported success — so semantic recall never surfaced the document. The embed batch is now sliced into timeout-sized requests (128 chunks each): one slow slice costs only its own vectors, the rest still land, and a failed slice falls back to per-chunk embedding. `IngestResult` now carries an `embedded` count, which the `knowledge_ingest` tool and `POST /api/knowledge/ingest` surface so a partial embed reads as "839 chunks, 0 embedded" instead of a silent success. The shared client's `request_timeout`/`max_retries` (correct for the chat query hot-path, #1681) are unchanged.
+
+- **`npm run --workspaces build` no longer hard-fails on the desktop app without a frozen sidecar (#3128).** `apps/desktop`'s `build` now skips `tauri build` (exit 0) when the PyInstaller server sidecar is absent — a fresh clone, the console CI sweep, any contributor machine — and runs the real bundle, forwarding every arg, once the sidecar exists. The Desktop Build workflow is unchanged: it freezes the sidecar first, so it still bundles as before.
+
 ## [0.174.1] - 2026-09-24
 
 ### Fixed

@@ -4,6 +4,7 @@ import type { JSX } from "react";
 
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 
+import { CodeRefChip } from "../codeviewer/CodeRefChip";
 import { registeredChatComponents } from "../ext/componentRegistry";
 import type { ComponentSpec } from "../lib/types";
 
@@ -113,6 +114,8 @@ const BUILTINS: Record<string, (p: { props: Record<string, unknown> }) => JSX.El
   table: TableComponent,
   keyvalue: KeyValueComponent,
   timeline: TimelineComponent,
+  // show_code's pointer at a file range (ADR 0112) — a chip that opens the code pane.
+  "code-ref": CodeRefChip,
 };
 
 export function ChatComponent({ spec }: { spec: ComponentSpec }) {

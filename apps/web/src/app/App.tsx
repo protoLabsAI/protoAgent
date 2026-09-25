@@ -51,6 +51,7 @@ import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { MemorySurface } from "../memory/MemorySurface";
+import { CodeSurface } from "../codeviewer/CodeSurface";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { PluginRailManage } from "../plugins/PluginRailManage";
@@ -159,7 +160,10 @@ function useLocalStorageState(key: string, fallback: string) {
 export function App() {
   const runtimeQ = useQuery({
     ...runtimeStatusQuery(),
-    retry: (failureCount, error) => !is401(error) && failureCount < 30,
+    // Retry budget must outlast the bootStuck timer (45s) so a slow cold start shows the gentle
+    // "taking longer than usual / Continue anyway" path, not the harsh "engine isn't responding"
+    // error. ~60s of retries makes bootFailed a genuine timeout for a truly-down engine.
+    retry: (failureCount, error) => !is401(error) && failureCount < 60,
     retryDelay: 1000,
     // Poll until the graph loads — and while a setup step the operator started from a banner is
     // still running server-side (a CLI download, a Chrome install), so its progress and outcome
@@ -678,6 +682,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       // digests, hot memory, per-turn injection record.
       case "memory":
         return <MemorySurface />;
+      // The code pane (ADR 0112) — read-only file + diff viewer; the heavy part is lazy.
+      case "code":
+        return <CodeSurface />;
       // Settings is no longer a rail surface (2026-06 consolidation) — it's a utility-bar
       // pill opening the settings dialog (SettingsOverlay). Notes is the first-party `notes`
       // plugin (ADR 0034 S4) — rendered via the default

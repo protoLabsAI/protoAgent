@@ -1,5 +1,41 @@
 [
   {
+    "version": "v0.178.0",
+    "date": "2026-09-25",
+    "changes": [
+      "The code pane's server half: fenced GET /api/fs/file + GET /api/fs/diff, and a show_code tool (#3605).",
+      "Code pane: a read-only file and diff viewer docked beside chat (#3606).",
+      "Apps launched by the desktop server no longer inherit paths into its temporary bundle dir (#3604)."
+    ]
+  },
+  {
+    "version": "v0.177.0",
+    "date": "2026-09-24",
+    "changes": [
+      "onboard_project clones from any git host, and a new register_local_project registers a directory already on disk (#3599).",
+      "delegate_to(project=…) sends an ACP coding delegate into one registered project for a call, and returns the diff it made (#3600).",
+      "filesystem.run_auto_approve: a safe-command allowlist so read-mostly run_command calls stop asking for approval (#3602)."
+    ]
+  },
+  {
+    "version": "v0.176.0",
+    "date": "2026-09-24",
+    "changes": [
+      "File paths in tool results open in your editor — Zed by default (#3596).",
+      "open_in_editor: an agent on your own machine can pop a file open in your editor (#3597)."
+    ]
+  },
+  {
+    "version": "v0.175.0",
+    "date": "2026-09-24",
+    "changes": [
+      "Langfuse traces carry their input and output, and ACP coder runs are traced (#3587).",
+      "The shipped example config declares its providers: registry explicitly (#3128).",
+      "Large-document knowledge ingest no longer silently loses every vector (#3126).",
+      "npm run --workspaces build no longer hard-fails on the desktop app without a frozen sidecar (#3128)."
+    ]
+  },
+  {
     "version": "v0.174.1",
     "date": "2026-09-24",
     "changes": [

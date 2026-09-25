@@ -1,6 +1,8 @@
 # ADR 0062 — Full-screen document viewer surface
 
-**Status:** Accepted (shipped)
+**Status:** Accepted (shipped) — **amended by [ADR 0112](0112-console-code-pane.md)**: the
+console code pane reuses this store + imperative-open pattern (`openCode(ref)` over a
+module-level `codeviewer` store) but as a docked surface, not a full-screen dialog.
 
 ## Context
 

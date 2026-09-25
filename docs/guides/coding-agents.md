@@ -349,6 +349,12 @@ pushing, open duplicate PRs when one item is fanned to several coders, and `git 
 their scratch into the diff. Every one of those is a *deterministic* step an LLM was asked
 to perform.
 
+In that default (unmanaged) mode, a one-off fix is best sent with
+`delegate_to(target, query, project="<registered project>")`. The coder runs in that
+project for the call, and its reply comes back with a snapshot-based diff of what it
+changed, so the lead can check the edit instead of trusting the coder's summary. See
+[Delegates › Send a coder into a specific project](delegates.md#send-a-coder-into-a-specific-project-project).
+
 `manage_git: true` on an `acp` delegate moves the whole lifecycle into the framework
 (`plugins/coding_agent/git_harness.py`); the coder is told to **edit files and run tests
 only**. Per dispatch, the harness:
