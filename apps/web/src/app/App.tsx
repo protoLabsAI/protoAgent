@@ -24,7 +24,7 @@ import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
 import { ProtoLabsIcon } from "./ProtoLabsIcon";
-import { bootGatePhase, bootGateReady } from "./bootGate";
+import { bootGatePhase, bootGateReady, BOOT_STUCK_MS, BOOT_FAILED_MS } from "./bootGate";
 import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
@@ -160,9 +160,11 @@ function useLocalStorageState(key: string, fallback: string) {
 export function App() {
   const runtimeQ = useQuery({
     ...runtimeStatusQuery(),
-    // Retry budget must outlast the bootStuck timer (45s) so a slow cold start shows the gentle
-    // "taking longer than usual / Continue anyway" path, not the harsh "engine isn't responding"
-    // error. ~60s of retries makes bootFailed a genuine timeout for a truly-down engine.
+    // Keep the probe alive across a slow cold start: the retry budget (bd-psfx) plus the
+    // refetchInterval below keep it polling instead of going idle after one failure. bootFailed is
+    // NO LONGER tied to this count — it's gated on the BOOT_FAILED_MS (120s) elapsed-time timer
+    // below, mirroring bootStuck (45s). So a probe that errors early during a slow start still shows
+    // the gentle "taking longer than usual" path, and "isn't responding" is a genuine timeout.
     retry: (failureCount, error) => !is401(error) && failureCount < 60,
     retryDelay: 1000,
     // Poll until the graph loads — and while a setup step the operator started from a banner is
@@ -180,11 +182,15 @@ export function App() {
     if (setupStepWatchDone(setupStepWatch, gapsNow, knownNow, runtimeQ.dataUpdatedAt)) clearSetupStepWatch();
   }, [setupStepWatch, runtime, runtimeQ.dataUpdatedAt, clearSetupStepWatch]);
   const [bootOverride, setBootOverride] = useState(false);
+  const [bootTimedOut, setBootTimedOut] = useState(false);
   const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
   const engineReady = Boolean(runtime?.graph_loaded);
   const signedOut = Boolean(runtime?.graph_auth_error) && !runtime?.graph_loaded;
   const bootReady = bootGateReady({ bootOverride, setupPending, engineReady, signedOut });
-  const bootFailed = !runtime && runtimeQ.isError;
+  // "failed" is time-based, like "stuck": a query error alone isn't enough — the BOOT_FAILED_MS
+  // elapsed-time timer must also have fired. Before 120s an errored probe stays on loading/stuck
+  // while refetchInterval keeps polling, so a slow-to-bind sidecar never flashes "isn't responding".
+  const bootFailed = !runtime && runtimeQ.isError && bootTimedOut;
   const focusedSlug = currentSlug();
   const agentDown =
     focusedSlug !== "host" &&
@@ -199,7 +205,16 @@ export function App() {
 
   useEffect(() => {
     if (bootReady) return;
-    const t = window.setTimeout(() => setBootStuck(true), 45_000);
+    const t = window.setTimeout(() => setBootStuck(true), BOOT_STUCK_MS);
+    return () => window.clearTimeout(t);
+  }, [bootReady]);
+
+  // Parallel to bootStuck, one budget longer: only past BOOT_FAILED_MS does a lingering probe error
+  // become the "isn't responding" gate. Cleared the moment the shell is ready so it never fires (or
+  // updates state) after mount.
+  useEffect(() => {
+    if (bootReady) return;
+    const t = window.setTimeout(() => setBootTimedOut(true), BOOT_FAILED_MS);
     return () => window.clearTimeout(t);
   }, [bootReady]);
 
