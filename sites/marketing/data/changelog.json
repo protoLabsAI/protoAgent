@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.179.0",
+    "date": "2026-09-25",
+    "changes": [
+      "Use a protoAgent from Zed's Agent Panel over ACP — ADR 0111 (#3598).",
+      "Continue a console chat in Zed's agent panel (#3610).",
+      "The code pane and show_code are now an opt-in toolset, off by default (#3613).",
+      "Console and A2A turns land in Langfuse as proper traces again, with a name, input and output (#3607).",
+      "The boot gate no longer flashes \"the engine isn't responding\" during a normal slow cold start (#3609).",
+      "The boot gate's \"isn't responding\" failure now waits for elapsed time, not the probe's retry count (#3611)."
+    ]
+  },
+  {
     "version": "v0.178.0",
     "date": "2026-09-25",
     "changes": [
