@@ -58,14 +58,24 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
       // opens the "install them now?" dialog in place of this one (same install-deps route
       // as the row; declining leaves the banner + its action). Clean names, never raw specs.
       const asking = promptDeps(res.deps_needed);
-      const needed = (res.deps_needed ?? []).flatMap((n) => n.deps.map((d) => d.name));
+      // An older backend sends no `deps_needed`: fall back to the declared specs (clean names,
+      // marker stripped — that backend can't say which apply here) so the note isn't lost.
+      const needed =
+        res.deps_needed === undefined
+          ? (s.requires_pip ?? []).map((spec) => spec.split(/[<>=!~[;\s]/, 1)[0]).filter(Boolean)
+          : res.deps_needed.flatMap((n) => n.deps.map((d) => d.name));
       // Clean install (auto-enabled, everything loaded, nothing to flag) → close; the new
       // row shows in the list. If auto-enable failed or a plugin failed to LOAD on the
       // reload (#2716), keep the dialog open with the note so it isn't lost.
       const loadErrs = Object.entries(res.load_errors ?? {});
       if (!res.enable_error && !loadErrs.length) {
         if (asking) setCloseAfterDeps(true);
-        else if (needed.length) setStatus(`Installed ${s.name || s.id} — optional packages not installed: ${needed.join(", ")} (Install deps on its row).`);
+        else if (needed.length)
+          setStatus(
+            res.deps_needed === undefined
+              ? `Installed ${s.name || s.id} — declares Python packages: ${needed.join(", ")} (Install deps on its row).`
+              : `Installed ${s.name || s.id} — optional packages not installed: ${needed.join(", ")} (Install deps on its row).`,
+          );
         else onClose();
         return;
       }

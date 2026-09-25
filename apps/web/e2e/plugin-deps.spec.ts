@@ -177,3 +177,28 @@ test("git-URL install hands over to the packages dialog; Not now installs nothin
   await expect(page.getByLabel("plugin git URL")).toHaveCount(0); // the whole flow closed
   expect(called).toBe(false);
 });
+
+test("an older backend without deps_needed still gets the declared-packages note (clean names)", async ({ page }) => {
+  await page.route("**/api/plugins/install", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await route.fulfill({
+      json: {
+        installed: {
+          id: "legacy", name: "Legacy", version: "0.1.0", description: "", resolved_sha: "b".repeat(40),
+          source_url: "https://github.com/acme/legacy", requires_pip: ["leftpad>=1; sys_platform == 'win32'"],
+          capabilities: {}, contributes: { views: [], secrets: [] },
+        },
+        enabled: ["legacy"], reloaded: true, restart_recommended: false, enable_error: null, load_errors: {},
+      },
+    });
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
+  await page.getByRole("button", { name: "Install from URL" }).click();
+  await page.getByLabel("plugin git URL").fill("https://github.com/acme/legacy");
+  await page.getByRole("button", { name: "Install", exact: true }).click();
+  await expect(page.locator(".plugin-install-status")).toHaveText(
+    "Installed Legacy — declares Python packages: leftpad (Install deps on its row).",
+  );
+});

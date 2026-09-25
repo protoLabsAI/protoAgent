@@ -306,8 +306,7 @@ def register_plugin_routes(app) -> None:
                 # Scope-aware (#2246): a `scope: host` dep isn't satisfied by the managed
                 # runtime, so the console must keep showing it as missing rather than
                 # reporting a plugin ready that will ModuleNotFoundError at tool time.
-                _, missing = installer._deps_satisfied(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
-                item["deps_missing"] = missing
+                item["deps_missing"] = installer.missing_deps(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
             out.append(item)
         # The dependency install this server is running, if any: `{id, target, since}` or
         # null. The console shows that row as installing and every other Install deps

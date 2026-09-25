@@ -802,6 +802,12 @@ def applicable_deps(specs: list[str]) -> list[str]:
     return [s for s in specs or [] if _dep_applies(s)]
 
 
+def missing_deps(specs: list[str], scopes: dict[str, str] | None = None) -> list[str]:
+    """Clean dist names of the ``specs`` that apply here and aren't satisfied — the public
+    face of ``_deps_satisfied`` for callers outside this module (the operator API)."""
+    return _deps_satisfied(list(specs or []), scopes)[1]
+
+
 def missing_deps_detail(manifest: PluginManifest) -> list[dict]:
     """The deps this plugin still needs HERE, as ``[{"name", "spec", "optional"}]`` —
     hard deps first, then optional, each in manifest order. ``spec`` is the exact PEP 508
