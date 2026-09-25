@@ -131,6 +131,7 @@ class Session:
     attached: asyncio.Event = field(default_factory=asyncio.Event)
     grace_timer: asyncio.Task | None = None
     steer: tuple[str, str] | None = None  # (id, text) queued by a Send Now, not yet folded in
+    handoff: asyncio.Task | None = None  # the console hand-off replay, sent after session/new returns
     spoke: bool = False  # any answer text sent this prompt (for separators)
     # "Allow for this session" (allow_always on a run_command approval). In memory only —
     # never persisted; a new Zed thread starts prompting again.
@@ -207,7 +208,13 @@ class ProtoAgentACP:
         reload_credentials: Any = None,
         steer_grace: float = 1.5,
         thread_index: history.ThreadIndex | None = None,
+        zed_threads_only: bool = False,
+        busy_poll: float = 2.0,
+        busy_timeout: float = 120.0,
     ) -> None:
+        self.zed_threads_only = zed_threads_only
+        self.busy_poll = busy_poll
+        self.busy_timeout = busy_timeout
         self.steer_grace = steer_grace
         self.index = thread_index or history.ThreadIndex(client.base_url)
         self.a2a = client
@@ -264,23 +271,74 @@ class ProtoAgentACP:
         # mcp_servers from the client are not forwarded: the instance's tool surface is
         # its own config (ADR 0111 — an MCP server Zed runs locally is not reachable from
         # a remote instance, and mounting per-session servers is not an A2A concept).
+        claimed = await self._claim_handoff(cwd)
+        if claimed is not None:
+            return NewSessionResponse(session_id=claimed)
         sid = _new_context_id(self.context_prefix)
         self._sessions[sid] = Session(id=sid, cwd=cwd)
         self.index.put(sid, cwd=cwd)
         return NewSessionResponse(session_id=sid)
 
+    async def _claim_handoff(self, cwd: str) -> str | None:
+        """Console → Zed hand-off: the operator pressed "Continue in Zed" (or the agent ran
+        ``open_in_editor``) and then started a thread here. ``POST /api/editor/handoff/claim
+        {cwd}`` → 200 ``{session_id, project, path, line, title}`` adopts that chat —
+        same contextId, history replayed like session/load; 204 / 404 / anything else → a
+        fresh thread. One claim per session/new; the server deletes it on claim."""
+        status, body = await self.a2a.send_json("POST", "/api/editor/handoff/claim", {"cwd": cwd})
+        if status != 200 or not isinstance(body, dict) or not body.get("session_id"):
+            return None
+        sid = str(body["session_id"])
+        try:
+            s, turns = await self._register(sid, cwd)
+        except RequestError as exc:
+            log.warning("hand-off to %s could not be loaded (%s) — starting a fresh thread", sid, exc)
+            return None
+        # The replay must follow the session/new RESPONSE (the client learns the session id
+        # from it); scheduled on the loop, it runs right after this handler returns.
+        title = str(body.get("title") or "") or next(
+            (history.title_of(history.first_user_text(t)) for t in turns if history.first_user_text(t)), ""
+        )
+        if title:
+            self.index.put(sid, title=title)
+        s.handoff = asyncio.create_task(self._replay_handoff(s, turns, title, body))
+        return sid
+
+    async def _replay_handoff(self, s: Session, turns: list[dict], title: str, claim: dict) -> None:
+        # The SDK writes messages through one FIFO queue and the session/new response is
+        # queued the moment the handler returns; a short beat makes sure the replay's
+        # session/update notifications can never overtake it (a client drops updates for a
+        # session it hasn't been told about yet).
+        await asyncio.sleep(0.05)
+        await self._replay(s, turns)
+        where = self.roots.resolve(claim.get("project"), claim.get("path")) if claim.get("path") else None
+        if where:  # the file the console was looking at: a location follow-the-agent can jump to
+            loc: dict[str, Any] = {"path": where}
+            line = claim.get("line")
+            if isinstance(line, int) and line >= 1:
+                loc["line"] = line
+            await self._send(
+                s,
+                start_tool_call(f"handoff-{uuid.uuid4().hex[:6]}", f"Open {claim.get('path')}", kind="read",
+                                status="completed", locations=[ToolCallLocation(**loc)]),
+            )
+        label = f" \u201c{title}\u201d" if title else ""
+        await self._send(s, update_agent_message_text(f"\u21aa Continuing your console chat{label}."))
+
     # ── thread history (session/list, session/load, session/resume) ─────────────
 
     async def list_sessions(self, cwd: str | None = None, cursor: str | None = None, **_: Any) -> ListSessionsResponse:
         await self._ensure_auth()
-        rows = await history.list_threads(self.a2a, self.index, self.context_prefix, cwd)
+        rows = await history.list_threads(self.a2a, self.index, self.context_prefix if self.zed_threads_only else None, cwd)
         return ListSessionsResponse(
             sessions=[SessionInfo(session_id=r["sessionId"], cwd=r["cwd"], title=r["title"], updated_at=r["updatedAt"]) for r in rows]
         )
 
     async def _register(self, session_id: str, cwd: str) -> tuple[Session, list[dict]]:
         await self._ensure_auth()
-        if not session_id.startswith(self.context_prefix + "-"):
+        # Ids are opaque: any session the server knows is loadable (a console chat too); the
+        # /turns read below is the existence check. --zed-threads-only keeps the old fence.
+        if self.zed_threads_only and not session_id.startswith(self.context_prefix + "-"):
             raise RequestError.invalid_params({"sessionId": f"not a {self.context_prefix} thread: {session_id!r}"})
         if not self._roots_loaded:
             await self.roots.load(self.a2a)
@@ -306,6 +364,10 @@ class ProtoAgentACP:
         messages, each turn's tool calls (completed, with locations) and its answer — then
         keep the contextId, so the next prompt continues with the agent's memory intact."""
         s, turns = await self._register(session_id, cwd)
+        await self._replay(s, turns)
+        return LoadSessionResponse()
+
+    async def _replay(self, s: Session, turns: list[dict]) -> None:
         for turn in turns:
             user = history.clean_user_text(history.first_user_text(turn))
             if user:
@@ -337,7 +399,7 @@ class ProtoAgentACP:
             elif "FAILED" in str(turn.get("state") or "").upper():
                 reason = _text_of_status(turn.get("status"))
                 await self._send(s, update_agent_message_text(f"⚠️ protoAgent error: {friendly_error(reason or 'the turn failed')}"))
-        return LoadSessionResponse()
+
 
     async def cancel(self, session_id: str, **_: Any) -> None:
         s = self._sessions.get(session_id)
@@ -408,6 +470,13 @@ class ProtoAgentACP:
             task_id, metadata = s.parked_task_id, {"hitl_resume": True}
             s.parked_task_id = None
         else:
+            if s.handoff is not None:  # never answer before the hand-off replay has landed
+                with contextlib.suppress(Exception):
+                    await s.handoff
+                s.handoff = None
+            s.cancelled = False
+            if not await self._wait_until_free(s):
+                return PromptResponse(stop_reason="cancelled")
             s.open_tools.clear()  # a fresh turn: nothing from an earlier one is still pending
             if s.first_prompt:
                 self.index.put(s.id, title=history.title_of(text))
@@ -429,6 +498,41 @@ class ProtoAgentACP:
         if s.detached and s.steer is None:
             # Finished while nobody was attached and no Send Now is adopting it: dropped.
             s.held.clear()
+
+    async def _busy(self, s: Session) -> bool | None:
+        """Is a turn running on this session right now (e.g. the operator is chatting in
+        the console)? ``GET /api/chat/sessions/<id>`` → ``active``. ``None`` = the server
+        can't say (older server, no such field, an error) — the caller doesn't wait."""
+        status, body = await self.a2a.send_json("GET", f"/api/chat/sessions/{s.id}")
+        if status != 200 or not isinstance(body, dict) or not isinstance(body.get("active"), bool):
+            return None
+        return body["active"]
+
+    async def _wait_until_free(self, s: Session) -> bool:
+        """Never interleave with a console turn: wait while the session is busy. ``False``
+        when the operator cancelled while waiting; a RequestError after ``busy_timeout``."""
+        if not await self._busy(s):
+            return True
+        # The server brackets a turn as active until its stream fully unwinds, so right
+        # after OUR previous turn (a Send Now re-run, a quick follow-up) it can still read
+        # busy for a moment. Re-check once, silently, before telling the operator.
+        await asyncio.sleep(0.3)
+        if not await self._busy(s):
+            return True
+        await self._send(s, update_agent_message_text("This chat is busy in the console. I'll send when it's free.\n\n"))
+        deadline = time.monotonic() + self.busy_timeout
+        while time.monotonic() < deadline:
+            await asyncio.sleep(min(self.busy_poll, 2.0))
+            if s.cancelled:
+                return False
+            if not await self._busy(s):
+                return True
+        raise RequestError(
+            -32603,
+            f"protoAgent: this chat stayed busy in the console for {int(self.busy_timeout)}s — "
+            "your message was not sent; try again when that turn finishes",
+            {"state": "busy", "sessionId": s.id},
+        )
 
     async def _own(self, s: Session, runner: asyncio.Task) -> PromptResponse:
         """Wait for ``runner``'s result — or for a detach (session/cancel) to answer this

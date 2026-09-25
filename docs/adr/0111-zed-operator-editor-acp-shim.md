@@ -74,9 +74,10 @@ cites where each one comes from.
 | `session/new` | Creates a fresh `contextId` `chat-zed-<ms>-<rand>`. The ACP sessionId *is* the A2A contextId, so the thread also shows in the console chat list (ADR 0104) |
 | `session/prompt` | `SendStreamingMessage`. The first prompt gets a one-line preamble when Zed's `cwd` is one of the agent's projects |
 | `session/cancel` | The prompt returns `stopReason: cancelled` at once. `CancelTask` follows after the `--steer-grace` window unless a prompt arrives, in which case that prompt **steers** the running turn (see below) |
-| `session/list` | `GET /api/chat/sessions`, filtered to this shim's `chat-zed-` prefix and the requested `cwd`. Titles come from the first user message |
+| `session/list` | `GET /api/chat/sessions`: **every** chat, console tabs included (`--zed-threads-only` limits it to `chat-zed-…`), filtered by the requested `cwd` when a thread's folder is known. Title order: server title, local index, first user message |
 | `session/load` | `GET /api/chat/sessions/<id>/turns`, replayed as `user_message_chunk` (including folded-in steers), completed `tool_call` entries with locations, and `agent_message_chunk`. The contextId is kept, so the agent's memory continues |
-| `session/resume` | Registers the thread on its contextId without replay |
+| `session/resume` | Registers the thread on its contextId without replay. Load and resume accept any id the server knows; ids are opaque and existence is checked via `/turns` |
+| `session/new` | First claims a console hand-off (`POST /api/editor/handoff/claim {cwd}`). On 200, it adopts that contextId, replays the chat like `session/load`, adds an `Open <file>` location, and emits `↪ Continuing your console chat "<title>".` On 204, 404 or any error, it creates a fresh `chat-zed-…` session |
 | `agent_message_chunk` | Artifact text on `append: true`. The terminal REPLACE is de-duplicated: ACP can't retract, so only an unseen suffix is emitted |
 | `agent_thought_chunk` | reasoning-v1 DataPart |
 | `tool_call` → `tool_call_update` | tool-call-v1 `started` (announced twice: first with empty args, then with args) → `completed`/`failed` |
@@ -156,6 +157,22 @@ thread missing from the index still lists, titled from its first turn and report
 the requested folder. `session/resume` is routed with the SDK's `use_unstable_protocol`,
 because the SDK still marks it unstable, and Zed calls it.
 
+**Console ↔ Zed continuity** (shared contract with the server PR `feat/zed-chat-handoff`).
+Zed can't deep-link into a thread (`zed://agent` takes only `?prompt=`), so the console or
+`open_in_editor` leaves a one-shot hand-off (TTL 120 s, keyed by project root). The shim
+claims it on the next `session/new` whose `cwd` is that root, inside it, or a parent of it.
+
+- **What the claim does:** it binds the Zed thread to the console chat's contextId. Both
+  surfaces then see the same server-side memory and transcript.
+- **Never interleaving:** before every new turn, the shim reads the busy signal
+  (`GET /api/chat/sessions/<id>` → `active`). While the chat is busy it says so, polls
+  every 2 s or less, and gives up after 120 s with an error, without sending.
+- **Older servers:** if the route or the `active` field is missing, the shim doesn't wait.
+  It never guesses from task states, because an orphaned `working` task would block
+  forever.
+- **What skips the check:** HITL resumes and Send Now steers, since both belong to a turn
+  that is already this thread's.
+
 **Credentials** are taken from `--token` / `--token-file`, then `PROTOAGENT_TOKEN` /
 `PROTOAGENT_TOKEN_FILE`, then the file written by `protoagent-acp login`. That file is
 mode 0600 and bound to its URL, so a stored token is never sent to a different instance.
@@ -196,6 +213,13 @@ prompt was a read-only question. The full stream is in
   correctly from the agent's memory on the same contextId.
 
 The transcript is `integrations/zed-acp/examples/navaengineer-steer-and-history.txt`.
+
+**All-chats history, live (navaEngineer).** `session/list` for `~/dev/nava` returned
+console chats (`chat-<ms>-<rand>`) alongside `chat-zed-` threads, titled from their first
+messages. I created a console-format chat through A2A for the test, so the operator's real
+console chat wasn't written to. Loading it replayed the message. A follow-up, "What
+codeword did I give you earlier in this chat?", was answered `marmalade` on the same
+contextId.
 
 Streamed text, reasoning, tool kinds and **absolute `locations` into the agent's checkout**
 all work with **no core change**. The A2A stream already carries the tool name and args.

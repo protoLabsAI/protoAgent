@@ -123,3 +123,22 @@ def test_harness_list_and_load_through_stdio():
     assert "chat-zed-1-aaa" in out.stdout and "'What is the answer?'" in out.stdout
     assert "user_message_chunk" in out.stdout and "The answer is 42." in out.stdout
     assert "Still 42." in out.stdout and fake.requests[0]["contextId"] == "chat-zed-1-aaa"
+
+
+def test_handoff_claim_through_stdio_replays_after_the_session_new_response():
+    """A client drops session/update for a session id it hasn't been handed yet, so the
+    claimed chat's replay must arrive AFTER the session/new response."""
+    harness = Path(__file__).resolve().parents[1] / "scripts" / "acp_harness.py"
+    with fa.FakeA2A(token=None) as fake:
+        sid = "chat-1790294944966-qkf93w"
+        fake.handoff = {"session_id": sid, "project": None, "path": None, "line": None, "title": "Console chat"}
+        fake.turns[sid] = [{"task_id": "t0", "state": "TASK_STATE_COMPLETED", "text": "Earlier answer.", "status": {},
+                            "artifacts": [], "history": [{"role": "ROLE_USER", "parts": [{"text": "Earlier question"}]}]}]
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "Continued.", append=False), fa.done(ctx)]
+        out = subprocess.run([sys.executable, str(harness), "--prompt", "carry on", "--", "--url", fake.url],
+                             capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stdout + out.stderr
+    new_at = out.stdout.index(f"session/new → {sid}")
+    assert out.stdout.index("Earlier question") > new_at
+    assert out.stdout.index("Continuing your console chat") > new_at
+    assert "Continued." in out.stdout and fake.requests[0]["contextId"] == sid

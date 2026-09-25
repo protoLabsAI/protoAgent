@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -122,6 +123,16 @@ class FakeA2A:
         self.steered = threading.Event()  # set when a steer is POSTed
         self.sessions: list[dict] = []  # GET /api/chat/sessions rows
         self.turns: dict[str, list[dict]] = {}  # GET …/turns
+        # Console → Zed hand-off (POST /api/editor/handoff/claim): one pending hand-off,
+        # one-shot, expiring at a monotonic deadline; `claim_status` forces an error code.
+        self.handoff: dict | None = None
+        self.handoff_expires = float("inf")
+        self.claim_status: int | None = None
+        self.claims: list[dict] = []
+        # Busy signal (GET /api/chat/sessions/<id> → {active}). A list is consumed one value
+        # per GET (the last one sticks); a session absent here answers 405 like a server
+        # that predates the signal.
+        self.active: dict[str, list[bool]] = {}
         self.hold = threading.Event()  # set() to release a frame list that ends in HOLD
         fake = self
 
@@ -153,6 +164,14 @@ class FakeA2A:
                 fake.gets.append(self.path)
                 path = self.path.split("?")[0]
                 parts = path.strip("/").split("/")
+                if parts[:3] == ["api", "chat", "sessions"] and len(parts) == 4:
+                    seq = fake.active.get(parts[3])
+                    if seq is None:
+                        self._json({"detail": "Method Not Allowed"}, 405)
+                    else:
+                        value = seq.pop(0) if len(seq) > 1 else seq[0]
+                        self._json({"session_id": parts[3], "active": value})
+                    return
                 if path == "/api/fs/roots" and fake.roots is not None:
                     self._json({"roots": fake.roots})
                 elif path == "/api/chat/sessions":
@@ -177,6 +196,19 @@ class FakeA2A:
             def do_POST(self) -> None:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
                 if not self._authed():
+                    return
+                if self.path == "/api/editor/handoff/claim":
+                    fake.claims.append(body)
+                    if fake.claim_status is not None:
+                        self._json({"detail": "boom"}, fake.claim_status)
+                        return
+                    h, fake.handoff = fake.handoff, None  # one-shot: deleted on claim
+                    if h is None or time.monotonic() > fake.handoff_expires:
+                        self.send_response(204)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    self._json(h)
                     return
                 if self.path.startswith("/api/chat/sessions/") and self.path.endswith("/steer"):
                     if not fake.steer_ok:

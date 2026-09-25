@@ -125,11 +125,15 @@ async def fetch_turns(client: Any, sid: str, limit: int = 200) -> list[dict]:
     return [t for t in turns or [] if isinstance(t, dict)]
 
 
-async def list_threads(client: Any, index: ThreadIndex, prefix: str, cwd: str | None) -> list[dict]:
-    """``[{sessionId, cwd, title, updatedAt}]`` newest first, this shim's threads only."""
+async def list_threads(client: Any, index: ThreadIndex, prefix: str | None, cwd: str | None) -> list[dict]:
+    """``[{sessionId, cwd, title, updatedAt}]`` newest first: every chat session the agent
+    has (console tabs included — ``/api/chat/sessions`` already scopes to ``chat-`` ids), or
+    only ``<prefix>-…`` threads when ``prefix`` is given (``--zed-threads-only``)."""
     body = await client.get_json("/api/chat/sessions?limit=200")
     rows = [r for r in (body or {}).get("sessions") or [] if isinstance(r, dict)] if isinstance(body, dict) else []
-    rows = [r for r in rows if str(r.get("session_id") or "").startswith(prefix + "-")]
+    rows = [r for r in rows if r.get("session_id")]
+    if prefix:
+        rows = [r for r in rows if str(r["session_id"]).startswith(prefix + "-")]
     out: list[dict] = []
     missing: list[dict] = []
     for r in rows:
@@ -140,7 +144,9 @@ async def list_threads(client: Any, index: ThreadIndex, prefix: str, cwd: str | 
         item = {
             "sessionId": sid,
             "cwd": known.get("cwd") or cwd or os.getcwd(),
-            "title": known.get("title"),
+            # A server-side session title when the server has one, else our index, else the
+            # first user message (filled in below).
+            "title": (str(r["title"]) if r.get("title") else None) or known.get("title"),
             "updatedAt": _rfc3339(r.get("last_updated")),
         }
         out.append(item)

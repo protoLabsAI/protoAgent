@@ -39,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--steer-grace", type=float, default=1.5, metavar="SECONDS",
                    help="after a Stop, keep the turn running this long in case it was Zed's Send Now "
                         "(cancel + prompt) — the new message then steers the running turn; 0 disables")
+    p.add_argument("--zed-threads-only", action="store_true",
+                   help="thread history lists/loads only this shim's chat-zed-… threads (default: every chat, "
+                        "console tabs included)")
     p.add_argument("--trace-frames", metavar="FILE", help="append every raw A2A frame (JSON lines) to FILE")
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging to stderr")
     p.add_argument("--version", action="version", version=f"protoagent-acp {__version__}")
@@ -62,6 +65,7 @@ async def _serve(args: argparse.Namespace) -> None:
         roots,
         context_prefix=args.context_prefix,
         steer_grace=max(0.0, args.steer_grace),
+        zed_threads_only=args.zed_threads_only,
         reload_credentials=lambda: credentials.resolve(args.url, args.token, args.token_file),
     )
     try:

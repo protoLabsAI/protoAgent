@@ -20,7 +20,8 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | a permission prompt: **Allow once / Allow for this session / Deny** | a parked `approval` (e.g. `run_command`, permanent delete) |
 | Stop button | A2A `CancelTask`, sent after a short grace window (see Send Now below) |
 | **Send Now** on a queued message | **steers the running turn**: the message is queued into it with protoAgent's mid-turn steering, and the turn carries on with it |
-| thread history: list and reopen past threads | `GET /api/chat/sessions` + `…/turns`; a reopened thread continues on the same session, so the agent keeps its memory |
+| thread history: list and reopen past threads, **console chats included** | `GET /api/chat/sessions` + `…/turns`; a reopened thread continues on the same session, so the agent keeps its memory |
+| a new thread that picks up the chat you handed off from the console | `POST /api/editor/handoff/claim` on `session/new` |
 | an error callout + a "⚠️ protoAgent error: …" line | a turn that FAILED (e.g. the model's 429 usage limit), or a stream that closed without a terminal state and whose task (read back with `GetTask`) failed or is still running |
 
 Each Zed thread is one protoAgent chat session (`chat-zed-…`), so the conversation also
@@ -114,15 +115,39 @@ pair back into a steer:
 - **An approval that parks inside the window** is asked of the new prompt. If an approval
   was already on screen, Zed's cancel dismisses it, which answers "deny".
 
-### Thread history
+### Thread history, console chats included
 
-Zed's thread history lists this instance's Zed threads (`chat-zed-…`) for the current
-folder. Opening one replays it: your messages, including Send Now steers where the agent
-read them, each turn's tool calls with their file locations, and the answers. The next
-message then continues on the same protoAgent session, so the agent remembers the
-conversation. Folder and title come from a small local index
-(`~/.config/protoagent-acp/threads.json`). Threads missing from it still list, titled from
-their first message.
+Zed's thread history lists **every** chat this agent has, including conversations started
+in the protoAgent console, not just the ones started from Zed. Pass `--zed-threads-only`
+to list only `chat-zed-…` threads.
+
+- **Opening a thread** replays it: your messages, Send Now steers where the agent read them,
+  each turn's tool calls with their file locations, and the answers.
+- **Your next message** continues on the same protoAgent session, so the agent remembers the
+  conversation, including one you started in the console.
+- **Titles** are the server's session title when it has one. Otherwise the shim uses its
+  local index (`~/.config/protoagent-acp/threads.json`), then the first message.
+- **Folders:** a chat with no recorded folder is listed under the folder Zed asked about.
+
+### Continue a console chat in Zed
+
+Press **Continue in Zed** in the console, or have the agent run `open_in_editor`. Then, within
+2 minutes, start a thread for the agent in Zed's Agent Panel. `session/new` claims the
+hand-off (`POST /api/editor/handoff/claim {cwd}`), and the new thread **is** that console
+chat:
+
+- it keeps the same session, with the history replayed;
+- it jumps to the file the console was showing;
+- it adds the line: ↪ Continuing your console chat "<title>".
+
+With no hand-off waiting (204), an expired one, or a server without the route, you get a
+fresh thread as usual.
+
+**It never talks over the console.** Before each message, the shim checks whether a turn is
+already running on that chat (`GET /api/chat/sessions/<id>` → `active`). If one is, it says
+"This chat is busy in the console. I'll send when it's free.", checks every 2 seconds, and
+gives up with an error after 120 seconds without sending anything. A server that doesn't
+report `active` isn't waited on.
 
 ## What it does not do (yet)
 

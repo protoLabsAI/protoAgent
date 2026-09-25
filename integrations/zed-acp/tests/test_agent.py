@@ -606,15 +606,16 @@ def _durable_turn(tid, user, answer, *, tools=(), state="TASK_STATE_COMPLETED", 
     return {"task_id": tid, "state": state, "text": answer, "status": {"state": state}, "artifacts": [], "history": history}
 
 
-async def test_list_filters_to_this_shims_threads_and_titles_them():
+async def test_list_shows_every_chat_and_titles_them():
     with fa.FakeA2A(roots={"p": "/repo"}) as fake:
         fake.sessions = [
             {"session_id": "chat-zed-2-bbb", "last_updated": "2026-09-24T10:00:00", "turn_count": 1},
-            {"session_id": "chat-1790-console", "last_updated": "2026-09-24T09:00:00", "turn_count": 3},
+            {"session_id": "chat-1790294944966-qkf93w", "last_updated": "2026-09-24T09:00:00", "turn_count": 3},
             {"session_id": "chat-zed-1-aaa", "last_updated": "2026-09-23T10:00:00", "turn_count": 2},
+            {"session_id": "chat-1790-titled", "last_updated": "2026-09-22T10:00:00", "turn_count": 1, "title": "Server title"},
         ]
         fake.turns["chat-zed-2-bbb"] = [_durable_turn("t1", "Where is the A2A executor?", "In a2a_impl.", preamble=True)]
-        fake.turns["chat-zed-1-aaa"] = [_durable_turn("t0", "hello", "hi")]
+        fake.turns["chat-1790294944966-qkf93w"] = [_durable_turn("t0", "Plan the release notes", "Sure.")]
         agent, _conn, client = await _agent(fake)
         agent.index.put("chat-zed-1-aaa", cwd="/other/folder", title="Remembered title")
         init = await agent.initialize(protocol_version=1)
@@ -622,12 +623,34 @@ async def test_list_filters_to_this_shims_threads_and_titles_them():
         assert caps.load_session and caps.session_capabilities.list is not None and caps.session_capabilities.resume is not None
         every = await agent.list_sessions()
         here = await agent.list_sessions(cwd="/repo")
+        agent.zed_threads_only = True
+        zed_only = await agent.list_sessions()
         await client.aclose()
-    assert [s.session_id for s in every.sessions] == ["chat-zed-2-bbb", "chat-zed-1-aaa"]  # console threads excluded
-    assert every.sessions[0].title == "Where is the A2A executor?"  # preamble stripped
-    assert every.sessions[0].updated_at == "2026-09-24T10:00:00Z"
-    assert every.sessions[1].title == "Remembered title" and every.sessions[1].cwd == "/other/folder"
-    assert [s.session_id for s in here.sessions] == ["chat-zed-2-bbb"]  # the /other/folder thread is filtered out
+    by_id = {s.session_id: s for s in every.sessions}
+    assert list(by_id) == ["chat-zed-2-bbb", "chat-1790294944966-qkf93w", "chat-zed-1-aaa", "chat-1790-titled"]
+    assert by_id["chat-zed-2-bbb"].title == "Where is the A2A executor?"  # preamble stripped
+    assert by_id["chat-zed-2-bbb"].updated_at == "2026-09-24T10:00:00Z"
+    assert by_id["chat-1790294944966-qkf93w"].title == "Plan the release notes"  # a console chat, titled from its first message
+    assert by_id["chat-1790-titled"].title == "Server title"  # a server-side title wins
+    assert by_id["chat-zed-1-aaa"].title == "Remembered title" and by_id["chat-zed-1-aaa"].cwd == "/other/folder"
+    assert "chat-zed-1-aaa" not in [s.session_id for s in here.sessions]  # opened from /other/folder
+    assert "chat-1790294944966-qkf93w" in [s.session_id for s in here.sessions]  # no recorded cwd: listed here
+    assert [s.session_id for s in zed_only.sessions] == ["chat-zed-2-bbb", "chat-zed-1-aaa"]  # --zed-threads-only
+
+
+async def test_load_a_console_chat_and_continue_it():
+    with fa.FakeA2A() as fake:
+        fake.turns["chat-1790294944966-qkf93w"] = [_durable_turn("t0", "Remember: codeword pineapple", "Noted.")]
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t1"), fa.text(ctx, "pineapple", append=False, tid="t1"), fa.done(ctx, tid="t1")]
+        agent, conn, client = await _agent(fake)
+        await agent.load_session(cwd="/", session_id="chat-1790294944966-qkf93w")
+        await agent.prompt(prompt=[text_block("what was the codeword?")], session_id="chat-1790294944966-qkf93w")
+        agent.zed_threads_only = True
+        with pytest.raises(RequestError):
+            await agent.load_session(cwd="/", session_id="chat-1790294944966-qkf93w")
+        await client.aclose()
+    assert conn.updates[0]["content"]["text"] == "Remember: codeword pineapple"
+    assert fake.requests[0]["contextId"] == "chat-1790294944966-qkf93w"
 
 
 async def test_load_replays_the_thread_and_continues_on_the_same_context():
@@ -669,7 +692,7 @@ async def test_resume_registers_without_replay_and_unknown_threads_are_rejected(
         with pytest.raises(RequestError):
             await agent.load_session(cwd="/", session_id="chat-zed-9-missing")
         with pytest.raises(RequestError):
-            await agent.load_session(cwd="/", session_id="chat-1790-console")  # not this shim's
+            await agent.load_session(cwd="/", session_id="chat-1790-console")  # unknown to the server
         await client.aclose()
     assert fake.requests[0]["contextId"] == "chat-zed-1-aaa"
 
@@ -752,3 +775,146 @@ async def test_turn_finishing_while_the_steer_is_being_adopted_still_answers_the
         await client.aclose()
     assert r2.stop_reason == "end_turn"
     assert conn.text() == "A.\n\n↪ steering: B\n\n B."
+
+
+# ── console → Zed hand-off ──────────────────────────────────────────────────────
+
+
+async def _new_and_settle(agent, cwd="/Users/me/dev/nava"):
+    resp = await agent.new_session(cwd=cwd)
+    s = agent._sessions.get(resp.session_id)
+    if s is not None and s.handoff is not None:
+        await s.handoff
+    return resp
+
+
+async def test_handoff_claim_adopts_the_console_chat_and_replays_it():
+    with fa.FakeA2A(roots={"rehearsal": "/Users/me/dev/nava/rehearsal"}) as fake:
+        sid = "chat-1790294944966-qkf93w"
+        fake.turns[sid] = [_durable_turn("t0", "Why does the assistant stop early?", "The loop exits on the first tool call.",
+                                         tools=[("c1", "read_file", '{"project": "rehearsal", "path": "src/agent.ts", "offset": 40}', "…")])]
+        fake.handoff = {"session_id": sid, "project": "rehearsal", "path": "src/agent.ts", "line": 42, "title": "Early-stop bug"}
+        fake.script = lambda ctx, msg: [fa.task(ctx, tid="t1"), fa.text(ctx, "Fixing it.", append=False, tid="t1"), fa.done(ctx, tid="t1")]
+        agent, conn, client = await _agent(fake)
+        resp = await _new_and_settle(agent)
+        replay = [(u["sessionUpdate"], u.get("title") or u["content"]["text"]) for u in conn.updates]
+        await agent.prompt(prompt=[text_block("go ahead and fix it")], session_id=resp.session_id)
+        await client.aclose()
+    assert resp.session_id == sid  # the console chat's contextId, not a fresh chat-zed-…
+    assert fake.claims == [{"cwd": "/Users/me/dev/nava"}]
+    assert replay == [
+        ("user_message_chunk", "Why does the assistant stop early?"),
+        ("tool_call", "Read rehearsal/src/agent.ts (from line 40)"),
+        ("agent_message_chunk", "The loop exits on the first tool call."),
+        ("tool_call", "Open src/agent.ts"),
+        ("agent_message_chunk", "\u21aa Continuing your console chat \u201cEarly-stop bug\u201d."),
+    ]
+    open_card = [u for u in conn.updates if u.get("title") == "Open src/agent.ts"][0]
+    assert open_card["locations"] == [{"path": "/Users/me/dev/nava/rehearsal/src/agent.ts", "line": 42}]
+    assert fake.requests[0]["contextId"] == sid
+    assert "Zed editor" not in fake.requests[0]["parts"][0]["text"]  # continuing: no new-thread preamble
+    assert agent.index.get(sid) == {"cwd": "/Users/me/dev/nava", "title": "Early-stop bug"}
+
+
+@pytest.mark.parametrize("case", ["miss", "expired", "server_error", "unknown_session", "old_server"])
+async def test_handoff_miss_starts_a_fresh_thread(case):
+    with fa.FakeA2A() as fake:
+        if case == "expired":
+            fake.handoff = {"session_id": "chat-1-x", "title": "t"}
+            fake.turns["chat-1-x"] = [_durable_turn("t0", "hi", "hello")]
+            fake.handoff_expires = 0  # its 120 s ran out
+        elif case == "server_error":
+            fake.claim_status = 500
+        elif case == "unknown_session":  # claimed, but the chat is gone from the task store
+            fake.handoff = {"session_id": "chat-1-gone", "title": "t"}
+        elif case == "old_server":
+            fake.claim_status = 404
+        agent, conn, client = await _agent(fake)
+        resp = await _new_and_settle(agent)
+        await client.aclose()
+    assert resp.session_id.startswith("chat-zed-")
+    assert conn.updates == [] and len(fake.claims) == 1
+
+
+async def test_claim_happens_once_per_session_new():
+    with fa.FakeA2A() as fake:
+        fake.turns["chat-1-x"] = [_durable_turn("t0", "hi", "hello")]
+        fake.handoff = {"session_id": "chat-1-x", "title": "t"}
+        agent, _conn, client = await _agent(fake)
+        first = await _new_and_settle(agent)
+        second = await _new_and_settle(agent)  # the hand-off was one-shot
+        await client.aclose()
+    assert first.session_id == "chat-1-x" and second.session_id.startswith("chat-zed-")
+    assert len(fake.claims) == 2
+
+
+# ── busy signal: never interleave with a console turn ──────────────────────────
+
+
+async def test_prompt_waits_while_the_console_is_mid_turn():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-x"
+        fake.turns[sid] = [_durable_turn("t0", "hi", "hello")]
+        fake.active[sid] = [True, True, True, False]  # 1st check + silent re-check, then polls
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "sent after", append=False), fa.done(ctx)]
+        agent, conn, client = await _agent(fake)
+        agent.busy_poll = 0.05
+        await agent.resume_session(cwd="/", session_id=sid)
+        resp = await agent.prompt(prompt=[text_block("next")], session_id=sid)
+        await client.aclose()
+    assert resp.stop_reason == "end_turn"
+    assert conn.text() == "This chat is busy in the console. I'll send when it's free.\n\nsent after"
+    assert fake.gets.count(f"/api/chat/sessions/{sid}") == 4 and len(fake.requests) == 1
+
+
+async def test_busy_too_long_is_a_clear_error_and_nothing_is_sent():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-x"
+        fake.turns[sid] = [_durable_turn("t0", "hi", "hello")]
+        fake.active[sid] = [True]
+        agent, _conn, client = await _agent(fake)
+        agent.busy_poll, agent.busy_timeout = 0.05, 0.3
+        await agent.resume_session(cwd="/", session_id=sid)
+        with pytest.raises(RequestError) as ei:
+            await agent.prompt(prompt=[text_block("next")], session_id=sid)
+        await client.aclose()
+    assert "stayed busy" in str(ei.value) and fake.requests == []
+
+
+async def test_cancel_while_waiting_for_the_console():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-x"
+        fake.turns[sid] = [_durable_turn("t0", "hi", "hello")]
+        fake.active[sid] = [True]
+        agent, _conn, client = await _agent(fake)
+        agent.busy_poll = 0.05
+        await agent.resume_session(cwd="/", session_id=sid)
+        waiting = asyncio.create_task(agent.prompt(prompt=[text_block("next")], session_id=sid))
+        await asyncio.sleep(0.2)
+        await agent.cancel(session_id=sid)
+        resp = await asyncio.wait_for(waiting, 2)
+        await client.aclose()
+    assert resp.stop_reason == "cancelled" and fake.requests == []
+
+
+async def test_no_busy_signal_on_an_older_server_means_no_wait():
+    with fa.FakeA2A() as fake:  # GET /api/chat/sessions/<id> → 405, as on v0.175.0
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "ok", append=False), fa.done(ctx)]
+        agent, conn, client = await _agent(fake)
+        sess = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
+        await client.aclose()
+    assert conn.text() == "ok"
+
+
+async def test_a_momentary_busy_right_after_our_own_turn_is_not_announced():
+    with fa.FakeA2A() as fake:
+        sid = "chat-1-x"
+        fake.turns[sid] = [_durable_turn("t0", "hi", "hello")]
+        fake.active[sid] = [True, False]  # the tail of our previous turn, then free
+        fake.script = lambda ctx, msg: [fa.task(ctx), fa.text(ctx, "ok", append=False), fa.done(ctx)]
+        agent, conn, client = await _agent(fake)
+        await agent.resume_session(cwd="/", session_id=sid)
+        await agent.prompt(prompt=[text_block("x")], session_id=sid)
+        await client.aclose()
+    assert conn.text() == "ok"
