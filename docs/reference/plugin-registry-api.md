@@ -9,7 +9,7 @@ surface in one place. Generated from `graph/plugins/registry.py`.
 
 ```python
 def register(registry):
-    """Called once at plugin load, before the graph is built."""
+    """Called at plugin load and again on every config reload, before the graph is built."""
     registry.register_tool(my_tool)
 ```
 
@@ -414,10 +414,21 @@ Register a lifecycle-managed background surface ([ADR 0018](/adr/0018-plugin-sur
 `start` (sync or async, no args) runs in the server's startup hook — so
 it has the running loop, like the Discord gateway — and may return a task/
 handle. `stop` (optional) runs in shutdown. `reload` (optional, called
-with the new `LangGraphConfig` on a config reload) lets a surface
-reconnect when its config changes — without it, surfaces wire once and a
-config change needs a restart. Best-effort: a failing surface logs, never
-breaks boot.
+with the new `LangGraphConfig` on a config reload) lets a running surface
+reconfigure in place when its config changes. Best-effort: a failing surface
+logs, never breaks boot.
+
+`register()` re-runs on every config reload. What happens to a surface that
+is still wanted afterwards depends on the two registrations ([#3593](https://github.com/protoLabsAI/protoAgent/issues/3593)):
+
+- both declare `reload` → it keeps running and `reload(cfg)` is called;
+- otherwise, the same `stop` (a module-level function, or a long-lived
+  object's method) → it is the same surface and is left running untouched;
+- otherwise, a different `stop` (fresh closures over fresh objects) → it is
+  stopped, its task given a grace period (then cancelled), and started again
+  from the new registration — so the running surface and the plugin's
+  routes/tools never hold two different instances. If the old one will not
+  end, it is kept and the replacement is not started.
 
 ### `registry.register_thread_id_resolver` {#registry-register-thread-id-resolver}
 

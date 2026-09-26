@@ -665,11 +665,18 @@ Retry. [`register_setup_step()`](../reference/plugin-registry-api.md#registry-re
 has the contract; the bundled `agent_browser` plugin's Download agent-browser and Install
 Chrome buttons are the worked example.
 
-**Routes now hot-reload; surfaces still don't.** On a config reload a newly-enabled
+**Routes and surfaces hot-reload.** On a config reload a newly-enabled
 plugin's **routers, public paths, verifiers, hooks, tools, subagents, chat commands,
-and MCP servers re-apply** without a restart (#1752/#1890). A **surface** does not — the
-startup hook already fired, so it (re)starts only on a full restart; a config reload just
-calls each running surface's `reload(cfg)` callback. Everything is best-effort: a failing
+and MCP servers re-apply** without a restart (#1752/#1890). Surfaces are reconciled: a
+disabled plugin's surface stops, a newly-enabled one starts, and a surviving surface gets
+its `reload(cfg)` callback when both its old and new registration declare one.
+`register()` re-runs on every reload, so a surviving surface whose new registration
+lacks a `reload` hook and hands back a different `stop` (fresh closures over a fresh
+dispatcher/queue) is **stopped, then started from the new registration** — otherwise the
+old loop would keep driving the old objects while the new routes use the new ones
+(#3593). The old task gets a grace period, then a cancel; one that still won't end is
+kept, and its replacement is not started. Declare `reload` to keep a surface running across saves,
+or register module-level/singleton `start`/`stop` so a re-register is the same surface. Everything is best-effort: a failing
 plugin/route/surface logs and never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
 `GET /api/runtime/status`. The bundled `plugins/telegram` (the reference

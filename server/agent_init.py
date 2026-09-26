@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import time
+import weakref
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -2885,77 +2886,203 @@ def _surface_key(spec_or_handle) -> tuple:
     return (spec_or_handle.get("plugin_id"), spec_or_handle.get("name"))
 
 
-def _plan_surface_reconcile(handles: list, wanted: list) -> tuple[list, list, list]:
+def _plan_surface_reconcile(handles: list, wanted: list) -> tuple[list, list, list, list]:
     """Pure diff for surface hot-reload — no I/O, so it's unit-testable.
 
     ``handles`` is the live ``STATE.plugin_surface_handles`` (running surfaces); ``wanted``
-    is the reloaded plugin surface spec set. Returns ``(to_stop, to_start, to_reload)``:
+    is the reloaded plugin surface spec set. Returns ``(to_stop, to_start, to_reload,
+    to_restart)``:
 
     - ``to_stop`` — running handles whose ``(plugin_id, name)`` is no longer wanted
       (its plugin was disabled/uninstalled).
     - ``to_start`` — wanted specs not currently running (a newly-enabled plugin).
     - ``to_reload`` — handles present in both (fire the ``reload(cfg)`` callback; leave
       the surface running so a live gateway connection isn't dropped).
+    - ``to_restart`` — ``(handle, spec)`` pairs for survivors that are ORPHANED from the
+      current registration (#3593): the old or new registration declares no ``reload`` hook, and the re-run
+      ``register()`` handed back a different ``stop`` than the one that owns the running
+      surface. Its closures belong to the previous registration's objects (a dispatcher,
+      a queue) while the freshly registered routes/tools hold new ones, and nothing will
+      ever tell it — so stop it and start it again from the new spec. A surface with a
+      ``reload`` hook opted into reconfiguring itself live and keeps that path; one whose
+      ``stop`` is unchanged (module-level functions, a long-lived singleton) is the same
+      surface and is left running.
     """
     running = {_surface_key(h): h for h in handles}
     wanted_by = {_surface_key(s): s for s in wanted}
     to_stop = [h for k, h in running.items() if k not in wanted_by]
     to_start = [s for k, s in wanted_by.items() if k not in running]
-    to_reload = [running[k] for k in wanted_by if k in running]
-    return to_stop, to_start, to_reload
+    to_reload: list = []
+    to_restart: list = []
+    for k, s in wanted_by.items():
+        if k not in running:
+            continue
+        h = running[k]
+        old_stop, new_stop = h.get("stop"), s.get("stop")
+        orphaned = (
+            # Both generations must declare ``reload`` for the live-reconfigure path: the
+            # running surface needs one to be told anything, and a new registration that
+            # dropped it no longer promises to reconfigure in place.
+            not (callable(h.get("reload")) and callable(s.get("reload")))
+            and callable(old_stop)
+            and callable(new_stop)
+            and old_stop != new_stop  # ``!=`` not ``is not``: a fresh bound method of the SAME object is equal
+        )
+        if orphaned:
+            to_restart.append((h, s))
+        else:
+            to_reload.append(h)
+    return to_stop, to_start, to_reload, to_restart
+
+
+# How long a restarted surface's old task may take to wind down after ``stop()`` before
+# it is cancelled (#3593) — long enough for a sweep tick, short enough not to stall a
+# reload. A task that ignores the cancel too gets ``_SURFACE_CANCEL_GRACE_S`` more, then
+# the restart is abandoned and the old surface kept: two generations never run at once.
+_SURFACE_RESTART_GRACE_S = 10.0
+_SURFACE_CANCEL_GRACE_S = 2.0
+
+# One reconcile at a time per loop (#3593). A restart can await a stop() and a grace
+# period; a second reload's reconcile planning from the same handles meanwhile would see
+# the surface half-stopped and start it twice. Keyed by loop: an asyncio.Lock binds to
+# the loop it is first contended on.
+_SURFACE_RECONCILE_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _surface_reconcile_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _SURFACE_RECONCILE_LOCKS.get(loop)
+    if lock is None:
+        lock = _SURFACE_RECONCILE_LOCKS[loop] = asyncio.Lock()
+    return lock
 
 
 def _reload_plugin_surfaces(new_config) -> None:
     """Reconcile running plugin surfaces against the reloaded plugin set (ADR 0018/0019).
 
     On a config reload: **stop** surfaces whose plugin was disabled/uninstalled,
-    **hot-start** newly-enabled plugins' surfaces, and fire each survivor's ``reload(cfg)``
-    callback so a Discord/Google-style gateway reconnects on a token/admin change without a
-    restart. Before this, a reload only fired reload callbacks — a newly-enabled surface
-    stayed dead and a disabled one leaked (kept running) until a full restart.
+    **hot-start** newly-enabled plugins' surfaces, **restart** survivors orphaned from the
+    re-run ``register()`` (no ``reload`` hook, new ``stop`` — #3593), and fire each other
+    survivor's ``reload(cfg)`` callback so a Discord/Google-style gateway reconnects on a
+    token/admin change without a restart. Before this, a reload only fired reload callbacks
+    — a newly-enabled surface stayed dead and a disabled one leaked (kept running) until a
+    full restart.
 
     A no-op until the startup hook has started surfaces (``plugin_surfaces_started``): a
     reload before boot's surface loop would double-start (here AND there). The whole
-    reconcile runs as ONE coroutine on the server loop, so every read/write of
-    ``plugin_surface_handles`` is serialized on the loop thread (the start/stop I/O is
-    async, and back-to-back reloads enqueue sequential tasks). Best-effort per surface: a
-    failure logs, never breaks the reload.
+    reconcile runs as ONE coroutine on the server loop under a per-loop lock, so
+    back-to-back reloads reconcile one after another, each against the surface set
+    current when it gets the lock. Best-effort per surface: a failure logs, never breaks
+    the reload.
     """
     if not STATE.plugin_surfaces_started:
         return  # the pending startup hook will start the already-updated STATE.plugin_surfaces
-    wanted = list(STATE.plugin_surfaces)
+
+    async def _stop(h) -> None:
+        stop_cb = h.get("stop")
+        if callable(stop_cb):
+            try:
+                res = stop_cb()
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                log.exception("[plugins] surface %s stop-on-reload failed", h.get("name"))
+        if h in STATE.plugin_surface_handles:
+            STATE.plugin_surface_handles.remove(h)
+
+    async def _start(s) -> bool:
+        try:
+            res = s["start"]()
+            if asyncio.iscoroutine(res):
+                res = await res
+        except Exception:
+            log.exception("[plugins] surface %s failed to hot-start", s.get("name"))
+            return False
+        STATE.plugin_surface_handles.append(
+            {
+                "plugin_id": s.get("plugin_id"),
+                "name": s.get("name"),
+                "start": s.get("start"),
+                "stop": s.get("stop"),
+                "reload": s.get("reload"),
+                "handle": res,
+            }
+        )
+        return True
+
+    async def _stopped_for_restart(h) -> bool:
+        """Stop ``h`` and confirm it ended. True → safe to start its replacement. On False
+        the old handle stays in ``plugin_surface_handles`` (it may still be running)."""
+        stop_ok = True
+        stop_cb = h.get("stop")
+        try:
+            res = stop_cb()
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception:
+            log.exception("[plugins] surface %s stop-on-restart failed", h.get("name"))
+            stop_ok = False
+        task = h.get("handle")
+        if isinstance(task, asyncio.Future):
+            # A stop() that only sets an event returns while the old tick still runs.
+            if not task.done():
+                await asyncio.wait({task}, timeout=_SURFACE_RESTART_GRACE_S)
+            if not task.done():
+                task.cancel()
+                await asyncio.wait({task}, timeout=_SURFACE_CANCEL_GRACE_S)
+            ended = task.done()
+        else:
+            # No task to watch: the stop callback's success is the only evidence it ended.
+            ended = stop_ok
+        if not ended:
+            log.error(
+                "[plugins] surface %s did not stop — keeping it and NOT starting its replacement; "
+                "restart the agent to pick up the plugin's new registration",
+                h.get("name"),
+            )
+            return False
+        if h in STATE.plugin_surface_handles:
+            STATE.plugin_surface_handles.remove(h)
+        return True
 
     async def _run():
-        to_stop, to_start, to_reload = _plan_surface_reconcile(STATE.plugin_surface_handles, wanted)
+        async with _surface_reconcile_lock():
+            await _reconcile()
+
+    async def _reconcile():
+        wanted = list(STATE.plugin_surfaces)  # the latest set, read under the lock
+        to_stop, to_start, to_reload, to_restart = _plan_surface_reconcile(STATE.plugin_surface_handles, wanted)
         for h in to_stop:
-            stop_cb = h.get("stop")
-            if callable(stop_cb):
-                try:
-                    res = stop_cb()
-                    if asyncio.iscoroutine(res):
-                        await res
-                except Exception:
-                    log.exception("[plugins] surface %s stop-on-reload failed", h.get("name"))
-            if h in STATE.plugin_surface_handles:
-                STATE.plugin_surface_handles.remove(h)
+            await _stop(h)
             log.info("[plugins] stopped surface %s — its plugin was disabled/removed", h.get("name"))
         for s in to_start:
-            try:
-                res = s["start"]()
-                if asyncio.iscoroutine(res):
-                    res = await res
-                STATE.plugin_surface_handles.append(
-                    {
-                        "plugin_id": s.get("plugin_id"),
-                        "name": s.get("name"),
-                        "stop": s.get("stop"),
-                        "reload": s.get("reload"),
-                        "handle": res,
-                    }
-                )
+            if await _start(s):
                 log.info("[plugins] hot-started surface %s — its plugin was enabled", s.get("name"))
-            except Exception:
-                log.exception("[plugins] surface %s failed to hot-start", s.get("name"))
+        for h, s in to_restart:
+            # Two generations of a sweep must never dispatch side by side: start the
+            # replacement only once the old one is confirmed ended.
+            if not await _stopped_for_restart(h):
+                continue
+            if await _start(s):
+                log.info("[plugins] restarted surface %s — its plugin re-registered it", s.get("name"))
+                continue
+            # The replacement failed to start and the old one is already stopped. Bring
+            # the old generation back rather than leave the surface dead: that is exactly
+            # what ran before this reload (stale objects, but alive and tracked).
+            if callable(h.get("start")) and await _start(h):
+                log.error(
+                    "[plugins] surface %s: its new registration failed to start — restored the "
+                    "previous one; fix the plugin and reload, or restart the agent",
+                    h.get("name"),
+                )
+            else:
+                log.error(
+                    "[plugins] surface %s is DOWN: its new registration failed to start and the "
+                    "previous one could not be restored — restart the agent",
+                    h.get("name"),
+                )
         for h in to_reload:
             reload_cb = h.get("reload")
             if not callable(reload_cb):
