@@ -11,10 +11,11 @@ consented to. The bounds are the whole point:
   nothing may be cloned (opt-in: the operator declares what may be fetched). It does
   not gate ``register_local_project`` — a local directory has no source to match;
   the root bounds it.
-- ``onboarding.root`` — every checkout lands here and every registration must
-  RESOLVE under it. A ``../`` or a symlink that would escape the root is refused
-  before anything is written. This is the whole fence for local registration, so
-  the operator widens what can be registered by widening the root, never the agent.
+- ``onboarding.root`` — every checkout lands here, and a local registration that
+  RESOLVES under it goes straight through. A local folder outside it (or any, while
+  it is unset) is registered only on the operator's per-folder approval card
+  (``onboarding.approve_outside_root``; off → refused, the pre-card behavior). A
+  clone target that would escape the root is refused before anything is written.
 - ``onboarding.enabled`` — ON by default (#3396), and a DISCOVERABILITY switch
   rather than the consent: the two bounds above carry that, and both are empty by
   default, so a stock install can onboard exactly nothing. Turning it off removes
@@ -682,6 +683,13 @@ def _outside_root_decision(decision, token: str) -> str:
     return "deny"
 
 
+def _outside(root_raw: str) -> str:
+    """How a result names where the folder sits relative to the root — which may be unset."""
+    if root_raw.strip():
+        return f"outside the onboarding root ({root_raw})"
+    return "with no onboarding root set"
+
+
 def _approval_card(
     *, target: Path, raw: str, root_raw: str, project_name: str, requested_write: bool, token: str
 ) -> dict:
@@ -703,11 +711,16 @@ def _approval_card(
         f"Repository: {git_line}",
         f"Name:       {_clean_display(project_name, 80)!r}",
         f"Agent asks: {'read-write' if requested_write else 'read-only'}",
-        f"Outside:    onboarding root {_clean_display(root_raw)}",
+        (
+            f"Outside:    onboarding root {_clean_display(root_raw)}"
+            if root_raw.strip()
+            else "Outside:    no onboarding root is set — this agent has no default workspace; approving "
+            "registers only this folder"
+        ),
         "",
         "Allowing registers THIS folder as a managed project (your filesystem tools, the",
-        "project board and the GitHub plugin will reach it). The root stays the boundary for",
-        "everything else. Your choice of access wins over what the agent asked for.",
+        "project board and the GitHub plugin will reach it). Nothing else is widened. Your",
+        "choice of access wins over what the agent asked for.",
     ]
     return {
         "kind": "approval",
@@ -945,9 +958,9 @@ def build_onboard_tools(config) -> list:
         if refusal:
             log.warning("[onboard] outside-root registration hard-refused (%s): %s", refusal, target)
             return (
-                f"Refused: {raw} resolves to {target}, outside the onboarding root ({root_raw}), and "
+                f"Refused: {raw} resolves to {target}, {_outside(root_raw)}, and "
                 f"{refusal} — this location can't be registered, even with the operator's approval. "
-                "Pick a project directory, or clone the repo into the root with onboard_project."
+                "Pick a project directory instead."
             )
         if not target.is_dir():
             return f"Error: {target} is not an existing directory."
@@ -1000,7 +1013,7 @@ def build_onboard_tools(config) -> list:
         if choice == "plain":
             log.warning("[onboard] outside-root approval answered with a plain approve — not registered: %s", target)
             return (
-                f"Not registered: {target} is outside the onboarding root and needs the operator to pick an "
+                f"Not registered: {target} ({_outside(root_raw)}) needs the operator to pick an "
                 "access level (Allow read-only / Allow read-write), but the answer was a plain approve — from a "
                 "client that doesn't show those choices, or an automatic approval. Nothing was written. Ask the "
                 "operator to answer from the console or Zed, or to add the folder in Settings."
@@ -1008,9 +1021,9 @@ def build_onboard_tools(config) -> list:
         if choice == "deny":
             log.info("[onboard] outside-root registration DENIED by the operator: %s", target)
             return (
-                f"Denied by the operator — {target} was not registered (it is outside the onboarding root, "
-                f"{root_raw}). Do not ask again for this folder in this turn; offer an alternative instead, "
-                "e.g. clone the repo into the root with onboard_project, or ask the operator to widen onboarding.root."
+                f"Denied by the operator — {target} was not registered ({_outside(root_raw)}). Do not ask "
+                "again for this folder in this turn; offer an alternative instead, e.g. clone the repo with "
+                "onboard_project, or ask the operator to set or widen onboarding.root."
             )
 
         write_effective = choice == "rw"
@@ -1020,7 +1033,7 @@ def build_onboard_tools(config) -> list:
             rw,
             "read-write" if requested_write else "read-only",
             target,
-            root_raw,
+            root_raw or "(unset)",
         )
         from graph.workspaces.manager import github_slug_for_checkout
 
@@ -1045,8 +1058,8 @@ def build_onboard_tools(config) -> list:
         source = f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
         return (
             f"Registered {project_name} ({rw}) at {target} in {_where(reg)} — approved by the operator "
-            f"({rw}){overridden}; it is outside the onboarding root ({root_raw}), which still bounds everything "
-            f"else. {source}, default branch {default_branch}."
+            f"({rw}){overridden}; it is {_outside(root_raw)}, and only this folder was added. "
+            f"{source}, default branch {default_branch}."
         )
 
     @tool
@@ -1072,7 +1085,8 @@ def build_onboard_tools(config) -> list:
 
         BOUNDED by ``onboarding.root``: a path that RESOLVES (symlinks followed) to
         an existing directory strictly inside that root registers directly. A
-        directory OUTSIDE the root pauses and shows the operator an approval card
+        directory OUTSIDE the root (or any directory, when no root is set) pauses and
+        shows the operator an approval card
         (Allow read-only / Allow read-write / Deny) for that one folder — just call
         this tool with the path; the operator's choice of access wins over
         ``write``. If they deny it, the result says so: don't retry, offer an
@@ -1089,17 +1103,24 @@ def build_onboard_tools(config) -> list:
         if not raw:
             return "Error: no path was given — pass the absolute path of the directory to register."
         root_raw = getattr(config, "onboarding_root", "") or ""
-        if not root_raw.strip():
+        approve_outside = bool(getattr(config, "onboarding_approve_outside_root", True))
+        if not root_raw.strip() and not approve_outside:
             return _ROOT_UNSET.format(verb="register from")
         expanded = Path(raw).expanduser()
         if not expanded.is_absolute():
             return f"Error: {raw!r} is not an absolute path — pass the full path (a leading ~ is fine)."
+        if not root_raw.strip():
+            # No root (a stock install): EVERY folder is "outside", so every registration
+            # goes to the operator's card — same floor, same binding, same no-bypass rule.
+            return await _register_outside_root(
+                raw=raw, target=expanded.resolve(), root_raw="", name=name, write=write
+            )
         root_resolved = Path(root_raw).expanduser().resolve()
         target = expanded.resolve()
         # Containment BEFORE existence: a path outside the root is refused the same
         # way whether or not it exists, so the tool can't be used to probe the disk.
         if not target.is_relative_to(root_resolved):
-            if not bool(getattr(config, "onboarding_approve_outside_root", True)):
+            if not approve_outside:
                 return (
                     f"Refused: {raw} resolves to {target}, outside the onboarding root ({root_raw}) — only "
                     "directories under the root can be registered. The operator widens this by changing "

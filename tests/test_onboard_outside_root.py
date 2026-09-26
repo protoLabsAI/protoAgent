@@ -508,3 +508,82 @@ async def test_real_graph_park_and_deny_registers_nothing(layout, applied):
     root, outside = layout
     _payload, out = await _drive(_tool(_cfg(root)), {"path": str(outside)}, "deny")
     assert out.startswith("Denied by the operator") and applied == []
+
+
+# ── no onboarding root at all (a stock install): the same card ──────────────
+
+
+async def test_unset_root_parks_with_the_no_root_line(layout, applied, park):
+    _root, outside = layout
+    park.answer = _DENY_ANSWER
+    out = await _tool(_cfg(Path(""), onboarding_root="")).ainvoke({"path": str(outside)})
+    [card] = park.payloads
+    assert card["path"] == str(outside.resolve()) and card["session_allow"] is False
+    assert "Outside:    no onboarding root is set — this agent has no default workspace" in card["detail"]
+    assert "approving registers only this folder" in card["detail"]
+    assert "onboarding root ." not in card["detail"]
+    assert out.startswith("Denied by the operator") and "with no onboarding root set" in out
+    assert applied == []
+
+
+@pytest.mark.parametrize(("label", "expect_write"), [("Allow read-only", False), ("Allow read-write", True)])
+async def test_unset_root_approved_registers_at_the_chosen_access(layout, applied, park, label, expect_write):
+    _root, outside = layout
+    park.answer = _option(label)
+    out = await _tool(_cfg(Path(""), onboarding_root="")).ainvoke({"path": str(outside)})
+    entry = applied[0]["projects"][-1]
+    assert entry["path"] == str(outside.resolve()) and entry["write"] is expect_write
+    rw = "read-write" if expect_write else "read-only"
+    assert f"approved by the operator ({rw})" in out and "with no onboarding root set" in out
+
+
+async def test_unset_root_real_graph_round_trip(layout, applied):
+    _root, outside = layout
+    payload, out = await _drive(_tool(_cfg(Path(""), onboarding_root="")), {"path": str(outside)}, _option("Allow read-only"))
+    assert "no onboarding root is set" in payload["detail"]
+    assert applied[0]["projects"][-1]["write"] is False and "approved by the operator" in out
+
+
+@pytest.mark.parametrize(
+    "make",
+    [lambda h, t: h, lambda h, t: h / ".ssh", lambda h, t: h / "Library" / "x", lambda h, t: t / "p" / ".aws"],
+)
+async def test_unset_root_hard_refusals_still_never_park(tmp_path, fake_home, applied, park, make):
+    target = make(fake_home, tmp_path)
+    target.mkdir(parents=True, exist_ok=True)
+    out = await _tool(_cfg(Path(""), onboarding_root="")).ainvoke({"path": str(target)})
+    assert out.startswith("Refused:") and "even with the operator's approval" in out
+    assert "with no onboarding root set" in out
+    assert park.payloads == [] and applied == []
+
+
+@posix_only
+async def test_unset_root_system_dir_still_refused(applied, park):
+    out = await _tool(_cfg(Path(""), onboarding_root="")).ainvoke({"path": "/etc"})
+    assert out.startswith("Refused:") and "system directory" in out
+    assert park.payloads == [] and applied == []
+
+
+async def test_unset_root_with_config_off_is_the_old_refusal(layout, applied, park):
+    _root, outside = layout
+    out = await _tool(_cfg(Path(""), onboarding_root="", onboarding_approve_outside_root=False)).ainvoke(
+        {"path": str(outside)}
+    )
+    assert out.startswith("Refused:") and "onboarding.root isn't set" in out
+    assert park.payloads == [] and applied == []
+
+
+async def test_unset_root_bypass_does_not_skip_the_card(layout, applied, park):
+    _root, outside = layout
+    park.answer = _DENY_ANSWER
+    with request_metadata_scope({"bypass_permissions": True}):
+        await _tool(_cfg(Path(""), onboarding_root="")).ainvoke({"path": str(outside)})
+    assert len(park.payloads) == 1 and applied == []
+
+
+async def test_unset_root_onboard_project_still_refuses_to_clone(tmp_path, applied, park):
+    """Cloning is unchanged: with no root there is nowhere for a clone to land."""
+    tools = {t.name: t for t in onboard_tools.build_onboard_tools(_cfg(Path(""), onboarding_root="", onboarding_allow=["github.com/acme/*"]))}
+    out = await tools["onboard_project"].ainvoke({"repo": "acme/widget"})
+    assert out.startswith("Refused:") and "onboarding.root isn't set" in out
+    assert park.payloads == [] and applied == []

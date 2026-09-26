@@ -133,6 +133,9 @@ here is written by hand any more:
   card for that one folder — **Allow read-only / Allow read-write / Deny** —
   and the root stays the boundary for everything else
   ([`onboarding.approve_outside_root`](/reference/configuration#onboarding)).
+  The same card appears on an agent with no onboarding root at all, so a stock
+  install can still be pointed at a checkout you already have — approving
+  registers only that folder.
   The canonical wording, including the fence consequence — once `projects:` is
   non-empty it *is* the filesystem fence — is in the
   [bundles guide](/guides/bundles#the-manifest). This rides a `project: true`

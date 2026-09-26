@@ -2054,7 +2054,8 @@ class LangGraphConfig:
     # ``enabled`` is ON by default (#3396) and is a DISCOVERABILITY switch, not the consent:
     # the bounds below carry that, and both are empty by default, so a stock install can
     # onboard exactly nothing. ``allow: []`` matches no source, so every clone is refused;
-    # ``root: ""`` is no consented space, so every registration is refused. Turning this off
+    # ``root: ""`` is no consented space, so a registration only happens on the operator's
+    # approval card (``approve_outside_root``; off → refused). Turning this off
     # additionally removes ``onboard_project`` from the toolset — which is why it defaulted
     # off and why that was wrong: an absent tool and a hidden settings section left the
     # operator with a dead "Add project" button and nothing naming what to configure.
@@ -2062,7 +2063,7 @@ class LangGraphConfig:
     onboarding_root: str = ""            # e.g. ~/dev — clones land here; registrations must resolve UNDER it
     onboarding_allow: list[str] = field(default_factory=list)  # e.g. [github.com/protoLabsAI/*]
     onboarding_write_default: bool = False  # registered read-only unless overridden per-call
-    # A local folder OUTSIDE ``root`` → an in-chat approval card for that one folder
+    # A local folder OUTSIDE ``root`` (or any, with no root) → an in-chat approval card for that one folder
     # (Allow read-only / read-write / Deny) instead of a flat refusal. Never auto-approved
     # by /bypass or "allow for session" — it moves the fence. False = the old refusal.
     onboarding_approve_outside_root: bool = True

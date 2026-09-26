@@ -931,7 +931,7 @@ async def register_local_project(path: str, name: str | None = None, write: bool
 Register a directory that is already on disk — a checkout the operator made, or one the agent
 created — in the same registry, without cloning. `path` must be absolute (`~` is expanded) and
 is judged by where it **resolves** (symlinks followed). Inside `onboarding.root` it registers
-directly. Outside it, the turn parks on an operator approval card for that one folder — **Allow
+directly. Outside it — or anywhere, when no root is set — the turn parks on an operator approval card for that one folder — **Allow
 read-only / Allow read-write / Deny**, the operator's choice winning over `write` — that
 `/bypass` and "allow for session" never skip; a denial is a plain result the agent can act on.
 Some places are refused with no card (filesystem root, home, system and credential
