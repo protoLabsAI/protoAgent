@@ -285,7 +285,7 @@ plugins:
     name: Engineer (navigator skills)
     category: Engineering
     bundled: true
-    tagline: "The skill pack behind the Engineer archetype — onboard a repo with a guided tour, then debug one checkpoint per turn: you write the fix, the agent reviews. Prompt-only; off by default."
+    tagline: "The skill pack behind the Engineer archetype — onboard a repo (its README, manifest and a code-linked architecture diagram, then a guided tour), then debug one checkpoint per turn: you write the fix, the agent reviews. Prompt-only; off by default."
     adds: [skill]
 
   # Moved in-tree in #3450 from cowork-plugin (now retired; the bundled manifest's

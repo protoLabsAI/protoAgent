@@ -323,6 +323,8 @@ def unmatched_keys(links: dict, code: str) -> list[str]:
     if not links or not code:
         return []
     msgs = _messages(code)
+    body = [ln.strip() for ln in code.splitlines() if ln.strip() and not ln.strip().startswith("%%")]
+    is_seq = bool(body) and body[0].startswith("sequenceDiagram")
     out = []
     for key in links:
         if key.startswith("msg:"):
@@ -332,6 +334,11 @@ def unmatched_keys(links: dict, code: str) -> list[str]:
                     out.append(key)
             elif sum(1 for m in msgs if m.replace("\n", " ") == ref.replace("\n", " ")) != 1:
                 out.append(key)
+            continue
+        if key.startswith("participant:") and not is_seq:
+            # The renderer matches participant:<name> on sequence participants only; on a
+            # flowchart/class/state diagram it is dead even though the name is in the source.
+            out.append(key)
             continue
         name = key[len("participant:") :].strip() if key.startswith("participant:") else key
         if not name or not re.search(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", code):
