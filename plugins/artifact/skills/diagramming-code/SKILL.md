@@ -16,6 +16,12 @@ points at the wrong line is worse than no diagram.
   `file:line`), then `read_file` with an `offset` around each hit to follow the calls.
 - Every linked node or message cites a `path` and `line` you **saw** in a `search_files` hit or a
   `read_file` offset. Never guess a line, never count lines by eye in a plain `read_file` result.
+- **Every link carries an `anchor`**: a short, exact snippet of the line you mean, copied
+  verbatim from the `search_files` / `read_file` output — `"runTool("`, `"llm.complete("`,
+  `"function textFrom"` (≤ 120 chars, one line, distinctive enough to find the right spot).
+  The server snaps the link to the anchor's occurrence nearest your `line`, so a miscounted
+  line still lands on the right code; a link whose anchor isn't in the file is dropped. Anchor
+  the line that DOES the thing (the call, the definition), not a comment about it.
 - Draw what the code does, not what it probably does. If a step is inferred (a framework calls
   it, a callback is registered elsewhere), leave it unlinked or say so in the note.
 
@@ -51,12 +57,13 @@ show_artifact(
   T-->>A: result
   A-->>C: answer""",
   links={
-    "participant:Agent": {"project": "app", "path": "src/agent.py", "line": 12},
+    "participant:Agent": {"project": "app", "path": "src/agent.py", "line": 12,
+                          "anchor": "class Agent"},
     "msg:1": {"project": "app", "path": "src/agent.py", "line": 40, "end_line": 58,
-              "note": "ask() — builds the prompt and starts the tool loop"},
+              "anchor": "def ask(", "note": "ask() — builds the prompt and starts the tool loop"},
     "msg:2": {"project": "app", "path": "src/agent.py", "line": 61, "end_line": 70,
-              "note": "one tool call per model turn, until it stops asking"},
-    "msg:3": {"project": "app", "path": "src/tools.py", "line": 22},
+              "anchor": "run_tool(call)", "note": "one tool call per model turn, until it stops asking"},
+    "msg:3": {"project": "app", "path": "src/tools.py", "line": 22, "anchor": "return result"},
   },
 )
 ```
@@ -71,13 +78,16 @@ Keys:
   `loop`/`alt` lines and participant lines don't count) — or `msg:<exact label>` when that label
   is unique.
 
-Each target: `project`, `path` (relative to the project root), `line`, optional `end_line`
-(inclusive) and optional `note` (one sentence, ≤ 280 chars — the *why*, like `show_code`'s note).
+Each target: `project`, `path` (relative to the project root), `line`, `anchor` (always — see
+above), optional `end_line` (inclusive; the range moves with a snap) and optional `note` (one
+sentence, ≤ 280 chars — the *why*, like `show_code`'s note).
 
 ## 5. Check the reply
 
 The reply lists every link it attached **with the first line of each target echoed back** — read
-them. If a line isn't the code you meant, fix it. It also lists links it **dropped** (outside the
+them — and every link it **moved** to match its anchor ("moved 59→66 to match anchor
+'runTool('"). If an echoed line still isn't the code you meant, your anchor was too generic:
+fix it. It also lists links it **dropped** (outside the
 project, a secret file, a line out of range, no such file) and keys that **match nothing** in the
 diagram (a typo'd node id, `msg:9` in a 7-message diagram). Resend a corrected `links` map with
 `update_artifact` / `rewrite_artifact` rather than leaving dead links. Then confirm it rendered

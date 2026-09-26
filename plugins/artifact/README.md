@@ -83,7 +83,11 @@ console view.
 svg and mermaid artifacts (and ` ```mermaid ` fences inside markdown) render into a navigable
 viewport: **wheel / pinch** zoom to the cursor (Safari/WKWebView gesture events included), **drag**
 to pan, **double-click** to zoom in (shift: out), keys **+ − 0 f** and the **arrows**, and a
-toolbar (− · zoom % · + · Fit · Reset). Big diagrams open fitted to the frame; small ones at 1:1.
+toolbar (− · zoom % · + · Fit · Reset). Small diagrams open fitted (never above 1:1). A diagram
+whose labels would shrink below ~11px when fitted (a long sequence diagram in a narrow dock) opens
+at fit-to-width — or the smallest readable zoom — anchored at the top-left instead; **Fit** always
+shows the whole diagram and **Reset** returns to that start view. Mermaid's palette follows the
+console theme (dark/light).
 Every zoom moves the root `<svg>`'s **viewBox** — the vector is re-laid out, so it stays sharp at
 any zoom. (A CSS-transform zoom was removed in #1517 because WKWebView blurred it.) In markdown
 the plain wheel keeps scrolling the page; zoom there with ctrl/⌘ + wheel, a pinch, or the toolbar.
@@ -105,6 +109,13 @@ show_artifact(kind="mermaid", code="sequenceDiagram\n  C->>A: ask(q)\n  A->>T: r
 - **Keys**: a flowchart / class / state node id (or a flowchart subgraph id) as written;
   `participant:<id or alias>`; `msg:<n>` (the n-th sequence message, 1-based, source order) or
   `msg:<exact label>` when that label is unique.
+- **Anchors**: each target should carry `anchor` — a short exact snippet of the line it means
+  (`"runTool("`, ≤ 120 chars, one line). The server finds it in the file (exact, else ignoring
+  whitespace) and SNAPS the link to the occurrence nearest the given `line`, keeping the range's
+  length; the reply reports each move ("moved 59→66 to match anchor 'runTool('"). An anchor
+  that isn't in the file drops the link. Models miscount lines but quote code reliably, so this
+  makes landing deterministic. The anchor is stored with the link; links without one work as
+  before, and the reply nudges to add it.
 - **Validation** mirrors `show_code`: the project fence (`live_project_registry`), the secret-path
   deny list, the file exists and is text, the line is in range (`end_line` clamped), the note ≤ 280
   chars. A bad link is **dropped with a reason** — the artifact still lands. The reply echoes each
@@ -114,7 +125,7 @@ show_artifact(kind="mermaid", code="sequenceDiagram\n  C->>A: ask(q)\n  A->>T: r
   chip keep their own. `update_artifact` and a panel edit carry them forward; a rewrite doesn't.
 - **In the panel**: linked elements get a dotted underline and a hover/focus tooltip
   (`project/path:line — note`); they're keyboard-focusable (Enter opens). A **Links (n)** button
-  lists every link (arrow keys, Enter, Esc), highlights the element on hover/focus and pans to it,
+  (a single-line badge) lists every link (arrow keys, Enter, Esc), highlights the element on hover/focus and pans to it,
   and marks links that match nothing in the diagram.
 - **Trust**: the sandboxed frame posts only a KEY (`protoArtifact:openCode`), and only behind a
   user gesture; the shell resolves it against the rendered version's stored links and forwards

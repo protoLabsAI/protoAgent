@@ -12,8 +12,8 @@ import { artifactFrame, routeLinksStore } from "./artifactLinks";
 // forwards nothing; and a forged post from the sandboxed frame can't name a path of its own.
 
 const HOST = "/__mm-host.html";
-const HOST_HTML = `<!doctype html><html><body style="margin:0">
-<iframe id="shell" src="/plugins/artifact/view" style="width:1000px;height:760px;border:0"></iframe>
+const hostHtml = (w: number) => `<!doctype html><html><body style="margin:0">
+<iframe id="shell" src="/plugins/artifact/view" style="width:${w}px;height:760px;border:0"></iframe>
 <script>
   window.__opened = [];
   addEventListener("message", (e) => {
@@ -22,9 +22,9 @@ const HOST_HTML = `<!doctype html><html><body style="margin:0">
   });
 </script></body></html>`;
 
-async function openHost(page: Page): Promise<Frame> {
+async function openHost(page: Page, width = 1000): Promise<Frame> {
   await routeLinksStore(page);
-  await page.route(`**${HOST}`, (route) => route.fulfill({ contentType: "text/html", body: HOST_HTML }));
+  await page.route(`**${HOST}`, (route) => route.fulfill({ contentType: "text/html", body: hostHtml(width) }));
   await page.goto(HOST);
   const shell = page.frameLocator("#shell");
   await expect(shell.locator("#art option")).toHaveCount(4);
@@ -87,7 +87,7 @@ test("zoom and pan move the svg viewBox, never a CSS transform", async ({ page }
   expect(panned[2]).toBeCloseTo(zoomed[2], 3);
   expect(panned[0]).not.toBeCloseTo(zoomed[0], 1);
   // Toolbar: + / − / Reset; keyboard 0 resets too.
-  await f.getByRole("button", { name: "Reset zoom (0)" }).click();
+  await f.getByRole("button", { name: "Reset to the start view (0)" }).click();
   await expect.poll(() => viewBox(f)).toBe(vb0);
   await f.getByRole("button", { name: "Zoom in (+)" }).click();
   await expect.poll(() => viewBox(f)).not.toBe(vb0);
@@ -193,7 +193,8 @@ test("the Links list is keyboard-reachable, text-only, and opens the stored targ
   const shell = await openHost(page);
   await show(shell, "art-seq", ".__lk");
   const btn = shell.locator("#links");
-  await expect(btn).toHaveText("Links (5)");
+  await expect(btn).toHaveText("Links 5");
+  await expect(btn).toHaveAttribute("aria-label", "Code links (5)");
   await btn.click();
   const list = shell.locator("#linklist");
   await expect(list.locator("button")).toHaveCount(5);
@@ -272,4 +273,47 @@ test("a broken mermaid diagram still reports its render error (the feedback loop
   await expect.poll(errText, { timeout: 20_000 }).toContain("Parse error");
   await expect.poll(() => posts.length).toBeGreaterThan(0);
   expect(JSON.parse(posts[0])).toMatchObject({ id: "bad", ok: false });
+});
+
+test("a narrow dock: the diagram opens readable at the top, and the toolbar stays one clean row", async ({ page }) => {
+  const shell = await openHost(page, 480);
+  const f = await show(shell, "art-seq", ".__lk");
+  // Labels render at a readable size (fit-to-contain would shrink them), from the top-left,
+  // below the zoom toolbar rather than under it.
+  const first = await f.evaluate(() => {
+    const t = document.querySelector("text.messageText")!.getBoundingClientRect();
+    const a = [...document.querySelectorAll("rect.actor")].map((r) => r.getBoundingClientRect());
+    const top = a.reduce((m, r) => (r.top < m.top ? r : m));
+    return { fontPx: t.height, actorTop: top.top, actorLeft: top.left, vh: innerHeight };
+  });
+  expect(first.fontPx).toBeGreaterThanOrEqual(11);
+  const tb = await f.evaluate(() => document.querySelector(".__vptb")!.getBoundingClientRect().bottom);
+  expect(first.actorTop).toBeGreaterThanOrEqual(tb);
+  expect(first.actorTop).toBeLessThan(first.vh / 3);
+  expect(first.actorLeft).toBeGreaterThanOrEqual(0);
+  // Fit still shows the whole diagram (smaller), Reset returns to the readable start.
+  const start = await viewBox(f);
+  await f.getByRole("button", { name: "Fit the whole diagram (f)" }).click();
+  await expect.poll(() => viewBox(f)).not.toBe(start);
+  await f.getByRole("button", { name: "Reset to the start view (0)" }).click();
+  await expect.poll(() => viewBox(f)).toBe(start);
+  // Toolbar: one row; Edit / Download / Delete fold into the ⋯ menu and still work.
+  const bar = shell.locator("#bar");
+  await expect(bar).toHaveClass(/compact/);
+  const rows = await shell.evaluate(() => {
+    const tops = new Set([...document.querySelectorAll("#bar > *")]
+      .filter((e) => (e as HTMLElement).offsetParent !== null)
+      .map((e) => { const r = e.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 4); }));
+    const links = document.getElementById("links")!.getBoundingClientRect();
+    return { rows: tops.size, linksH: links.height };
+  });
+  expect(rows.rows).toBe(1);
+  expect(rows.linksH).toBeLessThan(34); // "Links 5" on one line
+  await expect(shell.locator("#dl")).toBeHidden();
+  await shell.locator("#more").click();
+  await expect(shell.locator("#moremenu #dl")).toBeVisible();
+  await shell.locator("#moremenu #del").click();
+  await expect(shell.locator("#moremenu #del")).toHaveText("Confirm?"); // menu stays open to confirm
+  await page.keyboard.press("Escape");
+  await expect(shell.locator("#moremenu")).toBeHidden();
 });

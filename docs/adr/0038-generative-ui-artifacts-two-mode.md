@@ -27,7 +27,9 @@ version may also carry **`links`** (`show_artifact` / `update_artifact` / `rewri
 `msg:<label>`) to `{project, path, line, end_line, note}`. The tool validates each target the way
 `show_code` does (the fs fence via `live_project_registry`, the secret deny list, a real text file,
 an in-range line, a ≤ 280-char note), drops a bad one with a reason, and stores the kept links
-**with the version**. D1's boundary is unchanged: the sandboxed frame posts only a KEY
+**with the version**. A target's optional `anchor` (a short exact snippet of the intended line)
+snaps it to the nearest occurrence in the file — models miscount lines but quote code reliably —
+and a missing anchor drops the link. D1's boundary is unchanged: the sandboxed frame posts only a KEY
 (`protoArtifact:openCode {key}`, honoured only behind a user gesture); the shell looks the target
 up in the rendered version's stored links and forwards it to the console as
 `protoagent:code:open`, which PluginView accepts only from the plugin iframe at its own origin and

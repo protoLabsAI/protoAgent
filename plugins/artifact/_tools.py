@@ -229,9 +229,13 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     class / state node id or subgraph id exactly as written, ``participant:<name>`` for a
     sequence participant, and ``msg:<n>`` for the n-th sequence message (1-based, source
     order) or ``msg:<exact label>``. Every target must be a REAL location you read — take
-    ``line`` from ``search_files`` (file:line) or a ``read_file`` offset, never a guess; the
-    reply echoes each target's first line so you can check it. Bad links are dropped with a
-    reason (the diagram still renders). ``note`` is one sentence (≤ 280 chars).
+    ``line`` from ``search_files`` (file:line) or a ``read_file`` offset, never a guess — and
+    ALWAYS pass ``anchor``: a short exact snippet of that line copied verbatim from the tool
+    output (``"runTool("``, ``"function textFrom"``, ≤ 120 chars). The server snaps the link to
+    the anchor's nearest occurrence (so a miscounted line still lands) and drops a link whose
+    anchor isn't in the file. The reply echoes each target's first line and every snap. Bad
+    links are dropped with a reason (the diagram still renders). ``note`` is one sentence
+    (≤ 280 chars).
     """
     checked = _links.check(links)
     return _then_render(_show(kind, code, title, checked))

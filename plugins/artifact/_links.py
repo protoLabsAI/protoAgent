@@ -12,6 +12,11 @@ Target keys:
 * ``msg:<n>`` — the n-th sequence message (1-based, in source order), or ``msg:<label>`` —
   the message whose label is exactly ``<label>`` (only if no other message shares it).
 
+A target may carry an ``anchor``: a short exact snippet of the line it means (``"runTool("``).
+The line is then SNAPPED to the anchor's occurrence nearest the given ``line`` (the range keeps
+its length) — models quote code reliably but miscount lines — and a link whose anchor isn't in
+the file is dropped. The anchor is stored with the link.
+
 Every target is validated here the way ``show_code`` validates its range (tools/fs_tools.py):
 the project fence (``live_project_registry``), the secret-path deny list, the file exists and
 is text, the line is in range, and the note is at most one sentence. A bad link is DROPPED
@@ -35,6 +40,8 @@ KEY_MAX = 200
 NOTE_MAX_FALLBACK = 280  # graph.components.CODE_REF_NOTE_MAX (the code-ref chip's note cap)
 _ECHO_CHARS = 60
 _REPORT_MAX = 20  # per-link lines echoed back before summarising
+ANCHOR_MAX = 120  # an anchor is a short snippet from ONE line, not a block
+_ANCHOR_SCAN_BYTES = 4 * 1024 * 1024  # anchors are searched in the first 4 MB of a file
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 # A sequence message line: `A->>B: label`, `A-->>B: label`, `A-xB: …`, `A-)B: …`, `A->B: …`,
@@ -106,6 +113,14 @@ def _check_one(registry, key: str, spec) -> tuple[dict | None, str, str]:
         return None, "", f"`end_line` must be an integer (got {end_line!r})"
     if not isinstance(note, str):
         return None, "", "`note` must be a string"
+    anchor = spec.get("anchor")
+    if anchor is not None and not isinstance(anchor, str):
+        return None, "", "`anchor` must be a string"
+    anchor = (anchor or "").strip()
+    if len(anchor) > ANCHOR_MAX:
+        return None, "", f"`anchor` is {len(anchor)} chars; use a short snippet from one line (≤ {ANCHOR_MAX})"
+    if "\n" in anchor or "\r" in anchor:
+        return None, "", "`anchor` must be a snippet from a single line"
     note = note.strip()
     if len(note) > _note_max():
         return None, "", f"`note` is {len(note)} chars; keep it to one sentence (≤ {_note_max()})"
@@ -124,17 +139,30 @@ def _check_one(registry, key: str, spec) -> tuple[dict | None, str, str]:
         return None, "", f"{path} looks like a secret ({reason}) — it can't be linked"
     if not target.is_file():
         return None, "", f"no such file: {path}"
+    moved = ""
     try:
         with open_regular(target) as fh:
             if sniff_binary(fh):
                 return None, "", f"{path} is a binary file"
             total = count_lines(fh)
-            if line < 1 or line > total:
-                return None, "", f"line {line} is out of range for {path} ({total} lines)"
             end = line if end_line is None else end_line
             if end < line:
                 return None, "", f"end_line ({end}) is before line ({line})"
-            end = min(end, total)
+            if anchor:
+                # The anchor decides the line: models get line arithmetic wrong, but they quote
+                # code verbatim. Snap to the occurrence nearest the line they gave, keeping the
+                # range's length.
+                fh.seek(0)
+                hits = _anchor_lines(fh.read(_ANCHOR_SCAN_BYTES), anchor)
+                if not hits:
+                    return None, "", f"anchor {anchor!r} not found in {path}"
+                snapped = min(hits, key=lambda n: (abs(n - line), n))
+                if snapped != line:
+                    moved = f"moved {line}→{snapped} to match anchor {anchor!r}"
+                end, line = end + (snapped - line), snapped
+            elif line < 1 or line > total:
+                return None, "", f"line {line} is out of range for {path} ({total} lines)"
+            end = min(max(end, line), total)
             fh.seek(0)
             first = read_window(fh, line, line).text
     except OSError as exc:
@@ -142,7 +170,28 @@ def _check_one(registry, key: str, spec) -> tuple[dict | None, str, str]:
     rel = target.relative_to(root).as_posix()
     where = f"{rel}:{line}" if end == line else f"{rel}:{line}-{end}"
     stored = {"project": project, "path": rel, "line": line, "end_line": end, "note": note}
-    return stored, f"{key} → {project}/{where} L{line}: {_echo(first)}", ""
+    if anchor:
+        stored["anchor"] = anchor
+    echo = f"{key} → {project}/{where} L{line}: {_echo(first)}" + (f"  ({moved})" if moved else "")
+    return stored, echo, ""
+
+
+def _anchor_lines(data: bytes, anchor: str) -> list[int]:
+    """1-based numbers of the lines containing ``anchor`` — an exact substring first, else a
+    whitespace-insensitive match (all whitespace ignored on both sides, so `foo(a,b)` finds
+    `foo( a, b )`: a quote that differs from the code only in spacing). Numbering is the fs tools'
+    ``\n``-only split, so a snapped line is the line read_file / the code pane show."""
+    from tools.fs_view import split_lines
+
+    lines = split_lines(data.decode("utf-8", errors="replace"))
+    exact = [i + 1 for i, ln in enumerate(lines) if anchor in ln]
+    if exact:
+        return exact
+    squash = lambda t: re.sub(r"\s+", "", t)  # noqa: E731
+    want = squash(anchor)
+    if not want:
+        return []
+    return [i + 1 for i, ln in enumerate(lines) if want in squash(ln)]
 
 
 class Checked:
@@ -208,6 +257,13 @@ def finish(c: Checked, kind: str, code: str) -> tuple[dict, str]:
     if c.dropped:
         out.append(f"Dropped {len(c.dropped)} link(s) (the rest of the artifact is fine):")
         out += [f"  {x}" for x in c.dropped[:_REPORT_MAX]]
+    bare = [k for k, t in c.kept.items() if not t.get("anchor")]
+    if bare:
+        out.append(
+            f"{len(bare)} link(s) have no `anchor` ({', '.join(bare[:8])}{'…' if len(bare) > 8 else ''}) — add "
+            "`anchor`: a short exact snippet of the target line copied from search_files/read_file "
+            'output (e.g. "runTool("), so each link lands on the right line even if `line` is off.'
+        )
     unmatched = unmatched_keys(c.kept, code)
     if unmatched:
         out.append(
@@ -218,11 +274,6 @@ def finish(c: Checked, kind: str, code: str) -> tuple[dict, str]:
     if c.dropped or unmatched:
         out.append("Fix them by passing `links` again with the corrected entries.")
     return c.kept, "\n" + "\n".join(out)
-
-
-def validate_links(links, kind: str, code: str = "") -> tuple[dict, str]:
-    """``check`` + ``finish`` in one call (for callers that already know kind and source)."""
-    return finish(check(links), kind, code)
 
 
 def _messages(code: str) -> list[str]:

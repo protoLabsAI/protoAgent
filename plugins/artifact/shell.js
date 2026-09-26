@@ -199,6 +199,16 @@
       try{ var b=svg.getBBox(); if(b.width>0&&b.height>0) return {x:b.x,y:b.y,w:b.width,h:b.height}; }catch(_){}
       return {x:0,y:0,w:300,h:150};
     }
+    // Rendered text below this many CSS px counts as unreadable (see home()).
+    var READABLE_PX=11, TB_CLEAR=34;
+    // The diagram's typical label size in its own units (svg px at 1:1) — the median of a few
+    // labels' font sizes; 0 when it has no text (a pure drawing: fit it whole).
+    function textUnits(svg){
+      var els=[].slice.call(svg.querySelectorAll("text,.nodeLabel,.label span")).slice(0,24), fs=[];
+      els.forEach(function(el){ var v=parseFloat(getComputedStyle(el).fontSize); if(v>0&&(el.textContent||"").trim()) fs.push(v); });
+      if(!fs.length) return 0;
+      fs.sort(function(a,b){ return a-b; }); return fs[Math.floor(fs.length/2)];
+    }
     function btn(label, title, fn){
       var b=D.createElement("button"); b.type="button"; b.textContent=label; b.title=title; b.setAttribute("aria-label",title);
       b.addEventListener("click",function(e){ e.stopPropagation(); fn(); });
@@ -211,7 +221,7 @@
     // document: plain wheel keeps scrolling the page (zoom needs ctrl/⌘ or a pinch).
     function mount(svg, box, inline){
       if(!svg||svg.__vp) return null;
-      var vb0=natural(svg), view=null, anim=0;
+      var vb0=natural(svg), view=null, anim=0, fontUnits=textUnits(svg);
       if(inline){
         var h=Math.round(Math.min(Math.max(vb0.h+24,140), W.innerHeight*0.7));
         box.style.height=h+"px";
@@ -226,7 +236,19 @@
       function k(v){ return size().w/(v||view).w; }  // screen px per svg unit
       function fitK(cap){ var s=size(), p=12, f=Math.min((s.w-2*p)/vb0.w,(s.h-2*p)/vb0.h); if(!(f>0)) f=1; return cap?Math.min(f,1):f; }
       function around(kk, cx, cy){ var s=size(), w=s.w/kk, h=s.h/kk; return {x:cx-w/2,y:cy-h/2,w:w,h:h}; }
-      function home(){ return around(fitK(true), vb0.x+vb0.w/2, vb0.y+vb0.h/2); }
+      // The START view. Fit-to-contain (never above 1:1) when that keeps text readable; a tall or
+      // wide diagram in a narrow dock would shrink its labels to a smudge (a sequence diagram
+      // opened at 34%), so then it opens at fit-to-WIDTH — or at the smallest readable zoom —
+      // anchored at the top-left, where the first participants / messages are. "Fit" still
+      // shows the whole diagram.
+      function home(){
+        var kc=fitK(true), fu=fontUnits;
+        if(!fu || kc*fu>=READABLE_PX) return around(kc, vb0.x+vb0.w/2, vb0.y+vb0.h/2);
+        var s=size(), p=12, kw=Math.min(1,(s.w-2*p)/vb0.w), kk=Math.min(1,Math.max(kw, READABLE_PX/fu));
+        var x=vb0.x-p/kk;
+        if(kk===kw) x=vb0.x+vb0.w/2-s.w/(2*kk);  // the width fits: centre it
+        return {x:x, y:vb0.y-(p+TB_CLEAR)/kk, w:s.w/kk, h:s.h/kk};  // clear the zoom toolbar
+      }
       function fit(){ return around(fitK(false), vb0.x+vb0.w/2, vb0.y+vb0.h/2); }
       function clampK(kk){ var lo=Math.min(fitK(false)*0.25,0.5), hi=Math.max(32,fitK(false)*4); return Math.min(hi,Math.max(lo,kk)); }
       function set(v){ view=v; svg.setAttribute("viewBox",v.x+" "+v.y+" "+v.w+" "+v.h); if(zl) zl.textContent=Math.round(k(v)*100)+"%"; }
@@ -254,8 +276,8 @@
       tb.appendChild(btn("−","Zoom out (−)",function(){ zoomCenter(1/1.25); }));
       tb.appendChild(zl);
       tb.appendChild(btn("+","Zoom in (+)",function(){ zoomCenter(1.25); }));
-      tb.appendChild(btn("Fit","Fit to window (f)",function(){ go(fit(),true); }));
-      tb.appendChild(btn("Reset","Reset zoom (0)",function(){ go(home(),true); }));
+      tb.appendChild(btn("Fit","Fit the whole diagram (f)",function(){ go(fit(),true); }));
+      tb.appendChild(btn("Reset","Reset to the start view (0)",function(){ go(home(),true); }));
       box.appendChild(tb);
 
       box.addEventListener("wheel",function(e){
@@ -449,6 +471,16 @@
       }
     };
   }
+  // Mermaid's own palette follows the console's ground: "dark" on a dark theme, "default" on a
+  // light one — the hardcoded "dark" drew light-grey message labels on a light panel.
+  function mermaidTheme(){
+    var bg=(getComputedStyle(document.documentElement).getPropertyValue("--pl-color-bg")||"").trim(), m, l=0;
+    if((m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg))){ var h=m[1].length===3?m[1].replace(/./g,"$&$&"):m[1];
+      l=(0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255; }
+    else if((m=/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(bg))) l=(0.299*m[1]+0.587*m[2]+0.114*m[3])/255;
+    else return "dark";
+    return l>0.5 ? "default" : "dark";
+  }
   // The controller + its config as one srcdoc script. JSON is made script-safe (`<` escaped),
   // so a note or key holding a script close tag can't end the tag early.
   function gfxScript(cfg){
@@ -496,7 +528,7 @@
     // run stays UNHANDLED on purpose — ERRBOOT's unhandledrejection hook reports it (#1458).
     if (kind === "mermaid") return '<!doctype html>' + base(kind) + viewport('<pre class="mermaid">' + esc(code) + '</pre>') +
       cdn("mermaid") + gfxScript({links: linkDisplay(links)}) +
-      '<script>mermaid.initialize({startOnLoad:false,theme:"dark"});'
+      '<script>mermaid.initialize({startOnLoad:false,theme:' + JSON.stringify(mermaidTheme()) + '});'
       + 'mermaid.run().then(function(){__artVP.full();});<\/script></body>';
     if (kind === "markdown") return mdDoc(code);
     // `react`: import map + UMD react/react-dom/babel, compiled as a MODULE so `import` works
@@ -535,7 +567,7 @@
     var hasMermaid = code.indexOf("```mermaid") >= 0;
     var mmRun = hasMermaid
       ? 'document.querySelectorAll("#md pre>code.language-mermaid").forEach(function(c){var d=document.createElement("pre");d.className="mermaid";d.textContent=c.textContent;c.parentNode.replaceWith(d);});'
-        + 'if(window.mermaid){mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run().then(function(){__artVP.inline();});}'
+        + 'if(window.mermaid){mermaid.initialize({startOnLoad:false,theme:' + JSON.stringify(mermaidTheme()) + '});mermaid.run().then(function(){__artVP.inline();});}'
       : "";
     return '<!doctype html>' + dsLink() + base("markdown") + '<style>' + MD_CSS + '</style>' +
       (hasMermaid ? GFX_CSS : "") +
@@ -695,6 +727,38 @@
       renderLinks(); }
   }
 
+  // ── narrow-dock toolbar ───────────────────────────────────────────────────────────────
+  // Below COMPACT_PX the secondary actions (Edit / Download / Delete) move — the SAME elements,
+  // so their handlers and the delete confirm keep working — into a ⋯ menu, and back when the
+  // dock widens. The bar stays one clean row instead of wrapping or clipping a button.
+  var COMPACT_PX = 560;
+  var $acts=document.getElementById("acts"), $more=document.getElementById("more"), $menu=document.getElementById("moremenu");
+  var ACT_IDS=["edit","dl","del"];
+  function setMenu(open){ $menu.classList.toggle("open", open); $more.setAttribute("aria-expanded", open?"true":"false");
+    if(open){ var f=[].slice.call($menu.querySelectorAll("button")).filter(function(b){ return b.style.display!=="none"; })[0]; if(f) f.focus(); } }
+  function layoutBar(){
+    var compact = $bar.getBoundingClientRect().width < COMPACT_PX;
+    if(compact===$bar.classList.contains("compact")) return;
+    $bar.classList.toggle("compact", compact);
+    var dest = compact ? $menu : $acts;
+    ACT_IDS.forEach(function(id){ var b=document.getElementById(id); dest.appendChild(b);
+      if(compact) b.setAttribute("role","menuitem"); else b.removeAttribute("role"); });
+    $acts.style.display = compact ? "none" : "";
+    if(!compact) setMenu(false);
+  }
+  $more.addEventListener("click", function(e){ e.stopPropagation(); setMenu(!$menu.classList.contains("open")); });
+  // Picking an action closes the menu — except the first Delete click, which arms "Confirm?".
+  $menu.addEventListener("click", function(e){ var b=e.target.closest("button"); if(b && b.id!=="del") setMenu(false); });
+  $menu.addEventListener("keydown", function(e){
+    if(e.key==="Escape"){ e.preventDefault(); setMenu(false); $more.focus(); return; }
+    if(e.key!=="ArrowDown" && e.key!=="ArrowUp") return;
+    var bs=[].slice.call($menu.querySelectorAll("button")).filter(function(b){ return b.style.display!=="none"; }), i=bs.indexOf(document.activeElement);
+    e.preventDefault(); bs[(i+(e.key==="ArrowDown"?1:bs.length-1))%bs.length].focus();
+  });
+  document.addEventListener("click", function(e){ if(!$menu.contains(e.target) && e.target!==$more) setMenu(false); });
+  if(window.ResizeObserver) new ResizeObserver(layoutBar).observe($bar);
+  window.addEventListener("resize", layoutBar);
+
   // ── code links (ADR 0038 amendment) ──────────────────────────────────────────────────────
   // A mermaid version may carry `links` {key: {project, path, line, end_line, note}}, validated
   // server-side against the fs fence. The frame posts only a KEY; everything that leaves this
@@ -724,7 +788,8 @@
   function renderLinks(){
     var keys=linkKeys();
     $links.style.display = keys.length ? "" : "none";
-    $links.textContent = "Links ("+keys.length+")";
+    document.getElementById("linkn").textContent = String(keys.length);
+    $links.setAttribute("aria-label", "Code links ("+keys.length+")");
     if(!keys.length) closeLinks(false);
     $linklist.textContent="";
     keys.sort(function(a,b){ return msgOrder(a)-msgOrder(b); }).forEach(function(k){

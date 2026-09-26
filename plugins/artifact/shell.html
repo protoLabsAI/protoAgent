@@ -14,10 +14,22 @@
   /* Toolbar: artifact picker + version nav + download/delete. Hidden until there's one. */
   #bar{display:none;align-items:center;gap:6px;padding:6px 10px;
     border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);font-size:12px}
-  /* A narrow dock wraps the bar onto a second row instead of clipping the last buttons. */
-  #bar{flex-wrap:wrap;row-gap:4px}
-  #bar .pl-btn{white-space:nowrap}
-  #art{flex:1 1 140px;min-width:0}
+  /* One row at any width: the picker shrinks first, and below ~560px the secondary actions
+     (Edit / Download / Delete) fold into a ⋯ menu instead of wrapping or clipping. */
+  #bar .pl-btn{white-space:nowrap;flex:none}
+  #art{flex:1 1 90px;min-width:60px}
+  #vnav,#acts{display:flex;align-items:center;gap:2px;flex:none}
+  #acts{gap:6px}
+  #links .badge{display:inline-block;min-width:1.4em;padding:0 5px;margin-left:2px;border-radius:999px;
+    font-size:11px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums;
+    background:rgba(127,127,127,.2);color:var(--pl-color-fg,#ededed)}
+  #morewrap{position:relative;display:none;flex:none}
+  #bar.compact #morewrap{display:inline-flex}
+  #moremenu{position:absolute;right:0;top:calc(100% + 4px);z-index:6;display:none;flex-direction:column;gap:2px;
+    min-width:140px;padding:4px;border-radius:8px;background:var(--pl-color-bg,#0a0a0c);
+    border:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);box-shadow:0 6px 18px rgba(0,0,0,.3)}
+  #moremenu.open{display:flex}
+  #moremenu .pl-btn{justify-content:flex-start;width:100%;text-align:left}
   #vnav{display:flex;align-items:center;gap:2px}
   #vlabel{min-width:48px;text-align:center;color:var(--pl-color-fg-muted);font-variant-numeric:tabular-nums}
   #vnav button[disabled]{opacity:.4;cursor:default}
@@ -63,10 +75,16 @@
       <span id="vlabel"></span>
       <button id="vnext" class="pl-btn pl-btn--sm" type="button" title="Next version">›</button>
     </span>
-    <button id="links" class="pl-btn pl-btn--sm" type="button" title="Code links in this diagram" aria-haspopup="true" aria-expanded="false" aria-controls="linkpanel" style="display:none">Links</button>
-    <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
-    <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
-    <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
+    <button id="links" class="pl-btn pl-btn--sm" type="button" title="Code links in this diagram" aria-haspopup="true" aria-expanded="false" aria-controls="linkpanel" style="display:none">Links <span id="linkn" class="badge"></span></button>
+    <span id="acts">
+      <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
+      <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
+      <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
+    </span>
+    <span id="morewrap">
+      <button id="more" class="pl-btn pl-btn--sm" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="moremenu">⋯</button>
+      <span id="moremenu" role="menu" aria-label="Artifact actions"></span>
+    </span>
     <span id="dlstat" class="sr-only" role="status" aria-live="polite"></span>
   </div>
   <div id="stage">

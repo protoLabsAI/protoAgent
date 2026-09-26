@@ -225,3 +225,102 @@ def test_a_blank_or_malformed_links_argument_on_update_keeps_the_stored_links(ar
     out = art.update_artifact.invoke({"old_string": "reply", "new_string": "answer", "links": "{bad"})
     assert "not valid JSON" in out and "Carried over 1 code link" in out
     assert list(_latest(art)["links"]) == ["msg:1"]
+
+
+# ── anchors: deterministic landing ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def src(art):
+    """A file where the same call appears three times, plus a spaced-out signature."""
+    body = [f"# filler {i}" for i in range(1, 41)]
+    body[4] = "    results.push(await runTool(tools, call));"  # line 5
+    body[19] = "    runTool(tools, other)"  # line 20
+    body[34] = "async function runTool(tools, call) {"  # line 35
+    body[37] = "const  x = llm.complete( { system , messages } );"  # line 38
+    (art._root / "src" / "loop.ts").write_text("\n".join(body) + "\n")
+    return art
+
+
+def _a(**kw):
+    return {"project": "demo", "path": "src/loop.ts", **kw}
+
+
+def test_anchor_snaps_to_the_nearest_occurrence_and_is_reported(src):
+    out = src.show_artifact.invoke({"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=31, anchor="runTool(")}})
+    # Occurrences at 5, 20, 35 — 35 is nearest to 31.
+    assert "moved 31→35 to match anchor 'runTool('" in out
+    t = _latest(src)["links"]["msg:1"]
+    assert (t["line"], t["end_line"], t["anchor"]) == (35, 35, "runTool(")
+    out = src.show_artifact.invoke({"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=12, anchor="runTool(")}})
+    assert _latest(src)["links"]["msg:1"]["line"] == 5  # 12 is 7 from 5, 8 from 20
+    # Already on the anchor → no move reported.
+    out = src.show_artifact.invoke({"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=20, anchor="runTool(")}})
+    assert "moved" not in out and _latest(src)["links"]["msg:1"]["line"] == 20
+
+
+def test_anchor_snap_keeps_the_range_length_and_clamps(src):
+    src.show_artifact.invoke(
+        {"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=30, end_line=33, anchor="async function runTool")}}
+    )
+    t = _latest(src)["links"]["msg:1"]
+    assert (t["line"], t["end_line"]) == (35, 38)
+    src.show_artifact.invoke(
+        {"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=30, end_line=45, anchor="async function runTool")}}
+    )
+    assert _latest(src)["links"]["msg:1"]["end_line"] == 40  # shifted to 50, clamped to EOF
+    # A wildly wrong line (even past EOF) still lands when the anchor is found.
+    src.show_artifact.invoke({"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=900, anchor="llm.complete")}})
+    assert _latest(src)["links"]["msg:1"]["line"] == 38
+
+
+def test_anchor_not_found_drops_the_link(src):
+    out = src.show_artifact.invoke(
+        {"kind": "mermaid", "code": SEQ, "links": {"msg:1": _a(line=5, anchor="runToolz("), "msg:2": _a(line=5)}}
+    )
+    assert "anchor 'runToolz(' not found in src/loop.ts" in out
+    assert list(_latest(src)["links"]) == ["msg:2"]
+
+
+def test_anchor_matches_ignoring_whitespace(src):
+    src.show_artifact.invoke(
+        {
+            "kind": "mermaid",
+            "code": SEQ,
+            "links": {"msg:1": _a(line=1, anchor="const x = llm.complete({ system, messages })")},
+        }
+    )
+    assert _latest(src)["links"]["msg:1"]["line"] == 38
+
+
+def test_anchor_hygiene_and_the_anchorless_nudge(src):
+    out = src.show_artifact.invoke(
+        {
+            "kind": "mermaid",
+            "code": SEQ,
+            "links": {
+                "msg:1": _a(line=5, anchor="x" * 121),
+                "msg:2": _a(line=5, anchor="a\nb"),
+                "msg:3": _a(line=5, anchor=7),
+                "participant:Server": _a(line=5),
+            },
+        }
+    )
+    assert "Dropped 3 link(s)" in out and "≤ 120" in out and "single line" in out
+    assert "have no `anchor` (participant:Server)" in out
+    assert "anchor" not in _latest(src)["links"]["participant:Server"]
+
+
+def test_anchor_does_not_bypass_the_fence_or_the_secret_list(src, tmp_path):
+    out = src.show_artifact.invoke(
+        {
+            "kind": "mermaid",
+            "code": SEQ,
+            "links": {
+                "msg:1": {"project": "demo", "path": "../outside.py", "line": 1, "anchor": "secret"},
+                "msg:2": {"project": "demo", "path": ".env", "line": 1, "anchor": "TOKEN"},
+            },
+        }
+    )
+    assert "escapes project" in out and "looks like a secret" in out
+    assert "links" not in _latest(src)
