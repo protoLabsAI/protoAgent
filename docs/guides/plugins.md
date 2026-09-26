@@ -669,11 +669,13 @@ Chrome buttons are the worked example.
 plugin's **routers, public paths, verifiers, hooks, tools, subagents, chat commands,
 and MCP servers re-apply** without a restart (#1752/#1890). Surfaces are reconciled: a
 disabled plugin's surface stops, a newly-enabled one starts, and a surviving surface gets
-its `reload(cfg)` callback. `register()` re-runs on every reload, so a surviving surface
-with **no** `reload` hook whose new registration hands back a different `stop` (fresh
-closures over a fresh dispatcher/queue) is **stopped, then started from the new
-registration** — otherwise the old loop would keep driving the old objects while the new
-routes use the new ones (#3593). Declare `reload` to keep a surface running across saves,
+its `reload(cfg)` callback when both its old and new registration declare one.
+`register()` re-runs on every reload, so a surviving surface whose new registration
+lacks a `reload` hook and hands back a different `stop` (fresh closures over a fresh
+dispatcher/queue) is **stopped, then started from the new registration** — otherwise the
+old loop would keep driving the old objects while the new routes use the new ones
+(#3593). The old task gets a grace period, then a cancel; one that still won't end is
+kept, and its replacement is not started. Declare `reload` to keep a surface running across saves,
 or register module-level/singleton `start`/`stop` so a re-register is the same surface. Everything is best-effort: a failing
 plugin/route/surface logs and never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in

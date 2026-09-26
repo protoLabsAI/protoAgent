@@ -238,3 +238,115 @@ async def test_a_config_reload_leaves_exactly_one_sweep_on_the_new_registration(
     STATE.plugin_surface_handles[0]["stop"]()  # tidy: let the gen-2 loop finish
     await _drain()
     plugin_loader.purge_plugin_modules("sweeper")
+
+
+# ── #3593 review follow-ups: classification + restart safety ─────────────────
+
+
+def test_plan_restarts_when_the_new_registration_drops_its_reload_hook():
+    running = [_handle("p", "s", stop=lambda: None, reload=lambda cfg: None)]
+    wanted = [_spec("p", "s", stop=lambda: None)]  # reload gone, fresh stop
+
+    _, _, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
+
+    assert to_reload == [] and to_restart == [(running[0], wanted[0])]
+
+
+def _restart_state(monkeypatch, old_handle, new_spec):
+    monkeypatch.setattr(STATE, "plugin_surfaces_started", True, raising=False)
+    monkeypatch.setattr(STATE, "plugin_surface_handles", [old_handle], raising=False)
+    monkeypatch.setattr(STATE, "plugin_surfaces", [new_spec], raising=False)
+
+
+async def _settle(n=50):
+    for _ in range(n):
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_outlives_the_grace_is_cancelled_before_its_replacement_starts(monkeypatch):
+    monkeypatch.setattr(ai, "_SURFACE_RESTART_GRACE_S", 0.05)
+    log: list = []
+
+    async def _stubborn():  # ignores stop(), but honours cancel
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            log.append("old cancelled")
+            raise
+
+    old_task = asyncio.ensure_future(_stubborn())
+    new_spec = _spec("p", "s", start=lambda: log.append("new started"), stop=lambda: None)
+    _restart_state(monkeypatch, _handle("p", "s", stop=lambda: None, handle=old_task), new_spec)
+
+    ai._reload_plugin_surfaces(object())
+    await _settle()
+
+    assert log == ["old cancelled", "new started"]
+    assert [h["stop"] for h in STATE.plugin_surface_handles] == [new_spec["stop"]]
+
+
+@pytest.mark.asyncio
+async def test_a_surface_that_will_not_end_is_kept_and_not_doubled(monkeypatch):
+    monkeypatch.setattr(ai, "_SURFACE_RESTART_GRACE_S", 0.02)
+    monkeypatch.setattr(ai, "_SURFACE_CANCEL_GRACE_S", 0.02)
+    started: list = []
+    release = asyncio.Event()
+
+    async def _immortal():  # swallows the cancel
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    old_task = asyncio.ensure_future(_immortal())
+    old = _handle("p", "s", stop=lambda: None, handle=old_task)
+    _restart_state(monkeypatch, old, _spec("p", "s", start=lambda: started.append(1), stop=lambda: None))
+
+    ai._reload_plugin_surfaces(object())
+    await _settle()
+
+    assert started == []  # replacement NOT started beside a live old one
+    assert STATE.plugin_surface_handles == [old]  # old kept, so it's still tracked/stoppable
+    release.set()
+    await _settle(5)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_stop_with_no_task_to_watch_keeps_the_old_surface(monkeypatch):
+    started: list = []
+
+    def _boom():
+        raise RuntimeError("stop failed")
+
+    old = _handle("p", "s", stop=_boom, handle="not-a-task")
+    _restart_state(monkeypatch, old, _spec("p", "s", start=lambda: started.append(1), stop=lambda: None))
+
+    ai._reload_plugin_surfaces(object())
+    await _settle(5)
+
+    assert started == [] and STATE.plugin_surface_handles == [old]
+
+
+@pytest.mark.asyncio
+async def test_back_to_back_reloads_restart_a_surface_once(monkeypatch):
+    # The restart awaits a grace period; a second reload arriving meanwhile must not
+    # plan from the half-stopped surface and start it again.
+    starts: list = []
+    stop_event = asyncio.Event()
+
+    async def _old_loop():
+        await stop_event.wait()
+        await asyncio.sleep(0.05)  # winds down slowly → the first reconcile is mid-wait
+
+    old_task = asyncio.ensure_future(_old_loop())
+    new_spec = _spec("p", "s", start=lambda: starts.append(1), stop=lambda: None)
+    _restart_state(monkeypatch, _handle("p", "s", stop=stop_event.set, handle=old_task), new_spec)
+
+    ai._reload_plugin_surfaces(object())
+    ai._reload_plugin_surfaces(object())
+    await _settle()
+
+    assert starts == [1]
+    assert len(STATE.plugin_surface_handles) == 1

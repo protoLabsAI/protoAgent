@@ -462,7 +462,7 @@ def page_registry() -> str:
         "",
         "```python",
         "def register(registry):",
-        '    """Called once at plugin load, before the graph is built."""',
+        '    """Called at plugin load and again on every config reload, before the graph is built."""',
         "    registry.register_tool(my_tool)",
         "```",
         "",
