@@ -226,8 +226,8 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     CODE-LINKED DIAGRAMS (mermaid only): ``links`` maps diagram elements to code, so the
     operator can click a node or a message and land on that code in the console's code pane.
     ``{"<key>": {"project", "path", "line", "end_line"?, "note"?}}`` — keys are a flowchart /
-    class / state node id or subgraph id exactly as written, ``participant:<name>`` for a
-    sequence participant, and ``msg:<n>`` for the n-th sequence message (1-based, source
+    class / state node id or subgraph id exactly as written (bare — ``participant:`` is for
+    sequence diagrams only), ``participant:<name>`` for a sequence participant, and ``msg:<n>`` for the n-th sequence message (1-based, source
     order) or ``msg:<exact label>``. Every target must be a REAL location you read — take
     ``line`` from ``search_files`` (file:line) or a ``read_file`` offset, never a guess — and
     ALWAYS pass ``anchor``: a short exact snippet of that line copied verbatim from the tool
@@ -277,7 +277,17 @@ def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tu
     previous version's links carried over (a small edit keeps the same diagram) — re-checked
     against the new source so a renamed node or a removed message is reported, not silent."""
     if checked is not None and checked.given and not checked.error:
-        return _links.finish(checked, art["kind"], new_code)
+        kept, report = _links.finish(checked, art["kind"], new_code)
+        # A passed map REPLACES the stored one — it never merges. Say which previously linked
+        # keys that leaves unlinked, so "add one link" doesn't silently strip the rest.
+        lost = [k for k in (art["versions"][-1].get("links") or {}) if k not in kept]
+        if lost and kept:
+            report += (
+                f"\nThe `links` you passed REPLACED the stored map (it doesn't merge): {len(lost)} "
+                f"previously linked element(s) are now unlinked ({', '.join(lost[:12])}"
+                f"{'…' if len(lost) > 12 else ''}). To keep them, pass the complete map."
+            )
+        return kept, report
     # Not passed — or passed but unreadable (malformed JSON): a bad argument never deletes the
     # links already stored; its error is reported and the previous links carry over.
     err = ("\n" + checked.error) if checked is not None and checked.error else ""
