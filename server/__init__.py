@@ -776,6 +776,7 @@ def _main():
                     {
                         "plugin_id": s.get("plugin_id"),
                         "name": s["name"],
+                        "start": s.get("start"),  # a failed restart falls back to it (#3593)
                         "stop": s.get("stop"),
                         "reload": s.get("reload"),
                         "handle": res,

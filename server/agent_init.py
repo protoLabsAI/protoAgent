@@ -3004,6 +3004,7 @@ def _reload_plugin_surfaces(new_config) -> None:
             {
                 "plugin_id": s.get("plugin_id"),
                 "name": s.get("name"),
+                "start": s.get("start"),
                 "stop": s.get("stop"),
                 "reload": s.get("reload"),
                 "handle": res,
@@ -3062,8 +3063,26 @@ def _reload_plugin_surfaces(new_config) -> None:
         for h, s in to_restart:
             # Two generations of a sweep must never dispatch side by side: start the
             # replacement only once the old one is confirmed ended.
-            if await _stopped_for_restart(h) and await _start(s):
+            if not await _stopped_for_restart(h):
+                continue
+            if await _start(s):
                 log.info("[plugins] restarted surface %s — its plugin re-registered it", s.get("name"))
+                continue
+            # The replacement failed to start and the old one is already stopped. Bring
+            # the old generation back rather than leave the surface dead: that is exactly
+            # what ran before this reload (stale objects, but alive and tracked).
+            if callable(h.get("start")) and await _start(h):
+                log.error(
+                    "[plugins] surface %s: its new registration failed to start — restored the "
+                    "previous one; fix the plugin and reload, or restart the agent",
+                    h.get("name"),
+                )
+            else:
+                log.error(
+                    "[plugins] surface %s is DOWN: its new registration failed to start and the "
+                    "previous one could not be restored — restart the agent",
+                    h.get("name"),
+                )
         for h in to_reload:
             reload_cb = h.get("reload")
             if not callable(reload_cb):

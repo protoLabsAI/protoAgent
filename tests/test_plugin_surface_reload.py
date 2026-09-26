@@ -19,8 +19,8 @@ import server.agent_init as ai
 from runtime.state import STATE
 
 
-def _handle(plugin_id, name, *, stop=None, reload=None, handle=None):
-    return {"plugin_id": plugin_id, "name": name, "stop": stop, "reload": reload, "handle": handle}
+def _handle(plugin_id, name, *, start=None, stop=None, reload=None, handle=None):
+    return {"plugin_id": plugin_id, "name": name, "start": start, "stop": stop, "reload": reload, "handle": handle}
 
 
 def _spec(plugin_id, name, *, start=None, stop=None, reload=None):
@@ -350,3 +350,42 @@ async def test_back_to_back_reloads_restart_a_surface_once(monkeypatch):
 
     assert starts == [1]
     assert len(STATE.plugin_surface_handles) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_that_fails_to_start_restores_the_previous_surface(monkeypatch, caplog):
+    # Stopped cleanly, then the new start() raised: the surface must not be left dead
+    # and untracked — bring the previous generation back (what ran before the reload).
+    log: list = []
+
+    def _new_start():
+        raise RuntimeError("broken new registration")
+
+    old_stop = lambda: log.append("old stopped")  # noqa: E731
+    old = _handle("p", "s", start=lambda: log.append("old restarted") or "old-task", stop=old_stop)
+    _restart_state(monkeypatch, old, _spec("p", "s", start=_new_start, stop=lambda: None))
+
+    with caplog.at_level("ERROR"):
+        ai._reload_plugin_surfaces(object())
+        await _settle(5)
+
+    assert log == ["old stopped", "old restarted"]
+    [h] = STATE.plugin_surface_handles
+    assert h["stop"] is old_stop and h["handle"] == "old-task"  # tracked, stoppable
+    assert "restored the previous one" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_surface_that_cannot_be_restored_is_reported_down(monkeypatch, caplog):
+    def _boom():
+        raise RuntimeError("nope")
+
+    old = _handle("p", "s", start=_boom, stop=lambda: None)
+    _restart_state(monkeypatch, old, _spec("p", "s", start=_boom, stop=lambda: None))
+
+    with caplog.at_level("ERROR"):
+        ai._reload_plugin_surfaces(object())
+        await _settle(5)
+
+    assert STATE.plugin_surface_handles == []
+    assert "is DOWN" in caplog.text
