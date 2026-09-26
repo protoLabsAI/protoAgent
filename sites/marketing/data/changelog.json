@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.183.0",
+    "date": "2026-09-26",
+    "changes": [
+      "A new fleet agent inherits the host's Langfuse tracing (#3630).",
+      "Creating an agent from an archetype is two steps — pick, then set up in a dialog (#3631)."
+    ]
+  },
+  {
     "version": "v0.182.0",
     "date": "2026-09-26",
     "changes": [
