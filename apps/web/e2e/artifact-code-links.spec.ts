@@ -102,13 +102,16 @@ test("with the Code item on the bottom dock, a diagram link opens it THERE, besi
   await send(page, "MERMAID_LINKS draw the auth flow");
   const rightRail = page.locator(".pl-rail--right");
   const bottomRail = page.locator(".pl-rail--bottom");
+  // Let the live show_artifact open the diagram on the right dock FIRST — clicking the
+  // Artifact rail icon while it is already the shown panel would collapse the dock instead.
+  await expect(page.getByTestId("artifact-ref-chip")).toContainText("authorize() flow");
+  const msg = diagram(page).locator('[data-lk="msg:2"]').first();
+  await expect(msg).toBeVisible({ timeout: 20_000 });
+  // The operator moves Code to the bottom dock (the diagram stays up on the right).
   await rightRail.getByRole("button", { name: "Code", exact: true }).click({ button: "right" });
   await page.locator(".pl-menu").getByText("Move to bottom dock").click();
   await expect(bottomRail.getByRole("button", { name: "Code", exact: true })).toBeVisible();
-  // Show the diagram on the right dock (the move may have brought Code up).
-  await rightRail.getByRole("button", { name: "Artifact", exact: true }).click();
-  const msg = diagram(page).locator('[data-lk="msg:2"]').first();
-  await expect(msg).toBeVisible({ timeout: 20_000 });
+  await expect(msg).toBeVisible();
   await msg.click();
   await expect(page.getByTestId("code-pane-range")).toHaveText("L23–29");
   await expect(page.locator('iframe[title="Artifact"]')).toBeVisible();
