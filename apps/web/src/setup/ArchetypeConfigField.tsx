@@ -70,6 +70,7 @@ export function ArchetypeConfigField({
         onChange={onChange}
         placeholder={field.placeholder}
         ariaLabel={field.label}
+        describedBy={describedBy}
       />
     );
   }
@@ -80,6 +81,7 @@ export function ArchetypeConfigField({
         placeholder={field.placeholder}
         value={value}
         aria-label={field.label}
+        aria-describedby={describedBy}
         onChange={(e) => onChange(e.target.value)}
       />
     );

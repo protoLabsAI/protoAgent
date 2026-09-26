@@ -87,9 +87,11 @@ export function ArchetypeSetupForm({
     const id = fieldId(f);
     const value = values[id] ?? "";
     const onChange = (v: string) => onValueChange(id, v);
+    // The help line's id, so the control announces it (aria-describedby). The DS FormField
+    // gives its hint no id, so the hint content carries one.
+    const helpId = f.help ? `${id}:help` : undefined;
     if (f.kind === "boolean") {
       // A switch carries its own label; a FormField <label> around it would nest labels.
-      const helpId = f.help ? `${id}:help` : undefined;
       return (
         <div key={id} className="pl-field archetype-setup-switch">
           <ArchetypeConfigField field={f} value={value} onChange={onChange} describedBy={helpId} />
@@ -102,8 +104,8 @@ export function ArchetypeSetupForm({
       );
     }
     return (
-      <FormField key={id} label={`${f.label}${f.required ? " *" : ""}`} hint={f.help}>
-        <ArchetypeConfigField field={f} value={value} onChange={onChange} />
+      <FormField key={id} label={`${f.label}${f.required ? " *" : ""}`} hint={f.help ? <span id={helpId}>{f.help}</span> : undefined}>
+        <ArchetypeConfigField field={f} value={value} onChange={onChange} describedBy={helpId} />
       </FormField>
     );
   };

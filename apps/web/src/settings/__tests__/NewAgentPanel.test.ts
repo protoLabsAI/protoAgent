@@ -277,6 +277,53 @@ describe("NewAgentPanel — step 2: set up in a dialog", () => {
     expect(createButton()?.disabled).toBe(false);
   });
 
+  it("holds Create (button and Enter) while the bundle's peek is loading (#3632)", async () => {
+    // Until the peek lands the bundle's required config_inputs are unknown, so the
+    // missing-answer gate can't fire — Create must wait rather than post past them.
+    let resolvePeek: (p: ArchetypePreview) => void = () => {};
+    vi.spyOn(api, "archetypePreview").mockImplementation(
+      () => new Promise<ArchetypePreview>((r) => (resolvePeek = r)),
+    );
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    const create = mockCreate();
+    await mountPanel();
+    await next();
+    expect(createButton()?.disabled).toBe(true);
+    await act(async () => {
+      nameInput()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(create).not.toHaveBeenCalled();
+
+    await act(async () => resolvePeek(ENGINEER_PREVIEW));
+    await tick(() => Boolean(dialog()?.textContent?.includes("Start in a local repo")));
+    expect(createButton()?.disabled).toBe(false);
+  });
+
+  it("announces the help line on path and text fields (aria-describedby, #3632)", async () => {
+    const withHelp: ArchetypePreview = {
+      id: "engineer",
+      bundle: {
+        ...ENGINEER_PREVIEW.bundle!,
+        config_inputs: [
+          ...ENGINEER_PREVIEW.bundle!.config_inputs!,
+          { key: "engineer.branch", label: "Branch", type: "string", help: "Checked out on first run." },
+        ],
+      },
+    };
+    vi.spyOn(api, "archetypePreview").mockResolvedValue(withHelp);
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    await mountPanel();
+    await next();
+    await tick(() => Boolean(dialog()?.querySelector(".path-picker input")));
+    const d = dialog()!;
+    const describedText = (el: Element | null) =>
+      document.getElementById(el?.getAttribute("aria-describedby") ?? "")?.textContent;
+    expect(describedText(d.querySelector('.path-picker input[aria-label="Start in a local repo"]'))).toBe(
+      "It is registered as a project and the terminal opens there.",
+    );
+    expect(describedText(d.querySelector('input[aria-label="Branch"]'))).toBe("Checked out on first run.");
+  });
+
   it("omits requires_tools for a contract-less archetype", async () => {
     const create = mockCreate();
     await mountPanel();
