@@ -230,10 +230,11 @@ export const ARCHETYPE_PREVIEWS = {
       mcp: [],
       secrets: [],
       config_inputs: [
-        { key: "project_board.repo", label: "Repository path", type: "path", required: true },
+        // `help` (optional) is the explanation line under the field — the label stays short.
+        { key: "project_board.repo", label: "Repository path", type: "path", required: true, help: "The local checkout this board manages — registered as a project." },
         { key: "project_board.coder", label: "Coding delegate", type: "delegate", required: true },
         { key: "project_board.default_branch", label: "Default branch", type: "string", required: false },
-        { key: "project_board.auto_merge", label: "Auto-merge green PRs", type: "boolean", default: false },
+        { key: "project_board.auto_merge", label: "Auto-merge green PRs", type: "boolean", default: false, help: "Off = the board stops at review; you merge." },
       ],
     },
   },

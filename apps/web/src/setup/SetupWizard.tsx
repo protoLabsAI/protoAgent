@@ -1,18 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { DropdownSelect, Field, FormField, Input, RadioCard, RadioCardGroup, SecretInput, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Field, FormField, Input, RadioCard, RadioCardGroup, SecretInput } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import { Alert, Spinner } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 import {
   Bot,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Cpu,
   HardDrive,
   KeyRound,
   Search,
+  Settings2,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -22,28 +22,19 @@ import type { ReactNode } from "react";
 import { TestConnectionButton } from "../app/ui-kit";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { lucideIcon } from "../lib/lucideIcon";
 import { pythonRuntimeView } from "../app/pythonRuntime";
 import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
 import {
   archetypeConfigFields,
-  fieldId,
-  hasHardRequiredBundleConfig,
   isMissingRequiredBundleConfig,
-  isMissingRequiredConfig,
   requiresToolsNotice,
   splitConfigValues,
 } from "../lib/archetypeConfig";
-import {
-  CONFIGURE_OPTIONAL_COPY,
-  CONFIGURE_REQUIRED_COPY,
-  HARD_GATE_HINT_WIZARD,
-  HARD_GATE_HINT_WIZARD_COLLAPSED,
-  SOFT_GATE_HINT,
-} from "../lib/pickerCopy";
+import { suggestedAgentName } from "../lib/archetypeFlow";
+import { HARD_GATE_HINT_WIZARD } from "../lib/pickerCopy";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
-import { ArchetypeConfigField } from "./ArchetypeConfigField";
-import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
+import { ArchetypePicker } from "./ArchetypePicker";
+import { ArchetypeSetupForm } from "./ArchetypeSetupForm";
 import { needyPlugins } from "./depsReport";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
 import { personaSoul } from "./persona";
@@ -58,9 +49,12 @@ type PostInstallRow = {
   error: string;
 };
 
-// Four steps: intro, then "who the agent is" (name + persona), then "how it thinks"
-// (the model/coding-agent runtime), then a summary. Identity + persona are one step.
-type Step = "welcome" | "agent" | "brain" | "finish";
+// Five steps: intro, then the two-step archetype flow shared with the fleet New-agent
+// panel — "agent" PICKS the archetype (cards only), "setup" names it and answers the
+// bundle's questions (ArchetypeSetupForm) — then "how it thinks" (the model/coding-agent
+// runtime), then a summary. (Progress bar + Back/Next footer are app-local until the DS
+// grows a stepper primitive, protoContent#520.)
+type Step = "welcome" | "agent" | "setup" | "brain" | "finish";
 
 // Two former steps were dropped — they're all sensible defaults a new user shouldn't
 // have to reason about; the values flow straight through finishSetup:
@@ -69,7 +63,7 @@ type Step = "welcome" | "agent" | "brain" | "finish";
 //     top-K 5, no tasks init (do that from the Tasks view when there's a board).
 //   • Tools (middleware toggles + researcher turns): all middleware on, 40 turns —
 //     tune later in Settings.
-const steps: Step[] = ["welcome", "agent", "brain", "finish"];
+const steps: Step[] = ["welcome", "agent", "setup", "brain", "finish"];
 
 
 type WizardState = {
@@ -228,20 +222,17 @@ export function SetupWizard({
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
-  const [previewOpen, setPreviewOpen] = useState(false);
-  // Advanced archetypes (tier: "advanced") collapse below the standard persona cards
-  // behind a chevron toggle, so the persona step leads with the everyday choices.
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // The name the operator typed on the set-up step. Until then the name follows the
+  // picked archetype (its suggested name; Basic/Custom keep the configured identity).
+  const [agentNameTouched, setAgentNameTouched] = useState(false);
+  const hydratedName = useRef("protoagent");
   // Starter archetypes (the archetype-catalog: Basic + Custom, plus any installed bundle
   // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
   // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
   const archetypes = useQuery(archetypesQuery());
-  // Inline Configure step for a bundle archetype's MCP inputs + declared secrets +
-  // config_inputs (#2934) — NewAgentPanel parity (#2714; the fleet picker got this in
-  // #2041, the wizard — the surface a NEW user actually hits first — installed the
-  // bundle with no prompt). Collapsible: skipping falls back to this host's
-  // environment / the declared defaults, same as the panel.
-  const [configOpen, setConfigOpen] = useState(true);
+  // Set-up step answers for a bundle archetype's config_inputs (#2934) + MCP inputs +
+  // declared secrets — NewAgentPanel parity (#2714), same shared form. Blank answers
+  // fall back to this host's environment / the declared defaults.
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
   // Flips true once the initial config load finishes. The persona seed waits on it
@@ -300,7 +291,9 @@ export function SetupWizard({
       try {
         const config = await api.config();
         if (!alive) return;
-        setState(hydrateState(config));
+        const hydrated = hydrateState(config);
+        hydratedName.current = hydrated.agentName;
+        setState(hydrated);
         setLoaded(true);
       } catch (exc) {
         if (alive) setError(errMsg(exc));
@@ -343,8 +336,11 @@ export function SetupWizard({
       if (isOAuthProvider(state.provider)) return Boolean(state.modelName.trim());
       return Boolean(state.apiBase.trim() && state.modelName.trim());
     }
+    // Set-up step: a blank name has nothing to call the agent. (The required-answer
+    // gate, #2977, is applied at the Next button — it's derived further down.)
+    if (step === "setup") return Boolean(state.agentName.trim());
     return true;
-  }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, step]);
+  }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, state.agentName, step]);
 
   function update(patch: Partial<WizardState>) {
     setState((current) => ({ ...current, ...patch }));
@@ -435,9 +431,13 @@ export function SetupWizard({
   // archetype may ship no inline persona, so fall back to the base SOUL rather than
   // blanking the editor (see personaSoul).
   function pickArchetype(a: Archetype) {
-    update({ archetype: a.id, soul: personaSoul(a, archetypeList) });
+    if (a.id === state.archetype) return; // re-picking the same card (after Back) keeps everything
+    const patch: Partial<WizardState> = { archetype: a.id, soul: personaSoul(a, archetypeList) };
+    // An untouched name follows the pick: a bundle archetype suggests its own name;
+    // Basic/Custom go back to the configured identity.
+    if (!agentNameTouched) patch.agentName = a.bundle ? suggestedAgentName(a) : hydratedName.current;
+    update(patch);
     setConfigValues({}); // a token typed for one archetype must not carry into the next
-    setConfigOpen(true);
   }
 
   // Pre-fill the editor once with the default archetype's base SOUL so the persona
@@ -446,10 +446,6 @@ export function SetupWizard({
   // block a retry, leaving it blank until the user toggles a card. Never clobbers an
   // in-session edit (soul already non-empty).
   const archetypeList = archetypes.data?.archetypes ?? [];
-  // Split by tier: standard cards render inline as today; advanced ones (tier: "advanced")
-  // collapse under a toggle. Absent tier = standard, so nothing moves unless it opts in.
-  const standardArchetypes = archetypeList.filter((a) => a.tier !== "advanced");
-  const advancedArchetypes = archetypeList.filter((a) => a.tier === "advanced");
   const seededSoul = useRef(false);
   useEffect(() => {
     if (!loaded || seededSoul.current || !archetypeList.length || state.soul.trim()) return;
@@ -476,13 +472,9 @@ export function SetupWizard({
     retry: 1,
   });
   const configFields = useMemo(() => archetypeConfigFields(archetypePeek.data), [archetypePeek.data]);
-  // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure
-  // step (or a field) falls back to this host's environment, same as NewAgentPanel.
-  const missingRequired = configOpen && isMissingRequiredConfig(configFields, configValues);
   // Hard gate (#2977): a required bundle config_inputs answer has no env fallback — the host
-  // install refuses to activate without it, so Finish waits for it too.
+  // install refuses to activate without it, so the set-up step's Next (and Finish) wait for it.
   const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
-  const hasHardRequired = hasHardRequiredBundleConfig(configFields);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
   // Runtime requirement at CHOOSE-time (#2186): same affordance as NewAgentPanel —
@@ -610,17 +602,10 @@ export function SetupWizard({
       if (pickedBundle) {
         setMessage(`Setting up the ${personaLabel} tools — this can take a few seconds…`);
         try {
-          // Collected Configure values ride the install (#2714) — the same seed
-          // channels POST /api/fleet uses (#2041/#2934). Collapsed/absent form →
-          // env-only / declared defaults.
-          // Bundle config answers ride the install regardless of the collapsed state
-          // (no env fallback; the host install refuses to activate without them, #2977).
-          const split = configFields.length
-            ? splitConfigValues(configFields, configValues)
-            : { inputs: {}, secrets: [], config: {} };
-          const inputs = configOpen ? split.inputs : {};
-          const secrets = configOpen ? split.secrets : [];
-          const config = split.config;
+          // Collected set-up answers ride the install (#2714) — the same seed channels
+          // POST /api/fleet uses (#2041/#2934). Blank answers are dropped → env-only /
+          // declared defaults for whatever was skipped.
+          const { inputs, secrets, config } = splitConfigValues(configFields, configValues);
           const r = await api.installPlugin(pickedBundle, undefined, undefined, {
             inputs: Object.keys(inputs).length ? inputs : undefined,
             secrets: secrets.length ? secrets : undefined,
@@ -752,119 +737,39 @@ export function SetupWizard({
           ) : null}
 
           {step === "agent" ? (
-            <StepBody icon={<Bot size={20} />} title="Agent" kicker="Name & persona">
-              <div className="setup-grid two">
-                <Field label="Agent name" value={state.agentName} onValueChange={(value) => update({ agentName: value })} />
-                <Field label="Operator" value={state.operatorName} onValueChange={(value) => update({ operatorName: value })} />
-              </div>
+            <StepBody icon={<Bot size={20} />} title="Agent" kicker="Pick an archetype">
               <p className="setup-hint">
-                Pick an archetype to seed the persona below — the agent&apos;s base SOUL. You can edit it freely.
+                An archetype is a starting persona plus the tools it comes with. You&apos;ll name it and set it up next.
               </p>
-              <RadioCardGroup
-                name="archetype"
-                min="160px"
+              <ArchetypePicker
+                archetypes={archetypeList}
                 value={state.archetype}
-                onValueChange={(id) => {
-                  const a = archetypeList.find((x) => x.id === id);
-                  if (a) pickArchetype(a);
+                onPick={pickArchetype}
+                notices={[runtimeWarning, contractNotice].filter((n): n is string => Boolean(n))}
+              />
+            </StepBody>
+          ) : null}
+
+          {step === "setup" ? (
+            <StepBody icon={<Settings2 size={20} />} title={`Set up ${personaLabel}`} kicker="Name & settings">
+              <ArchetypeSetupForm
+                nameLabel="Agent name"
+                name={state.agentName}
+                onNameChange={(value) => {
+                  setAgentNameTouched(true);
+                  update({ agentName: value });
                 }}
-              >
-                {standardArchetypes.map((a) => (
-                  <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
-                ))}
-              </RadioCardGroup>
-              {/* Advanced personas collapse behind a chevron toggle — a separate group sharing
-                  the same picked value + pickArchetype(), so choosing one here seeds the SOUL
-                  editor exactly like a standard card. Hidden when the catalog has none. */}
-              {advancedArchetypes.length ? (
-                <div className="archetype-advanced">
-                  <button
-                    type="button"
-                    className="archetype-configure-toggle"
-                    aria-expanded={advancedOpen}
-                    onClick={() => setAdvancedOpen((o) => !o)}
-                  >
-                    {advancedOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                    <span>Advanced ({advancedArchetypes.length})</span>
-                  </button>
-                  {advancedOpen ? (
-                    <RadioCardGroup
-                      name="archetype-advanced"
-                      min="160px"
-                      value={state.archetype}
-                      onValueChange={(id) => {
-                        const a = archetypeList.find((x) => x.id === id);
-                        if (a) pickArchetype(a);
-                      }}
-                    >
-                      {advancedArchetypes.map((a) => (
-                        <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
-                      ))}
-                    </RadioCardGroup>
-                  ) : null}
-                </div>
-              ) : null}
-              {pickedArchetype ? (
-                <button type="button" className="archetype-preview-link" onClick={() => setPreviewOpen(true)}>
-                  See what&apos;s included in {pickedArchetype.label} →
-                </button>
-              ) : null}
-              {previewOpen && pickedArchetype ? (
-                <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
-              ) : null}
-              {runtimeWarning ? (
-                <p className="archetype-runtime-notice" role="note">
-                  {runtimeWarning}
-                </p>
-              ) : null}
-              {contractNotice ? (
-                <p className="archetype-runtime-notice" role="note">
-                  {contractNotice}
-                </p>
-              ) : null}
-              {/* Inline Configure step — NewAgentPanel parity (#2714/#2041/#2934): appears only
-                  when the picked bundle declares MCP inputs, secrets, or config_inputs.
-                  Collapsing skips it (→ env-only / declared-default seeding on install). */}
-              {configFields.length ? (
-                <div className="archetype-configure">
-                  <button
-                    type="button"
-                    className="archetype-configure-toggle"
-                    aria-expanded={configOpen}
-                    onClick={() => setConfigOpen((o) => !o)}
-                  >
-                    {configOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                    <span>Configure {pickedArchetype?.label}</span>
-                    <span className="field-hint">{hasHardRequired ? CONFIGURE_REQUIRED_COPY : CONFIGURE_OPTIONAL_COPY}</span>
-                  </button>
-                  {missingHard && !configOpen ? <span className="field-hint">{HARD_GATE_HINT_WIZARD_COLLAPSED}</span> : null}
-                  {configOpen ? (
-                    <div className="archetype-configure-fields">
-                      {configFields.map((f) => (
-                        <label key={fieldId(f)} className="field">
-                          <span>
-                            {f.label}
-                            {f.required ? " *" : ""}
-                          </span>
-                          <ArchetypeConfigField
-                            field={f}
-                            value={configValues[fieldId(f)] ?? ""}
-                            onChange={(val) => setConfigValues((v) => ({ ...v, [fieldId(f)]: val }))}
-                          />
-                        </label>
-                      ))}
-                      {missingHard ? (
-                        <span className="field-hint">{HARD_GATE_HINT_WIZARD}</span>
-                      ) : missingRequired ? (
-                        <span className="field-hint">{SOFT_GATE_HINT}</span>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <FormField label="SOUL.md">
-                <Textarea className="setup-editor" value={state.soul} onChange={(event) => update({ soul: event.target.value })} />
-              </FormField>
+                identityExtra={
+                  <Field label="Operator" value={state.operatorName} onValueChange={(value) => update({ operatorName: value })} />
+                }
+                fields={configFields}
+                values={configValues}
+                onValueChange={(id, value) => setConfigValues((v) => ({ ...v, [id]: value }))}
+                soul={state.soul}
+                onSoulChange={(soul) => update({ soul })}
+                hardGateHint={HARD_GATE_HINT_WIZARD}
+                loading={Boolean(pickedArchetype?.bundle) && archetypePeek.isLoading}
+              />
             </StepBody>
           ) : null}
 
@@ -1144,7 +1049,7 @@ export function SetupWizard({
                 </Button>
               )
             ) : (
-              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy}>
+              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy || (step === "setup" && missingHard)}>
                 Next
                 <ChevronRight size={15} />
               </Button>

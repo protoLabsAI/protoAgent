@@ -1149,6 +1149,22 @@ def test_normalize_config_inputs_keeps_project_flag_on_path_only():
     assert "project" not in out[1] and "project" not in out[2]
 
 
+def test_normalize_config_inputs_keeps_optional_help():
+    """`help:` is an optional explanation line under the field (the label stays short).
+    A non-blank value is kept trimmed; blank/absent adds no key, so the normalized shape
+    of a help-less manifest is unchanged (backward compatible)."""
+    out = installer.normalize_config_inputs(
+        "b",
+        [
+            {"key": "github.write", "label": "Allow GitHub writes", "type": "boolean", "help": "  Off = read-only.  "},
+            {"key": "board.repo", "label": "Repo", "type": "path", "help": "   "},
+            {"key": "board.other", "label": "A long legacy label that explains itself"},
+        ],
+    )
+    assert out[0]["help"] == "Off = read-only."
+    assert "help" not in out[1] and "help" not in out[2]
+
+
 @pytest.mark.parametrize(
     "entry",
     [

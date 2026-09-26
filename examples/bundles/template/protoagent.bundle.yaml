@@ -82,10 +82,14 @@ secrets:
 # answer is COPIED from the host into the new member's own registry; a `path` answer
 # flagged `project: true` is registered as a managed project (ADR 0095 `projects:` +
 # GitHub slug from its origin remote + a scoped `onboarding.root`). Older cores ignore
-# the whole block; `project:` is ignored by cores that predate it.
+# the whole block; `project:` is ignored by cores that predate it. Keep `label` SHORT and
+# put the explanation in the optional `help:` line (rendered under the field; ignored by
+# cores that predate it, which show the label alone).
 config_inputs:
-  - { key: my_board.repo,  label: "Repo this board manages (absolute path)", type: path, required: true, project: true }
-  - { key: my_board.coder, label: "Coder delegate the board dispatches to",  type: delegate, required: true }
+  - { key: my_board.repo,  label: "Repo this board manages", type: path, required: true, project: true,
+      help: "Absolute path to the local checkout — registered as a managed project." }
+  - { key: my_board.coder, label: "Coder delegate", type: delegate, required: true,
+      help: "The coding agent the board dispatches builds to." }
   - { key: my_board.loop_enabled, label: "Start the loop now", type: boolean, default: false }
 
 # Agent archetype (ADR 0042) — presents this bundle as a starter "agent type" in the

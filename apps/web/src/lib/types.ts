@@ -406,6 +406,9 @@ export type BundleConfigInputType = "string" | "path" | "delegate" | "boolean";
 export type BundleConfigInput = {
   key: string;
   label: string;
+  // Optional one-line explanation rendered under the field, so `label` can stay a short
+  // name. Absent on older hosts/bundles — a long legacy `label` still renders as-is.
+  help?: string;
   type?: BundleConfigInputType;
   required?: boolean;
   default?: string | boolean;

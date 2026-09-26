@@ -1626,13 +1626,6 @@ textarea {
   align-items: end;
 }
 
-.setup-editor {
-  min-height: 240px;
-  resize: vertical;
-  font-family: var(--pl-font-mono);
-  font-size: 12px;
-}
-
 .setup-checkbox {
   justify-self: start;
 }
@@ -2035,18 +2028,8 @@ textarea {
    ::view-transition root crossfade. The status dots (FleetSwitcher + FleetManager) are the DS
    <StatusDot> now, so the hand-rolled .fleet-dot* is retired. */
 
-/* Archetype picker is now the DS <RadioCardGroup> (protoContent #254). */
-.archetype-name-field {
-  max-width: 380px;
-}
-
-/* Inline Configure step (#2041) — the bundle's MCP inputs + declared secrets, collapsible. */
-.archetype-configure {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 380px;
-}
+/* Archetype picker is now the DS <RadioCardGroup> (protoContent #254). The chevron
+   toggle below is the picker's "Advanced (N)" disclosure (delegates.css reuses it). */
 .archetype-configure-toggle {
   display: flex;
   align-items: center;
@@ -2060,14 +2043,80 @@ textarea {
   cursor: pointer;
   text-align: left;
 }
-.archetype-configure-toggle .field-hint {
-  font-weight: 400;
-}
-.archetype-configure-fields {
+
+/* Step 1 of the archetype flow (ArchetypePicker): each card with its "What's included"
+   link beside it. The link lives outside the DS RadioCard because the card is a <label>
+   (a button inside it is invalid) and the card has no action slot yet. */
+.archetype-picker {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
+.archetype-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.archetype-card > .pl-radiocard {
+  flex: 1;
+}
+.archetype-card > .archetype-preview-link {
+  margin-top: 0;
+  padding: 2px 4px;
+  align-self: flex-start;
+}
+.archetype-step-actions {
+  margin-top: 12px;
+}
+
+/* Step 2 (ArchetypeSetupForm) — the name, the bundle's questions, Advanced. Shared by
+   the New-agent set-up dialog and the Setup Wizard's set-up step. Labels + hints are
+   the DS FormField's; this only spaces the groups and sets the explanatory lines in the
+   regular UI font at a readable contrast (not the mono/subtle .field look). */
+.archetype-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-sans);
+}
+.archetype-setup-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.archetype-setup-help {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--pl-color-fg-muted);
+}
+.archetype-setup-gate {
+  color: var(--pl-color-status-warning);
+}
+.archetype-setup-error {
+  color: var(--pl-color-status-error);
+}
+.archetype-setup-switch .pl-field__hint {
+  margin-top: 4px;
+  padding-left: 2px;
+}
+.archetype-setup-soul {
+  min-height: 160px;
+  resize: vertical;
+  font-family: var(--pl-font-mono);
+  font-size: 12px;
+}
+.archetype-setup-advanced .pl-accordion__panel {
+  padding-top: 4px;
+}
+/* The set-up dialog: a long bundle scrolls inside the body, the Back/Create foot stays. */
+.archetype-setup-dialog .pl-dialog__body {
+  color: var(--pl-color-fg);
+}
+
 /* Advanced-tier archetypes (tier: "advanced") — collapsed below the standard cards behind
    the chevron toggle, in both the setup wizard's persona step and the fleet new-agent panel.
    The toggle reuses .archetype-configure-toggle; this just spaces the section + its expanded

@@ -137,9 +137,13 @@ The picker draws from **two** sources:
   **self-registers** on top of the catalog (deduped by id + bundle URL). Install the bundle
   and its starter type appears in the picker for free — no catalog edit needed.
 
-Picking an archetype seeds the new agent's **persona** (its `SOUL.md`) from that base, and — if
-it carries a bundle — installs the bundle's plugins into the new agent. See
-[Install & publish plugins](./plugin-registry.md).
+Creating from an archetype is two steps, the same in Settings ▸ Fleet ▸ New agent and in the
+first-run Setup Wizard: **pick** a card (label, blurb, *What's included*), then **set it up** —
+the name (pre-filled from the archetype, e.g. `engineer`), the bundle's `config_inputs`
+questions, and a collapsed **Advanced** section with the bundle's MCP inputs / secrets and the
+persona. **Back** returns to the cards with every answer kept. The archetype seeds the new
+agent's **persona** (its `SOUL.md`) and — if it carries a bundle — installs the bundle's
+plugins into the new agent. See [Install & publish plugins](./plugin-registry.md).
 
 ### The Engineer archetype — a navigator, not a solver
 

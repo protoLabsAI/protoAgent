@@ -1219,9 +1219,10 @@ def load_bundle(repo: Path) -> dict | None:
 
 
 # The input types a bundle's `config_inputs:` may declare (#2934). Mirrors the MCP
-# catalog input shape ({key, label, type, required?, default?}); the SetupWizard /
-# NewAgentPanel Configure step picks the widget from `type` (string/path → text,
-# delegate → dropdown of configured ACP delegates, boolean → toggle).
+# catalog input shape ({key, label, type, required?, default?}) plus an optional `help`
+# line; the SetupWizard / NewAgentPanel set-up step picks the widget from `type`
+# (string → text, path → folder picker, delegate → dropdown of configured ACP
+# delegates, boolean → switch).
 CONFIG_INPUT_TYPES = ("string", "path", "delegate", "boolean")
 
 # Core sections a bundle may never prompt for through `config_inputs:` — the Configure
@@ -1246,7 +1247,7 @@ _CONFIG_INPUT_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_][A
 
 def normalize_config_inputs(bundle_id: str, raw: object, *, strict: bool = True) -> list[dict]:
     """Validate + normalize a bundle's ``config_inputs:`` block (#2934) into
-    ``[{key, label, type, required, default?}]``. ``strict`` (the install path) raises
+    ``[{key, label, type, required, help?, default?}]``. ``strict`` (the install path) raises
     :class:`InstallError` on a malformed entry so a typo'd manifest fails the install
     with a reason instead of silently dropping the operator prompt; ``strict=False``
     (the read-only peek) drops bad entries so one typo can't blank the whole preview."""
@@ -1288,6 +1289,13 @@ def normalize_config_inputs(bundle_id: str, raw: object, *, strict: bool = True)
         # hosts that predate it, so a bundle can declare it without a core-version gate.
         if typ == "path" and bool(entry.get("project")):
             norm["project"] = True
+        # `help:` — an optional one-line explanation rendered under the field, so the
+        # `label` can stay a short name ("Allow GitHub writes") instead of carrying the
+        # whole explanation. Optional + additive: an older host ignores it, and a bundle
+        # that folds its explanation into a long `label` still renders as before.
+        help_text = str(entry.get("help") or "").strip()
+        if help_text:
+            norm["help"] = help_text
         if "default" in entry and entry["default"] is not None:
             default = coerce_config_input_value(typ, entry["default"])
             if default is not None:

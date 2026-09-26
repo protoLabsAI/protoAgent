@@ -1,11 +1,13 @@
-// NewAgentPanel layout contract (#2193): Name + Create sit ABOVE the archetype section so
-// a growing archetype list (every installed bundle adds a card) never pushes them
-// off-screen — the card list scrolls inside its own bounded container instead. The
-// preview link stays attached to the archetype section below. DOM order IS tab order
-// here (no tabindex overrides), so the order assertions also pin keyboard/focus order.
+// NewAgentPanel — the two-step create-from-archetype flow (lib/archetypeFlow):
+//   1. PICK: the archetype cards only (shared ArchetypePicker) + Next. No name, no config.
+//   2. SET UP: a DS Dialog (shared ArchetypeSetupForm) — the name first, pre-filled with the
+//      archetype's suggested name; the bundle's config_inputs as real fields (short label +
+//      help line, folder picker for `path`, labelled switch for booleans); Advanced
+//      collapsed; Back (keeps choices) + Create.
 //
 // jsdom + react-dom/client (the console has no @testing-library; the unit harness is
-// `.test.ts` only, so we build elements with React.createElement rather than JSX).
+// `.test.ts`, so we build elements with React.createElement rather than JSX). The DS
+// Dialog portals to <body>, so step-2 queries go through `document`, not `container`.
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,7 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NewAgentPanel } from "../NewAgentPanel";
 import { api } from "../../lib/api";
-import type { Archetype, PythonRuntimePayload } from "../../lib/types";
+import { HARD_GATE_HINT, SETUP_OPTIONAL_HELP } from "../../lib/pickerCopy";
+import type { Archetype, ArchetypePreview, PythonRuntimePayload } from "../../lib/types";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -22,6 +25,32 @@ const ARCHETYPES: Archetype[] = [
   { id: "basic", label: "Basic", icon: "bot", blurb: "A plain agent", bundle: null, soul: "" },
   { id: "scout", label: "Scout", icon: "search", blurb: "Research bundle", bundle: "https://example.com/scout.git", soul: "persona" },
 ];
+
+// A bundle whose peek declares config_inputs (a path with help, a boolean with help, a
+// required string) and one MCP input — the Engineer-style case the redesign is for.
+const ENGINEER: Archetype = {
+  id: "engineer",
+  label: "Engineer",
+  icon: "wrench",
+  blurb: "Ships code",
+  bundle: "https://example.com/engineer.git",
+  soul: "# Engineer",
+  requires_tools: ["github_create_issue"],
+};
+const ENGINEER_PREVIEW: ArchetypePreview = {
+  id: "engineer",
+  bundle: {
+    kind: "bundle",
+    name: "Engineer",
+    members: [],
+    mcp: [{ id: "gh", name: "GitHub", template: {}, inputs: [{ key: "github_token", label: "GitHub token", secret: true }] }],
+    secrets: [],
+    config_inputs: [
+      { key: "engineer.repo", label: "Start in a local repo", type: "path", help: "It is registered as a project and the terminal opens there." },
+      { key: "github.write", label: "Allow GitHub writes", type: "boolean", default: false, help: "Off = read-only." },
+    ],
+  },
+};
 
 // Managed-runtime payloads for the choose-time warning (#2186 follow-on).
 const runtimePayload = (over: Partial<PythonRuntimePayload["python"]>): PythonRuntimePayload => ({
@@ -45,7 +74,11 @@ let root: Root;
 beforeEach(() => {
   vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: ARCHETYPES });
   vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({})); // provisioned by default
-  vi.spyOn(api, "archetypePreview").mockResolvedValue({ id: "scout", bundle: null });
+  vi.spyOn(api, "archetypePreview").mockImplementation(async (id: string) =>
+    id === "engineer" ? ENGINEER_PREVIEW : { id, bundle: null },
+  );
+  vi.spyOn(api, "fleet").mockResolvedValue({ agents: [] });
+  vi.spyOn(api, "delegates").mockResolvedValue({ delegates: [] });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -57,108 +90,202 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function tick(done: () => boolean) {
+  for (let i = 0; i < 50 && !done(); i++) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+  }
+}
+
 async function mountPanel(props: Parameters<typeof NewAgentPanel>[0] = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => {
     root.render(h(QueryClientProvider, { client: qc }, h(ToastProvider, null, h(NewAgentPanel, props))));
   });
-  // react-query commits the resolved archetypes on a follow-up tick (its notify batching
-  // isn't a plain microtask) — wait for the panel's own data-dependent markup, bounded.
-  for (let i = 0; i < 50 && !container.querySelector(".archetype-preview-link"); i++) {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 10));
-    });
-  }
-  if (!container.querySelector(".archetype-preview-link")) {
-    throw new Error("archetypes never rendered — the mocked query did not commit");
-  }
+  // react-query commits the resolved archetypes on a follow-up tick — wait for the cards.
+  await tick(() => Boolean(container.querySelector(".pl-radiocard")));
+  if (!container.querySelector(".pl-radiocard")) throw new Error("archetypes never rendered — the mocked query did not commit");
 }
 
-// a precedes b in document order (which, absent tabindex, is also tab order).
-function precedes(a: Element, b: Element): boolean {
-  return Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+const buttons = (root: ParentNode = document) => [...root.querySelectorAll<HTMLButtonElement>("button")];
+const buttonNamed = (re: RegExp, root: ParentNode = document) => buttons(root).find((b) => re.test(b.textContent?.trim() ?? ""));
+const dialog = () => document.querySelector<HTMLElement>(".archetype-setup-dialog");
+const nameInput = () => dialog()?.querySelector<HTMLInputElement>('input[aria-label="Agent name"]') ?? null;
+const radioFor = (value: string) =>
+  [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((r) => r.value === value);
+
+async function click(el: HTMLElement | undefined | null) {
+  if (!el) throw new Error("nothing to click");
+  await act(async () => {
+    el.click();
+  });
+}
+async function pick(value: string) {
+  await click(radioFor(value));
+}
+async function next() {
+  await click(buttonNamed(/^Next/, container));
+  await tick(() => Boolean(dialog()));
+}
+async function typeInto(input: HTMLInputElement | HTMLTextAreaElement | null, value: string) {
+  if (!input) throw new Error("no input");
+  const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")!.set!;
+  await act(async () => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+const createButton = () => buttonNamed(/^Create/, dialog() ?? document);
+function mockCreate() {
+  return vi.spyOn(api, "createAgent").mockResolvedValue({ ok: true, agent: { id: "x-0", name: "x" } as never, installed: [] });
 }
 
-function createButton(): HTMLButtonElement {
-  const btn = [...container.querySelectorAll("button")].find((b) => /^Create/.test(b.textContent?.trim() ?? ""));
-  if (!btn) throw new Error("no Create button rendered");
-  return btn;
-}
-
-function archetypeHeading(): Element {
-  const el = [...container.querySelectorAll(".fleet-section-label")].find((p) => p.textContent === "Archetype");
-  if (!el) throw new Error("no Archetype section label rendered");
-  return el;
-}
-
-describe("NewAgentPanel — name + create above the archetype section (#2193)", () => {
-  it("renders name field (with id/URL hint) → Create button → ARCHETYPE heading, in that order", async () => {
-    await mountPanel();
-
-    const nameField = container.querySelector(".archetype-name-field");
-    expect(nameField).not.toBeNull();
-    // The id/URL hint travels with the name field, above the archetype section too.
-    expect(nameField?.textContent).toContain("it's the agent's id and URL");
-
-    expect(precedes(nameField!, createButton())).toBe(true);
-    expect(precedes(createButton(), archetypeHeading())).toBe(true);
-  });
-
-  it("wraps the archetype card list in a bounded scroll container", async () => {
-    await mountPanel();
-
-    const scroll = container.querySelector<HTMLElement>(".archetype-card-scroll");
-    expect(scroll).not.toBeNull();
-    // Bounded height + its own scrollbar — overflow stays inside the list, not the page.
-    expect(scroll!.style.overflowY).toBe("auto");
-    expect(scroll!.style.maxHeight).not.toBe("");
-    // The cards live INSIDE the container and still render as the radio card group.
-    expect(scroll!.textContent).toContain("Basic");
-    expect(scroll!.textContent).toContain("Scout");
-    // …and the container sits inside the archetype section, below the heading.
-    expect(precedes(archetypeHeading(), scroll!)).toBe(true);
-  });
-
-  it("keeps the preview link attached to the archetype section, below name + create", async () => {
-    await mountPanel();
-
-    const link = container.querySelector(".archetype-preview-link");
-    expect(link).not.toBeNull();
-    expect(link?.textContent).toContain("Basic"); // default pick
-    expect(precedes(container.querySelector(".archetype-name-field")!, link!)).toBe(true);
-    expect(precedes(createButton(), link!)).toBe(true);
-    expect(precedes(archetypeHeading(), link!)).toBe(true);
-  });
-
-  it("puts the name input first in tab order — before the Create button and every card control", async () => {
-    await mountPanel();
-
-    const focusables = [
-      ...container.querySelectorAll<HTMLElement>("input, button, select, textarea, a[href], [tabindex]"),
-    ].filter((el) => el.tabIndex >= 0 || el.matches("input, button"));
-    // The source tablist (archetype | snapshot, #2106) is the ONE thing allowed ahead of
-    // the name: it decides which form you are filling in, so reaching Name first would mean
-    // typing into a field that then disappears. Everything else must still come after —
-    // that's the #2193 invariant, that a growing archetype list can't push name+create
-    // off-screen. Asserting the exception by ROLE keeps the guard: adding some other
-    // control above Name still fails this.
-    const beforeName = focusables.slice(
-      0,
-      focusables.findIndex((el) => el.getAttribute("aria-label") === "Agent name"),
-    );
-    expect(beforeName.every((el) => el.getAttribute("role") === "tab")).toBe(true);
-    expect(beforeName.length).toBeLessThanOrEqual(2);
-
-    const nameInput = container.querySelector('input[aria-label="Agent name"]');
-    expect(nameInput).not.toBeNull();
-    expect(precedes(nameInput!, createButton())).toBe(true);
-  });
-
+describe("NewAgentPanel — step 1: the picker is cards only", () => {
   it("offers both new-agent sources, archetype first (#2106)", async () => {
     await mountPanel();
     const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
     expect(tabs.map((t) => t.textContent)).toEqual(["From an archetype", "From a snapshot"]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("renders no name field and no config on the picker — just cards and Next", async () => {
+    await mountPanel();
+    expect(document.querySelector('input[aria-label="Agent name"]')).toBeNull();
+    expect(dialog()).toBeNull();
+    expect(radioFor("basic")).toBeTruthy();
+    expect(radioFor("scout")).toBeTruthy();
+    expect(buttonNamed(/^Next/, container)).toBeTruthy();
+    expect(buttonNamed(/^Create/, container)).toBeUndefined();
+  });
+
+  it("gives every card its own 'What's included' link", async () => {
+    await mountPanel();
+    const links = [...container.querySelectorAll(".archetype-card .archetype-preview-link")];
+    expect(links.map((l) => l.getAttribute("aria-label"))).toEqual(["What's included in Basic", "What's included in Scout"]);
+  });
+
+  it("wraps the card list in a bounded scroll container (#2193) with Next below it", async () => {
+    await mountPanel();
+    const scroll = container.querySelector<HTMLElement>(".archetype-card-scroll");
+    expect(scroll!.style.overflowY).toBe("auto");
+    expect(scroll!.style.maxHeight).not.toBe("");
+    expect(scroll!.compareDocumentPosition(buttonNamed(/^Next/, container)!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("NewAgentPanel — step 2: set up in a dialog", () => {
+  it("Next opens the set-up dialog with the name pre-filled from the archetype", async () => {
+    await mountPanel();
+    await pick("scout");
+    await next();
+    expect(dialog()?.textContent).toContain("Set up Scout");
+    expect(nameInput()?.value).toBe("scout");
+    expect(createButton()?.textContent).toContain("Create from Scout");
+  });
+
+  it("the suggested name steps around a name already on the fleet", async () => {
+    vi.spyOn(api, "fleet").mockResolvedValue({ agents: [{ name: "scout", id: "scout-1", port: 1, pid: null, running: false, bundle: "" }] });
+    await mountPanel();
+    await tick(() => false); // let the fleet query commit
+    await pick("scout");
+    await next();
+    expect(nameInput()?.value).toBe("scout-2");
+  });
+
+  it("Back returns to the picker keeping the typed name and answers", async () => {
+    await mountPanel();
+    await pick("scout");
+    await next();
+    await typeInto(nameInput(), "scouty");
+    await click(buttonNamed(/^Back/, dialog()!));
+    expect(dialog()).toBeNull();
+    expect(radioFor("scout")?.checked).toBe(true);
+    await next();
+    expect(nameInput()?.value).toBe("scouty");
+  });
+
+  it("an invalid name disables Create and says why", async () => {
+    await mountPanel();
+    await next();
+    await typeInto(nameInput(), "bad name!");
+    expect(createButton()?.disabled).toBe(true);
+    expect(dialog()?.textContent).toContain("Use only letters, numbers, dashes and underscores.");
+  });
+
+  it("renders config_inputs as proper fields: short label, help line, folder picker, labelled switch", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, ENGINEER] });
+    await mountPanel();
+    await pick("engineer");
+    await next();
+    await tick(() => Boolean(dialog()?.textContent?.includes("Start in a local repo")));
+    const d = dialog()!;
+    // The optional note is said ONCE, above the group.
+    expect(d.textContent?.split(SETUP_OPTIONAL_HELP).length).toBe(2);
+    // path → the Settings folder picker (input + Browse…), with its help line.
+    expect(d.querySelector('.path-picker input[aria-label="Start in a local repo"]')).not.toBeNull();
+    expect(buttonNamed(/Browse/, d)).toBeTruthy();
+    expect(d.textContent).toContain("It is registered as a project and the terminal opens there.");
+    // boolean → a DS switch carrying its short label, the help described-by.
+    const sw = d.querySelector<HTMLInputElement>(".pl-switch input");
+    expect(sw?.closest(".pl-switch")?.textContent).toContain("Allow GitHub writes");
+    expect(document.getElementById(sw!.getAttribute("aria-describedby")!)?.textContent).toBe("Off = read-only.");
+    // Advanced is collapsed: the MCP input isn't on screen until it's opened.
+    expect(d.querySelector('input[aria-label="GitHub token"]')).toBeNull();
+    await click(buttonNamed(/^Advanced/, d));
+    expect(d.querySelector('input[aria-label="GitHub token"]')).not.toBeNull();
+  });
+
+  it("Create sends the name, the config answers, the advanced values and the contract", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, ENGINEER] });
+    const create = mockCreate();
+    await mountPanel();
+    await pick("engineer");
+    await next();
+    await tick(() => Boolean(dialog()?.querySelector(".path-picker input")));
+    const d = dialog()!;
+    await typeInto(d.querySelector<HTMLInputElement>(".path-picker input"), "/src/app");
+    await click(d.querySelector<HTMLInputElement>(".pl-switch input"));
+    await click(buttonNamed(/^Advanced/, d));
+    await typeInto(d.querySelector<HTMLInputElement>('input[aria-label="GitHub token"]'), "ghp_x");
+    await click(createButton());
+
+    expect(create).toHaveBeenCalledWith({
+      name: "engineer",
+      bundle: ENGINEER.bundle,
+      soul: "# Engineer",
+      inputs: { github_token: "ghp_x" },
+      secrets: undefined,
+      config_inputs: { "engineer.repo": "/src/app", "github.write": true },
+      requires_tools: ["github_create_issue"],
+    });
+  });
+
+  it("a required config answer left blank keeps Create disabled with the hard-gate hint", async () => {
+    const required: ArchetypePreview = {
+      id: "engineer",
+      bundle: { ...ENGINEER_PREVIEW.bundle!, config_inputs: [{ key: "engineer.repo", label: "Repo", type: "string", required: true }] },
+    };
+    vi.spyOn(api, "archetypePreview").mockResolvedValue(required);
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    await mountPanel();
+    await next();
+    await tick(() => Boolean(dialog()?.textContent?.includes(HARD_GATE_HINT)));
+    expect(createButton()?.disabled).toBe(true);
+    await typeInto(dialog()!.querySelector<HTMLInputElement>('input[aria-label="Repo"]'), "x");
+    expect(createButton()?.disabled).toBe(false);
+  });
+
+  it("omits requires_tools for a contract-less archetype", async () => {
+    const create = mockCreate();
+    await mountPanel();
+    await next(); // default card = Basic
+    await typeInto(nameInput(), "plain");
+    await click(createButton());
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][0].requires_tools).toBeUndefined();
+    expect(create.mock.calls[0][0].bundle).toBeNull();
   });
 });
 
@@ -173,261 +300,77 @@ describe("NewAgentPanel — choose-time runtime warning (#2186 follow-on)", () =
     requires: ["python_runtime"],
   };
 
-  async function pickDocsy() {
-    const radio = [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
-      (r) => r.value === "docsy",
-    );
-    if (!radio) throw new Error("no docsy radio card rendered");
-    await act(async () => {
-      radio.click();
-    });
-  }
-
   it("warns when the picked archetype requires the runtime and it isn't provisioned", async () => {
     vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, DOCSY] });
     vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({ managed: false, baseline_current: false }));
     await mountPanel();
-    await pickDocsy();
-
+    await pick("docsy");
     const note = container.querySelector(".archetype-runtime-notice");
-    expect(note).not.toBeNull();
     expect(note!.textContent).toContain("Docsy needs the managed Python runtime");
     expect(note!.textContent).toContain("Settings ▸ Tools");
   });
 
-  it("stays silent when the runtime is provisioned, and for archetypes without the requirement", async () => {
+  it("stays silent when the runtime is provisioned", async () => {
     vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, DOCSY] });
-    await mountPanel(); // default mock: provisioned
-    await pickDocsy();
-    expect(container.querySelector(".archetype-runtime-notice")).toBeNull();
-  });
-
-  it("stays silent for a non-requiring archetype even when the runtime is missing", async () => {
-    vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({ managed: false, baseline_current: false }));
-    await mountPanel(); // default pick = basic, no requires
+    await mountPanel();
+    await pick("docsy");
     expect(container.querySelector(".archetype-runtime-notice")).toBeNull();
   });
 });
 
 describe("NewAgentPanel — advanced-tier archetypes collapse behind a toggle", () => {
-  // basic (standard, no tier) renders inline; pm (tier: "advanced") files under the toggle.
   const WITH_ADVANCED: Archetype[] = [
     { id: "basic", label: "Basic", icon: "bot", blurb: "A plain agent", bundle: null, soul: "" },
-    {
-      id: "pm",
-      label: "Project Manager",
-      icon: "clipboard",
-      blurb: "PM bundle",
-      bundle: "https://example.com/pm.git",
-      soul: "pm-persona",
-      tier: "advanced",
-    },
+    { id: "pm", label: "Project Manager", icon: "clipboard", blurb: "PM bundle", bundle: "https://example.com/pm.git", soul: "pm", tier: "advanced" },
   ];
+  const advancedToggle = () => buttonNamed(/^Advanced \(/, container);
 
-  // The "Advanced (N)" disclosure button inside the advanced section.
-  function advancedToggle(): HTMLButtonElement | undefined {
-    return [...container.querySelectorAll<HTMLButtonElement>(".archetype-advanced button")].find((b) =>
-      /^Advanced/.test(b.textContent?.trim() ?? ""),
-    );
-  }
-  function radioFor(value: string): HTMLInputElement | undefined {
-    return [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((r) => r.value === value);
-  }
-
-  it("renders standard cards inline but files advanced ones under a collapsed 'Advanced (N)' toggle", async () => {
+  it("files advanced cards under a collapsed 'Advanced (N)' toggle below the standard ones", async () => {
     vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_ADVANCED });
     await mountPanel();
-
-    // The standard card is inline and pickable from the start.
-    expect(radioFor("basic")).toBeTruthy();
-    // The advanced card is NOT in the DOM while the section is collapsed.
     expect(radioFor("pm")).toBeUndefined();
-    // A collapsed toggle carries the advanced count + ChevronRight (collapsed) affordance.
-    const toggle = advancedToggle();
-    expect(toggle).toBeTruthy();
-    expect(toggle!.textContent).toContain("Advanced (1)");
-    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
-    // The advanced section sits BELOW the standard card group (DOM = visual order here).
-    expect(precedes(radioFor("basic")!, toggle!)).toBe(true);
-  });
-
-  it("expands to reveal the advanced cards, then collapses them away again", async () => {
-    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_ADVANCED });
-    await mountPanel();
-
-    await act(async () => {
-      advancedToggle()!.click();
-    });
-    expect(advancedToggle()!.getAttribute("aria-expanded")).toBe("true");
+    expect(advancedToggle()?.textContent).toContain("Advanced (1)");
+    expect(advancedToggle()?.getAttribute("aria-expanded")).toBe("false");
+    await click(advancedToggle());
     expect(radioFor("pm")).toBeTruthy();
-
-    await act(async () => {
-      advancedToggle()!.click();
-    });
-    expect(advancedToggle()!.getAttribute("aria-expanded")).toBe("false");
-    expect(radioFor("pm")).toBeUndefined();
   });
 
-  it("picking an advanced card drives the create flow identically to a standard one", async () => {
+  it("picking an advanced card drives the same set-up step", async () => {
     vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_ADVANCED });
     await mountPanel();
-
-    await act(async () => {
-      advancedToggle()!.click();
-    });
-    await act(async () => {
-      radioFor("pm")!.click();
-    });
-
-    // Picking the bundle-backed advanced archetype flips the Create button to its bundle label
-    // and the preview link to its name — same wiring the inline standard cards drive.
-    expect(createButton().textContent).toContain("Create from Project Manager");
-    expect(container.querySelector(".archetype-preview-link")?.textContent).toContain("Project Manager");
+    await click(advancedToggle());
+    await pick("pm");
+    await next();
+    expect(dialog()?.textContent).toContain("Set up Project Manager");
+    expect(nameInput()?.value).toBe("project-manager");
   });
 
-  it("shows no advanced toggle when every archetype is standard (unchanged from before)", async () => {
-    await mountPanel(); // default ARCHETYPES — both standard, no tier
+  it("shows no advanced toggle when every archetype is standard", async () => {
+    await mountPanel();
     expect(advancedToggle()).toBeUndefined();
-    // …and every card still renders inline.
-    expect(radioFor("basic")).toBeTruthy();
-    expect(radioFor("scout")).toBeTruthy();
-  });
-});
-
-describe("NewAgentPanel — create forwards the archetype's capability contract (#2713)", () => {
-  // The backend has persisted + checked `requires_tools` since #2315, but the panel never
-  // sent it — so every console-created agent shipped without its contract (#2277's bug).
-  // These tests pin the browser half of the seam.
-  const WITH_CONTRACT: Archetype[] = [
-    { id: "basic", label: "Basic", icon: "bot", blurb: "A plain agent", bundle: null, soul: "" },
-    {
-      id: "pm",
-      label: "Project Manager",
-      icon: "clipboard",
-      blurb: "PM bundle",
-      bundle: "https://example.com/pm.git",
-      soul: "pm-persona",
-      requires_tools: ["github_create_issue"],
-    },
-  ];
-
-  function radioFor(value: string): HTMLInputElement | undefined {
-    return [...container.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find((r) => r.value === value);
-  }
-
-  async function typeName(name: string) {
-    const input = container.querySelector<HTMLInputElement>(".archetype-name-field input");
-    if (!input) throw new Error("no name input rendered");
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-    await act(async () => {
-      setter.call(input, name);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  }
-
-  function mockCreate() {
-    return vi.spyOn(api, "createAgent").mockResolvedValue({
-      ok: true,
-      agent: { id: "x-0", name: "x" } as never,
-      installed: [],
-    });
-  }
-
-  it("sends requires_tools when the picked archetype carries a contract", async () => {
-    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_CONTRACT });
-    const create = mockCreate();
-    await mountPanel();
-
-    await typeName("pm-agent");
-    await act(async () => {
-      radioFor("pm")!.click();
-    });
-    await act(async () => {
-      createButton().click();
-    });
-
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ requires_tools: ["github_create_issue"] }),
-    );
-  });
-
-  it("omits requires_tools for a contract-less archetype", async () => {
-    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: WITH_CONTRACT });
-    const create = mockCreate();
-    await mountPanel();
-
-    await typeName("plain");
-    await act(async () => {
-      radioFor("basic")!.click();
-    });
-    await act(async () => {
-      createButton().click();
-    });
-
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][0].requires_tools).toBeUndefined();
   });
 });
 
 describe("NewAgentPanel — onDone hands over the created agent's name AND id", () => {
-  // The id is the navigation slug (ADR 0042): FleetSurface navigates into the new agent's
-  // own console with it. The name alone can't get there — the slug is `name-<4hex>`, an
-  // opaque immutable id, never the editable display name.
-
-  async function typeName(name: string) {
-    const input = container.querySelector<HTMLInputElement>(".archetype-name-field input");
-    if (!input) throw new Error("no name input rendered");
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-    await act(async () => {
-      setter.call(input, name);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  }
-
-  // The mutation's onSuccess/onError land a tick after the click (mockResolvedValue →
-  // microtask → react-query callback chain) — wait for the observable outcome, bounded,
-  // the same way mountPanel waits for the archetypes to commit.
-  async function settle(done: () => boolean) {
-    for (let i = 0; i < 50 && !done(); i++) {
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 10));
-      });
-    }
-  }
-
   it("calls onDone with both the name and the id on a successful create", async () => {
     const onDone = vi.fn();
-    vi.spyOn(api, "createAgent").mockResolvedValue({
-      ok: true,
-      agent: { id: "newbot-ab12", name: "newbot" } as never,
-      installed: [],
-    });
+    vi.spyOn(api, "createAgent").mockResolvedValue({ ok: true, agent: { id: "newbot-ab12", name: "newbot" } as never, installed: [] });
     await mountPanel({ onDone });
-
-    await typeName("newbot");
-    await act(async () => {
-      createButton().click();
-    });
-    await settle(() => onDone.mock.calls.length > 0);
-
+    await next();
+    await typeInto(nameInput(), "newbot");
+    await click(createButton());
+    await tick(() => onDone.mock.calls.length > 0);
     expect(onDone).toHaveBeenCalledWith("newbot", "newbot-ab12");
   });
 
   it("survives a success response with no agent record: name lands, id is undefined", async () => {
-    // The guard under test: onSuccess must not throw reading `.id` off a missing record
-    // (the API contract nominally always returns it, but the name line already hedges
-    // with `res.agent?.name` — the id access must hedge the same way). No id → the
-    // caller falls back to the list instead of navigating.
     const onDone = vi.fn();
     vi.spyOn(api, "createAgent").mockResolvedValue({ ok: true } as never);
     await mountPanel({ onDone });
-
-    await typeName("ghostbot");
-    await act(async () => {
-      createButton().click();
-    });
-    await settle(() => onDone.mock.calls.length > 0);
-
+    await next();
+    await typeInto(nameInput(), "ghostbot");
+    await click(createButton());
+    await tick(() => onDone.mock.calls.length > 0);
     expect(onDone).toHaveBeenCalledWith("ghostbot", undefined);
   });
 
@@ -435,13 +378,10 @@ describe("NewAgentPanel — onDone hands over the created agent's name AND id", 
     const onDone = vi.fn();
     vi.spyOn(api, "createAgent").mockRejectedValue(new Error("bundle clone failed"));
     await mountPanel({ onDone });
-
-    await typeName("failbot");
-    await act(async () => {
-      createButton().click();
-    });
-    await settle(() => document.querySelector(".pl-toast") !== null);
-
+    await next();
+    await typeInto(nameInput(), "failbot");
+    await click(createButton());
+    await tick(() => document.querySelector(".pl-toast") !== null);
     expect(document.querySelector(".pl-toast")?.textContent).toContain("Couldn't create agent");
     expect(onDone).not.toHaveBeenCalled();
   });

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { requiresToolsNotice } from "../src/lib/archetypeConfig";
-import { CONFIGURE_REQUIRED_COPY, HARD_GATE_HINT, HARD_GATE_HINT_COLLAPSED } from "../src/lib/pickerCopy";
+import { HARD_GATE_HINT, SETUP_REQUIRED_HELP, SOFT_GATE_HINT_COLLAPSED } from "../src/lib/pickerCopy";
 import { ARCHETYPES } from "./fixtures.mjs";
 import { routeSnapshot } from "./routeSnapshot";
 
@@ -135,126 +135,167 @@ test("Fleet Config: dragging a member's handle onto another row reorders the ros
   await expect(rosterNames(page)).toHaveText([/roxy/, /main/, /ava/]);
 });
 
-test("New agent → archetype picker → create navigates into the new agent", async ({ page }) => {
+// ── New agent: the two-step archetype flow (pick → set up) ─────────────────────────
+// Step 1 is the card picker only (no name, no config); Next opens the set-up DIALOG —
+// name first (pre-filled from the archetype), the bundle's config_inputs as real fields
+// (short label + help line, the Settings folder picker for `path`, a labelled switch for
+// booleans), Advanced collapsed. Back returns to the picker keeping every choice.
+
+const setupDialog = (page) => page.locator(".archetype-setup-dialog");
+const nextButton = (page) => page.getByRole("button", { name: /^Next/ });
+const createButton = (page) => setupDialog(page).getByRole("button", { name: /^Create/ });
+
+// Pick a card on step 1, then Next → the set-up dialog.
+async function pickAndNext(page, label) {
+  await page.locator(".pl-radiocard", { hasText: label }).click();
+  await nextButton(page).click();
+  await expect(setupDialog(page)).toBeVisible();
+}
+
+test("New agent → pick → set up → create navigates into the new agent", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
   await expect(page.locator(".pl-radiocard")).toHaveCount(2); // DS RadioCard, from GET /api/archetypes (Custom filtered out)
-  await page.locator(".pl-radiocard", { hasText: "Product Manager" }).click();
-  await page.getByLabel("Agent name").fill("newbot");
-  await page.getByRole("button", { name: /Create/ }).click();
+  // Step 1 is cards only — the name lives on step 2.
+  await expect(page.getByLabel("Agent name")).toHaveCount(0);
+  await pickAndNext(page, "Product Manager");
+  // The name is pre-filled from the archetype label.
+  await expect(setupDialog(page).getByLabel("Agent name")).toHaveValue("product-manager");
+  await setupDialog(page).getByLabel("Agent name").fill("newbot");
+  await createButton(page).click();
   // Create lands the operator IN the new agent's console — the id is the URL slug
-  // (ADR 0042, the same navigation the FleetSwitcher uses) — because the next move is
-  // configuring the agent just made, not re-reading the fleet list.
+  // (ADR 0042, the same navigation the FleetSwitcher uses).
   await expect(page).toHaveURL(/\/app\/agent\/newbot-ab12\//);
   await expect(page.getByTestId("fleet-switcher")).toContainText("newbot");
 });
 
-test("New agent → configure a bundle's MCP inputs → create seeds them (#2041)", async ({ page }) => {
+test("New agent → a bundle's MCP inputs sit under Advanced and ride the create (#2041)", async ({ page }) => {
   await openAgents(page);
-
-  // Capture the create payload — the Configure step must carry the operator's inputs.
   let posted = null;
   await page.route("**/api/fleet", async (route) => {
     if (route.request().method() === "POST") posted = route.request().postDataJSON();
     return route.continue();
   });
-
   await page.getByRole("button", { name: "New agent" }).click();
-  await page.locator(".pl-radiocard", { hasText: "Product Manager" }).click();
+  await pickAndNext(page, "Product Manager");
 
-  // The picked bundle asks for a GitHub token (secret, masked) + declares a Brave secret;
-  // both surface in the inline Configure step (the preview peek supplies them).
-  const token = page.getByLabel("GitHub token");
-  await expect(token).toBeVisible();
-  await expect(page.getByLabel("Brave API key")).toBeVisible();
-  await token.fill("ghp_secret");
+  // The GitHub token (MCP input) + the Brave secret are env-fallback plumbing → Advanced,
+  // collapsed; the collapsed section still says a connection wants a value.
+  const dialog = setupDialog(page);
+  await expect(dialog.getByLabel("GitHub token")).toHaveCount(0);
+  await expect(dialog.getByText(SOFT_GATE_HINT_COLLAPSED, { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Advanced" }).click();
+  await expect(dialog.getByLabel("Brave API key")).toBeVisible();
+  await dialog.getByLabel("GitHub token").fill("ghp_secret");
 
-  await page.getByLabel("Agent name").fill("ghbot");
-  await page.getByRole("button", { name: /Create/ }).click();
-
-  // Create navigates into the new agent (see the picker test above); reaching the slug
-  // URL also proves the POST has been captured before the payload assertions below.
+  await dialog.getByLabel("Agent name").fill("ghbot");
+  await createButton(page).click();
   await expect(page).toHaveURL(/\/app\/agent\/ghbot-ab12\//);
   expect(posted?.inputs).toEqual({ github_token: "ghp_secret" });
   // The Brave secret was left blank → dropped (env-only fallback), not sent as an empty value.
   expect(posted?.secrets ?? []).toEqual([]);
 });
 
-test("New agent preview dialog lists the bundle's MCP servers + secrets (#2041)", async ({ page }) => {
+test("New agent: every card has its own 'What's included' preview (#2041)", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();
-  await page.locator(".pl-radiocard", { hasText: "Product Manager" }).click();
-  await page.getByRole("button", { name: /See what.s included/ }).click();
-
+  await page.getByRole("button", { name: "What's included in Product Manager" }).click();
   const dialog = page.locator(".pl-dialog", { hasText: "What's included" });
   await expect(dialog.getByText("MCP servers: GitHub (needs token)")).toBeVisible();
   await expect(dialog.getByText("Secrets: Brave API key")).toBeVisible();
 });
 
-// ── The archetype picker's hard gate (#2977/#2979/#2984) ──────────────────────────
+// ── The set-up step's hard gate (#2977/#2979/#2984) ────────────────────────────────
 // A required bundle `config_inputs` answer has no env fallback — the server refuses the
-// create — so the picker must not offer a Create that can only 400. The Project Manager
-// fixture is the contract-carrying, advanced archetype with two such answers.
+// create — so Create must not be offered until it's answered. The Project Manager
+// fixture is the contract-carrying, advanced archetype with two such answers, a `path`
+// and a `boolean` that both carry a `help` line.
 
-// Open the picker and pick the (advanced, collapsed) Project Manager card.
 async function pickProjectManager(page) {
   await page.getByRole("button", { name: "New agent" }).click();
   await page.getByRole("button", { name: /^Advanced \(1\)/ }).click();
-  await page.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
-  // The Configure step is open by default; its fields come from the preview peek.
-  await expect(page.getByLabel("Repository path")).toBeVisible();
+  await pickAndNext(page, "Project Manager");
+  await expect(setupDialog(page).getByLabel("Repository path")).toBeVisible();
 }
 
 // The DS DropdownSelect trigger carries the field id (origin:key — escape the colon/dot).
 const coderTrigger = (page) => page.locator('[id="config:project_board.coder"]');
-const createButton = (page) => page.getByRole("button", { name: /^Create/ });
-// The contract note, computed by the same helper the card renders with — the spec and
-// the component can't drift apart on wording.
 const PM = ARCHETYPES.find((a) => a.id === "project-manager");
 const PM_CONTRACT_NOTICE = requiresToolsNotice(PM.label, PM.requires_tools);
 
-test("picking the Project Manager archetype shows its capability contract under the card (#2979)", async ({ page }) => {
+test("picking Project Manager shows its capability contract on the picker (#2979)", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("button", { name: /^Advanced \(1\)/ }).click();
+  await page.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
+  await expect(page.getByRole("note").filter({ hasText: PM_CONTRACT_NOTICE })).toBeVisible();
+});
+
+test("set-up renders config_inputs as real fields: short label, help line, folder picker, switch", async ({ page }) => {
   await openAgents(page);
   await pickProjectManager(page);
-  // The contract note names the tool the persona commits to — at choose-time, so a
-  // contract break is a known trade-off rather than a post-boot banner.
-  await expect(page.getByRole("note").filter({ hasText: PM_CONTRACT_NOTICE })).toBeVisible();
-  // The toggle copy says the answers are required, not "optional — skip".
-  await expect(page.getByRole("button", { name: /Configure Project Manager/ })).toContainText(CONFIGURE_REQUIRED_COPY);
+  const dialog = setupDialog(page);
+  await expect(dialog.getByText(SETUP_REQUIRED_HELP, { exact: true })).toBeVisible();
+  // Required fields are starred; the optional string and the defaulted boolean are not.
+  await expect(dialog.locator(".pl-field__label", { hasText: "Repository path *" })).toBeVisible();
+  await expect(dialog.locator(".pl-field__label", { hasText: "Coding delegate *" })).toBeVisible();
+  await expect(dialog.locator(".pl-field__label", { hasText: "Default branch" })).not.toContainText("*");
+  // The help lines render under their fields.
+  await expect(dialog.getByText("The local checkout this board manages — registered as a project.")).toBeVisible();
+  await expect(dialog.getByText("Off = the board stops at review; you merge.")).toBeVisible();
+  // boolean → a labelled switch.
+  await expect(dialog.locator(".pl-switch", { hasText: "Auto-merge green PRs" })).toBeVisible();
+  // path → the Settings folder picker: Browse… opens the server-side browser ON TOP of the
+  // set-up dialog, and picking a folder fills the field.
+  await dialog.getByRole("button", { name: /Browse/ }).click();
+  const browser = page.getByRole("dialog", { name: "Choose a folder" });
+  await expect(browser).toBeVisible();
+  await browser.getByRole("option", { name: "dev" }).click();
+  await expect(browser.locator(".path-browser-cwd")).toHaveText("/home/op/dev");
+  await browser.getByRole("button", { name: "Use this folder" }).click();
+  await expect(browser).toHaveCount(0);
+  await expect(dialog.getByLabel("Repository path")).toHaveValue("/home/op/dev");
+});
+
+test("Escape in the folder picker closes only the picker, not the set-up dialog or Settings", async ({ page }) => {
+  await openAgents(page);
+  await pickProjectManager(page);
+  await setupDialog(page).getByRole("button", { name: /Browse/ }).click();
+  const browser = page.getByRole("dialog", { name: "Choose a folder" });
+  await expect(browser).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(browser).toHaveCount(0);
+  await expect(setupDialog(page)).toBeVisible();
+  // A second Escape is the set-up dialog's own → Back to the picker, Settings stays open.
+  await page.keyboard.press("Escape");
+  await expect(setupDialog(page)).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
 });
 
 test("Create stays disabled while a required bundle answer is blank; the hint says why (#2977)", async ({ page }) => {
   await openAgents(page);
   await pickProjectManager(page);
-  await page.getByLabel("Agent name").fill("pmbot");
-  // A valid name alone isn't enough: the two hard-required answers are blank.
+  await setupDialog(page).getByLabel("Agent name").fill("pmbot");
   await expect(createButton(page)).toBeDisabled();
-  await expect(page.getByText(HARD_GATE_HINT, { exact: true })).toBeVisible();
-  // Required fields are starred; the optional string and the defaulted boolean are not.
-  await expect(page.locator(".archetype-configure-fields label", { hasText: "Repository path *" })).toBeVisible();
-  await expect(page.locator(".archetype-configure-fields label", { hasText: "Coding delegate *" })).toBeVisible();
-  await expect(page.locator(".archetype-configure-fields label", { hasText: "Default branch" })).not.toContainText("*");
-  await expect(page.locator(".archetype-configure-fields label", { hasText: "Auto-merge green PRs" })).not.toContainText("*");
-  // Filling just ONE of the two keeps the gate shut.
-  await page.getByLabel("Repository path").fill("/Users/me/dev/repo");
+  await expect(setupDialog(page).getByText(HARD_GATE_HINT, { exact: true })).toBeVisible();
+  await setupDialog(page).getByLabel("Repository path").fill("/Users/me/dev/repo");
   await expect(createButton(page)).toBeDisabled();
 });
 
 test("the coding-delegate dropdown lists ONLY acp delegates (#2934)", async ({ page }) => {
   await openAgents(page);
   await pickProjectManager(page);
-  // DropdownSelect (#274): open the trigger, then read the portaled menu items.
   await coderTrigger(page).click();
   await expect(page.getByRole("menuitemradio", { name: "coder", exact: true })).toBeVisible();
-  // /api/delegates also serves an openai endpoint ("opus") and an a2a peer ("peer-pm") —
-  // neither can take a build, so neither may be offered as the coder.
   await expect(page.getByRole("menuitemradio", { name: "opus", exact: true })).toHaveCount(0);
   await expect(page.getByRole("menuitemradio", { name: "peer-pm", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
+  // That Escape closed the dropdown only — the set-up dialog stays.
+  await expect(setupDialog(page)).toBeVisible();
 });
 
-test("Enter in the Name field does NOT submit while a required answer is blank (#2979)", async ({ page }) => {
+test("Back keeps every answer; Enter in Name submits once ungated (#2979)", async ({ page }) => {
   await openAgents(page);
   const posted = [];
   await page.route("**/api/fleet", async (route) => {
@@ -262,70 +303,38 @@ test("Enter in the Name field does NOT submit while a required answer is blank (
     return route.continue();
   });
   await pickProjectManager(page);
-  const name = page.getByLabel("Agent name");
+  const dialog = setupDialog(page);
+  const name = dialog.getByLabel("Agent name");
   await name.fill("pmbot");
+  // Gated: Enter does nothing.
   await name.press("Enter");
-  await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
   await expect(createButton(page)).toBeDisabled();
 
-  // Positive control, and the proof the gated press above has fully run: the console
-  // keeps an event stream open so there is no network-idle to wait for — instead, fill
-  // the answers and press Enter AGAIN. The keyboard path still submits when ungated, and
-  // the one POST that lands carries the answers; a gated press that had fired would have
-  // landed first (same page, same handler) and be sitting in `posted` ahead of it.
-  await page.getByLabel("Repository path").fill("/Users/me/dev/repo");
+  await dialog.getByLabel("Repository path").fill("/Users/me/dev/repo");
   await coderTrigger(page).click();
   await page.getByRole("menuitemradio", { name: "coder", exact: true }).click();
+  await dialog.locator(".pl-switch", { hasText: "Auto-merge green PRs" }).click();
+
+  // Back → the picker with Project Manager still selected; Next → everything still there.
+  await dialog.getByRole("button", { name: /^Back/ }).click();
+  await expect(setupDialog(page)).toHaveCount(0);
+  await expect(page.locator(".pl-radiocard--selected", { hasText: "Project Manager" })).toBeVisible();
+  await nextButton(page).click();
+  await expect(setupDialog(page).getByLabel("Agent name")).toHaveValue("pmbot");
+  await expect(setupDialog(page).getByLabel("Repository path")).toHaveValue("/Users/me/dev/repo");
+
   await expect(createButton(page)).toBeEnabled();
-  await name.press("Enter");
+  await setupDialog(page).getByLabel("Agent name").press("Enter");
   await expect(page).toHaveURL(/\/app\/agent\/pmbot-ab12\//);
   expect(posted).toHaveLength(1);
-  expect(posted[0].config_inputs).toEqual({ "project_board.repo": "/Users/me/dev/repo", "project_board.coder": "coder" });
-});
-
-test("collapsing Configure with a required answer blank shows the collapsed-state hint (#2979)", async ({ page }) => {
-  await openAgents(page);
-  await pickProjectManager(page);
-  await page.getByLabel("Agent name").fill("pmbot");
-  const toggle = page.getByRole("button", { name: /Configure Project Manager/ });
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  // The fields are gone but the explanation is not — the hint moved OUT of the collapsible
-  // block so a disabled Create never reads as a mystery.
-  await expect(page.getByLabel("Repository path")).toHaveCount(0);
-  await expect(page.getByText(HARD_GATE_HINT_COLLAPSED, { exact: true })).toBeVisible();
-  await expect(createButton(page)).toBeDisabled();
-});
-
-test("filling both required answers enables Create; config_inputs ride the POST even after collapsing Configure (#2979)", async ({ page }) => {
-  await openAgents(page);
-  let posted = null;
-  await page.route("**/api/fleet", async (route) => {
-    if (route.request().method() === "POST") posted = route.request().postDataJSON();
-    return route.continue();
+  expect(posted[0].config_inputs).toEqual({
+    "project_board.repo": "/Users/me/dev/repo",
+    "project_board.coder": "coder",
+    "project_board.auto_merge": true,
   });
-  await pickProjectManager(page);
-  await page.getByLabel("Agent name").fill("pmbot");
-
-  await page.getByLabel("Repository path").fill("/Users/me/dev/repo");
-  await coderTrigger(page).click();
-  await page.getByRole("menuitemradio", { name: "coder", exact: true }).click();
-  await expect(createButton(page)).toBeEnabled();
-  await expect(page.getByText(HARD_GATE_HINT, { exact: true })).toHaveCount(0);
-
-  // The fill-then-collapse regression (QA panel on #2979): the answers were collected but
-  // the mutation only sent config values while Configure was open → server 400.
-  await page.getByRole("button", { name: /Configure Project Manager/ }).click();
-  await expect(page.getByLabel("Repository path")).toHaveCount(0);
-  await expect(createButton(page)).toBeEnabled();
-  await createButton(page).click();
-
-  // Create navigates into the new agent; reaching the slug URL proves the POST was captured.
-  await expect(page).toHaveURL(/\/app\/agent\/pmbot-ab12\//);
-  expect(posted?.config_inputs).toEqual({ "project_board.repo": "/Users/me/dev/repo", "project_board.coder": "coder" });
   // The contract rides along so the member's workspace.yaml records it (ADR 0100).
-  expect(posted?.requires_tools).toEqual(["github_create_issue"]);
-  expect(posted?.bundle).toBe("https://github.com/protoLabsAI/project-manager-archetype");
+  expect(posted[0].requires_tools).toEqual(["github_create_issue"]);
+  expect(posted[0].bundle).toBe("https://github.com/protoLabsAI/project-manager-archetype");
 });
 
 test("stop a running agent flips its status dot", async ({ page }) => {
