@@ -49,6 +49,7 @@ export function ArchetypeSetupForm({
   onSoulChange,
   hardGateHint,
   loading,
+  advancedDefaultOpen = false,
 }: {
   nameLabel?: string;
   name: string;
@@ -68,9 +69,12 @@ export function ArchetypeSetupForm({
   hardGateHint: string;
   // The bundle peek is still loading — its questions aren't known yet.
   loading?: boolean;
+  // Open Advanced from the start — the wizard's Custom archetype, whose whole point is
+  // writing the persona.
+  advancedDefaultOpen?: boolean;
 }) {
   const nameId = useId();
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(advancedDefaultOpen);
   // The bundle's own questions lead; MCP inputs + declared secrets (env-fallback
   // plumbing) go under Advanced.
   const questions = fields.filter((f) => f.origin === "config");

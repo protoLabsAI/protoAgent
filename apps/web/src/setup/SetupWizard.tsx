@@ -769,6 +769,7 @@ export function SetupWizard({
                 onSoulChange={(soul) => update({ soul })}
                 hardGateHint={HARD_GATE_HINT_WIZARD}
                 loading={Boolean(pickedArchetype?.bundle) && archetypePeek.isLoading}
+                advancedDefaultOpen={state.archetype === "custom"}
               />
             </StepBody>
           ) : null}

@@ -148,6 +148,16 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Branch"]')?.value).toBe("main");
   });
 
+  it("Custom opens Advanced so the persona editor is on screen", async () => {
+    vi.spyOn(api, "archetypes").mockResolvedValue({
+      archetypes: [...ARCHETYPES, { id: "custom", label: "Custom", icon: "pen", blurb: "Write your own", bundle: null, soul: "# Mine" }],
+    });
+    await mountToPicker();
+    await click(radioFor("custom"));
+    await click(button(/^Next/));
+    expect(container.querySelector<HTMLTextAreaElement>(".archetype-setup-soul")?.value).toBe("# Mine");
+  });
+
   it("Basic keeps the configured identity name (no archetype suggestion)", async () => {
     await mountToPicker();
     await click(radioFor("engineer"));
