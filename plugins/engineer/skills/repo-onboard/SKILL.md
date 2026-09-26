@@ -7,7 +7,7 @@ description: Get the OPERATOR up to speed in an unfamiliar repository fast — c
 
 Goal: in a few minutes the **operator** knows what the code is, how it runs, and where to
 look, well enough to explain it. Steps 1–7 are plumbing: do them in **one turn**, then stop
-with a choice. The tour (step 7) is interactive: one stop per turn. Cite `path:line`.
+with a choice. The tour (step 8) is interactive: one stop per turn. Cite `path:line`.
 **Never change code during onboarding** — no edits, no writes, no commits.
 
 **Read with the filesystem tools** — `list_dir`, `find_files`, `search_files`, `read_file` —
@@ -15,6 +15,9 @@ not `execute_code` or ad-hoc scripts: their `file:line` output is what `show_cod
 diagram links need, and they stay inside the project fence. Setup commands go through
 `run_command`. Every onboarding produces all three views: the README artifact, the manifest
 in the code pane, and the overview diagram.
+If those tools aren't bound ("`list_dir` is not a valid tool"), tell the operator first —
+the filesystem toolset is off or a registered work folder is missing, and the server log's
+`[fs]` line names it — then carry on with what you have, citing `path:line` in text.
 
 ## 1. Register it
 - A git URL or `owner/repo` → `onboard_project(github_repo=..., write=true)`. It clones into
