@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.183.0] - 2026-09-26
+
+### Added
+- **A new fleet agent inherits the host's Langfuse tracing (#3630).** Creating or rebuilding an agent already copies the host's model connection and gateway credentials. When the host has tracing enabled, it now copies tracing too: the Langfuse endpoint goes into the new agent's config and the key pair into its owner-only `secrets.yaml`. Before this, every new agent booted with "Langfuse not configured" until someone copied the block by hand. It's a copy made at creation time, like a gateway key, so rotating the keys later means editing each agent; a disabled tracing block isn't copied.
+
+### Changed
+- **Creating an agent from an archetype is two steps — pick, then set up in a dialog (#3631).**
+  The New agent panel used to append the bundle's `config_inputs` inline under the picker as
+  long, muted paragraph labels. Now step 1 is the archetype cards only (with a per-card
+  *What's included*), and **Next** opens a set-up dialog: the name first (pre-filled from the
+  archetype, e.g. `engineer`), the bundle's questions as real fields — a short label with a help
+  line, the folder picker for `path` inputs, a switch for booleans — and a collapsed
+  **Advanced** section for MCP inputs, secrets and the persona. **Back** keeps every answer. The
+  Setup Wizard uses the same two steps and the same components. Bundle manifests gain an
+  optional `help:` on each `config_inputs` entry (older cores ignore it), and Escape on stacked
+  dialogs now closes only the top-most one.
+
 ## [0.182.0] - 2026-09-26
 
 ### Added
