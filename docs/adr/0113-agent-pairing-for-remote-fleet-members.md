@@ -173,8 +173,9 @@ Any failure is fixed before the flag is removed.
 
 - mDNS advertises only when the server is bound to a non-loopback address, and advertises an
   address the server actually listens on.
-- Each discovered agent reports whether this hub already has it paired, as `paired: true`
-  on the result.
+- No `paired` flag on discovery results: `GET /api/fleet/discover` already drops every
+  registered remote, so a discovered agent is by definition unpaired. A registered remote's
+  pairing state is its row's `auth` (D5).
 - ADR 0042 §I's stale "not built" paragraph is replaced by a pointer here.
 
 **Not doing: HTTPS discovery.** The port scan probes `http://` on 7860–7910. A protoAgent
@@ -210,7 +211,7 @@ accepts `https://`) already covers.
    proxy URL (D4); a live smoke delegates through the hub to a token-gated remote.
 4. **Remote WebSockets**: `forward_ws` under D6, with tests for swap, pass-through,
    non-operator refusal, and tokenless-remote refusal.
-5. **Discovery hygiene + CLI**: D9 plus `protoagent pair` (D7); ADR 0042 cleanup.
+5. **Discovery hygiene + CLI**: D9 (mDNS) plus `protoagent pair` (D7); ADR 0042 cleanup.
 6. **Console**: Devices ▸ "Pair an agent" (code, countdown, reachability, kind badges); the
    Fleet panel's "Pair…" / "Re-pair" dialog; the `auth` badge; "Add as delegate" uses the
    proxied `a2a`.
