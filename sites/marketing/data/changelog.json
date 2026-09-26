@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.181.0",
+    "date": "2026-09-26",
+    "changes": [
+      "Engineer archetype — a hands-on pair-programming navigator (#3625).",
+      "The desktop app asks before installing a plugin's Python packages, with the same dialog as the browser console (#3623).",
+      "A workflow run is one Langfuse trace, not one trace per step (#3626).",
+      "New operator guide for the Friction log (#3621)."
+    ]
+  },
+  {
     "version": "v0.180.0",
     "date": "2026-09-25",
     "changes": [
