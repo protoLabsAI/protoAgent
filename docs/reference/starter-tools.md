@@ -147,7 +147,7 @@ Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) 
 |---|---|---|
 | [`show_config(section="", offset=0, limit=0)`](#show_config) | Read the agent's own effective, merged config, secrets masked. | a config is available (always, in the server) |
 | [`onboard_project(repo, name=None, write=None)`](#onboard_project) | Clone a repo from any git host into the onboarding root and register it as a managed project. | `onboarding.enabled` (default **on**; refuses until `root` + `allow` are set) |
-| [`register_local_project(path, name=None, write=None)`](#register_local_project) | Register a directory already on disk, under the onboarding root, as a managed project. | `onboarding.enabled` (default **on**; refuses until `root` is set) |
+| [`register_local_project(path, name=None, write=None)`](#register_local_project) | Register a directory already on disk as a managed project — under the onboarding root directly, outside it only on the operator's approval card. | `onboarding.enabled` (default **on**; refuses until `root` is set) |
 
 ### Opt-in singles
 
@@ -930,9 +930,14 @@ async def register_local_project(path: str, name: str | None = None, write: bool
 
 Register a directory that is already on disk — a checkout the operator made, or one the agent
 created — in the same registry, without cloning. `path` must be absolute (`~` is expanded) and
-must **resolve** (symlinks followed) to an existing directory strictly inside
-`onboarding.root`; anything else is refused, naming the root. The root is the whole fence here
-(`allow` does not apply — nothing is fetched), and only the operator can widen it. The `github`
+is judged by where it **resolves** (symlinks followed). Inside `onboarding.root` it registers
+directly. Outside it, the turn parks on an operator approval card for that one folder — **Allow
+read-only / Allow read-write / Deny**, the operator's choice winning over `write` — that
+`/bypass` and "allow for session" never skip; a denial is a plain result the agent can act on.
+Some places are refused with no card (filesystem root, home, system and credential
+directories — the full list is under
+[`onboarding`](configuration.md#onboarding)); `onboarding.approve_outside_root: false` restores
+the flat refusal. `allow` does not apply — nothing is fetched. The `github`
 binding comes from the directory's `origin` remote when that is GitHub; `default_branch` from
 `origin/HEAD`, else the current branch. Idempotent: an already-registered path is reported, not
 re-written.

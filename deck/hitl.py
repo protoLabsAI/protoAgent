@@ -182,6 +182,24 @@ HITL_CSS = """
 """
 
 
+def approval_options(hitl: dict) -> list[dict]:
+    """An approval's server-supplied choices (``options``: ``{value, label, kind,
+    primary}``), normalized — or ``[]`` for a classic approve/deny gate."""
+    raw = hitl.get("options")
+    out: list[dict] = []
+    for o in raw if isinstance(raw, list) else []:
+        if isinstance(o, dict) and str(o.get("value") or "").strip():
+            out.append(
+                {
+                    "value": str(o["value"]),
+                    "label": str(o.get("label") or o["value"]),
+                    "kind": str(o.get("kind") or "allow_once"),
+                    "primary": bool(o.get("primary")),
+                }
+            )
+    return out
+
+
 class ApprovalModal(OnceModal[str | None]):
     """Approve / deny a gated tool call. Returns ``"approved"``, ``"denied"``, the dismiss
     marker ``"__dismiss__"``, or ``None`` (closed — the turn stays parked)."""
@@ -197,6 +215,7 @@ class ApprovalModal(OnceModal[str | None]):
         super().__init__(classes="hitl-modal")
         self.member = member
         self.hitl = hitl
+        self._options = approval_options(hitl)
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="hitl-box"):
@@ -209,19 +228,30 @@ class ApprovalModal(OnceModal[str | None]):
             if self.hitl.get("project"):
                 yield Static(Text(f"project: {self.hitl['project']}"), classes="hitl-sub")
             with Horizontal(classes="hitl-buttons"):
-                yield Button("Approve (a)", id="approve", variant="success")
-                yield Button("Deny (d)", id="deny", variant="error")
+                if self._options:
+                    # The approval brings its own choices (e.g. a folder outside the
+                    # onboarding root: Allow read-only / read-write / Deny) — each answers
+                    # with its value verbatim; there is no generic "approve" for it.
+                    for i, opt in enumerate(self._options):
+                        variant = "error" if opt["kind"].startswith("reject") else ("success" if opt["primary"] else "default")
+                        yield Button(opt["label"], id=f"opt-{i}", variant=variant)
+                else:
+                    yield Button("Approve (a)", id="approve", variant="success")
+                    yield Button("Deny (d)", id="deny", variant="error")
                 yield Button("Dismiss (ctrl+d)", id="dismiss")
             yield Static("esc leaves the turn parked · dismiss tells the member to go on without an answer", classes="hitl-hint")
 
     def on_mount(self) -> None:
-        self.query_one("#approve", Button).focus()
+        self.query_one("#opt-0" if self._options else "#approve", Button).focus()
 
     def action_approve(self) -> None:
+        if self._options:
+            return  # own choices: pick one explicitly — a plain approve registers nothing
         self.dismiss("approved")
 
     def action_deny(self) -> None:
-        self.dismiss("denied")
+        reject = next((o["value"] for o in self._options if o["kind"].startswith("reject")), None)
+        self.dismiss(reject or "denied")
 
     def action_dismiss_request(self) -> None:
         self.dismiss("__dismiss__")
@@ -231,7 +261,11 @@ class ApprovalModal(OnceModal[str | None]):
 
     @on(Button.Pressed)
     def _pressed(self, event: Button.Pressed) -> None:
-        self.dismiss({"approve": "approved", "deny": "denied", "dismiss": "__dismiss__"}.get(event.button.id or "", None))
+        bid = event.button.id or ""
+        if bid.startswith("opt-") and bid[4:].isdigit() and int(bid[4:]) < len(self._options):
+            self.dismiss(self._options[int(bid[4:])]["value"])
+            return
+        self.dismiss({"approve": "approved", "deny": "denied", "dismiss": "__dismiss__"}.get(bid, None))
 
 
 class QuestionModal(OnceModal[str | None]):
@@ -301,6 +335,7 @@ class FormModal(OnceModal[dict | str | None]):
         super().__init__(classes="hitl-modal")
         self.member = member
         self.hitl = hitl
+        self._options = approval_options(hitl)
         self.steps: list[dict] = [s for s in (hitl.get("steps") or []) if isinstance(s, dict)]
         self.values: dict = seed_defaults(self.steps)
         self.current = 0

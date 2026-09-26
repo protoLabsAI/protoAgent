@@ -62,6 +62,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -456,6 +457,292 @@ _ROOT_UNSET = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Outside-root registration: an operator approval card, per folder
+# ---------------------------------------------------------------------------
+#
+# ``register_local_project`` on a directory OUTSIDE ``onboarding.root`` parks for the
+# operator instead of refusing (``onboarding.approve_outside_root``, default on). The
+# card is composed ENTIRELY by the server from the resolved path — nothing the agent
+# wrote is rendered as prose — and its answer is bound to that exact realpath, so the
+# folder the operator approved is the folder that gets registered. The root stays the
+# boundary for everything else; one approval registers one folder.
+#
+# NOT skippable by the per-turn /bypass toggle, by the console's "Approve & don't ask
+# again", or by the Zed shim's "Allow for this session". Those skip confirmation of
+# actions INSIDE the fence the operator already drew (run_command in a registered
+# project). This gate MOVES the fence — a config write that outlives the turn and the
+# session — so a standing "yes" would hand the agent the power to widen its own
+# filesystem reach at will. The permanent-delete floor (ADR 0083 D5) is the precedent
+# for a gate bypass cannot skip; this one's reason is persistence, not irreversibility.
+
+_ALLOW_RO = "allow-read-only"
+_ALLOW_RW = "allow-read-write"
+_DENY = "deny"
+# A plain approve — what a client that predates the ``options`` field sends, and ALSO
+# what every auto-approver sends (an older Zed shim's "Allow for this session", the
+# console's "Approve & don't ask again"). It can't be tied to the folder on the card and
+# can't be told apart from a standing "yes", so it registers NOTHING: the result says
+# to answer from a client that shows the access choices.
+_PLAIN_APPROVE = {"approve", "approved", "yes", "y", "true", "ok"}
+
+# Refused outright — no card. Every entry is compared against the REALPATH.
+# Subtrees (the dir itself and everything under it):
+_SYSTEM_SUBTREES_POSIX = (
+    "/System", "/Library", "/Applications", "/usr", "/etc", "/bin", "/sbin", "/var",
+    "/private", "/dev", "/proc", "/sys", "/boot", "/run", "/lib", "/lib32", "/lib64",
+    "/libx32", "/opt", "/snap", "/nix", "/root", "/cores", "/Network",
+)  # fmt: skip
+# ...except these scratch areas, whose strict SUBDIRECTORIES may be approved (a temp
+# checkout is a normal thing to want to look at; the temp dir itself never is).
+_TEMP_PARENTS_POSIX = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders")
+# The dir itself only (a mount/user parent): children may be approved, the parent never.
+_EXACT_POSIX = ("/Users", "/home", "/Volumes", "/mnt", "/media", "/srv")
+_SYSTEM_SUBTREES_NT = ("Windows", "Program Files", "Program Files (x86)", "ProgramData")
+
+# Directory names that hold credentials — refused anywhere in the path.
+_CREDENTIAL_DIRS = frozenset(
+    {".ssh", ".gnupg", ".gpg", ".aws", ".azure", ".kube", ".docker", ".password-store",
+     ".1password", "keychains", ".gcloud", "gcloud", ".vault", ".terraform.d"}
+)  # fmt: skip
+# Directly under the home dir: dirs that aggregate every app's config/credentials.
+# ``~/Library`` (macOS) and ``~/AppData`` (Windows) are refused as whole subtrees —
+# keychains, cookies, every app's state, the desktop app's own box root.
+_HOME_SUBTREES = ("Library", "AppData")
+_HOME_EXACT = (".config", ".local", ".cache", ".protoagent")
+
+# Control characters, plus the invisible/bidi ones that could make a folder name READ as
+# something else on the card (a right-to-left override, a zero-width joiner).
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+
+# macOS and Windows filesystems are case-insensitive by default, and ``resolve()`` keeps
+# the caller's casing there — ``/USR/bin`` and ``/users/kj`` resolve to themselves. So the
+# floor compares case-folded on those platforms, or a re-cased path would walk around it.
+_CASE_INSENSITIVE = os.name == "nt" or sys.platform == "darwin"
+
+
+def _norm(p: Path | str) -> str:
+    s = str(p)
+    return s.casefold() if _CASE_INSENSITIVE else s
+
+
+def _within(child: Path, parent: Path) -> bool:
+    """``child`` is ``parent`` or under it — case-insensitively on macOS / Windows."""
+    c, p = _norm(child), _norm(parent)
+    sep = "\\" if os.name == "nt" else "/"
+    return c == p or c.startswith(p.rstrip(sep) + sep)
+
+
+def _protoagent_state_roots() -> list[Path]:
+    """Every protoAgent box/instance root this process knows — the agent's own config,
+    secrets and stores. Best-effort: a resolution failure contributes nothing."""
+    roots: list[Path] = []
+    try:
+        from infra.paths import instance_paths, known_box_roots
+
+        roots.extend(known_box_roots())
+        roots.append(instance_paths().instance_root.resolve())
+    except Exception:  # noqa: BLE001 — the rest of the floor still applies
+        log.debug("[onboard] could not resolve protoAgent state roots", exc_info=True)
+    return roots
+
+
+def _hard_refusal(target: Path) -> str | None:
+    """Why ``target`` (a REALPATH) can never be registered from outside the root — even
+    with the operator's approval — or ``None`` when an approval card may be shown.
+
+    Deliberately conservative: a place where approving is essentially never right, and
+    where one tired click would expose the machine, gets no card to click."""
+    if _CONTROL_RE.search(str(target)):
+        return "the path contains control characters"
+    if target == Path(target.anchor):
+        return "it is the filesystem root"
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        home = None
+    if home is not None:
+        if _within(home, target):
+            return "it is your home directory" if _norm(home) == _norm(target) else "it contains your home directory"
+        for sub in _HOME_SUBTREES:
+            if _within(target, home / sub):
+                return f"it is inside ~/{sub} (application state and credentials)"
+        for sub in _HOME_EXACT:
+            if _norm(target) == _norm(home / sub):
+                return f"~/{sub} holds application config and credentials"
+    for state in _protoagent_state_roots():
+        if _within(target, state) or _within(state, target):
+            return "it is (or contains) protoAgent's own config and data directory"
+    parts = [p.casefold() for p in target.parts]
+    hit = next((p for p in parts if p in _CREDENTIAL_DIRS), None)
+    if hit:
+        return f"it is inside a credentials directory ({hit})"
+    from tools.fs_secrets import is_secret_path
+
+    secret = is_secret_path(target)
+    if secret:
+        return f"it looks like {secret}"
+    if os.name == "nt":
+        anchor = Path(target.anchor)
+        for sub in _SYSTEM_SUBTREES_NT:
+            if _within(target, anchor / sub):
+                return f"it is a system directory ({anchor / sub})"
+        return None
+    s = _norm(target)
+    if s in {_norm(t) for t in _TEMP_PARENTS_POSIX}:
+        return f"{target} is a shared scratch area — register one project folder inside it"
+    if any(s.startswith(_norm(t) + "/") for t in _TEMP_PARENTS_POSIX):
+        return None  # a strict subdirectory of a scratch area
+    for sys_dir in _SYSTEM_SUBTREES_POSIX:
+        if _within(target, Path(sys_dir)):
+            return f"it is a system directory ({sys_dir})"
+    if s in {_norm(t) for t in _EXACT_POSIX}:
+        return f"{target} holds every user's / volume's directories — register one project inside it"
+    return None
+
+
+def _path_token(target: Path) -> str:
+    """A short digest of the realpath the card shows — the approve answers carry it, so
+    an answer can only register the folder that was on the card (the tool re-runs from
+    the top on resume and re-resolves the path; a folder swapped in between is caught)."""
+    import hashlib
+
+    return hashlib.sha256(str(target).encode("utf-8", "surrogateescape")).hexdigest()[:12]
+
+
+def _clean_display(text: str, limit: int = 200) -> str:
+    """One line, no control characters, bounded — for anything on the card that came
+    off disk (an origin URL) or from the agent (a project name)."""
+    text = _CONTROL_RE.sub("?", str(text or ""))
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _read_origin(target: Path) -> tuple[bool, str]:
+    """``(is_git_checkout, origin_url)`` read from ``target/.git`` WITHOUT running git —
+    the folder isn't approved yet, and a hostile repo config (``core.fsmonitor`` …) can
+    make some git commands execute code. Best-effort: anything odd → ``(False, "")``."""
+    dotgit = target / ".git"
+    try:
+        if dotgit.is_file():  # a worktree / submodule: "gitdir: <path>"
+            line = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+            if not line.startswith("gitdir:"):
+                return False, ""
+            gitdir = Path(line[len("gitdir:") :].strip())
+            gitdir = gitdir if gitdir.is_absolute() else target / gitdir
+            # A worktree's config lives in the COMMON dir.
+            common = gitdir / "commondir"
+            if common.is_file():
+                c = Path(common.read_text(encoding="utf-8", errors="replace").strip())
+                gitdir = c if c.is_absolute() else gitdir / c
+            config_file = gitdir / "config"
+        elif dotgit.is_dir():
+            config_file = dotgit / "config"
+        else:
+            return False, ""
+        text = config_file.read_text(encoding="utf-8", errors="replace")[:65536] if config_file.is_file() else ""
+    except OSError:
+        return False, ""
+    origin = ""
+    in_origin = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            in_origin = bool(re.match(r'^\[\s*remote\s+"origin"\s*\]$', line))
+            continue
+        if in_origin:
+            m = re.match(r"^url\s*=\s*(.+)$", line)
+            if m:
+                origin = m.group(1).strip().strip('"')
+                break
+    return True, origin
+
+
+def _outside_root_decision(decision, token: str) -> str:
+    """Map the operator's answer to ``"ro"`` / ``"rw"`` / ``"deny"`` / ``"stale"`` /
+    ``"plain"``.
+
+    Only the two allow values bound to THIS path mean yes. ``"stale"`` = an allow answer
+    bound to a different path than this run resolved; ``"plain"`` = an unbound approve
+    (see ``_PLAIN_APPROVE``). Anything else — a dismissal, the autonomous-turn sentinel,
+    garbage — is a no."""
+    if isinstance(decision, bool):
+        return "plain" if decision else "deny"
+    if isinstance(decision, dict):
+        if isinstance(decision.get("approved"), bool):
+            return "plain" if decision["approved"] else "deny"
+        decision = decision.get("decision") or decision.get("answer") or ""
+    answer = str(decision or "").strip().lower()
+    for prefix, mode in ((_ALLOW_RO, "ro"), (_ALLOW_RW, "rw")):
+        if answer == f"{prefix}@{token}":
+            return mode
+        if answer.startswith(prefix + "@"):
+            return "stale"
+    if answer in _PLAIN_APPROVE:
+        return "plain"
+    return "deny"
+
+
+def _approval_card(
+    *, target: Path, raw: str, root_raw: str, project_name: str, requested_write: bool, token: str
+) -> dict:
+    """The hitl-v1 ``approval`` payload. Every line of ``detail`` is composed here from
+    the REALPATH; the agent's words reach it only as the (sanitized, quoted) name and the
+    as-typed path when that differs, both labelled as what they are. ``detail`` renders
+    as a literal block (never markdown) in the console, the deck and Zed."""
+    is_git, origin = _read_origin(target)
+    if is_git and origin:
+        git_line = f"git checkout, origin {_clean_display(_redact(origin))}"
+    elif is_git:
+        git_line = "git checkout, no origin remote"
+    else:
+        git_line = "not a git checkout"
+    lines = [f"Folder:     {target}"]
+    if str(Path(raw).expanduser()) != str(target):
+        lines.append(f"Requested:  {_clean_display(raw)!r} (resolves to the folder above)")
+    lines += [
+        f"Repository: {git_line}",
+        f"Name:       {_clean_display(project_name, 80)!r}",
+        f"Agent asks: {'read-write' if requested_write else 'read-only'}",
+        f"Outside:    onboarding root {_clean_display(root_raw)}",
+        "",
+        "Allowing registers THIS folder as a managed project (your filesystem tools, the",
+        "project board and the GitHub plugin will reach it). The root stays the boundary for",
+        "everything else. Your choice of access wins over what the agent asked for.",
+    ]
+    return {
+        "kind": "approval",
+        "title": "Allow access to a folder outside the onboarding root?",
+        "detail": "\n".join(lines),
+        "tool": "register_local_project",
+        "path": str(target),
+        # This gate moves the fence, so no client may offer a standing "yes" for it.
+        "session_allow": False,
+        "options": [
+            {"value": f"{_ALLOW_RO}@{token}", "label": "Allow read-only", "kind": "allow_once", "primary": True},
+            {"value": f"{_ALLOW_RW}@{token}", "label": "Allow read-write", "kind": "allow_once"},
+            {"value": _DENY, "label": "Deny", "kind": "reject_once"},
+        ],
+    }
+
+
+def _existing_entry(config, target: Path) -> dict | None:
+    """The registry (else explicit fence) entry already naming ``target``, read from the
+    LIVE config like :func:`_register` does — or ``None``."""
+    from graph.plugins.host import HOST
+
+    source = config
+    if HOST.config is not None:
+        try:
+            source = HOST.config() or config
+        except Exception:  # noqa: BLE001
+            source = config
+    for attr in ("projects", "filesystem_projects"):
+        for e in getattr(source, attr, []) or []:
+            if isinstance(e, dict) and _same_path(e.get("path"), target):
+                return e
+    return None
+
+
 def build_onboard_tools(config) -> list:
     """Bind ``onboard_project`` + ``register_local_project`` against the LIVE config —
     or return ``[]``.
@@ -649,6 +936,119 @@ def build_onboard_tools(config) -> list:
             f"default branch {default_branch}.{drift} {readers} that registry; no further registration is needed."
         )
 
+    async def _register_outside_root(*, raw: str, target: Path, root_raw: str, name: str | None, write: bool | None) -> str:
+        """``register_local_project`` for a realpath OUTSIDE the root: hard floor, then the
+        operator's approval card, then the shared registry write. Re-entered from the top
+        on resume (LangGraph re-runs the tool), so every check below runs again on the
+        path as it resolves NOW, and the answer must be bound to that same path."""
+        refusal = _hard_refusal(target)
+        if refusal:
+            log.warning("[onboard] outside-root registration hard-refused (%s): %s", refusal, target)
+            return (
+                f"Refused: {raw} resolves to {target}, outside the onboarding root ({root_raw}), and "
+                f"{refusal} — this location can't be registered, even with the operator's approval. "
+                "Pick a project directory, or clone the repo into the root with onboard_project."
+            )
+        if not target.is_dir():
+            return f"Error: {target} is not an existing directory."
+        if name is not None and (_CONTROL_RE.search(name) or not name.strip()):
+            return "Error: name must be a non-empty single line without control characters."
+        project_name = (name or target.name).strip()
+
+        # Already registered (by the operator, or an earlier approval) → nothing moves the
+        # fence, so no card. A fence-only entry is PROMOTED at its OWN write mode — never
+        # the agent's — so this can't be used to upgrade a read-only folder.
+        existing = _existing_entry(config, target)
+        if existing is not None:
+            mode = bool(existing.get("write", False))
+            rw = "read-write" if mode else "read-only"
+            reg = await _register(
+                config,
+                target=target,
+                project_name=str(existing.get("name") or project_name),
+                write=mode,
+                github=str(existing.get("github") or ""),
+                default_branch=str(existing.get("default_branch") or "main"),
+            )
+            if reg.status == "error":
+                return f"Error: {target} was not registered — {reg.error}."
+            if reg.status == "already":
+                return f"{existing.get('name') or project_name} is already registered at {target} ({rw}) — nothing changed."
+            return f"Promoted the existing filesystem.projects entry for {existing.get('name') or project_name} ({rw}) at {target} in {_where(reg)}."
+
+        requested_write = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
+        token = _path_token(target)
+        card = _approval_card(
+            target=target,
+            raw=raw,
+            root_raw=root_raw,
+            project_name=project_name,
+            requested_write=requested_write,
+            token=token,
+        )
+        # ALWAYS asks: no bypass_permissions / "allow for session" check here, on purpose
+        # (see the section comment above _ALLOW_RO).
+        from langgraph.types import interrupt
+
+        choice = _outside_root_decision(interrupt(card), token)
+        if choice == "stale":
+            log.warning("[onboard] outside-root approval did not match the resolved path — not registered: %s", target)
+            return (
+                f"Not registered: the approval answered a different folder than {target} resolves to now "
+                "(it changed while the card was open). Nothing was written; ask again if you still need it."
+            )
+        if choice == "plain":
+            log.warning("[onboard] outside-root approval answered with a plain approve — not registered: %s", target)
+            return (
+                f"Not registered: {target} is outside the onboarding root and needs the operator to pick an "
+                "access level (Allow read-only / Allow read-write), but the answer was a plain approve — from a "
+                "client that doesn't show those choices, or an automatic approval. Nothing was written. Ask the "
+                "operator to answer from the console or Zed, or to add the folder in Settings."
+            )
+        if choice == "deny":
+            log.info("[onboard] outside-root registration DENIED by the operator: %s", target)
+            return (
+                f"Denied by the operator — {target} was not registered (it is outside the onboarding root, "
+                f"{root_raw}). Do not ask again for this folder in this turn; offer an alternative instead, "
+                "e.g. clone the repo into the root with onboard_project, or ask the operator to widen onboarding.root."
+            )
+
+        write_effective = choice == "rw"
+        rw = "read-write" if write_effective else "read-only"
+        log.warning(
+            "[onboard] outside-root registration APPROVED by the operator (%s, agent asked %s): %s (root %s)",
+            rw,
+            "read-write" if requested_write else "read-only",
+            target,
+            root_raw,
+        )
+        from graph.workspaces.manager import github_slug_for_checkout
+
+        # git runs here only AFTER the operator approved the folder.
+        github = await asyncio.to_thread(github_slug_for_checkout, target)
+        default_branch = await asyncio.to_thread(_default_branch, target)
+        reg = await _register(
+            config,
+            target=target,
+            project_name=project_name,
+            write=write_effective,
+            github=github,
+            default_branch=default_branch,
+        )
+        if reg.status == "error":
+            return f"Error: approved by the operator, but {target} was not registered — {reg.error}."
+        overridden = (
+            f" (you asked for {'read-write' if requested_write else 'read-only'}; the operator's choice wins)"
+            if requested_write != write_effective
+            else ""
+        )
+        source = f"GitHub {github}" if github else "no GitHub origin remote, so the GitHub plugin's picker won't list it"
+        return (
+            f"Registered {project_name} ({rw}) at {target} in {_where(reg)} — approved by the operator "
+            f"({rw}){overridden}; it is outside the onboarding root ({root_raw}), which still bounds everything "
+            f"else. {source}, default branch {default_branch}."
+        )
+
     @tool
     async def register_local_project(
         path: str,
@@ -670,15 +1070,20 @@ def build_onboard_tools(config) -> list:
             write: Register read-write (``true``) or read-only (``false``).
                 Omit to use the operator's configured default.
 
-        BOUNDED by ``onboarding.root``: the path must RESOLVE (symlinks followed)
-        to an existing directory strictly inside that root, or it is refused,
-        naming the root. The root is operator-controlled — to register something
-        outside it, ask the operator to change ``onboarding.root``; you cannot
-        widen it. ``onboarding.allow`` does not apply (nothing is fetched).
-        Already registered → success with a note; registration is idempotent.
+        BOUNDED by ``onboarding.root``: a path that RESOLVES (symlinks followed) to
+        an existing directory strictly inside that root registers directly. A
+        directory OUTSIDE the root pauses and shows the operator an approval card
+        (Allow read-only / Allow read-write / Deny) for that one folder — just call
+        this tool with the path; the operator's choice of access wins over
+        ``write``. If they deny it, the result says so: don't retry, offer an
+        alternative (clone it into the root with ``onboard_project``). Some places
+        are refused outright with no card — the filesystem root, the home
+        directory, system and credential directories. ``onboarding.allow`` does not
+        apply (nothing is fetched). Already registered → success with a note;
+        registration is idempotent.
 
         Returns a confirmation naming the project, its path, and whether it is
-        read-only or read-write — or a ``Refused:``/``Error:`` string.
+        read-only or read-write — or a ``Refused:``/``Error:``/``Denied`` string.
         """
         raw = (path or "").strip()
         if not raw:
@@ -694,11 +1099,13 @@ def build_onboard_tools(config) -> list:
         # Containment BEFORE existence: a path outside the root is refused the same
         # way whether or not it exists, so the tool can't be used to probe the disk.
         if not target.is_relative_to(root_resolved):
-            return (
-                f"Refused: {raw} resolves to {target}, outside the onboarding root ({root_raw}) — only "
-                "directories under the root can be registered. The operator widens this by changing "
-                "onboarding.root."
-            )
+            if not bool(getattr(config, "onboarding_approve_outside_root", True)):
+                return (
+                    f"Refused: {raw} resolves to {target}, outside the onboarding root ({root_raw}) — only "
+                    "directories under the root can be registered. The operator widens this by changing "
+                    "onboarding.root."
+                )
+            return await _register_outside_root(raw=raw, target=target, root_raw=root_raw, name=name, write=write)
         if target == root_resolved:
             return (
                 f"Refused: {raw} is the onboarding root itself — register a project directory inside "

@@ -2062,6 +2062,10 @@ class LangGraphConfig:
     onboarding_root: str = ""            # e.g. ~/dev — clones land here; registrations must resolve UNDER it
     onboarding_allow: list[str] = field(default_factory=list)  # e.g. [github.com/protoLabsAI/*]
     onboarding_write_default: bool = False  # registered read-only unless overridden per-call
+    # A local folder OUTSIDE ``root`` → an in-chat approval card for that one folder
+    # (Allow read-only / read-write / Deny) instead of a flat refusal. Never auto-approved
+    # by /bypass or "allow for session" — it moves the fence. False = the old refusal.
+    onboarding_approve_outside_root: bool = True
 
     # Core media output store (#1929) — tool-generated binary artifacts
     # (images/audio/video) persisted via ``registry.save_media()`` and served on
@@ -2684,6 +2688,7 @@ class LangGraphConfig:
             onboarding_root=str((data.get("onboarding") or {}).get("root", "") or ""),
             onboarding_allow=list((data.get("onboarding") or {}).get("allow") or []),
             onboarding_write_default=bool((data.get("onboarding") or {}).get("write_default", False)),
+            onboarding_approve_outside_root=bool((data.get("onboarding") or {}).get("approve_outside_root", True)),
             operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
             operator_project_dir=str(operator.get("project_dir", "") or ""),
             filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),

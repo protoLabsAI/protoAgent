@@ -513,6 +513,8 @@ onboarding:
   allow: []                             # e.g. [github.com/protoLabsAI/*] — clone-source globs,
                                         # same semantics as plugins.sources.allow. Empty allows nothing
   write_default: false                  # onboarded projects are read-only unless a call asks for write
+  approve_outside_root: true            # a local folder OUTSIDE root → an approval card for that one
+                                        # folder (read-only / read-write / deny); false = refuse
 
 # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs every agent this machine
 # owns inherits. These are HOST defaults: best set once in host-config.yaml or the

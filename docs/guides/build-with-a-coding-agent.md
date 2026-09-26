@@ -128,6 +128,11 @@ here is written by hand any more:
   checkout's parent with `allow: [github.com/<owner>/<name>]` — so
   `onboard_project` resolves the typed repo and nothing wider is clonable until
   you widen the allowlist (no remote → registered only, onboarding untouched).
+  If the agent later needs a local folder *outside* that root (a sibling
+  checkout you point it at), it doesn't refuse: you get an in-chat approval
+  card for that one folder — **Allow read-only / Allow read-write / Deny** —
+  and the root stays the boundary for everything else
+  ([`onboarding.approve_outside_root`](/reference/configuration#onboarding)).
   The canonical wording, including the fence consequence — once `projects:` is
   non-empty it *is* the filesystem fence — is in the
   [bundles guide](/guides/bundles#the-manifest). This rides a `project: true`

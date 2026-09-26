@@ -960,7 +960,10 @@ class ProtoAgentACP:
         # the server's bypass skips. delete_file's permanent-delete floor ALWAYS asks (ADR
         # 0083 D5) and anything else (a plugin's approval) has no server-side bypass, so
         # neither is ever offered allow_always nor auto-approved here.
-        session_allowable = tool == "run_command"
+        # A park that brings its own choices, or says it can't be session-allowed (it moves
+        # the fence, or it's a floor), is never auto-approved — even when the pending-tool
+        # guess says run_command (parallel calls can make that guess wrong).
+        session_allowable = tool == "run_command" and hitl.get("session_allow") is not False and not hitl.get("options")
         tool_call_id = f"approval-{task_id}-{uuid.uuid4().hex[:6]}"
         kind = "execute" if tool == "run_command" else ("delete" if tool == "delete_file" else "other")
         first_line = detail.splitlines()[0] if detail else ""
@@ -984,6 +987,13 @@ class ProtoAgentACP:
             )
 
         await self._send(s, start_tool_call(tool_call_id, f"{title} {first_line}".strip(), kind=kind, status="pending"))
+        own = self._own_options(hitl)
+        if own is not None:
+            # The approval brings its OWN choices (register_local_project outside the
+            # onboarding root: Allow read-only / Allow read-write / Deny). Relay them as
+            # they are — each answer resumes with its value verbatim, which the server
+            # binds to the folder on the card — and never as "allow for this session".
+            return await self._ask_own_options(s, tool_call_id, title, detail, own)
         options = [PermissionOption(option_id="approve", name="Allow once", kind="allow_once")]
         if session_allowable:
             options.append(PermissionOption(option_id="approve_session", name="Allow for this session", kind="allow_always"))
@@ -1013,6 +1023,45 @@ class ProtoAgentACP:
             s.auto_approve_turn = True
         await self._send(s, update_tool_call(tool_call_id, status="completed" if approved else "failed"))
         return "approved" if approved else "denied"
+
+    @staticmethod
+    def _own_options(hitl: dict) -> list[PermissionOption] | None:
+        """The approval's server-supplied choices as ACP options, or ``None`` for a classic
+        approve/deny gate. An ``allow_always`` kind is downgraded to ``allow_once``: a
+        standing "yes" is only ever the shim's own run_command session allow."""
+        raw = hitl.get("options")
+        if not isinstance(raw, list):
+            return None
+        out: list[PermissionOption] = []
+        for o in raw:
+            if not isinstance(o, dict) or not str(o.get("value") or "").strip():
+                continue
+            kind = str(o.get("kind") or "allow_once")
+            if kind not in ("allow_once", "reject_once", "reject_always"):
+                kind = "allow_once"
+            out.append(PermissionOption(option_id=str(o["value"]), name=str(o.get("label") or o["value"]), kind=kind))
+        return out or None
+
+    async def _ask_own_options(
+        self, s: Session, tool_call_id: str, title: str, detail: str, options: list[PermissionOption]
+    ) -> str:
+        choice = ""
+        try:
+            resp = await self._conn.request_permission(
+                session_id=s.id,
+                tool_call=ToolCallUpdate(tool_call_id=tool_call_id, title=title, raw_input={"detail": detail} if detail else None),
+                options=options,
+            )
+            outcome = resp.outcome
+            if getattr(outcome, "outcome", "") == "selected":
+                choice = str(getattr(outcome, "option_id", ""))
+        except Exception as exc:  # a client without permission UI: fail closed
+            log.warning("request_permission failed (%s); denying", exc)
+        chosen = next((o for o in options if o.option_id == choice), None)
+        approved = chosen is not None and chosen.kind == "allow_once"
+        await self._send(s, update_tool_call(tool_call_id, status="completed" if approved else "failed"))
+        # A dismissed prompt or an id we never offered is a denial — never an approval.
+        return chosen.option_id if chosen is not None else "denied"
 
     async def _send(self, s: Session, update: Any) -> None:
         if s.detached:  # nobody owns the turn right now (the Send Now window): hold it

@@ -1664,6 +1664,18 @@ FIELDS: list[Field] = [
         "read-only unless the agent explicitly requests write access.",
         depends_on={"key": "onboarding.enabled"},
     ),
+    Field(
+        "onboarding.approve_outside_root",
+        "onboarding_approve_outside_root",
+        "Ask before registering outside the root",
+        "bool",
+        "Project onboarding",
+        "When the agent asks to register a local folder outside the onboarding root, show "
+        "you an approval card for that one folder (allow read-only / read-write / deny) "
+        "instead of refusing. Never auto-approved by bypass mode. System, home and "
+        "credential directories are refused either way. Off = always refuse.",
+        depends_on={"key": "onboarding.enabled"},
+    ),
 ]
 
 # Knowledge domain sub-sections (console grouping). The Knowledge fields are declared with

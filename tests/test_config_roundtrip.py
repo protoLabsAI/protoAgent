@@ -266,6 +266,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "onboarding_root": "",
     "onboarding_allow": [],
     "onboarding_write_default": False,
+    "onboarding_approve_outside_root": True,
     "reasoning_effort": None,
     "repetition_penalty": None,
     "request_timeout": 120,

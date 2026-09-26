@@ -1141,7 +1141,14 @@ def build_fs_tools(config) -> list:
         from langgraph.types import interrupt
 
         decision = interrupt(
-            {"kind": "approval", "title": "Approve permanent file delete?", "detail": path, "project": project}
+            {
+                "kind": "approval",
+                "title": "Approve permanent file delete?",
+                "detail": path,
+                "project": project,
+                # A floor bypass can't skip — tell clients not to offer a standing "yes".
+                "session_allow": False,
+            }
         )
         if not _approved(decision):
             # RETURN (not raise) a decline, same as run_command: a decline is the operator's

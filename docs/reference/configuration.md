@@ -483,6 +483,7 @@ onboarding:
     - "github.com/protoLabsAI/*"
     - "gitlab.com/acme/*"
   write_default: false                # registered read-only unless the call asks for write
+  approve_outside_root: true          # a folder OUTSIDE root → ask the operator (per folder)
 ```
 
 | Key | Default | What |
@@ -491,6 +492,40 @@ onboarding:
 | `root` | `""` | Clones land here, and `register_local_project` accepts only a directory that **resolves** (symlinks followed) strictly inside it. Unset → every registration is refused. To let the agent register something elsewhere, widen this — the agent cannot. |
 | `allow` | `[]` | `fnmatch` globs (same semantics as `plugins.sources.allow`) matched against a clone source's canonical **`host/owner/repo`**, for any git host: `github.com/acme/*`, `gitlab.com/acme/*`, `git.example.com/team/*`. A bare `owner/repo` means `github.com`; an https URL, an ssh URL and the scp form `git@host:owner/repo` of the same repo all normalize to the same string (port and credentials dropped). Empty = nothing may be cloned; it does not gate `register_local_project`, which fetches nothing. |
 | `write_default` | `false` | Whether a registration is fenced read-write unless the call says otherwise. |
+| `approve_outside_root` | `true` | When `register_local_project` names an existing directory **outside** `root`, park the turn on an in-chat approval card for that one folder instead of refusing. `false` = refuse, as before. See below. |
+
+**Registering a folder outside the root.** With `approve_outside_root` on (the default), an
+agent asking to register a local folder outside `root` shows you an approval card — in the
+console, the deck and Zed alike — instead of a refusal. The card is written by the server, not
+the agent: the folder's **resolved** absolute path (symlinks followed; the path the agent typed
+is shown separately when it differs), whether it is a git checkout and its `origin` remote, the
+access the agent asked for, and the root it falls outside. Your choices are **Allow read-only**,
+**Allow read-write** or **Deny**; your choice wins over the agent's `write`. Allowing registers
+exactly that folder in `projects:` (an audit line is logged either way); `root` stays the
+boundary for everything else, and nothing else is widened. A denial comes back to the agent as
+a plain result, so it can offer an alternative (clone the repo into the root with
+`onboard_project`).
+
+The card is **never auto-approved**: not by `/bypass`, not by the console's "Approve & don't
+ask again", not by Zed's "Allow for this session". Those skip confirmation of actions *inside*
+the fence you already drew; this card moves the fence, and the change outlives the turn and the
+session, so a standing "yes" would let the agent widen its own reach at will. For the same
+reason each allow answer is bound to the path on the card — a plain "approve" (an older client,
+or any auto-approver) registers nothing, and if the folder resolves somewhere else by the time
+you answer (a swapped symlink), nothing is registered either. No git command runs in the folder
+until you approve it.
+
+Some places are refused outright, with no card: the filesystem root; your home directory and
+anything containing it; `~/Library` and `~/AppData`; `~/.config`, `~/.local`, `~/.cache`,
+`~/.protoagent`; any path through a credentials directory (`.ssh`, `.gnupg`, `.aws`, `.azure`,
+`.kube`, `.docker`, `.password-store`, keychains, …) or with a secret-looking name; protoAgent's
+own box and instance directories (and anything containing them); system directories (`/System`,
+`/Library`, `/Applications`, `/usr`, `/etc`, `/bin`, `/sbin`, `/var`, `/private`, `/opt`, `/dev`,
+`/proc`, `/sys`, `/boot`, `/run`, `/lib*`, `/snap`, `/nix`, `/root`; on Windows `Windows`,
+`Program Files*`, `ProgramData`); the temp directories themselves (a folder *inside* `/tmp`,
+`/private/tmp`, `/var/tmp` or `/var/folders` can be approved); the bare parents `/Users`, `/home`,
+`/Volumes`, `/mnt`, `/media`, `/srv`; and any path containing control characters. With `root`
+unset, every registration is still refused — there is no root to be "outside" of.
 
 git receives the clone URL exactly as given, so the host's ssh keys and credential helpers apply; a credential embedded in an https URL is masked in everything the tool reports (git itself still stores the URL in the checkout's `.git/config`, so prefer a credential helper). Refused before git runs: local paths and `file://`, remote-helper transports such as `ext::`, and anything starting with `-`.
 
