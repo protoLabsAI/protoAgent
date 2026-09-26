@@ -997,32 +997,67 @@ async def test_a_steer_whose_enqueue_is_in_flight_when_the_turn_ends_is_not_mark
     """CodeRabbit: the reconcile ran before the steer POST returned, found it absent from the
     member's queue and marked it consumed — while the POST then queued it after the turn.
     An in-flight enqueue is not judged; once accepted it is reconciled on its own."""
-    import time as _t
+    import threading
 
     fake = FakeA2A(hang=True)
     be = TalkBackend(a2a_client=fake)
     orig_steer = be.steer
+    # The steer POST is held open until the test releases it (#3622). A fixed 0.7 s sleep
+    # raced the "sending…" snapshot: a slow runner spent longer than that between typing and
+    # the assertion, the POST landed first and the line already read "queued".
+    post_out, release_post = threading.Event(), threading.Event()
 
-    def slow_steer(agent, sid, msg_id, text):
-        _t.sleep(0.7)
+    def held_steer(agent, sid, msg_id, text):
+        post_out.set()
+        release_post.wait(timeout=10)  # bounded so a failed test can't strand the worker
         return orig_steer(agent, sid, msg_id, text)
 
-    be.steer = slow_steer  # type: ignore[method-assign]
+    be.steer = held_steer  # type: ignore[method-assign]
     be.steer_pending = lambda agent, sid: [{"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"]  # the member holds whatever was accepted
+    app = FleetDeck(be, poll_s=0)
+    try:
+        async with app.run_test(size=(120, 36)) as pilot:
+            await _open_talk(be, pilot, app)
+            await _type(app, pilot, "go", wait=0.2)
+            await _type(app, pilot, "later", wait=0.1)
+            assert await _until(pilot, post_out.is_set)  # its POST is out, held until released
+            assert "sending" in app.screen.query(".steer-msg").first().render().plain
+            fake.hang = False
+            await pilot.press("escape")  # the turn ends while the enqueue is still out
+            assert await _until(pilot, lambda: app.screen.convo.live is None)
+            assert not any(c[0] == "steer_pending" for c in be.calls)  # nothing to judge yet
+            assert "folded in" not in app.screen.query(".steer-msg").first().render().plain
+            # the POST lands, the member now holds it, the turn is over → it becomes a turn of its own
+            release_post.set()
+            assert await _until(pilot, lambda: len(fake.sent) == 2, timeout=4)
+            assert fake.sent[1]["text"] == "later" and not app.screen.query(".steer-msg")
+    finally:
+        release_post.set()
+
+
+@pytest.mark.asyncio
+async def test_a_second_reconcile_landing_for_the_same_steer_does_not_resend_it():
+    """`_finish` can see a steer's `queued` flag (set on the POST worker) before that
+    worker's `_enqueued` runs, so two reconciles judge the same steer. The first re-sends it
+    as a turn of its own; the second, landing once that turn is over, must not send it again."""
+    fake = FakeA2A(hang=True)
+    be = TalkBackend(a2a_client=fake)
+    be.steer_pending = lambda agent, sid: [{"id": c[2], "text": c[3]} for c in be.calls if c[0] == "steer"]
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
         await _type(app, pilot, "go", wait=0.2)
-        await _type(app, pilot, "later", wait=0.1)  # its POST is out for 0.7 s
-        assert "sending" in app.screen.query(".steer-msg").first().render().plain
+        await _type(app, pilot, "later", wait=0.1)
+        screen = app.screen
+        assert await _until(pilot, lambda: screen.convo.steers and screen.convo.steers[0].queued)
+        st, first = screen.convo.steers[0], screen.convo.live
         fake.hang = False
-        await pilot.press("escape")  # the turn ends while the enqueue is still out
-        assert await _until(pilot, lambda: app.screen.convo.live is None)
-        assert not any(c[0] == "steer_pending" for c in be.calls)  # nothing to judge yet
-        assert "folded in" not in app.screen.query(".steer-msg").first().render().plain
-        # the POST lands, the member now holds it, the turn is over → it becomes a turn of its own
-        assert await _until(pilot, lambda: len(fake.sent) == 2, timeout=4)
-        assert fake.sent[1]["text"] == "later" and not app.screen.query(".steer-msg")
+        await pilot.press("escape")
+        assert await _until(pilot, lambda: len(fake.sent) == 2 and screen.convo.live is None)
+        assert fake.sent[1]["text"] == "later"
+        screen._reconcile_landed(screen.convo, first, first.generation, [st], {st.id})  # the late duplicate
+        await pilot.pause(0.3)
+        assert len(fake.sent) == 2 and screen.convo.live is None
 
 
 @pytest.mark.asyncio
