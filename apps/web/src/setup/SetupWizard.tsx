@@ -95,7 +95,7 @@ type WizardState = {
   initTasks: boolean;
 };
 
-function defaultState(): WizardState {
+export function defaultState(): WizardState {
   return {
     agentName: "protoagent",
     operatorName: "",
@@ -124,36 +124,43 @@ function defaultState(): WizardState {
   };
 }
 
-function hydrateState(payload: ConfigPayload): WizardState {
-  const config = payload.config;
+// Every section is read defensively: the current server always emits them (config_to_dict
+// is schema-driven), but a proxied fleet member on an older core, or any partial
+// payload, must not crash the first-run render — a missing section or key falls back to
+// the same value defaultState() starts with.
+export function hydrateState(payload: ConfigPayload): WizardState {
+  const d = defaultState();
+  const config: Partial<ConfigPayload["config"]> = payload?.config ?? {};
+  const identity: Partial<ConfigPayload["config"]["identity"]> = config.identity ?? {};
+  const model: Partial<ConfigPayload["config"]["model"]> = config.model ?? {};
   const rt = String(config.agent_runtime || "native");
   return {
-    agentName: config.identity.name || "protoagent",
-    operatorName: config.identity.operator || "",
+    agentName: identity.name || d.agentName,
+    operatorName: identity.operator || d.operatorName,
     runtimeKind: rt.startsWith("acp:") ? "acp" : "native",
-    provider: String(config.model.provider || "openai"),
-    acpAgent: rt.startsWith("acp:") ? rt.slice(4) || "proto" : "proto",
-    apiBase: config.model.api_base || "https://api.proto-labs.ai/v1",
+    provider: String(model.provider || d.provider),
+    acpAgent: rt.startsWith("acp:") ? rt.slice(4) || d.acpAgent : d.acpAgent,
+    apiBase: model.api_base || d.apiBase,
     apiKey: "",
-    modelName: config.model.name || "protolabs/reasoning",
-    temperature: Number(config.model.temperature ?? 0.2),
-    maxTokens: Number(config.model.max_tokens ?? 32768),
-    maxIterations: Number(config.model.max_iterations ?? 2000),
+    modelName: model.name || d.modelName,
+    temperature: Number(model.temperature ?? d.temperature),
+    maxTokens: Number(model.max_tokens ?? d.maxTokens),
+    maxIterations: Number(model.max_iterations ?? d.maxIterations),
     // Start blank in the wizard (first-run-only flow): /api/config returns the
     // server's GENERIC default SOUL, not a user persona — the persona step seeds
     // the editor from the selected archetype instead. Leaving it blank lets that
     // seed run (a non-empty value here would suppress it).
     soul: "",
-    archetype: "basic",
+    archetype: d.archetype,
     middleware: {
-      knowledge: Boolean(config.middleware?.knowledge),
-      audit: Boolean(config.middleware?.audit),
-      memory: Boolean(config.middleware?.memory),
-      scheduler: Boolean(config.middleware?.scheduler),
+      knowledge: Boolean(config.middleware?.knowledge ?? d.middleware.knowledge),
+      audit: Boolean(config.middleware?.audit ?? d.middleware.audit),
+      memory: Boolean(config.middleware?.memory ?? d.middleware.memory),
+      scheduler: Boolean(config.middleware?.scheduler ?? d.middleware.scheduler),
     },
-    researcherTurns: Number(config.subagents?.researcher?.max_turns ?? 40),
-    knowledgePath: config.knowledge?.db_path || "",
-    knowledgeTopK: Number(config.knowledge?.top_k ?? 5),
+    researcherTurns: Number(config.subagents?.researcher?.max_turns ?? d.researcherTurns),
+    knowledgePath: config.knowledge?.db_path || d.knowledgePath,
+    knowledgeTopK: Number(config.knowledge?.top_k ?? d.knowledgeTopK),
     allowedDirs: (config.operator?.allowed_dirs || []).join("\n"),
     initTasks: false,
   };
@@ -196,7 +203,7 @@ const OAUTH_LABEL: Record<string, string> = {
 // A probe/test against a possibly-wrong or slow gateway must never hang the wizard —
 // race it against a timeout so `busy` always clears and the step never locks (which
 // would disable Next, trapping the user on the runtime step).
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((_resolve, reject) => {
     timer = setTimeout(
