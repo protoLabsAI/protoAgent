@@ -1740,3 +1740,13 @@ def test_inline_host_tracing_keys_land_in_the_members_secrets_not_its_yaml(root,
         "public_key": "pk-lf-inline",
         "secret_key": "sk-lf-inline",
     }
+
+
+def test_a_whitespace_only_secret_never_overrides_a_real_inline_tracing_key(root, tmp_path):
+    host = _tracing_host(tmp_path, enabled=True, inline_keys=True)
+    (host / "secrets.yaml").write_text("tracing:\n  public_key: '   '\n  secret_key: ''\n")
+
+    rec = manager.create("kid", inherit_model=str(host))
+    secrets = yaml.safe_load((root / rec["id"] / "config" / "secrets.yaml").read_text())
+
+    assert secrets["tracing"] == {"public_key": "pk-lf-inline", "secret_key": "sk-lf-inline"}

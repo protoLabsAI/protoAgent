@@ -1230,6 +1230,13 @@ _copy_host_delegates = copy_host_delegates
 _register_project_inputs = register_project_inputs
 
 
+def _filled(value: object) -> bool:
+    """A credential worth copying: a whitespace-only string is BLANK — the runtime strips
+    it (``resolve_credentials``) and then refuses the pair, so letting it win over a real
+    inline key would leave the member unconfigured."""
+    return bool(value.strip()) if isinstance(value, str) else bool(value)
+
+
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     """Pop model connections + credentials from another agent into this blank one.
 
@@ -1309,7 +1316,7 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         if tracing_on:
             tracing = dict(tracing)
             inline_tracing = {k: tracing.pop(k, "") for k in ("public_key", "secret_key")}
-            inline_tracing = {k: v for k, v in inline_tracing.items() if v}
+            inline_tracing = {k: v for k, v in inline_tracing.items() if _filled(v)}
             if inline_tracing:
                 inherited_secrets["tracing"] = inline_tracing
             new["tracing"] = tracing
@@ -1326,7 +1333,7 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         for section in ("model", "providers", *(("tracing",) if tracing_on else ())):
             values = source_secrets.get(section)
             if isinstance(values, dict):
-                nonblank = {key: value for key, value in values.items() if value}
+                nonblank = {key: value for key, value in values.items() if _filled(value)}
                 if nonblank:
                     inherited_secrets.setdefault(section, {}).update(nonblank)
     if inherited_secrets:
