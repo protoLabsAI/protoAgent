@@ -32,6 +32,7 @@ URL escapes that origin and the handshake silently never completes — which is 
 | `protoagent:contextmenu:register` | page → host | `{ items: MenuItem[] }` |
 | `protoagent:contextmenu:open` | page → host | `{ x: number, y: number, items?: MenuItem[] }` |
 | `protoagent:contextmenu:action` | host → page | `{ itemId: string }` |
+| `protoagent:code:open` | page → host | `{ project: string, path: string, line?: number, end_line?: number, note?: string }` |
 
 ## The handshake — `init` / `ready`
 
@@ -156,6 +157,24 @@ window.addEventListener("message", (e) => {
 - Item ids are namespaced like keybinding ids, and re-registering replaces the set (`items: []`
   clears it). Items support `label`, `icon`, `danger`, `disabled`, and `{ divider: true }`; a
   trailing divider is dropped.
+
+## Show code — `protoagent:code:open`
+
+A page asks the console to show a range of a managed project's code — the Artifact panel's
+code-linked diagrams use it. The host accepts it only from the view's own iframe at the page's
+origin, and refuses a `path` the fs fence would (absolute, `~`, `..`). It then opens the **code
+pane** (ADR 0112) at `line`–`end_line` with `note` as its banner when that toolset is on — beside
+the view, never swapping it out — else the operator's external editor (Settings ▸ Chat ▸ Open
+files in), else it copies `project/path:line` and says so in a toast. The pane's own routes still
+apply the fence and the secret-path deny list, so this can't show anything `show_code` couldn't.
+
+```js
+parent.postMessage({ type: "protoagent:code:open", project: "app", path: "src/server.ts",
+  line: 23, end_line: 29, note: "the bearer check" }, hostOrigin);
+```
+
+A page that renders untrusted content (a sandboxed frame of its own) should forward only targets
+it validated — never a path the untrusted frame supplied.
 
 ## The kit
 
