@@ -15,6 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.181.0] - 2026-09-26
+
+### Added
+- **Engineer archetype — a hands-on pair-programming navigator (#3625).** A new starter
+  type in the new-agent picker, backed by
+  [engineer-archetype](https://github.com/protoLabsAI/engineer-archetype). Point it at a repo
+  and it clones or registers it, proves the toolchain, writes a repo card and gives a guided
+  tour; point it at a bug and it works through it one checkpoint per turn — reproduce, narrow,
+  your hypothesis first, evidence in the code pane — while you write the fix, then it reviews
+  and runs the checks. It never edits, commits, pushes or posts to GitHub unless you ask. The
+  bundle adds your own terminal beside chat and read-only GitHub tools; the persona's skills
+  (`repo-onboard`, `debug-loop`) ship as the in-tree `engineer` plugin, off for every other
+  agent.
+
+### Changed
+- **The desktop app asks before installing a plugin's Python packages, with the same dialog as the browser console (#3623).**
+  Installing a plugin on the desktop app used to pip its missing required packages into the
+  managed Python runtime silently, as part of the install. Now the plugin installs and the
+  "Install Python packages for <Plugin>?" dialog lists the exact specs, the plugin's source and
+  "the desktop app's managed Python runtime" — nothing runs until you click, and Not now leaves
+  the plugin installed with its Install dependencies banner. A required `scope: host` dep the app
+  can't satisfy still refuses the install. Creating a fleet agent from an archetype and importing
+  an agent snapshot, which have no dialog, keep installing deps via the new
+  `plugin install --install-runtime-deps` opt-in.
+
+### Fixed
+- **A workflow run is one Langfuse trace, not one trace per step (#3626).** A run with no turn around it (Studio, the REST API, a QA reviewer's code-review panel) used to make every step's subagent its own sessionless root trace. In the fleet project that was 92 of the last 100 traces, burying the agents' turns. Each run is now a `workflow:<name>` trace (session = run id) with its steps nested under it, plus its redacted input and its outcome; a run started from a chat turn nests under that turn instead. Plugins get the same seam as `graph.sdk.trace_run`.
+
+### Docs
+- **New operator guide for the Friction log (#3621).**
+  `docs/guides/friction-log.md` covers the Friction rail view and its filters, `/friction` and
+  `/friction <text>`, the fleet rollup on a hub, resolving and reopening rows (the ledger is the
+  source of truth), filing a row as a GitHub issue and why `friction.issue_repo` is pinned rather
+  than derived from the project being worked on, the `friction_triage` filing plan, what reaches
+  the agent's `<working_state>` and the knobs that control it, what auto-capture logs, and a
+  worked cleanup of pre-v0.180.0 escape-hatch noise. Linked from the sidebar, the guides index,
+  the README plugin table, the starter-tools reference and the plugin README.
+
 ## [0.180.0] - 2026-09-25
 
 ### Added
