@@ -798,6 +798,10 @@ class ConversationScreen(Screen):
         new turn may be streaming."""
         if convo is not self.convo or ex.generation != gen:
             return  # a different session, or the turn lived again since we asked: this answer is stale
+        # Two reconciles can be in flight for one steer: `_finish` sees `st.queued` (set on the
+        # POST worker) before that worker's `_enqueued` runs, and `_enqueued` then judges it
+        # again. Whichever lands second must not re-send what the first already dropped.
+        queued = [st for st in queued if st in convo.steers and not st.consumed]
         for st in queued:
             if st.id not in pending:
                 st.consumed = True

@@ -60,13 +60,15 @@ async def test_run_once_completes_and_is_not_rekicked():
 async def test_crash_is_rekicked_after_on_crash_recovery():
     calls = 0
     recovered = []
+    rekicked = asyncio.Event()
 
     async def work():
         nonlocal calls
         calls += 1
         if calls == 1:
             raise ValueError("boom")
-        await asyncio.sleep(0.5)  # second run stays alive
+        rekicked.set()
+        await asyncio.Event().wait()  # second run stays alive until aclose()
         return "ok"
 
     def on_crash(result):
@@ -75,8 +77,11 @@ async def test_crash_is_rekicked_after_on_crash_recovery():
 
     sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash)
     sv.start()
-    await asyncio.sleep(0.15)
-    assert calls >= 2  # crashed once, watchdog re-kicked, ran again
+    # Wait for the re-kick itself, not a wall-clock window (#3549): a fixed sleep lost the
+    # race when the process was descheduled across both the watchdog tick and the deadline —
+    # both timers then fire in one loop pass and the re-kicked runner hasn't stepped yet.
+    await asyncio.wait_for(rekicked.wait(), timeout=10)
+    assert calls == 2  # crashed once, watchdog re-kicked, ran again (and is still running)
     assert len(recovered) == 1  # on_crash fired exactly once for the down-streak
     assert "error" in recovered[0]  # got the crash result
     await sv.aclose()
