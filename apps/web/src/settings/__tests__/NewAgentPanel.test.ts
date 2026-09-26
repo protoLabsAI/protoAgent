@@ -277,6 +277,84 @@ describe("NewAgentPanel — step 2: set up in a dialog", () => {
     expect(createButton()?.disabled).toBe(false);
   });
 
+  it("holds Create (button and Enter) while the bundle's peek is loading (#3632)", async () => {
+    // Until the peek lands the bundle's required config_inputs are unknown, so the
+    // missing-answer gate can't fire — Create must wait rather than post past them.
+    let resolvePeek: (p: ArchetypePreview) => void = () => {};
+    vi.spyOn(api, "archetypePreview").mockImplementation(
+      () => new Promise<ArchetypePreview>((r) => (resolvePeek = r)),
+    );
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    const create = mockCreate();
+    await mountPanel();
+    await next();
+    expect(createButton()?.disabled).toBe(true);
+    await act(async () => {
+      nameInput()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(create).not.toHaveBeenCalled();
+
+    await act(async () => resolvePeek(ENGINEER_PREVIEW));
+    await tick(() => Boolean(dialog()?.textContent?.includes("Start in a local repo")));
+    expect(createButton()?.disabled).toBe(false);
+  });
+
+  it("a FAILED peek keeps Create (button and Enter) held and offers a Retry that refetches (#3632)", async () => {
+    // Not loading ≠ questions known: after a failed fetch there's no data, so the
+    // required-answer gate can't fire — Create must stay held until a retry lands.
+    const peek = vi.spyOn(api, "archetypePreview").mockRejectedValue(new Error("peek exploded"));
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    const create = mockCreate();
+    await mountPanel();
+    await next();
+    // The panel's query retries once (~1s) before it settles into the error state.
+    for (let i = 0; i < 40 && !dialog()?.querySelector('[role="alert"]'); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+    }
+    const alert = dialog()!.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("peek exploded");
+    expect(createButton()?.disabled).toBe(true);
+    await act(async () => {
+      nameInput()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(create).not.toHaveBeenCalled();
+
+    const calls = peek.mock.calls.length;
+    peek.mockResolvedValue(ENGINEER_PREVIEW);
+    await click(buttonNamed(/^Retry$/, dialog()!));
+    await tick(() => Boolean(dialog()?.textContent?.includes("Start in a local repo")));
+    expect(peek.mock.calls.length).toBe(calls + 1);
+    expect(dialog()!.querySelector('[role="alert"]')).toBeNull();
+    expect(createButton()?.disabled).toBe(false);
+  }, 10_000);
+
+  it("announces the help line on path and text fields (aria-describedby, #3632)", async () => {
+    const withHelp: ArchetypePreview = {
+      id: "engineer",
+      bundle: {
+        ...ENGINEER_PREVIEW.bundle!,
+        config_inputs: [
+          ...ENGINEER_PREVIEW.bundle!.config_inputs!,
+          { key: "engineer.branch", label: "Branch", type: "string", help: "Checked out on first run." },
+        ],
+      },
+    };
+    vi.spyOn(api, "archetypePreview").mockResolvedValue(withHelp);
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    await mountPanel();
+    await next();
+    await tick(() => Boolean(dialog()?.querySelector(".path-picker input")));
+    const d = dialog()!;
+    const describedText = (el: Element | null) =>
+      document.getElementById(el?.getAttribute("aria-describedby") ?? "")?.textContent;
+    expect(describedText(d.querySelector('.path-picker input[aria-label="Start in a local repo"]'))).toBe(
+      "It is registered as a project and the terminal opens there.",
+    );
+    expect(describedText(d.querySelector('input[aria-label="Branch"]'))).toBe("Checked out on first run.");
+  });
+
   it("omits requires_tools for a contract-less archetype", async () => {
     const create = mockCreate();
     await mountPanel();

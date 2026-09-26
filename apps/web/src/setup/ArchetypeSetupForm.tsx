@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { FormField, Input, Textarea } from "@protolabsai/ui/forms";
 import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
+import { Button, Callout } from "@protolabsai/ui/primitives";
 
 import {
   fieldId,
@@ -49,6 +50,8 @@ export function ArchetypeSetupForm({
   onSoulChange,
   hardGateHint,
   loading,
+  loadError,
+  onRetry,
   advancedDefaultOpen = false,
 }: {
   nameLabel?: string;
@@ -69,6 +72,10 @@ export function ArchetypeSetupForm({
   hardGateHint: string;
   // The bundle peek is still loading — its questions aren't known yet.
   loading?: boolean;
+  // The bundle peek FAILED — its questions are unknown, so the caller holds its terminal
+  // action; this says why and offers a Retry (the caller's refetch).
+  loadError?: string | null;
+  onRetry?: () => void;
   // Open Advanced from the start — the wizard's Custom archetype, whose whole point is
   // writing the persona.
   advancedDefaultOpen?: boolean;
@@ -87,9 +94,11 @@ export function ArchetypeSetupForm({
     const id = fieldId(f);
     const value = values[id] ?? "";
     const onChange = (v: string) => onValueChange(id, v);
+    // The help line's id, so the control announces it (aria-describedby). The DS FormField
+    // gives its hint no id, so the hint content carries one.
+    const helpId = f.help ? `${id}:help` : undefined;
     if (f.kind === "boolean") {
       // A switch carries its own label; a FormField <label> around it would nest labels.
-      const helpId = f.help ? `${id}:help` : undefined;
       return (
         <div key={id} className="pl-field archetype-setup-switch">
           <ArchetypeConfigField field={f} value={value} onChange={onChange} describedBy={helpId} />
@@ -102,8 +111,8 @@ export function ArchetypeSetupForm({
       );
     }
     return (
-      <FormField key={id} label={`${f.label}${f.required ? " *" : ""}`} hint={f.help}>
-        <ArchetypeConfigField field={f} value={value} onChange={onChange} />
+      <FormField key={id} label={`${f.label}${f.required ? " *" : ""}`} hint={f.help ? <span id={helpId}>{f.help}</span> : undefined}>
+        <ArchetypeConfigField field={f} value={value} onChange={onChange} describedBy={helpId} />
       </FormField>
     );
   };
@@ -130,6 +139,18 @@ export function ArchetypeSetupForm({
       {identityExtra}
 
       {loading ? <p className="archetype-setup-help">Reading the archetype&apos;s setup…</p> : null}
+      {loadError ? (
+        <div role="alert">
+          <Callout tone="error" title="Couldn’t read the archetype’s setup">
+            <span>{loadError}</span>{" "}
+            {onRetry ? (
+              <Button type="button" size="sm" variant="ghost" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
+          </Callout>
+        </div>
+      ) : null}
       {questions.length ? (
         <section className="archetype-setup-group" aria-label="Archetype settings">
           <p className="archetype-setup-help">{hasHardRequired ? SETUP_REQUIRED_HELP : SETUP_OPTIONAL_HELP}</p>

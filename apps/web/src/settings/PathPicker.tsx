@@ -41,6 +41,7 @@ export function PathPicker({
   id,
   placeholder,
   ariaLabel,
+  describedBy,
   invalid,
 }: {
   value: string;
@@ -49,6 +50,8 @@ export function PathPicker({
   id?: string;
   placeholder?: string;
   ariaLabel?: string;
+  // id of a help line describing the field (aria-describedby on the text input).
+  describedBy?: string;
   invalid?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -80,6 +83,7 @@ export function PathPicker({
           value={value}
           placeholder={placeholder ?? (kind === "file" ? FILE_EXAMPLE : DIR_EXAMPLE)}
           aria-label={ariaLabel}
+          aria-describedby={describedBy}
           aria-invalid={invalid}
           onChange={(e) => onChange(e.target.value)}
         />

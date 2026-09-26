@@ -20,6 +20,7 @@ import {
   initialArchetypeFlow,
   suggestedAgentName,
 } from "../lib/archetypeFlow";
+import { errMsg } from "../lib/format";
 import { escapeCloseAllowed, isTopmostOverlay } from "../lib/overlayStack";
 import { HARD_GATE_HINT } from "../lib/pickerCopy";
 import type { Archetype } from "../lib/types";
@@ -129,7 +130,15 @@ export function NewAgentPanel({
       onDone?.(created, res.agent?.id);
     },
   });
-  const canCreate = nameOk && !missingHard && !create.isPending;
+  // The bundle's questions are unknown until its peek lands (`fields` is empty meanwhile,
+  // so `missingHard` reads false) — hold Create (button AND Enter) until they are, or a
+  // fast click posts past the required config_inputs and eats the server's #2977 refusal.
+  // "Landed" means DATA, not "not loading": a failed peek is not loading either, and it
+  // knows the questions no better — it holds too, with an inline Retry.
+  const bundlePicked = Boolean(pickedArchetype?.bundle);
+  const peekLoading = bundlePicked && preview.isLoading;
+  const peekMissing = bundlePicked && !preview.data;
+  const canCreate = nameOk && !missingHard && !peekMissing && !create.isPending;
   const submit = () => {
     if (canCreate) create.mutate();
   };
@@ -241,7 +250,9 @@ export function NewAgentPanel({
             soul={flow.soul}
             onSoulChange={(soul) => dispatch({ type: "setSoul", soul })}
             hardGateHint={HARD_GATE_HINT}
-            loading={Boolean(pickedArchetype?.bundle) && preview.isLoading}
+            loading={peekLoading}
+            loadError={bundlePicked && preview.isError ? errMsg(preview.error) : null}
+            onRetry={() => void preview.refetch()}
           />
         </Dialog>
       ) : null}
