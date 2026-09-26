@@ -90,6 +90,55 @@ jobs:
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" \
             -c 'pip install -q pytest pytest-asyncio && python -m pytest tests/ --collect-only -q'
 
+      # Tell the fleet member repos that build `FROM ...protoagent:latest` that a new
+      # base just landed, so they rebuild instead of drifting until their own next
+      # push (#3574). Subscribers declare `repository_dispatch: types:
+      # [protoagent-base-published]` in their docker-publish.yml. Runs only after
+      # the image is pushed AND verified, only in the canonical repo (a fork's
+      # opt-in publish must not roll protoLabs' fleet), and never fails the
+      # publish: a missing token or a refused dispatch is a warning annotation.
+      # `GITHUB_TOKEN` cannot dispatch cross-repo, so this needs the org `GH_PAT`
+      # (the same secret examples/bundles/member-release-notify.yml uses).
+      - name: Notify fleet members (protoagent-base-published)
+        if: github.repository == 'protoLabsAI/protoAgent'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          SUBSCRIBERS: ${{ vars.BASE_PUBLISHED_SUBSCRIBERS || 'protoLabsAI/matt protoLabsAI/roxy protoLabsAI/ava' }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning title=Fleet dispatch skipped::GH_PAT secret is not available to this workflow; protoagent-base-published was NOT sent to: $SUBSCRIBERS"
+            exit 0
+          fi
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-7)
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n1)
+          failed=""
+          for repo in $SUBSCRIBERS; do
+            if gh api "repos/$repo/dispatches" \
+                -f event_type=protoagent-base-published \
+                -f "client_payload[image]=$IMAGE" \
+                -f "client_payload[tag]=latest" \
+                -f "client_payload[sha_tag]=sha-$SHORT_SHA" \
+                -f "client_payload[digest]=$DIGEST" \
+                -f "client_payload[version]=$VERSION" \
+                -f "client_payload[revision]=$GITHUB_SHA" >/dev/null; then
+              echo "Dispatched protoagent-base-published to $repo"
+            else
+              echo "::warning title=Fleet dispatch failed::protoagent-base-published to $repo was refused (does GH_PAT have contents:write on it?)"
+              failed="$failed $repo"
+            fi
+          done
+          {
+            echo "## Fleet dispatch"
+            echo ""
+            echo "protoagent-base-published (v$VERSION, sha-$SHORT_SHA, $DIGEST)"
+            echo "- sent to: $SUBSCRIBERS"
+            if [ -n "$failed" ]; then echo "- **failed:**$failed"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Summary
         run: |
           echo "## Published" >> "$GITHUB_STEP_SUMMARY"
