@@ -133,6 +133,23 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     expect(button(/^Next/)?.disabled).toBe(false);
   });
 
+  it("holds Next on the set-up step while the bundle's peek is loading (#3632)", async () => {
+    let resolvePeek: (p: ArchetypePreview) => void = () => {};
+    vi.spyOn(api, "archetypePreview").mockImplementation((id: string) =>
+      id === "engineer" ? new Promise<ArchetypePreview>((r) => (resolvePeek = r)) : Promise.resolve({ id, bundle: null }),
+    );
+    await mountToPicker();
+    await click(radioFor("engineer"));
+    await click(button(/^Next/));
+    expect(nameInput()?.value).toBe("engineer");
+    // Name is set, nothing is known to be missing yet — but the questions haven't landed.
+    expect(button(/^Next/)?.disabled).toBe(true);
+
+    await act(async () => resolvePeek({ ...PREVIEW, bundle: { ...PREVIEW.bundle!, config_inputs: [PREVIEW.bundle!.config_inputs![0]] } }));
+    await tick(() => Boolean(container.textContent?.includes("Start in a local repo")));
+    expect(button(/^Next/)?.disabled).toBe(false);
+  });
+
   it("Back from set-up returns to the picker keeping the pick, the typed name and the answers", async () => {
     await mountToPicker();
     await click(radioFor("engineer"));
