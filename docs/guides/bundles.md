@@ -36,10 +36,12 @@ mcp:                             # MCP servers to seed, catalog-shaped (#2011)
       - { key: token, env: GITHUB_MCP_TOKEN, required: true, secret: true }
 secrets:                         # standalone secrets to prompt for / seed (#2041)
   - { key: acme_api_key, label: "Acme API key", secret: true }
-config_inputs:                   # Configure-step prompts at create time (#2934)
-  - { key: my_board.repo,  label: "Repo this board manages", type: path, required: true, project: true }
+config_inputs:                   # set-up-step prompts at create time (#2934)
+  - { key: my_board.repo,  label: "Repo this board manages", type: path, required: true, project: true,
+      help: "The local checkout the board works in — registered as a managed project." }
   - { key: my_board.coder, label: "Coder delegate",          type: delegate, required: true }
-  - { key: my_board.loop,  label: "Start the loop now",      type: boolean, default: false }
+  - { key: my_board.loop,  label: "Start the loop now",      type: boolean, default: false,
+      help: "Off = the board waits until you start it from the Board view." }
 archetype:                       # optional: appear in the new-agent picker (ADR 0100)
   label: My Archetype
   icon: Boxes
@@ -58,8 +60,14 @@ is skipped like `builtin: true`, with nothing fetched, and it's still turned on 
 bundle's `enabled:` list. Keep listing it by URL: that is what older hosts need.
 
 **`config_inputs:`** are the questions the Setup Wizard / New Agent panel asks *before*
-the agent exists, written into its config at the declared dotted keys (`type`:
-`string` · `path` · `delegate` · `boolean`). `required: true` is a hard gate — a create
+the agent exists — on the **set-up step** that follows picking the archetype — written
+into its config at the declared dotted keys (`type`: `string` · `path` (a folder picker
+browsing the agent's machine) · `delegate` · `boolean` (a switch)). Keep `label` a short
+name ("Allow GitHub writes") and put the explanation in the optional **`help:`** line,
+which renders under the field in regular text (core ≥ the release carrying it; older
+cores ignore `help` and show the label alone, so a long self-explaining `label` still
+works everywhere). The step says "optional — leave blank to use this host's environment"
+once for the group, so don't repeat it per prompt. `required: true` is a hard gate — a create
 (or a host install) with a required answer missing is refused with the prompt's label,
 rather than shipping an agent that boots green and fails at first use. A `delegate`
 answer does more than write the name: the picked delegate's entry is **copied from
@@ -91,8 +99,8 @@ Where you install from decides what happens (ADR 0040, as amended):
   or Settings ▸ Agents ▸ new agent) — **installs, enables the curated set, seeds
   `config:`/`mcp:`/`secrets:`, and hot-reloads.** Installing is the consent
   (trust-by-default, [ADR 0071](/adr/0071-plugin-permissions-trust-model)). The wizard
-  and new-agent picker collect the declared `${input}`s and secrets in a Configure
-  step first; skipping falls back to the environment.
+  and new-agent picker collect the declared `${input}`s and secrets under **Advanced**
+  on the set-up step; skipping falls back to the environment.
 - **CLI** — fetch-only, never enables:
 
 ```sh

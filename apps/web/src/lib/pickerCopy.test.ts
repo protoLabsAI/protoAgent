@@ -1,22 +1,23 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ADVANCED_CONNECTIONS_HELP,
   HARD_GATE_HINT,
-  HARD_GATE_HINT_COLLAPSED,
   HARD_GATE_HINT_WIZARD,
-  HARD_GATE_HINT_WIZARD_COLLAPSED,
+  SETUP_OPTIONAL_HELP,
+  SETUP_REQUIRED_HELP,
 } from "./pickerCopy";
 
-describe("picker gate copy — one home for both pickers and the e2e specs", () => {
-  it("the collapsed variants extend the open hint with where to go", () => {
-    expect(HARD_GATE_HINT_COLLAPSED).toBe("Fields marked * are needed before this agent can be created — open Configure.");
-    expect(HARD_GATE_HINT_WIZARD_COLLAPSED).toBe("Fields marked * are needed before setup can finish — open Configure.");
-    expect(HARD_GATE_HINT_COLLAPSED.startsWith(HARD_GATE_HINT.replace(/\.$/, ""))).toBe(true);
-    expect(HARD_GATE_HINT_WIZARD_COLLAPSED.startsWith(HARD_GATE_HINT_WIZARD.replace(/\.$/, ""))).toBe(true);
+describe("archetype flow copy — one home for both entry points and the e2e specs", () => {
+  it("the two entry points name their own terminal action", () => {
+    expect(HARD_GATE_HINT).toContain("this agent can be created");
+    expect(HARD_GATE_HINT_WIZARD).toContain("setup can continue");
   });
 
-  it("the two pickers name their own terminal action", () => {
-    expect(HARD_GATE_HINT).toContain("this agent can be created");
-    expect(HARD_GATE_HINT_WIZARD).toContain("setup can finish");
+  it("the set-up step says 'leave blank to use this host's environment' once per group", () => {
+    for (const copy of [SETUP_OPTIONAL_HELP, SETUP_REQUIRED_HELP, ADVANCED_CONNECTIONS_HELP]) {
+      expect(copy).toMatch(/leave (the rest )?blank to use this host's environment/i);
+    }
+    expect(SETUP_REQUIRED_HELP).toContain("marked * are required");
   });
 });

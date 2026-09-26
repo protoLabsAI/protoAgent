@@ -1,15 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 import { requiresToolsNotice } from "../src/lib/archetypeConfig";
-import { CONFIGURE_REQUIRED_COPY, HARD_GATE_HINT_WIZARD, HARD_GATE_HINT_WIZARD_COLLAPSED } from "../src/lib/pickerCopy";
+import { HARD_GATE_HINT_WIZARD, SETUP_REQUIRED_HELP } from "../src/lib/pickerCopy";
 import { ARCHETYPES } from "./fixtures.mjs";
 import { routeSnapshot } from "./routeSnapshot";
 
-// The first-run Setup Wizard (host path, ADR 0100) — the archetype picker's hard gate
-// (#2977/#2979/#2984) mirrored from the fleet New-agent panel: a required bundle
-// `config_inputs` answer has no env fallback, so Finish stays disabled until it's
-// answered, the answers ride the bundle install even when Configure is collapsed, and
-// the collapsed state still explains the disabled button.
+// The first-run Setup Wizard (host path, ADR 0100) — the same two-step archetype flow as
+// the fleet New-agent panel (shared ArchetypePicker + ArchetypeSetupForm): the "agent"
+// step picks the archetype (cards only), the "setup" step names it and answers the
+// bundle's config_inputs. A required answer has no env fallback (#2977/#2979/#2984), so
+// the set-up step's Next waits for it, and the answers ride the bundle install on Finish.
 //
 // The mock reports setup_complete:true for every other spec; these flip it per-test so
 // the wizard mounts over the shell. Finishing never flips it back (the override is
@@ -26,20 +26,22 @@ async function openWizard(page) {
   await page.goto("/app/", { waitUntil: "load" });
   const wizard = page.getByRole("dialog", { name: "Setup" });
   await expect(wizard).toBeVisible();
-  // welcome → agent (name & persona)
+  // welcome → agent (pick an archetype: cards only, no name yet)
   await wizard.getByRole("button", { name: "Next" }).click();
-  await expect(wizard.getByLabel("Agent name")).toBeVisible();
+  await expect(wizard.locator(".archetype-picker")).toBeVisible();
+  await expect(wizard.getByLabel("Agent name")).toHaveCount(0);
   return wizard;
 }
 
-// Pick the (advanced, collapsed) Project Manager persona; Configure opens with its fields.
+// Pick the (advanced, collapsed) Project Manager card, then Next → the set-up step.
 async function pickProjectManager(wizard) {
   await wizard.getByRole("button", { name: /^Advanced \(1\)/ }).click();
   await wizard.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
+  await wizard.getByRole("button", { name: "Next" }).click();
   await expect(wizard.getByLabel("Repository path")).toBeVisible();
 }
 
-// agent → brain → finish. The Brain step's Next needs a gateway base + model, which the
+// setup → brain → finish. The Brain step's Next needs a gateway base + model, which the
 // wizard hydrates with defaults from the mock's /api/config.
 async function goToFinish(wizard) {
   await wizard.getByRole("button", { name: "Next" }).click();
@@ -53,34 +55,41 @@ const coderTrigger = (wizard) => wizard.locator('[id="config:project_board.coder
 const PM = ARCHETYPES.find((a) => a.id === "project-manager");
 const PM_CONTRACT_NOTICE = requiresToolsNotice(PM.label, PM.requires_tools);
 
-test("picking Project Manager shows its capability contract and the required-answer hint", async ({ page }) => {
+test("the pick step shows the capability contract; the set-up step the name, help lines and required note", async ({ page }) => {
   const wizard = await openWizard(page);
-  await pickProjectManager(wizard);
+  await wizard.getByRole("button", { name: /^Advanced \(1\)/ }).click();
+  await wizard.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
   await expect(wizard.getByRole("note").filter({ hasText: PM_CONTRACT_NOTICE })).toBeVisible();
-  await expect(wizard.getByRole("button", { name: /Configure Project Manager/ })).toContainText(CONFIGURE_REQUIRED_COPY);
+  await wizard.getByRole("button", { name: "Next" }).click();
+
+  await expect(wizard.getByRole("heading", { name: "Set up Project Manager" })).toBeVisible();
+  await expect(wizard.getByLabel("Agent name")).toHaveValue("project-manager");
+  await expect(wizard.getByText(SETUP_REQUIRED_HELP, { exact: true })).toBeVisible();
+  await expect(wizard.getByText("The local checkout this board manages — registered as a project.")).toBeVisible();
+  await expect(wizard.getByRole("button", { name: /Browse/ })).toBeVisible();
   await expect(wizard.getByText(HARD_GATE_HINT_WIZARD, { exact: true })).toBeVisible();
 });
 
-test("Finish stays disabled while a required bundle answer is blank (#2977)", async ({ page }) => {
+test("the set-up step's Next stays disabled while a required bundle answer is blank (#2977)", async ({ page }) => {
   const wizard = await openWizard(page);
   await pickProjectManager(wizard);
-  // One of the two hard-required answers filled — still gated.
   await wizard.getByLabel("Repository path").fill("/Users/me/dev/repo");
-  await goToFinish(wizard);
-  await expect(wizard.getByRole("button", { name: "Finish" })).toBeDisabled();
+  await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
 });
 
-test("collapsing Configure with a required answer blank keeps the explanation visible (#2979)", async ({ page }) => {
+test("Back from set-up returns to the picker with every answer kept", async ({ page }) => {
   const wizard = await openWizard(page);
   await pickProjectManager(wizard);
-  const toggle = wizard.getByRole("button", { name: /Configure Project Manager/ });
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(wizard.getByLabel("Repository path")).toHaveCount(0);
-  await expect(wizard.getByText(HARD_GATE_HINT_WIZARD_COLLAPSED, { exact: true })).toBeVisible();
+  await wizard.getByLabel("Agent name").fill("hq");
+  await wizard.getByLabel("Repository path").fill("/Users/me/dev/repo");
+  await wizard.getByRole("button", { name: "Back" }).click();
+  await expect(wizard.locator(".pl-radiocard--selected", { hasText: "Project Manager" })).toBeVisible();
+  await wizard.getByRole("button", { name: "Next" }).click();
+  await expect(wizard.getByLabel("Agent name")).toHaveValue("hq");
+  await expect(wizard.getByLabel("Repository path")).toHaveValue("/Users/me/dev/repo");
 });
 
-test("both required answers enable Finish; config_inputs ride the bundle install even after collapsing Configure (#2979)", async ({ page }) => {
+test("both required answers unlock Next; config_inputs ride the bundle install on Finish (#2979)", async ({ page }) => {
   const wizard = await openWizard(page);
   // Capture the install body and answer it HERE: the mock's real handler mutates
   // module-global plugin state (INSTALLED_PLUGINS / RUNTIME_STATUS.plugins / the settings
@@ -118,11 +127,6 @@ test("both required answers enable Finish; config_inputs ride the bundle install
   await page.getByRole("menuitemradio", { name: "coder", exact: true }).click();
   await expect(wizard.getByText(HARD_GATE_HINT_WIZARD, { exact: true })).toHaveCount(0);
 
-  // The fill-then-collapse regression: answers collected, section collapsed, they must
-  // still reach the install (the host refuses to activate the bundle without them).
-  await wizard.getByRole("button", { name: /Configure Project Manager/ }).click();
-  await expect(wizard.getByLabel("Repository path")).toHaveCount(0);
-
   await goToFinish(wizard);
   const finish = wizard.getByRole("button", { name: "Finish" });
   await expect(finish).toBeEnabled();
@@ -131,8 +135,7 @@ test("both required answers enable Finish; config_inputs ride the bundle install
   await expect.poll(() => installed).not.toBeNull();
   expect(installed?.url).toBe("https://github.com/protoLabsAI/project-manager-archetype");
   expect(installed?.config_inputs).toEqual({ "project_board.repo": "/Users/me/dev/repo", "project_board.coder": "coder" });
-  // The host records the contract the persona commits to (#2989) — the post-boot
-  // capability banner has something to check against on the wizard path too.
+  // The host records the contract the persona commits to (#2989).
   await expect.poll(() => setup).not.toBeNull();
   expect(setup?.requires_tools).toEqual(["github_create_issue"]);
 });

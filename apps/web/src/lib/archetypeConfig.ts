@@ -28,6 +28,8 @@ export type ConfigField = {
   // required" — the backend writes the default when the operator skips it.
   kind?: BundleConfigInputType;
   defaultValue?: string;
+  // config_inputs only: the bundle's optional `help` line, rendered under the field.
+  help?: string;
 };
 
 // Form state is keyed by origin(+server)+key: an MCP input and a declared secret that
@@ -93,6 +95,7 @@ export function archetypeConfigFields(preview: ArchetypePreview | undefined): Co
       origin: "config",
       kind,
       defaultValue: fallback,
+      help: ci.help?.trim() || undefined,
     });
   }
   return fields;

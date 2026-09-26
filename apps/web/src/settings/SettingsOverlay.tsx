@@ -6,21 +6,12 @@ import { Server } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 
 import { isHostConsole } from "../lib/api";
+import { escapeCloseAllowed, isTopmostOverlay } from "../lib/overlayStack";
 import { SettingsSurface } from "./SettingsSurface";
 
-/** Is there an open interactive layer (dropdown/menu/listbox) above the dialog? (#2466)
- *
- *  Interactive layers only — a hovered TOOLTIP also rides a popper wrapper but must not
- *  hold the dialog open.
- *
- *  WHEN you ask this is the whole problem; see `SettingsOverlay` below. */
-export function escapeCloseAllowed(doc: Document = document): boolean {
-  return (
-    doc.querySelector(
-      '[data-radix-popper-content-wrapper] :is([role="menu"],[role="listbox"],[role="dialog"])',
-    ) === null
-  );
-}
+// escapeCloseAllowed (#2466) lives with the other Escape-arbitration helpers now; it's
+// re-exported here for its existing callers/tests.
+export { escapeCloseAllowed };
 
 // The settings dialog (2026-06 consolidation) — the ONE settings surface (the focused
 // agent's settings; the Box group on the host), opened from the utility-bar Settings pill,
@@ -54,7 +45,9 @@ export function SettingsOverlay({
   useEffect(() => {
     if (!open) return;
     const sample = (e: KeyboardEvent) => {
-      if (e.key === "Escape") escapeConsumed.current = !escapeCloseAllowed();
+      // …or a DS dialog stacked ABOVE this one (the New-agent set-up dialog, a folder
+      // picker) — that press belongs to the top layer, not to Settings.
+      if (e.key === "Escape") escapeConsumed.current = !escapeCloseAllowed() || !isTopmostOverlay(".settings-overlay");
     };
     window.addEventListener("keydown", sample, true);
     return () => window.removeEventListener("keydown", sample, true);

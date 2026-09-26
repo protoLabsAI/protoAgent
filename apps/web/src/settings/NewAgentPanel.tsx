@@ -1,46 +1,39 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { ImportSnapshotPanel } from "./ImportSnapshotPanel";
-import { useMemo, useState } from "react";
-
-import { Input, RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { PanelHeader } from "@protolabsai/ui/navigation";
-import { useToast } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 
+import { ImportSnapshotPanel } from "./ImportSnapshotPanel";
 import { api } from "../lib/api";
-import { ArchetypeConfigField } from "../setup/ArchetypeConfigField";
-import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
+import { ArchetypePicker } from "../setup/ArchetypePicker";
+import { ArchetypeSetupForm } from "../setup/ArchetypeSetupForm";
 import { pythonRuntimeView } from "../app/pythonRuntime";
-import { archetypesQuery, pythonRuntimeQuery, queryKeys } from "../lib/queries";
-import { lucideIcon } from "../lib/lucideIcon";
+import { archetypesQuery, fleetQuery, pythonRuntimeQuery, queryKeys } from "../lib/queries";
+import { archetypeConfigFields, isMissingRequiredBundleConfig, requiresToolsNotice } from "../lib/archetypeConfig";
 import {
-  archetypeConfigFields,
-  fieldId,
-  hasHardRequiredBundleConfig,
-  isMissingRequiredBundleConfig,
-  isMissingRequiredConfig,
-  requiresToolsNotice,
-  splitConfigValues,
-} from "../lib/archetypeConfig";
-import {
-  CONFIGURE_OPTIONAL_COPY,
-  CONFIGURE_REQUIRED_COPY,
-  HARD_GATE_HINT,
-  HARD_GATE_HINT_COLLAPSED,
-  SOFT_GATE_HINT,
-} from "../lib/pickerCopy";
+  AGENT_NAME_RE,
+  archetypeFlowReducer,
+  createAgentBody,
+  initialArchetypeFlow,
+  suggestedAgentName,
+} from "../lib/archetypeFlow";
+import { escapeCloseAllowed, isTopmostOverlay } from "../lib/overlayStack";
+import { HARD_GATE_HINT } from "../lib/pickerCopy";
 import type { Archetype } from "../lib/types";
 
-const NAME_RE = /^[A-Za-z0-9-_]+$/;
-
-// Onboarding / archetype picker (ADR 0042). Name the agent, pick an archetype (Basic +
-// installed bundles), optionally configure the bundle's MCP inputs + secrets (#2041), create.
-// Name + Create sit ABOVE the archetype section (#2193) so a growing archetype list never
-// pushes them off-screen — the card list scrolls inside its own bounded container instead.
+// Onboarding / archetype picker (ADR 0042), in two steps (lib/archetypeFlow):
+//   1. PICK — the archetype cards only (ArchetypePicker): label, icon, blurb, "What's
+//      included". No name, no config — one decision.
+//   2. SET UP — a DS Dialog over the picker (ArchetypeSetupForm, shared with the Setup
+//      Wizard): the name first (pre-filled with the archetype's suggested name), then the
+//      bundle's questions, advanced options collapsed. Back returns to the picker with
+//      every choice kept; Create posts. The Back/Create chrome is hand-assembled around a
+//      DS Dialog until the DS has a stepper primitive (protoContent#520).
 // Creating from a bundle clones+installs it (a few seconds) — the POST returns once the
-// agent is up, so the button shows a spinner until then.
+// agent is up, so Create shows a spinner until then.
 //
 // A new agent has TWO sources (ADR 0091 #2106): an archetype (below) or a SNAPSHOT of an
 // existing agent. They share this one entry point rather than living in separate places,
@@ -60,38 +53,27 @@ export function NewAgentPanel({
   const qc = useQueryClient();
   const toast = useToast();
   const archetypes = useQuery(archetypesQuery());
-  const [picked, setPicked] = useState<string>("basic");
-  const [name, setName] = useState("");
-  const [previewOpen, setPreviewOpen] = useState(false);
-  // The inline Configure step: expanded by default when the archetype has inputs, so the
-  // operator sees what to fill; collapsing skips it (→ env-only seed). `values` is keyed by
-  // fieldId(origin+key) so an MCP input and a declared secret sharing a key don't collide.
-  const [configOpen, setConfigOpen] = useState(true);
-  const [values, setValues] = useState<Record<string, string>>({});
-  // Advanced archetypes (tier: "advanced") collapse below the standard cards behind a
-  // chevron toggle, so the picker leads with the everyday choices. Expand to pick one.
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [flow, dispatch] = useReducer(archetypeFlowReducer, undefined, () => initialArchetypeFlow("basic"));
   // Which source this new agent comes from. Archetype is the default because it's the
   // common case; importing is deliberate and usually starts from a file you already have.
   const [source, setSource] = useState<"archetype" | "snapshot">("archetype");
+  // Names already on the fleet — the suggested name steps around them (engineer-2, …).
+  const fleet = useQuery({ ...fleetQuery(), refetchInterval: false });
+  const taken = useMemo(() => (fleet.data?.agents ?? []).map((a) => a.name), [fleet.data]);
 
   // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
-  // agent from a bundle and has no SOUL editor, so Custom would just duplicate Basic.
+  // agent from a bundle, and its persona editor lives under Advanced, so Custom would
+  // just duplicate Basic.
   const list = (archetypes.data?.archetypes ?? []).filter((a) => a.id !== "custom");
-  // Split by tier: standard renders inline as today; advanced under a collapsible section.
-  // Absent tier = standard (backward compatible), so nothing moves unless it opts in.
-  const standard = list.filter((a) => a.tier !== "advanced");
-  const advanced = list.filter((a) => a.tier === "advanced");
-  const pickedArchetype = list.find((a) => a.id === picked);
+  const pickedArchetype = list.find((a) => a.id === flow.picked);
   const archetype = pickedArchetype ?? list[0];
-  const nameOk = NAME_RE.test(name);
 
-  // The picked archetype's read-only peek — the source of the Configure form's fields (its
-  // bundle's MCP inputs + declared secrets). Shares the dialog's cache key; only fetched for
-  // bundle-backed archetypes (Basic has no bundle → no form, backward compatible).
+  // The picked archetype's read-only peek — the source of the set-up form's fields (its
+  // bundle's config_inputs, MCP inputs and declared secrets). Shares the preview dialog's
+  // cache key; only fetched for bundle-backed archetypes (Basic has no bundle → no fields).
   const preview = useQuery({
-    queryKey: ["archetype-preview", picked],
-    queryFn: () => api.archetypePreview(picked),
+    queryKey: ["archetype-preview", flow.picked],
+    queryFn: () => api.archetypePreview(flow.picked),
     enabled: Boolean(pickedArchetype?.bundle),
     staleTime: 10 * 60 * 1000,
     retry: 1,
@@ -112,59 +94,73 @@ export function NewAgentPanel({
         ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
         : `${pickedArchetype.label} needs the managed Python runtime for its document skills — install it in Settings ▸ Tools first, or create the agent now and provision later.`
       : null;
-  // A required MCP input / secret left blank is a soft hint (skip → env fallback); a required
-  // bundle config_inputs answer is a HARD gate (#2977) — the server refuses the create, so the
-  // button does too, whether or not the Configure step is open.
-  const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
-  const missingHard = isMissingRequiredBundleConfig(fields, values);
-  const hasHardRequired = hasHardRequiredBundleConfig(fields);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
+  const notices = [runtimeWarning, contractNotice].filter((n): n is string => Boolean(n));
 
-  function pick(id: string) {
-    setPicked(id);
-    setValues({}); // a token typed for one archetype must not carry into the next
-    setConfigOpen(true);
+  // A required bundle config_inputs answer is a HARD gate (#2977) — the server refuses the
+  // create, so Create does too. MCP inputs / secrets stay soft (skip → env fallback).
+  const missingHard = isMissingRequiredBundleConfig(fields, flow.values);
+  const nameOk = AGENT_NAME_RE.test(flow.name.trim());
+  const nameError =
+    flow.name.trim() && !nameOk ? "Use only letters, numbers, dashes and underscores." : null;
+
+  function pick(a: Archetype) {
+    dispatch({ type: "pick", id: a.id, suggestedName: suggestedAgentName(a, taken), soul: a.soul ?? "" });
+  }
+  function next() {
+    if (!archetype) return;
+    pick(archetype); // same card → only fills a still-empty name/persona
+    dispatch({ type: "next" });
   }
 
   const create = useMutation({
-    // Carry the archetype's base SOUL so a bundle agent arrives WITH its persona, not just
-    // its tools (ADR 0042). Blank soul (bundle with no inline persona) → server leaves the
-    // agent on the default SOUL. When the Configure form is open, split the collected values
-    // into the two seed channels (#2041); a collapsed/absent form sends nothing → env-only.
-    mutationFn: () => {
-      // MCP inputs + secrets are skippable (collapsed form → env fallback); bundle config
-      // answers are NOT (the server gates on them, #2977) — they ride the request whether
-      // or not the section is open, so fill-then-collapse can't drop them.
-      const split = fields.length ? splitConfigValues(fields, values) : { inputs: {}, secrets: [], config: {} };
-      const inputs = configOpen ? split.inputs : {};
-      const secrets = configOpen ? split.secrets : [];
-      const config = split.config;
-      return api.createAgent({
-        name: name.trim(),
-        bundle: archetype?.bundle ?? null,
-        soul: archetype?.soul || undefined,
-        inputs: Object.keys(inputs).length ? inputs : undefined,
-        secrets: secrets.length ? secrets : undefined,
-        config_inputs: Object.keys(config).length ? config : undefined,
-        requires_tools: archetype?.requires_tools?.length ? archetype.requires_tools : undefined,
-      });
-    },
+    // Carry the archetype's base SOUL (or the operator's edit of it) so a bundle agent
+    // arrives WITH its persona, not just its tools (ADR 0042), plus every answer given —
+    // bundle config answers, and the advanced MCP inputs / secrets. Blank answers are
+    // dropped, so what was skipped still falls back to the host's environment / defaults.
+    mutationFn: () => api.createAgent(createAgentBody(flow, archetype, fields)),
     onError: (e: Error) => toast({ tone: "error", title: "Couldn't create agent", message: e.message }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
-      const created = res.agent?.name ?? name.trim();
+      const created = res.agent?.name ?? flow.name.trim();
       toast({ tone: "success", title: "Agent created", message: `${created} is ready.` });
       // Same guard as the name above: a success response without the agent record must
       // not throw here — it hands back no id and the caller falls back to the list.
       onDone?.(created, res.agent?.id);
     },
   });
+  const canCreate = nameOk && !missingHard && !create.isPending;
+  const submit = () => {
+    if (canCreate) create.mutate();
+  };
+  const setupOpen = source === "archetype" && flow.step === "setup" && Boolean(archetype);
+
+  // Esc / backdrop on the set-up dialog = Back. The DS Dialog closes on EVERY open
+  // dialog's Escape, so an Escape aimed at a layer above this one (the folder picker's
+  // dialog, the delegate dropdown) must not also send the operator back — sampled on
+  // window capture, one-shot (lib/overlayStack, protoContent#521).
+  const escapeNotOurs = useRef(false);
+  useEffect(() => {
+    if (!setupOpen) return;
+    const sample = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        escapeNotOurs.current = !escapeCloseAllowed() || !isTopmostOverlay(".archetype-setup-dialog");
+      }
+    };
+    window.addEventListener("keydown", sample, true);
+    return () => window.removeEventListener("keydown", sample, true);
+  }, [setupOpen]);
+  const back = useCallback(() => {
+    const notOurs = escapeNotOurs.current;
+    escapeNotOurs.current = false;
+    if (!notOurs) dispatch({ type: "back" });
+  }, []);
 
   return (
     <section className="panel stage-panel">
       <PanelHeader
         title="New agent"
-        kicker="name it, pick an archetype, and launch — a new workspace agent on this host"
+        kicker="pick an archetype, then name and set it up — a new workspace agent on this host"
         actions={
           onCancel ? (
             <Button variant="ghost" onClick={onCancel}>
@@ -197,129 +193,58 @@ export function NewAgentPanel({
         {source === "snapshot" ? (
           <ImportSnapshotPanel onDone={onDone} />
         ) : (
-        <>
-        <label className="field archetype-name-field">
-          <span>Name</span>
-          <Input
-            value={name}
-            autoFocus
-            placeholder="e.g. ava, roxy, research-bot"
-            aria-label="Agent name"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && nameOk && !missingHard && !create.isPending) create.mutate();
-            }}
-          />
-          <span className="field-hint">Letters, numbers, dashes and underscores — it's the agent's id and URL.</span>
-        </label>
-
-        <div className="panel-actions">
-          <Button
-            variant="primary"
-            disabled={!nameOk || missingHard || create.isPending}
-            onClick={() => create.mutate()}
-          >
-            {create.isPending ? "Creating…" : archetype?.bundle ? `Create from ${archetype.label}` : "Create agent"}
-          </Button>
-        </div>
-
-        <p className="fleet-section-label">Archetype</p>
-        {/* Installed bundles grow this list without bound (#2193) — the cards scroll inside
-            their own container so Name/Create above never leave the viewport. Height only:
-            width stays with the AppShell's controlled container. */}
-        <div className="archetype-card-scroll" style={{ maxHeight: "min(40vh, 420px)", overflowY: "auto" }}>
-          <RadioCardGroup name="archetype" min="160px" value={picked} onValueChange={pick}>
-            {standard.map((a: Archetype) => (
-              <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
-            ))}
-          </RadioCardGroup>
-          {/* Advanced archetypes (tier: "advanced") collapse behind a chevron toggle — a
-              separate RadioCardGroup that shares the same picked value + pick(), so choosing a
-              card here is identical to choosing a standard one. Hidden entirely when empty, so
-              a catalog with no advanced entries looks exactly as it did before. */}
-          {advanced.length ? (
-            <div className="archetype-advanced">
-              <button
-                type="button"
-                className="archetype-configure-toggle"
-                aria-expanded={advancedOpen}
-                onClick={() => setAdvancedOpen((o) => !o)}
-              >
-                {advancedOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                <span>Advanced ({advanced.length})</span>
-              </button>
-              {advancedOpen ? (
-                <RadioCardGroup name="archetype-advanced" min="160px" value={picked} onValueChange={pick}>
-                  {advanced.map((a: Archetype) => (
-                    <RadioCard key={a.id} value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
-                  ))}
-                </RadioCardGroup>
-              ) : null}
+          <>
+            <p className="fleet-section-label">Archetype</p>
+            {/* Installed bundles grow this list without bound (#2193) — the cards scroll
+                inside their own container so Next below never leaves the viewport. Height
+                only: width stays with the AppShell's controlled container. */}
+            <div className="archetype-card-scroll" style={{ maxHeight: "min(52vh, 560px)", overflowY: "auto" }}>
+              <ArchetypePicker archetypes={list} value={flow.picked} onPick={pick} notices={notices} />
             </div>
-          ) : null}
-        </div>
-        {pickedArchetype ? (
-          <button type="button" className="archetype-preview-link" onClick={() => setPreviewOpen(true)}>
-            See what&apos;s included in {pickedArchetype.label} →
-          </button>
-        ) : null}
-        {previewOpen && pickedArchetype ? (
-          <ArchetypePreviewDialog archetype={pickedArchetype} onClose={() => setPreviewOpen(false)} />
-        ) : null}
-        {runtimeWarning ? (
-          <p className="archetype-runtime-notice" role="note">
-            {runtimeWarning}
-          </p>
-        ) : null}
-        {contractNotice ? (
-          <p className="archetype-runtime-notice" role="note">
-            {contractNotice}
-          </p>
-        ) : null}
-
-        {/* Inline Configure step (#2041/#2934) — appears only when the picked bundle has MCP
-            inputs, declared secrets, or config_inputs. Collapsible: skipping falls back to
-            this host's environment / the declared defaults. */}
-        {fields.length ? (
-          <div className="archetype-configure">
-            <button
-              type="button"
-              className="archetype-configure-toggle"
-              aria-expanded={configOpen}
-              onClick={() => setConfigOpen((o) => !o)}
-            >
-              {configOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-              <span>Configure {pickedArchetype?.label}</span>
-              <span className="field-hint">{hasHardRequired ? CONFIGURE_REQUIRED_COPY : CONFIGURE_OPTIONAL_COPY}</span>
-            </button>
-            {missingHard && !configOpen ? <span className="field-hint">{HARD_GATE_HINT_COLLAPSED}</span> : null}
-            {configOpen ? (
-              <div className="archetype-configure-fields">
-                {fields.map((f) => (
-                  <label key={fieldId(f)} className="field">
-                    <span>
-                      {f.label}
-                      {f.required ? " *" : ""}
-                    </span>
-                    <ArchetypeConfigField
-                      field={f}
-                      value={values[fieldId(f)] ?? ""}
-                      onChange={(val) => setValues((v) => ({ ...v, [fieldId(f)]: val }))}
-                    />
-                  </label>
-                ))}
-                {missingHard ? (
-                  <span className="field-hint">{HARD_GATE_HINT}</span>
-                ) : missingRequired ? (
-                  <span className="field-hint">{SOFT_GATE_HINT}</span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        </>
+            <div className="panel-actions archetype-step-actions">
+              <Button variant="primary" disabled={!archetype} onClick={next}>
+                Next
+                <ChevronRight size={15} />
+              </Button>
+            </div>
+          </>
         )}
       </div>
+      {setupOpen && archetype ? (
+        <Dialog
+          open
+          onClose={back}
+          title={`Set up ${archetype.label}`}
+          width="min(560px, 100%)"
+          className="archetype-setup-dialog"
+          footer={
+            <>
+              <Button variant="ghost" type="button" onClick={() => dispatch({ type: "back" })}>
+                <ChevronLeft size={15} />
+                Back
+              </Button>
+              <Button variant="primary" type="button" disabled={!canCreate} onClick={submit}>
+                {create.isPending ? "Creating…" : archetype.bundle ? `Create from ${archetype.label}` : "Create agent"}
+              </Button>
+            </>
+          }
+        >
+          <ArchetypeSetupForm
+            name={flow.name}
+            onNameChange={(name) => dispatch({ type: "setName", name })}
+            nameHint="Letters, numbers, dashes and underscores — it's the agent's id and URL."
+            nameError={nameError}
+            onSubmit={submit}
+            fields={fields}
+            values={flow.values}
+            onValueChange={(id, value) => dispatch({ type: "setValue", id, value })}
+            soul={flow.soul}
+            onSoulChange={(soul) => dispatch({ type: "setSoul", soul })}
+            hardGateHint={HARD_GATE_HINT}
+            loading={Boolean(pickedArchetype?.bundle) && preview.isLoading}
+          />
+        </Dialog>
+      ) : null}
     </section>
   );
 }
