@@ -1685,3 +1685,68 @@ def test_inheriting_from_a_legacy_agent_does_not_strand_its_gateway(root, tmp_pa
     # The property that actually matters: the endpoint survives to a resolved connection.
     loaded = LangGraphConfig.from_dict(cfg)
     assert [p.base_url for p in loaded.providers if p.id == "gateway"] == ["https://legacy.example/v1"]
+
+
+# ── Langfuse tracing travels with the model connection (new agents are traced) ────────
+
+
+def _tracing_host(tmp_path, *, enabled: bool, inline_keys: bool = False):
+    host = tmp_path / "host"
+    host.mkdir()
+    keys = "  public_key: pk-lf-inline\n  secret_key: sk-lf-inline\n" if inline_keys else ""
+    (host / "langgraph-config.yaml").write_text(
+        "model:\n  name: m\n  provider: openai\n"
+        f"tracing:\n  enabled: {str(enabled).lower()}\n  host: https://langfuse.example\n{keys}"
+    )
+    if not inline_keys:
+        (host / "secrets.yaml").write_text("tracing:\n  public_key: pk-lf-host\n  secret_key: sk-lf-host\n")
+    return host
+
+
+def test_a_new_agent_inherits_the_hosts_tracing(root, tmp_path):
+    """Before this, every new or rebuilt agent booted 'Langfuse not configured'."""
+    from graph.config import LangGraphConfig
+    from observability.tracing import resolve_credentials
+
+    rec = manager.create("kid", inherit_model=str(_tracing_host(tmp_path, enabled=True)))
+    cfg = root / rec["id"] / "config"
+
+    doc = yaml.safe_load((cfg / "langgraph-config.yaml").read_text())
+    assert doc["tracing"] == {"enabled": True, "host": "https://langfuse.example"}
+    assert yaml.safe_load((cfg / "secrets.yaml").read_text())["tracing"] == {
+        "public_key": "pk-lf-host",
+        "secret_key": "sk-lf-host",
+    }
+    # What matters: the new agent's own config resolves a usable Langfuse destination.
+    loaded = LangGraphConfig.from_yaml(str(cfg / "langgraph-config.yaml"))
+    assert resolve_credentials(loaded)[1:] == ("sk-lf-host", "https://langfuse.example", "config")
+
+
+def test_disabled_tracing_does_not_travel(root, tmp_path):
+    rec = manager.create("kid", inherit_model=str(_tracing_host(tmp_path, enabled=False)))
+    cfg = root / rec["id"] / "config"
+
+    assert "tracing" not in (yaml.safe_load((cfg / "langgraph-config.yaml").read_text()) or {})
+    secrets_file = cfg / "secrets.yaml"
+    assert not secrets_file.exists() or "tracing" not in (yaml.safe_load(secrets_file.read_text()) or {})
+
+
+def test_inline_host_tracing_keys_land_in_the_members_secrets_not_its_yaml(root, tmp_path):
+    rec = manager.create("kid", inherit_model=str(_tracing_host(tmp_path, enabled=True, inline_keys=True)))
+    cfg = root / rec["id"] / "config"
+
+    assert "public_key" not in yaml.safe_load((cfg / "langgraph-config.yaml").read_text())["tracing"]
+    assert yaml.safe_load((cfg / "secrets.yaml").read_text())["tracing"] == {
+        "public_key": "pk-lf-inline",
+        "secret_key": "sk-lf-inline",
+    }
+
+
+def test_a_whitespace_only_secret_never_overrides_a_real_inline_tracing_key(root, tmp_path):
+    host = _tracing_host(tmp_path, enabled=True, inline_keys=True)
+    (host / "secrets.yaml").write_text("tracing:\n  public_key: '   '\n  secret_key: ''\n")
+
+    rec = manager.create("kid", inherit_model=str(host))
+    secrets = yaml.safe_load((root / rec["id"] / "config" / "secrets.yaml").read_text())
+
+    assert secrets["tracing"] == {"public_key": "pk-lf-inline", "secret_key": "sk-lf-inline"}

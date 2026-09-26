@@ -1230,12 +1230,25 @@ _copy_host_delegates = copy_host_delegates
 _register_project_inputs = register_project_inputs
 
 
+def _filled(value: object) -> bool:
+    """A credential worth copying: a whitespace-only string is BLANK — the runtime strips
+    it (``resolve_credentials``) and then refuses the pair, so letting it win over a real
+    inline key would leave the member unconfigured."""
+    return bool(value.strip()) if isinstance(value, str) else bool(value)
+
+
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     """Pop model connections + credentials from another agent into this blank one.
 
     A provider-qualified model is incomplete without its ``providers:`` registry and
     gateway keys.  OAuth transfer is finalized by :func:`create` only after bundle
     seeding succeeds.  Plugins, skills, identity, and unrelated secrets remain isolated.
+
+    Langfuse tracing travels too, when the source has it ENABLED: it is the same kind of
+    box-wide destination + credential as the gateway, and before this every new or
+    rebuilt agent booted "Langfuse not configured" until someone hand-copied the block.
+    Copied, not inherited live: the Host layer deliberately never hands out credentials
+    (ADR 0047), so a later key rotation is a per-agent edit, like a gateway key's.
     Comment-preserving; a read/write failure aborts creation rather than leaving a
     partially inherited agent.
     """
@@ -1298,16 +1311,29 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
             # before the template carried a registry at all.
             new.pop("providers", None)
             changed = True
+        tracing = host.get("tracing")
+        tracing_on = isinstance(tracing, dict) and bool(tracing.get("enabled"))
+        if tracing_on:
+            tracing = dict(tracing)
+            inline_tracing = {k: tracing.pop(k, "") for k in ("public_key", "secret_key")}
+            inline_tracing = {k: v for k, v in inline_tracing.items() if _filled(v)}
+            if inline_tracing:
+                inherited_secrets["tracing"] = inline_tracing
+            new["tracing"] = tracing
+            changed = True
         if changed:
             save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
+    else:
+        tracing_on = False
     if isinstance(source_secrets, dict):
-        # Only model credentials cross this blank-agent boundary. The explicit
+        # Only model (and, when enabled, tracing) credentials cross this blank-agent boundary. The explicit
         # secrets overlay wins when NONBLANK, matching runtime's ``secret or inline``
         # fallback; a blank redacted/stale value must not erase a working inline key.
-        for section in ("model", "providers"):
+        # Tracing keys only with tracing ON at the source — a disabled pair stays put.
+        for section in ("model", "providers", *(("tracing",) if tracing_on else ())):
             values = source_secrets.get(section)
             if isinstance(values, dict):
-                nonblank = {key: value for key, value in values.items() if value}
+                nonblank = {key: value for key, value in values.items() if _filled(value)}
                 if nonblank:
                     inherited_secrets.setdefault(section, {}).update(nonblank)
     if inherited_secrets:
