@@ -14,6 +14,13 @@ import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
 import { onPluginViewMessage, takePluginViewMessages } from "../lib/pluginViewInbox";
 import {
+  defaultRouteDeps,
+  parsePluginCodeOpen,
+  routePluginCodeOpen,
+  targetLabel,
+  useOptionalToast,
+} from "../codeviewer/fromPlugin";
+import {
   parsePluginMenuOpen,
   parsePluginMenuRegistration,
   type PluginMenuEntry,
@@ -121,6 +128,11 @@ export function consoleTheme(): Record<string, string> {
 // or offer the redundant Configure context-menu action from inside Configure itself.
 export function PluginView({ view, embedded = false }: { view: PluginViewType; embedded?: boolean }) {
   const tabs = view.tabs ?? [];
+  // Feedback for a `protoagent:code:open` that had nowhere to go (no pane, no editor). Held in a
+  // ref so the message effect below reads the current one without re-subscribing.
+  const toast = useOptionalToast();
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
   const src = useMemo(() => {
     const t = tabs.find((x) => x.id === activeTab);
@@ -475,6 +487,20 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // keydowns never reach the host listener at all.
         const key = parseForwardedKey(m);
         if (key) runForwardedCombo(key.combo, key.editable);
+      } else if (m.type === "protoagent:code:open") {
+        // "Show this code" (the Artifact panel's code-linked diagrams). Trusted as far as the
+        // checks above take it — THIS plugin iframe at its own origin; a nested sandboxed frame
+        // posting to the top can't pass them. The pane's fenced routes refuse anything the fs
+        // fence or the secret deny list would.
+        const target = parsePluginCodeOpen(m);
+        if (!target) return;
+        void routePluginCodeOpen(target, defaultRouteDeps(view.key)).then((outcome) => {
+          const toast = toastRef.current;
+          if (!toast) return;
+          if (outcome === "copied")
+            toast({ tone: "info", title: "Path copied", message: `${targetLabel(target)} — no code pane or editor is set up.` });
+          else if (outcome === "none") toast({ tone: "info", title: "Code location", message: targetLabel(target) });
+        });
       } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
         // Force the plugin's namespace — a page can only publish under its own id.
         const bare = m.topic.replace(/^.*?\./, "");

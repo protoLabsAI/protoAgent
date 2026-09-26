@@ -14,7 +14,22 @@
   /* Toolbar: artifact picker + version nav + download/delete. Hidden until there's one. */
   #bar{display:none;align-items:center;gap:6px;padding:6px 10px;
     border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);font-size:12px}
-  #art{flex:1;min-width:0}
+  /* One row at any width: the picker shrinks first, and below ~560px the secondary actions
+     (Edit / Download / Delete) fold into a ⋯ menu instead of wrapping or clipping. */
+  #bar .pl-btn{white-space:nowrap;flex:none}
+  #art{flex:1 1 90px;min-width:60px}
+  #vnav,#acts{display:flex;align-items:center;gap:2px;flex:none}
+  #acts{gap:6px}
+  #links .badge{display:inline-block;min-width:1.4em;padding:0 5px;margin-left:2px;border-radius:999px;
+    font-size:11px;line-height:16px;text-align:center;font-variant-numeric:tabular-nums;
+    background:rgba(127,127,127,.2);color:var(--pl-color-fg,#ededed)}
+  #morewrap{position:relative;display:none;flex:none}
+  #bar.compact #morewrap{display:inline-flex}
+  #moremenu{position:absolute;right:0;top:calc(100% + 4px);z-index:6;display:none;flex-direction:column;gap:2px;
+    min-width:140px;padding:4px;border-radius:8px;background:var(--pl-color-bg,#0a0a0c);
+    border:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);box-shadow:0 6px 18px rgba(0,0,0,.3)}
+  #moremenu.open{display:flex}
+  #moremenu .pl-btn{justify-content:flex-start;width:100%;text-align:left}
   #vnav{display:flex;align-items:center;gap:2px}
   #vlabel{min-width:48px;text-align:center;color:var(--pl-color-fg-muted);font-variant-numeric:tabular-nums}
   #vnav button[disabled]{opacity:.4;cursor:default}
@@ -31,6 +46,22 @@
     border-top:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30)}
   #estat{color:var(--pl-color-fg-muted,#9aa0aa);font-size:12px}
   #ebar .grow{flex:1}
+  /* Code links list (mermaid diagrams linked to code): a right-hand overlay over the stage. */
+  #linkpanel{position:absolute;top:0;right:0;bottom:0;z-index:4;width:min(340px,100%);flex-direction:column;
+    background:var(--pl-color-bg,#0a0a0c);border-left:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30);
+    box-shadow:-6px 0 18px rgba(0,0,0,.25)}
+  #linkhead{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;font-size:12px;
+    color:var(--pl-color-fg,#ededed);border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,#2a2a30)}
+  #linklist{list-style:none;margin:0;padding:4px;overflow:auto;flex:1;min-height:0}
+  #linklist .lk{all:unset;box-sizing:border-box;display:flex;flex-direction:column;gap:2px;width:100%;padding:7px 9px;
+    border-radius:6px;cursor:pointer;font-size:12px;line-height:1.4}
+  #linklist .lk:hover,#linklist .lk:focus-visible{background:rgba(127,127,127,.16)}
+  #linklist .lk:focus-visible{outline:2px solid var(--pl-color-accent,#9b87f2);outline-offset:-2px}
+  #linklist .lk-name{color:var(--pl-color-fg,#ededed);font-weight:600}
+  #linklist .lk-where{font-family:var(--pl-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);word-break:break-all;
+    color:var(--pl-color-accent,#9b87f2)}
+  #linklist .lk-note{color:var(--pl-color-fg-muted,#9aa0aa)}
+  #linklist .lk-miss{opacity:.6}
   /* Visually-hidden live region: the Download button's transient outcome is announced to
      assistive tech here (a bare button-label swap on an unfocused button isn't). */
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
@@ -44,14 +75,25 @@
       <span id="vlabel"></span>
       <button id="vnext" class="pl-btn pl-btn--sm" type="button" title="Next version">›</button>
     </span>
-    <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
-    <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
-    <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
+    <button id="links" class="pl-btn pl-btn--sm" type="button" title="Code links in this diagram" aria-haspopup="true" aria-expanded="false" aria-controls="linkpanel" style="display:none">Links <span id="linkn" class="badge"></span></button>
+    <span id="acts">
+      <button id="edit" class="pl-btn pl-btn--sm" type="button" title="Edit the source">Edit</button>
+      <button id="dl" class="pl-btn pl-btn--sm" type="button" title="Download this version">Download</button>
+      <button id="del" class="pl-btn pl-btn--sm" type="button" title="Delete this artifact">Delete</button>
+    </span>
+    <span id="morewrap">
+      <button id="more" class="pl-btn pl-btn--sm" type="button" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false" aria-controls="moremenu">⋯</button>
+      <span id="moremenu" role="menu" aria-label="Artifact actions"></span>
+    </span>
     <span id="dlstat" class="sr-only" role="status" aria-live="polite"></span>
   </div>
   <div id="stage">
     <div id="empty">No artifact yet. Ask the agent to render one — a chart, diagram, or widget.</div>
     <iframe id="frame" sandbox="allow-scripts allow-pointer-lock" allow="pointer-lock" referrerpolicy="no-referrer"></iframe>
+    <div id="linkpanel" role="dialog" aria-label="Code links" style="display:none">
+      <div id="linkhead"><span>Code links</span><button id="linkclose" class="pl-btn pl-btn--sm" type="button" title="Close (Esc)">Close</button></div>
+      <ul id="linklist"></ul>
+    </div>
     <div id="editor">
       <textarea id="code" class="pl-input" spellcheck="false" placeholder="Edit the artifact source…"></textarea>
       <div id="ebar">

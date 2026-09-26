@@ -60,6 +60,22 @@ describe("placeCodeSurface — never on chat's dock", () => {
     rail(["chat"], ["work"], ["code"]);
     expect(placeCodeSurface()).toBe("bottom");
   });
+  it("keeps the surface it was opened FROM on screen (a diagram beside its code)", () => {
+    // The Artifact panel on the right, chat on the left: the pane goes to the bottom dock
+    // rather than swapping the diagram out.
+    rail(["chat"], ["work", "plugin:artifact:artifact", "code"]);
+    useUI.setState({ rightPanel: "plugin:artifact:artifact" as never });
+    expect(placeCodeSurface("plugin:artifact:artifact")).toBe("bottom");
+    expect(useUI.getState().railOrder.bottom).toContain("code");
+    // Not showing (another right panel is up) → the usual right dock is fine.
+    rail(["chat"], ["work", "plugin:artifact:artifact", "code"]);
+    useUI.setState({ rightPanel: "work" as never });
+    expect(placeCodeSurface("plugin:artifact:artifact")).toBe("right");
+    // An operator-chosen bottom dock that isn't showing it stays put.
+    rail(["chat"], ["plugin:artifact:artifact"], ["code"]);
+    useUI.setState({ rightPanel: "plugin:artifact:artifact" as never, bottomPanel: "code" });
+    expect(placeCodeSurface("plugin:artifact:artifact")).toBe("bottom");
+  });
   it("puts a missing/hidden surface on the side away from chat", () => {
     useUI.setState({ railOrder: { left: ["chat"], right: ["work"], bottom: [], hidden: ["code"] } });
     expect(placeCodeSurface()).toBe("right");

@@ -42,16 +42,27 @@ function dockOf(id: string): Dock | null {
   return null;
 }
 
+/** The surface a dock is showing right now. */
+function shownOn(dock: Dock): string {
+  const ui = useUI.getState();
+  return String(dock === "right" ? ui.rightPanel : dock === "bottom" ? ui.bottomPanel : ui.surface);
+}
+
 /** Placement rule: the pane opens on a dock that does NOT hold chat — the point is reading
  *  the code NEXT TO the conversation, and on chat's own dock it would swap chat out. Moves
  *  the surface only when it sits on chat's dock (or nowhere); an operator who dragged it to
- *  another non-chat dock keeps their choice. Exported for tests. */
-export function placeCodeSurface(): Dock {
+ *  another non-chat dock keeps their choice. `keep` is a surface the open came FROM (a plugin
+ *  view — the Artifact panel's code-linked diagram): the pane also avoids the dock showing it,
+ *  so the diagram and its code sit side by side instead of one swapping the other out. Exported
+ *  for tests. */
+export function placeCodeSurface(keep?: string): Dock {
   const chat = dockOf("chat") ?? "left";
   const code = dockOf(CODE_SURFACE_ID);
-  if (code && code !== chat) return code;
-  const target: Dock = chat === "right" ? "left" : "right";
-  useUI.getState().moveSurface(CODE_SURFACE_ID, target);
+  const blocked = (d: Dock) => d === chat || (!!keep && shownOn(d) === keep);
+  if (code && code !== chat && !(keep && shownOn(code) === keep)) return code;
+  const order: Dock[] = chat === "right" ? ["left", "bottom"] : ["right", "bottom", "left"];
+  const target: Dock = order.find((d) => !blocked(d)) ?? (chat === "right" ? "left" : "right");
+  if (target !== code) useUI.getState().moveSurface(CODE_SURFACE_ID, target);
   return target;
 }
 
@@ -80,6 +91,8 @@ export type OpenCodeOptions = {
   /** An open the operator did NOT ask for (the agent's show_code). Never takes over a phone
    *  screen (ADR 0086): on mobile it only seeds the pane; the chip pushes it on a tap. */
   auto?: boolean;
+  /** The surface the open came from, kept on screen beside the pane (see placeCodeSurface). */
+  keep?: string;
 };
 
 /** Stamp the originating chat on a ref that doesn't carry one: an operator click (tool-card
@@ -103,7 +116,7 @@ export function openCode(ref: CodeRef, opts: OpenCodeOptions = {}): void {
   if (!showCodeRef(withOrigin(ref))) return;
   const mobile = isMobileViewport();
   if (opts.auto && mobile) return;
-  if (!mobile) widenOnce(placeCodeSurface());
+  if (!mobile) widenOnce(placeCodeSurface(opts.keep));
   // flushSync: a collapsed dock UNMOUNTS its column (DS AppShell), so the pane only exists
   // after this commit — committing now lets the pane's scroll-to-line run against a real DOM.
   try {

@@ -17,6 +17,25 @@ unchanged. Host → view messages wait for the page's `protoagent:ready` ping
 (`apps/web/src/lib/pluginViewInbox.ts`), so a collapsed (unmounted) panel still lands on the right
 version.
 
+**Update (2026-09-25, code-linked diagrams):** graphic artifacts (svg, mermaid, and mermaid fences in
+markdown) are **navigable** — wheel/pinch zoom to the cursor, drag to pan, double-click, keyboard,
+and a Fit/Reset toolbar. Zoom moves the root `<svg>`'s **viewBox**, never a CSS transform: #1517
+had removed the earlier transform zoom because WKWebView rasterized the SVG at 1x and GPU-scaled
+the bitmap (blurry); a viewBox change is re-laid out as a vector, so it stays sharp. A mermaid
+version may also carry **`links`** (`show_artifact` / `update_artifact` / `rewrite_artifact`
+`links=`): a map from a diagram key (a node id, `participant:<name>`, `msg:<n>` or
+`msg:<label>`) to `{project, path, line, end_line, note}`. The tool validates each target the way
+`show_code` does (the fs fence via `live_project_registry`, the secret deny list, a real text file,
+an in-range line, a ≤ 280-char note), drops a bad one with a reason, and stores the kept links
+**with the version**. A target's optional `anchor` (a short exact snippet of the intended line)
+snaps it to the nearest occurrence in the file — models miscount lines but quote code reliably —
+and a missing anchor drops the link. D1's boundary is unchanged: the sandboxed frame posts only a KEY
+(`protoArtifact:openCode {key}`, honoured only behind a user gesture); the shell looks the target
+up in the rendered version's stored links and forwards it to the console as
+`protoagent:code:open`, which PluginView accepts only from the plugin iframe at its own origin and
+routes to the code pane (ADR 0112) — or the external editor, or a copied path. A path named by the
+frame is never used.
+
 ## Context
 
 ADR 0034 made plugin React views first-class via **Module Federation** (in-process remotes sharing

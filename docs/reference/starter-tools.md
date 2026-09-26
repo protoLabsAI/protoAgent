@@ -354,7 +354,9 @@ leaves a chip that opens the Artifact panel on that exact version.
 
 Rule of thumb: a data **shape** (table / metrics / steps) → this tool; a generated **visual**
 (chart, diagram, bespoke HTML/React/SVG) → an artifact, which renders generated code in a
-separate sandboxed panel.
+separate sandboxed panel. A mermaid artifact about the code can also carry `links` — its nodes and
+sequence messages then open the exact lines in the code pane (validated like `show_code`; see the
+artifact plugin's `diagramming-code` skill).
 
 ## Skills & curation
 

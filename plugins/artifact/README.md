@@ -26,12 +26,15 @@ console view.
 
 - **Tools** — an artifact is a **version chain** (the Claude "update vs rewrite" model), so editing
   iterates the same artifact instead of flooding the panel with near-duplicates:
-  - `show_artifact(kind, code, title)` — **create** (`kind` ∈ `html` · `markdown` · `svg` · `mermaid`
-    · `react`). `markdown` renders with design-system prose styling (` ```mermaid ` fences become
-    live diagrams); `react` can `import` the curated libraries below.
-  - `update_artifact(old_string, new_string, artifact_id?)` — **targeted edit** (string-replace,
-    must match once) → new version. The fast path for small changes.
-  - `rewrite_artifact(code, title?, artifact_id?)` — **full replace** → new version.
+  - `show_artifact(kind, code, title, links?)` — **create** (`kind` ∈ `html` · `markdown` · `svg` ·
+    `mermaid` · `react`). `markdown` renders with design-system prose styling (` ```mermaid ` fences
+    become live diagrams); `react` can `import` the curated libraries below. `links` (mermaid) —
+    see **Code-linked diagrams** below.
+  - `update_artifact(old_string, new_string, artifact_id?, links?)` — **targeted edit**
+    (string-replace, must match once) → new version. The fast path for small changes. A
+    diagram's links carry over unless `links` is passed (`{}` clears them).
+  - `rewrite_artifact(code, title?, artifact_id?, links?)` — **full replace** → new version (links
+    don't carry over a rewrite — pass them).
   - `get_artifact(artifact_id?)` — **read the current source** (kind/title/version + code), so you can
     take over an artifact you didn't author (read it, then `update_artifact`/`rewrite_artifact`).
   - `check_artifact(artifact_id?)` — the latest **render verdict** (rendered cleanly / failed with the
@@ -71,8 +74,63 @@ console view.
   version it was made for.
 - **Events** `artifact.created` / `artifact.updated` / `artifact.deleted` (ADR 0039) — broadcast on
   the bus so the console lights the Artifact rail icon even when the panel is closed.
-- **Skill** `rendering-artifacts` — teaches render-don't-write-files and the edit-don't-recreate
-  workflow.
+- **Skills** `rendering-artifacts` — teaches render-don't-write-files and the edit-don't-recreate
+  workflow; `diagramming-code` — grounded, code-linked mermaid diagrams (read first, cite real
+  lines, pick the right diagram, keep it small, revise the same artifact).
+
+## Navigable diagrams
+
+svg and mermaid artifacts (and ` ```mermaid ` fences inside markdown) render into a navigable
+viewport: **wheel / pinch** zoom to the cursor (Safari/WKWebView gesture events included), **drag**
+to pan, **double-click** to zoom in (shift: out), keys **+ − 0 f** and the **arrows**, and a
+toolbar (− · zoom % · + · Fit · Reset). Small diagrams open fitted (never above 1:1). A diagram
+whose labels would shrink below ~11px when fitted (a long sequence diagram in a narrow dock) opens
+at fit-to-width — or the smallest readable zoom — anchored at the top-left instead; **Fit** always
+shows the whole diagram and **Reset** returns to that start view. Mermaid's palette follows the
+console theme (dark/light).
+Every zoom moves the root `<svg>`'s **viewBox** — the vector is re-laid out, so it stays sharp at
+any zoom. (A CSS-transform zoom was removed in #1517 because WKWebView blurred it.) In markdown
+the plain wheel keeps scrolling the page; zoom there with ctrl/⌘ + wheel, a pinch, or the toolbar.
+Animated steps respect `prefers-reduced-motion`.
+
+## Code-linked diagrams
+
+A mermaid version can carry `links`, so the operator clicks a node or a message and lands on the
+code — in the console's code pane (ADR 0112, `filesystem.code_pane`), else their external editor
+(Settings ▸ Chat ▸ Open files in), else the path is copied:
+
+```text
+show_artifact(kind="mermaid", code="sequenceDiagram\n  C->>A: ask(q)\n  A->>T: run_tool(call)",
+  links={"msg:1": {"project": "app", "path": "src/agent.py", "line": 40, "end_line": 58,
+                   "note": "ask() builds the prompt and starts the tool loop"},
+         "participant:A": {"project": "app", "path": "src/agent.py", "line": 12}})
+```
+
+- **Keys**: a flowchart / class / state node id (or a flowchart subgraph id) as written;
+  `participant:<id or alias>`; `msg:<n>` (the n-th sequence message, 1-based, source order) or
+  `msg:<exact label>` when that label is unique.
+- **Anchors**: each target should carry `anchor` — a short exact snippet of the line it means
+  (`"runTool("`, ≤ 120 chars, one line). The server finds it in the file (exact, else ignoring
+  whitespace) and SNAPS the link to the occurrence nearest the given `line`, keeping the range's
+  length; the reply reports each move ("moved 59→66 to match anchor 'runTool('"). An anchor
+  that isn't in the file drops the link. Models miscount lines but quote code reliably, so this
+  makes landing deterministic. The anchor is stored with the link; links without one work as
+  before, and the reply nudges to add it.
+- **Validation** mirrors `show_code`: the project fence (`live_project_registry`), the secret-path
+  deny list, the file exists and is text, the line is in range (`end_line` clamped), the note ≤ 280
+  chars. A bad link is **dropped with a reason** — the artifact still lands. The reply echoes each
+  target's first line (so the model can check it pointed where it meant) and names keys that
+  match nothing in the diagram. Needs the filesystem toolset.
+- **Storage**: links live on the **version** (`versions[i].links`), so an older version and its chat
+  chip keep their own. `update_artifact` and a panel edit carry them forward; a rewrite doesn't.
+- **In the panel**: linked elements get a dotted underline and a hover/focus tooltip
+  (`project/path:line — note`); they're keyboard-focusable (Enter opens). A **Links (n)** button
+  (a single-line badge) lists every link (arrow keys, Enter, Esc), highlights the element on hover/focus and pans to it,
+  and marks links that match nothing in the diagram.
+- **Trust**: the sandboxed frame posts only a KEY (`protoArtifact:openCode`), and only behind a
+  user gesture; the shell resolves it against the rendered version's stored links and forwards
+  that target to the console (`protoagent:code:open`), which accepts it only from the plugin's own
+  iframe at its origin. A path the frame names is never used; notes and labels render as text.
 
 ## Curated React imports + the design system
 

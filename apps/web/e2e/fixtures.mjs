@@ -799,6 +799,31 @@ function scenarioFor(prompt) {
       answer: `Revised the chart (v${version}).`,
     };
   }
+  // MERMAID_LINKS (ADR 0038 amendment): show_artifact creates a code-linked mermaid sequence
+  // diagram — `art-links` in artifact-code-links.spec.ts's own store (it routes /history) —
+  // and leaves an artifact-ref chip that (live, desktop) opens the Artifact panel on it.
+  if (t.includes("MERMAID_LINKS"))
+    return {
+      events: [
+        {
+          id: "mm-1",
+          name: "show_artifact",
+          phase: "start",
+          input: JSON.stringify({ kind: "mermaid", title: "authorize() flow", code: "sequenceDiagram" }),
+        },
+        {
+          id: "mm-1",
+          name: "show_artifact",
+          phase: "end",
+          output: "Created mermaid artifact art-links — now showing in the Artifact panel.\nLinked 3 diagram element(s) to code.",
+        },
+      ],
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-links", version: 1, versions_total: 1, title: "authorize() flow", kind: "mermaid" },
+      },
+      answer: "Here's the request flow — click a message to see its code.",
+    };
   // code-ref edge states (ADR 0112): a secret-like path (403), a vanished file (404), a binary.
   // …and a 20k-line file (virtualized, plain past the highlight cap) pointed deep inside.
   for (const [key, path, line] of [
