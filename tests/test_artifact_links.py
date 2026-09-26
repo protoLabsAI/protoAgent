@@ -215,3 +215,13 @@ def test_link_key_hygiene(art):
     )
     assert "Dropped 3 link(s)" in out
     assert list(_latest(art)["links"]) == ["msg:1"]
+
+
+def test_a_blank_or_malformed_links_argument_on_update_keeps_the_stored_links(art):
+    art.show_artifact.invoke({"kind": "mermaid", "code": SEQ, "links": {"msg:1": _link()}})
+    out = art.update_artifact.invoke({"old_string": "answer", "new_string": "reply", "links": ""})
+    assert "Carried over 1 code link" in out
+    assert list(_latest(art)["links"]) == ["msg:1"]
+    out = art.update_artifact.invoke({"old_string": "reply", "new_string": "answer", "links": "{bad"})
+    assert "not valid JSON" in out and "Carried over 1 code link" in out
+    assert list(_latest(art)["links"]) == ["msg:1"]

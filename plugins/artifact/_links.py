@@ -157,7 +157,9 @@ def check(links) -> Checked:
     """Validate every target in ``links`` against the fs fence. Touches the filesystem, so the
     tools call it BEFORE taking the store lock (it needs no store state). ``given`` is False
     when the caller passed nothing (None) — update_artifact then keeps the previous links."""
-    if links is None:
+    # None and a blank string both mean "not passed" — models often fill an optional string
+    # argument with "", and on update_artifact that must not wipe the carried-over links.
+    if links is None or (isinstance(links, str) and not links.strip()):
         return Checked({}, [], [], given=False)
     raw, err = _coerce(links)
     if raw is None:

@@ -272,12 +272,15 @@ def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tu
     """The links for a targeted edit's new version: the passed map when there is one, else the
     previous version's links carried over (a small edit keeps the same diagram) — re-checked
     against the new source so a renamed node or a removed message is reported, not silent."""
-    if checked is not None and checked.given:
+    if checked is not None and checked.given and not checked.error:
         return _links.finish(checked, art["kind"], new_code)
+    # Not passed — or passed but unreadable (malformed JSON): a bad argument never deletes the
+    # links already stored; its error is reported and the previous links carry over.
+    err = ("\n" + checked.error) if checked is not None and checked.error else ""
     old = art["versions"][-1].get("links") or {}
     if not old or art["kind"] != "mermaid":
-        return {}, ""
-    report = f"\nCarried over {len(old)} code link(s) from the previous version."
+        return {}, err
+    report = err + f"\nCarried over {len(old)} code link(s) from the previous version."
     stale = _links.unmatched_keys(old, new_code)
     if stale:
         report += (
