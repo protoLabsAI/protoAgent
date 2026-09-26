@@ -474,8 +474,11 @@ export function SetupWizard({
   const configFields = useMemo(() => archetypeConfigFields(archetypePeek.data), [archetypePeek.data]);
   // Until the peek lands the bundle's questions are unknown (no fields → `missingHard`
   // false), so Next on the set-up step would skip past required answers and Finish would
-  // disable later with nothing on screen to explain it. Hold Next while it loads.
-  const peekLoading = Boolean(pickedArchetype?.bundle) && archetypePeek.isLoading;
+  // disable later with nothing on screen to explain it. Hold Next until the peek's DATA is
+  // here — a failed peek isn't loading either, and holds too (with an inline Retry).
+  const bundlePicked = Boolean(pickedArchetype?.bundle);
+  const peekLoading = bundlePicked && archetypePeek.isLoading;
+  const peekMissing = bundlePicked && !archetypePeek.data;
   // Hard gate (#2977): a required bundle config_inputs answer has no env fallback — the host
   // install refuses to activate without it, so the set-up step's Next (and Finish) wait for it.
   const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
@@ -773,6 +776,8 @@ export function SetupWizard({
                 onSoulChange={(soul) => update({ soul })}
                 hardGateHint={HARD_GATE_HINT_WIZARD}
                 loading={peekLoading}
+                loadError={bundlePicked && archetypePeek.isError ? errMsg(archetypePeek.error) : null}
+                onRetry={() => void archetypePeek.refetch()}
                 advancedDefaultOpen={state.archetype === "custom"}
               />
             </StepBody>
@@ -1054,7 +1059,7 @@ export function SetupWizard({
                 </Button>
               )
             ) : (
-              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy || (step === "setup" && (missingHard || peekLoading))}>
+              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy || (step === "setup" && (missingHard || peekMissing))}>
                 Next
                 <ChevronRight size={15} />
               </Button>

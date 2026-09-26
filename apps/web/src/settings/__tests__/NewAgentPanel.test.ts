@@ -299,6 +299,37 @@ describe("NewAgentPanel — step 2: set up in a dialog", () => {
     expect(createButton()?.disabled).toBe(false);
   });
 
+  it("a FAILED peek keeps Create (button and Enter) held and offers a Retry that refetches (#3632)", async () => {
+    // Not loading ≠ questions known: after a failed fetch there's no data, so the
+    // required-answer gate can't fire — Create must stay held until a retry lands.
+    const peek = vi.spyOn(api, "archetypePreview").mockRejectedValue(new Error("peek exploded"));
+    vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [ENGINEER] });
+    const create = mockCreate();
+    await mountPanel();
+    await next();
+    // The panel's query retries once (~1s) before it settles into the error state.
+    for (let i = 0; i < 40 && !dialog()?.querySelector('[role="alert"]'); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+    }
+    const alert = dialog()!.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("peek exploded");
+    expect(createButton()?.disabled).toBe(true);
+    await act(async () => {
+      nameInput()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(create).not.toHaveBeenCalled();
+
+    const calls = peek.mock.calls.length;
+    peek.mockResolvedValue(ENGINEER_PREVIEW);
+    await click(buttonNamed(/^Retry$/, dialog()!));
+    await tick(() => Boolean(dialog()?.textContent?.includes("Start in a local repo")));
+    expect(peek.mock.calls.length).toBe(calls + 1);
+    expect(dialog()!.querySelector('[role="alert"]')).toBeNull();
+    expect(createButton()?.disabled).toBe(false);
+  }, 10_000);
+
   it("announces the help line on path and text fields (aria-describedby, #3632)", async () => {
     const withHelp: ArchetypePreview = {
       id: "engineer",

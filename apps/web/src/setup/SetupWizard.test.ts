@@ -150,6 +150,36 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     expect(button(/^Next/)?.disabled).toBe(false);
   });
 
+  it("a FAILED peek keeps Next held on the set-up step and offers a Retry that refetches (#3632)", async () => {
+    const peek = vi
+      .spyOn(api, "archetypePreview")
+      .mockImplementation(async (id: string) => {
+        if (id === "engineer") throw new Error("peek exploded");
+        return { id, bundle: null };
+      });
+    await mountToPicker();
+    await click(radioFor("engineer"));
+    await click(button(/^Next/));
+    // The wizard's query retries once (~1s) before it settles into the error state.
+    for (let i = 0; i < 40 && !container.querySelector('[role="alert"]'); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+    }
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("peek exploded");
+    expect(nameInput()?.value).toBe("engineer");
+    expect(button(/^Next/)?.disabled).toBe(true);
+
+    const calls = peek.mock.calls.filter(([id]) => id === "engineer").length;
+    const landed = { ...PREVIEW, bundle: { ...PREVIEW.bundle!, config_inputs: [PREVIEW.bundle!.config_inputs![0]] } };
+    peek.mockImplementation(async (id: string) => (id === "engineer" ? landed : { id, bundle: null }));
+    await click(button(/^Retry$/));
+    await tick(() => Boolean(container.textContent?.includes("Start in a local repo")));
+    expect(peek.mock.calls.filter(([id]) => id === "engineer").length).toBe(calls + 1);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(button(/^Next/)?.disabled).toBe(false);
+  }, 10_000);
+
   it("Back from set-up returns to the picker keeping the pick, the typed name and the answers", async () => {
     await mountToPicker();
     await click(radioFor("engineer"));
