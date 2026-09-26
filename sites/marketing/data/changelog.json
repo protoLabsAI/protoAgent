@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.182.0",
+    "date": "2026-09-26",
+    "changes": [
+      "Mermaid and SVG artifacts are navigable, and mermaid diagrams can link to the code (#3628)."
+    ]
+  },
+  {
     "version": "v0.181.0",
     "date": "2026-09-26",
     "changes": [
