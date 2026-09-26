@@ -39,6 +39,8 @@ the module's own.
 
 **Plugin metric timeseries (#1632)** — [`metric_history()`](#sdk-metric-history), [`metric_last()`](#sdk-metric-last), [`record_metric()`](#sdk-record-metric)
 
+**Run tracing (one Langfuse trace per multi-step plugin run)** — [`trace_run()`](#sdk-trace-run)
+
 **Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
 
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
@@ -587,6 +589,35 @@ The most recent `(ts, value)` of the plugin metric series `name`, or
 unavailable). The cheap read for "what did I last see?" checks — e.g. a verifier
 comparing the live reading against the last recorded one. Same namespacing +
 `plugin_id` contract as `record_metric`.
+
+## Run tracing (one Langfuse trace per multi-step plugin run)
+
+### `sdk.trace_run` {#sdk-trace-run}
+
+```python
+sdk.trace_run(name: str, *, run_id: str = '', input: Any = None, metadata: dict | None = None)
+```
+
+Group a plugin's multi-step run into ONE Langfuse observation.
+
+Every `run_subagent` call opens a `subagent:<type>` span in the CURRENT trace.
+One trace per execution SEGMENT: a run that parks (a human gate) and later
+resumes is two traces, grouped in Langfuse's Sessions view by the shared
+`run_id`. The OTel context isn't persisted across a pause of unbounded length.
+
+Called from a turn (the `run_workflow` tool), that nests; called with no turn
+around it (a REST route, a detached Studio run, a scheduled fire), each step became
+its own sessionless ROOT trace — a 9-step review panel was 9 unrelated traces, and
+a busy reviewer buried every agent's turns under them.
+
+Inside a traced turn this opens a nested span; otherwise it opens the run's own
+root trace (session `run_id` when given). Input/output are redacted and capped;
+a block that raises marks the observation `ERROR` and re-raises unchanged. A
+no-op when tracing is disabled — the block always runs::
+
+    async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=inputs) as run:
+        result = await execute(...)
+        run.output(result["output"], failed=bool(result["failed"]))
 
 ## Delegation ledger (who handed what work to whom)
 

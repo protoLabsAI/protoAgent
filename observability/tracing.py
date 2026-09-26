@@ -433,6 +433,7 @@ async def trace_session(
         return
 
     ctx = None
+    span = None
     token = None
     span_token = None
     attrs = None
@@ -495,10 +496,15 @@ async def trace_session(
             or getattr(span, "id", "")
         )
         token = _trace_id_ctx.set(trace_id)
-        yield span
     except Exception as e:
+        # SETUP failed — trace nothing, run the turn anyway. Only setup is caught: the
+        # yield below must happen exactly once, and a body exception must reach the
+        # caller unchanged. (Catching it here and yielding again made asynccontextmanager
+        # replace the turn's real error with "generator didn't stop after athrow()".)
         print(f"[tracing] trace_session({name}) error: {e}")
-        yield None
+        span = None
+    try:
+        yield span
     finally:
         try:
             _session_id_ctx.reset(sid_token)

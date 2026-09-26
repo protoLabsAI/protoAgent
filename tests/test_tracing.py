@@ -1160,3 +1160,15 @@ async def test_a_caller_trace_still_joins(monkeypatch):
             pass
 
     assert seen["trace_context"] == {"trace_id": "a" * 32, "parent_span_id": "b" * 16}
+
+
+async def test_a_turn_exception_reaches_the_caller_unchanged(session_langfuse):
+    """Catching the BODY's exception and yielding again made asynccontextmanager raise
+    RuntimeError("generator didn't stop after athrow()") in place of the real error."""
+    tracing, _span = session_langfuse
+
+    with pytest.raises(KeyError, match="boom"):
+        async with tracing.trace_session("s1", name="chat", input="hi"):
+            raise KeyError("boom")
+    assert tracing.current_session_id() == ""
+    assert tracing.current_trace_id() == ""
