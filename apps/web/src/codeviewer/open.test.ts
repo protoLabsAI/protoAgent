@@ -45,41 +45,76 @@ describe("code pane toolset OFF (ADR 0112 amendment)", () => {
   });
 });
 
-describe("placeCodeSurface — never on chat's dock", () => {
-  it("leaves it on the right when chat is on the left", () => {
-    expect(placeCodeSurface()).toBe("right");
-    expect(useUI.getState().railOrder.right).toContain("code");
+// Josh 2026-09-26: "opening the code link from the artifact view opens the code panel in the
+// bottom panel regardless of what rail the code view lives in." The pane opens where the
+// operator keeps it; only a surface with NO dock yet is placed (away from chat).
+describe("placeCodeSurface — the dock the operator keeps it on", () => {
+  const ARTIFACT = "plugin:artifact:artifact";
+  const snapshot = () => JSON.stringify(useUI.getState().railOrder);
+
+  it("code on the right with the Artifact panel showing there → opens RIGHT, swapping the diagram out", () => {
+    rail(["chat"], ["work", ARTIFACT, "code"]);
+    useUI.setState({ rightPanel: ARTIFACT as never, rightCollapsed: false });
+    const before = snapshot();
+    openCode({ project: "app", path: "src/server.ts", line: 23, source: "link" });
+    expect(useUI.getState().rightPanel).toBe("code");
+    expect(snapshot()).toBe(before);
   });
-  it("moves it to the left when chat is on the right with it", () => {
-    rail(["knowledge"], ["chat", "work", "code"]);
-    expect(placeCodeSurface()).toBe("left");
-    expect(useUI.getState().railOrder.left).toContain("code");
-    expect(useUI.getState().railOrder.right).not.toContain("code");
+
+  it("code on the bottom → bottom", () => {
+    rail(["chat"], ["work", ARTIFACT], ["code"]);
+    useUI.setState({ rightPanel: ARTIFACT as never });
+    const before = snapshot();
+    openCode({ project: "app", path: "a.ts", source: "link" });
+    expect(useUI.getState().bottomPanel).toBe("code");
+    expect(useUI.getState().rightPanel).toBe(ARTIFACT);
+    expect(snapshot()).toBe(before);
   });
-  it("keeps an operator's own non-chat dock (bottom)", () => {
-    rail(["chat"], ["work"], ["code"]);
-    expect(placeCodeSurface()).toBe("bottom");
+
+  it("code on the left with chat on the right → left", () => {
+    rail(["knowledge", "code"], ["chat", "work"]);
+    const before = snapshot();
+    openCode({ project: "app", path: "a.ts", source: "link" });
+    expect(useUI.getState().surface).toBe("code");
+    expect(snapshot()).toBe(before);
   });
-  it("keeps the surface it was opened FROM on screen (a diagram beside its code)", () => {
-    // The Artifact panel on the right, chat on the left: the pane goes to the bottom dock
-    // rather than swapping the diagram out.
-    rail(["chat"], ["work", "plugin:artifact:artifact", "code"]);
-    useUI.setState({ rightPanel: "plugin:artifact:artifact" as never });
-    expect(placeCodeSurface("plugin:artifact:artifact")).toBe("bottom");
-    expect(useUI.getState().railOrder.bottom).toContain("code");
-    // Not showing (another right panel is up) → the usual right dock is fine.
-    rail(["chat"], ["work", "plugin:artifact:artifact", "code"]);
-    useUI.setState({ rightPanel: "work" as never });
-    expect(placeCodeSurface("plugin:artifact:artifact")).toBe("right");
-    // An operator-chosen bottom dock that isn't showing it stays put.
-    rail(["chat"], ["plugin:artifact:artifact"], ["code"]);
-    useUI.setState({ rightPanel: "plugin:artifact:artifact" as never, bottomPanel: "code" });
-    expect(placeCodeSurface("plugin:artifact:artifact")).toBe("bottom");
+
+  it("NEVER mutates railOrder when Code already has a dock — even chat's own", () => {
+    const layouts: Array<[string[], string[], string[]]> = [
+      [["chat", "knowledge"], ["work", "code"], []],
+      [["chat"], ["work"], ["code"]],
+      [["knowledge", "code"], ["chat", "work"], []],
+      [["knowledge"], ["chat", "work", "code"], []], // on chat's dock: the operator's call
+      [["chat", "code"], ["work"], []],
+    ];
+    for (const [l, r, b] of layouts) {
+      for (const shown of ["work", ARTIFACT, "code"]) {
+        rail(l, r, b);
+        useUI.setState({ rightPanel: shown as never, bottomPanel: shown as never });
+        const before = snapshot();
+        const dock = placeCodeSurface();
+        expect(snapshot()).toBe(before);
+        expect(useUI.getState().railOrder[dock]).toContain("code");
+      }
+    }
   });
-  it("puts a missing/hidden surface on the side away from chat", () => {
+
+  it("puts a hidden surface on the side away from chat", () => {
     useUI.setState({ railOrder: { left: ["chat"], right: ["work"], bottom: [], hidden: ["code"] } });
     expect(placeCodeSurface()).toBe("right");
+    expect(useUI.getState().railOrder.right).toContain("code");
     expect(useUI.getState().railOrder.hidden).not.toContain("code");
+    useUI.setState({ railOrder: { left: ["knowledge"], right: ["chat", "work"], bottom: [], hidden: ["code"] } });
+    expect(placeCodeSurface()).toBe("left");
+    expect(useUI.getState().railOrder.left).toContain("code");
+  });
+
+  it("puts a MISSING surface on the side away from chat", () => {
+    rail(["chat"], ["work"]);
+    expect(placeCodeSurface()).toBe("right");
+    expect(useUI.getState().railOrder.right).toContain("code");
+    rail(["knowledge"], ["chat", "work"]);
+    expect(placeCodeSurface()).toBe("left");
   });
 });
 

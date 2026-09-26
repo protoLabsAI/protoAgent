@@ -494,7 +494,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // fence or the secret deny list would.
         const target = parsePluginCodeOpen(m);
         if (!target) return;
-        void routePluginCodeOpen(target, defaultRouteDeps(view.key)).then((outcome) => {
+        void routePluginCodeOpen(target, defaultRouteDeps()).then((outcome) => {
           const toast = toastRef.current;
           if (!toast) return;
           if (outcome === "copied")

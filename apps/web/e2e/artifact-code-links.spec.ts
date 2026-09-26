@@ -80,15 +80,43 @@ test("clicking a linked message opens the code pane at that range, with the note
   await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
   await expect(page.getByTestId("code-pane-range")).toHaveText("L23–29");
   await expect(page.getByTestId("code-pane-note")).toContainText("constant-time bearer check");
-  // Side by side: the pane took a dock that shows neither chat nor the diagram.
+  // The pane opens on the dock the operator keeps it on — the right one by default, the same
+  // dock as the Artifact panel — so the diagram swaps out and the Code item never moves.
+  const rightRail = page.locator(".pl-rail--right");
+  await expect(rightRail.getByRole("button", { name: "Code", exact: true })).toBeVisible();
+  await expect(page.locator(".pl-rail--bottom").getByRole("button", { name: "Code", exact: true })).toHaveCount(0);
+  await expect(page.locator('iframe[title="Artifact"]')).not.toBeVisible();
+  // Back to the diagram through its rail icon. An unlinked participant opens nothing.
+  await rightRail.getByRole("button", { name: "Artifact", exact: true }).click();
   await expect(page.locator('iframe[title="Artifact"]')).toBeVisible();
-  // An unlinked participant opens nothing new: the pane stays on the message's range.
   await diagram(page).locator('rect.actor[name="C"]').first().click({ position: { x: 10, y: 10 } });
   await page.waitForTimeout(300);
-  await expect(page.getByTestId("code-pane-range")).toHaveText("L23–29");
+  await expect(page.getByTestId("code-pane")).toHaveCount(0);
   // The participant link re-points it.
   await diagram(page).locator('[data-lk="participant:Server"]').first().click({ position: { x: 10, y: 10 } });
   await expect(page.getByTestId("code-pane-range")).toHaveText("L34");
+});
+
+test("with the Code item on the bottom dock, a diagram link opens it THERE, beside the diagram", async ({ page }) => {
+  await setup(page, true);
+  await send(page, "MERMAID_LINKS draw the auth flow");
+  const rightRail = page.locator(".pl-rail--right");
+  const bottomRail = page.locator(".pl-rail--bottom");
+  // Let the live show_artifact open the diagram on the right dock FIRST — clicking the
+  // Artifact rail icon while it is already the shown panel would collapse the dock instead.
+  await expect(page.getByTestId("artifact-ref-chip")).toContainText("authorize() flow");
+  const msg = diagram(page).locator('[data-lk="msg:2"]').first();
+  await expect(msg).toBeVisible({ timeout: 20_000 });
+  // The operator moves Code to the bottom dock (the diagram stays up on the right).
+  await rightRail.getByRole("button", { name: "Code", exact: true }).click({ button: "right" });
+  await page.locator(".pl-menu").getByText("Move to bottom dock").click();
+  await expect(bottomRail.getByRole("button", { name: "Code", exact: true })).toBeVisible();
+  await expect(msg).toBeVisible();
+  await msg.click();
+  await expect(page.getByTestId("code-pane-range")).toHaveText("L23–29");
+  await expect(page.locator('iframe[title="Artifact"]')).toBeVisible();
+  await expect(bottomRail.getByRole("button", { name: "Code", exact: true })).toBeVisible();
+  await expect(rightRail.getByRole("button", { name: "Code", exact: true })).toHaveCount(0);
 });
 
 test("with no code pane and no editor, the console tells the operator where the code is", async ({ page, context }) => {
