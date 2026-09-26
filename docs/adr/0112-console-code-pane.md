@@ -4,6 +4,9 @@
 - Date: 2026-09-24
 - Amended: 2026-09-25 — the code pane is an **opt-in toolset, off by default**
   (`filesystem.code_pane`); see [Amendment](#amendment-an-opt-in-toolset-off-by-default) (#3613)
+- Amended: 2026-09-26 — placement: the pane opens on the dock the operator **keeps** it on and is
+  never moved once it has one (not off chat's dock, not off the dock showing the plugin view that
+  opened it). Only a hidden/missing Code surface is placed, away from chat. See D1.
 - Implemented in: the server half (this PR): `tools/fs_secrets.py`, `tools/fs_view.py`,
   `tools/git_read.py`, `operator_api/browse_routes.py` (`GET /api/fs/file`,
   `GET /api/fs/diff`), `tools/fs_tools.py` (`show_code`), `graph/components.py`
@@ -71,6 +74,11 @@ range highlighted and scrolled into view; a **Recent** trail of the last 20 refs
 revisit) with a **File | Diff** tab pair. It is read-only, full stop: no edit, no save, no
 staging. Placement rule: it opens on the dock that does **not** hold chat, so pointing never
 covers the conversation it came from. It is lazy-loaded.
+*Amended 2026-09-26:* that rule now applies only when the Code surface has **no dock yet**
+(hidden or missing). Once it sits on a dock it opens there, whatever that dock is showing, and
+`railOrder` is never rewritten. The earlier rule moved it off chat's dock and, for a plugin
+view's code link, off the dock showing that view, which silently re-homed the Code item (usually
+to the bottom dock). A view the pane swaps out comes back through its rail icon.
 
 ### D2 — `GET /api/fs/file`: fenced, capped, line-addressed
 
