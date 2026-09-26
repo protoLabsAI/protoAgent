@@ -4,7 +4,8 @@ A config reload used to only fire each running surface's `reload(cfg)` callback,
 newly-ENABLED plugin's surface never started and a DISABLED plugin's surface kept
 running (a leak) until a full restart — asymmetric with routers, which hot-mount.
 `_reload_plugin_surfaces` now reconciles: stop removed, hot-start newly-enabled, reload
-survivors. These tests cover the pure diff, the pre-startup guard, and the on-loop
+survivors — and restart a survivor orphaned from the re-run ``register()`` (#3593). These
+tests cover the pure diff, the pre-startup guard, and the on-loop
 start/stop behavior.
 """
 
@@ -31,8 +32,9 @@ def test_plan_reconcile_buckets_stop_start_and_reload():
     # google survives, discord is gone, telegram is new.
     wanted = [_spec("google", "google-gateway"), _spec("telegram", "telegram-gateway")]
 
-    to_stop, to_start, to_reload = ai._plan_surface_reconcile(running, wanted)
+    to_stop, to_start, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
 
+    assert to_restart == []
     assert [h["plugin_id"] for h in to_stop] == ["discord"]      # no longer wanted → stop
     assert [s["plugin_id"] for s in to_start] == ["telegram"]    # newly wanted → start
     assert [h["plugin_id"] for h in to_reload] == ["google"]     # in both → reload cb
@@ -44,11 +46,59 @@ def test_plan_reconcile_keys_on_plugin_id_and_name():
     running = [_handle("a", "gateway")]
     wanted = [_spec("b", "gateway")]
 
-    to_stop, to_start, to_reload = ai._plan_surface_reconcile(running, wanted)
+    to_stop, to_start, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
 
+    assert to_restart == []
     assert [h["plugin_id"] for h in to_stop] == ["a"]
     assert [s["plugin_id"] for s in to_start] == ["b"]
     assert to_reload == []
+
+
+def test_plan_restarts_a_survivor_whose_register_minted_a_new_stop():
+    # #3593: no reload hook + a different stop ⇒ the running surface belongs to the
+    # previous registration's objects. It must be restarted from the new spec.
+    old_stop, new_stop = (lambda: None), (lambda: None)
+    running = [_handle("pr-reviewer", "sweep", stop=old_stop)]
+    wanted = [_spec("pr-reviewer", "sweep", stop=new_stop)]
+
+    to_stop, to_start, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
+
+    assert (to_stop, to_start, to_reload) == ([], [], [])
+    assert to_restart == [(running[0], wanted[0])]
+
+
+def test_plan_keeps_a_survivor_that_is_still_the_same_surface():
+    # The same stop (module-level function) or an EQUAL bound method of the same
+    # long-lived object (terminal's MANAGER.close_all) is the same surface — restarting
+    # it would e.g. kill every open terminal on a config save.
+    class Manager:
+        def close_all(self):
+            pass
+
+    mgr = Manager()
+
+    def module_stop():
+        pass
+
+    running = [_handle("t", "sessions", stop=mgr.close_all), _handle("d", "health", stop=module_stop)]
+    wanted = [_spec("t", "sessions", stop=mgr.close_all), _spec("d", "health", stop=module_stop)]
+    assert running[0]["stop"] is not wanted[0]["stop"]  # fresh bound-method objects…
+
+    _, _, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
+
+    assert to_restart == []  # …but equal, so not restarted
+    assert [h["plugin_id"] for h in to_reload] == ["t", "d"]
+
+
+def test_plan_leaves_a_surface_with_a_reload_hook_on_the_reload_path():
+    # A reload hook is the plugin opting into live reconfiguration (Discord, the board
+    # loop) — its new-closure stop must not turn every config save into a restart.
+    running = [_handle("discord", "gw", stop=lambda: None, reload=lambda cfg: None)]
+    wanted = [_spec("discord", "gw", stop=lambda: None, reload=lambda cfg: None)]
+
+    _, _, to_reload, to_restart = ai._plan_surface_reconcile(running, wanted)
+
+    assert to_restart == [] and to_reload == running
 
 
 def test_reload_is_a_noop_before_startup_started_surfaces(monkeypatch):
@@ -111,3 +161,80 @@ async def test_reload_hot_starts_new_and_stops_removed_on_the_loop(monkeypatch):
     assert ("discord", "discord-gateway") not in keys   # dropped
     assert ("google", "google-gateway") in keys         # kept (still running)
     assert ("telegram", "telegram-gateway") in keys     # added
+
+
+# ── #3593 end to end: the real loader, register() run twice ────────────────────
+
+_SWEEP_PLUGIN = """
+import asyncio
+
+EVENTS = []          # module-level: survives re-register (the module isn't re-exec'd)
+
+
+class Dispatcher:
+    count = 0
+
+    def __init__(self):
+        Dispatcher.count += 1
+        self.gen = Dispatcher.count
+
+
+def register(registry):
+    dispatcher = Dispatcher()          # one per register(), like pr-reviewer
+    stop_event = asyncio.Event()
+
+    async def _loop():
+        EVENTS.append(("running", dispatcher.gen))
+        await stop_event.wait()
+        for _ in range(3):             # finish the in-flight tick after stop()
+            await asyncio.sleep(0)
+        EVENTS.append(("stopped", dispatcher.gen))
+
+    def _start():
+        return asyncio.ensure_future(_loop())
+
+    def _stop():
+        stop_event.set()   # returns at once; the loop winds down on its own
+
+    registry.register_surface(_start, _stop, name="sweep")
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_config_reload_leaves_exactly_one_sweep_on_the_new_registration(tmp_path, monkeypatch):
+    import sys
+
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader as plugin_loader
+
+    d = tmp_path / "sweeper"
+    d.mkdir()
+    (d / "protoagent.plugin.yaml").write_text("id: sweeper\nname: sweeper\nversion: 0.1.0\nenabled: true\n")
+    (d / "__init__.py").write_text(_SWEEP_PLUGIN)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+
+    async def _drain():
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+    # Boot: load + start, as the startup hook does.
+    boot = plugin_loader.load_plugins(LangGraphConfig())
+    [spec] = [s for s in boot.surfaces if s["plugin_id"] == "sweeper"]
+    handles = [{"plugin_id": "sweeper", "name": "sweep", "stop": spec["stop"], "reload": None, "handle": spec["start"]()}]
+    monkeypatch.setattr(STATE, "plugin_surfaces_started", True, raising=False)
+    monkeypatch.setattr(STATE, "plugin_surface_handles", handles, raising=False)
+    await _drain()
+
+    # Config save: load_plugins re-runs register() → a second Dispatcher.
+    reloaded = plugin_loader.load_plugins(LangGraphConfig())
+    monkeypatch.setattr(STATE, "plugin_surfaces", reloaded.surfaces, raising=False)
+    ai._reload_plugin_surfaces(object())
+    await _drain()
+
+    events = sys.modules[plugin_loader._plugin_module_name("sweeper")].EVENTS
+    # The gen-1 sweep stopped BEFORE gen 2 started — never two loops at once.
+    assert events == [("running", 1), ("stopped", 1), ("running", 2)]
+    assert [h["stop"] for h in STATE.plugin_surface_handles] == [reloaded.surfaces[0]["stop"]]
+    STATE.plugin_surface_handles[0]["stop"]()  # tidy: let the gen-2 loop finish
+    await _drain()
+    plugin_loader.purge_plugin_modules("sweeper")

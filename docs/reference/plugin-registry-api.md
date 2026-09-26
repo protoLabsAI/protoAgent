@@ -419,6 +419,14 @@ reconnect when its config changes — without it, surfaces wire once and a
 config change needs a restart. Best-effort: a failing surface logs, never
 breaks boot.
 
+`register()` re-runs on every config reload. A surface **without** `reload`
+whose re-run hands back a different `stop` (fresh closures over fresh
+objects) is stopped and started again from the new registration, so the
+running surface and the plugin's routes/tools never hold two different
+instances ([#3593](https://github.com/protoLabsAI/protoAgent/issues/3593)). With `reload`, the surface keeps running and reconfigures
+itself; with the same `stop` (a module-level function or a long-lived
+object's method) it is left alone.
+
 ### `registry.register_thread_id_resolver` {#registry-register-thread-id-resolver}
 
 ```python
