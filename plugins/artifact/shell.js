@@ -136,18 +136,339 @@
     + '#md blockquote{margin:1em 0;padding-left:1em;border-left:3px solid var(--pl-color-border,rgba(255,255,255,.2));color:var(--pl-color-fg-muted,#9aa0aa)}'
     + '#md img{max-width:100%}#md .mermaid{background:none;border:0;padding:0}';
 
-  // Crisp fit-to-window viewport for the GRAPHIC kinds (svg + mermaid — #1517). Both render an
-  // <svg> into the sandboxed frame; scale it as a VECTOR to fit the frame (max-width/height:100%,
-  // !important to beat mermaid's inline max-width:Npx on its own svg). No CSS transform / raster
-  // layer: transform-scaling rasterized the SVG at 1x then GPU-scaled the bitmap, so zooming in
-  // pixelated/blurred on WKWebView. This keeps it sharp at any size (pan/zoom traded for crispness).
-  // Self-contained (needs no DS stylesheet) — styled off the base() token carry.
+  // Navigable viewport for the GRAPHIC kinds (svg + mermaid, and mermaid fences in markdown).
+  // Zoom and pan move the root <svg>'s VIEWBOX — the browser re-lays the vector out at every
+  // zoom level, so it stays sharp. Never a CSS transform: #1517 removed the old transform zoom
+  // because WKWebView (the desktop app) rasterized the SVG at 1x and GPU-scaled the bitmap, which
+  // blurred on zoom-in. Wheel / pinch zoom to the cursor, drag to pan, double-click to zoom in,
+  // keyboard (+ − 0 f and arrows), and a small toolbar. Big diagrams open fitted to the frame;
+  // small ones at 1:1 (never blown up). Self-contained (needs no DS stylesheet) — styled off the
+  // base() token carry, so a live re-theme restyles it too.
   var VP_CSS = '<style>html,body{margin:0;height:100%;overflow:hidden}'
-    + '#__vp{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:12px;box-sizing:border-box}'
+    + '#__vp{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none}'
     + '#__vp pre.mermaid{display:contents}'
-    + '#__vp svg{max-width:100% !important;max-height:100% !important;width:auto !important;height:auto !important;display:block}</style>';
-  // Wrap graphic content in the fit-to-window viewport (svg + mermaid share this).
-  function viewport(inner){ return VP_CSS + '<body><div id="__vp">' + inner + '</div>'; }
+    // Before the controller mounts (mermaid still laying out) the svg just fits, as it always did.
+    + '#__vp>svg,#__vp>pre>svg{max-width:100%;max-height:100%}'
+    + '</style>';
+  // Chrome shared by the full-frame viewport and markdown's inline diagram boxes, plus the code
+  // link affordances (ADR 0038 amendment). No `</` inside: it rides a srcdoc <style>.
+  var GFX_CSS = '<style>'
+    + '.__vpsvg{position:absolute;left:0;top:0;width:100% !important;height:100% !important;max-width:none !important;max-height:none !important;display:block;cursor:grab}'
+    + '.__vpdrag .__vpsvg{cursor:grabbing}'
+    + '.__vpbox{position:relative;overflow:hidden;margin:12px 0;border:1px solid var(--pl-color-border,rgba(255,255,255,.12));border-radius:8px;touch-action:pan-y}'
+    + '.__vpbox:focus-visible,#__vp:focus-visible{outline:2px solid var(--pl-color-accent,#9b87f2);outline-offset:-2px}'
+    + '.__vptb{position:absolute;top:8px;right:8px;z-index:10;display:flex;align-items:center;gap:1px;padding:2px;border-radius:7px;'
+    + 'background:var(--pl-color-bg,#0a0a0c);color:var(--pl-color-fg,#ededed);border:1px solid var(--pl-color-border,rgba(255,255,255,.12));'
+    + 'font:12px/1 var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif);box-shadow:0 2px 8px rgba(0,0,0,.25)}'
+    + '.__vptb button{all:unset;box-sizing:border-box;min-width:26px;height:24px;padding:0 6px;border-radius:5px;text-align:center;cursor:pointer}'
+    + '.__vptb button:hover{background:rgba(127,127,127,.18)}'
+    + '.__vptb button:focus-visible{outline:2px solid var(--pl-color-accent,#9b87f2)}'
+    + '.__vptb .__vpz{min-width:44px;text-align:center;opacity:.75;font-variant-numeric:tabular-nums}'
+    + '.__lk{cursor:pointer}'
+    + '.__lk text,.__lk .nodeLabel,.__lk .label{text-decoration:underline dotted;text-underline-offset:3px}'
+    + '.__lk:hover :is(rect,polygon,circle,ellipse,path,line):not(.__lkhit),.__lk:focus-visible :is(rect,polygon,circle,ellipse,path,line):not(.__lkhit),'
+    + '.__lkhl :is(rect,polygon,circle,ellipse,path,line):not(.__lkhit){stroke:var(--pl-color-accent,#9b87f2) !important;stroke-width:2px !important}'
+    + '.__lk:hover text,.__lk:focus-visible text,.__lkhl text{fill:var(--pl-color-accent,#9b87f2) !important;text-decoration-style:solid}'
+    + '.__lk:hover .nodeLabel,.__lk:focus-visible .nodeLabel,.__lkhl .nodeLabel{color:var(--pl-color-accent,#9b87f2) !important;text-decoration-style:solid}'
+    + '.__lk:focus{outline:none}'
+    + '.__lkhit{fill:transparent;stroke:none;pointer-events:all}'
+    + '.__lktip{position:fixed;z-index:2147483646;pointer-events:none;max-width:min(440px,calc(100vw - 16px));padding:6px 9px;border-radius:6px;'
+    + 'background:var(--pl-color-bg,#0a0a0c);color:var(--pl-color-fg,#ededed);border:1px solid var(--pl-color-border,rgba(255,255,255,.14));'
+    + 'box-shadow:0 4px 14px rgba(0,0,0,.35);font:12px/1.45 var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}'
+    + '.__lktip b{display:block;font:600 12px/1.45 var(--pl-font-mono,ui-monospace,Menlo,monospace);word-break:break-all}'
+    + '</style>';
+
+  // The in-frame controller. Authored here as a real function and injected into the sandboxed
+  // artifact frame as SOURCE (`'(' + artGraphics + ')(cfg)'`) — it never runs in the shell, so it
+  // may reference nothing outside itself. cfg = {links: {key: {where, note}} | null}: DISPLAY data
+  // only (tooltips); a click posts just the KEY up, and the shell resolves the target from the
+  // version's stored links — the frame (model-authored code) can't name a path of its own.
+  // Keep `</` and `<!` out of this function: its source rides a srcdoc <script>.
+  function artGraphics(cfg){
+    var D=document, W=window, NS="http://www.w3.org/2000/svg";
+    var links=(cfg&&cfg.links)||null, own=Object.prototype.hasOwnProperty;
+    var reduce=false; try{ reduce=W.matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(_){}
+    var views=[], byKey={};
+
+    // The svg's own coordinate box — viewBox, else width/height, else its drawn bbox.
+    function natural(svg){
+      var vb=svg.viewBox&&svg.viewBox.baseVal;
+      if(vb&&vb.width>0&&vb.height>0) return {x:vb.x,y:vb.y,w:vb.width,h:vb.height};
+      var w=parseFloat(svg.getAttribute("width")), h=parseFloat(svg.getAttribute("height"));
+      if(w>0&&h>0&&!/%/.test(svg.getAttribute("width")+svg.getAttribute("height"))) return {x:0,y:0,w:w,h:h};
+      try{ var b=svg.getBBox(); if(b.width>0&&b.height>0) return {x:b.x,y:b.y,w:b.width,h:b.height}; }catch(_){}
+      return {x:0,y:0,w:300,h:150};
+    }
+    function btn(label, title, fn){
+      var b=D.createElement("button"); b.type="button"; b.textContent=label; b.title=title; b.setAttribute("aria-label",title);
+      b.addEventListener("click",function(e){ e.stopPropagation(); fn(); });
+      b.addEventListener("pointerdown",function(e){ e.stopPropagation(); });
+      b.addEventListener("dblclick",function(e){ e.stopPropagation(); });
+      return b;
+    }
+
+    // Mount one navigable view on `svg` inside `box`. inline = a diagram inside a markdown
+    // document: plain wheel keeps scrolling the page (zoom needs ctrl/⌘ or a pinch).
+    function mount(svg, box, inline){
+      if(!svg||svg.__vp) return null;
+      var vb0=natural(svg), view=null, anim=0;
+      if(inline){
+        var h=Math.round(Math.min(Math.max(vb0.h+24,140), W.innerHeight*0.7));
+        box.style.height=h+"px";
+      }
+      svg.removeAttribute("width"); svg.removeAttribute("height");
+      svg.setAttribute("preserveAspectRatio","xMidYMid meet");
+      svg.classList.add("__vpsvg");
+      if(!box.hasAttribute("tabindex")) box.setAttribute("tabindex","0");
+      box.setAttribute("role","group");
+      box.setAttribute("aria-label","Diagram — scroll or pinch to zoom, drag to pan, + − 0 and arrow keys");
+      function size(){ var r=box.getBoundingClientRect(); return {w:Math.max(1,r.width),h:Math.max(1,r.height)}; }
+      function k(v){ return size().w/(v||view).w; }  // screen px per svg unit
+      function fitK(cap){ var s=size(), p=12, f=Math.min((s.w-2*p)/vb0.w,(s.h-2*p)/vb0.h); if(!(f>0)) f=1; return cap?Math.min(f,1):f; }
+      function around(kk, cx, cy){ var s=size(), w=s.w/kk, h=s.h/kk; return {x:cx-w/2,y:cy-h/2,w:w,h:h}; }
+      function home(){ return around(fitK(true), vb0.x+vb0.w/2, vb0.y+vb0.h/2); }
+      function fit(){ return around(fitK(false), vb0.x+vb0.w/2, vb0.y+vb0.h/2); }
+      function clampK(kk){ var lo=Math.min(fitK(false)*0.25,0.5), hi=Math.max(32,fitK(false)*4); return Math.min(hi,Math.max(lo,kk)); }
+      function set(v){ view=v; svg.setAttribute("viewBox",v.x+" "+v.y+" "+v.w+" "+v.h); if(zl) zl.textContent=Math.round(k(v)*100)+"%"; }
+      function go(v, animate){
+        if(anim){ cancelAnimationFrame(anim); anim=0; }
+        if(!animate||reduce||!view){ set(v); return; }
+        var a=view, t0=performance.now(), dur=160;
+        function step(t){ var p=Math.min(1,(t-t0)/dur), e=1-Math.pow(1-p,3);
+          set({x:a.x+(v.x-a.x)*e,y:a.y+(v.y-a.y)*e,w:a.w+(v.w-a.w)*e,h:a.h+(v.h-a.h)*e});
+          anim=p<1?requestAnimationFrame(step):0; }
+        anim=requestAnimationFrame(step);
+      }
+      // Zoom by `f` keeping the svg point under box-local (px,py) fixed.
+      function zoomAt(f, px, py, animate){
+        var kk=k(), nk=clampK(kk*f); if(nk===kk) return;
+        var ux=view.x+px/kk, uy=view.y+py/kk, s=size();
+        go({x:ux-px/nk,y:uy-py/nk,w:s.w/nk,h:s.h/nk}, animate);
+      }
+      function zoomCenter(f){ var s=size(); zoomAt(f, s.w/2, s.h/2, true); }
+      function pan(dx, dy){ var kk=k(); set({x:view.x-dx/kk,y:view.y-dy/kk,w:view.w,h:view.h}); }
+      function local(e){ var r=box.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; }
+
+      var tb=D.createElement("div"); tb.className="__vptb"; tb.setAttribute("role","toolbar"); tb.setAttribute("aria-label","Zoom");
+      var zl=D.createElement("span"); zl.className="__vpz"; zl.setAttribute("aria-live","polite");
+      tb.appendChild(btn("−","Zoom out (−)",function(){ zoomCenter(1/1.25); }));
+      tb.appendChild(zl);
+      tb.appendChild(btn("+","Zoom in (+)",function(){ zoomCenter(1.25); }));
+      tb.appendChild(btn("Fit","Fit to window (f)",function(){ go(fit(),true); }));
+      tb.appendChild(btn("Reset","Reset zoom (0)",function(){ go(home(),true); }));
+      box.appendChild(tb);
+
+      box.addEventListener("wheel",function(e){
+        var dx=e.deltaX, dy=e.deltaY, m=e.deltaMode===1?16:e.deltaMode===2?size().h:1;
+        dx*=m; dy*=m;
+        var pinch=e.ctrlKey||e.metaKey;
+        if(inline&&!pinch) return;  // let the document scroll
+        e.preventDefault();
+        var p=local(e);
+        if(pinch) zoomAt(Math.exp(-dy*0.01), p.x, p.y, false);
+        else if(e.shiftKey||Math.abs(dx)>Math.abs(dy)) pan(-(dx||dy), 0);
+        else zoomAt(Math.exp(-dy*0.0015), p.x, p.y, false);
+      },{passive:false});
+      // Safari / WKWebView trackpad pinch arrives as gesture events, not ctrl+wheel.
+      var g0=1;
+      box.addEventListener("gesturestart",function(e){ e.preventDefault(); g0=1; });
+      box.addEventListener("gesturechange",function(e){ e.preventDefault(); var p=local(e); zoomAt(e.scale/g0, p.x, p.y, false); g0=e.scale; });
+
+      // Drag to pan (mouse / pen / one finger); two fingers pinch. A drag past a few px
+      // swallows the click that ends it, so panning never fires a code link.
+      var ptrs={}, dragged=false, start=null, pinch0=0;
+      function count(){ return Object.keys(ptrs).length; }
+      box.addEventListener("pointerdown",function(e){
+        if(e.button!==0&&e.pointerType==="mouse") return;
+        if(inline&&e.pointerType==="touch") return;
+        ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
+        if(count()===1){ start={x:e.clientX,y:e.clientY}; dragged=false; }
+        if(count()===2){ var a=Object.keys(ptrs).map(function(i){return ptrs[i];}); pinch0=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y); }
+      });
+      box.addEventListener("pointermove",function(e){
+        var p=ptrs[e.pointerId]; if(!p) return;
+        var dx=e.clientX-p.x, dy=e.clientY-p.y; p.x=e.clientX; p.y=e.clientY;
+        if(count()>=2){
+          var a=Object.keys(ptrs).map(function(i){return ptrs[i];}), d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);
+          if(pinch0>0&&d>0){ var r=box.getBoundingClientRect(); zoomAt(d/pinch0,(a[0].x+a[1].x)/2-r.left,(a[0].y+a[1].y)/2-r.top,false); }
+          pinch0=d; dragged=true; return;
+        }
+        if(!dragged&&start&&Math.hypot(e.clientX-start.x,e.clientY-start.y)<4) return;
+        if(!dragged){ dragged=true; box.classList.add("__vpdrag"); try{ box.setPointerCapture(e.pointerId); }catch(_){} }
+        pan(dx, dy);
+      });
+      function up(e){ delete ptrs[e.pointerId]; if(!count()){ box.classList.remove("__vpdrag"); start=null; } }
+      box.addEventListener("pointerup",up); box.addEventListener("pointercancel",up);
+      box.addEventListener("click",function(e){ if(dragged){ e.stopPropagation(); e.preventDefault(); dragged=false; } },true);
+      box.addEventListener("dblclick",function(e){
+        if(e.target&&e.target.closest&&e.target.closest(".__lk")) return;  // a link, not a zoom
+        var p=local(e); zoomAt(e.shiftKey?0.5:2, p.x, p.y, true);
+      });
+      // Keyboard: the whole frame for a full-frame diagram, the box itself when inline.
+      (inline?box:D).addEventListener("keydown",function(e){
+        if(e.defaultPrevented||e.altKey||e.ctrlKey||e.metaKey) return;
+        var t=e.target; if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+        var s=size(), step=0.1;
+        switch(e.key){
+          case "+": case "=": zoomCenter(1.25); break;
+          case "-": case "_": zoomCenter(1/1.25); break;
+          case "0": go(home(),true); break;
+          case "f": case "F": go(fit(),true); break;
+          case "ArrowLeft": pan(s.w*step,0); break;
+          case "ArrowRight": pan(-s.w*step,0); break;
+          case "ArrowUp": pan(0,s.h*step); break;
+          case "ArrowDown": pan(0,-s.h*step); break;
+          default: return;
+        }
+        e.preventDefault();
+      });
+      // A resized frame keeps the same centre and zoom level.
+      var last=size();
+      if(W.ResizeObserver) new ResizeObserver(function(){
+        var s=size(); if(!view||(s.w===last.w&&s.h===last.h)) return;
+        var kk=last.w/view.w, cx=view.x+view.w/2, cy=view.y+view.h/2; last=s;
+        set(around(kk,cx,cy));
+      }).observe(box);
+      set(home());
+      var api={svg:svg,box:box,reveal:function(el){
+        try{ var b=el.getBBox(), inside=b.x>=view.x&&b.y>=view.y&&b.x+b.width<=view.x+view.w&&b.y+b.height<=view.y+view.h;
+          if(!inside) go(around(k(),b.x+b.width/2,b.y+b.height/2),true); }catch(_){}
+      }};
+      svg.__vp=api; views.push(api);
+      return api;
+    }
+
+    // ── code links (mermaid) ─────────────────────────────────────────────────────────
+    var tip=null;
+    function tipFor(key){ var t=links[key]||{}; return t; }
+    function showTip(key, x, y){
+      if(!tip){ tip=D.createElement("div"); tip.className="__lktip"; tip.setAttribute("role","tooltip"); D.body.appendChild(tip); }
+      var t=tipFor(key); tip.textContent="";
+      var b=D.createElement("b"); b.textContent=String(t.where||""); tip.appendChild(b);
+      if(t.note){ var n=D.createElement("span"); n.textContent=String(t.note); tip.appendChild(n); }
+      tip.style.display="block";
+      var r=tip.getBoundingClientRect(), vw=W.innerWidth, vh=W.innerHeight;
+      tip.style.left=Math.max(8,Math.min(x+12,vw-r.width-8))+"px";
+      tip.style.top=(y+16+r.height>vh-8?Math.max(8,y-r.height-10):y+16)+"px";
+    }
+    function hideTip(){ if(tip) tip.style.display="none"; }
+    function open(key){ hideTip(); try{ parent.postMessage({type:"protoArtifact:openCode",key:key},"*"); }catch(_){} }
+    function mark(el, key, label){
+      (byKey[key]=byKey[key]||[]).push(el);
+      if(el.__lkKey) return;  // one element, several keys (msg:3 + msg:<label>): one handler, the first key
+      el.__lkKey=key;
+      el.classList.add("__lk"); el.setAttribute("tabindex","0"); el.setAttribute("role","link");
+      el.setAttribute("data-lk",key);
+      var t=tipFor(key);
+      el.setAttribute("aria-label",(label?label+" — ":"")+"open "+String(t.where||"")+(t.note?" — "+String(t.note):""));
+      el.addEventListener("click",function(e){ e.stopPropagation(); open(key); });
+      el.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); e.stopPropagation(); open(key); } });
+      el.addEventListener("pointerenter",function(e){ showTip(key,e.clientX,e.clientY); });
+      el.addEventListener("pointermove",function(e){ showTip(key,e.clientX,e.clientY); });
+      el.addEventListener("pointerleave",hideTip);
+      el.addEventListener("focus",function(){ var r=el.getBoundingClientRect(); showTip(key,r.left,r.bottom-8); });
+      el.addEventListener("blur",hideTip);
+    }
+    function textOf(el){ return String(el.textContent||"").replace(/​/g,"").replace(/\s+/g," ").trim(); }
+    function norm(s){ return String(s).replace(/\s+/g," ").trim(); }
+    function attach(svg){
+      var found={};
+      function hit(key, el, label){ if(!own.call(links,key)||found[key]&&found[key].el===el) return; mark(el,key,label); if(!found[key]) found[key]={el:el,label:label}; }
+      // Flowchart / class / state nodes (mermaid 10: g.node#flowchart-<id>-<n>, #classId-<id>-<n>,
+      // #state-<id>-<n>) and flowchart subgraphs (g.cluster#<id>). Ids are stable per source.
+      svg.querySelectorAll("g.node,g.cluster").forEach(function(g){
+        var id=g.id||"", m=/^(?:flowchart|classId|state)-(.+)-\d+$/.exec(id);
+        var key=m?m[1]:id; if(key) hit(key,g,textOf(g));
+      });
+      // Sequence participants: rect.actor[name] (its <g> holds the label) and actor-man g[name];
+      // matched by id (`participant:U`) or by display alias (`participant:User`). Top + bottom boxes.
+      svg.querySelectorAll("rect.actor[name],g.actor-man[name]").forEach(function(el){
+        var g=el.tagName.toLowerCase()==="rect"?el.parentNode:el, name=el.getAttribute("name")||"", label=textOf(g);
+        hit("participant:"+name,g,label); if(label&&label!==name) hit("participant:"+label,g,label);
+      });
+      // Sequence messages, in drawing order: each message is its label line(s) (text.messageText)
+      // followed by its arrow (.messageLine0/1). msg:<n> is 1-based; msg:<label> only if unique.
+      var msgs=[], cur=[];
+      svg.querySelectorAll("text.messageText,.messageLine0,.messageLine1").forEach(function(el){
+        if(el.tagName.toLowerCase()==="text"){ cur.push(el); return; }
+        msgs.push({texts:cur,line:el}); cur=[];
+      });
+      var counts={};
+      msgs.forEach(function(m){ m.label=norm(m.texts.map(textOf).join(" ")); counts[m.label]=(counts[m.label]||0)+1; });
+      msgs.forEach(function(m,i){
+        var keys=["msg:"+(i+1)]; if(m.label&&counts[m.label]===1) keys.push("msg:"+m.label);
+        Object.keys(links).forEach(function(k){ if(k.indexOf("msg:")===0&&!/^msg:\d+$/.test(k)&&norm(k.slice(4))===m.label&&counts[m.label]===1&&keys.indexOf(k)<0) keys.push(k); });
+        var want=keys.filter(function(k){ return own.call(links,k); }); if(!want.length) return;
+        var els=m.texts.concat([m.line]), parentEl=m.line.parentNode, same=els.every(function(e){ return e.parentNode===parentEl; });
+        var target=m.line;
+        if(same){
+          var bb=null; els.forEach(function(e){ try{ var b=e.getBBox(); if(!bb) bb={x:b.x,y:b.y,x2:b.x+b.width,y2:b.y+b.height};
+            else { bb.x=Math.min(bb.x,b.x); bb.y=Math.min(bb.y,b.y); bb.x2=Math.max(bb.x2,b.x+b.width); bb.y2=Math.max(bb.y2,b.y+b.height); } }catch(_){} });
+          var g=D.createElementNS(NS,"g"); parentEl.insertBefore(g,els[0]);
+          if(bb){ var r=D.createElementNS(NS,"rect"); r.setAttribute("class","__lkhit");
+            r.setAttribute("x",bb.x-4); r.setAttribute("y",bb.y-6); r.setAttribute("width",bb.x2-bb.x+8); r.setAttribute("height",bb.y2-bb.y+12); g.appendChild(r); }
+          els.forEach(function(e){ g.appendChild(e); });
+          target=g;
+        }
+        want.forEach(function(k){ hit(k,target,(i+1)+". "+m.label); });
+      });
+      return found;
+    }
+    // Tell the shell which keys landed (for the Links list) — labels only, never targets.
+    function report(){
+      if(!links) return;
+      var matched={}; Object.keys(byKey).forEach(function(k){ var el=byKey[k][0]; matched[k]=String(el.__lkLabel||""); });
+      try{ parent.postMessage({type:"protoArtifact:linkmap",matched:matched},"*"); }catch(_){}
+    }
+    // The shell's Links list highlights (and scrolls to) an element on hover / focus.
+    W.addEventListener("message",function(e){
+      if(e.source!==parent) return;
+      var m=e.data||{}; if(m.type!=="protoArtifact:highlight") return;
+      D.querySelectorAll(".__lkhl").forEach(function(el){ el.classList.remove("__lkhl"); });
+      var els=typeof m.key==="string"&&own.call(byKey,m.key)?byKey[m.key]:null; if(!els) return;
+      els.forEach(function(el){ el.classList.add("__lkhl"); });
+      var svg=els[0].ownerSVGElement; while(svg&&svg.ownerSVGElement) svg=svg.ownerSVGElement;
+      if(svg&&svg.__vp&&m.reveal) svg.__vp.reveal(els[0]);
+    });
+
+    W.__artVP={
+      // The full-frame kinds: the first root <svg> in #__vp (mermaid draws it inside its <pre>).
+      full:function(){
+        var vp=D.getElementById("__vp"); if(!vp) return;
+        var svg=vp.querySelector(":scope>svg,:scope>pre.mermaid>svg"); if(!svg) return;
+        mount(svg,vp,false);
+        if(links){ var f=attach(svg); Object.keys(f).forEach(function(k){ byKey[k].forEach(function(el){ el.__lkLabel=f[k].label; }); }); report(); }
+      },
+      // markdown: every rendered ```mermaid fence gets its own inline box (no code links there).
+      inline:function(){
+        D.querySelectorAll("pre.mermaid>svg").forEach(function(svg){
+          var pre=svg.parentNode, box=D.createElement("div"); box.className="__vpbox";
+          pre.parentNode.insertBefore(box,pre); box.appendChild(svg); pre.remove();
+          mount(svg,box,true);
+        });
+      }
+    };
+  }
+  // The controller + its config as one srcdoc script. JSON is made script-safe (`<` escaped),
+  // so a note or key holding a script close tag can't end the tag early.
+  function gfxScript(cfg){
+    return '<script>(' + artGraphics.toString() + ')(' + JSON.stringify(cfg||{}).replace(/</g,"\\u003c") + ');<\/script>';
+  }
+  // Display data for the frame's tooltips: {key: {where:"project/path:line[-end]", note}}.
+  function linkDisplay(links){
+    if(!links || typeof links!=="object") return null;
+    var out={}, n=0;
+    Object.keys(links).forEach(function(k){ var t=links[k]; if(!t||typeof t!=="object") return;
+      out[k]={where: linkWhere(t), note: String(t.note||"")}; n++; });
+    return n ? out : null;
+  }
+  function linkWhere(t){
+    var w=String(t.project||"")+"/"+String(t.path||"")+":"+(+t.line||1);
+    if(+t.end_line && +t.end_line!==+t.line) w+="-"+(+t.end_line);
+    return w;
+  }
+  // Wrap graphic content in the navigable viewport (svg + mermaid share this).
+  function viewport(inner){ return VP_CSS + GFX_CSS + '<body><div id="__vp">' + inner + '</div>'; }
 
   // An `html` artifact that is a FULL document must keep its own prologue FIRST. Prepending the
   // DS link + base() ahead of its `<!doctype …>` put content before the doctype, and a doctype —
@@ -167,13 +488,16 @@
     return m[0] + inject + code.slice(m[0].length);
   }
 
-  function srcdoc(kind, code) {
+  function srcdoc(kind, code, links) {
     if (kind === "html") return htmlDoc(code, dsLink() + base(kind));
-    if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + '</body>';
+    if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + gfxScript({}) +
+      '<script>__artVP.full();<\/script></body>';
+    // mermaid.run() is async: the viewport + code links mount once the <svg> exists. A rejected
+    // run stays UNHANDLED on purpose — ERRBOOT's unhandledrejection hook reports it (#1458).
     if (kind === "mermaid") return '<!doctype html>' + base(kind) + viewport('<pre class="mermaid">' + esc(code) + '</pre>') +
-      cdn("mermaid") +
+      cdn("mermaid") + gfxScript({links: linkDisplay(links)}) +
       '<script>mermaid.initialize({startOnLoad:false,theme:"dark"});'
-      + 'try{mermaid.run();}catch(_){}<\/script></body>';
+      + 'mermaid.run().then(function(){__artVP.full();});<\/script></body>';
     if (kind === "markdown") return mdDoc(code);
     // `react`: import map + UMD react/react-dom/babel, compiled as a MODULE so `import` works
     // (no-import artifacts still run — they use the UMD React/ReactDOM globals as before).
@@ -211,12 +535,13 @@
     var hasMermaid = code.indexOf("```mermaid") >= 0;
     var mmRun = hasMermaid
       ? 'document.querySelectorAll("#md pre>code.language-mermaid").forEach(function(c){var d=document.createElement("pre");d.className="mermaid";d.textContent=c.textContent;c.parentNode.replaceWith(d);});'
-        + 'if(window.mermaid){mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run();}'
+        + 'if(window.mermaid){mermaid.initialize({startOnLoad:false,theme:"dark"});mermaid.run().then(function(){__artVP.inline();});}'
       : "";
     return '<!doctype html>' + dsLink() + base("markdown") + '<style>' + MD_CSS + '</style>' +
+      (hasMermaid ? GFX_CSS : "") +
       '<body><div id="md" class="pl-prose"></div>' +
       '<script type="importmap">{"imports":{"marked":"' + V + 'marked.mjs"}}<\/script>' +
-      (hasMermaid ? cdn("mermaid") : "") +
+      (hasMermaid ? cdn("mermaid") + gfxScript({}) : "") +
       '<script type="module">import { marked } from "marked";' +
       'document.getElementById("md").innerHTML = marked.parse(decodeURIComponent(escape(atob("' + b64 + '"))));' +
       mmRun + '<\/script></body>';
@@ -362,8 +687,82 @@
     var key=a.id+"@"+vi+"@"+v.ts;
     if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
       renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;  // lifetime number (_store._version_key)
-      $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code); $frame.style.display="block"; }
+      // The version's STORED code links (ADR 0038 amendment) — the only targets a click in the
+      // frame can open. Captured with the srcdoc so they always belong to what's on screen.
+      renderingLinks = (a.kind==="mermaid" && v.links && typeof v.links==="object" && !Array.isArray(v.links)) ? v.links : null;
+      linkLabels = null;
+      $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
+      renderLinks(); }
   }
+
+  // ── code links (ADR 0038 amendment) ──────────────────────────────────────────────────────
+  // A mermaid version may carry `links` {key: {project, path, line, end_line, note}}, validated
+  // server-side against the fs fence. The frame posts only a KEY; everything that leaves this
+  // page for the console is looked up HERE, in the rendered version's stored links — so model-
+  // authored code in the sandbox can open exactly the targets the tool validated, nothing else.
+  var renderingLinks = null, linkLabels = null;  // linkLabels: null until the frame reports its matches
+  var $links=document.getElementById("links"), $linkpanel=document.getElementById("linkpanel"),
+      $linklist=document.getElementById("linklist");
+  function linkTarget(key){
+    if(!renderingLinks || typeof key!=="string" || !Object.prototype.hasOwnProperty.call(renderingLinks, key)) return null;
+    var t=renderingLinks[key];
+    if(!t || typeof t.project!=="string" || typeof t.path!=="string") return null;
+    var line=Math.floor(+t.line)||0; if(line<1) return null;
+    var end=Math.floor(+t.end_line)||line;
+    return {project:t.project, path:t.path, line:line, end_line:Math.max(end,line), note:typeof t.note==="string"?t.note:""};
+  }
+  // Hand a target to the console, which opens the code pane (or the editor). Posted only to the
+  // page that embeds this one, at its origin where the browser tells us (see fromEmbedder).
+  function openTarget(t){
+    if(!t || window.parent===window) return;
+    var anc=location.ancestorOrigins, origin=(anc && anc.length) ? anc[0] : "*";
+    try{ window.parent.postMessage({type:"protoagent:code:open", project:t.project, path:t.path,
+      line:t.line, end_line:t.end_line, note:t.note}, origin); }catch(_){}
+  }
+  function linkKeys(){ return renderingLinks ? Object.keys(renderingLinks).filter(function(k){ return !!linkTarget(k); }) : []; }
+  function msgOrder(k){ var m=/^msg:(\d+)$/.exec(k); return m ? +m[1] : Infinity; }
+  function renderLinks(){
+    var keys=linkKeys();
+    $links.style.display = keys.length ? "" : "none";
+    $links.textContent = "Links ("+keys.length+")";
+    if(!keys.length) closeLinks(false);
+    $linklist.textContent="";
+    keys.sort(function(a,b){ return msgOrder(a)-msgOrder(b); }).forEach(function(k){
+      var t=linkTarget(k), li=document.createElement("li"), b=document.createElement("button");
+      b.type="button"; b.className="lk"; b.setAttribute("data-key", k);
+      var name=document.createElement("span"); name.className="lk-name";
+      name.textContent = (linkLabels && linkLabels[k]) || k;   // textContent only — never HTML
+      var where=document.createElement("span"); where.className="lk-where";
+      where.textContent = t.project+"/"+t.path+":"+t.line+(t.end_line!==t.line?"-"+t.end_line:"");
+      b.appendChild(name); b.appendChild(where);
+      if(t.note){ var n=document.createElement("span"); n.className="lk-note"; n.textContent=t.note; b.appendChild(n); }
+      if(linkLabels && !Object.prototype.hasOwnProperty.call(linkLabels, k)){
+        b.classList.add("lk-miss"); var miss=document.createElement("span"); miss.className="lk-note"; miss.textContent="not found in the diagram"; b.appendChild(miss);
+      }
+      b.addEventListener("click", function(){ openTarget(linkTarget(k)); });
+      b.addEventListener("mouseenter", function(){ highlight(k, false); });
+      b.addEventListener("focus", function(){ highlight(k, true); });
+      b.addEventListener("mouseleave", function(){ highlight(null, false); });
+      li.appendChild(b); $linklist.appendChild(li);
+    });
+  }
+  function highlight(key, reveal){
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:highlight", key:key, reveal:!!reveal}, "*"); }catch(_){}
+  }
+  function openLinks(){ $linkpanel.style.display="flex"; $links.setAttribute("aria-expanded","true");
+    var f=$linklist.querySelector("button"); if(f) f.focus(); }
+  function closeLinks(refocus){ if($linkpanel.style.display==="none") return;
+    $linkpanel.style.display="none"; $links.setAttribute("aria-expanded","false"); highlight(null,false);
+    if(refocus) $links.focus(); }
+  $links.addEventListener("click", function(){ $linkpanel.style.display==="flex" ? closeLinks(false) : openLinks(); });
+  document.getElementById("linkclose").addEventListener("click", function(){ closeLinks(true); });
+  $linkpanel.addEventListener("keydown", function(e){
+    if(e.key==="Escape"){ e.preventDefault(); closeLinks(true); return; }
+    if(e.key!=="ArrowDown" && e.key!=="ArrowUp") return;
+    var bs=[].slice.call($linklist.querySelectorAll("button")), i=bs.indexOf(document.activeElement);
+    if(i<0) return; e.preventDefault();
+    var j=e.key==="ArrowDown" ? Math.min(bs.length-1,i+1) : Math.max(0,i-1); bs[j].focus();
+  });
 
   // Live re-theme (#1872): base() bakes the theme tokens into the srcdoc as literal
   // colors, so an app-theme switch after render left the artifact in the stale
@@ -476,6 +875,22 @@
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
       if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
+      return;
+    }
+    // A click on a linked diagram element (ADR 0038 amendment). Only the KEY is read from the
+    // frame — the target comes from the rendered version's stored links; an unknown key, or a
+    // post without a user gesture behind it (a script firing on its own), opens nothing.
+    if(m.type==="protoArtifact:openCode"){
+      var ua=navigator.userActivation;
+      if(ua && !ua.isActive) return;
+      openTarget(linkTarget(m.key));
+      return;
+    }
+    // Which keys the diagram actually matched (+ their visible labels) — for the Links list.
+    if(m.type==="protoArtifact:linkmap"){
+      var mm=m.matched, keep={};
+      if(mm && typeof mm==="object") Object.keys(mm).forEach(function(k){ if(linkTarget(k)) keep[k]=String(mm[k]||"").slice(0,160); });
+      linkLabels=keep; renderLinks();
       return;
     }
     if(m.type!=="protoArtifact:ask") return;

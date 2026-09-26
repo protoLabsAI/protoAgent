@@ -376,7 +376,10 @@ def _build_data_router():
             raise HTTPException(404, f"unknown artifact {art_id}")
         if _store._is_file(art):  # a file artifact's preview isn't user-editable (would orphan its blob)
             raise HTTPException(409, "file artifacts are not editable — re-save the file")
-        v = _store._commit_version(store, art, code, by="user")
+        # A panel edit is a small change to the same diagram: its code links carry over, like
+        # update_artifact's (a key the edit removed simply stops matching anything).
+        links = art["versions"][-1].get("links") or None
+        v = _store._commit_version(store, art, code, by="user", extra={"links": dict(links)} if links else None)
         return {"ok": True, "id": art_id, "version": v}
 
     @router.get("/artifact/{art_id}/blob")

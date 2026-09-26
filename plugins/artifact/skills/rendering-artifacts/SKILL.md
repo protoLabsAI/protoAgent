@@ -19,7 +19,9 @@ the user files to wire up themselves — not what they asked for when they want 
 
 ## Kinds
 
-- `mermaid` — flowcharts, sequence/ER/gantt diagrams. `code` is the Mermaid definition.
+- `mermaid` — flowcharts, sequence/ER/gantt diagrams. `code` is the Mermaid definition. The
+  panel lets the user zoom and pan it. A diagram **of the code** can link its nodes and messages
+  to the exact lines (`links=`) — see the `diagramming-code` skill.
 - `markdown` — a Markdown document (notes, a README, a write-up). Rendered with design-system
   prose styling; GitHub-style tables/lists/code work, and a ` ```mermaid ` fence becomes a live
   diagram. Reach for this over `html` when you just want **formatted text**.

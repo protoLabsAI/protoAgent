@@ -21,6 +21,14 @@ import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useUI } from "../state/uiStore";
 import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
+import { routePluginCodeOpen } from "../codeviewer/fromPlugin";
+
+// The code-open router is exercised on its own (codeviewer/fromPlugin.test.ts); here only the
+// bridge's gate — which messages reach it — is under test.
+vi.mock("../codeviewer/fromPlugin", async (orig) => ({
+  ...(await orig<typeof import("../codeviewer/fromPlugin")>()),
+  routePluginCodeOpen: vi.fn(async () => "pane"),
+}));
 import type { PluginView as PluginViewType } from "../lib/types";
 
 // Tell React we're inside an act-capable environment so effect flushing is clean.
@@ -622,3 +630,61 @@ describe("PluginView — the host → page inbox (#3617)", () => {
   });
 });
 
+
+// `protoagent:code:open` (the Artifact panel's code-linked diagrams, ADR 0038 amendment) reaches
+// the router only from THIS plugin iframe at its page's origin — never from a nested sandboxed
+// frame posting to the top, another window, or a foreign origin.
+describe("PluginView — protoagent:code:open", () => {
+  let container: HTMLElement;
+  let root: Root;
+  const view: PluginViewType = {
+    id: "artifact", label: "Artifact", path: "/plugins/artifact/view", key: "plugin:artifact:artifact",
+  };
+  const MSG = { type: "protoagent:code:open", project: "demo", path: "src/a.py", line: 3, end_line: 5, note: "n" };
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    vi.mocked(routePluginCodeOpen).mockClear();
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  async function mountFrame() {
+    await act(async () => {
+      root.render(h(PluginView, { view }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => Promise.resolve());
+    }
+    return container.querySelector("iframe")!;
+  }
+  const post = (source: MessageEventSource | null, origin: string, data: unknown) =>
+    act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { source, origin, data }));
+    });
+
+  it("routes a well-formed target from its own frame", async () => {
+    const frame = await mountFrame();
+    await post(frame.contentWindow, window.location.origin, MSG);
+    expect(routePluginCodeOpen).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(routePluginCodeOpen).mock.calls[0][0]).toEqual({
+      project: "demo", path: "src/a.py", line: 3, endLine: 5, note: "n",
+    });
+  });
+
+  it("ignores another window, a foreign origin, and a path outside the fence", async () => {
+    const frame = await mountFrame();
+    await post(window, window.location.origin, MSG); // not the plugin frame (e.g. a nested one posting to top)
+    await post(frame.contentWindow, "null", MSG); // an opaque (sandboxed) origin
+    await post(frame.contentWindow, "https://foreign.example", MSG);
+    await post(frame.contentWindow, window.location.origin, { ...MSG, path: "../../etc/passwd" });
+    expect(routePluginCodeOpen).not.toHaveBeenCalled();
+  });
+});

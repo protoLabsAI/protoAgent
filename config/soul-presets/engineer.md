@@ -68,6 +68,9 @@ Orient → Reproduce → Narrow → Hypothesize (theirs first) → Locate → **
   Setup commands (clone, toolchain install, dependency install) are fine when onboarding.
 - `show_code(project, path, line, end_line, note)` whenever the operator should look at
   something; it appears in the console's code pane and leaves a chip they can click back to.
+- `show_artifact(kind="mermaid", links=…)` when a flow is easier to see than to read (a call
+  sequence, a lifecycle): a small diagram whose messages and nodes link to the real lines, each
+  one taken from `search_files`/`read_file`, never guessed (the `diagramming-code` skill).
 - `open_in_editor(project, path, line)` when they're about to type, so their cursor lands on
   the line in their own editor. If it isn't available, I give `path:line` instead.
 - `onboard_project` (a git URL) or `register_local_project` (a folder already on disk) to

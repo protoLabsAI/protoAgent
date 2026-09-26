@@ -10,7 +10,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import _config, _preview, _ref, _render_status, _store
+from . import _config, _links, _preview, _ref, _render_status, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -196,7 +196,7 @@ def _then_render(result: _LockedResult) -> str:
 
 @tool
 @_busy_reply
-def show_artifact(kind: str, code: str, title: str = "") -> str:
+def show_artifact(kind: str, code: str, title: str = "", links: dict | str | None = None) -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
     ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
@@ -222,20 +222,32 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
     the chat, data-only, no sandbox, lighter). Rule of thumb: a generated VISUAL → this tool;
     a data SHAPE → a component. Prefer either over writing files when the user just wants to
     SEE something rendered. Returns the artifact id.
+
+    CODE-LINKED DIAGRAMS (mermaid only): ``links`` maps diagram elements to code, so the
+    operator can click a node or a message and land on that code in the console's code pane.
+    ``{"<key>": {"project", "path", "line", "end_line"?, "note"?}}`` — keys are a flowchart /
+    class / state node id or subgraph id exactly as written, ``participant:<name>`` for a
+    sequence participant, and ``msg:<n>`` for the n-th sequence message (1-based, source
+    order) or ``msg:<exact label>``. Every target must be a REAL location you read — take
+    ``line`` from ``search_files`` (file:line) or a ``read_file`` offset, never a guess; the
+    reply echoes each target's first line so you can check it. Bad links are dropped with a
+    reason (the diagram still renders). ``note`` is one sentence (≤ 280 chars).
     """
-    return _then_render(_show(kind, code, title))
+    checked = _links.check(links)
+    return _then_render(_show(kind, code, title, checked))
 
 
 @_store.serialized
-def _show(kind: str, code: str, title: str) -> _LockedResult:
+def _show(kind: str, code: str, title: str, checked: _links.Checked | None = None) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
         return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}.", None
     code = code or ""
     if err := _store._too_big(code):
         return err, None
+    kept, report = _links.finish(checked, k, code) if checked else ({}, "")
     store = _store._read_store()
-    nv = _store._new_version(code)
+    nv = _store._new_version(code, extra={"links": kept} if kept else None)
     art = {
         "id": _store._new_id(),
         "title": title or "",
@@ -252,25 +264,50 @@ def _show(kind: str, code: str, title: str) -> _LockedResult:
     msg = (
         f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
         f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
-    )
+    ) + report
     return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art)
+
+
+def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tuple[dict, str]:
+    """The links for a targeted edit's new version: the passed map when there is one, else the
+    previous version's links carried over (a small edit keeps the same diagram) — re-checked
+    against the new source so a renamed node or a removed message is reported, not silent."""
+    if checked is not None and checked.given:
+        return _links.finish(checked, art["kind"], new_code)
+    old = art["versions"][-1].get("links") or {}
+    if not old or art["kind"] != "mermaid":
+        return {}, ""
+    report = f"\nCarried over {len(old)} code link(s) from the previous version."
+    stale = _links.unmatched_keys(old, new_code)
+    if stale:
+        report += (
+            " These no longer match anything in the diagram: "
+            + ", ".join(stale[:20])
+            + " — pass `links` with the corrected map."
+        )
+    return dict(old), report
 
 
 @tool
 @_busy_reply
-def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> str:
+def update_artifact(old_string: str, new_string: str, artifact_id: str = "", links: dict | str | None = None) -> str:
     """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
     in its current source, creating a new version. ``old_string`` must match the current source
     EXACTLY ONCE (whitespace included) — add surrounding context to disambiguate if needed.
     Defaults to the most-recent artifact; pass ``artifact_id`` to target another (see
     ``list_artifacts``). Prefer this over ``rewrite_artifact`` for small changes — it's the fast
     path and keeps the version history clean.
+
+    A mermaid diagram's code ``links`` (see ``show_artifact``) CARRY OVER to the new version
+    unless you pass ``links`` — the full new map, replacing the old one (``{}`` clears them).
+    If your edit renumbers sequence messages (msg:<n>), pass the corrected map.
     """
-    return _then_render(_update(old_string, new_string, artifact_id))
+    checked = _links.check(links)
+    return _then_render(_update(old_string, new_string, artifact_id, checked))
 
 
 @_store.serialized
-def _update(old_string: str, new_string: str, artifact_id: str) -> _LockedResult:
+def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.Checked | None = None) -> _LockedResult:
     if not old_string:
         return "old_string must not be empty.", None
     store = _store._read_store()
@@ -293,9 +330,10 @@ def _update(old_string: str, new_string: str, artifact_id: str) -> _LockedResult
     new_code = src.replace(old_string, new_string, 1)
     if err := _store._too_big(new_code):
         return err, None
-    v = _store._commit_version(store, art, new_code)
+    kept, report = _carry_links(art, checked, new_code)
+    v = _store._commit_version(store, art, new_code, extra={"links": kept} if kept else None)
     return (
-        f"Updated artifact {art['id']} → version {v}.",
+        f"Updated artifact {art['id']} → version {v}." + report,
         (art["id"], v, _store._version_key(art)),
         _ref.ref_tail(art),
     )
@@ -303,19 +341,23 @@ def _update(old_string: str, new_string: str, artifact_id: str) -> _LockedResult
 
 @tool
 @_busy_reply
-def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
+def rewrite_artifact(code: str, title: str = "", artifact_id: str = "", links: dict | str | None = None) -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
     prefer ``update_artifact`` for small edits — a rewrite round-trips the full body through
     the conversation every time, so batch your changes into one rewrite rather than iterating
     rewrite-by-rewrite. Optionally update the ``title``. Defaults to the most-recent artifact;
     pass ``artifact_id`` to target another.
+
+    A mermaid diagram's code ``links`` (see ``show_artifact``) do NOT carry over a rewrite —
+    the new source is a new diagram, so pass the ``links`` for it (the old version keeps its own).
     """
-    return _then_render(_rewrite(code, title, artifact_id))
+    checked = _links.check(links)
+    return _then_render(_rewrite(code, title, artifact_id, checked))
 
 
 @_store.serialized
-def _rewrite(code: str, title: str, artifact_id: str) -> _LockedResult:
+def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | None = None) -> _LockedResult:
     code = code or ""
     if err := _store._too_big(code):
         return err, None
@@ -327,9 +369,17 @@ def _rewrite(code: str, title: str, artifact_id: str) -> _LockedResult:
         return _store._file_not_editable(art), None
     if title:
         art["title"] = title
-    v = _store._commit_version(store, art, code)
+    kept, report = _links.finish(checked, art["kind"], code) if checked else ({}, "")
+    if not checked or not checked.given:
+        old = art["versions"][-1].get("links") or {}
+        if old:
+            report += (
+                f"\nThe previous version's {len(old)} code link(s) were not carried over (a rewrite is a "
+                "new diagram) — pass `links` to link this one."
+            )
+    v = _store._commit_version(store, art, code, extra={"links": kept} if kept else None)
     return (
-        f"Rewrote artifact {art['id']} → version {v}." + _save_nudge(art["id"]),
+        f"Rewrote artifact {art['id']} → version {v}." + report + _save_nudge(art["id"]),
         (art["id"], v, _store._version_key(art)),
         _ref.ref_tail(art),
     )
@@ -378,7 +428,8 @@ def get_artifact(artifact_id: str = "") -> str:
     code = art["versions"][-1]["code"]
     title = art["title"] or "(untitled)"
     v = len(art["versions"])
-    return f"Artifact {art['id']}  [{art['kind']}]  {title}  · v{v}{_pin_mark(art)} — current source:\n\n{code}"
+    links = _links.describe(art["versions"][-1].get("links"))
+    return f"Artifact {art['id']}  [{art['kind']}]  {title}  · v{v}{_pin_mark(art)} — current source:\n\n{code}{links}"
 
 
 @tool

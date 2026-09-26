@@ -639,26 +639,27 @@ def test_ask_bridge_is_wired(monkeypatch, tmp_path):
     assert "e.source!==$frame.contentWindow" in html
 
 
-def test_graphic_kinds_get_a_crisp_fit_to_window_viewport(monkeypatch, tmp_path):
-    """svg + mermaid render into a CRISP fit-to-window viewport (#1517): the <svg> scales as a
-    VECTOR to fit the frame (max-width/height:100% !important — the !important beats mermaid's
-    inline max-width:Npx). No CSS transform / raster layer, which pixelated on zoom-in in
-    WKWebView; pan/zoom is intentionally traded away for crispness. Both kinds share the one
-    `viewport(...)` wrapper."""
+def test_graphic_kinds_get_a_navigable_viewbox_viewport(monkeypatch, tmp_path):
+    """svg + mermaid (and mermaid fences in markdown) render into a NAVIGABLE viewport: wheel /
+    pinch zoom, drag pan, keyboard and a toolbar — all by moving the root <svg>'s viewBox, so the
+    browser re-lays the vector out at every zoom. Never a CSS transform: #1517 removed the old
+    transform zoom because WKWebView rasterized the SVG at 1x and GPU-scaled it (blurry). The
+    behaviour is pinned in a real browser (apps/web/e2e/artifact-mermaid-links.spec.ts); this
+    guards the source against the transform scaffold creeping back."""
     art = _load(monkeypatch, tmp_path)
-    html = art._SHELL_HTML + art._SHELL_JS
-    # the viewport container exists and fits the svg crisply as a vector.
-    assert 'id="__vp"' in html
-    assert "max-width:100% !important" in html and "max-height:100% !important" in html
-    assert "width:auto !important" in html and "height:auto !important" in html
-    # both graphic kinds route through the shared wrapper.
-    assert "function viewport(inner)" in html
-    # the old transform-driven raster pan/zoom scaffold + controls are GONE (they pixelated).
-    assert 'id="__cv"' not in html
-    assert 'id="__zi"' not in html and 'id="__zo"' not in html and 'id="__zr"' not in html
-    assert "will-change" not in html and "transform-origin" not in html
-    assert 'addEventListener("wheel"' not in html  # no scroll-zoom
-    assert "__artFit" not in html  # no async re-fit — the fit is pure CSS now
+    js = art._SHELL_JS
+    assert 'id="__vp"' in js and "function viewport(inner)" in js
+    # The in-frame controller is authored as a real function and injected as source.
+    assert "function artGraphics(cfg)" in js and "artGraphics.toString()" in js
+    assert 'setAttribute("viewBox"' in js
+    assert 'addEventListener("wheel"' in js and '"gesturechange"' in js  # Safari/WKWebView pinch
+    assert "prefers-reduced-motion" in js
+    # …and none of the raster zoom: no transform-driven scaling, no compositor hint.
+    for bad in ("will-change", "transform-origin", "scale(", "style.transform", "__artFit", 'id="__cv"'):
+        assert bad not in js, bad
+    # The frame's controller must not carry a literal script close (it rides a srcdoc <script>).
+    src = js[js.index("function artGraphics(cfg)") : js.index("function gfxScript(")]
+    assert "</" not in src and "<!--" not in src
 
 
 def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
@@ -1084,7 +1085,7 @@ def test_save_file_artifact_registered_and_shell_has_filecard(monkeypatch, tmp_p
     # the shell renders file kinds as a download card, hides Edit, and downloads via the blob route
     html = art._SHELL_HTML + art._SHELL_JS
     assert "function fileCard(v)" in html
-    assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code)' in html
+    assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)' in html
     assert "/blob?version=" in html
 
 
