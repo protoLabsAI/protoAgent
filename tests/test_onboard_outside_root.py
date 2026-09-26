@@ -271,8 +271,11 @@ async def test_bypass_does_not_skip_the_card(layout, applied, park):
 # ── the hard floor: never a card ────────────────────────────────────────────
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def fake_home(tmp_path, monkeypatch):
+    """Every test gets its own home dir. Besides letting the home-relative floor be tested
+    for real, it keeps the RUNNER's home out of it: on Windows ``tmp_path`` lives under
+    ``%USERPROFILE%\\AppData``, which the floor refuses."""
     home = tmp_path / "home" / "kj"
     home.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
