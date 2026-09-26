@@ -96,6 +96,20 @@ browser only ever talks to the hub (same-origin), so no per-agent CORS/token spr
 > (`/api/events`) **hub-signed** (the console fetches `/api/sse-token` with `host:true`),
 > because the hub's auth middleware validates the proxied stream *before* forwarding — a
 > member-signed token 401'd at the hub for every non-host member on a bearer-gated hub.
+>
+> **Amendment — ADR 0113 D6 ([#3648](https://github.com/protoLabsAI/protoAgent/issues/3648)):**
+> the #1607 refusal above is **lifted**; remote members' WebSockets traverse the hub again,
+> under one rule: **the hub never attaches the remote's stored bearer to an upgrade on its
+> own.** A presented `?token=` (or a server-to-server caller's `Authorization: Bearer`) is
+> authenticated at the hub (`bearer_tier`); operator ⇒ it is **swapped** for the remote's
+> stored token in the slot it was presented in, anything else ⇒ close `1008`. A socket with
+> no credential (ticket-based plugins — agent_browser's `?ticket=`, the terminal plugin's
+> in-band ticket, both minted over the authenticated HTTP proxy) is passed through with **no**
+> Authorization, and the remote checks the ticket itself. A remote registered **without** a
+> stored token is still refused. The hub's own credential is never forwarded to a remote, and
+> the loopback-only fleet token (ADR 0089) never leaves the machine. So an unauthenticated
+> caller still gets nothing through the hub it couldn't get by dialling the remote directly —
+> the property #1607 protected.
 
 > **Amendment — A2A URL-based multi-tenancy:** the slug proxy makes each member an
 > independently-addressable **A2A tenant** at `/agents/<slug>/a2a`, which is exactly the

@@ -112,6 +112,29 @@ _slug_cache: dict = {}
 _remote_slugs: set[str] = set()
 
 
+def _resolve_slug(slug: str) -> tuple[str, str, str | None] | None:
+    """Uncached ``(kind, base_url, stored_token)`` for a slug, or None when it isn't reachable.
+
+    ``kind`` is ``"host"`` (this instance), ``"local"`` (a live local peer) or ``"remote"`` (a
+    registered remote member). Precedence is host → live local → remote, so a running local
+    peer shadows a same-slug remote. ``stored_token`` is the remote's stored bearer (None for
+    host/local, and for a remote registered without one). One derivation shared by the HTTP
+    target below and ``forward_ws`` — the WS path must know the KIND, not guess it from whether
+    an Authorization header happened to be attached (a tokenless remote carries none)."""
+    if slug == "host":
+        from runtime.state import STATE
+
+        port = getattr(STATE, "active_port", None)
+        return ("host", f"http://127.0.0.1:{port}", None) if port else None
+    rec = supervisor._load_state().get(slug)
+    if rec and supervisor._alive(rec.get("pid")):
+        return ("local", f"http://127.0.0.1:{rec['port']}", None)
+    remote = supervisor.remote_for_slug(slug)
+    if remote:
+        return ("remote", remote["url"], remote.get("token") or None)
+    return None
+
+
 def _target_for_slug(slug: str) -> tuple[str, dict] | None:
     """``(base_url, extra_headers)`` for a slug, or None when it isn't reachable."""
     now = time.monotonic()
@@ -119,23 +142,14 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
     if hit and now - hit[1] < 1.0:
         return hit[0]
     target: tuple[str, dict] | None = None
-    is_remote = False  # set ONLY in the remote branch (kind == "remote") — no second _alive race
-    if slug == "host":
-        from runtime.state import STATE
-
-        port = getattr(STATE, "active_port", None)
-        target = (f"http://127.0.0.1:{port}", {}) if port else None
-    else:
-        rec = supervisor._load_state().get(slug)
-        if rec and supervisor._alive(rec.get("pid")):
-            target = (f"http://127.0.0.1:{rec['port']}", {})
-        else:
-            remote = supervisor.remote_for_slug(slug)
-            if remote:
-                extra = {"authorization": f"Bearer {remote['token']}"} if remote.get("token") else {}
-                target = (remote["url"], extra)
-                is_remote = True
-    if is_remote:
+    resolved = _resolve_slug(slug)
+    kind = resolved[0] if resolved is not None else None
+    if resolved is not None:
+        _kind, base, stored = resolved
+        target = (base, {"authorization": f"Bearer {stored}"} if stored else {})
+    # ``_remote_slugs`` is driven by the same one derivation ``forward_ws`` uses — the KIND, never
+    # "did an Authorization header get attached" (a tokenless remote carries none).
+    if kind == "remote":
         _remote_slugs.add(slug)
     else:
         _remote_slugs.discard(slug)
@@ -349,7 +363,7 @@ async def _pump_ws(client_ws, upstream) -> None:
 
 
 def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
-    """Rewrite a WS handshake's query for a LOCAL-member target (ADR 0089).
+    """Rewrite a WS handshake's query for a HOST or LOCAL-member target (ADR 0089).
 
     A member's plugin WS (terminal PTY, say) validates a ``?token=`` param against the member's
     OWN inbound bearer — which is now the fleet service token (D5) — but the console opens the
@@ -361,8 +375,10 @@ def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
     authenticate as operator — close the socket rather than proxy it. Pass-through unchanged for:
     the ``host`` slug (its plugins expect the operator bearer, not the fleet token) and
     ticket-based plugins that carry no ``token`` param (agent_browser mints a member-side ticket
-    over HTTP — already correct — so the hub must not gate them). Callers refuse remote members
-    before this (their stored bearer must never be lent to an unauthenticated WS caller)."""
+    over HTTP — already correct — so the hub must not gate them). A REMOTE member never comes
+    through here: ``forward_ws`` routes it to ``_remote_ws_handshake``, because the fleet token is
+    a loopback-only credential that must never leave this machine (ADR 0089), and a remote gets
+    its own stored bearer instead — under stricter rules (ADR 0113 D6)."""
     from urllib.parse import parse_qsl, urlencode
 
     pairs = parse_qsl(raw_query, keep_blank_values=True)
@@ -382,55 +398,123 @@ def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
     return raw_query, True  # no token (ticket-based plugin) — the member self-authenticates
 
 
+def _remote_ws_handshake(
+    raw_query: str, auth_header: str | None, stored_token: str | None
+) -> tuple[str, dict, str | None]:
+    """Authenticate + rewrite a WS handshake bound for a REMOTE member (ADR 0113 D6).
+
+    Returns ``(query, headers, refusal)``: ``refusal`` is a close reason (the caller closes 1008
+    and dials nothing) or None; ``headers`` is the COMPLETE header set for the upstream upgrade.
+
+    The one rule: **the hub never attaches the remote's stored bearer to an upgrade on its own.**
+    This route runs outside the HTTP auth middleware, so nobody has authenticated the caller —
+    #1607 was exactly the hub attaching the stored bearer anyway, which lent an anonymous caller
+    a ride into the remote's terminal PTY. The stored bearer now only ever REPLACES a credential
+    the caller presented AND the hub authenticated as operator, in the slot it was presented in:
+
+    - **No stored token** → refuse. With nothing to authenticate against, the hub would be a
+      blind pipe into an open instance.
+    - **``?token=``** → ``bearer_tier`` at the hub. Operator ⇒ swapped for the stored token
+      (the remote's plugin validates ``?token=`` against its OWN bearer — the same reason the
+      local-member path swaps in the fleet token). Anything else, including an empty value ⇒
+      refuse. Never the fleet token: that is loopback-only and must not leave this machine.
+    - **``Authorization`` header** → the same treatment. A browser can't set headers on a WS,
+      so this is a server-to-server caller (a script holding the hub's bearer). Its header
+      carries a HUB credential, which is meaningless at the remote and a leak if forwarded, so
+      it is NEVER forwarded as-is. Operator ⇒ replaced by ``Bearer <stored>`` — parity with
+      HTTP ``forward_to``, where an authenticated caller's header is replaced by the stored
+      bearer — and anything else (wrong token, non-Bearer scheme) ⇒ refuse, rather than
+      silently stripping it and proxying the caller as anonymous: a caller that presented a
+      credential expects it to count, and a failed one is a policy violation, not a fallback.
+    - **Neither** (ticket-based plugins — agent_browser's ``?ticket=``, the terminal's in-band
+      ticket frame) → pass through with NO Authorization at all. The ticket was minted over the
+      authenticated HTTP proxy, and the remote checks it itself. Unlike the local path, an
+      OPEN hub does not inject a credential here either: "open" makes every presented token
+      operator, but it never makes the hub present one on the caller's behalf.
+
+    Every presented credential must authenticate — a good ``?token=`` doesn't excuse a bad
+    header. So an unauthenticated caller gets nothing through the hub it couldn't get by dialling
+    the remote directly (the property #1607 protected). Subprotocols are passed through by the
+    caller unchanged and the hub never writes a credential into them (no in-tree plugin carries
+    a token in ``Sec-WebSocket-Protocol``; the terminal plugin authenticates in-band)."""
+    from urllib.parse import parse_qsl, urlencode
+
+    from a2a_impl.auth import bearer_tier
+
+    if not stored_token:
+        return raw_query, {}, "remote member has no stored token; websocket proxying refused"
+    pairs = parse_qsl(raw_query, keep_blank_values=True)
+    headers: dict = {}
+    tokens = [v for (k, v) in pairs if k == "token"]
+    if tokens:
+        if any(bearer_tier(t or "") != "operator" for t in tokens):
+            return raw_query, {}, "unauthorized"
+        pairs = [(k, v) for (k, v) in pairs if k != "token"] + [("token", stored_token)]
+        raw_query = urlencode(pairs)
+    if auth_header is not None:
+        scheme, _, cred = auth_header.strip().partition(" ")
+        if scheme.lower() != "bearer" or bearer_tier(cred.strip()) != "operator":
+            return raw_query, {}, "unauthorized"
+        headers["authorization"] = f"Bearer {stored_token}"
+    return raw_query, headers, None
+
+
 async def forward_ws(slug: str, ws, path: str) -> None:
     """Reverse-proxy a **WebSocket** to the agent named by ``slug`` (#883). The HTTP proxy
     above can't carry a WS upgrade (it strips ``Upgrade``/``Connection``), so a plugin's
     live WS — agent_browser's viewport/feed, say — couldn't traverse the hub: HTTP loaded
     the panel but the socket showed "Disconnected". This resolves the slug → member, opens
-    a client WS to it (carrying the bearer + subprotocols), and pumps frames both ways.
+    a client WS to it (carrying the credential + subprotocols), and pumps frames both ways.
 
-    **Auth (ADR 0089).** The hub's default-deny auth is an HTTP middleware
-    (``A2AAuthMiddleware`` is a Starlette ``BaseHTTPMiddleware``, which skips non-HTTP scopes),
-    so this ``@app.websocket`` route runs with NO hub auth. ``_member_ws_query`` restores it for
-    a LOCAL member: a presented ``?token=`` is authenticated at the hub and swapped for the fleet
-    service token the member expects (its plugin WS validates against the member's own bearer,
-    now the fleet token); a token that doesn't authenticate is refused. **Remote members are NOT
-    proxied over WS**: the hub would attach the remote's stored bearer (``_target_for_slug``) and
-    lend an unauthenticated caller a ride into the remote's authed sockets (e.g. a terminal
-    plugin's PTY); until a remote handshake is authenticated end-to-end, use ``delegate_to`` /
-    a direct connection to the remote instead.
+    **Auth.** The hub's default-deny auth is an HTTP middleware (``A2AAuthMiddleware`` is a
+    Starlette ``BaseHTTPMiddleware``, which skips non-HTTP scopes), so this ``@app.websocket``
+    route runs with NO hub auth, and every credential decision is made here:
+
+    - **host / local member (ADR 0089)** — ``_member_ws_query``: a presented ``?token=`` is
+      authenticated at the hub and (for a local member) swapped for the fleet service token the
+      member expects; a token that doesn't authenticate is refused. The caller's own
+      Authorization header rides through (the hub attaches no stored credential here).
+    - **remote member (ADR 0113 D6)** — ``_remote_ws_handshake``: the hub never lends the
+      remote's stored bearer on its own; it only swaps it in for a credential it authenticated
+      as operator, passes ticket-based sockets through with no Authorization, and refuses a
+      remote registered with no token. (#1607 refused remotes outright; D6 re-enables them.)
+
+    There is no WS analog of ``member_public``: that flag marks an HTTP request the middleware
+    admitted anonymously, so ``forward_to`` strips the stored bearer from it. Every WS arrives
+    unauthenticated, so the remote path already treats a credential-less socket exactly that
+    way — forwarded anonymous — and only an authenticated one gets the swap.
     """
     import websockets
 
-    # Refuse WS to a remote member (see docstring). A live LOCAL peer takes precedence over a
-    # same-slug remote in _target_for_slug, so only refuse when the slug resolves to a remote
-    # (not a running local process). host/local peers fall through and proxy as before.
-    live_local = supervisor._load_state().get(slug)
-    if not (live_local and supervisor._alive(live_local.get("pid"))) and supervisor.remote_for_slug(slug):
-        log.info("[fleet] refusing WS proxy to remote member %r (hub auth is HTTP-only)", slug)
-        await ws.close(code=1008, reason="websocket proxying to a remote member is disabled")
-        return
-
-    target = _target_for_slug(slug)
-    if target is None:
+    # Uncached, and the URL comes from the same record as the stored token: a cached target
+    # that went stale between "which kind is this?" and "where do I dial?" must not be able to
+    # send one member's credential to another.
+    resolved = _resolve_slug(slug)
+    if resolved is None:
         await ws.close(code=1011, reason=f"agent {slug!r} is not running")
         return
-    base, extra = target
+    kind, base, stored = resolved
     ws_base = "ws" + base[len("http") :]  # http(s):// → ws(s)://
-    # Authenticate + swap the ?token= credential for a local member (ADR 0089): the member's
-    # plugin WS validates it against the member's own (fleet) bearer, which the console's
-    # operator bearer no longer matches. A presented-but-unauthenticated token is refused here.
-    query, allowed = _member_ws_query(slug, ws.url.query)
-    if not allowed:
-        log.info("[fleet] refusing WS to %r — presented token is not an operator credential", slug)
-        await ws.close(code=1008, reason="unauthorized")
-        return
+    auth = ws.headers.get("authorization")
+
+    if kind == "remote":
+        query, headers, refusal = _remote_ws_handshake(ws.url.query, auth, stored)
+        if refusal is not None:
+            log.info("[fleet] refusing WS to remote member %r — %s", slug, refusal)
+            await ws.close(code=1008, reason=refusal)
+            return
+    else:
+        # Authenticate + swap the ?token= credential for a local member (ADR 0089): the member's
+        # plugin WS validates it against the member's own (fleet) bearer, which the console's
+        # operator bearer no longer matches. A presented-but-unauthenticated token is refused.
+        query, allowed = _member_ws_query(slug, ws.url.query)
+        if not allowed:
+            log.info("[fleet] refusing WS to %r — presented token is not an operator credential", slug)
+            await ws.close(code=1008, reason="unauthorized")
+            return
+        headers = {"authorization": auth} if auth else {}
     upstream_url = f"{ws_base}/{path}" + (f"?{query}" if query else "")
 
-    headers = dict(extra)  # a remote member's bearer; else carry the browser's
-    auth = ws.headers.get("authorization")
-    if auth and not any(k.lower() == "authorization" for k in headers):
-        headers["authorization"] = auth
     sub = ws.headers.get("sec-websocket-protocol")
     subprotocols = [s.strip() for s in sub.split(",") if s.strip()] if sub else None
 
