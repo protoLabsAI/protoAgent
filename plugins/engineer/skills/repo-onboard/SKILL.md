@@ -10,6 +10,12 @@ look, well enough to explain it. Steps 1–7 are plumbing: do them in **one turn
 with a choice. The tour (step 7) is interactive: one stop per turn. Cite `path:line`.
 **Never change code during onboarding** — no edits, no writes, no commits.
 
+**Read with the filesystem tools** — `list_dir`, `find_files`, `search_files`, `read_file` —
+not `execute_code` or ad-hoc scripts: their `file:line` output is what `show_code` and the
+diagram links need, and they stay inside the project fence. Setup commands go through
+`run_command`. Every onboarding produces all three views: the README artifact, the manifest
+in the code pane, and the overview diagram.
+
 ## 1. Register it
 - A git URL or `owner/repo` → `onboard_project(github_repo=..., write=true)`. It clones into
   the onboarding root (or reuses an existing checkout there and reports drift). Use the
@@ -125,9 +131,9 @@ Watch out: <anything surprising>
 ```
 
 Point at the three artifacts in a line ("README, the manifest and the overview are open
-beside chat — click any node to jump to its code"), then **end the turn with the choice**:
-*"Want a guided tour of <flow 1>, <flow 2> or <flow 3>, a sequence diagram of one of them,
-or straight to the bug?"*
+beside chat — click any node to jump to its code"), then **end the turn with this choice**,
+all three options, in one line: *"Want a guided tour of <flow 1>, <flow 2> or <flow 3>, a
+sequence diagram of one of them, or straight to the bug?"*
 
 ## 8. Guided tour (only if the operator wants it; ONE stop per turn)
 Walk the chosen flow as 3–5 stops (e.g. entry → request/turn loop → model call → tool
