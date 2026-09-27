@@ -28,14 +28,14 @@
   white-space: nowrap;
 }
 .doc-viewer__subtitle {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-weight: 400;
   color: var(--pl-color-fg-subtle);
 }
 
 .doc-viewer__body {
   /* Comfortable reading measure; the markdown renderer styles the rest. */
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   line-height: 1.65;
 }
 
