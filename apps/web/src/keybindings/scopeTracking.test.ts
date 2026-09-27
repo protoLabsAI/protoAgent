@@ -158,6 +158,23 @@ describe("useGlobalKeybindings — last-interaction fallback fires scoped bindin
     unmountHost();
   });
 
+  it("focus falling back to <body> after a pointerdown in the scope doesn't erase the record", () => {
+    const run = vi.fn();
+    const off = registerScoped("test.scope.msg", "f9", run);
+    mountHost();
+
+    // Typing in the composer, then clicking a non-focusable message: the browser fires
+    // pointerdown on the message, then focus falls back to <body> (focusin on body). The
+    // body focusin must not overwrite the in-scope record.
+    msg.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    bodyKeydown("F9");
+    expect(run).toHaveBeenCalledTimes(1);
+
+    off();
+    unmountHost();
+  });
+
   it("r5: a real focused target keeps its own scope AND the isEditableTarget typing gate", () => {
     const run = vi.fn();
     const off = registerScoped("test.scope.msg", "f9", run);

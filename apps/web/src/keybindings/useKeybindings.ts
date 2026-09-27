@@ -52,7 +52,12 @@ export function useGlobalKeybindings(): void {
     // chain then correctly resolves to no scope.
     let lastInteracted: Element | null = null;
     const rememberInteraction = (e: Event) => {
-      if (e.target instanceof Element) lastInteracted = e.target;
+      if (!(e.target instanceof Element)) return;
+      // Focus falling back to <body>/<html> (clicking a non-focusable element while a form
+      // control was focused) is not an interaction: recording it would overwrite the
+      // pointerdown that just landed inside a scope and defeat the fallback.
+      if (e.type === "focusin" && (e.target === document.body || e.target === document.documentElement)) return;
+      lastInteracted = e.target;
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
