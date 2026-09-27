@@ -1,0 +1,1 @@
+- **Utility-bar chrome now uses DS Button (#3684).** The Settings pill and the bottom/left/right panel toggles are DS `Button icon size="xs" variant="ghost"`; the panel toggles expose their shown/collapsed state via `aria-pressed` (true = shown) instead of the old `is-off` class, and the dead `.status-dot` topbar-health CSS is removed.

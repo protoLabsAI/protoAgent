@@ -52,38 +52,6 @@
   border-right: 0;
 }
 
-/* Topbar health light — one dot, detail on hover, click to refresh. */
-.status-dot {
-  width: 11px;
-  height: 11px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: var(--pl-color-fg-subtle, #555);
-  cursor: pointer;
-  flex: none;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
-}
-
-.status-dot.tone-ok {
-  background: var(--pl-color-status-success, #3fb950);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-success, #3fb950) 22%, transparent);
-}
-
-.status-dot.tone-warning {
-  background: var(--pl-color-status-warning, #d29922);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-warning, #d29922) 22%, transparent);
-}
-
-.status-dot.tone-error {
-  background: var(--pl-color-status-error, #ff6b6b);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-error, #ff6b6b) 22%, transparent);
-}
-
-.status-dot:hover {
-  filter: brightness(1.15);
-}
-
 /* Bottom utility bar — panel collapse toggles, pinned to their sides. */
 .utility-bar {
   display: flex;
@@ -93,6 +61,13 @@
   border-top: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg);
   font-size: 11px;
+}
+
+/* Panel toggles are DS icon buttons carrying aria-pressed (true = panel shown).
+   The DS doesn't tone [aria-pressed="false"], so mark the collapsed state with
+   accent — matching the retired .util-btn.is-off, tokens only (no hex). */
+.utility-bar [aria-pressed="false"] {
+  color: var(--pl-color-accent);
 }
 
 .utility-bar .util-spacer {

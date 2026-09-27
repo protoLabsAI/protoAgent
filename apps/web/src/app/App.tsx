@@ -1180,15 +1180,17 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                     (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer +
                     palette deep-links can open it too via the store flag (openGlobalSettings). */}
                 <Tooltip label="Settings — model, plugins, knowledge & more">
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className="util-btn"
                     aria-label="Settings"
                     data-testid="settings-widget"
                     onClick={() => openGlobalSettings()}
                   >
                     <Settings2 size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
                     that one keeps the far-left slot operators already reach for by position. */}
@@ -1233,16 +1235,19 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                       : "No bottom panel — move a surface to the bottom dock"
                   }
                 >
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className={`util-btn ${bottomCollapsed ? "is-off" : ""}`}
                     onClick={() => setBottomCollapsed(!bottomCollapsed)}
                     disabled={!bottomActive}
+                    aria-pressed={!bottomCollapsed}
                     aria-label="Toggle bottom panel"
                     data-testid="toggle-bottom"
                   >
                     <PanelBottom size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
                 <Tooltip
                   label={
@@ -1253,16 +1258,19 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                         : "Hide left panel"
                   }
                 >
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
                     onClick={() => setLeftCollapsed(!leftCollapsed)}
                     disabled={leftMembers.length === 0}
+                    aria-pressed={!leftCollapsed}
                     aria-label="Toggle left panel"
                     data-testid="toggle-left"
                   >
                     <PanelLeft size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
                 <Tooltip
                   label={
@@ -1273,16 +1281,19 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                         : "Hide side panel"
                   }
                 >
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
                     onClick={() => setRightCollapsed(!rightCollapsed)}
                     disabled={rightMembers.length === 0}
+                    aria-pressed={!rightCollapsed}
                     aria-label="Toggle side panel"
                     data-testid="toggle-right"
                   >
                     <PanelRight size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
               </>
             }
