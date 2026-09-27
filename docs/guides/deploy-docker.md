@@ -152,6 +152,14 @@ protoAgent refuses to bind `0.0.0.0` with an **open** operator API (`/api/*`, `/
 - bind `127.0.0.1` (single-host);
 - or, only behind a trusted network boundary, `PROTOAGENT_ALLOW_OPEN=1`.
 
+An open instance (no token) also only answers requests addressed to a host name it
+recognizes: IP literals, `localhost`, `*.ts.net` and the names in `PROTOAGENT_TRUSTED_HOSTS`
+(see [Environment variables](/reference/environment-variables)). Browsing the bundled
+compose's `127.0.0.1` publish works as-is. If other containers call an open agent by its
+service name (`http://agent:7870`), add that name: `PROTOAGENT_TRUSTED_HOSTS=agent`.
+In open mode, `POST`s to `/a2a` and `/v1/*` must also send `Content-Type: application/json`
+(every protoAgent and OpenAI-compatible client already does).
+
 ### Where the operator token lives
 
 Configure the token in the **server's environment** — `A2A_AUTH_TOKEN` (or `auth.token` in

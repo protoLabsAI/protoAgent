@@ -25,6 +25,7 @@ import time
 import httpx
 from starlette.responses import JSONResponse, StreamingResponse
 
+from a2a_impl.hosts import host_allowed as _host_allowed
 from graph.fleet import supervisor
 
 log = logging.getLogger("protoagent.server")
@@ -467,108 +468,16 @@ def _origin_allowed(origin: str | None, host: str | None) -> bool:
 # are an ``Authorization`` bearer or ``X-API-Key`` the console keeps in per-origin localStorage
 # (nothing auth-bearing is a cookie), so neither a cross-site page nor a rebound origin — whose
 # localStorage is empty — can attach one, and the middleware 401s them before this proxy runs.
-# Local members and the host slug are unaffected: they live inside this box's trust boundary
-# and are the same "open instance is open" posture the hub's own ``/api`` already has; a remote
+# Local members and the host slug skip THIS pair of gates (the instance-wide open-mode Host
+# gate, ``a2a_impl.hosts.HostGuardMiddleware``, still fronts them like every other path): they
+# live inside this box's trust boundary, the same posture the hub's own ``/api`` has; a remote
 # crosses a machine boundary, and its operator granted that token to the HUB, not to every page
 # the hub's operator happens to have open.
 
-# Resolved bind interface, pushed in by the server bootstrap (graph/ can't import the pairing
-# routes that already hold it). Only a NAME matters here — any IP literal passes on its own.
-_BIND_HOST: list[str] = ["127.0.0.1"]
-
-
-def set_bind_host(host: str) -> None:
-    """Record the resolved bind interface (called from the server bootstrap)."""
-    _BIND_HOST[0] = (host or "").strip().lower() or "127.0.0.1"
-
-
-def _host_name(host: str) -> str:
-    """The name part of a ``Host`` header, lowercased: port dropped, IPv6 brackets and a
-    trailing root dot removed (``[::1]:7870`` → ``::1``, ``Localhost.:7870`` → ``localhost``)."""
-    h = host.strip().lower()
-    if h.startswith("["):
-        return h[1 : h.find("]")] if "]" in h else h[1:]
-    if h.count(":") == 1:
-        h = h.split(":", 1)[0]
-    return h.rstrip(".")
-
-
-def _own_names() -> set[str]:
-    """This machine's own mDNS name, ``<short>.local`` — and deliberately nothing else.
-
-    The bare short name and a dotted FQDN are both resolved through the NETWORK's DNS: a DHCP
-    search domain turns ``joshs-mbp`` into ``joshs-mbp.<their-domain>``, and a DHCP-assigned
-    FQDN sits in a zone the network runs — so a hostile Wi-Fi could answer either with
-    127.0.0.1. ``.local`` is multicast DNS, and this machine's own responder owns its own name
-    (a conflicting answer forces a rename rather than winning). ``gethostname`` reads the
-    kernel's name — no resolution, so no 5s DNS stall. Anything else goes in
-    ``PROTOAGENT_TRUSTED_HOSTS``."""
-    import socket
-
-    try:
-        name = socket.gethostname().strip().lower().rstrip(".")
-    except OSError:
-        return set()
-    if not name:
-        return set()
-    short = name.split(".", 1)[0]
-    return {f"{short}.local"} if short else set()
-
-
-def _trusted_host_names() -> set[str]:
-    """Operator-declared names the hub is served under: ``PROTOAGENT_TRUSTED_HOSTS`` (comma-
-    separated, for a reverse proxy that forwards its own public name) plus the host of every
-    ``A2A_ALLOWED_ORIGINS`` entry (an origin you trust to CALL the hub names a host that serves
-    it). Read per call — both are cheap and an env change must not need a cache flush."""
-    import os
-    from urllib.parse import urlsplit
-
-    from a2a_impl.auth import allowed_origins
-
-    names = {_host_name(n) for n in os.environ.get("PROTOAGENT_TRUSTED_HOSTS", "").split(",") if n.strip()}
-    for o in allowed_origins() or []:
-        try:
-            netloc = urlsplit(o).netloc
-        except ValueError:
-            continue
-        if netloc:
-            names.add(_host_name(netloc))
-    return names
-
-
-def _host_allowed(host: str | None) -> bool:
-    """Is ``host`` (the request's ``Host`` header) a name this hub is honestly served under?
-
-    DNS rebinding needs a NAME the attacker's DNS answers, so:
-    - **Any IP literal** passes (127.x, ::1, this box's LAN/tailnet IPs, the bind address). A
-      browser only sends an IP ``Host`` when it connected to that IP, so the page came from
-      whatever serves there — this hub — never from an attacker's domain. That makes an
-      explicit "this machine's addresses" list unnecessary (and it can't go stale).
-    - ``localhost`` and ``*.localhost`` (RFC 6761: browsers resolve them to loopback
-      themselves, no DNS involved).
-    - ``*.ts.net`` — Tailscale MagicDNS (a hub behind ``tailscale serve`` sees its own
-      ``<machine>.<tailnet>.ts.net``). That zone is Tailscale's; nobody can point a ts.net name
-      at another tailnet's loopback.
-    - This machine's ``<short>.local`` mDNS name (see ``_own_names`` for why not the bare or
-      DNS hostname), and the bind address when it is a name.
-    - ``PROTOAGENT_TRUSTED_HOSTS`` and the hosts of ``A2A_ALLOWED_ORIGINS`` (a reverse proxy
-      that forwards its public name, e.g. nginx ``proxy_set_header Host $host``).
-    No ``Host`` at all is a non-browser client (browsers always send one) and passes."""
-    if host is None or not host.strip():
-        return True
-    name = _host_name(host)
-    import ipaddress
-
-    try:
-        ipaddress.ip_address(name)
-        return True
-    except ValueError:
-        pass
-    if name == "localhost" or name.endswith(".localhost") or name.endswith(".ts.net"):
-        return True
-    if name == _host_name(_BIND_HOST[0]) or name in _own_names():
-        return True
-    return name in _trusted_host_names()
+# The Host allowlist itself lives in ``a2a_impl.hosts`` (#3668; the server bootstrap feeds it
+# the bind name): the same check now guards the whole open instance at the ASGI layer, so
+# there is one definition of "a name this instance is served under". This gate still calls it
+# — the proxy must stay safe on its own, e.g. in an app assembled without ``auth.install``.
 
 
 # A navigation (top-level or iframe) may be cross-site — links and the desktop webview's plugin

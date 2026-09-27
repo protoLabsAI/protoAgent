@@ -58,6 +58,26 @@ That's the whole model, stated plainly: **trust what you install, sandbox what t
 contain the blast radius.** No security theater, no pretending a plugin's React was more dangerous
 than its Python.
 
+## An instance with no token
+
+With no bearer token (the desktop default, bound to loopback) the operator API is open to
+anything that can reach the port, so the port itself is the boundary. Two hardening rules keep
+that boundary honest for browsers on the same machine
+([#3668](https://github.com/protoLabsAI/protoAgent/issues/3668)):
+
+- **Host allowlist.** Every request and WebSocket must be addressed to a name the instance is
+  served under: an IP literal, `localhost`/`*.localhost`, `*.ts.net`, this machine's
+  `<name>.local`, a named bind, the hosts of `A2A_ALLOWED_ORIGINS`, or
+  `PROTOAGENT_TRUSTED_HOSTS`. Anything else gets `403`. This is the same allowed-hosts check
+  Jupyter, VS Code and Vite apply to their local servers.
+- **JSON only on `/a2a` and `/v1/*`.** A request with a body must say
+  `Content-Type: application/json` (or a `+json` type); anything else gets `415`.
+
+A token-gated instance skips both: its credential is a header the client attaches (never a
+cookie), so a page on another origin has nothing to send. Anything reachable beyond loopback
+should have a token anyway. The server refuses a non-loopback open bind unless
+`PROTOAGENT_ALLOW_OPEN=1`.
+
 ## See also
 
 - [Building a plugin view](../guides/building-react-plugin-views.md) — the sandboxed-iframe plugin UI model.

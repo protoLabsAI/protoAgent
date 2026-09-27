@@ -16,10 +16,11 @@ import pytest
 from starlette.datastructures import Headers
 
 from a2a_impl import auth
+from a2a_impl import hosts
 from graph.fleet import proxy
 
 _STORED = "remote-operator-device-token"
-_REAL_OWN_NAMES = proxy._own_names  # captured before the autouse fixture stubs it
+_REAL_OWN_NAMES = hosts._own_names  # captured before the autouse fixture stubs it
 
 
 @pytest.fixture(autouse=True)
@@ -28,8 +29,8 @@ def _clean(monkeypatch):
     proxy._remote_slugs.clear()
     monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS", raising=False)
     monkeypatch.setattr(auth, "_ALLOWED_ORIGINS", [None])
-    monkeypatch.setattr(proxy, "_BIND_HOST", ["127.0.0.1"])
-    monkeypatch.setattr(proxy, "_own_names", lambda: {"joshs-mbp.local"})
+    monkeypatch.setattr(hosts, "_BIND_HOST", ["127.0.0.1"])
+    monkeypatch.setattr(hosts, "_own_names", lambda: {"joshs-mbp.local"})
     yield
     proxy._slug_cache.clear()
     proxy._remote_slugs.clear()
@@ -260,7 +261,7 @@ async def test_trusted_hosts_env_bind_name_and_allowed_origins(monkeypatch, open
     monkeypatch.setattr(auth, "_ALLOWED_ORIGINS", [["https://agents.example.com"]])
     assert (await _send("r1", "POST", {"host": "agents.example.com"})).status_code == 200
     monkeypatch.setattr(auth, "_ALLOWED_ORIGINS", [None])
-    proxy.set_bind_host("Hub.Lan")
+    hosts.set_bind_host("Hub.Lan")
     assert (await _send("r1", "POST", {"host": "hub.lan:7870"})).status_code == 200
 
 
