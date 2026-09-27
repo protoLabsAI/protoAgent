@@ -4,6 +4,8 @@
 [ADR 0086](0086-chat-first-mobile-shell.md)** (chat-first mobile shell). D1–D5 and D7 stand.
 **Amended by [ADR 0112](0112-console-code-pane.md)** (D1/D2): a new core `code` surface
 defaults to the right dock and opens on whichever dock is *not* holding chat.
+**D5 amendment proposed by [ADR 0114](0114-console-browser-storage-budget.md)**: layout
+persistence goes through the storage seam (writes never throw under a full quota).
 
 ## Context
 
