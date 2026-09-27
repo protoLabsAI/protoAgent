@@ -162,124 +162,38 @@
 }
 
 /* ── Session sheet ───────────────────────────────────────────────────────────
-   Hand-rolled: the DS Drawer is side-only (left/right) and a thread switcher wants to
-   come up from the bottom, under the thumb. Mirrors AppDrawer's structure. */
-.session-sheet-root {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-}
-.session-sheet-backdrop {
-  position: absolute;
-  inset: 0;
-  background: var(--pl-color-overlay);
-  animation: mshell-fade-in 0.18s ease;
-}
-.session-sheet {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-height: 70dvh;
-  display: flex;
-  flex-direction: column;
-  background: var(--pl-color-bg-raised, var(--pl-color-bg));
-  border-top-left-radius: 16px;
-  border-top-right-radius: 16px;
-  padding-bottom: env(safe-area-inset-bottom);
-  animation: mshell-sheet-in 0.24s cubic-bezier(0.32, 0.72, 0, 1);
-  transition: transform 0.2s ease;
-}
-@keyframes mshell-sheet-in {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-@keyframes mshell-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.session-sheet-grip {
-  width: 36px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--pl-color-border);
-  margin: 8px auto 4px;
-  flex: 0 0 auto;
-}
-
+   A DS `Drawer side="bottom"` (SessionSheet.tsx) — it owns the sheet chrome, the scrim,
+   the slide-in animation, Esc / overlay dismiss and the focus trap. What's left here is
+   LAYOUT ONLY, on the structural classNames the mobile e2e spec pins, sized to the ADR
+   0086 44px touch floor. No colours, borders, radii or animation live here now. */
 .session-sheet-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 16px 8px;
-  flex: 0 0 auto;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
-.session-sheet-head h2 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-.session-sheet-new {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
-  background: none;
-  color: var(--pl-color-fg);
-  font-size: 14px;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-.session-sheet-new:active {
-  opacity: 0.55;
-}
-
 .session-sheet-list {
   list-style: none;
   margin: 0;
-  padding: 0 8px 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  min-height: 0;
 }
 .session-sheet-row {
   display: flex;
   align-items: center;
-  border-radius: var(--pl-radius);
 }
-.session-sheet-row.is-current {
-  background: var(--pl-color-bg-hover);
-}
+/* The current row is conveyed by `aria-current` on its pick button plus the status dot;
+   the old row-background highlight was chrome the DS Drawer swap retires. */
 .session-sheet-pick {
   flex: 1;
   min-width: 0;
-  display: flex;
-  align-items: center;
+  justify-content: flex-start;
   gap: 9px;
-  min-height: 48px;
-  padding: 0 8px;
-  border: none;
-  background: none;
-  color: var(--pl-color-fg);
-  font-size: 15px;
-  text-align: left;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-.session-sheet-pick:active {
-  opacity: 0.55;
+  /* 44px hard minimum — the HIG / ADR 0086 touch target. */
+  min-height: 44px;
 }
 .session-sheet-title {
   flex: 1;
@@ -287,22 +201,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 .session-sheet-del {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   min-width: 44px;
   min-height: 44px;
-  border: none;
-  background: none;
-  /* --fg-subtle was never defined, so this always resolved to the fallback — keep it. */
-  color: var(--pl-color-fg);
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-.session-sheet-del:active {
-  opacity: 0.55;
 }
 
 /* ── Toasts ──────────────────────────────────────────────────────────────────
@@ -321,12 +224,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mshell-pushed,
-  .session-sheet,
-  .session-sheet-backdrop {
+  .mshell-pushed {
     animation: none;
-  }
-  .session-sheet {
-    transition: none;
   }
 }
