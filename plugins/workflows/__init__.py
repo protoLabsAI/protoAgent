@@ -182,7 +182,7 @@ async def _run_prepared(
                 seed_outputs=seed_outputs,
             )
             _trace_outcome(traced, result)
-    except Exception:
+    except BaseException:  # a cancelled run too, or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
@@ -411,7 +411,7 @@ async def _resume(
         ) as traced:
             result = await execute_workflow(recipe, inputs, **kwargs)
             _trace_outcome(traced, result)
-    except Exception:
+    except BaseException:  # a cancelled run too, or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal

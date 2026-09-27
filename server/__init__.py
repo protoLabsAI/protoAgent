@@ -969,6 +969,13 @@ def _main():
         try:
             from observability import tracing
 
+            # A span is exported only when it ENDS: work still running now (a coder
+            # dispatch no surface cancelled, a turn mid-stream) would otherwise vanish
+            # with the process, leaving its already-exported children orphaned in a
+            # nameless trace. End those as interrupted first, then flush.
+            ended = tracing.end_open_spans("the process shut down (restart or exit)")
+            if ended:
+                log.info("[tracing] ended %d open span(s) at shutdown", ended)
             await asyncio.to_thread(tracing.flush)
         except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             log.exception("[tracing] flush on shutdown failed")

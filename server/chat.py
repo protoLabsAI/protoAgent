@@ -2480,6 +2480,9 @@ def _trace_terminal_output(ev: tuple) -> None:
         return
     if kind == "done":
         text = payload if isinstance(payload, str) else str(getattr(payload, "text", "") or "")
+        # The caller got nothing (a turn that parked on `wait`, or ended on a tool call):
+        # say so, rather than leave the trace looking like its output was lost.
+        text = text or "(the turn ended without reply text)"
     elif kind == "input_required" and isinstance(payload, dict):
         text = str(payload.get("question") or payload.get("title") or "")
         text = f"[input required] {text}".rstrip()

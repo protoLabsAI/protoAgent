@@ -145,6 +145,11 @@ def _short_tool_name(title: str) -> str:
     return (label or (title or "").strip() or "tool")[:80]
 
 
+#: How much of a coder's reasoning (the tail) and of one tool call's input a trace keeps.
+_THOUGHTS_TRACE_CHARS = 4000
+_TOOL_TRACE_CHARS = 2000
+
+
 def _tool_refinement(update: dict) -> tuple[str, Any] | None:
     """A ``tool_call_update``'s refinement of an open call as ``(title, raw_input)``, or
     None when it carries no usable arguments.
@@ -505,6 +510,9 @@ class AcpClient:
         # project board's live monitor) sample it like last_usage; None until the
         # agent sends one (not every coder plans).
         self.last_plan: list | None = None
+        # The model the agent reports for its session (ACP ``models.currentModelId`` on
+        # session/new or session/load), for labelling the coder's generation in traces.
+        self._model_id: str | None = None
         # Captured from the `initialize` response (was previously discarded).
         self._auth_methods: list[dict] = []
         self._agent_capabilities: dict = {}
@@ -553,7 +561,13 @@ class AcpClient:
         # ``_handle_update`` runs on the reader task, whose context predates the span — a
         # pooled client's reader outlives every turn it reports on.
         self._turn_span: Any = None
-        self._turn_tool_starts: dict[str, tuple[float, str, str]] = {}
+        self._turn_tool_starts: dict[str, Any] = {}
+        # What the agent reported about THIS turn, for its trace: token usage (the
+        # session/prompt response's ``usage``), cost (``usage_update.cost.amount``), and
+        # the tail of its reasoning (``agent_thought_chunk``). Reset per turn.
+        self._turn_usage: dict | None = None
+        self._turn_cost_usd: float | None = None
+        self._turn_thoughts = ""
         # Read at turn start for the same reason: an incognito turn (ADR 0069 D3b)
         # records the coder's tool spans without their content.
         self._turn_trace_io = True
@@ -937,6 +951,8 @@ class AcpClient:
             # for parity with the native runtime's thinking stream.
             text = _content_text(update.get("content"))
             if text:
+                # Keep the tail for the trace: the conclusion is at the end.
+                self._turn_thoughts = (self._turn_thoughts + text)[-_THOUGHTS_TRACE_CHARS:]
                 await self._emit_thought(text)
         elif kind == "tool_call":
             self._turn_tool_calls += 1
@@ -1040,6 +1056,13 @@ class AcpClient:
                 self.last_usage = {"used": int(update.get("used") or 0), "size": int(update.get("size") or 0)}
             except (TypeError, ValueError):
                 logger.debug("[acp/%s] unparseable usage_update %r", self.name, update)
+            # claude-agent-acp attaches the query's cost (its SDK's ``total_cost_usd``,
+            # the API-equivalent price) — latest wins, as the final result carries the
+            # whole query's. Trace-only: a subscription run is not billed per token, so it
+            # stays out of the telemetry row (see _record_run_telemetry).
+            cost = update.get("cost")
+            if isinstance(cost, dict) and isinstance(cost.get("amount"), (int, float)):
+                self._turn_cost_usd = float(cost["amount"])
         elif kind == "plan":
             # The coder's execution plan (its live todo list) — the sharpest
             # "where is it in the work" signal an ACP agent sends. The update carries
@@ -1102,35 +1125,49 @@ class AcpClient:
                 logger.warning("[acp/%s] progress_callback raised: %s", self.name, exc)
 
     def _trace_tool(self, event: dict, raw_input: Any = None) -> None:
-        """Record a finished coder tool call as a child of the turn's ``acp:`` span.
+        """Trace a coder tool call as a child of the turn's ``acp:`` span: opened at its
+        start event and closed at its end, so the span's duration is the call's.
 
         ``raw_input`` is the STRUCTURED ``rawInput``, redacted as data before it is
         stringified: the event's ``input`` is already JSON text, where key-based rules
         (``api_key``, …) can no longer see the keys.
         """
         if self._turn_span is None or event.get("phase") == "update":
-            return  # an update is folded into the start record by ``_refine_tool_start``
-        tool_id = str(event.get("id") or "")
-        if event.get("phase") == "start":
-            safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
-            self._turn_tool_starts[tool_id] = (time.monotonic(), str(event.get("name") or ""), safe_input)
-            return
-        started, name, tool_input = self._turn_tool_starts.pop(tool_id, (time.monotonic(), "", ""))
+            return  # an update is folded into the open span by ``_refine_tool_start``
         from graph.middleware.redaction import redact
         from observability import tracing
 
-        # Redacted like every other tool span (AuditMiddleware): a coder running `env`
-        # or `cat .env` must not ship the values to Langfuse.
+        tool_id = str(event.get("id") or "")
+        # Redacted like every other tool span (AuditMiddleware): a coder running `env` or
+        # `cat .env` must not ship the values to Langfuse. The NAME is content too: an
+        # agent's title can be the whole command line (`export OPENAI_API_KEY=…`), so it is
+        # redacted, and an incognito turn sends none of it.
         io = self._turn_trace_io
-        # The NAME is content too: an agent's title can be the whole command line
-        # (`export OPENAI_API_KEY=…`). Redact it, and send none of it in an incognito turn.
-        name = name or str(event.get("name") or "tool")
+        if event.get("phase") == "start":
+            safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
+            name = str(event.get("name") or "tool")
+            self._turn_tool_starts[tool_id] = tracing.start_child(
+                self._turn_span,
+                f"tool:{redact(name) if io else 'coder'}",
+                as_type="tool",
+                input={"input": safe_input[:_TOOL_TRACE_CHARS] if io else ""},
+                metadata={"session_id": self._turn_session_id or ""},
+            )
+            return
+        ok = event.get("status") == "completed"
+        output = redact(str(event.get("output") or ""))[:1000] if io else ""
+        span = self._turn_tool_starts.pop(tool_id, None)
+        if span is not None:
+            tracing.end_child(span, output=output, level="DEFAULT" if ok else "ERROR")
+            return
+        # No open span (the start predates this turn's span): record it in one shot.
+        name = str(event.get("name") or "tool")
         tracing.trace_tool_call(
             redact(name) if io else "coder",
-            {"input": tool_input if io else ""},
-            redact(str(event.get("output") or "")) if io else "",
-            int((time.monotonic() - started) * 1000),
-            event.get("status") == "completed",
+            {"input": ""},
+            output,
+            0,
+            ok,
             session_id=self._turn_session_id or "",
             parent=self._turn_span,
         )
@@ -1148,17 +1185,31 @@ class AcpClient:
         return json.dumps(redact(raw_input), ensure_ascii=False, default=str)
 
     def _refine_tool_start(self, tool_id: str, title: str, raw_input: Any) -> None:
-        """Fold a refinement (see ``_tool_refinement``) into the open call's trace record,
-        so the span shows the real arguments and title, not just the kind."""
-        start = self._turn_tool_starts.get(tool_id)
-        if start is None:
+        """Fold a refinement (see ``_tool_refinement``) into the open call's span, so it
+        shows the real arguments and title, not just the kind."""
+        span = self._turn_tool_starts.get(tool_id)
+        if span is None:
             return
-        started, name, tool_input = start
-        self._turn_tool_starts[tool_id] = (
-            started,
-            _short_tool_name(title) if title else name,
-            self._safe_tool_input(raw_input) or tool_input,
-        )
+        from graph.middleware.redaction import redact
+        from observability import tracing
+
+        fields: dict = {}
+        if title:
+            fields["name"] = f"tool:{redact(_short_tool_name(title)) if self._turn_trace_io else 'coder'}"
+        safe_input = self._safe_tool_input(raw_input)
+        if safe_input and self._turn_trace_io:
+            fields["input"] = {"input": safe_input[:_TOOL_TRACE_CHARS]}
+        if fields:
+            tracing.update_span(span, **fields)
+
+    def _end_open_tool_spans(self) -> None:
+        """Close tool spans still open when the turn ends (a call the agent never
+        finished, or a turn cut short), marked as such rather than left dangling."""
+        from observability import tracing
+
+        for span in self._turn_tool_starts.values():
+            tracing.end_child(span, level="WARNING", status_message="the turn ended before this tool call did")
+        self._turn_tool_starts.clear()
 
     async def _emit_tool(self, event: dict, *, raw_input: Any = None) -> None:
         self._trace_tool(event, raw_input)
@@ -1327,7 +1378,7 @@ class AcpClient:
         ``null``. Caller gates this on the agent's ``loadSession`` capability."""
         self._loading = True
         try:
-            await self._request(
+            result = await self._request(
                 "session/load",
                 {"sessionId": session_id, "cwd": self.cwd, "mcpServers": self.mcp_servers},
                 timeout=60.0,
@@ -1335,6 +1386,23 @@ class AcpClient:
         finally:
             self._loading = False
         self._session_id = session_id
+        self._note_model(result)
+
+    def _note_model(self, result: Any) -> None:
+        """Remember the session's model from a session/new or session/load response:
+        ``models.currentModelId``, or (the newer ACP shape claude-agent-acp sends) the
+        ``configOptions`` entry with ``id: "model"``."""
+        if not isinstance(result, dict):
+            return
+        models = result.get("models")
+        model = models.get("currentModelId") if isinstance(models, dict) else None
+        if not model:
+            for opt in result.get("configOptions") or []:
+                if isinstance(opt, dict) and opt.get("id") == "model":
+                    model = opt.get("currentValue")
+                    break
+        if isinstance(model, str) and model.strip():
+            self._model_id = model.strip()
 
     def _read_persisted_session_id(self) -> str | None:
         """The session id saved for this launch signature, or None. Guards on a
@@ -1384,6 +1452,7 @@ class AcpClient:
                 ) from exc
             raise
         self._session_id = (result or {}).get("sessionId")
+        self._note_model(result)
         if not self._session_id:
             raise AcpError("session/new returned no sessionId")
         self._persist_session_id(self._session_id)
@@ -1433,6 +1502,12 @@ class AcpClient:
         session_id = ""
         reply = ""
         stop_reason: str | None = None
+        # Per-turn signals, read while the lock is held (see the finally below) and
+        # traced after it is released. None/empty when the run never got the lock.
+        usage: dict | None = None
+        cost_usd: float | None = None
+        thoughts, plan = "", None
+        failure: BaseException | None = None
         from graph.middleware.redaction import redact as _redact
         from observability import tracing
 
@@ -1495,8 +1570,10 @@ class AcpClient:
                     # rather than this one's numbers (#3040).
                     tool_calls = self._turn_tool_calls
                     session_id = self._turn_session_id or ""
+                    usage, cost_usd = self._turn_usage, self._turn_cost_usd
+                    thoughts, plan = self._turn_thoughts, self.last_plan
+                    self._end_open_tool_spans()
                     self._turn_span = None
-                    self._turn_tool_starts.clear()
                     self._turn_lock.release()
                 # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
                 # refusal, a deliberate cancel and a reply truncated at the output-token
@@ -1511,19 +1588,83 @@ class AcpClient:
                 # per turn, so a failed one would report the previous run's.
                 reply, stop_reason = answer, self.last_stop_reason
                 return answer
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
                 self._record_run_telemetry(state, started, tool_calls, session_id)
+                io = tracing.io_allowed()
+                if usage or cost_usd:
+                    self._trace_generation(usage, cost_usd, started)
+                output = reply
+                if state != "completed":
+                    # A failed run has no reply, so without this its trace had no output
+                    # at all: say why it failed (timeout, agent error, cancel, cut off).
+                    output = f"[{state}] {self._failure_reason(failure, stop_reason)}" + (
+                        f"\n\n{reply}" if reply else ""
+                    )
+                metadata = {
+                    "state": state,
+                    "stop_reason": stop_reason,
+                    "tool_calls": tool_calls,
+                    "acp_session_id": session_id,
+                }
+                if self._model_id:
+                    metadata["model"] = self._model_id
+                if plan:
+                    metadata["plan"] = plan
+                if thoughts and io:
+                    metadata["reasoning_tail"] = _redact(thoughts)[-_THOUGHTS_TRACE_CHARS:]
                 tracing.update_span(
                     span,
-                    output=_redact(reply[:2000]) if tracing.io_allowed() else "",
-                    metadata={
-                        "state": state,
-                        "stop_reason": stop_reason,
-                        "tool_calls": tool_calls,
-                        "acp_session_id": session_id,
-                    },
+                    output=_redact(output)[: tracing.MAX_IO_CHARS] if io else "",
+                    metadata=metadata,
                     level="DEFAULT" if state == "completed" else "ERROR",
                 )
+
+    def _trace_generation(self, usage: dict | None, cost_usd: float | None, started: float) -> None:
+        """The coder's own model usage, as a generation under the run's ``acp:`` span.
+
+        The coding agent calls its model itself, so no gateway callback or middleware ever
+        sees those calls; before this a coder run's trace carried no tokens and no cost.
+        claude-agent-acp reports the turn's usage (session/prompt ``usage``, camelCase)
+        and its cost (``usage_update``). The cost is the API-equivalent price the agent's
+        SDK computes, labelled as such: a subscription run is not billed per token.
+        """
+        from observability import tracing
+
+        u = usage or {}
+
+        def n(key: str) -> int:
+            try:
+                return int(u.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        tracing.trace_generation(
+            name=f"acp:{self.name}-model",
+            model=self._model_id or f"acp:{self.name}",
+            usage={
+                "input_tokens": n("inputTokens"),
+                "output_tokens": n("outputTokens"),
+                "cache_read_input_tokens": n("cachedReadTokens"),
+                "cache_creation_input_tokens": n("cachedWriteTokens"),
+                "total_tokens": n("totalTokens"),
+            },
+            cost_usd=cost_usd or 0.0,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            session_id=self._turn_session_id or "",
+            metadata={"usage_source": "reported by the coding agent", "cost_basis": "API-equivalent"},
+        )
+
+    def _failure_reason(self, failure: BaseException | None, stop_reason: str | None) -> str:
+        """Why a run failed, in a line: the exception, else the wire stop reason."""
+        if isinstance(failure, asyncio.CancelledError):
+            return "cancelled"
+        if failure is not None:
+            text = str(failure).strip()
+            return f"{type(failure).__name__}: {text}" if text else type(failure).__name__
+        return self.unfinished_reason() or (f"stop reason {stop_reason}" if stop_reason else "no reply")
 
     def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
@@ -1610,6 +1751,9 @@ class AcpClient:
         self._turn_tool_calls = 0
         self._turn_ended_tool_ids = set()
         self._turn_open_tools = {}
+        self._turn_usage = None
+        self._turn_cost_usd = None
+        self._turn_thoughts = ""
         self._turn_session_id = None
         self._progress = progress_callback
         self._on_tool = tool_callback
@@ -1660,6 +1804,8 @@ class AcpClient:
             self._on_text = None
             self._on_thought = None
         self.last_stop_reason = str((result or {}).get("stopReason") or "") or None
+        usage = (result or {}).get("usage")
+        self._turn_usage = usage if isinstance(usage, dict) else None
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, self.last_stop_reason)
         # Collapse BEFORE stripping: a doubled reply is text+text byte-for-byte, and the
         # common shape ends in whitespace ("…blockers: none\n" twice) — stripping first

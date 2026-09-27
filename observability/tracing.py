@@ -56,7 +56,10 @@ import contextvars
 import logging
 import os
 import re
+import threading
 from typing import Any, AsyncIterator, Iterator
+
+log = logging.getLogger("protoagent.tracing")
 
 _langfuse = None
 _enabled = False
@@ -150,6 +153,49 @@ _PROPAGATED_VALUE_MAX = 200
 # request.state.trust_tier) so the structured request telemetry can carry it as a
 # bounded, non-secret dimension. Default "" = unclassified — the dimension is then
 # omitted so an unclassified request keeps its prior telemetry shape.
+# Spans opened by trace_session / trace_span that have not ended yet, oldest first. A span
+# is exported only when it ENDS, so one still open when the process exits (an operator
+# restart re-execs over the running image) is never exported at all, and every child it
+# already exported lands as an orphan in a nameless trace. end_open_spans() closes them
+# at shutdown, before the flush.
+_open_spans: dict[int, tuple[str, Any]] = {}
+_open_spans_lock = threading.Lock()
+
+
+def _track_open(span: Any, name: str) -> None:
+    if span is not None:
+        with _open_spans_lock:
+            _open_spans[id(span)] = (name, span)
+
+
+def _untrack_open(span: Any) -> None:
+    if span is not None:
+        with _open_spans_lock:
+            _open_spans.pop(id(span), None)
+
+
+def end_open_spans(reason: str) -> int:
+    """End every tracked span that is still open, newest first, marked as interrupted.
+
+    For process shutdown: call it BEFORE ``flush()``, after the surfaces have had their
+    chance to stop, so work that is still running (a board coder dispatch nobody
+    cancelled, a turn mid-stream) exports as an ended, WARNING-level span instead of
+    vanishing. Returns how many were ended. Best-effort; never raises.
+    """
+    with _open_spans_lock:
+        pending = list(_open_spans.values())
+        _open_spans.clear()
+    ended = 0
+    for name, span in reversed(pending):
+        try:
+            span.update(level="WARNING", status_message=f"not finished: {reason}")
+            span.end()
+            ended += 1
+        except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
+            log.debug("[tracing] could not end open span %s", name, exc_info=True)
+    return ended
+
+
 _trust_tier_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_protoagent_trust_tier",
     default="",
@@ -636,6 +682,7 @@ async def trace_session(
             },
         )
         span = ctx.__enter__()
+        _track_open(span, name)
         try:
             from langfuse import propagate_attributes
 
@@ -695,6 +742,7 @@ async def trace_session(
                 attrs.__exit__(None, None, None)
             except Exception:
                 pass
+        _untrack_open(span)
         if ctx is not None:
             try:
                 ctx.__exit__(None, None, None)
@@ -751,6 +799,7 @@ def trace_span(
             metadata={**_inherited_meta_ctx.get(), **(metadata or {})},
         )
         span = ctx.__enter__()
+        _track_open(span, name)
     except Exception as e:  # noqa: BLE001 — never fail the wrapped work for tracing
         print(f"[tracing] trace_span({name}) error: {e}")
         ctx = None
@@ -762,6 +811,7 @@ def trace_span(
             _span_depth_ctx.reset(depth_token)
         except ValueError:
             pass
+        _untrack_open(span)
         if ctx is not None:
             try:
                 ctx.__exit__(None, None, None)
@@ -894,6 +944,38 @@ def trace_tool_call(
         return None
 
 
+def start_child(parent: Any, name: str, *, as_type: str = "span", input: Any = None, metadata: dict | None = None) -> Any:
+    """Open an observation under ``parent`` (a span from ``trace_span``) and return it,
+    or None. For work whose start and end arrive as separate events on a task that
+    does not carry the parent's context, such as an ACP coder's tool calls: opened at the
+    start event and closed with ``end_child`` at the end event, so its duration is real.
+    (``trace_tool_call`` records a finished call in one shot, which shows as 0s.)"""
+    if not _enabled or _langfuse is None or parent is None:
+        return None
+    try:
+        return parent.start_observation(
+            name=name,
+            as_type=as_type,
+            input=input,
+            metadata={**_inherited_meta_ctx.get(), **(metadata or {})},
+        )
+    except Exception:  # noqa: BLE001 — tracing never alters the traced work
+        return None
+
+
+def end_child(span: Any, **fields: Any) -> None:
+    """Set ``output`` / ``level`` / ``status_message`` / … on a ``start_child`` span, then
+    end it. No-op for None; swallow-all."""
+    if span is None:
+        return
+    try:
+        if fields:
+            span.update(**fields)
+        span.end()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def update_span(span: Any, **fields: Any) -> None:
     """Set ``output`` / ``metadata`` / ``level`` / … on a span from ``trace_span``.
 
@@ -938,6 +1020,7 @@ def trace_generation(
     session_id: str = "",
     input: Any = None,
     output: Any = None,
+    metadata: dict | None = None,
 ) -> Any:
     """Log a completed LLM generation as a child observation in the CURRENT trace.
 
@@ -971,6 +1054,8 @@ def trace_generation(
             candidates = {
                 "input": usage.get("input_tokens"),
                 "output": usage.get("output_tokens"),
+                "input_cache_read": usage.get("cache_read_input_tokens"),
+                "input_cache_creation": usage.get("cache_creation_input_tokens"),
                 "total": usage.get("total_tokens"),
             }
             usage_details = {k: int(v) for k, v in candidates.items() if v} or None
@@ -984,6 +1069,7 @@ def trace_generation(
             cost_details=({"total": float(cost_usd)} if cost_usd else None),
             metadata={
                 **_inherited_meta_ctx.get(),
+                **(metadata or {}),
                 "session_id": session_id,
                 "trace_id": _trace_id_ctx.get(),
                 "duration_ms": duration_ms,
