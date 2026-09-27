@@ -488,6 +488,66 @@ def _a2a_progress_fingerprint(result: object) -> str:
     return json.dumps(_compact(observation), sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _status_message_text(result: object) -> str:
+    """The peer task's STATUS-message text (its progress narration), or ``""``.
+
+    Deliberately the status message ONLY — not ``_extract_text``, which also reads
+    artifacts: a still-working task's artifacts are partial output, and a stateless task
+    envelope carries text that is not an answer at all. When a poll deadline expires this is
+    the "last status message" the result carries back to the caller (#3700), so it must be
+    the peer's own account of where it is, nothing more.
+    """
+    if not isinstance(result, dict):
+        return ""
+    task = result.get("task", result)
+    status = task.get("status") if isinstance(task, dict) else None
+    message = status.get("message") if isinstance(status, dict) else None
+    parts = message.get("parts") if isinstance(message, dict) else None
+    if not isinstance(parts, list):
+        return ""
+    return " ".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
+
+
+def _still_running_message(
+    d: Delegate,
+    task_id: str,
+    state: object,
+    status_text: str,
+    *,
+    poll_timeout: float,
+    send_timeout: float | None = None,
+) -> str:
+    """The message a delegation returns when its poll deadline expires with the peer STILL
+    working (#3700).
+
+    Never a bare failure, and never "retry": it names the peer task id, the last observed
+    state and status message, and says the work may still finish and can be resumed or
+    collected with that id. A background delegation delivers a late completion automatically
+    (``late.collect_task``); a foreground caller resumes with
+    ``delegate_to(..., resume_task_id=<id>)``. ``poll_timeout_s`` is per-delegate
+    configurable — raising it is the fix for a peer that legitimately runs longer than the
+    no-progress bound, not re-sending the work (which double-boards it on a peer still busy
+    with the first task).
+    """
+    status = " ".join(str(status_text or "").split())[:_A2A_ERROR_DETAIL_LIMIT]
+    last_status = f'; last status "{status}"' if status else ""
+    if send_timeout is not None:
+        head = f"delegate {d.name!r} still running after {send_timeout:g}s (this call's timeout)"
+        raise_hint = "raise this call's timeout"
+    else:
+        head = (
+            f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable progress "
+            "(its configurable poll_timeout_s)"
+        )
+        raise_hint = "raise this delegate's poll_timeout_s"
+    return (
+        f"{head} — the peer may still be working on task {task_id} (state={state}{last_status}). "
+        f"Its answer will be delivered automatically if it finishes; do NOT re-send this work "
+        f"(that double-boards it). To pick it up, resume with delegate_to(..., "
+        f"resume_task_id={task_id!r}), or {raise_hint} for a job that legitimately runs this long."
+    )
+
+
 # The A2A protocol version(s) our delegate client can speak (it sends the
 # ``A2A-Version: 1.0`` header + the 1.0 SendMessage/GetTask dialect). Used to
 # pre-check a peer's advertised version and fail fast on a clear mismatch.
@@ -1348,6 +1408,9 @@ class A2aAdapter(Adapter):
             # to the pre-#3360 wire: a fresh context next time.
             _drop()
             if task_id and not _is_terminal(state):
+                # The last thing the peer told us about where it is — carried back to the
+                # caller so a deadline is never a bare failure (#3700).
+                last_status_text = _status_message_text(result)
                 # Retain the TASK for collection while continuity stays dropped (#3360b).
                 # The peer took the work and is still doing it; the room will not address
                 # this member again (``room_rounds._dropped``), but ``late.collect`` can poll
@@ -1365,17 +1428,38 @@ class A2aAdapter(Adapter):
                         credential=credential,
                         session_id=d.origin_session_id,
                     )
+                # A background (detached) delegation carries no conversation key, so the room's
+                # ``late.collect`` never runs for it — yet its caller isn't holding a turn open
+                # either, so it can afford to keep waiting. Reuse the same read-only GetTask poll
+                # (``late.collect_task``) here, up to the same bounded window, and deliver the
+                # peer's REAL reply as the job result if it finishes rather than losing it to a
+                # FAILED job with no task id to resume (#3700).
+                if _DETACHED_DELEGATION.get():
+                    from . import late
+
+                    outcome, late_text, ext_state, ext_status = await late.collect_task(d, str(task_id))
+                    if outcome in (late.ANSWERED, late.PARKED) and late_text:
+                        return late_text
+                    if outcome == late.FAILED and _is_terminal(ext_state):
+                        # The task actually settled as a failure while we waited — surface the
+                        # peer's own diagnostic, not a "still running" note.
+                        raise DelegateError(f"delegate {d.name!r}: {late_text}")
+                    # Still unfinished after the extra window: fall through to the actionable
+                    # message below, carrying the freshest state/status the poll observed.
+                    state = ext_state or state
+                    last_status_text = ext_status or last_status_text
+                # The deadline stands — but the result names the peer task id, the last state
+                # and status message, and how to resume/collect the work, and never says to
+                # retry (#3700). ``poll_timeout_s`` remains per-delegate configurable; the text
+                # says so.
                 if hard_deadline is not None and time.monotonic() >= hard_deadline:
                     raise DelegateError(
-                        f"delegate {d.name!r} still running after {send_timeout:g}s (this call's "
-                        f"timeout) — the peer may still be working; raise the call's timeout for a "
-                        f"job this long (state={state})"
+                        _still_running_message(
+                            d, str(task_id), state, last_status_text, poll_timeout=poll_timeout, send_timeout=send_timeout
+                        )
                     )
                 raise DelegateError(
-                    f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable "
-                    f"progress — the peer may still be working; raise its poll timeout if tasks go "
-                    f"that long without visible advancement "
-                    f"(state={state})"
+                    _still_running_message(d, str(task_id), state, last_status_text, poll_timeout=poll_timeout)
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
 
