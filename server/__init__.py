@@ -445,8 +445,9 @@ def _main():
     # code when it handled the args, or None to fall through to the server boot below
     # (a bare invocation / server flags). The `protoagent` front door adds `--help`
     # discoverability, `serve`, and `setup` on top of this same dispatcher.
-    from server.cli import dispatch
+    from server.cli import dispatch, ensure_console_encoding
 
+    ensure_console_encoding()  # a cp1252 Windows console must not crash a CLI print
     _sub_code = dispatch(sys.argv[1:])
     if _sub_code is not None:
         raise SystemExit(_sub_code)

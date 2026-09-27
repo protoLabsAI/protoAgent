@@ -62,7 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pn = sub.add_parser("new", help="scaffold a new plugin skeleton on disk (ready to fill in + enable)")
-    pn.add_argument("name", help='human name (the id is slugified from it, e.g. "My Plugin" → my-plugin)')
+    pn.add_argument("name", help='human name (the id is slugified from it, e.g. "My Plugin" -> my-plugin)')
     pn.add_argument("--summary", default="A protoAgent plugin.", help="one-line description for the manifest")
     pn.add_argument("--view", action="store_true", help="include a console view (sandboxed iframe + router)")
     pn.add_argument("--skill", action="store_true", help="include a SKILL.md skill stub")
@@ -328,7 +328,7 @@ def run_plugin_cli(argv: list[str]) -> int:
                     print(
                         f"  ⚠ a protoAgent server is RUNNING ({where}) — {args.id} stays loaded in it "
                         f"until a restart or config reload. For a live teardown, uninstall from the "
-                        f"console (Settings ▸ Plugins) instead."
+                        f"console (Settings > Plugins) instead."
                     )
             return 0
         if args.cmd == "update-bundle":

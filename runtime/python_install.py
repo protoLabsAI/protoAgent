@@ -370,7 +370,7 @@ def install_requirements_into_managed_runtime(
     if exe is None:
         raise PythonInstallError(
             "the managed Python runtime isn't provisioned — install it first "
-            "(Settings ▸ Tools or `protoagent runtime install-python`), then install plugin deps."
+            "(Settings > Tools or `protoagent runtime install-python`), then install plugin deps."
         )
     reqs = [r for r in (requirements or []) if r and r.strip()]
     if not reqs:
@@ -458,7 +458,7 @@ def ensure_test_runtime(*, timeout: float = 600.0) -> str | None:
     if exe is None:
         return (
             "the managed Python runtime isn't provisioned — install it "
-            "(Settings ▸ Tools, ~35 MB, or `protoagent runtime install-python`), then try again"
+            "(Settings > Tools, ~35 MB, or `protoagent runtime install-python`), then try again"
         )
     missing = test_runtime_missing()
     if not missing:
