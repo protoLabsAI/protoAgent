@@ -542,7 +542,15 @@ class HubClient:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"} if self._token else {}
 
-    def _request(self, method: str, path: str, *, json_body: Any = None, timeout: httpx.Timeout | None = None) -> Any:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Any = None,
+        timeout: httpx.Timeout | None = None,
+        accept: tuple[int, ...] = (),
+    ) -> Any:
         try:
             r = self._client.request(
                 method,
@@ -562,6 +570,13 @@ class HubClient:
             if slug:
                 raise MemberUnauthorized(self.url, slug, f"member {slug!r} rejected the credential the hub attached")
             raise HubUnauthorized(self.url, f"{self.url} rejected the credential ({r.status_code})")
+        if r.status_code in accept:
+            # A status the caller treats as an ANSWER, not a failure (e.g. pairing's 409
+            # "loopback-only", whose body says what the instance could bind instead).
+            try:
+                return r.json()
+            except ValueError:
+                return {"detail": (r.text or "").strip()[:300]}
         if r.status_code >= 400:
             detail = ""
             try:
@@ -682,6 +697,16 @@ class HubClient:
         budget = max(_LIFECYCLE_TIMEOUT.read or 0.0, _DOWN_PER_MEMBER_S * max(int(running), 0))
         res = self._request("POST", "/api/fleet/down", timeout=httpx.Timeout(budget, connect=2.0))
         return _expect_dict(self.url, res, "down")
+
+    def pairing_start(self, kind: str = "agent") -> dict:
+        """Mint a pairing code on THIS instance (ADR 0087 / 0113). A 409 is returned, not
+        raised: it means "only listens on localhost", and its body carries the addresses the
+        instance could bind — the part the operator needs to act on."""
+        return _expect_dict(
+            self.url,
+            self._request("POST", "/api/pairing/start", json_body={"kind": kind}, accept=(409,)),
+            "pairing",
+        )
 
     def runtime_status(self) -> dict:
         return _expect_dict(self.url, self._request("GET", "/api/runtime/status"), "runtime status")

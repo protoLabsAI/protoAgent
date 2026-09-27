@@ -9,6 +9,7 @@ turns a regressed on-loop call site into an instant warning instead of a ~10s
 from __future__ import annotations
 
 import asyncio
+import socket
 import sys
 import time
 import types
@@ -409,3 +410,38 @@ def test_boot_sweep_and_discover_ignore_the_disable_flag(monkeypatch):
 
     swept = asyncio.run(discovery.boot_sweep())
     assert [p["name"] for p in swept] == ["loc"]
+
+
+# ── ADR 0113 D9: advertise only an address the server listens on ────────────────────────
+
+
+@pytest.mark.parametrize("bind", ["127.0.0.1", "127.0.1.1", "localhost", "::1"])
+def test_advertise_stays_quiet_on_a_loopback_bind(fake_zeroconf, monkeypatch, bind):
+    """A loopback-bound server is reachable by nobody else, so announcing the LAN address
+    put an unreachable row in every sibling's Discover list."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.1.20")
+    discovery.advertise("alpha", 7871, bind)
+    assert discovery._zc is None
+
+
+@pytest.mark.parametrize("bind", ["0.0.0.0", "::", ""])
+def test_advertise_announces_the_default_route_address_on_a_wildcard_bind(fake_zeroconf, monkeypatch, bind):
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.1.20")
+    discovery.advertise("alpha", 7871, bind)
+    assert discovery._zc.registered["kw"]["addresses"] == [socket.inet_aton("192.168.1.20")]
+
+
+def test_advertise_announces_exactly_a_specific_bind(fake_zeroconf, monkeypatch):
+    """Bound to one address, that address is the only one that answers — not the default
+    route's, which may be a different interface."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.1.20")
+    assert discovery._advertise_address("100.101.102.103") == "100.101.102.103"
+    discovery.advertise("alpha", 7871, "100.101.102.103")
+    assert discovery._zc.registered["kw"]["addresses"] == [socket.inet_aton("100.101.102.103")]
+
+
+def test_wildcard_bind_with_no_network_does_not_advertise_loopback(fake_zeroconf, monkeypatch):
+    """Offline, the default-route probe falls back to 127.0.0.1 — never announce that."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "127.0.0.1")
+    discovery.advertise("alpha", 7871, "0.0.0.0")
+    assert discovery._zc is None

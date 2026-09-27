@@ -807,7 +807,13 @@ def _main():
         try:
             from graph.fleet import discovery
 
-            await asyncio.to_thread(discovery.advertise, agent_name(), int(getattr(STATE, "active_port", 0) or 0))
+            from operator_api.pairing_routes import bind_host
+
+            # The RESOLVED bind (what uvicorn got), so a loopback-bound instance stays quiet
+            # instead of announcing a LAN address it doesn't listen on (ADR 0113 D9).
+            await asyncio.to_thread(
+                discovery.advertise, agent_name(), int(getattr(STATE, "active_port", 0) or 0), bind_host()
+            )
             # …and kick off a one-shot BACKGROUND sweep so peers that booted alongside us are
             # cached and the first console GET /api/fleet/discover is instant (instead of only
             # finding them after a manual rescan). Fire-and-forget on the loop — discover()
