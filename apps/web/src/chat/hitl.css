@@ -49,13 +49,12 @@
    the composer when a turn pauses as input-required.
    Accent sites (#2153) read --pl-color-accent — the semantic accent the
    ThemePanel workspace override writes on <html> (the same token the
-   composer's focus border follows via the theme-base.css bridge) — with the
-   literal --brand-indigo chain as fallback, so unthemed installs render
-   exactly as before. Guarded by hitl-accent.test.ts. */
+   composer's focus border follows via the theme-base.css bridge) — so the
+   card tracks the workspace accent. Guarded by hitl-accent.test.ts. */
 .hitl-card {
   margin: 0 12px 8px;
   padding: 12px 14px;
-  border: 1px solid var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  border: 1px solid var(--pl-color-accent);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   display: flex;
@@ -194,7 +193,7 @@
 }
 
 .hitl-dot[data-state="active"] {
-  background: var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  background: var(--pl-color-accent);
 }
 
 .hitl-dot[data-state="done"] {
@@ -228,24 +227,24 @@
 }
 
 .hitl-card-option:hover {
-  border-color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  border-color: var(--pl-color-accent);
 }
 
 /* Keyboard navigation (#1978): the roving focus must be visible even on the
-   already-selected card, where the brand border alone wouldn't distinguish it. */
+   already-selected card, where the accent border alone wouldn't distinguish it. */
 .hitl-card-option:focus-visible {
-  outline: 2px solid var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  outline: 2px solid var(--pl-color-accent);
   outline-offset: 2px;
 }
 
 .hitl-card-option[data-selected] {
-  border-color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
-  background: color-mix(in srgb, var(--pl-color-accent, var(--brand-indigo, #6366f1)) 12%, var(--pl-color-bg));
+  border-color: var(--pl-color-accent);
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, var(--pl-color-bg));
 }
 
 .hitl-card-mark {
   line-height: 1.2;
-  color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  color: var(--pl-color-accent);
 }
 
 .hitl-card-body {

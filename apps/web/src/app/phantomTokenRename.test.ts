@@ -61,8 +61,13 @@ describe("phantom CSS tokens re-pointed to real DS tokens (#3682)", () => {
     expect(count(mem, "var(--pl-color-fg-muted)")).toBe(8);
   });
 
-  it("chat.css: the model-lane label reads --pl-color-fg-muted with its #8b8b93 fallback", () => {
-    expect(count(source("/chat/chat.css"), "var(--pl-color-fg-muted, #8b8b93)")).toBe(1);
+  it("chat.css: the model-lane label reads a bare --pl-color-fg-muted (its #8b8b93 fallback dropped in #3685)", () => {
+    // #3682 re-pointed this site off the phantom name but kept a dark-only hex fallback;
+    // #3685 stripped that fallback since the DS tokens are always loaded and the fallback
+    // could only paint the wrong colour. The rename survives, without the trailing hex.
+    const chat = source("/chat/chat.css");
+    expect(count(chat, "var(--pl-color-fg-muted, #8b8b93)")).toBe(0);
+    expect(chat).toContain("color: var(--pl-color-fg-muted);");
   });
 
   it("workflows.css: the ok dot / err dot / bad toolchip now read the bare real tokens — #3685(a) stripped the fallbacks", () => {
