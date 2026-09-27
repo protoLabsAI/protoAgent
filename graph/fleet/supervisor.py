@@ -1070,7 +1070,7 @@ def pair_remote(
     url = _normalize_remote_url(url)  # FleetError → 400 at the route; nothing dialled yet
     code = str(code or "").strip()
     if not code:
-        raise PairingError("a pairing code is required — generate one on the remote (Settings ▸ Devices)")
+        raise PairingError("a pairing code is required — generate one on the remote (Settings > Devices)")
     try:
         _require_secure_transport(url, allow_insecure=allow_insecure, what="the pairing code and token")
     except InsecureTransport as exc:
@@ -1126,7 +1126,7 @@ def pair_remote(
     device = body.get("device") if isinstance(body.get("device"), dict) else {}
     device_id = _clean_device_id(device.get("id"))
     shown_id = device_id or "(id not reported)"
-    orphan_hint = f"revoke device {shown_id} on the remote (Settings ▸ Devices) and pair again"
+    orphan_hint = f"revoke device {shown_id} on the remote (Settings > Devices) and pair again"
 
     if existing is not None:
         prev = remotes.get(existing) or {}

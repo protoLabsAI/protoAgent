@@ -30,7 +30,7 @@ def test_uninstall_of_enabled_plugin_warns_about_live_server(monkeypatch, capsys
     out = capsys.readouterr().out
     assert "✓ uninstalled demo" in out
     assert "RUNNING" in out and "pid 4242" in out and "port 7870" in out
-    assert "stays loaded" in out and "Settings ▸ Plugins" in out
+    assert "stays loaded" in out and "Settings > Plugins" in out
 
 
 def test_uninstall_with_no_live_server_stays_quiet(monkeypatch, capsys):

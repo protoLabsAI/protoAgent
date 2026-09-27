@@ -36,7 +36,7 @@ Scaffold a new plugin skeleton on disk (ready to fill in + enable).
 
 | Argument | Meaning |
 |---|---|
-| `name` | human name (the id is slugified from it, e.g. "My Plugin" → my-plugin) |
+| `name` | human name (the id is slugified from it, e.g. "My Plugin" -> my-plugin) |
 | `--summary` | one-line description for the manifest (default `'A protoAgent plugin.'`) |
 | `--view` | include a console view (sandboxed iframe + router) |
 | `--skill` | include a SKILL.md skill stub |

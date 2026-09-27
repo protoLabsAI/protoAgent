@@ -120,7 +120,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _common(rr, top=False)
     pp = sub.add_parser(
         "pair",
-        help="pair with a remote protoAgent using a code generated on it (Settings ▸ Devices, or `protoagent pair` there)",
+        help="pair with a remote protoAgent using a code generated on it (Settings > Devices, or `protoagent pair` there)",
     )
     pp.add_argument("url", help="the remote's URL, e.g. http://100.64.0.5:7870")
     pp.add_argument(

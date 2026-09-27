@@ -88,6 +88,29 @@ _LIFECYCLE_HELP = {
 _DEFAULT_PORT = 7870
 
 
+# ── console encoding (shared by both entrypoints) ────────────────────────────
+
+
+def ensure_console_encoding() -> None:
+    """Make stdout/stderr replace, not raise on, characters the console can't encode.
+
+    A Windows console or pipe defaults to cp1252, which has no "▸"/"✓"/"⚠" — and a
+    help string or status line carrying one raised ``UnicodeEncodeError`` mid-print
+    (the frozen ``fleet --help`` failed the v0.184.0 desktop build). Only a stream
+    whose encoding can't carry them is touched, and only its ``errors`` policy: a
+    UTF-8 terminal, a test's capture buffer, or a replaced stream is left alone."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            "▸✓⚠".encode(stream.encoding or "ascii")
+        except (UnicodeEncodeError, LookupError):
+            try:
+                stream.reconfigure(errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass  # not a TextIOWrapper (or already closed) — leave it as it is
+        except (AttributeError, TypeError):
+            pass  # no usable .encoding — not a text console stream
+
+
 # ── subcommand router (shared by both entrypoints) ───────────────────────────
 
 
@@ -321,6 +344,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """``protoagent`` entrypoint. Returns a process exit code."""
+    ensure_console_encoding()
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
 

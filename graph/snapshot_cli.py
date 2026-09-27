@@ -232,7 +232,7 @@ def _cmd_import(args) -> int:
         out("INCOMPLETE — supply these before the agent will work:")
         for m in res.missing_secrets:
             out(f"  {m}")
-        out("  (`protoagent agent import … --secret NAME=VALUE`, or Settings ▸ Secrets on the new agent)")
+        out("  (`protoagent agent import … --secret NAME=VALUE`, or Settings > Secrets on the new agent)")
     return 0 if res.complete else 1
 
 
