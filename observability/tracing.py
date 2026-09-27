@@ -474,6 +474,23 @@ def current_trace_context() -> dict | None:
     return ctx
 
 
+def in_active_trace() -> bool:
+    """True when an observation is current — a span opened now nests instead of rooting.
+
+    Reads the OTel context directly: asking the Langfuse SDK
+    (``get_current_trace_id``) with nothing active logs a "No active span" warning
+    per call, which a background caller asking exactly this question would spam.
+    """
+    if not _enabled or _langfuse is None:
+        return False
+    try:
+        from opentelemetry import trace as otel_trace
+
+        return otel_trace.get_current_span().get_span_context().is_valid
+    except Exception:  # noqa: BLE001 — best-effort, like every helper here
+        return False
+
+
 def _caller_trace_context(metadata: dict | None) -> dict | None:
     """Build a Langfuse ``trace_context`` from ``caller_trace_id`` /
     ``caller_span_id`` metadata (the ids an A2A caller sent as ``a2a.trace``).

@@ -157,7 +157,9 @@ def redact(data: Any, _depth: int = 0) -> Any:
         Non-string scalar values (int, bool, None, etc.) are returned unchanged.
     """
     if _depth > _MAX_DEPTH:
-        return data
+        # Fail CLOSED past the depth guard. Returning the subtree as-is let a credential
+        # nested deep enough reach an audit record or trace unredacted.
+        return _PLACEHOLDER
 
     if isinstance(data, str):
         return _redact_string_simple(data)

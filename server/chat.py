@@ -2440,9 +2440,48 @@ async def _chat_langgraph_stream(
             request_metadata=request_metadata,
             images=images,
         ):
+            _trace_terminal_output(_ev)
             yield _ev
     finally:
         _turn_ended(session_id)
+
+
+def _trace_terminal_output(ev: tuple) -> None:
+    """Write a terminal frame onto the turn's Langfuse trace as its output.
+
+    The model middleware records the answer only from a final tool-call-free reply, and
+    most ways a turn can end never produce one: an ``@delegate`` exchange or a slash
+    command skips the graph entirely, a turn parked on ``ask_human`` or an approval ends
+    on the tool call that asked, and an error ends it with no reply. Each left a trace
+    with input and no output. The terminal frame is what the caller actually received,
+    so it is the output on every path. This runs while the impl generator is suspended
+    inside its ``trace_session`` scope (a generator runs in its consumer's context), so
+    the session span is still current here.
+    """
+    try:
+        kind, payload = ev[0], ev[1]
+    except (TypeError, IndexError):
+        return
+    if kind == "done":
+        text = payload if isinstance(payload, str) else str(getattr(payload, "text", "") or "")
+    elif kind == "input_required" and isinstance(payload, dict):
+        text = str(payload.get("question") or payload.get("title") or "")
+        text = f"[input required] {text}".rstrip()
+    elif kind == "error":
+        text = f"[error] {payload}"
+    else:
+        return
+    if not text:
+        return
+    from observability import tracing
+
+    try:
+        # Redact the WHOLE text, then cap: a secret cut in half no longer matches its
+        # pattern, and an exact-match secret (a manager-sourced PEM key, say) can be longer
+        # than any fixed headroom. Once per turn, so the full pass is affordable.
+        tracing.set_session_output(_redact(text)[: tracing.MAX_IO_CHARS])
+    except Exception:  # noqa: BLE001 — tracing never alters the turn
+        log.debug("[tracing] terminal output not recorded", exc_info=True)
 
 
 async def _chat_langgraph_stream_impl(

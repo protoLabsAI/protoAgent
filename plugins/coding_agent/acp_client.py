@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import glob
+import hashlib
 import json
 import logging
 import os
@@ -142,6 +143,15 @@ def _short_tool_name(title: str) -> str:
     # peels only the mcp+server segment; a non-namespaced name (`read_file`) is untouched.
     label = re.sub(r"^mcp__.+?__", "", label).strip()
     return (label or (title or "").strip() or "tool")[:80]
+
+
+def _coder_session_id(name: str, cwd: str) -> str:
+    """Langfuse session for a coder run outside any turn: one per coder per worktree, so a
+    feature's retries group together. The basename keeps it readable. The short hash of the
+    full path keeps two projects' same-named worktrees apart, and it survives the 200-char
+    trace-attribute cap, which the full path would not."""
+    digest = hashlib.sha256(cwd.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"coder:{name}:{os.path.basename(cwd)[:120]}:{digest}"
 
 
 def _content_text(content) -> str:
@@ -956,6 +966,14 @@ class AcpClient:
             # Status transition — emit an end event when it finishes (tool_end card).
             status = str(update.get("status") or "")
             tool_id = str(update.get("toolCallId") or "")
+            # A streaming agent opens the call before its arguments exist: claude-agent-acp
+            # sends ``tool_call`` at content_block_start with ``rawInput: {}`` and a generic
+            # title ("Read File"), then REFINES it with a ``tool_call_update`` carrying the
+            # real ``rawInput`` and title. Without this the trace recorded only the kind.
+            try:
+                self._refine_tool_start(tool_id, update)
+            except Exception:  # noqa: BLE001 — a trace refinement must never cost the end event
+                logger.debug("[acp/%s] could not refine tool call %s", self.name, tool_id, exc_info=True)
             if status in ("completed", "failed") and tool_id not in self._turn_ended_tool_ids:
                 self._turn_ended_tool_ids.add(tool_id)
                 await self._emit_tool(
@@ -1048,12 +1066,7 @@ class AcpClient:
             return
         tool_id = str(event.get("id") or "")
         if event.get("phase") == "start":
-            from graph.middleware.redaction import redact
-
-            if raw_input not in (None, "", {}, []):
-                safe_input = json.dumps(redact(raw_input), ensure_ascii=False, default=str)
-            else:
-                safe_input = redact(str(event.get("input") or ""))
+            safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
             self._turn_tool_starts[tool_id] = (time.monotonic(), str(event.get("name") or ""), safe_input)
             return
         started, name, tool_input = self._turn_tool_starts.pop(tool_id, (time.monotonic(), "", ""))
@@ -1063,14 +1076,56 @@ class AcpClient:
         # Redacted like every other tool span (AuditMiddleware): a coder running `env`
         # or `cat .env` must not ship the values to Langfuse.
         io = self._turn_trace_io
+        # The NAME is content too: an agent's title can be the whole command line
+        # (`export OPENAI_API_KEY=…`). Redact it, and send none of it in an incognito turn.
+        name = name or str(event.get("name") or "tool")
         tracing.trace_tool_call(
-            name or str(event.get("name") or "tool"),
+            redact(name) if io else "coder",
             {"input": tool_input if io else ""},
             redact(str(event.get("output") or "")) if io else "",
             int((time.monotonic() - started) * 1000),
             event.get("status") == "completed",
             session_id=self._turn_session_id or "",
             parent=self._turn_span,
+        )
+
+    @staticmethod
+    def _safe_tool_input(raw_input: Any) -> str:
+        """Redacted tool input text, or "" when there is none. Structured input is
+        redacted as DATA before it is stringified, so key-based rules still see the keys."""
+        if raw_input in (None, "", {}, []):
+            return ""
+        from graph.middleware.redaction import redact
+
+        if isinstance(raw_input, str):
+            return redact(raw_input)
+        return json.dumps(redact(raw_input), ensure_ascii=False, default=str)
+
+    def _refine_tool_start(self, tool_id: str, update: dict) -> None:
+        """Fold a ``tool_call_update``'s later ``rawInput`` / title into the open call's
+        trace record, so the span shows the real arguments and not just the kind."""
+        start = self._turn_tool_starts.get(tool_id)
+        if start is None:
+            return
+        started, name, tool_input = start
+        title = str(update.get("title") or "")
+        raw_input = update.get("rawInput")
+        if raw_input in (None, "", {}, []):
+            # No structured input: an agent may still inline JSON args in the title. Only
+            # a title that PARSES counts (parsed back to data, so key-based redaction rules
+            # see the keys). A fragment that doesn't, such as ``awk '{print $1}'`` repeated
+            # on the completion update, must not overwrite a real refinement.
+            _, inline = _split_tool_title(title)
+            try:
+                raw_input = json.loads(inline) if inline else None
+            except (TypeError, ValueError, RecursionError):
+                raw_input = None
+            if not isinstance(raw_input, (dict, list)):
+                return
+        self._turn_tool_starts[tool_id] = (
+            started,
+            _short_tool_name(title) if title else name,
+            self._safe_tool_input(raw_input) or tool_input,
         )
 
     async def _emit_tool(self, event: dict, *, raw_input: Any = None) -> None:
@@ -1354,11 +1409,29 @@ class AcpClient:
         # turn, so this is the only seam every coder run crosses. Inside a traced turn
         # (``delegate_to``, the ACP runtime) it nests under that turn; from the board it
         # is its own trace. No-op when tracing is disabled.
-        with tracing.trace_span(
-            f"acp:{self.name}",
-            metadata={"command": self.command, "cwd": self.cwd},
-            as_type="agent",
-        ) as span:
+        #
+        # As its own trace the span is the ROOT, and a root carries the trace's session and
+        # tags — nothing else will stamp them. Without them every board coder run landed
+        # sessionless and untagged, unfindable next to the turns that asked for the work.
+        # The session is keyed on the worktree, so a feature's retries group together.
+        is_root = not tracing.in_active_trace()
+        with (
+            tracing.trace_span(
+                f"acp:{self.name}",
+                metadata={"command": self.command, "cwd": self.cwd},
+                as_type="agent",
+            ) as span,
+            tracing.trace_attributes(
+                session_id=_coder_session_id(self.name, self.cwd) if is_root else "",
+                tags=[os.environ.get("AGENT_NAME", "protoagent")] if is_root else None,
+                trace_level=False,
+            ),
+        ):
+            # The brief the coder was handed — for a root span, the trace's input.
+            if tracing.io_allowed():
+                # Redact the WHOLE brief, then cap: a secret cut in half no longer matches,
+                # and an exact-match secret can be longer than any fixed headroom.
+                tracing.update_span(span, input=_redact(text)[: tracing.MAX_IO_CHARS])
             try:
                 if self._turn_lock.locked():
                     logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
