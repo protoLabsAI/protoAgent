@@ -261,6 +261,26 @@ async def test_resubscribe_gives_up_after_bounded_retries(monkeypatch):
     assert len(calls) == ec._TASK_VISIBLE_ATTEMPTS
 
 
+@pytest.mark.asyncio
+async def test_resubscribe_records_an_undecodable_non_stream_body_as_raw(monkeypatch):
+    """A proxy answering with bytes that are not valid UTF-8/16/32 must not raise
+    out of the consumer; it lands as a ``raw`` event like any other non-JSON body."""
+    from fastapi.responses import Response
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def a2a(request: Request):
+        return Response(content=b"\x80\x81 garbage", media_type="application/octet-stream")
+
+    client = _route(monkeypatch, app)
+
+    events, final = await client.resubscribe("task-1", timeout_s=5)
+
+    assert final is None
+    assert [e["kind"] for e in events] == ["raw"]
+
+
 # ── push notification config ────────────────────────────────────────────────
 
 

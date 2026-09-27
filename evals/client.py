@@ -333,7 +333,7 @@ class AgentClient:
                     body = await r.aread()
                     try:
                         resp = json.loads(body)
-                    except json.JSONDecodeError:
+                    except ValueError:  # JSONDecodeError, or UnicodeDecodeError on non-UTF bytes
                         resp = None
                     if isinstance(resp, dict) and isinstance(resp.get("error"), dict):
                         events.append({"kind": "error", "result": resp["error"]})
