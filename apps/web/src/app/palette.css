@@ -44,7 +44,7 @@
 
 /* ── The utility-bar affordance (PaletteButton.tsx) ────────────────────────────────────
    Deliberately almost nothing, and scoped to its own class so it cannot restyle the shared
-   `.util-btn` widgets beside it. An earlier cut gave it a border and rendered the live chord
+   DS Button pills beside it. An earlier cut gave it a border and rendered the live chord
    as text so it read as the search field it opens — which made it the one pill on the bar
    carrying text, a different class of control rather than a peer. It is a plain icon pill
    now; the chord travels on the tooltip and in `aria-keyshortcuts`. */

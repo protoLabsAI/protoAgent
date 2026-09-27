@@ -1,5 +1,5 @@
 // The utility-bar pill is now a DS `<Button icon size="xs" variant="ghost">` rather than a
-// bare `<button className="util-btn">` (#3684). This suite guards the swap: the pill must stay
+// bare hand-rolled `<button>` (#3684). This suite guards the swap: the pill must stay
 // a real button that keeps its testid, aria-label, title fallback, children, click/context-menu
 // handlers and its optional Tooltip wrapper — the contract the utility bar and its e2e specs
 // depend on. createRoot/act + the real DS components, like the other console UI suites
@@ -30,7 +30,7 @@ afterEach(() => {
 const pill = () => document.querySelector<HTMLButtonElement>('[data-testid="util-widget-inbox"]');
 
 describe("UtilityWidget — the DS-Button pill (#3684)", () => {
-  it("renders the pill as a real button carrying its testid, aria-label and children — never .util-btn", () => {
+  it("renders the pill as a real DS Button carrying its testid, aria-label and children", () => {
     act(() =>
       root.render(
         h(UtilityWidget, {
@@ -47,8 +47,9 @@ describe("UtilityWidget — the DS-Button pill (#3684)", () => {
     expect(btn).not.toBeNull();
     expect(btn!.tagName).toBe("BUTTON");
     expect(btn!.getAttribute("aria-label")).toBe("Inbox");
-    // The whole point of the card: the pill is a DS Button, not the bare .util-btn element.
-    expect(document.querySelector(".util-btn")).toBeNull();
+    // The whole point of the card: the pill is a DS Button (carries the `pl-btn` class),
+    // not a bare hand-rolled element.
+    expect(btn!.classList.contains("pl-btn")).toBe(true);
     // The host still owns the glyph + badge children.
     expect(btn!.querySelector('[data-testid="pill-icon"]')).not.toBeNull();
     expect(btn!.querySelector('[data-testid="pill-badge"]')).not.toBeNull();
