@@ -390,11 +390,14 @@ async def _dispatch_into_room(
     # A Command update needs the matching ToolMessage: ToolNode validates that every
     # model tool call has exactly one terminator. It also leaves the usual result in the
     # current loop, so the lead can synthesize immediately while the envelopes persist.
+    # The ToolMessage goes FIRST: Anthropic requires a tool call's result to be the very
+    # next message, and envelopes written ahead of it 400'd every later turn of the chat
+    # ("tool_use ids were found without tool_result blocks immediately after").
     return Command(
         update={
             "messages": [
-                *outcome["messages"],
                 ToolMessage(content=result, tool_call_id=tool_call_id, status="success" if outcome["ok"] else "error"),
+                *outcome["messages"],
             ]
         }
     )

@@ -1,16 +1,26 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GripVertical, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
+import { GripVertical, KeyRound, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { Alert, StatusDot } from "@protolabsai/ui/data";
-import { EditableText, Input, SecretInput, Switch } from "@protolabsai/ui/forms";
+import { Checkbox, EditableText, Input, SecretInput, Switch } from "@protolabsai/ui/forms";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 
+import { PairRemoteDialog, type PairResult, type PairTarget } from "./PairRemoteDialog";
 import { QuickSetting } from "./QuickSetting";
+import {
+  delegateLinkFor,
+  hubUrlRefusal,
+  INSECURE_OPT_IN,
+  INSECURE_WARNING,
+  isInsecureRefusal,
+  needsInsecureOptIn,
+  remoteAuthBadge,
+} from "../lib/agentPairing";
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
@@ -307,8 +317,14 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     onError: (e) => toast({ tone: "error", title: "Couldn't enable delegates", message: errMsg(e) }),
   });
 
+  // Which member URLs this window may write as delegates (see `delegateLinkFor`): every `a2a`
+  // in /api/fleet resolves on the HUB's box, so it's only valid when the focused agent is the
+  // hub or a local member. null = allowed; else the reason the gesture is disabled.
+  const linkRefusal = hubUrlRefusal(agents, slug);
+
   // Network discovery (ADR 0042 §I) — scan the box + LAN for OTHER protoAgents (not in this
-  // fleet), then add a found one as a delegate of the focused agent (its A2A = url + /a2a).
+  // fleet). Pair… is the primary way in (ADR 0113): it adds the agent as a member holding a
+  // paired token, and optionally links it as a delegate through the hub's proxy.
   const [scanning, setScanning] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredAgent[] | null>(null);
   const scan = async () => {
@@ -321,9 +337,38 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       setScanning(false);
     }
   };
-  // Remote adds funnel through the same mutation, so a host-window 404 gets the
-  // same enable-and-retry path as fleet-row adds.
-  const addRemote = (d: DiscoveredAgent) => addDelegate.mutate({ name: d.name, url: `${d.url}/a2a` });
+
+  // Pair… / Re-pair (ADR 0113 D1). One dialog for both: a discovered row opens it with an
+  // editable URL; a remote row re-pairs its own URL (the hub re-tokens that member in place).
+  const [pairTarget, setPairTarget] = useState<PairTarget | null>(null);
+  const [pairOffersDelegate, setPairOffersDelegate] = useState(false);
+  const openPair = (d: DiscoveredAgent, withDelegate = false) => {
+    setPairOffersDelegate(withDelegate && linkRefusal === null);
+    setPairTarget({ mode: "pair", url: d.url, label: d.name, name: d.name });
+  };
+  const openRepair = (a: FleetAgent) => {
+    setPairOffersDelegate(false);
+    setPairTarget({ mode: "repair", url: a.url ?? "", label: a.label ?? a.name });
+  };
+  const onPaired = async (res: PairResult, opts: { addDelegate: boolean }) => {
+    // It's a member now — out of the found list at once (the rescan would take a round-trip,
+    // and until then its Pair… would re-claim against a member that already exists).
+    setDiscovered((list) => (list ? list.filter((x) => x.url !== res.agent?.url) : list));
+    await qc.invalidateQueries({ queryKey: queryKeys.fleet });
+    if (!opts.addDelegate || !res.agent) return;
+    // Pair-then-link: the delegate URL must be the member's `a2a` from /api/fleet — the
+    // hub's loopback proxy (ADR 0113 D4), which carries the PAIRED token — never the remote's
+    // raw `<url>/a2a`, which has no token and 401s. Read it from a fresh roster.
+    try {
+      const roster = (await api.fleet()).agents;
+      const member = roster.find((m) => m.id === res.agent.id);
+      const link = member ? delegateLinkFor(roster, slug, member) : null;
+      if (member && link?.url) addDelegate.mutate({ name: member.name, url: link.url });
+      else toast({ tone: "warning", title: "Paired, but not linked", message: link?.reason ?? "The new member isn't in the fleet list yet." });
+    } catch (e) {
+      toast({ tone: "error", title: "Couldn't add delegate", message: errMsg(e) });
+    }
+  };
 
   // A registered member's up-front feedback: the server probes it at register time and
   // returns `reachable`, so a peer that's offline (or behind a wrong/missing token — the
@@ -366,12 +411,19 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const [addName, setAddName] = useState("");
   const [addUrl, setAddUrl] = useState("");
   const [addToken, setAddToken] = useState("");
+  // ADR 0113 D10 — a TOKEN sent over plain http to a non-loopback, non-tailnet host needs the
+  // operator's explicit opt-in (same rule and words as the Pair dialog). Revealed after the
+  // hub's own 400 for an http name this browser couldn't classify.
+  const [addAllowInsecure, setAddAllowInsecure] = useState(false);
+  const [addInsecureRevealed, setAddInsecureRevealed] = useState(false);
   const resetForm = () => {
     setShowAdd(false);
     setEditingId(null);
     setAddName("");
     setAddUrl("");
     setAddToken("");
+    setAddAllowInsecure(false);
+    setAddInsecureRevealed(false);
   };
   const openAdd = () => {
     resetForm();
@@ -389,10 +441,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       const name = addName.trim();
       const url = addUrl.trim();
       const token = addToken.trim();
+      const insecure = addAskInsecure && addAllowInsecure ? { allow_insecure: true } : {};
       // On edit, a blank token means "keep" (omit it); on add, pass it through.
       return editingId
-        ? api.updateRemoteAgent(editingId, { name, url, ...(token ? { token } : {}) })
-        : api.addRemoteAgent({ name, url, token });
+        ? api.updateRemoteAgent(editingId, { name, url, ...(token ? { token } : {}), ...insecure })
+        : api.addRemoteAgent({ name, url, token, ...insecure });
     },
     onSuccess: (res) => {
       const name = addName.trim();
@@ -408,11 +461,14 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       else addedToast(name, res.reachable);
       resetForm();
     },
-    onError: (e) =>
-      toast({ tone: "error", title: editingId ? "Couldn't update member" : "Couldn't add to fleet", message: errMsg(e) }),
+    onError: (e) => {
+      if (isInsecureRefusal(e)) setAddInsecureRevealed(true);
+      toast({ tone: "error", title: editingId ? "Couldn't update member" : "Couldn't add to fleet", message: errMsg(e) });
+    },
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
-  const canAdd = canAddRemote(addName, addUrl);
+  const addAskInsecure = (addToken.trim() !== "" && needsInsecureOptIn(addUrl)) || addInsecureRevealed;
+  const canAdd = canAddRemote(addName, addUrl) && (!addAskInsecure || addAllowInsecure);
   const removeMember = useMutation({
     mutationFn: (a: FleetAgent) => api.removeRemoteAgent(a.id),
     onError: (e) => toast({ tone: "error", title: "Couldn't remove member", message: errMsg(e) }),
@@ -664,6 +720,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           <Badge status="neutral">remote</Badge>
                         </span>
                       ) : null}
+                      {/* The hub's token verdict (ADR 0113 D5): a revoked hub shows up as
+                          revoked here, instead of a green dot that 401s when clicked. */}
+                      {a.remote
+                        ? (() => {
+                            const badge = remoteAuthBadge(a.auth);
+                            return badge ? (
+                              <span title={badge.title} data-testid="fleet-auth-badge" data-auth={a.auth}>
+                                <Badge status={badge.status}>{badge.label}</Badge>
+                              </span>
+                            ) : null;
+                          })()
+                        : null}
                       {/* Version skew — remotes (hub↔remote handshake) AND local members:
                           a local member spawned before an app update keeps running the OLD
                           binary until restarted (version-coherence P2), so it gets the same
@@ -715,11 +783,23 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                           </Button>
                         </>
                       ) : (
-                        <Button icon variant="ghost" title="Add as a delegate of this agent (delegate_to)"
-                          disabled={addDelegate.isPending || !a.a2a}
-                          onClick={() => addDelegate.mutate({ name: a.name, url: a.a2a! })}>
-                          <Link2 size={14} />
-                        </Button>
+                        // The URL comes from `delegateLinkFor`: the member's hub-side `a2a` (a
+                        // remote's is the hub's proxy, carrying its paired token — ADR 0113 D4),
+                        // and ONLY when this window's agent shares the hub's box. From a remote's
+                        // window the button stays visible but disabled, and says why.
+                        (() => {
+                          const link = delegateLinkFor(agents, slug, a);
+                          return (
+                            <span title={linkRefusal ?? undefined}>
+                              <Button icon variant="ghost"
+                                title={linkRefusal ?? "Add as a delegate of this agent (delegate_to)"}
+                                disabled={addDelegate.isPending || !link.url}
+                                onClick={() => link.url && addDelegate.mutate({ name: a.name, url: link.url })}>
+                                <Link2 size={14} />
+                              </Button>
+                            </span>
+                          );
+                        })()
                       )
                     ) : null}
                     {/* A remote member can't be started/stopped from here, but its URL/token/
@@ -727,6 +807,19 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                         (the remote agent itself is untouched). */}
                     {a.remote ? (
                       <>
+                        {/* Re-pair: a fresh code from the remote re-tokens this member in place
+                            (id, slug and windows kept). Labelled "Pair…" when nothing is stored
+                            yet; promoted to a visible text button when the token is refused, the
+                            one state where it's the fix rather than an option. */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title={a.auth === "none" ? "Pair with a code from the remote" : "Re-pair with a fresh code from the remote"}
+                          disabled={!a.url}
+                          onClick={() => openRepair(a)}
+                        >
+                          <KeyRound size={14} aria-hidden /> {a.auth === "none" ? "Pair…" : "Re-pair"}
+                        </Button>
                         <Button icon variant="ghost" title="Edit this member's URL, token or name"
                           disabled={submitRemote.isPending}
                           onClick={() => openEdit(a)}>
@@ -783,8 +876,20 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             <Button variant="ghost" onClick={scan} disabled={scanning}>
               <Radar size={14} /> {scanning ? "Scanning…" : "Discover agents on the network"}
             </Button>
-            {/* Manual add — the only path for a token-gated remote (discovery carries no
-                credential) or one on a subnet the scan can't reach. */}
+            {/* Manual add — a remote on a subnet the scan can't reach, or a pasted operator
+                token for an instance that predates pairing (ADR 0113 D3). Pair… on a
+                discovered row is the primary path for a token-gated protoAgent. */}
+            {/* Pair by URL — a remote the scan can't see (another subnet, mDNS off, a headless
+                box that printed its code with `protoagent pair`). */}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPairOffersDelegate(false);
+                setPairTarget({ mode: "pair", url: "", label: "a remote agent" });
+              }}
+            >
+              <KeyRound size={14} /> Pair by URL…
+            </Button>
             <Button variant="ghost" onClick={() => (showAdd ? resetForm() : openAdd())} aria-expanded={showAdd}>
               <Link2 size={14} /> Add a remote by URL
             </Button>
@@ -811,7 +916,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                 <span>URL</span>
                 <Input
                   value={addUrl}
-                  onChange={(e) => setAddUrl(e.target.value)}
+                  onChange={(e) => {
+                    setAddUrl(e.target.value);
+                    setAddAllowInsecure(false); // consent is per host
+                    setAddInsecureRevealed(false);
+                  }}
                   placeholder="http://100.x.y.z:7870"
                 />
               </label>
@@ -823,6 +932,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                   placeholder={editingId ? "•••••••• — leave blank to keep the current token" : "the remote's operator token, if it's gated"}
                 />
               </label>
+              {addAskInsecure ? (
+                <Alert status="warning" className="fleet-insecure">
+                  <p>{INSECURE_WARNING}</p>
+                  <Checkbox
+                    checked={addAllowInsecure}
+                    onCheckedChange={setAddAllowInsecure}
+                    required
+                    label={INSECURE_OPT_IN}
+                    data-testid="fleet-add-insecure"
+                  />
+                </Alert>
+              ) : null}
               <div className="fleet-add-remote-actions">
                 <Button type="button" variant="ghost" onClick={resetForm}>
                   Cancel
@@ -856,23 +977,35 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                       <span className="fleet-meta">{d.url}</span>
                     </div>
                     <div className="fleet-row-actions">
-                      {/* Two ways in: a delegate of the FOCUSED agent (delegate_to flows), or a
-                          full fleet MEMBER — a switchable slug window proxied through this hub. */}
-                      <Button icon variant="ghost" title="Add to this fleet (a switchable remote member)"
+                      {/* Pair… is the PRIMARY way in (ADR 0113): the remote shows a code, this
+                          hub redeems it, and the member holds its own revocable token. "Add to
+                          this fleet" stays as the tokenless path for an OPEN remote. */}
+                      <Button variant="primary" size="sm" title="Pair with a code from that agent (Settings ▸ Devices ▸ Pair an agent)"
+                        onClick={() => openPair(d)}>
+                        <KeyRound size={14} aria-hidden /> Pair…
+                      </Button>
+                      <Button icon variant="ghost" title="Add to this fleet without a token (a switchable remote member — for an open remote)"
                         disabled={addMember.isPending}
                         onClick={() => addMember.mutate(d)}>
                         <Plus size={14} />
                       </Button>
+                      {/* Delegate: pair FIRST, then link through the hub's proxy. The old direct
+                          `<url>/a2a` delegate carried no token, so against any paired (gated)
+                          agent it 401'd on first use — the failure ADR 0113 D4 removes. The same
+                          button now opens Pair… with "also add as a delegate" on. */}
                       {delegateNames.has(d.name) ? (
                         <span title="A delegate of this agent">
                           <Badge status="info">delegate</Badge>
                         </span>
                       ) : (
-                        <Button icon variant="ghost" title="Add as a remote delegate (delegate_to)"
-                          disabled={addDelegate.isPending}
-                          onClick={() => addRemote(d)}>
-                          <Link2 size={14} />
-                        </Button>
+                        <span title={linkRefusal ?? undefined}>
+                          <Button icon variant="ghost"
+                            title={linkRefusal ?? "Pair, then add as a delegate of this agent (delegate_to)"}
+                            disabled={linkRefusal !== null}
+                            onClick={() => openPair(d, true)}>
+                            <Link2 size={14} />
+                          </Button>
+                        </span>
                       )}
                     </div>
                   </li>
@@ -882,6 +1015,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           ) : null}
         </div>
       </div>
+
+      <PairRemoteDialog
+        target={pairTarget}
+        offerDelegate={pairOffersDelegate}
+        onClose={() => setPairTarget(null)}
+        onPaired={(res, opts) => void onPaired(res, opts)}
+      />
 
       <ConfirmDialog
         open={confirmRemove !== null}

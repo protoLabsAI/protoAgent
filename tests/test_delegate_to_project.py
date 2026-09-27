@@ -451,7 +451,7 @@ async def test_room_path_carries_the_project_across_mention_op(coder_registry, p
         project=resolve("rw"),
     )
     assert isinstance(out, Command)
-    tool_msg = out.update["messages"][-1]
+    tool_msg = out.update["messages"][0]  # the terminator leads (tool_result adjacency)
     assert isinstance(tool_msg, ToolMessage)
     assert f"done in {projects_config['rw'].resolve()}" in tool_msg.content
     assert "+print('fixed')" in tool_msg.content

@@ -124,3 +124,67 @@
   font-size: 11px;
   word-break: break-all;
 }
+
+/* Pair an agent (ADR 0113). No QR: the code is READ here and TYPED on another machine, so it
+   is the card's focal point: large, monospace, letter-spaced so 0/O and 1/I stay distinct at
+   a glance. The card drops the QR column, so it stacks instead of sitting side by side. */
+.devices-pair--agent {
+  align-items: stretch;
+}
+.devices-pair--agent .devices-pair-body {
+  flex: 1;
+}
+.devices-code {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.devices-code code {
+  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  padding: 6px 12px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg);
+  user-select: all;
+}
+.devices-agent-hosts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.devices-agent-hosts li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.devices-agent-hosts code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+@media (max-width: 767px) {
+  .devices-code code {
+    font-size: 22px;
+  }
+}
+
+/* Kind badge beside a device's name (ADR 0113 D3). The shared `.subagent-row span` rule
+   (theme.css) outranks the DS badge's tone colour, so an "Agent" badge would read grey;
+   restore the info tone here, scoped to this list. */
+.devices-list .subagent-row strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.devices-list .subagent-row .pl-badge--info {
+  color: var(--pl-color-status-info);
+}
