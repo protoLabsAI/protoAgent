@@ -1218,10 +1218,12 @@ export const chatStore = {
     // (~word-sized, #2993) — debounce the localStorage write. The stream-done
     // path flushes via setSessionStatus right after the final updateMessages,
     // so the terminal state always lands immediately.
-    setState((current) => {
-      const sessions = withSession(current, sessionId, (session) => applyMessagesUpdaters(session, [updater]));
-      return sessions === current.sessions ? current : { ...current, sessions };
-    }, "debounced");
+    // A no-op (missing target, e.g. another window's progress frame) changes nothing, so it
+    // neither notifies nor schedules a write — a streaming turn elsewhere would otherwise
+    // cost a full read/parse/merge/write every debounce tick.
+    const sessions = withSession(state, sessionId, (session) => applyMessagesUpdaters(session, [updater]));
+    if (sessions === state.sessions) return;
+    setState((current) => ({ ...current, sessions }), "debounced"); // synchronous: current === state
   },
 
   /** This session's load state (ADR 0114 D2). */

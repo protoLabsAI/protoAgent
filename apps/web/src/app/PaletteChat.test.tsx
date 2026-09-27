@@ -170,6 +170,19 @@ describe("PaletteChat load barrier", () => {
     expect(paletteWrites).toEqual([]);
   });
 
+  it("blocked storage starts a fresh, usable thread — not a permanently failed one", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    });
+    render({ initial: "hello anyway" }); // the default (synchronous) loader
+    expect(host.querySelector("[data-testid=palette-chat-load-failed]")).toBeNull();
+    expect(composer().disabled).toBe(false);
+    await act(async () => {});
+    expect(apiMocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(apiMocks.streamChat.mock.calls[0]?.[0]).toBe("hello anyway");
+    expect(apiMocks.streamChat.mock.calls[0]?.[1]).toMatch(/^palette-/);
+  });
+
   it("the default synchronous read loads on the first render (no skeleton flash)", () => {
     render();
     expect(host.querySelector("[data-testid=skeleton]")).toBeNull();

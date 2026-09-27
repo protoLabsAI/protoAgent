@@ -2142,6 +2142,10 @@ function ChatSessionSlot({
       onError(`Couldn't regenerate: ${errMsg(e)}`);
       return;
     }
+    // The reply can vanish during the rewind await (cleared, rewound, deleted). Then there
+    // is nothing to replace, and the hidden resend below would append a duplicate answer.
+    const current = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    if (!current?.messages.some((m) => m.id === assistantId)) return;
     // Cut the CURRENT transcript at the regenerated reply (a missing reply is a no-op).
     chatStore.updateMessages(session.id, (messages) => {
       const at = messages.findIndex((m) => m.id === assistantId);
@@ -2563,7 +2567,8 @@ function ChatSessionSlot({
           });
           // Follow mode (ADR 0112) — the LIVE path only. The args live on the card (the
           // second start frame carries them); the end frame need not repeat them.
-          if (evt.phase === "end") onLiveToolEvent(evt, card?.input, session.id);
+          // No card = the bubble (or the whole session) is gone mid-turn: nothing to follow.
+          if (evt.phase === "end" && card) onLiveToolEvent(evt, card.input, session.id);
         },
         onComponent: (spec) => {
           reveal.flush(); // part ordering — the component lands AFTER the text already streamed

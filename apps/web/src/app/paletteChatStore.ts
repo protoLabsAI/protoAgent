@@ -98,7 +98,17 @@ export const PALETTE_LOAD_TIMEOUT_MS = 10_000;
  *  read. May answer synchronously or with a promise. */
 export type PaletteThreadLoader = (scope?: string) => PaletteThread | null | Promise<PaletteThread | null>;
 
-const defaultPaletteThreadLoader: PaletteThreadLoader = (scope) => readStoredPaletteThread(scope);
+// Blocked storage (a hardened context: getItem throws SecurityError) is NOT a failed read
+// here — there is nothing to protect and nothing that ever will load, so it starts a fresh
+// thread, as the palette always has. `failed` is reserved for an asynchronous loader,
+// whose record exists and may still load.
+const defaultPaletteThreadLoader: PaletteThreadLoader = (scope) => {
+  try {
+    return readStoredPaletteThread(scope);
+  } catch {
+    return null;
+  }
+};
 let paletteThreadLoader: PaletteThreadLoader = defaultPaletteThreadLoader;
 
 /** Install the thread loader (the S5 seam; tests pass a deferred one). `null` restores

@@ -80,6 +80,27 @@ describe("updater-only message mutators", () => {
     expect(chatStore.getSnapshot().sessions[0].updatedAt).toBe(1);
   });
 
+  it("a no-op neither notifies nor schedules a write (another window's frames cost nothing)", async () => {
+    vi.useFakeTimers();
+    stored([session("s1", history)]);
+    const { chatStore, mapMessageById, PERSIST_DEBOUNCE_MS } = await boot();
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const listener = vi.fn();
+    chatStore.subscribe(listener);
+    for (let i = 0; i < 5; i++) {
+      chatStore.updateMessages("s1", (messages) => mapMessageById(messages, "other-window-bubble", (m) => m));
+      chatStore.updateMessages("not-open-here", (messages) => [...messages, card(i)]);
+    }
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS * 2);
+    expect(listener).not.toHaveBeenCalled();
+    expect(setItem).not.toHaveBeenCalled();
+    // …while a real change still does both.
+    chatStore.updateMessages("s1", (messages) => [...messages, card(9)]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(PERSIST_DEBOUNCE_MS);
+    expect(setItem).toHaveBeenCalledTimes(1);
+  });
+
   it("an unknown session is ignored — the updater never runs", async () => {
     stored([session("s1", history)]);
     const { chatStore } = await boot();
