@@ -1119,8 +1119,7 @@ def test_persona_doc_names_only_exposed_tools(monkeypatch):
     assert "list its tools" in unknown
 
     wide = rt_mod.persona_doc(
-        _cfg(),
-        exposed={"task_create", "task_list", "memory_ingest", "notes_list", "set_goal", "schedule_task", "web_search"},
+        _cfg(), exposed={"task_create", "task_list", "memory_ingest", "notes_list", "set_goal", "schedule_task", "web_search"}
     )
     for present in ("`task_create`", "`memory_ingest`", "`notes_*`", "`set_goal`", "`schedule_task`", "IMPORTANT"):
         assert present in wide, present
@@ -1143,11 +1142,7 @@ def test_persona_files_and_prefix_share_one_exposed_set(tmp_path, monkeypatch):
     assert rt_mod.persona_doc(cfg, exposed={"task_create", "calculator"}) == doc
     assert rt_mod.persona_doc(cfg) == doc  # the default resolution IS the shared derivation
     rt._context.assemble(query="")
-    assert (
-        rt._context.bound_tool_names
-        == frozenset(sidecar_exposed_names(cfg))
-        == frozenset({"task_create", "calculator"})
-    )
+    assert rt._context.bound_tool_names == frozenset(sidecar_exposed_names(cfg)) == frozenset({"task_create", "calculator"})
 
 
 def test_persona_doc_names_nothing_when_resolution_fails(monkeypatch):
