@@ -174,3 +174,32 @@ describe("reconnect", () => {
     expect(FakeEventSource.instances[1].url).toBe("/api/events?token=t2&since=42");
   });
 });
+
+describe("dispatch isolates listeners (ADR 0114 D1)", () => {
+  it("a throwing listener neither starves the others nor skips the lastSeq update", async () => {
+    vi.useFakeTimers();
+    window.sessionStorage.clear();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: string[] = [];
+    const { onTopic } = await loadEvents();
+    onTopic("job.*", () => {
+      throw new Error("boom — e.g. a persist setter on a full quota");
+    });
+    onTopic("job.*", (_d, topic) => seen.push(`second:${topic}`));
+    onTopic("#", (_d, topic) => seen.push(`third:${topic}`));
+
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const first = FakeEventSource.instances[0];
+    first.onopen?.({});
+    expect(() => first.emit({ topic: "job.start", data: {}, seq: 9 })).not.toThrow();
+    expect(seen).toEqual(["second:job.start", "third:job.start"]);
+    expect(errSpy).toHaveBeenCalled();
+    // The seq was still recorded — persisted for a same-tab navigation, and used on reconnect.
+    expect(window.sessionStorage.getItem("protoagent.events.since")).toBe("9");
+    first.onerror?.({});
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(2));
+    expect(FakeEventSource.instances[1].url).toBe("/api/events?since=9");
+    errSpy.mockRestore();
+  });
+});

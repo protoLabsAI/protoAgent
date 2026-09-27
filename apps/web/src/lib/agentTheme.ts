@@ -2,6 +2,7 @@ import { applyStoredTheme } from "@protolabsai/ui/theming";
 
 import { currentSlug } from "./api";
 import { resolveThemeToPersist } from "./themeMerge";
+import { readKey, removeKey, writeKey } from "./storage";
 
 // Bridge the per-agent server theme (/api/theme, ADR 0042) to the DS ThemePanel, which is
 // localStorage-backed (key "pl-theme", an opaque {mode, overrides} blob). The host round-trips
@@ -47,16 +48,16 @@ export function applyAgentTheme(theme: unknown, opts: { animate?: boolean; prese
     const blob = resolveThemeToPersist(theme, currentThemeBlob(), { preservePersisted });
     if (blob) {
       try {
-        localStorage.setItem(PL_THEME_KEY, JSON.stringify(blob));
-        localStorage.setItem(PL_THEME_OWNER_KEY, currentSlug()); // stamp the owning agent
+        writeKey("local", PL_THEME_KEY, JSON.stringify(blob));
+        writeKey("local", PL_THEME_OWNER_KEY, currentSlug()); // stamp the owning agent
       } catch {
         /* ignore */
       }
       applyStoredTheme(); // re-reads the seeded blob → mode + overrides
     } else {
       try {
-        localStorage.removeItem(PL_THEME_KEY);
-        localStorage.removeItem(PL_THEME_OWNER_KEY);
+        removeKey("local", PL_THEME_KEY);
+        removeKey("local", PL_THEME_OWNER_KEY);
       } catch {
         /* ignore */
       }
@@ -196,7 +197,7 @@ export function watchThemeChanges() {
 /** The panel's current blob (what "Save to this agent" PUTs), or null if untouched. */
 export function currentThemeBlob(): unknown {
   try {
-    const raw = localStorage.getItem(PL_THEME_KEY);
+    const raw = readKey("local", PL_THEME_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -214,7 +215,7 @@ export function currentThemeBlob(): unknown {
  *  agent's window overwrites the shared key. */
 export function persistedThemeIsForCurrentAgent(): boolean {
   try {
-    return localStorage.getItem(PL_THEME_OWNER_KEY) === currentSlug();
+    return readKey("local", PL_THEME_OWNER_KEY) === currentSlug();
   } catch {
     return false;
   }

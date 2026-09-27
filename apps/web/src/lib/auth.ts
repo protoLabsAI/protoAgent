@@ -13,6 +13,8 @@
 // localhost-default + default-deny bearer-gate posture; the real lever beyond localhost is
 // a CSP connect-src egress limit. See docs/guides/deploy-docker.md → "Where the operator
 // token lives".
+import { readKey, removeKey, writeKeyStrict } from "./storage";
+
 const TOKEN_KEY = "protoagent.authToken";
 
 let needed = false;
@@ -51,17 +53,19 @@ export function clearAuthRequired() {
 }
 
 /** Persist the operator bearer (the key api.ts's authToken() reads) and clear the
- *  prompt. Storage can be unavailable in hardened contexts — the token still won't
- *  survive a reload there, but in-flight retries pick it up via the gate's refetch. */
-export function saveAuthToken(token: string) {
+ *  prompt. A credential write is STRICT (ADR 0114 D1): when the browser can't keep the
+ *  token (full quota, storage disabled) every request would still go out without it, so
+ *  this reports the failure and leaves the prompt up instead of pretending it connected. */
+export function saveAuthToken(token: string): { ok: true } | { ok: false; error: string } {
   try {
     const t = token.trim();
-    if (t) window.localStorage.setItem(TOKEN_KEY, t);
-    else window.localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // best-effort
+    if (t) writeKeyStrict("local", TOKEN_KEY, t);
+    else removeKey("local", TOKEN_KEY);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "could not save the token" };
   }
   clearAuthRequired();
+  return { ok: true };
 }
 
 
@@ -76,14 +80,11 @@ async function tryDesktopSelfAuth(): Promise<void> {
   const token = await desktopAuthToken();
   // Only useful if it differs from what we already sent — otherwise the server rejected
   // this exact token and re-saving it would loop.
-  let existing = "";
-  try {
-    existing = window.localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    // best-effort; an unreadable store just means we try the shell's token
-  }
+  // An unreadable store reads as "" — we just try the shell's token.
+  const existing = readKey("local", TOKEN_KEY) || "";
   if (!token || token === existing) return;
-  saveAuthToken(token);
+  // A token the browser couldn't keep recovers nothing — leave the prompt to say so.
+  if (!saveAuthToken(token).ok) return;
   // Same recovery path the manual prompt takes: everything refetches with the new bearer.
   window.dispatchEvent(new CustomEvent("protoagent:auth-recovered"));
 }

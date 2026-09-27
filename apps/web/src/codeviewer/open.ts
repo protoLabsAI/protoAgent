@@ -5,6 +5,7 @@ import { chatStore } from "../chat/chat-store";
 import { useUI } from "../state/uiStore";
 import { isCodePaneEnabled } from "./enabled";
 import { showCodeRef, useCodeViewer, type CodeRef } from "./store";
+import { readKey, writeKey } from "../lib/storage";
 
 // Routing the code pane onto a dock (ADR 0112). The store (store.ts) says WHAT to show; this
 // says WHERE — and is the one place the placement rule, the one-time widen and the mobile
@@ -61,7 +62,7 @@ export function placeCodeSurface(): Dock {
 
 function widenedBefore(): boolean {
   try {
-    return globalThis.localStorage?.getItem(WIDENED_KEY) === "1";
+    return readKey("local", WIDENED_KEY) === "1";
   } catch {
     return false;
   }
@@ -72,7 +73,7 @@ function widenedBefore(): boolean {
 function widenOnce(dock: Dock): void {
   if (dock !== "right" || widenedBefore()) return;
   try {
-    globalThis.localStorage?.setItem(WIDENED_KEY, "1");
+    writeKey("local", WIDENED_KEY, "1");
   } catch {
     /* storage blocked — at worst we widen once per page load */
   }

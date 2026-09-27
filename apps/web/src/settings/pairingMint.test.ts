@@ -19,6 +19,7 @@ describe("makeReachable mint decision", () => {
   it("does NOT decide from this browser's localStorage", () => {
     // The exact shape of the bug: a localStorage read gating the mint.
     expect(src).not.toMatch(/const\s+previous\s*=\s*window\.localStorage\.getItem/);
+    expect(src).not.toMatch(/const\s+previous\s*=\s*readKey\(/); // the same read via the storage seam
     expect(src).not.toMatch(/if\s*\(!previous\)\s*\{/);
   });
 
@@ -27,6 +28,13 @@ describe("makeReachable mint decision", () => {
   });
 
   it("restores a prior token when the save fails rather than blanking it", () => {
-    expect(src).toMatch(/if \(prior\) window\.localStorage\.setItem/);
+    expect(src).toMatch(/if \(prior\) writeKey\("local", "protoagent\.authToken", prior\)/);
+  });
+
+  it("stores the minted token STRICTLY, before the server is told (ADR 0114 D1)", () => {
+    // A token the browser failed to keep must throw into the catch — never reach saveSettings.
+    const strict = src.indexOf('writeKeyStrict("local", "protoagent.authToken", token)');
+    expect(strict).toBeGreaterThan(-1);
+    expect(strict).toBeLessThan(src.indexOf('api.saveSettings({ "auth.token": token }'));
   });
 });

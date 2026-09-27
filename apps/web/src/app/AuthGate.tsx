@@ -28,12 +28,19 @@ import { authRequired, saveAuthToken, subscribeAuth } from "../lib/auth";
 export function AuthGate() {
   const needed = useSyncExternalStore(subscribeAuth, authRequired);
   const [token, setToken] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   if (!needed) return null;
 
   const connect = () => {
-    saveAuthToken(token);
+    const res = saveAuthToken(token);
+    if (!res.ok) {
+      // The browser couldn't keep the token (ADR 0114 D1) — say so; don't pretend.
+      setSaveError(res.error);
+      return;
+    }
+    setSaveError(null);
     setToken("");
     // Refetch everything (including the boot probe) with the new bearer.
     void queryClient.invalidateQueries();
@@ -76,6 +83,11 @@ export function AuthGate() {
           value={token}
           onChange={(e) => setToken(e.target.value)}
         />
+        {saveError && (
+          <p className="auth-gate-error" role="alert" style={{ color: "var(--pl-color-status-error)" }}>
+            {saveError}
+          </p>
+        )}
       </form>
     </Dialog>
   );

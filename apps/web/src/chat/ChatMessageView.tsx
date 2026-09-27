@@ -31,6 +31,7 @@ import { foldPlan, toolsForGroup } from "./parts";
 import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 import { useBackgroundJob } from "./backgroundJobStore";
 import { STATE_LABEL, briefSummary, delegationState } from "./delegation";
+import { readKey, writeKey } from "../lib/storage";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
 // chat) and no actions render. Each callback is independently optional.
@@ -321,7 +322,7 @@ const DISMISSED_KEY = "protoagent.chat.dismissedReports";
 
 function dismissedSet(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("local", DISMISSED_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -334,7 +335,7 @@ function useDismissedReports() {
     const s = dismissedSet();
     s.add(jobId);
     try {
-      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...s].slice(-300)));
+      writeKey("local", DISMISSED_KEY, JSON.stringify([...s].slice(-300)));
     } catch {
       /* storage unavailable — the chip still hides for this page's lifetime */
     }
@@ -440,7 +441,7 @@ const DISMISSED_SCHEDULED_KEY = "protoagent.chat.dismissedScheduled";
 
 function dismissedScheduledSet(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(DISMISSED_SCHEDULED_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("local", DISMISSED_SCHEDULED_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -452,7 +453,7 @@ function useDismissedScheduled() {
     const s = dismissedScheduledSet();
     s.add(key);
     try {
-      localStorage.setItem(DISMISSED_SCHEDULED_KEY, JSON.stringify([...s].slice(-300)));
+      writeKey("local", DISMISSED_SCHEDULED_KEY, JSON.stringify([...s].slice(-300)));
     } catch {
       /* storage unavailable — the card still hides for this page's lifetime */
     }

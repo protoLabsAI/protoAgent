@@ -5,7 +5,7 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
 import { Launcher } from "./app/Launcher";
-import { AppCrash } from "./app/AppCrash";
+import { AppCrash, ForcedQuotaCrash } from "./app/AppCrash";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import { isLauncherWindow } from "./lib/desktop";
 // ADR 0037 — design-system foundation. Order matters: brand tokens (--pl-*) first, then
@@ -41,13 +41,21 @@ if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch 
 // `.finally` rather than top-level await: TLA constrains the build target, and this must
 // render even if the claim rejects. With no `#pair=` fragment the promise resolves
 // synchronously-ish (no network call at all), so the normal boot is unaffected.
-void redeemPairingFromUrl().finally(() => {
+void redeemPairingFromUrl()
+  .then((res) => {
+    // A failed claim (expired code, or a token this browser couldn't store — ADR 0114 D1)
+    // falls through to the token gate; leave the reason where a bug report will find it.
+    if (res && !res.ok) console.error("[pairing] device pairing failed:", res.error);
+  })
+  .finally(() => {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     {/* The ROOT boundary (#872): anything a panel boundary doesn't catch lands on a
         full-page recovery card instead of a white screen. Outermost so a throw in
         the providers themselves is caught too. */}
     <ErrorBoundary fallback={({ error }) => <AppCrash error={error} />}>
+      {/* Inert unless the e2e/QA hook is set (ADR 0114) — reaches AppCrash's quota path. */}
+      <ForcedQuotaCrash />
       <QueryClientProvider client={queryClient}>
         {/* Toasts anchor TOP-right (app-level notifications; clear of the bottom utility
             bar / composer) via the DS prop — no `.pl-toast-stack` CSS override needed

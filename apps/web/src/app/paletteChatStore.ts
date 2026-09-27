@@ -4,6 +4,7 @@
 // chat-store's slug-namespacing + try/catch + debounce. `/clear` mints a fresh thread
 // and wipes the old one's checkpoints.
 import type { ChatMessage } from "../lib/types";
+import { readKey, writeKey } from "../lib/storage";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
 // palette thread; host (no slug) uses the bare key. Fixed per page load.
@@ -48,7 +49,7 @@ function sanitize(messages: unknown): ChatMessage[] {
 
 export function loadPaletteThread(scope?: string): PaletteThread {
   try {
-    const raw = window.localStorage.getItem(keyFor(scope));
+    const raw = readKey("local", keyFor(scope));
     if (raw) {
       const p = JSON.parse(raw) as Partial<PaletteThread>;
       if (p && typeof p.contextId === "string") {
@@ -65,7 +66,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let pending: { thread: PaletteThread; scope?: string } | null = null;
 function write(thread: PaletteThread, scope?: string) {
   try {
-    window.localStorage.setItem(keyFor(scope), JSON.stringify(thread));
+    writeKey("local", keyFor(scope), JSON.stringify(thread));
   } catch {
     // storage can be unavailable (hardened contexts)
   }

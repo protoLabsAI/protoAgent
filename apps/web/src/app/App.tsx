@@ -110,6 +110,7 @@ import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";
 import type { RuntimeStatus } from "../lib/types";
+import { readKey, writeKey } from "../lib/storage";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -133,7 +134,7 @@ import type { RuntimeStatus } from "../lib/types";
 function useLocalStorageState(key: string, fallback: string) {
   const [value, setValue] = useState(() => {
     try {
-      return window.localStorage.getItem(key) || fallback;
+      return readKey("local", key) || fallback;
     } catch {
       return fallback;
     }
@@ -141,7 +142,7 @@ function useLocalStorageState(key: string, fallback: string) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(key, value);
+      writeKey("local", key, value);
     } catch {
       // localStorage can be unavailable in hardened browser contexts.
     }

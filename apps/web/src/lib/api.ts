@@ -86,6 +86,7 @@ import { delegationFromFrame } from "./delegation";
 import type { WatchCreateBody } from "../chat/watchForm";
 import { notifyAuthRequired } from "./auth";
 import { errMsg } from "./format";
+import { readKey } from "./storage";
 
 type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
@@ -186,12 +187,7 @@ export function frameIsForeign(frame: A2AFrame, expectedContextId: string): bool
 
 function defaultApiBase() {
   if (typeof window === "undefined") return "";
-  let savedBase = "";
-  try {
-    savedBase = window.localStorage.getItem("protoagent.apiBase") || "";
-  } catch {
-    savedBase = "";
-  }
+  const savedBase = readKey("local", "protoagent.apiBase") || "";
   if (savedBase) return savedBase.replace(/\/$/, "");
 
   // The Tauri desktop shell boots its bundled server on a dynamically-chosen
@@ -351,11 +347,7 @@ function tauriCore(): TauriCore | null {
  * local/desktop case (no token) stays open. (The `/api/events` EventSource is
  * exempt server-side since EventSource can't set headers.) */
 export function authToken(): string {
-  try {
-    return window.localStorage.getItem("protoagent.authToken") || "";
-  } catch {
-    return "";
-  }
+  return readKey("local", "protoagent.authToken") || "";
 }
 
 function applyAuth(headers: Headers): Headers {

@@ -46,3 +46,44 @@
   color: var(--pl-color-fg-subtle, #9aa0aa);
   font-size: 12px;
 }
+
+/* Largest-keys fallback (ADR 0114 D6): shown when clearing transcripts freed too little. */
+.app-crash__keys {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 640px;
+  width: 100%;
+}
+
+.app-crash__keys ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  text-align: left;
+}
+
+.app-crash__keys li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--pl-color-border, #2a2a2e);
+  font-size: 12px;
+}
+
+.app-crash__keys code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--pl-font-mono, ui-monospace, monospace);
+}
+
+.app-crash__keys span {
+  color: var(--pl-color-fg-subtle, #9aa0aa);
+  font-variant-numeric: tabular-nums;
+}

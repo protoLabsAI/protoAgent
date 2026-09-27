@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { api, authToken, currentSlug } from "../lib/api";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
+import { listKeys, matchKey, readKey, writeKey } from "../lib/storage";
 
 // Cross-agent "turn finished" notifications (ADR 0042 follow-up). Each window's SSE +
 // chat stream is scoped to ITS slug, so a window has no live channel to a turn running
@@ -25,7 +26,7 @@ type Watch = { slug: string; taskId: string; title: string };
 
 function notifiedSet(): Set<string> {
   try {
-    return new Set(JSON.parse(sessionStorage.getItem(NOTIFIED_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("session", NOTIFIED_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -35,7 +36,7 @@ function markNotified(taskId: string) {
   try {
     const s = notifiedSet();
     s.add(taskId);
-    sessionStorage.setItem(NOTIFIED_KEY, JSON.stringify([...s].slice(-50)));
+    writeKey("session", NOTIFIED_KEY, JSON.stringify([...s].slice(-50)));
   } catch {
     /* best-effort */
   }
@@ -45,13 +46,14 @@ function markNotified(taskId: string) {
 export function scanOtherSlugs(current: string): Watch[] {
   const out: Watch[] = [];
   const seen = notifiedSet();
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i) || "";
-    if (!key.startsWith("protoagent.chat.sessions")) continue;
-    const slug = key === "protoagent.chat.sessions" ? "host" : key.slice("protoagent.chat.sessions:".length);
+  for (const key of listKeys("local")) {
+    // Exact registry match (ADR 0114 D1): a `.dismissed` set is not a transcript.
+    const hit = matchKey("local", key);
+    if (hit?.spec.id !== "chat.sessions") continue;
+    const slug = hit.slug ?? "host";
     if (slug === current) continue;
     try {
-      const state = JSON.parse(localStorage.getItem(key) || "null");
+      const state = JSON.parse(readKey("local", key) || "null");
       for (const s of state?.sessions ?? []) {
         const last = [...(s.messages ?? [])].reverse().find((m: ChatMessage) => m.role === "assistant");
         if (last?.status === "streaming" && last.taskId && !seen.has(last.taskId)) {
