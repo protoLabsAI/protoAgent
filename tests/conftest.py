@@ -129,6 +129,17 @@ def _isolate_host_config(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(tmp_path / "host-config.yaml"))
 
 
+@pytest.fixture(autouse=True)
+def _trust_testclient_host(monkeypatch):
+    """Trust Starlette ``TestClient``'s ``Host: testserver`` in the open-mode Host allowlist.
+
+    ``auth.install`` fronts an OPEN app with ``a2a_impl.hosts.HostGuardMiddleware`` (#3668),
+    which only answers names the instance is served under — and ``testserver`` is not one.
+    Declared the way an operator would (``PROTOAGENT_TRUSTED_HOSTS``) so the real code path
+    runs; tests of the allowlist itself delete or override it."""
+    monkeypatch.setenv("PROTOAGENT_TRUSTED_HOSTS", "testserver")
+
+
 def pytest_configure(config):  # noqa: ARG001
     """Prepend site-packages to sys.path before any test imports occur."""
     site_dirs = site.getsitepackages()

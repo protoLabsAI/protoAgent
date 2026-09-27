@@ -587,14 +587,14 @@ def _main():
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
 
+    from a2a_impl.hosts import CONSOLE_ORIGIN_REGEX
+
     fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
     STATE.fastapi_app = fastapi_app  # reload hot-mounts newly-enabled plugin routes onto it
     fastapi_app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=(
-            r"^(tauri://localhost|http://tauri\.localhost|"
-            r"https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
-        ),
+        # One definition, shared with the open-mode cross-site gate (a2a_impl.hosts, #3668).
+        allow_origin_regex=CONSOLE_ORIGIN_REGEX,
         allow_methods=["*"],
         allow_headers=["*"],
         # The desktop webview is cross-origin. Without explicit exposure, fetch() can see
@@ -1446,11 +1446,13 @@ def _main():
     # Tell the pairing routes what we actually bound to (ADR 0087 D6). Enumerating the
     # host's interfaces isn't enough: a loopback-bound server still HAS a LAN address, and
     # offering it as a pairing target produces a QR that silently can't work.
-    from graph.fleet.proxy import set_bind_host as set_proxy_bind_host
+    from a2a_impl.hosts import set_bind_host as set_trusted_bind_host
     from operator_api.pairing_routes import set_bind_host
 
     set_bind_host(args.host)
-    set_proxy_bind_host(args.host)  # the remote-member Host gate (#3662) admits a named bind
+    # The open-mode Host allowlist (#3668, and the fleet proxy's remote gate #3662) admits a
+    # named bind. Set before uvicorn serves the first request.
+    set_trusted_bind_host(args.host)
 
     # Boot gate: a non-loopback bind with no A2A auth token exposes the full
     # operator API (plugin install+enable = code execution, config/SOUL

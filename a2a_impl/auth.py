@@ -317,7 +317,8 @@ def open_mode() -> bool:
     For callers that must treat "operator because nothing is checked" differently from
     "operator because a secret matched": the fleet proxy gates browser-driven requests to a
     REMOTE member on an open hub (#3662), because there an anonymous cross-site page would
-    otherwise be lent the remote's stored credential."""
+    otherwise be lent the remote's stored credential; and ``a2a_impl.hosts.HostGuardMiddleware``
+    applies the instance-wide Host allowlist + JSON content-type rule only here (#3668)."""
     return _BEARER[0] is None and not _API_KEY[0]
 
 
@@ -799,7 +800,15 @@ def install(
     federation_token: str | None = None,
     fleet_token: str | None = None,
 ) -> None:
-    """Configure the guard and add the middleware to ``app``."""
+    """Configure the guard and add the middleware to ``app``.
+
+    Two layers, added in this order so the second wraps the first (Starlette runs the
+    last-added middleware outermost): ``A2AAuthMiddleware`` (credentials, HTTP only), then
+    ``a2a_impl.hosts.HostGuardMiddleware`` — the open-mode Host allowlist + JSON content-type
+    rule (#3668), pure ASGI so it also covers WebSocket routes, and outermost so a refused
+    request reaches nothing."""
+    from a2a_impl.hosts import HostGuardMiddleware
+
     configure(
         bearer_token=bearer_token,
         api_key=api_key,
@@ -808,6 +817,7 @@ def install(
         fleet_token=fleet_token,
     )
     app.add_middleware(A2AAuthMiddleware)
+    app.add_middleware(HostGuardMiddleware)
 
 
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")

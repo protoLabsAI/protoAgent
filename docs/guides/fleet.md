@@ -451,8 +451,10 @@ a **remote** member on an **open** hub, the proxy refuses with `403` before cont
   with a reverse proxy that forwards its own public name, add that name there.
 
 curl, scripts and the `delegate_to` path send neither header and pass. Local members and the
-host are unaffected, and so is a token-gated hub. Its credential is a header, never a cookie,
-so a foreign or rebound page has nothing to attach.
+host skip the `Origin` and Fetch Metadata checks, and a token-gated hub skips all of them. Its
+credential is a header, never a cookie, so a foreign or rebound page has nothing to attach.
+The `Host` check isn't specific to this proxy: an open instance applies it to every path
+([Security & trust](/explanation/security-and-trust#an-instance-with-no-token)).
 
 **Version skew is flagged.** The hub console drives a remote's full `/api/*` by proxy, so a
 remote on a *different protoAgent release* is a real compat surface. The reachability probe

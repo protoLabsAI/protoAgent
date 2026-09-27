@@ -1222,7 +1222,8 @@ async def test_allowed_origin_passes():
         yield ("done", "x")
 
     app = _build_app(stream, allowed_origins="https://example.com,https://other.com")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+    # An open app: the Host allowlist (#3668) wants a name it's served under — loopback here.
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:7870") as c:
         r = await c.post(
             "/a2a",
             headers={**A2A_HEADERS, "Origin": "https://example.com"},
