@@ -12,6 +12,7 @@ import { onConnectionChange, onTopic } from "../lib/events";
 import type { BackgroundJobDTO } from "../lib/types";
 import { useUI } from "../state/uiStore";
 import { applyProgress, byRecency, fmtElapsed, nowIso, unreadJobIds, type ProgressTool } from "./background-jobs";
+import { readKey, writeKey } from "../lib/storage";
 
 // Background-jobs UtilityBar pill + dialog (ADR 0050 Phase 3 / ADR 0051). Hydrates from
 // GET /api/background, then tracks live via the bus: `background.{started,completed}` for
@@ -27,7 +28,7 @@ const SEEN_KEY = "protoagent.bgjobs.seen";
 
 function seenSet(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("local", SEEN_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -38,7 +39,7 @@ function markSeen(ids: string[]) {
   try {
     const s = seenSet();
     for (const id of ids) s.add(id);
-    localStorage.setItem(SEEN_KEY, JSON.stringify([...s].slice(-300)));
+    writeKey("local", SEEN_KEY, JSON.stringify([...s].slice(-300)));
   } catch {
     /* best-effort */
   }

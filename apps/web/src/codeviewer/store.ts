@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { readKey, writeKey } from "../lib/storage";
 
 // The code pane's state (ADR 0112) — what file/range the pane shows, the "Recent" trail,
 // which tab is up, and the follow-mode switches. A module-level zustand store (the ADR 0062
@@ -54,7 +55,7 @@ export const SESSION_KEY = "protoagent.codePane";
  *  throw (private mode, blocked site data) and the pane must render anyway. */
 export function loadSession(): { current: CodeRef | null; recent: CodeRef[] } {
   try {
-    const raw = globalThis.sessionStorage?.getItem(SESSION_KEY);
+    const raw = readKey("session", SESSION_KEY);
     if (!raw) return { current: null, recent: [] };
     const v = JSON.parse(raw) as { current?: unknown; recent?: unknown };
     const one = (x: unknown): CodeRef | null =>
@@ -69,7 +70,7 @@ export function loadSession(): { current: CodeRef | null; recent: CodeRef[] } {
 
 function saveSession(current: CodeRef | null, recent: CodeRef[]): void {
   try {
-    globalThis.sessionStorage?.setItem(SESSION_KEY, JSON.stringify({ current, recent }));
+    writeKey("session", SESSION_KEY, JSON.stringify({ current, recent }));
   } catch {
     /* storage blocked — the pane just won't survive a reload */
   }

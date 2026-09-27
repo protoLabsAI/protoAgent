@@ -6,6 +6,7 @@ import { isShortResult } from "./background-jobs";
 import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
+import { readKey, writeKey } from "../lib/storage";
 
 // Live delivery of background-subagent updates (ADR 0050) into the chat that spawned
 // them. A background job runs detached as its own A2A turn; its completion is already
@@ -23,7 +24,7 @@ const NOTIFIED_KEY = "protoagent.bgwatch.notified"; // sessionStorage — surviv
 
 function notifiedSet(): Set<string> {
   try {
-    return new Set(JSON.parse(sessionStorage.getItem(NOTIFIED_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("session", NOTIFIED_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -33,7 +34,7 @@ function markNotified(key: string) {
   try {
     const s = notifiedSet();
     s.add(key);
-    sessionStorage.setItem(NOTIFIED_KEY, JSON.stringify([...s].slice(-100)));
+    writeKey("session", NOTIFIED_KEY, JSON.stringify([...s].slice(-100)));
   } catch {
     /* best-effort */
   }

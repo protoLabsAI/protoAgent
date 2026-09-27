@@ -6,6 +6,7 @@ import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
 import { parseScheduledEvent } from "./scheduledEvent";
+import { readKey, writeKey } from "../lib/storage";
 
 // Live delivery of scheduled-task results (#2990) into the chat that CREATED the schedule.
 // A scheduled fire runs detached in Activity (or its context target), but if it was set up
@@ -24,7 +25,7 @@ const NOTIFIED_KEY = "protoagent.schedwatch.notified"; // sessionStorage — sur
 
 function notifiedSet(): Set<string> {
   try {
-    return new Set(JSON.parse(sessionStorage.getItem(NOTIFIED_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("session", NOTIFIED_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -34,7 +35,7 @@ function markNotified(key: string) {
   try {
     const s = notifiedSet();
     s.add(key);
-    sessionStorage.setItem(NOTIFIED_KEY, JSON.stringify([...s].slice(-100)));
+    writeKey("session", NOTIFIED_KEY, JSON.stringify([...s].slice(-100)));
   } catch {
     /* best-effort */
   }

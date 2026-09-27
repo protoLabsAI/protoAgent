@@ -7,6 +7,8 @@
  * Redemption runs BEFORE React mounts, so the app never renders its "enter your token"
  * gate for a device that is about to be authorised. */
 
+import { writeKey, writeKeyStrict } from "./storage";
+
 const KEY = "protoagent.authToken";
 const DEVICE_KEY = "protoagent.deviceId";
 
@@ -70,8 +72,11 @@ export async function redeemPairingFromUrl(): Promise<PairResult> {
     if (!res.ok || !data?.token) {
       return { ok: false, error: String(data?.error || "pairing failed") };
     }
-    window.localStorage.setItem(KEY, data.token);
-    if (data?.device?.id) window.localStorage.setItem(DEVICE_KEY, data.device.id);
+    // Strict (ADR 0114 D1): a token the browser failed to keep must not report success —
+    // the throw lands in the catch below and comes back as { ok: false }.
+    writeKeyStrict("local", KEY, data.token);
+    if (data?.device?.id) writeKey("local", DEVICE_KEY, data.device.id); // informational
+
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "pairing failed" };

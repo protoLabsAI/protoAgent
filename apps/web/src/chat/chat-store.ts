@@ -9,6 +9,8 @@ import {
   shownRuns,
   turnBubbleIndexes,
 } from "./turnText";
+import { readKey, writeKey } from "../lib/storage";
+import { persistBlocked } from "../lib/storageReset";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -112,7 +114,7 @@ const DISMISSED_STORAGE_KEY = `${STORAGE_KEY}.dismissed`;
 
 function loadDismissedIds(): Set<string> {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(DISMISSED_STORAGE_KEY) || "[]");
+    const parsed = JSON.parse(readKey("local", DISMISSED_STORAGE_KEY) || "[]");
     return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
   } catch {
     return new Set();
@@ -121,7 +123,7 @@ function loadDismissedIds(): Set<string> {
 
 function persistDismissedIds(ids: Set<string>) {
   try {
-    window.localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify([...ids].sort()));
+    writeKey("local", DISMISSED_STORAGE_KEY, JSON.stringify([...ids].sort()));
   } catch {
     // Hardened storage contexts keep the in-memory dismissal for this page.
   }
@@ -476,7 +478,7 @@ function streamingIds(state: ChatState): Set<string> {
 
 function loadPersisted(): PersistedChatState {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readKey("local", STORAGE_KEY);
     const state = raw ? sanitizePersisted(JSON.parse(raw)) : null;
     if (state) {
       const sessions = state.sessions.filter((session) => !locallyDismissedIds.has(session.id));
@@ -501,7 +503,10 @@ function loadPersisted(): PersistedChatState {
   };
 }
 
+// Storage recovery (ADR 0114 D6): after AppCrash's "Free up space & reload" (this page) or a
+// `storage-reset` broadcast (another tab), this store stops writing — see lib/storageReset.ts.
 function persist(state: ChatState) {
+  if (persistBlocked()) return;
   try {
     // Read-merge-write: a concurrent tab sharing this key may have written sessions we
     // don't have (or newer copies) since our last read. Fold them in so our write never
@@ -509,7 +514,7 @@ function persist(state: ChatState) {
     // streaming sessions stay authoritative; locally-deleted ones are not resurrected.
     let sessions = state.sessions;
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const raw = readKey("local", STORAGE_KEY);
       const onDisk = raw ? sanitizePersisted(JSON.parse(raw)) : null;
       if (onDisk) {
         sessions = mergeSessions(state.sessions, onDisk.sessions, {
@@ -532,7 +537,7 @@ function persist(state: ChatState) {
       ),
       currentSessionId: state.currentSessionId,
     };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    writeKey("local", STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // Storage can be unavailable in hardened browser contexts.
   }
@@ -574,6 +579,10 @@ export function flushChatPersist() {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
     persistTimer = null;
+  }
+  if (persistBlocked()) {
+    persistDirty = false; // the storage was just reset — nothing may be written back
+    return;
   }
   if (persistDirty) {
     persistDirty = false;

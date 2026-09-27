@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { redeemPairingFromUrl } from "./pairing";
+import { QuotaStorage } from "./quotaStorage.testkit";
+import { __resetStorageSeamForTests } from "./storage";
 
 // Device pairing redemption (ADR 0087). The security-relevant behaviour here is that the
 // code leaves the URL and history REGARDLESS of outcome — a spent or rejected code sitting
@@ -93,5 +95,26 @@ describe("redeemPairingFromUrl", () => {
     expect(await redeemPairingFromUrl()).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(window.location.hash).toBe("#settings"); // untouched — not ours to strip
+  });
+});
+
+// ADR 0114 D1: the device token is a credential — a write the browser refused must come back
+// as a failed pairing, never `{ ok: true }` for a token this browser never kept.
+describe("redeemPairingFromUrl on a full quota", () => {
+  it("returns { ok: false } instead of reporting success", async () => {
+    const full = new QuotaStorage(100);
+    full.setItem("plugin.hog", "x".repeat(40));
+    vi.stubGlobal("localStorage", full);
+    setHash("#pair=abc123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ ok: true, token: "device-token", device: { id: "d" } }) })),
+    );
+    const res = await redeemPairingFromUrl();
+    expect(res?.ok).toBe(false);
+    expect(res && !res.ok ? res.error : "").toMatch(/storage is full/);
+    expect(full.getItem("protoagent.authToken")).toBeNull();
+    vi.unstubAllGlobals();
+    __resetStorageSeamForTests();
   });
 });

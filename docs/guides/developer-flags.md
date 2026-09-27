@@ -95,6 +95,23 @@ and `remove_by` is the due date. `tests/test_flags.py::test_no_flag_is_past_its_
 CI** once a flag's ISO-date `remove_by` has passed, so a stale gate is visible debt rather than
 silent accretion.
 
+## Console QA knobs (not tiered flags)
+
+A few console-only switches reuse the `?flag:` query syntax but take a **value** and have no
+registry entry, tier or `remove_by` — they're QA instruments, not pre-release gates, and last
+only for the page load. They are gated like the Developer panel: live only in a Vite dev build
+or once `/api/flags` reports a non-`prod` channel, so a production console ignores them:
+
+- **`?flag:storage.simulateQuotaBytes=<N>`** (ADR 0114)
+  — the console's storage seam (`apps/web/src/lib/storage.ts`) throws a synthetic
+  `QuotaExceededError` for any `localStorage` write that would take total usage (UTF-16 bytes,
+  `2 × (key + value length)`, every key counted) past N. A full quota on demand: the console
+  must keep working, with history simply not saved. Tests can set
+  `globalThis.__protoagentSimulateQuotaBytes = N` instead.
+- **`globalThis.__protoagentForceQuotaCrash = true`** (set before the app loads, e.g. a
+  Playwright init script) — forces a render-time quota error so the crash page's **Free up
+  space & reload** path stays testable now that a real quota error can't reach a render.
+
 ## See also
 
 - [ADR 0068](/adr/0068-developer-flags-and-panel) — the design and the non-goals.

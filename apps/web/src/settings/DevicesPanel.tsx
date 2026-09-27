@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { StatusPill } from "../app/StatusPill";
 import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api } from "../lib/api";
+import { readKey, removeKey, writeKey, writeKeyStrict } from "../lib/storage";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
@@ -220,14 +221,16 @@ export function DevicesPanel() {
         const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
         // Store locally BEFORE saving: `auth.token` applies live, so the very next request
         // would 401 this session if the browser weren't already holding it.
-        const prior = window.localStorage.getItem("protoagent.authToken");
-        window.localStorage.setItem("protoagent.authToken", token);
+        // Strict (ADR 0114 D1): if the browser can't keep the token, throw into the catch
+        // below BEFORE the server is told about a token this session wouldn't be sending.
+        const prior = readKey("local", "protoagent.authToken");
+        writeKeyStrict("local", "protoagent.authToken", token);
         const res = await api.saveSettings({ "auth.token": token }, "agent");
         if (!res.ok) {
           // Restore what was there, don't blank it — this browser may hold a token that is
           // still valid for something, and the save we just attempted never took effect.
-          if (prior) window.localStorage.setItem("protoagent.authToken", prior);
-          else window.localStorage.removeItem("protoagent.authToken");
+          if (prior) writeKey("local", "protoagent.authToken", prior);
+          else removeKey("local", "protoagent.authToken");
           throw new Error(res.messages.join(" · ") || "could not set an auth token");
         }
         setMintedToken(token);
