@@ -117,7 +117,7 @@ async def test_threaded_tool_calls_never_cross_responses():
         "print('bad:', len(bad), bad[:3])\n"
     )
     out = await run_code(code, {"blob_tool": blob_tool}, timeout=30.0)
-    assert out == "bad: 0 []"
+    assert out.replace("\r\n", "\n") == "bad: 0 []"
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_malformed_frame_is_answered_not_dropped():
         "print(tools.echo_tool(text='still works'))\n"
     )
     out = await run_code(code, _TOOL_MAP, timeout=10.0)
-    assert out == "99 False None False True\nSTILL WORKS"
+    assert out.replace("\r\n", "\n") == "99 False None False True\nSTILL WORKS"
 
 
 @pytest.mark.asyncio
