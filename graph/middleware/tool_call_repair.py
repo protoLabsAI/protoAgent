@@ -133,6 +133,16 @@ class ToolCallRepairMiddleware(AgentMiddleware):
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         return self._repair(state)
 
+
+class ToolResultOrderMiddleware(AgentMiddleware):
+    """Hand the model a history whose tool results directly follow their calls.
+
+    View-only (``request.override``) — the checkpoint keeps its stored order. Placed
+    INSIDE PromptCache and OUTSIDE PromptCapture (see ``graph.agent``): Trajectory, which
+    sits outside PromptCache, must hash the STORED messages; PromptCapture must record
+    what the model actually saw. A healthy history passes through as the same request.
+    """
+
     def wrap_model_call(self, request, handler):  # type: ignore[override]
         fixed = reorder_tool_results(getattr(request, "messages", None) or [])
         return handler(request.override(messages=fixed) if fixed is not None else request)

@@ -90,7 +90,7 @@ def test_repair_applied_through_the_langgraph_reducer():
 
 # ── out-of-order answers (the delegate_to room-envelope 400) ─────────────────────────────
 
-from graph.middleware.tool_call_repair import reorder_tool_results  # noqa: E402
+from graph.middleware.tool_call_repair import ToolResultOrderMiddleware, reorder_tool_results  # noqa: E402
 
 
 def _room(text, **room):
@@ -154,11 +154,11 @@ def test_middleware_hands_the_model_the_reordered_history():
         seen["messages"] = req.messages
         return "ok"
 
-    assert ToolCallRepairMiddleware().wrap_model_call(_Req([call, env, res]), handler) == "ok"
+    assert ToolResultOrderMiddleware().wrap_model_call(_Req([call, env, res]), handler) == "ok"
     assert seen["messages"] == [call, res, env]
 
     healthy = _Req([call, res, env])
-    ToolCallRepairMiddleware().wrap_model_call(healthy, handler)
+    ToolResultOrderMiddleware().wrap_model_call(healthy, handler)
     assert seen["messages"] is healthy.messages  # passed through untouched
 
 
@@ -179,5 +179,5 @@ def test_middleware_async_path_reorders_too():
     async def handler(req):
         return req.messages
 
-    out = asyncio.run(ToolCallRepairMiddleware().awrap_model_call(_Req([call, env, res]), handler))
+    out = asyncio.run(ToolResultOrderMiddleware().awrap_model_call(_Req([call, env, res]), handler))
     assert out == [call, res, env]

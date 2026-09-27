@@ -323,6 +323,9 @@ def test_config_wires_middleware():
     # PromptCache (a suffix never disturbs the prefix anchors), OUTSIDE
     # PromptCapture (which must record the prompt cast line included).
     assert wrappers.index("RoomCastMiddleware") > wrappers.index("PromptCacheMiddleware")
+    # Tool-result ordering is view-only: INSIDE PromptCache (Trajectory hashes stored
+    # order) and before any prompt capture, so capture records what the model saw.
+    assert wrappers.index("ToolResultOrderMiddleware") == wrappers.index("PromptCacheMiddleware") + 1
 
 
 @pytest.mark.asyncio
