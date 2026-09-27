@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.184.0",
+    "date": "2026-09-27",
+    "changes": [
+      "An agent can ask to register a folder outside the onboarding root — you approve it in chat (#3642).",
+      "Agent pairing codes on the remote side (#3645).",
+      "A fleet hub can pair with a remote protoAgent by code (#3646).",
+      "protoagent pair prints a one-time code a hub claims to pair with this agent, and mDNS only advertises from a reachable bind (#3649).",
+      "Dependencies refreshed to what a fresh install resolves today (#3575).",
+      "Re-attaching to a turn that just started no longer fails with \"Task not found\" (#3575).",
+      "The Engineer's repo-onboard skill now shows you the project, not just a card (#3641).",
+      "A delegate to a remote fleet member now routes through the hub (#3647).",
+      "A workflow step's Langfuse trace now says which run, step and inputs it belongs to (#3565).",
+      "A code link opens the code pane on the dock you keep it on (#3640).",
+      "The setup wizard no longer crashes on a partial config (#3654).",
+      "search_files no longer crashes on an unreadable subdirectory (#3663).",
+      "The hub proxy no longer hands hub credentials to remote fleet members (#3647).",
+      "Remote fleet members' WebSockets traverse the hub again, and the hub still never lends a credential (#3648)."
+    ]
+  },
+  {
     "version": "v0.183.1",
     "date": "2026-09-26",
     "changes": [
