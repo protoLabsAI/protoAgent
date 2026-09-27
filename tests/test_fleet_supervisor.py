@@ -386,11 +386,15 @@ def test_update_remote_edits_url_token_name_in_place(tmp_path, monkeypatch):
     stored = supervisor.remote_for_slug(rid)  # proxy-side lookup DOES carry it
     assert stored["token"] == "new" and stored["url"] == "http://100.64.0.9:7999"
 
-    # token=None keeps the stored bearer; token="" clears it.
-    supervisor.update_remote(rid, url="http://100.64.0.9:8001")  # no token kwarg
+    # token=None keeps the stored bearer (a same-origin url edit included); token="" clears it.
+    supervisor.update_remote(rid, url="http://100.64.0.9:7999/")  # no token kwarg, same origin
     assert supervisor.remote_for_slug(rid)["token"] == "new"
     supervisor.update_remote(rid, token="")
     assert supervisor.remote_for_slug(rid)["token"] == ""
+    # …but a url on a NEW origin never inherits the token the old host issued (ADR 0113).
+    supervisor.update_remote(rid, token="again")
+    out = supervisor.update_remote(rid, url="http://100.64.0.9:8001")
+    assert out["token_cleared"] is True and supervisor.remote_for_slug(rid)["token"] == ""
 
 
 def test_update_remote_rejects_bad_url_collision_and_unknown(tmp_path, monkeypatch):
@@ -422,7 +426,7 @@ def test_refresh_remote_probes_ttl(tmp_path, monkeypatch):
         def json(self):
             return {"name": "ava", "version": "0.9.9"}
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, **kw):
         calls["n"] += 1
         return FakeResp()
 
@@ -441,7 +445,7 @@ def test_probe_captures_remote_version(tmp_path, monkeypatch):
     surfaces it — while the stored bearer token still never leaves via status()."""
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     supervisor._probe_cache.clear()
-    rec = supervisor.add_remote("ava", "http://h:9", token="sek")
+    rec = supervisor.add_remote("ava", "http://100.64.0.9:9", token="sek")
 
     class FakeResp:
         status_code = 200
@@ -451,7 +455,7 @@ def test_probe_captures_remote_version(tmp_path, monkeypatch):
 
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeResp())
     supervisor.refresh_remote_probes()
 
     entry = next(a for a in supervisor.status() if a.get("remote"))
@@ -477,7 +481,7 @@ def test_probe_remote_reachable_returns_version(tmp_path, monkeypatch):
     up front. It refreshes the cache and persists the probed version."""
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     supervisor._probe_cache.clear()
-    rec = supervisor.add_remote("ava", "http://h:9", token="sek")
+    rec = supervisor.add_remote("ava", "http://100.64.0.9:9", token="sek")
 
     class FakeResp:
         status_code = 200
@@ -487,7 +491,7 @@ def test_probe_remote_reachable_returns_version(tmp_path, monkeypatch):
 
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeResp())
     reachable, version = supervisor.probe_remote(rec["id"])
     assert reachable is True and version == "0.31.0"
     assert supervisor._probe_cache[rec["id"]][0] is True
@@ -507,7 +511,7 @@ def test_probe_remote_unreachable_is_false(tmp_path, monkeypatch):
 
     import httpx
 
-    def boom(url, timeout):
+    def boom(url, timeout, **kw):
         raise httpx.HTTPError("connection refused")
 
     monkeypatch.setattr(httpx, "get", boom)
@@ -538,7 +542,7 @@ def test_probe_card_without_version_keeps_last_known(tmp_path, monkeypatch):
 
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: NoVersionResp())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: NoVersionResp())
     supervisor.refresh_remote_probes()
     assert supervisor.remote_for_slug(rec["id"])["version"] == "0.28.0"
     assert next(a for a in supervisor.status() if a.get("remote"))["version"] == "0.28.0"
@@ -1167,6 +1171,7 @@ def test_status_reports_a_malformed_remote_instead_of_raising(tmp_path, monkeypa
         "url": "",
         "version": "",
         "a2a": None,  # no url ⇒ no endpoint to advertise, rather than "/a2a"
+        "auth": "none",  # no token stored ⇒ nothing to verify (ADR 0113 D5)
     }
     assert rows["no-id"]["name"] == "bo" and rows["no-id"]["url"] == "http://100.64.0.9:7870"
     # The same records must not blow up the probe sweep either — /api/fleet runs
@@ -1174,7 +1179,7 @@ def test_status_reports_a_malformed_remote_instead_of_raising(tmp_path, monkeypa
     # the surface just as surely.
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: (_ for _ in ()).throw(httpx.ConnectError("down")))
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: (_ for _ in ()).throw(httpx.ConnectError("down")))
     supervisor.refresh_remote_probes()
     assert supervisor._probe_cache["no-url"][0] is False
 

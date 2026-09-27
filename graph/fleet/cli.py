@@ -46,7 +46,11 @@ def _common(p: argparse.ArgumentParser, *, top: bool) -> None:
     p.add_argument(
         "--insecure-http",
         action="store_true",
-        help="allow sending a credential to a non-loopback http:// hub (only for a link you know is encrypted, e.g. a tailnet)",
+        help=(
+            "allow sending a credential over plain http:// off loopback: to a non-loopback --hub, and — for "
+            "pair / remote add / remote edit — the pairing code or bearer to a remote that isn't on loopback or "
+            "a tailnet (only for a network you trust)"
+        ),
         **d,
     )
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting", **d)
@@ -114,6 +118,19 @@ def _build_parser() -> argparse.ArgumentParser:
     rr = rsub.add_parser("rm", help="unregister a remote member (the remote agent itself is untouched)")
     rr.add_argument("name")
     _common(rr, top=False)
+    pp = sub.add_parser(
+        "pair",
+        help="pair with a remote protoAgent using a code generated on it (Settings ▸ Devices, or `protoagent pair` there)",
+    )
+    pp.add_argument("url", help="the remote's URL, e.g. http://100.64.0.5:7870")
+    pp.add_argument(
+        "code",
+        nargs="?",
+        help="the pairing code the remote showed (single-use, expires in minutes); omit it to be prompted, or use --code-stdin, to keep it out of shell history",
+    )
+    pp.add_argument("--code-stdin", action="store_true", help="read the pairing code from stdin (one line)")
+    pp.add_argument("--name", dest="member_name", help="the member's name in this fleet (default: the remote's agent name)")
+    _common(pp, top=False)
     po = sub.add_parser("order", help="persist the roster's display order: every member id, in the order wanted")
     po.add_argument("ids", nargs="+", metavar="ID")
     _common(po, top=False)
@@ -706,10 +723,23 @@ def _cmd_rename(args: argparse.Namespace) -> int:
     return _finish(args, "offline", results)
 
 
+def _insecure_kw(args: argparse.Namespace) -> dict:
+    """``--insecure-http`` (the flag every verb takes for a plain-http ``--hub``) is ALSO the
+    opt-in for sending a pairing code / storing a bearer for a plain-http remote off
+    loopback/tailnet (ADR 0113 D10). Passed only when given, so the default request is
+    unchanged."""
+    return {"allow_insecure": True} if getattr(args, "insecure_http", False) else {}
+
+
 def _remote_text(res: dict) -> str:
     agent = res.get("agent") or {}
     reach = f"reachable, v{res.get('version')}" if res.get("reachable") else "unreachable for now (registered anyway)"
-    return f"{agent.get('url', '')} · {reach}"
+    text = f"{agent.get('url', '')} · {reach}"
+    if res.get("token_cleared"):
+        # The url moved to another host: the stored token was issued by the OLD one, so the
+        # hub dropped it rather than present it to the new one (ADR 0113 review).
+        text += " · stored token CLEARED (new address) — re-pair, or pass --bearer/--bearer-stdin"
+    return text
 
 
 def _cmd_remote(args: argparse.Namespace) -> int:
@@ -729,15 +759,15 @@ def _cmd_remote(args: argparse.Namespace) -> int:
         hub_url = conn.client.url
         try:
             if args.remote_cmd == "add":
-                res = conn.client.remote_add(name, args.url, token or "")
+                res = conn.client.remote_add(name, args.url, token or "", **_insecure_kw(args))
                 _row_ok(name, args, results, f"added: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
             elif args.remote_cmd == "edit":
                 fields = {k: v for k, v in (("name", args.new_name), ("url", args.url), ("token", token)) if v is not None}
                 if not fields:
                     _row_fail(name, args, results, "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer")
                     return _finish(args, "live", results, hub_url)
-                res = conn.client.remote_update(name, **fields)
-                _row_ok(name, args, results, f"updated: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+                res = conn.client.remote_update(name, **fields, **_insecure_kw(args))
+                _row_ok(name, args, results, f"updated: {_remote_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), token_cleared=bool(res.get("token_cleared")))
             else:
                 res = conn.client.remote_remove(name)
                 _row_ok(name, args, results, f"unregistered via hub {hub_url} (the remote agent itself is untouched)", id=res.get("id"))
@@ -751,19 +781,81 @@ def _cmd_remote(args: argparse.Namespace) -> int:
 
     try:
         if args.remote_cmd == "add":
-            res = _run_op(fleet_ops.remotes_add, name, args.url, token or "")
+            res = _run_op(fleet_ops.remotes_add, name, args.url, token or "", **_insecure_kw(args))
             _row_ok(name, args, results, f"added: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
         elif args.remote_cmd == "edit":
             if args.new_name is None and args.url is None and token is None:
                 _row_fail(name, args, results, "nothing to change — pass --name, --url, --bearer/--bearer-stdin or --clear-bearer")
                 return _finish(args, "offline", results)
-            res = _run_op(fleet_ops.remotes_update, name, name=args.new_name, url=args.url, token=token)
-            _row_ok(name, args, results, f"updated: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"))
+            res = _run_op(fleet_ops.remotes_update, name, name=args.new_name, url=args.url, token=token, **_insecure_kw(args))
+            _row_ok(name, args, results, f"updated: {_remote_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), token_cleared=bool(res.get("token_cleared")))
         else:
             res = _run_op(fleet_ops.remotes_remove, name)
             _row_ok(name, args, results, "unregistered via disk (offline)", id=res.get("id"))
     except (supervisor.FleetError, manager.WorkspaceError) as exc:
         _row_fail(name, args, results, str(exc))
+    return _finish(args, "offline", results)
+
+
+def _pair_text(res: dict) -> str:
+    verb = "re-paired (new token)" if res.get("action") == "retokened" else "paired + added"
+    auth = {"ok": "token accepted", "rejected": "token REJECTED", "unknown": "token not verified yet", "none": "no token"}.get(str(res.get("auth")), str(res.get("auth")))
+    return f"{verb}: {_remote_text(res)} · {auth}"
+
+
+def _read_code(args: argparse.Namespace) -> str:
+    """The pairing code: the positional, ``--code-stdin`` (one line), or — with neither and a
+    terminal on stdin — a no-echo prompt. The last two keep a (short-lived, single-use, but
+    still live) credential out of shell history and ``ps``."""
+    if args.code is not None and args.code_stdin:
+        raise _BearerError("pass the code OR --code-stdin, not both")
+    code = args.code
+    if code is None:
+        if args.code_stdin or not sys.stdin.isatty():
+            if not args.code_stdin:
+                raise _BearerError("no pairing code — pass it, pipe it with --code-stdin, or run on a terminal to be prompted")
+            code = sys.stdin.readline().rstrip("\r\n")
+        else:
+            import getpass
+
+            code = getpass.getpass("pairing code shown on the remote (not echoed): ")
+    if not code.strip():
+        raise _BearerError("the pairing code is empty — nothing sent")
+    return code.strip()
+
+
+def _cmd_pair(args: argparse.Namespace) -> int:
+    """``protoagent fleet pair <url> <code> [--name N]`` (ADR 0113 D7, hub side). Live: the
+    running hub claims the code, so the token lands in ITS registry. Offline: the claim runs
+    here and the token is written to this instance's remotes.json — same op either way."""
+    results: list[dict] = []
+    label = args.member_name or args.url
+    try:
+        code = _read_code(args)
+    except _BearerError as exc:
+        _row_fail(label, args, results, str(exc))
+        return _finish(args, "error", results)
+    conn = _open_hub(args)
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            res = conn.client.remote_pair(args.url, code, args.member_name, **_insecure_kw(args))
+            name = (res.get("agent") or {}).get("name") or label
+            _row_ok(name, args, results, f"{_pair_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), auth=res.get("auth"), action=res.get("action"))
+        except deckhub.HubError as exc:
+            _row_fail(label, args, results, _hub_detail(exc))
+        finally:
+            conn.client.close()
+        return _finish(args, "live", results, hub_url)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    try:
+        res = _run_op(fleet_ops.remotes_pair, args.url, code, args.member_name, **_insecure_kw(args))
+        name = (res.get("agent") or {}).get("name") or label
+        _row_ok(name, args, results, f"{_pair_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), auth=res.get("auth"), action=res.get("action"))
+    except (supervisor.FleetError, manager.WorkspaceError) as exc:
+        _row_fail(label, args, results, str(exc))
     return _finish(args, "offline", results)
 
 
@@ -927,6 +1019,8 @@ def run_fleet_cli(argv: list[str]) -> int:
             return _cmd_remote(args)
         if args.cmd == "order":
             return _cmd_order(args)
+        if args.cmd == "pair":
+            return _cmd_pair(args)
         return _cmd_ls(args)
     except ValueError as exc:  # a malformed --hub (deck.hub.normalize_url)
         if args.as_json:

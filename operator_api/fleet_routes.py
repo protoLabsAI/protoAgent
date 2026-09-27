@@ -63,8 +63,38 @@ def register_fleet_routes(app) -> None:
                 str((req or {}).get("name", "")),
                 str((req or {}).get("url", "")),
                 str((req or {}).get("token", "") or ""),
+                (req or {}).get("allow_insecure") is True,
             )
             return {"ok": True, **out}
+        except (supervisor.FleetError, manager.WorkspaceError) as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/fleet/remotes/pair")
+    async def _pair_remote(req: dict):
+        """Pair with a remote protoAgent (ADR 0113 D1). Body ``{url, code, name?}``: the hub
+        redeems the code (minted on the remote, Settings ▸ Devices / ``protoagent pair``)
+        against the remote's ``/api/pairing/claim`` and stores the per-device token it gets
+        back as the member's bearer — added, or re-tokened when that URL is already a member
+        (the previously-paired device on the remote is then revoked, best effort). ``url`` is
+        the agent's BASE URL — a path/query/fragment (e.g. a phone ``#pair=`` link) is a 400.
+        Plain ``http://`` off loopback/tailnet is a 400 unless ``allow_insecure: true`` — the
+        code and the token would cross the network in cleartext (ADR 0113 D10; the same
+        opt-in applies to add/PATCH when a token is being stored).
+        Answers the sanitized record + ``reachable`` + ``auth`` (never the token). 400 for a
+        bad url/name or an invalid/expired code; 502 when the remote is unreachable or isn't a
+        protoAgent that supports pairing. Declared BEFORE the ``{ident}`` routes (no clash —
+        those are PATCH/DELETE — but it keeps the literal path obviously first)."""
+        body = req or {}
+        try:
+            out = await fleet_ops.remotes_pair(
+                str(body.get("url", "") or ""),
+                str(body.get("code", "") or ""),
+                (str(body["name"]) if body.get("name") else None),
+                body.get("allow_insecure") is True,
+            )
+            return {"ok": True, **out}
+        except supervisor.PairingError as exc:
+            raise HTTPException(exc.status, str(exc))
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
@@ -74,11 +104,20 @@ def register_fleet_routes(app) -> None:
 
         Omitted fields are left as-is; ``token: ""`` clears the stored bearer (a rotated/wrong
         token is fixed by PATCHing the new one — the recovery path when a proxied member 401s).
+        A ``url`` on a different origin (scheme/host/port) with no ``token`` in the same body
+        CLEARS the stored bearer — it was issued by the old host and must not be presented to
+        the new one — and the response says ``token_cleared: true`` (re-pair or pass a token).
         The id — and so the slug + open windows — never changes. Re-probes so the response
         reports fresh reachability, same shape as add. 400 on a bad url/name/collision."""
         body = req or {}
         try:
-            out = await fleet_ops.remotes_update(ident, name=body.get("name"), url=body.get("url"), token=body.get("token"))
+            out = await fleet_ops.remotes_update(
+                ident,
+                name=body.get("name"),
+                url=body.get("url"),
+                token=body.get("token"),
+                allow_insecure=body.get("allow_insecure") is True,
+            )
             return {"ok": True, **out}
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))

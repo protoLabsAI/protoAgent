@@ -2225,8 +2225,10 @@ export const api = {
   updateRemoteAgent(ident: string, body: { name?: string; url?: string; token?: string }) {
     // Edit a remote member in place (ADR 0042 §I) — omitted fields keep their value;
     // token:"" clears the stored bearer. The id/slug is unchanged, so open windows survive.
-    // The server re-probes and returns fresh {reachable, version}.
-    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string }>(
+    // The server re-probes and returns fresh {reachable, version}. A url on a NEW origin with
+    // no token in the same body clears the stored token (it was issued by the old host) and
+    // the answer says `token_cleared: true` (ADR 0113).
+    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string; token_cleared?: boolean }>(
       `/api/fleet/remotes/${encodeURIComponent(ident)}`,
       { method: "PATCH", body },
     );

@@ -396,7 +396,15 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     },
     onSuccess: (res) => {
       const name = addName.trim();
-      if (editingId) toast({ tone: "success", title: `Updated ${name}`, message: res.reachable === false ? "Saved — still not reachable." : "Saved." });
+      if (editingId && "token_cleared" in res && res.token_cleared)
+        // The address moved to another host: the hub dropped the token the OLD host issued
+        // rather than present it to the new one (ADR 0113). Say so — the member now 401s.
+        toast({
+          tone: "warning",
+          title: `Updated ${name}`,
+          message: "New address, so its stored token was cleared — pair again or paste a token.",
+        });
+      else if (editingId) toast({ tone: "success", title: `Updated ${name}`, message: res.reachable === false ? "Saved — still not reachable." : "Saved." });
       else addedToast(name, res.reachable);
       resetForm();
     },

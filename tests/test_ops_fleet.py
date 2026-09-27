@@ -80,12 +80,15 @@ async def test_rename_requires_a_name_and_wraps_the_manager(monkeypatch):
 
 async def test_remotes_add_update_remove_probe_and_wrap_the_supervisor(monkeypatch):
     seen: list = []
-    monkeypatch.setattr(supervisor, "add_remote", lambda name, url, token="": (seen.append(("add", name, url, token)) or {"id": "r-1", "name": name, "url": url, "remote": True}))
-    monkeypatch.setattr(supervisor, "update_remote", lambda ident, *, name=None, url=None, token=None: (seen.append(("update", ident, name, url, token)) or {"id": ident, "name": name or "ava", "url": url or "https://ava:7870", "remote": True}))
+    monkeypatch.setattr(supervisor, "add_remote", lambda name, url, token="", allow_insecure=False: (seen.append(("add", name, url, token)) or {"id": "r-1", "name": name, "url": url, "remote": True}))
+    monkeypatch.setattr(supervisor, "update_remote", lambda ident, *, name=None, url=None, token=None, allow_insecure=False: (seen.append(("update", ident, name, url, token)) or {"id": ident, "name": name or "ava", "url": url or "https://ava:7870", "remote": True}))
     monkeypatch.setattr(supervisor, "remove_remote", lambda ident: {"id": ident, "name": "ava", "removed": ["remote"]})
     monkeypatch.setattr(supervisor, "probe_remote", lambda ident, timeout=1.0: (True, "0.165.0"))
+    # The auth verdict (ADR 0113 D5) is read from the FULL record probe_remote just refreshed.
+    monkeypatch.setattr(supervisor, "remote_for_slug", lambda rid: {"id": rid, "token": "tok"})
+    monkeypatch.setitem(supervisor._auth_cache, "r-1", ("ok", 0.0))
     out = await remotes_add("ava", "https://ava:7870", "tok")
-    assert out == {"agent": {"id": "r-1", "name": "ava", "url": "https://ava:7870", "remote": True}, "reachable": True, "version": "0.165.0"}
+    assert out == {"agent": {"id": "r-1", "name": "ava", "url": "https://ava:7870", "remote": True}, "reachable": True, "version": "0.165.0", "auth": "ok"}
     assert "tok" not in str(out)  # the token is stored, never returned
     out = await remotes_update("r-1", url="https://ava2:7870", token="")
     assert seen[-1] == ("update", "r-1", None, "https://ava2:7870", "") and out["reachable"] is True
@@ -99,5 +102,5 @@ async def test_order_wraps_the_supervisor(monkeypatch):
 
 def test_management_ops_are_registered_as_mutating():
     reg = registry()
-    for name in ("fleet.create", "fleet.remove", "fleet.rename", "fleet.remotes.add", "fleet.remotes.update", "fleet.remotes.remove", "fleet.order"):
+    for name in ("fleet.create", "fleet.remove", "fleet.rename", "fleet.remotes.add", "fleet.remotes.update", "fleet.remotes.remove", "fleet.remotes.pair", "fleet.order"):
         assert reg[name].mutates is True, name

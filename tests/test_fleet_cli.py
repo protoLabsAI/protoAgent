@@ -71,13 +71,17 @@ class FakeClient:
             raise deckhub.HubRequestError(self.url, self.remove_status, "workspace busy" if self.remove_status == 409 else "no such member")
         return {"ok": True, "name": ident, "removed": ["workspace"] if purge else []}
 
-    def remote_add(self, name, url, token=""):
-        self.calls.append(("remote_add", name, url, token))
+    def remote_add(self, name, url, token="", **kw):
+        self.calls.append(("remote_add", name, url, token) + ((kw,) if kw else ()))
         return {"ok": True, "agent": {"id": f"r-{name}", "name": name, "url": url, "remote": True}, "reachable": False, "version": ""}
 
     def remote_update(self, ident, **fields):
         self.calls.append(("remote_update", ident, fields))
         return {"ok": True, "agent": {"id": ident, "name": "ava", "url": fields.get("url", "https://ava.tail:7870"), "remote": True}, "reachable": True, "version": "0.165.0"}
+
+    def remote_pair(self, url, code, name=None, **kw):
+        self.calls.append(("remote_pair", url, code, name) + ((kw,) if kw else ()))
+        return {"ok": True, "agent": {"id": "r-ava", "name": name or "ava", "url": url, "remote": True}, "reachable": True, "version": "0.183.1", "auth": "ok", "action": "added"}
 
     def remote_remove(self, ident):
         self.calls.append(("remote_remove", ident))
@@ -641,6 +645,130 @@ def test_remote_offline_runs_the_ops(monkeypatch, capsys):
     assert cli.run_fleet_cli(["remote", "rm", "bo", "--json"]) == 0
     assert seen == [("add", "bo", "https://bo:7870", "t"), ("update", "bo", "bob", None, ""), ("remove", "bo")]
     assert json.loads(capsys.readouterr().out)["mode"] == "offline"
+
+
+def test_pair_live_goes_through_the_hub(monkeypatch, capsys):
+    """``fleet pair <url> <code> [--name N]`` (ADR 0113 D7): the HUB claims the code, so the
+    minted token lands in its registry and never passes through this process."""
+    client = FakeClient()
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "ABCDE-12345", "--name", "ava", "--json"]) == 0
+    assert ("remote_pair", "http://100.64.0.5:7870", "ABCDE-12345", "ava") in client.calls
+    row = json.loads(capsys.readouterr().out)["results"][0]
+    assert row["ok"] and row["auth"] == "ok" and row["action"] == "added" and row["name"] == "ava"
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "ABCDE-12345"]) == 0
+    assert client.calls[-1] == ("remote_pair", "http://100.64.0.5:7870", "ABCDE-12345", None)
+    assert "paired + added" in capsys.readouterr().out and client.closed
+
+
+def test_pair_live_hub_error_is_a_failed_row(monkeypatch, capsys):
+    client = FakeClient()
+
+    def refuse(url, code, name=None):
+        raise deckhub.HubRequestError(client.url, 400, "that code is invalid or expired — generate a new one on the remote")
+
+    client.remote_pair = refuse
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "WRONG"]) == 1
+    assert "invalid or expired" in capsys.readouterr().err
+
+
+def test_pair_offline_runs_the_op(monkeypatch, capsys):
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    seen: list = []
+
+    async def pair(url, code, name=None):
+        seen.append((url, code, name))
+        return {"agent": {"id": "r-1", "name": "ava", "url": url}, "reachable": True, "version": "0.1", "auth": "ok", "action": "retokened"}
+
+    monkeypatch.setattr(fleet_ops, "remotes_pair", pair)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "C0DE", "--json"]) == 0
+    assert seen == [("http://100.64.0.5:7870", "C0DE", None)]
+    body = json.loads(capsys.readouterr().out)
+    assert body["mode"] == "offline" and body["results"][0]["action"] == "retokened"
+
+    async def refuse(url, code, name=None):
+        raise cli.supervisor.PairingError("that code is invalid or expired — generate a new one on the remote")
+
+    monkeypatch.setattr(fleet_ops, "remotes_pair", refuse)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "C0DE"]) == 1
+    assert "invalid or expired" in capsys.readouterr().err
+
+
+def test_pair_code_from_stdin_or_a_prompt_keeps_it_out_of_argv(monkeypatch, capsys):
+    """``--code-stdin`` / the no-echo prompt (review minor 5): the code needn't be in argv
+    (shell history, ``ps``). The positional form still works; both at once is an error."""
+    import io
+
+    client = FakeClient()
+    _live(monkeypatch, client)
+    monkeypatch.setattr("sys.stdin", io.StringIO("ABCDE-12345\n"))
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "--code-stdin"]) == 0
+    assert client.calls[-1] == ("remote_pair", "http://100.64.0.5:7870", "ABCDE-12345", None)
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", Tty(""))
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": "  FGHIJ-67890 ")
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870"]) == 0
+    assert client.calls[-1] == ("remote_pair", "http://100.64.0.5:7870", "FGHIJ-67890", None)
+    capsys.readouterr()
+
+    n = len(client.calls)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "X", "--code-stdin"]) == 1
+    assert "not both" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # not a terminal, nothing given
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870"]) == 1
+    assert "no pairing code" in capsys.readouterr().err
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "--code-stdin"]) == 1  # empty line
+    assert "empty" in capsys.readouterr().err
+    assert len(client.calls) == n  # nothing reached the hub
+
+
+def test_insecure_http_is_the_d10_opt_in_for_pair_and_remote_add_edit(monkeypatch, capsys):
+    """ADR 0113 D10: ``--insecure-http`` (already the flag for a plain-http ``--hub``) also
+    opts in to sending a pairing code / storing a bearer for a plain-http LAN remote. Without
+    it, nothing extra is sent — the hub applies the default refusal."""
+    client = FakeClient()
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["pair", "http://192.168.1.20:7870", "C0DE"]) == 0
+    assert client.calls[-1] == ("remote_pair", "http://192.168.1.20:7870", "C0DE", None)
+    assert cli.run_fleet_cli(["pair", "http://192.168.1.20:7870", "C0DE", "--insecure-http"]) == 0
+    assert client.calls[-1] == ("remote_pair", "http://192.168.1.20:7870", "C0DE", None, {"allow_insecure": True})
+    assert cli.run_fleet_cli(["remote", "add", "bo", "http://192.168.1.20:7870", "--bearer", "t", "--insecure-http"]) == 0
+    assert client.calls[-1] == ("remote_add", "bo", "http://192.168.1.20:7870", "t", {"allow_insecure": True})
+    assert cli.run_fleet_cli(["remote", "edit", "bo", "--bearer", "t", "--insecure-http"]) == 0
+    assert client.calls[-1] == ("remote_update", "bo", {"token": "t", "allow_insecure": True})
+    capsys.readouterr()
+
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    seen: list = []
+
+    async def pair(url, code, name=None, allow_insecure=False):
+        seen.append(allow_insecure)
+        return {"agent": {"id": "r-1", "name": "ava", "url": url}, "reachable": True, "version": "0.1", "auth": "ok", "action": "added"}
+
+    monkeypatch.setattr(fleet_ops, "remotes_pair", pair)
+    assert cli.run_fleet_cli(["pair", "http://192.168.1.20:7870", "C0DE", "--offline", "--insecure-http"]) == 0
+    assert cli.run_fleet_cli(["pair", "http://192.168.1.20:7870", "C0DE", "--offline"]) == 0
+    assert seen == [True, False]
+
+
+def test_remote_edit_says_when_the_token_was_cleared(monkeypatch, capsys):
+    client = FakeClient()
+    moved = lambda ident, **fields: {"ok": True, "agent": {"id": ident, "name": "ava", "url": fields["url"]}, "reachable": True, "version": "1", "auth": "none", "token_cleared": True}  # noqa: E731
+    client.remote_update = moved
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["remote", "edit", "ava", "--url", "https://elsewhere:7870"]) == 0
+    assert "stored token CLEARED" in capsys.readouterr().out
+    assert cli.run_fleet_cli(["remote", "edit", "ava", "--url", "https://elsewhere:7870", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["results"][0]["token_cleared"] is True
 
 
 def test_order_live_and_offline(monkeypatch, capsys):

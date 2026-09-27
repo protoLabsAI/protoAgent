@@ -713,3 +713,28 @@ def test_heartbeats_and_pidfile_skip_a_pid_that_is_alive_but_not_ours(tmp_path, 
     (inst / "server.pid").write_text(json.dumps({"pid": 4242, "port": 7871}))
     cand = hub._pidfile_candidate()
     assert cand is not None and cand.pid == 4242 and cand.url == "http://127.0.0.1:7871"
+
+
+def test_remote_pair_posts_url_code_and_optional_name():
+    """``HubClient.remote_pair`` (ADR 0113 D7): one POST to the hub's pair route; the name
+    rides only when given, and the hub's 4xx/5xx detail surfaces as a HubRequestError."""
+    import json as _json
+
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, _json.loads(request.content)))
+        if _json.loads(request.content)["code"] == "bad":
+            return httpx.Response(400, json={"detail": "that code is invalid or expired"})
+        return httpx.Response(200, json={"ok": True, "agent": {"id": "r-1"}, "auth": "ok", "action": "added"})
+
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=httpx.MockTransport(handler))
+    assert c.remote_pair("http://100.64.0.5:7870", "ABCDE-12345")["auth"] == "ok"
+    c.remote_pair("http://100.64.0.5:7870", "ABCDE-12345", "ava")
+    assert seen == [
+        ("POST", "/api/fleet/remotes/pair", {"url": "http://100.64.0.5:7870", "code": "ABCDE-12345"}),
+        ("POST", "/api/fleet/remotes/pair", {"url": "http://100.64.0.5:7870", "code": "ABCDE-12345", "name": "ava"}),
+    ]
+    with pytest.raises(hub.HubRequestError) as ei:
+        c.remote_pair("http://100.64.0.5:7870", "bad")
+    assert ei.value.status == 400 and "invalid or expired" in ei.value.detail

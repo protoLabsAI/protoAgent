@@ -412,7 +412,7 @@ def test_fleet_list_carries_versions(client, monkeypatch):
     from graph.fleet import supervisor
 
     supervisor._probe_cache.clear()
-    supervisor.add_remote("ava", "http://1.2.3.4:7871", token="sek")
+    supervisor.add_remote("ava", "http://100.64.1.4:7871", token="sek")
 
     class FakeCard:
         status_code = 200
@@ -420,7 +420,7 @@ def test_fleet_list_carries_versions(client, monkeypatch):
         def json(self):
             return {"name": "ava", "version": "0.30.0"}
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeCard())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeCard())
     agents = client.get("/api/fleet").json()["agents"]
     host = next(a for a in agents if a.get("host"))
     assert host["version"]  # the hub always knows its own version
@@ -443,7 +443,7 @@ def test_add_remote_probes_on_register_reachable(client, monkeypatch):
         def json(self):
             return {"name": "ava", "version": "0.31.0"}
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeCard())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeCard())
     body = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://1.2.3.4:7871"}).json()
     assert body["ok"] is True and body["agent"]["name"] == "ava"
     assert body["reachable"] is True and body["version"] == "0.31.0"
@@ -458,7 +458,7 @@ def test_add_remote_unreachable_is_registered_not_rejected(client, monkeypatch):
 
     supervisor._probe_cache.clear()
 
-    def boom(url, timeout):
+    def boom(url, timeout, **kw):
         raise httpx.HTTPError("connection refused")
 
     monkeypatch.setattr(httpx, "get", boom)
@@ -478,16 +478,16 @@ def test_patch_remote_edits_and_reprobes(client, monkeypatch):
     from graph.fleet import supervisor
 
     supervisor._probe_cache.clear()
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: type("C", (), {"status_code": 200, "json": lambda s: {}})())
-    rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://1.2.3.4:7871"}).json()["agent"]["id"]
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {}})())
+    rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://100.64.1.4:7871"}).json()["agent"]["id"]
 
-    r = client.patch(f"/api/fleet/remotes/{rid}", json={"url": "http://1.2.3.4:7999", "token": "sek"})
+    r = client.patch(f"/api/fleet/remotes/{rid}", json={"url": "http://100.64.1.4:7999", "token": "sek"})
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True and body["agent"]["url"] == "http://1.2.3.4:7999" and body["reachable"] is True
+    assert body["ok"] is True and body["agent"]["url"] == "http://100.64.1.4:7999" and body["reachable"] is True
     assert "token" not in body["agent"]  # the bearer never comes back out
     entry = next(a for a in client.get("/api/fleet").json()["agents"] if a.get("remote"))
-    assert entry["id"] == rid and entry["url"] == "http://1.2.3.4:7999"  # same id, new url
+    assert entry["id"] == rid and entry["url"] == "http://100.64.1.4:7999"  # same id, new url
 
     assert client.patch(f"/api/fleet/remotes/{rid}", json={"url": "ftp://nope"}).status_code == 400
     assert client.patch("/api/fleet/remotes/ghost", json={"token": "x"}).status_code == 400
