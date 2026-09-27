@@ -113,3 +113,58 @@ test("populated left/right rail toggles stay enabled and interactive (#1234)", a
   await toggleRight.click();
   await expect(right).toBeVisible();
 });
+
+// #3684 (part 1a): the panel toggles are now DS <Button icon size="xs" variant="ghost">
+// and expose their shown/collapsed state as aria-pressed (true = panel shown) instead
+// of the old `is-off` class. Pin that all three carry the attribute and that it flips.
+test("panel toggles expose aria-pressed (true = shown) and it flips on click (#3684)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const toggleRight = page.getByTestId("toggle-right");
+  const toggleLeft = page.getByTestId("toggle-left");
+  const toggleBottom = page.getByTestId("toggle-bottom");
+
+  // All three carry aria-pressed reflecting whether their panel is shown.
+  for (const t of [toggleRight, toggleLeft, toggleBottom]) {
+    await expect(t).toHaveAttribute("aria-pressed", /^(true|false)$/);
+  }
+
+  // Left + right rails are populated and shown by default → pressed.
+  await expect(toggleRight).toHaveAttribute("aria-pressed", "true");
+  await expect(toggleLeft).toHaveAttribute("aria-pressed", "true");
+
+  // Clicking an enabled toggle flips aria-pressed and unmounts/restores the column.
+  const right = page.locator(".pl-appshell__col--right");
+  await expect(right).toBeVisible();
+  await toggleRight.click();
+  await expect(toggleRight).toHaveAttribute("aria-pressed", "false");
+  await expect(right).toHaveCount(0);
+  await toggleRight.click();
+  await expect(toggleRight).toHaveAttribute("aria-pressed", "true");
+  await expect(right).toBeVisible();
+
+  // Left flips too (attribute-level — deterministic regardless of column DOM).
+  await toggleLeft.click();
+  await expect(toggleLeft).toHaveAttribute("aria-pressed", "false");
+  await toggleLeft.click();
+  await expect(toggleLeft).toHaveAttribute("aria-pressed", "true");
+
+  // The bottom toggle is disabled by default (nothing docked) so it can't flip,
+  // but it still reports its pressed state.
+  await expect(toggleBottom).toBeDisabled();
+  await expect(toggleBottom).toHaveAttribute("aria-pressed", /^(true|false)$/);
+});
+
+// The Settings pill + three toggles must keep a WCAG 2.5.8 (>=24x24) pointer target.
+// DS xs icon buttons render a 20px visual square with a 24x24 hit-area via the
+// `.pl-btn--icon.pl-btn--xs::after` overlay. That pseudo-element isn't reportable via
+// boundingBox, so we assert the DS xs icon classes as the documented proxy (see PR note).
+test("converted utility-bar buttons are DS xs icon buttons (>=24x24 target proxy) (#3684)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  for (const id of ["settings-widget", "toggle-bottom", "toggle-left", "toggle-right"]) {
+    const btn = page.getByTestId(id);
+    await expect(btn).toBeVisible();
+    await expect(btn).toHaveClass(/pl-btn--xs/);
+    await expect(btn).toHaveClass(/pl-btn--icon/);
+  }
+});
