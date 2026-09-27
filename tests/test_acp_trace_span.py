@@ -8,6 +8,7 @@ before this a coder run never reached Langfuse at all."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from unittest.mock import MagicMock
@@ -769,3 +770,105 @@ def test_end_open_spans_ends_what_is_still_running(fake_langfuse):
         span.update.assert_called_with(level="WARNING", status_message="not finished: restart")
         span.end.assert_called_once()
     assert tracing.end_open_spans("again") == 0  # the block's own exit untracked nothing twice
+
+
+# ─── review round: cumulative cost, plan privacy, per-turn plan, redaction window ──────
+
+# The Nth prompt plays SPEC["turns"][N] (one pooled client, several turns).
+_POOLED_AGENT = _SCRIPTED_AGENT.replace(
+    'elif method == "session/prompt":\n        for u in SPEC.get("updates", []):',
+    'elif method == "session/prompt":\n        SPEC.update(SPEC["turns"].pop(0))\n        for u in SPEC.get("updates", []):',
+)
+
+
+async def _pooled(tmp_path, turns: list[dict], incognito: tuple[bool, ...] = ()):
+    script = tmp_path / "pooled_agent.py"
+    script.write_text(_POOLED_AGENT, encoding="utf-8")
+    spec = tmp_path / "pooled.json"
+    spec.write_text(json.dumps({"turns": turns}), encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script), str(spec)], cwd=str(tmp_path), name="opus", record_runs=False)
+    try:
+        for flag in incognito or (False,) * len(turns):
+            token = tracing._io_suppressed_ctx.set(flag)
+            try:
+                await client.prompt("go", timeout=30.0)
+            finally:
+                tracing._io_suppressed_ctx.reset(token)
+    finally:
+        await client.close()
+
+
+def _cost(total: float) -> dict:
+    return {"sessionUpdate": "usage_update", "used": 1, "size": 2, "cost": {"amount": total, "currency": "USD"}}
+
+
+_PLAN = {
+    "sessionUpdate": "plan",
+    "entries": [{"content": "rotate OPENAI_API_KEY=sk-" + "Z" * 40 + " for acme", "status": "pending"}],
+}
+_USAGE = {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}
+
+
+async def test_a_cumulative_session_cost_is_recorded_per_turn(tmp_path, fake_langfuse):
+    """claude-agent-acp's cost.amount is its SDK's running session total (confirmed live:
+    $0.0105 after turn 1, $0.0243 after turn 2). Each turn's generation gets the change."""
+    fake, _span = fake_langfuse
+    await _pooled(
+        tmp_path,
+        [
+            {"updates": [_msg("a"), _cost(0.10)], "prompt_result": _USAGE},
+            {"updates": [_msg("b"), _cost(0.25)], "prompt_result": _USAGE},
+        ],
+    )
+    costs = [c.kwargs["cost_details"]["total"] for c in fake.start_observation.call_args_list]
+    assert costs == [pytest.approx(0.10), pytest.approx(0.15)]
+
+
+async def test_plan_is_redacted_and_absent_in_incognito(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _pooled(tmp_path, [{"updates": [_PLAN, _msg("x")]}, {"updates": [_PLAN, _msg("y")]}], incognito=(False, True))
+    first, second = (c.kwargs["metadata"] for c in span.update.call_args_list if "metadata" in c.kwargs)
+    assert "Z" * 40 not in json.dumps(first["plan"]) and first["plan"][0]["status"] == "pending"
+    assert "plan" not in second  # task text is content: none of it in an incognito turn
+
+
+async def test_a_turn_without_a_plan_does_not_inherit_the_last_one(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _pooled(tmp_path, [{"updates": [_PLAN, _msg("x")]}, {"updates": [_msg("y")]}])
+    last = [c.kwargs["metadata"] for c in span.update.call_args_list if "metadata" in c.kwargs][-1]
+    assert "plan" not in last
+
+
+def test_a_resumed_session_takes_its_first_cost_reading_as_a_baseline():
+    client = AcpClient(sys.executable, ["-c", "pass"], cwd=".", name="opus", record_runs=False)
+    client._session_cost_seen = None  # what session/load leaves
+    asyncio.run(client._handle_update({"update": _cost(3.0)}))
+    assert client._turn_cost_usd is None  # pre-resume spend is not attributed to this turn
+    asyncio.run(client._handle_update({"update": _cost(3.4)}))
+    assert client._turn_cost_usd == pytest.approx(0.4)
+
+
+async def test_a_key_straddling_the_reasoning_window_is_still_redacted(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    key = "sk-" + "ab12" * 10
+    # Place the key so a plain last-4000-chars cut would start inside it.
+    thought = "x" * 5000 + key + "y" * 3990
+    await _scripted(
+        tmp_path,
+        {
+            "updates": [
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": thought}},
+                _msg("d"),
+            ]
+        },
+    )
+    tail = span.update.call_args.kwargs["metadata"]["reasoning_tail"]
+    assert "ab12ab12ab12" not in tail
+
+
+def test_end_open_spans_also_ends_an_open_tool_span(fake_langfuse):
+    _fake, span = fake_langfuse
+    with tracing.trace_span("acp:opus", as_type="agent") as run:
+        tool = tracing.start_child(run, "tool:Terminal", as_type="tool")
+        assert tracing.end_open_spans("restart") == 2
+        tool.end.assert_called_once()

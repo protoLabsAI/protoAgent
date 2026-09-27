@@ -435,7 +435,10 @@ def init(config: Any = None) -> None:
         _langfuse = Langfuse(**client_kwargs)
         _enabled = True
         service = _provider_service_name(provider)
-        print(f"[tracing] Langfuse initialized from {source} -> {host}" + (f" (service.name={service})" if service else ""))
+        print(
+            f"[tracing] Langfuse initialized from {source} -> {host}"
+            + (f" (service.name={service})" if service else "")
+        )
     except ImportError:
         print("[tracing] langfuse not installed. Tracing disabled.")
     except Exception as e:
@@ -703,11 +706,7 @@ async def trace_session(
         span_token = _session_span_ctx.set(span)
         # Joined session: the span reports the CALLER's trace id — that's what
         # audit records and downstream propagation must carry.
-        trace_id = (
-            getattr(span, "trace_id", "")
-            or (trace_context or {}).get("trace_id", "")
-            or getattr(span, "id", "")
-        )
+        trace_id = getattr(span, "trace_id", "") or (trace_context or {}).get("trace_id", "") or getattr(span, "id", "")
         token = _trace_id_ctx.set(trace_id)
     except Exception as e:
         # SETUP failed — trace nothing, run the turn anyway. Only setup is caught: the
@@ -715,6 +714,7 @@ async def trace_session(
         # caller unchanged. (Catching it here and yielding again made asynccontextmanager
         # replace the turn's real error with "generator didn't stop after athrow()".)
         print(f"[tracing] trace_session({name}) error: {e}")
+        _untrack_open(span)
         span = None
     try:
         yield span
@@ -944,7 +944,9 @@ def trace_tool_call(
         return None
 
 
-def start_child(parent: Any, name: str, *, as_type: str = "span", input: Any = None, metadata: dict | None = None) -> Any:
+def start_child(
+    parent: Any, name: str, *, as_type: str = "span", input: Any = None, metadata: dict | None = None
+) -> Any:
     """Open an observation under ``parent`` (a span from ``trace_span``) and return it,
     or None. For work whose start and end arrive as separate events on a task that
     does not carry the parent's context, such as an ACP coder's tool calls: opened at the
@@ -953,7 +955,7 @@ def start_child(parent: Any, name: str, *, as_type: str = "span", input: Any = N
     if not _enabled or _langfuse is None or parent is None:
         return None
     try:
-        return parent.start_observation(
+        span = parent.start_observation(
             name=name,
             as_type=as_type,
             input=input,
@@ -961,6 +963,8 @@ def start_child(parent: Any, name: str, *, as_type: str = "span", input: Any = N
         )
     except Exception:  # noqa: BLE001 — tracing never alters the traced work
         return None
+    _track_open(span, name)  # so a shutdown mid-call ends it too
+    return span
 
 
 def end_child(span: Any, **fields: Any) -> None:
@@ -968,6 +972,7 @@ def end_child(span: Any, **fields: Any) -> None:
     end it. No-op for None; swallow-all."""
     if span is None:
         return
+    _untrack_open(span)
     try:
         if fields:
             span.update(**fields)

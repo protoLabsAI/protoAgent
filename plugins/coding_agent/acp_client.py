@@ -568,6 +568,14 @@ class AcpClient:
         self._turn_usage: dict | None = None
         self._turn_cost_usd: float | None = None
         self._turn_thoughts = ""
+        self._turn_plan: list | None = None
+        # The session's running cost total as last reported. claude-agent-acp's
+        # ``cost.amount`` is its SDK's ``total_cost_usd``: CUMULATIVE across the session's
+        # turns (and carried over a resumed session), so a turn's cost is the change.
+        # 0.0 after session/new; None after session/load until a first reading sets the
+        # baseline (that reading mixes pre-resume spend with this turn's, so it isn't
+        # attributed).
+        self._session_cost_seen: float | None = None
         # Read at turn start for the same reason: an incognito turn (ADR 0069 D3b)
         # records the coder's tool spans without their content.
         self._turn_trace_io = True
@@ -951,8 +959,10 @@ class AcpClient:
             # for parity with the native runtime's thinking stream.
             text = _content_text(update.get("content"))
             if text:
-                # Keep the tail for the trace: the conclusion is at the end.
-                self._turn_thoughts = (self._turn_thoughts + text)[-_THOUGHTS_TRACE_CHARS:]
+                # Keep the tail for the trace (the conclusion is at the end), with headroom:
+                # it is redacted BEFORE the final cut, so a key straddling the window's
+                # start still matches its pattern.
+                self._turn_thoughts = (self._turn_thoughts + text)[-2 * _THOUGHTS_TRACE_CHARS :]
                 await self._emit_thought(text)
         elif kind == "tool_call":
             self._turn_tool_calls += 1
@@ -1062,7 +1072,13 @@ class AcpClient:
             # stays out of the telemetry row (see _record_run_telemetry).
             cost = update.get("cost")
             if isinstance(cost, dict) and isinstance(cost.get("amount"), (int, float)):
-                self._turn_cost_usd = float(cost["amount"])
+                total = float(cost["amount"])
+                seen = self._session_cost_seen
+                self._session_cost_seen = total
+                if seen is not None:
+                    # A drop means the agent's counter restarted: the new total is all new.
+                    delta = total - seen if total >= seen else total
+                    self._turn_cost_usd = (self._turn_cost_usd or 0.0) + delta
         elif kind == "plan":
             # The coder's execution plan (its live todo list) — the sharpest
             # "where is it in the work" signal an ACP agent sends. The update carries
@@ -1070,7 +1086,7 @@ class AcpClient:
             # malformed agent can't bloat the client.
             entries = update.get("entries")
             if isinstance(entries, list):
-                self.last_plan = [
+                self._turn_plan = self.last_plan = [
                     {
                         "content": str(e.get("content") or "")[:200],
                         "status": str(e.get("status") or ""),
@@ -1386,6 +1402,7 @@ class AcpClient:
         finally:
             self._loading = False
         self._session_id = session_id
+        self._session_cost_seen = None  # a resumed total: baseline on the first reading
         self._note_model(result)
 
     def _note_model(self, result: Any) -> None:
@@ -1452,6 +1469,7 @@ class AcpClient:
                 ) from exc
             raise
         self._session_id = (result or {}).get("sessionId")
+        self._session_cost_seen = 0.0
         self._note_model(result)
         if not self._session_id:
             raise AcpError("session/new returned no sessionId")
@@ -1571,7 +1589,7 @@ class AcpClient:
                     tool_calls = self._turn_tool_calls
                     session_id = self._turn_session_id or ""
                     usage, cost_usd = self._turn_usage, self._turn_cost_usd
-                    thoughts, plan = self._turn_thoughts, self.last_plan
+                    thoughts, plan = self._turn_thoughts, self._turn_plan
                     self._end_open_tool_spans()
                     self._turn_span = None
                     self._turn_lock.release()
@@ -1611,8 +1629,8 @@ class AcpClient:
                 }
                 if self._model_id:
                     metadata["model"] = self._model_id
-                if plan:
-                    metadata["plan"] = plan
+                if plan and io:  # task text: content, so none of it in an incognito turn
+                    metadata["plan"] = [{**e, "content": _redact(e.get("content") or "")} for e in plan]
                 if thoughts and io:
                     metadata["reasoning_tail"] = _redact(thoughts)[-_THOUGHTS_TRACE_CHARS:]
                 tracing.update_span(
@@ -1754,6 +1772,7 @@ class AcpClient:
         self._turn_usage = None
         self._turn_cost_usd = None
         self._turn_thoughts = ""
+        self._turn_plan = None
         self._turn_session_id = None
         self._progress = progress_callback
         self._on_tool = tool_callback
