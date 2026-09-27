@@ -17,7 +17,7 @@
 .snapshot-section {
   margin-bottom: 20px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 .snapshot-section:last-of-type {
   border-bottom: none;
@@ -33,7 +33,7 @@
 /* The one section that is a call to action rather than a readout: something credential-shaped
    is still live in the SOURCE agent. */
 .snapshot-section--warn h3 {
-  color: var(--pl-color-status-warning, #f5a623);
+  color: var(--pl-color-status-warning);
 }
 .snapshot-hint,
 .snapshot-none {
@@ -89,7 +89,7 @@
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
-  border-bottom: 1px solid var(--pl-color-border, #2a2a31);
+  border-bottom: 1px solid var(--pl-color-border);
 }
 .new-agent-source button {
   padding: 8px 14px;
@@ -103,7 +103,7 @@
 }
 .new-agent-source button.is-active {
   color: var(--pl-color-fg);
-  border-bottom-color: var(--pl-color-accent, #7c8cff);
+  border-bottom-color: var(--pl-color-accent);
 }
 .snapshot-import {
   display: flex;
@@ -115,7 +115,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 .snapshot-import-actions {
   display: flex;

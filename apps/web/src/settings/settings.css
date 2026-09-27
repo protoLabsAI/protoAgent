@@ -193,7 +193,7 @@
 }
 .setting-row.dirty {
   /* subtle marker that this field has unsaved edits */
-  box-shadow: inset 2px 0 0 var(--brand-violet);
+  box-shadow: inset 2px 0 0 var(--pl-color-accent);
   padding-left: 10px;
 }
 .setting-meta { min-width: 0; }
