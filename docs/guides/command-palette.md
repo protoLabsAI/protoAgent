@@ -103,7 +103,7 @@ Settings ▸ Keyboard, not with the in-app chords above.
   only — the matcher already searches each row's label, hint and group.)
   The per-section rows are registered after the three above, so the **root** list is
   unchanged — they earn their place on search, and through recency once you've used one.
-  A section behind a developer flag (Secrets, Devices, Publish) or restricted to the host
+  A section behind a developer flag (Secrets, Publish) or restricted to the host
   console (Overview, Telemetry) carries that gate on the row and is resolved *per render*,
   never at registration. The one section with no row is **Developer**: its visibility is a
   channel decision (`developerPanelVisible`), which is neither of the two axes the seam can

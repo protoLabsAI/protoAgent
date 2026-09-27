@@ -65,10 +65,10 @@ export const AGENT_SECTIONS = [
   { id: "access", label: "Operator & access", icon: "KeyRound" },
   // Paired devices (ADR 0087) — sits next to access because it IS access: each device holds
   // its own revocable token rather than sharing the operator bearer.
-  // Behind `settings.devices` (ADR 0068), default OFF — see the flag's description in
-  // runtime/flags.py. The pairing flow stopped the desktop app from starting four times; it
-  // stays hidden until the whole path is exercised in the desktop app itself.
-  { id: "devices", label: "Devices", icon: "Smartphone", flag: "settings.devices" },
+  // Ungated since ADR 0113 D8: the `settings.devices` flag (ADR 0068) came off once the whole
+  // "Allow devices on my network" → pair → revoke → back-to-loopback path passed in the
+  // desktop app itself, which is where each of its four earlier start-up failures landed.
+  { id: "devices", label: "Devices", icon: "Smartphone" },
   // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
   // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
   // Connections is the first, default-open accordion group. The OAuth account lifecycle

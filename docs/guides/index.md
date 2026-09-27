@@ -88,6 +88,7 @@ Surface the agent to people — the operator console, or no UI at all.
 | [Command palette (⌘⇧K)](/guides/command-palette) | You want the fast keyboard path to jump between surfaces + inline chat |
 | [Developer flags](/guides/developer-flags) | You want to merge a half-built feature behind a tiered flag (off/dev/beta/on) instead of a long-lived branch |
 | [Access from your phone (LAN / Tailscale)](/guides/phone-access) | You want to drive the agent from your phone — installable PWA over your LAN or tailnet, add-to-home-screen |
+| [Pair devices and agents](/guides/pairing) | You want a phone or another protoAgent to get its own revocable token for this agent — QR or typed code, making the agent reachable, revoking, and delegating to a paired remote |
 | [Run headless (API + A2A)](/guides/headless) | You want the agent as a service — REST + A2A — with no UI |
 
 ## Operate & deploy
