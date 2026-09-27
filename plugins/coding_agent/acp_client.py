@@ -1420,6 +1420,7 @@ class AcpClient:
                 f"acp:{self.name}",
                 metadata={"command": self.command, "cwd": self.cwd},
                 as_type="agent",
+                root=is_root,
             ) as span,
             tracing.trace_attributes(
                 session_id=_coder_session_id(self.name, self.cwd) if is_root else "",
