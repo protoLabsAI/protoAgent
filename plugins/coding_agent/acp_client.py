@@ -1429,9 +1429,9 @@ class AcpClient:
         ):
             # The brief the coder was handed — for a root span, the trace's input.
             if tracing.io_allowed():
-                # Redact BEFORE the cap: a secret cut in half no longer matches its pattern.
-                # (With headroom rather than the whole brief, which may be megabytes.)
-                tracing.update_span(span, input=_redact(text[: tracing.MAX_IO_CHARS + 512])[: tracing.MAX_IO_CHARS])
+                # Redact the WHOLE brief, then cap: a secret cut in half no longer matches,
+                # and an exact-match secret can be longer than any fixed headroom.
+                tracing.update_span(span, input=_redact(text)[: tracing.MAX_IO_CHARS])
             try:
                 if self._turn_lock.locked():
                     logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)

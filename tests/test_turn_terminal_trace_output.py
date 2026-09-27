@@ -86,6 +86,17 @@ async def test_a_secret_straddling_the_cap_is_still_redacted(monkeypatch, sessio
     assert "A" * 10 not in out  # not even the half that survived the cut
 
 
+async def test_a_long_exact_match_secret_straddling_the_cap_is_redacted(monkeypatch, session_span):
+    from graph.middleware import redaction
+
+    pem = "PEMKEY" + "Q" * 2000  # longer than any fixed headroom past the cap
+    monkeypatch.setattr(redaction, "_known_secret_values", lambda: frozenset({pem}))
+    await _drain(monkeypatch, _impl_yielding(("done", "x" * (tracing.MAX_IO_CHARS - 100) + " " + pem)))
+
+    (out,) = _outputs(session_span)
+    assert "Q" * 50 not in out
+
+
 async def test_incognito_turn_records_no_output(monkeypatch, session_span):
     await _drain(monkeypatch, _impl_yielding(("done", "secret answer"), incognito=True))
 
