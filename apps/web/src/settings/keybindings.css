@@ -36,7 +36,7 @@
   align-items: center;
   gap: 12px;
   padding: 7px 0;
-  border-bottom: var(--pl-border-width) solid var(--pl-color-border-subtle, var(--pl-color-border));
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
 }
 .kb-row__label {
   display: flex;
