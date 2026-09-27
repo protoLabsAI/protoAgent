@@ -66,13 +66,15 @@ async def test_command_carries_authored_room_messages_and_the_tool_terminator():
 
     assert isinstance(out, Command)
     messages = out.update["messages"]
-    assert [message.additional_kwargs["room"] for message in messages[:2]] == [
+    # The terminator comes FIRST: Anthropic rejects a history whose tool_use isn't
+    # immediately followed by its tool_result, so envelopes ahead of it bricked the chat.
+    assert isinstance(messages[0], ToolMessage)
+    assert messages[0].tool_call_id == "call-1"
+    assert messages[0].content == "the token expires before refresh"
+    assert [message.additional_kwargs["room"] for message in messages[1:3]] == [
         {"from": "assistant", "to": "proto"},
         {"from": "proto"},
     ]
-    assert isinstance(messages[2], ToolMessage)
-    assert messages[2].tool_call_id == "call-1"
-    assert messages[2].content == "the token expires before refresh"
     assert registry.calls[0]["permissions"] is None  # preserve foreground delegate_to access
 
 
@@ -108,6 +110,11 @@ async def test_real_toolnode_checkpoints_the_room_with_its_turn(monkeypatch):
         {"from": "proto"},
     ]
     assert any(isinstance(message, ToolMessage) and message.tool_call_id == "call-1" for message in messages)
+    # …and it sits DIRECTLY after the assistant's tool_use in the checkpointed thread, so
+    # every later turn's history is valid for a provider that requires the pair adjacent.
+    call_at = next(i for i, m in enumerate(messages) if isinstance(m, AIMessage) and m.tool_calls)
+    assert isinstance(messages[call_at + 1], ToolMessage)
+    assert messages[call_at + 1].tool_call_id == "call-1"
 
 
 @pytest.mark.asyncio

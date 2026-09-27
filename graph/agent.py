@@ -202,6 +202,14 @@ def _build_middleware(
         )
     )
 
+    # Tool results directly after their calls (view-only). A foreground delegate_to once
+    # wrote room envelopes AHEAD of its ToolMessage, and a native Anthropic model rejects
+    # that history on every later turn. Inside PromptCache (Trajectory, outside it, hashes
+    # the STORED order), outside PromptCapture (which records what the model saw).
+    from graph.middleware.tool_call_repair import ToolResultOrderMiddleware
+
+    middleware.append(ToolResultOrderMiddleware())
+
     # Who is in this chat (#3049) — one system-SUFFIX line naming the delegates that
     # have spoken on this thread, so the lead knows who is already caught up and
     # prefers them for follow-ups. Awareness, never permission; no-op on a thread with
@@ -823,6 +831,7 @@ async def _run_subagent_inner(
     # delegation's tool loop) now read the prefix from cache. Same knobs as the
     # lead; the middleware's own denylist/zero-activity watchers apply per model.
     from graph.middleware.prompt_cache import PromptCacheMiddleware
+    from graph.middleware.tool_call_repair import ToolResultOrderMiddleware
 
     sub_middleware = [
         TraceContextMiddleware(),
@@ -831,6 +840,8 @@ async def _run_subagent_inner(
             ttl=getattr(config, "prompt_cache_ttl", "5m"),
             force=getattr(config, "prompt_cache_force", False),
         ),
+        # A subagent can delegate_to as well — same view-only tool-result ordering.
+        ToolResultOrderMiddleware(),
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
