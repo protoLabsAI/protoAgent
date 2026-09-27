@@ -2471,6 +2471,27 @@ def _trace_terminal_output(ev: tuple) -> None:
         text = f"[error] {payload}"
     else:
         return
+    _set_trace_output(text)
+
+
+def _trace_reply_output(reply: Any) -> None:
+    """The non-streaming driver's counterpart of ``_trace_terminal_output``: record the
+    reply it returns (the last assistant message's content) as the trace output. Its
+    ``@delegate`` and slash-command short-circuits, HITL parks and error bubbles return
+    without a tool-call-free model reply, so without this their ``chat`` traces had
+    input and no output (#3695). Called inside the ``trace_session`` scope.
+    """
+    if not isinstance(reply, list):
+        return
+    for msg in reversed(reply):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            content = msg.get("content")
+            _set_trace_output(content if isinstance(content, str) else str(content or ""))
+            return
+
+
+def _set_trace_output(text: str) -> None:
+    """Record ``text`` as the active turn's trace output: redacted, then capped."""
     if not text:
         return
     from observability import tracing
@@ -2481,7 +2502,7 @@ def _trace_terminal_output(ev: tuple) -> None:
         # than any fixed headroom. Once per turn, so the full pass is affordable.
         tracing.set_session_output(_redact(text)[: tracing.MAX_IO_CHARS])
     except Exception:  # noqa: BLE001 — tracing never alters the turn
-        log.debug("[tracing] terminal output not recorded", exc_info=True)
+        log.debug("[tracing] turn output not recorded", exc_info=True)
 
 
 async def _chat_langgraph_stream_impl(
@@ -3843,6 +3864,12 @@ async def _chat_langgraph_impl(
 
     from graph.config_io import soul_revision
 
+    def _traced(reply):
+        # Every return inside the trace scope goes through here, so the trace's output
+        # is what the caller got on every path — not only a final model reply (#3695).
+        _trace_reply_output(reply)
+        return reply
+
     async with tracing.trace_session(
         session_id=session_id,
         name="chat",
@@ -3860,7 +3887,7 @@ async def _chat_langgraph_impl(
             async with _thread_lock(_resolve_thread_id(None, session_id)):
                 _at_reply, _ = await _at_delegate_exchange(message, session_id, None)
             if _at_reply is not None:
-                return [{"role": "assistant", "content": _at_reply}]
+                return _traced([{"role": "assistant", "content": _at_reply}])
 
             # Goal control messages short-circuit (status / clear) — but a /goal SET kicks the
             # drive immediately (#1910) rather than returning just the ack: fall through into a
@@ -3872,12 +3899,12 @@ async def _chat_langgraph_impl(
                     STATE.goal_controller.is_set_ack(reply)
                     and STATE.goal_controller.active_goal(session_id) is not None
                 ):
-                    return [{"role": "assistant", "content": reply}]
+                    return _traced([{"role": "assistant", "content": reply}])
 
             # Core /lifecycle command (ADR 0074) — read-only listing. Reserved like /goal.
             lc_reply = _lifecycle_command_reply(message)
             if lc_reply is not None:
-                return [{"role": "assistant", "content": lc_reply}]
+                return _traced([{"role": "assistant", "content": lc_reply}])
 
             # Plugin-registered chat control command (/<name> …) short-circuits —
             # user-only, like /goal (e.g. the github plugin's /issue). No plugin
@@ -3889,14 +3916,14 @@ async def _chat_langgraph_impl(
                     # Non-streaming callers (e.g. the OpenAI-compat /v1 path) can't render
                     # a form — degrade to a text note pointing at the console (#1701 S2).
                     _title = cmd_reply.form.get("title") or "This command"
-                    return [{"role": "assistant", "content": f"**{_title}** needs a form — open it in the protoAgent console."}]
+                    return _traced([{"role": "assistant", "content": f"**{_title}** needs a form — open it in the protoAgent console."}])
                 if cmd_reply is not None:
-                    return [{"role": "assistant", "content": cmd_reply}]
+                    return _traced([{"role": "assistant", "content": cmd_reply}])
 
             # Workflow slash command (/<workflow-name> …) short-circuits the turn.
             parsed = _parse_workflow_command(message)
             if parsed is not None:
-                return [{"role": "assistant", "content": await _run_parsed_workflow(*parsed)}]
+                return _traced([{"role": "assistant", "content": await _run_parsed_workflow(*parsed)}])
 
             # User-facing skill slash command (/<skill> [args], ADR 0052) — rewrite
             # the message to inject the skill's procedure and fall through to the
@@ -3910,7 +3937,7 @@ async def _chat_langgraph_impl(
             # instead of running the agent turn on the raw `/foobar` text.
             unknown_reply = _unknown_slash_command_reply(message)
             if unknown_reply is not None:
-                return [{"role": "assistant", "content": unknown_reply}]
+                return _traced([{"role": "assistant", "content": unknown_reply}])
 
             # Non-native runtime (ADR 0033) — same switch as the streaming driver, same
             # position (after the control-plane short-circuits). Without it, an acp:*
@@ -3920,7 +3947,7 @@ async def _chat_langgraph_impl(
             from runtime.acp_runtime import is_acp_runtime
 
             if is_acp_runtime(STATE.graph_config):
-                return await _acp_turn_collected(session_id, message)
+                return _traced(await _acp_turn_collected(session_id, message))
 
             # Same thread-id resolution as the streaming path (ADR 0069 D4): the
             # non-streaming turns used to key `chat:{session_id}` apart from the
@@ -3979,15 +4006,17 @@ async def _chat_langgraph_impl(
                 if hold is not None and hold is not _HITL_RESUME:
                     payload = _interrupt_payload(hold)
                     question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
-                    return [
-                        {
-                            "role": "assistant",
-                            "content": (
-                                f"🙋 **Input needed first:** {question}\n\n"
-                                "_(Your message is queued — the agent gets it right after you answer.)_"
-                            ),
-                        }
-                    ]
+                    return _traced(
+                        [
+                            {
+                                "role": "assistant",
+                                "content": (
+                                    f"🙋 **Input needed first:** {question}\n\n"
+                                    "_(Your message is queued — the agent gets it right after you answer.)_"
+                                ),
+                            }
+                        ]
+                    )
                 if hold is _HITL_RESUME:
                     from langgraph.types import Command
 
@@ -4043,13 +4072,15 @@ async def _chat_langgraph_impl(
                     # continues the thread (the checkpointer kept the history).
                     payload = _interrupt_payload(interrupt_val)
                     question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
-                    return [
-                        {
-                            "role": "assistant",
-                            "content": f"🙋 **Input needed:** {question}",
-                            "usage": _sum_usage(usage_cb.usage_metadata),
-                        }
-                    ]
+                    return _traced(
+                        [
+                            {
+                                "role": "assistant",
+                                "content": f"🙋 **Input needed:** {question}",
+                                "usage": _sum_usage(usage_cb.usage_metadata),
+                            }
+                        ]
+                    )
 
             # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
             # to the last tool result so the caller gets a signal, not a blank.
@@ -4110,7 +4141,7 @@ async def _chat_langgraph_impl(
                 if note:
                     response = f"{response}\n\n---\n{note}"
 
-            return [{"role": "assistant", "content": response, "usage": _sum_usage(usage_cb.usage_metadata)}]
+            return _traced([{"role": "assistant", "content": response, "usage": _sum_usage(usage_cb.usage_metadata)}])
         except Exception as e:
             from graph.llm import RETRYABLE_STREAM_ERRORS
 
@@ -4123,19 +4154,21 @@ async def _chat_langgraph_impl(
                 )
                 retry_msg = "the model provider closed the stream (possibly rate-limited). Please retry."
                 await record_failed_turn(session_id, f"**Error:** {retry_msg}")
-                return [
-                    {
-                        "role": "assistant",
-                        "content": f"**Error:** {retry_msg}",
-                        "error": turn_error(e, retry_msg),
-                    }
-                ]
+                return _traced(
+                    [
+                        {
+                            "role": "assistant",
+                            "content": f"**Error:** {retry_msg}",
+                            "error": turn_error(e, retry_msg),
+                        }
+                    ]
+                )
             log.exception(
                 "[chat] unhandled exception for session=%s: %s",
                 session_id,
                 e,
             )
             await record_failed_turn(session_id, f"**Error:** {e}")
-            return [{"role": "assistant", "content": f"**Error:** {e}", "error": turn_error(e)}]
+            return _traced([{"role": "assistant", "content": f"**Error:** {e}", "error": turn_error(e)}])
         finally:
             tracing.flush()
