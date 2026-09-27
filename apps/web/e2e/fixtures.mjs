@@ -914,6 +914,30 @@ function scenarioFor(prompt) {
       ],
       answer: "Started it — sonnet will report back.",
     };
+  if (t.includes("HITL_OUTSIDE_ROOT"))
+    // register_local_project on a folder OUTSIDE onboarding.root: an approval with its
+    // OWN choices (the server binds each allow value to the folder's realpath) and
+    // session_allow:false — the console must render exactly these buttons and never
+    // offer "Approve & don't ask again" (it would move the fence for good).
+    return {
+      events: [],
+      answer: "That folder is outside the onboarding root — asking you first.",
+      hitl: {
+        kind: "approval",
+        title: "Allow access to a folder outside the onboarding root?",
+        detail:
+          "Folder:     /Users/op/dev/mundamanager\nRepository: git checkout, origin git@github.com:acme/munda.git\n" +
+          "Name:       'mundamanager'\nAgent asks: read-only\nOutside:    onboarding root ~/code",
+        tool: "register_local_project",
+        path: "/Users/op/dev/mundamanager",
+        session_allow: false,
+        options: [
+          { value: "allow-read-only@0123456789ab", label: "Allow read-only", kind: "allow_once", primary: true },
+          { value: "allow-read-write@0123456789ab", label: "Allow read-write", kind: "allow_once" },
+          { value: "deny", label: "Deny", kind: "reject_once" },
+        ],
+      },
+    };
   if (t.includes("HITL_ASK"))
     // ask_human free-text interrupt: the turn parks input-required with a hitl-v1
     // DataPart carrying a plain `question` — the console shows the floating

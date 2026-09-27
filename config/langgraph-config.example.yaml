@@ -505,7 +505,9 @@ operator:
 # is `root` and `allow`, and both are empty here, so out of the box this onboards
 # NOTHING: no source matches an empty allowlist, and there is no space to clone into.
 # Fill them in and the agent can clone + register within exactly that space — a `../`
-# or a symlink that would escape the root is refused before anything is written.
+# or a symlink that would escape the root is refused before anything is written. A local
+# folder outside the root (or any, while it is unset) is registered only if you approve
+# it on an in-chat card (`approve_outside_root` below).
 onboarding:
   enabled: true
   root: ""                              # e.g. /home/kj/dev — clones land here, and every
@@ -513,6 +515,8 @@ onboarding:
   allow: []                             # e.g. [github.com/protoLabsAI/*] — clone-source globs,
                                         # same semantics as plugins.sources.allow. Empty allows nothing
   write_default: false                  # onboarded projects are read-only unless a call asks for write
+  approve_outside_root: true            # a local folder OUTSIDE root (or any, with no root) → an
+                                        # approval card for that one folder; false = refuse
 
 # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs every agent this machine
 # owns inherits. These are HOST defaults: best set once in host-config.yaml or the
