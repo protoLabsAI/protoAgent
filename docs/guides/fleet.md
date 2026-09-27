@@ -309,8 +309,9 @@ On the other machine:
 A2A_AUTH_TOKEN=<secret> python -m server --port 7871 --host 0.0.0.0 --ui none
 ```
 
-On this one — Settings → Agents → **Discover** → **➕ Add to this fleet**, or register
-manually (the stored token is attached by the proxy; the browser never sees it):
+On this one — Settings → Agents → **Discover** → **Pair…** on the found row (see *Pairing*
+below), **➕ Add to this fleet** for an open remote with no token, or register manually with
+a pasted token (the stored token is attached by the proxy; the browser never sees it):
 
 ```bash
 curl -X POST http://127.0.0.1:7871/api/fleet/remotes \
@@ -327,6 +328,19 @@ protoagent fleet pair http://100.101.189.45:7871 <code> [--name ava]
 # or: curl -X POST http://127.0.0.1:7871/api/fleet/remotes/pair \
 #       -H 'content-type: application/json' -d '{"url": "http://100.101.189.45:7871", "code": "<code>"}'
 ```
+
+**In the console** *([ADR 0113](../adr/0113-agent-pairing-for-remote-fleet-members.md))*: on the remote, **Settings ▸ Devices ▸ Pair an agent** shows
+a code like `7KQ2M-X9D4P`, a 5-minute countdown and the addresses it's reachable on (tailnet
+first). If the remote only listens on localhost, the same "Allow devices on my network" step
+the phone flow uses comes first. On the hub, **Pair…** on a discovered row (or **Pair by
+URL…**) takes the code; **Re-pair** on a remote member's row does the same for a member whose
+token was revoked. The row then shows the token's health: *token rejected — re-pair*, *not
+paired* (no token stored), *open — no token needed* (the remote answers without one) or a
+quiet *paired*. Paired hubs appear in the remote's Devices list
+badged **Agent** and are revoked there like any device. Plain `http://` to an address that is
+neither loopback nor tailnet asks you to confirm sending the code and token unencrypted
+(ADR 0113 D10) — prefer the tailnet address or `https://`. The Devices section is still
+behind the `settings.devices` developer flag until the desktop-app check in ADR 0113 D8.
 
 The hub redeems the code against the remote's `POST /api/pairing/claim` and stores the
 per-device token it gets back. The remote lists the hub as `<hub name> (fleet hub)` in its
@@ -399,6 +413,10 @@ the hub's machine. A remote with **no** stored token is proxied with no credenti
 hub never forwards its fleet token off the box), so a secured one answers `401` and the
 delegate's error tells you to pair it. Local members can use the same URL (they hold the fleet
 token too), so it also works as a [fleet-shared delegate](delegates.md#share-a-delegate-with-the-whole-fleet-adr-0105).
+In the console, the fleet row's link button writes exactly that URL, so it is enabled only
+in the hub's window or a local member's (both on the hub's machine); in a remote member's
+window it is disabled with the reason, since `127.0.0.1` there is the remote itself. The
+link button on a *discovered* row pairs first, then links the new member the same way.
 
 **Live views (WebSockets) work on a remote too** — the terminal, agent_browser's viewport —
 as long as the remote was registered **with a token** (ADR 0113 D6,

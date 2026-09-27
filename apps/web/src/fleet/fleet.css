@@ -206,3 +206,37 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Pair… / Re-pair dialog (ADR 0113). Same field rhythm as the add-by-URL form; the code
+   field is monospace and letter-spaced so it reads back exactly like the remote's screen. */
+.fleet-pair-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fleet-pair-form .setting-desc {
+  margin: 0;
+}
+.fleet-pair-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fleet-pair-form .field > span {
+  font-size: 12px;
+  color: var(--pl-color-fg-muted, inherit);
+}
+.fleet-pair-form .fleet-pair-code {
+  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 18px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.fleet-pair-form input[readonly] {
+  opacity: 0.75;
+}
+
+/* D10 plaintext opt-in: the warning sentence, then its required checkbox. */
+.fleet-insecure p {
+  margin: 0 0 8px;
+}

@@ -477,7 +477,7 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   const found = page.locator(".fleet-row--found", { hasText: "remy" });
   await expect(found).toBeVisible();
 
-  await found.getByRole("button", { name: "Add to this fleet (a switchable remote member)" }).click();
+  await found.getByRole("button", { name: "Add to this fleet without a token (a switchable remote member — for an open remote)" }).click();
 
   // …and it leaves the found list: an agent that's already a member must not keep offering
   // "Add to this fleet", which would 400. (The re-scan satisfies this too — the point of the
@@ -505,6 +505,160 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
   await page.locator(".fleet-row", { hasText: "remy" })
     .getByRole("button", { name: /Remove from this fleet/ }).click();
   await expect(page.locator(".fleet-row", { hasText: "remy" })).toHaveCount(0);
+});
+
+// ── Agent pairing (ADR 0113) — Pair… / Re-pair and the auth badge ─────────────────────
+
+test("discovered row: Pair… is primary; the code formats as typed; pairing adds a paired member", async ({ page }) => {
+  let pairBody = null;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/fleet/remotes/pair")) pairBody = r.postDataJSON();
+  });
+  await openAgents(page);
+  await page.getByRole("button", { name: /Discover agents/ }).click();
+  const found = page.locator(".fleet-row--found", { hasText: "remy" });
+  await found.getByRole("button", { name: "Pair…" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Pair with remy" });
+  await expect(dialog).toBeVisible();
+  // The URL is prefilled from discovery and editable; focus starts in the code field.
+  await expect(dialog.getByLabel("URL")).toHaveValue("http://192.168.5.50:7871");
+  const code = dialog.getByTestId("fleet-pair-code");
+  await expect(code).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Pair", exact: true })).toBeDisabled();
+  // Lower-case with a space in it — the field upper-cases and re-dashes as it goes.
+  await code.pressSequentially("7kq2m x9d4p");
+  await expect(code).toHaveValue("7KQ2M-X9D4P");
+  // A plain-http LAN address (ADR 0113 D10): the warning and its REQUIRED opt-in gate Pair.
+  await expect(dialog.getByRole("alert")).toContainText("unencrypted on your network");
+  await expect(dialog.getByRole("button", { name: "Pair", exact: true })).toBeDisabled();
+  await dialog.getByText("I trust this network — send it unencrypted").click();
+  await dialog.getByRole("button", { name: "Pair", exact: true }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("remy joined the fleet.")).toBeVisible();
+  expect(pairBody).toEqual({ url: "http://192.168.5.50:7871", code: "7KQ2M-X9D4P", allow_insecure: true });
+  await expect(page.locator(".fleet-row--found", { hasText: "remy" })).toHaveCount(0);
+  const member = page.locator(".fleet-row:not(.fleet-row--found)", { hasText: "http://192.168.5.50:7871" });
+  await expect(member.getByTestId("fleet-auth-badge")).toHaveText("paired");
+});
+
+test("Pair…: an expired code toasts the server's detail verbatim and keeps the dialog open", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: /Discover agents/ }).click();
+  await page.locator(".fleet-row--found", { hasText: "remy" }).getByRole("button", { name: "Pair…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Pair with remy" });
+  await dialog.getByTestId("fleet-pair-code").fill("expir-ed000");
+  await dialog.getByText("I trust this network — send it unencrypted").click();
+  await dialog.getByRole("button", { name: "Pair", exact: true }).click();
+  await expect(page.getByText("that code is invalid or expired — generate a new one on the remote")).toBeVisible();
+  await expect(dialog).toBeVisible(); // the operator fixes the code, not re-opens the dialog
+});
+
+test("Pair by URL: an http NAME the hub resolves to a LAN address reveals the opt-in after its 400", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "Pair by URL…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Pair with a remote agent" });
+  await expect(dialog.getByLabel("URL")).toBeFocused(); // nothing prefilled — start at the URL
+  await dialog.getByLabel("URL").fill("http://studio.local:7870");
+  await dialog.getByTestId("fleet-pair-code").fill("7KQ2M-X9D4P");
+  // A name can't be classified in the browser — no warning up front…
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Pair", exact: true }).click();
+  // …the hub's refusal is shown verbatim, and the opt-in appears.
+  await expect(page.getByText(/plain http to studio\.local would send the pairing code and token in cleartext/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Pair", exact: true })).toBeDisabled();
+  await dialog.getByText("I trust this network — send it unencrypted").click();
+  await dialog.getByRole("button", { name: "Pair", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("Add a remote by URL: a token to a plain-http LAN address needs the same opt-in", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "Add a remote by URL" }).click();
+  const form = page.locator(".fleet-add-remote");
+  await form.getByLabel("Name").fill("lanny");
+  await form.getByLabel("URL").fill("http://192.168.7.7:7870");
+  // No token → nothing to protect → no warning.
+  await expect(form.getByRole("alert")).toHaveCount(0);
+  await form.getByLabel(/Token/).fill("s3cret");
+  await expect(form.getByRole("alert")).toContainText("unencrypted on your network");
+  await expect(form.getByRole("button", { name: "Add to fleet" })).toBeDisabled();
+  await form.getByText("I trust this network — send it unencrypted").click();
+  await expect(form.getByRole("button", { name: "Add to fleet" })).toBeEnabled();
+  // A tailnet URL clears the question (and the consent — it was for another host).
+  await form.getByLabel("URL").fill("http://100.64.1.2:7870");
+  await expect(form.getByRole("alert")).toHaveCount(0);
+});
+
+test("remote rows show the auth verdict; Re-pair re-tokens a rejected member in place", async ({ page }, testInfo) => {
+  await page.request.post("/api/__test__/fleet/seed-remotes", { headers: { "x-e2e-fleet": fleetScope(testInfo) } });
+  await openAgents(page);
+  const rex = page.locator(".fleet-row", { hasText: "rex" });
+  const nova = page.locator(".fleet-row", { hasText: "nova" });
+  const orbit = page.locator(".fleet-row", { hasText: "orbit" });
+  await expect(rex.getByTestId("fleet-auth-badge")).toHaveText("token rejected — re-pair");
+  await expect(nova.getByTestId("fleet-auth-badge")).toHaveText("not paired");
+  await expect(orbit.getByTestId("fleet-auth-badge")).toHaveText("paired");
+  await expect(page.locator(".fleet-row", { hasText: "opal" }).getByTestId("fleet-auth-badge")).toHaveText("open — no token needed");
+  await expect(nova.getByRole("button", { name: "Pair…" })).toBeVisible();
+
+  await rex.getByRole("button", { name: "Re-pair" }).click();
+  const dialog = page.getByRole("dialog", { name: "Re-pair rex" });
+  // Re-pair targets THIS member's URL — editing it would add a second member instead.
+  await expect(dialog.getByLabel("URL")).toHaveValue("http://100.64.0.21:7870");
+  await expect(dialog.getByLabel("URL")).toHaveAttribute("readonly", "");
+  // A tailnet address is WireGuard underneath — no plaintext warning (ADR 0113 D10).
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByTestId("fleet-pair-code").fill("ABCDE-FGHIJ");
+  await dialog.getByRole("button", { name: "Re-pair", exact: true }).click();
+  await expect(page.getByText("Its new token is stored on this hub.")).toBeVisible();
+  await expect(rex.getByTestId("fleet-auth-badge")).toHaveText("paired");
+});
+
+test("discovered row: the delegate link pairs first, then links the hub's proxy URL (ADR 0113 D4)", async ({ page }) => {
+  let delegateBody = null;
+  await page.route("**/api/delegates", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    delegateBody = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true } });
+  });
+  await openAgents(page);
+  await page.getByRole("button", { name: /Discover agents/ }).click();
+  await page
+    .locator(".fleet-row--found", { hasText: "remy" })
+    .getByRole("button", { name: "Pair, then add as a delegate of this agent (delegate_to)" })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "Pair with remy" });
+  await expect(dialog.getByLabel("Also add it as a delegate of this agent")).toBeChecked();
+  await dialog.getByTestId("fleet-pair-code").fill("7KQ2M-X9D4P");
+  await dialog.getByText("I trust this network — send it unencrypted").click();
+  await dialog.getByRole("button", { name: "Pair", exact: true }).click();
+  // The hub-loopback proxy (carries the paired token) — never the remote's raw <url>/a2a.
+  await expect.poll(() => delegateBody).toMatchObject({ name: "remy", type: "a2a", url: "http://127.0.0.1:7871/agents/remy-pr01/a2a" });
+});
+
+test("a REMOTE member's window can't write hub-box delegate URLs; the link is disabled with a reason", async ({ page }, testInfo) => {
+  await page.request.post("/api/__test__/fleet/seed-remotes", { headers: { "x-e2e-fleet": fleetScope(testInfo) } });
+  // Give every member an a2a so the only thing disabling the button is the focus rule.
+  await routeSnapshot(
+    page,
+    "/api/fleet",
+    (json) => {
+      for (const a of json.agents) if (!a.a2a) a.a2a = `http://127.0.0.1:${a.port}/a2a`;
+    },
+    { headers: { "x-e2e-fleet": fleetScope(testInfo) } },
+  );
+  await page.goto("/app/agent/orbit-re04/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  const fleetTab = page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Fleet", exact: true });
+  // Fleet is a host-console Box section; if this remote window doesn't carry it, there is no
+  // gesture to guard — the pure rule is unit-tested in agentPairing.test.ts.
+  if ((await fleetTab.count()) === 0) test.skip(true, "no Fleet section in a remote member window");
+  await fleetTab.click();
+  const link = page.locator(".fleet-row", { hasText: "ava" }).getByRole("button", { name: /remote agent on another machine/ });
+  await expect(link).toBeDisabled();
 });
 
 // ── Folded-in fleet controls (#1733 quick-chat + #1769 toggle → the Fleet Room) ─────
