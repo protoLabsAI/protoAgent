@@ -15,6 +15,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Activity, AlertTriangle, ChevronLeft, ExternalLink, FileText, Play, RefreshCw, ScrollText, Square } from "lucide-react";
 import { useToast } from "@protolabsai/ui/overlays";
+import { Button } from "@protolabsai/ui/primitives";
+import { Input } from "@protolabsai/ui/forms";
 import { PromptInput, type PromptAttachment } from "@protolabsai/ui/ai";
 import type { PaletteContext, PaletteView } from "@protolabsai/ui/command-palette";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -261,7 +263,9 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                   className={`flr__member${a.running ? "" : " is-down"}${diag?.slug === slug ? " is-diag" : ""}`}
                 >
                   <span className={`flr__dot flr__dot--${p.key}`} aria-hidden />
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     type="button"
                     className="flr__who"
                     onClick={() => dm(a)}
@@ -276,7 +280,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     <span className="flr__meta">
                       {[a.bundle, a.port ? `:${a.port}` : null, p.label].filter(Boolean).join(" · ")}
                     </span>
-                  </button>
+                  </Button>
                   <div className="flr__actions">
                     {awaiting[slug] && a.running ? (
                       <span className="flr__pill flr__pill--attn" title="A turn is parked awaiting your answer">
@@ -288,7 +292,10 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                       </span>
                     ) : null}
                     {local && (
-                      <button
+                      <Button
+                        icon
+                        variant="ghost"
+                        size="sm"
                         type="button"
                         className="flr__icon"
                         onClick={() => toggle(a)}
@@ -296,19 +303,25 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                         aria-label={a.running ? `Stop ${a.name}` : `Start ${a.name}`}
                       >
                         {a.running ? <Square size={14} /> : <Play size={14} />}
-                      </button>
+                      </Button>
                     )}
-                    <button
+                    <Button
+                      icon
+                      variant="ghost"
+                      size="sm"
                       type="button"
-                      className={`flr__icon${diag?.slug === slug ? " is-active" : ""}`}
+                      className="flr__icon"
                       onClick={() => openDiag(a)}
                       title="Diagnostics — bounded logs & task inspector"
                       aria-label={`Diagnostics for ${a.name}`}
                       aria-pressed={diag?.slug === slug}
                     >
                       <Activity size={14} />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      icon
+                      variant="ghost"
+                      size="sm"
                       type="button"
                       className="flr__icon"
                       onClick={() => open(a)}
@@ -317,7 +330,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                       aria-label={`Open ${a.name} console`}
                     >
                       <ExternalLink size={14} />
-                    </button>
+                    </Button>
                   </div>
                 </div>
               );
@@ -346,8 +359,10 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
             {mentionMatches.map((a) => {
               const mp = presenceOf(a);
               return (
-                <button
+                <Button
                   key={slugOf(a)}
+                  variant="ghost"
+                  size="sm"
                   type="button"
                   className="flr__mention"
                   onMouseDown={(e) => {
@@ -358,7 +373,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                   <span className={`flr__dot flr__dot--${mp.key}`} aria-hidden />
                   <span className="flr__mention-name">{a.name}</span>
                   <span className="flr__mention-meta">{mp.label}</span>
-                </button>
+                </Button>
               );
             })}
           </div>
@@ -464,9 +479,9 @@ function DiagError({
         <strong>{state.title}</strong>
         <span>{state.hint}</span>
       </div>
-      <button type="button" className="flr__diag-retry" onClick={onRetry}>
+      <Button variant="ghost" size="sm" type="button" className="flr__diag-retry" onClick={onRetry}>
         Retry
-      </button>
+      </Button>
     </div>
   );
 }
@@ -536,7 +551,10 @@ export function MemberDiagnostics({
   return (
     <div className="flr__diag" data-testid="fleet-diagnostics">
       <div className="flr__diag-head">
-        <button
+        <Button
+          icon
+          variant="ghost"
+          size="sm"
           type="button"
           className="flr__diag-back"
           onClick={onClose}
@@ -544,7 +562,7 @@ export function MemberDiagnostics({
           aria-label="Close diagnostics"
         >
           <ChevronLeft size={16} />
-        </button>
+        </Button>
         <span className={`flr__dot flr__dot--${presence.key}`} aria-hidden />
         <span className="flr__diag-name" data-testid="diag-member">
           {name}
@@ -558,16 +576,18 @@ export function MemberDiagnostics({
             <span className="flr__diag-sectitle">
               <ScrollText size={13} aria-hidden /> Logs
             </span>
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               type="button"
               className="flr__diag-refresh"
               onClick={() => logs.refetch()}
-              disabled={logs.isFetching}
+              loading={logs.isFetching}
               aria-label="Refresh logs"
               title="Refresh logs (snapshot)"
             >
               <RefreshCw size={13} aria-hidden /> Refresh
-            </button>
+            </Button>
           </header>
           {logs.isError ? (
             <DiagError state={diagnosticErrorState(logs.error, "logs")} onRetry={() => logs.refetch()} />
@@ -585,7 +605,7 @@ export function MemberDiagnostics({
             </span>
           </header>
           <div className="flr__diag-taskbar">
-            <input
+            <Input
               className="flr__diag-taskinput"
               value={taskDraft}
               onChange={(e) => setTaskDraft(e.target.value)}
@@ -594,14 +614,17 @@ export function MemberDiagnostics({
               aria-label="Task id"
               spellCheck={false}
             />
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               type="button"
               className="flr__diag-inspect"
               onClick={inspect}
               disabled={!taskDraft.trim()}
+              loading={task.isFetching}
             >
               Inspect
-            </button>
+            </Button>
           </div>
           {taskId === null ? (
             <div className="flr__diag-state flr__diag-idle">
