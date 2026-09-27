@@ -491,3 +491,50 @@ async def test_a_pathological_title_still_ends_the_tool(tmp_path, fake_langfuse)
 
     assert [e["phase"] for e in events] == ["start", "end"]
     assert span.start_observation.call_count == 1
+
+
+# ─── #3691: the refinement reaches the chat card too, as an `update` event ─────────────
+
+
+async def test_a_refinement_is_emitted_as_an_update_for_the_ui(tmp_path, monkeypatch):
+    # Tracing OFF: the card fix must not depend on Langfuse.
+    monkeypatch.setattr(tracing, "_enabled", False)
+    monkeypatch.setattr(tracing, "_langfuse", None)
+    events: list[dict] = []
+    await _replay(
+        tmp_path,
+        [
+            _OPEN,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t1",
+                "title": "Run make test",
+                "rawInput": {"command": "make test"},
+            },
+            {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"},
+        ],
+        events,
+    )
+
+    assert [e["phase"] for e in events] == ["start", "update", "end"]
+    assert events[2]["name"] == "Run make test"  # the end is named after the refined card
+    update = events[1]
+    assert update == {"phase": "update", "id": "t1", "name": "Run make test", "input": '{"command": "make test"}'}
+
+
+async def test_no_update_for_an_ended_or_unknown_call(tmp_path, fake_langfuse):
+    events: list[dict] = []
+    await _replay(
+        tmp_path,
+        [
+            _OPEN,
+            {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"},
+            # Arrives after the end: the card is closed, nothing to fill in.
+            {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "late", "rawInput": {"a": 1}},
+            # Never started: no card to update.
+            {"sessionUpdate": "tool_call_update", "toolCallId": "ghost", "title": "x", "rawInput": {"a": 1}},
+        ],
+        events,
+    )
+
+    assert [e["phase"] for e in events] == ["start", "end"]

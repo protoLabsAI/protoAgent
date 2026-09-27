@@ -1158,3 +1158,26 @@ def test_persona_doc_names_nothing_when_resolution_fails(monkeypatch):
     assert "You are Aria." in doc and "list its tools" in doc
     for absent in ("set_goal", "schedule_task", "task_create", "memory_", "notes_", "subagent"):
         assert absent not in doc, absent
+
+
+async def test_acp_drive_turn_turns_a_tool_update_into_a_same_id_refining_start():
+    """#3691: the coder's refined name/args re-announce the SAME card id, so the console
+    fills the card in by id, marked `refine` so it isn't counted as another call."""
+    chat = _chat_module()
+
+    class _Rt(_MockRuntime):
+        async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
+            await tool_callback({"phase": "start", "id": "t1", "name": "Read File", "input": "read"})
+            await tool_callback(
+                {"phase": "update", "id": "t1", "name": "Read app.py", "input": '{"file_path": "app.py"}'}
+            )
+            await tool_callback({"phase": "end", "id": "t1", "name": "Read app.py", "output": "ok"})
+            return "done-text"
+
+    frames = [f async for f in chat._acp_drive_turn(_Rt(), "m")]
+    starts = [p for k, p in frames if k == "tool_start"]
+
+    assert starts == [
+        {"id": "t1", "name": "Read File", "input": "read"},
+        {"id": "t1", "name": "Read app.py", "input": '{"file_path": "app.py"}', "refine": True},
+    ]

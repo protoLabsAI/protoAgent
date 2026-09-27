@@ -40,7 +40,13 @@ export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessag
   // emission order; children (parentId set) nest under their parent's card,
   // so they don't get their own block.
   let nextParts = message.parts;
-  if (evt.phase === "start") {
+  if (evt.phase === "start" && idx >= 0) {
+    // A re-announce of a card we already have (the native runtime's second start with
+    // full args, an ACP coder's refined name/args — #3691): fill it in. Keep its clock,
+    // nesting and position — re-adding the ref would render the card twice once text
+    // arrived in between, and resetting startedAt would shorten its elapsed time.
+    calls[idx] = { ...calls[idx], name: evt.name || calls[idx].name, input: evt.input ?? calls[idx].input };
+  } else if (evt.phase === "start") {
     // Nest a subagent's own tool under its `task` card. The server tags the
     // child frame with the parent delegation's id (authoritative — works even
     // though the task's end races AHEAD of the child); fall back to "last open
@@ -54,8 +60,7 @@ export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessag
       startedAt: now,
       parentId: evt.parentId ?? openTask?.id,
     };
-    if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
-    else calls.push(card);
+    calls.push(card);
     if (card.parentId == null) nextParts = addToolRef(message.parts, evt.id);
   } else {
     // end — flip the matching card to done/error (or create one if the start

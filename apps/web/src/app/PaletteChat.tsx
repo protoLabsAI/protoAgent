@@ -25,12 +25,15 @@ function upsertTool(message: ChatMessage, evt: ToolEvent): ChatMessage {
   const idx = calls.findIndex((c) => c.id === evt.id);
   const now = Date.now();
   let nextParts = message.parts;
-  if (evt.phase === "start") {
+  if (evt.phase === "start" && idx >= 0) {
+    // A re-announce of a known card (full args / an ACP refinement, #3691): fill it in,
+    // keeping its clock, nesting and position — no second ref, no reset elapsed time.
+    calls[idx] = { ...calls[idx], name: evt.name || calls[idx].name, input: evt.input ?? calls[idx].input };
+  } else if (evt.phase === "start") {
     const openTask = [...calls].reverse().find((c) => c.name === "task" && c.status === "running" && c.id !== evt.id);
     const parentId = evt.parentId ?? openTask?.id;
     const card: ToolCall = { id: evt.id, name: evt.name, input: evt.input, status: "running", startedAt: now, parentId };
-    if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
-    else calls.push(card);
+    calls.push(card);
     // Children (parentId set) nest under their parent's card — only top-level tools get a block.
     if (parentId == null) nextParts = addToolRef(message.parts, evt.id);
   } else {
