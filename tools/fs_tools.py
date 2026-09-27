@@ -145,30 +145,40 @@ def _echo_line(text: str) -> str:
 
 
 def _is_probably_binary(path: Path) -> bool:
-    """`grep -I` semantics — a NUL byte in the first chunk means 'not text'."""
-    try:
-        with path.open("rb") as fh:
-            return b"\x00" in fh.read(_BINARY_SNIFF_BYTES)
-    except OSError:
-        return True  # unreadable is not searchable either
+    """`grep -I` semantics — a NUL byte in the first chunk means 'not text'.
+
+    Raises ``OSError`` for a file that can't be opened, so the caller can count it
+    as unreadable rather than silently filing it under "binary".
+    """
+    with path.open("rb") as fh:
+        return b"\x00" in fh.read(_BINARY_SNIFF_BYTES)
 
 
-def _walk_searchable(base: Path) -> tuple[list[Path], bool]:
-    """Files under `base` worth grepping, plus whether anything was skipped.
+def _walk_searchable(base: Path, *, prune: bool = True) -> tuple[list[Path], bool, int]:
+    """Files under `base` worth grepping, whether anything was pruned, and how many
+    directories could not be listed.
 
     Prunes with ``os.walk``'s in-place ``dirnames`` rather than filtering ``rglob``
     output, so a `node_modules` is never DESCENDED into — the cost of the old version
     was paid walking the tree, not just printing it. Sorted for a stable result order,
-    which ``rglob`` never promised.
+    which ``rglob`` never promised. ``prune=False`` (include_generated) walks
+    everything. A directory that can't be listed (PermissionError / OSError) is
+    skipped and counted via ``onerror`` instead of aborting the whole search.
     """
     files: list[Path] = []
     skipped = False
-    for dirpath, dirnames, filenames in os.walk(base):
-        keep = [d for d in dirnames if d not in _SKIP_DIRS]
+    unreadable = 0
+
+    def _count(_exc: OSError) -> None:
+        nonlocal unreadable
+        unreadable += 1
+
+    for dirpath, dirnames, filenames in os.walk(base, onerror=_count):
+        keep = [d for d in dirnames if d not in _SKIP_DIRS] if prune else list(dirnames)
         skipped = skipped or len(keep) != len(dirnames)
         dirnames[:] = sorted(keep)
         files.extend(Path(dirpath) / name for name in sorted(filenames))
-    return files, skipped
+    return files, skipped, unreadable
 
 
 _SHELLS = ("default", "cmd", "powershell", "sh")
@@ -964,12 +974,15 @@ def build_fs_tools(config) -> list:
         context_lines = max(0, min(context_lines, _MAX_CONTEXT_LINES))
 
         skipped_dirs = False
+        unreadable = 0
         if base.is_file():
             files = [base]
         elif include_generated:
-            files = sorted(p for p in base.rglob("*") if p.is_file())
+            files, _, unreadable = _walk_searchable(base, prune=False)
+            # Same global order (and regular-files-only filter) the old rglob walk had.
+            files = sorted(p for p in files if p.is_file())
         else:
-            files, skipped_dirs = _walk_searchable(base)
+            files, skipped_dirs, unreadable = _walk_searchable(base)
 
         blocks: list[str] = []
         n_matches = 0
@@ -980,15 +993,18 @@ def build_fs_tools(config) -> list:
             for f in files:
                 if hit_cap:
                     break
-                if not include_generated and _is_probably_binary(f):
-                    skipped_binary = True
-                    continue
                 try:
+                    if not include_generated and _is_probably_binary(f):
+                        skipped_binary = True
+                        continue
                     # Verbatim + `\n`-only lines: `read_text` translates a lone `\r` into a
                     # line break and `splitlines` adds \f, \x85, \u2028 …, so the `file:N` this
                     # prints disagreed with read_file(offset=N), the code pane and editors.
                     lines = split_lines(_read_text_verbatim(f))
                 except OSError:
+                    # A dangling symlink / file deleted mid-walk isn't "unreadable" — it's gone.
+                    if f.exists():
+                        unreadable += 1
                     continue
                 # Stop SCANNING once the match cap is reached — a huge file with more
                 # than _MAX_MATCHES hits shouldn't pay to enumerate all of them just to
@@ -1046,19 +1062,25 @@ def build_fs_tools(config) -> list:
                         break
         except TimeoutError:
             return f"Error: regex took too long to match (possible catastrophic backtracking) — simplify the pattern: {query!r}"
+        # One trailing note (never a `file:line`-shaped line) so a permission-denied
+        # subtree can't pass for "searched, nothing there".
+        note = f"\n(skipped {unreadable} unreadable path{'s' if unreadable != 1 else ''})" if unreadable else ""
         if hit_cap:
             # Two independent caps can trigger this: too many MATCHES, or too much
             # OUTPUT (e.g. wide context_lines around matches that were all already
             # found) — don't claim specifically "more matches" when it might just be
             # more context around matches already shown in full.
-            return "\n".join(blocks) + "\n… (more matches or output; narrow the search or lower context_lines)"
+            return "\n".join(blocks) + "\n… (more matches or output; narrow the search or lower context_lines)" + note
         if blocks:
-            return "\n".join(blocks)
+            return "\n".join(blocks) + note
         # Say what was NOT searched, so "(no matches)" can't be read as "not in this
         # repo" when the answer is sitting in a pruned tree.
         if skipped_dirs or skipped_binary:
-            return "(no matches; binary files and generated dirs were skipped — retry with include_generated=true to search those too)"
-        return "(no matches)"
+            return (
+                "(no matches; binary files and generated dirs were skipped — retry with include_generated=true to search those too)"
+                + note
+            )
+        return "(no matches)" + note
 
     @tool
     def write_file(project: str, path: str, content: str) -> str:
