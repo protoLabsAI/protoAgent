@@ -15,6 +15,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.184.0] - 2026-09-27
+
+### Added
+- **An agent can ask to register a folder outside the onboarding root — you approve it in chat (#3642).**
+  `register_local_project` on a directory outside `onboarding.root` used to refuse, leaving the
+  agent no way to ask; now it shows an approval card for that one folder — Allow read-only / Allow
+  read-write / Deny — in the console, the deck and Zed. The card is written by the server from the
+  folder's resolved path (with its git origin), your choice of access wins over the agent's, and
+  the root still bounds everything else. A stock install with no onboarding root gets the same
+  card, so it can be pointed at a checkout you already have. `/bypass` and "allow for this session" never skip it, and
+  the filesystem root, your home directory, system and credential directories are refused with no
+  card. `onboarding.approve_outside_root: false` restores the flat refusal.
+
+- **Agent pairing codes on the remote side (#3645).** `POST /api/pairing/start` accepts
+  `{"kind": "agent"}` and mints a typeable 10-character Crockford code (`XXXXX-XXXXX`,
+  5-minute TTL) with the base URLs a hub should pair against and this agent's name. The
+  claim route folds case, dashes, spaces and the `O/0`, `I/L/1` look-alikes for agent codes,
+  and a single failed-claim lockout covers both code kinds. Paired entries now carry a
+  `kind` (`device` or `agent`) that is set from the code at mint time and never from the
+  claimer. Registries without the field read as `device`. `POST /api/pairing/cancel` takes
+  an optional `kind`, so closing one dialog leaves the other kind's code alone (ADR 0113 D2/D3).
+
+- **A fleet hub can pair with a remote protoAgent by code (#3646).** `POST /api/fleet/remotes/pair`
+  `{url, code, name?}` and `protoagent fleet pair <url> <code> [--name N]` redeem a code minted on
+  the remote against its existing `/api/pairing/claim` and store the per-device token as the
+  member's bearer, adding the member or re-tokening the one already at that URL (ADR 0113 D1/D7).
+  The hub never sees the remote's shared bearer, and the remote can revoke the hub alone. Remote
+  members now report `auth: ok | rejected | open | unknown | none` from an authenticated probe on a 30s
+  TTL (D5), so a revoked or wrong token shows up as rejected instead of reading "running".
+  Editing a remote's URL to a different scheme, host or port now clears its stored token
+  unless a new one is passed in the same edit (`token_cleared: true`), so one host's
+  credential is never presented to another. Remote URLs must be base URLs and are
+  canonicalized, and a remote that answers without any token reports `auth: open`.
+  A pairing code or stored token crosses plain `http://` only to loopback or a tailnet
+  address (100.64.0.0/10, `*.ts.net`); anything else needs `allow_insecure` /
+  `--insecure-http` (ADR 0113 D10).
+
+- **`protoagent pair` prints a one-time code a hub claims to pair with this agent, and mDNS only advertises from a reachable bind (#3649).**
+  The headless half of agent pairing (ADR 0113 D7): a docker or server install with nobody at
+  its console can mint an agent pairing code from the running instance and see a
+  `protoagent fleet pair <url> <code>` line for each address a hub can reach it on. A
+  loopback-bound instance says it can't be paired and names the fix: a reachable bind with a
+  token, never an open instance. Separately, an agent bound to loopback no longer announces
+  its LAN address on mDNS (nothing could connect to it), and one bound to a specific address
+  announces that address rather than the default route's (ADR 0113 D9).
+
+### Changed
+- **Dependencies refreshed to what a fresh install resolves today (#3575).** `uv.lock` had fallen behind: a new contributor, the Docker image and the desktop sidecar were getting a newer, untested set than the PR gates. The lock now matches a fresh resolve, including openai 3.19, anthropic 1.8, langsmith 0.14, langchain-openai 1.6.6, langchain-core 1.6.5, langgraph 1.2.12, protobuf 7, SQLAlchemy 2.1 and OpenTelemetry 1.45, and the full suite passes on it. The gateway's `PROTOAGENT_GATEWAY_RESPONSES_API=1` escape hatch still works: langchain-openai now settles the wire when the client is built rather than per call, so the test checks which wire the client would use instead of the stored field.
+- **Re-attaching to a turn that just started no longer fails with "Task not found" (#3575).** a2a-sdk 1.1.5 (in the refreshed lock) added an ownership check that reads the task store even for a live task, and a task is live a moment before its first store write. So the deck attaching to a server-fired turn on its `turn_started` announcement, or the eval client's dropped-stream `resubscribe()`, could be refused for a task that exists. Both now retry that one error with a short bounded backoff (~0.75s worst case), and the eval client reports a refusal as an `error` event instead of an empty stream.
+
+- **The Engineer's `repo-onboard` skill now shows you the project, not just a card (#3641).**
+  Onboarding detects the repo's ecosystem(s) from its root files (npm/pnpm/yarn/bun and
+  JS monorepos, Python, Rust, Go, Ruby, JVM, .NET, PHP, Elixir, Deno), renders the README
+  verbatim as a markdown artifact, points the code pane at the manifest's scripts and
+  dependencies, and draws a 5–12-node Mermaid architecture overview whose every node links
+  to anchored code — then ends with a choice: a guided tour of one of the key flows it
+  spotted, a sequence diagram of one, or straight to the bug. Two artifact-link traps the
+  real run hit are now reported by the tool: a `participant:` key on a flowchart (dead in
+  the renderer, previously reported as linked), and an `update_artifact` whose partial
+  `links` map silently replaced the stored one.
+
+- **A delegate to a remote fleet member now routes through the hub (#3647).** The fleet
+  roster advertises a remote's `a2a` as the hub's loopback proxy
+  (`http://127.0.0.1:<hub-port>/agents/<id>/a2a`), so "Add as delegate" on a remote needs no
+  token: the delegate presents the fleet service token and the hub swaps in the remote's stored
+  one (ADR 0113 D4). A `401` through the hub proxy now says to pair the remote rather than
+  blaming the fleet token.
+
+### Fixed
+- **A workflow step's Langfuse trace now says which run, step and inputs it belongs to (#3565).** A `subagent:<type>` span started by a workflow step carried only a description and an empty `parent_task_id`. The only way to join it to `.runs/<run_id>.json` was by timestamp, and that breaks as soon as two review panels overlap. Every step's span, and the tool calls and generations under it, now carry `run_id`, `workflow`, `step_id`, `subagent`, the caller's `parent_session_id`, and the run's scalar inputs as redacted `input_<name>` keys capped at 200 characters. The run-level keys are also set as trace metadata. Per-step keys stay on the observations, because a trace holds the whole run. The trace is tagged `workflow:<name>`, `run:<run_id>` and `step:<id>`. A run started from a chat turn stays in that turn's trace and session. A run with no turn around it is its own trace, with its session set to the `run_id`. In an incognito turn the ids are kept but no inputs are sent. The run's input and output are not sent either; the nested run span used to send both. Plugins get the same seam as `sdk.trace_attributes` and `sdk.trace_run(inputs=, tags=)`.
+
+- **Traces name their agent, and the delegation ledger records what a delegation cost (#3565).**
+  Every agent exported to Langfuse as `service.name = unknown_service`, so a fleet sharing
+  one Langfuse project could not be split by agent at the trace level. The tracer provider
+  now carries `service.name` = the agent's identity name (config `identity.name`, then
+  `AGENT_NAME`), per instance; `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` still win.
+  `ledger.db` `delegations.cost_usd` was NULL on every row: subagent edges (including
+  workflow steps, which have no A2A turn to join to) now carry the sum of their priced
+  model calls, and background jobs settle with their turn's cost. It stays NULL when no
+  call reported usage — unknown, not free. It is a per-edge view of spend the parent turn
+  already counts; don't add it to `turns.cost_usd`.
+
+- **A code link opens the code pane on the dock you keep it on (#3640).** Clicking a code-linked diagram in the Artifact panel used to move the Code rail item to another dock (usually the bottom one) so it wouldn't cover the diagram, which rewrote your layout. Now the pane opens wherever the Code item lives, even if that means swapping the diagram out (its rail icon brings it back). The layout is never rewritten. A hidden Code surface is still placed away from chat on its first open.
+
+- **The setup wizard no longer crashes on a partial config (#3654).** If `/api/config` came back without an `identity` or `model` section (for example from a fleet member running an older core), the first-run wizard crashed while rendering. Now a missing section falls back to the wizard's normal defaults.
+
+- **`search_files` no longer crashes on an unreadable subdirectory (#3663).**
+  With `include_generated=true`, one permission-denied directory aborted the whole
+  search; both modes now skip unreadable directories and files, keep the readable
+  hits, and add a single `(skipped N unreadable paths)` line to the result.
+
+- **A fresh `pip install -r requirements.txt` no longer installs an older langchain/langgraph than the release ships (#3666).** websockets 17 came out, but langgraph-sdk 0.4.x caps `websockets<17`. An unconstrained resolve therefore gave up langgraph-sdk 0.4.5 → 0.3.15, langgraph 1.2.12 → 1.2.2 and langchain 1.4.2 → 1.3.2 to get the newer websockets. Nothing failed; the agent was just silently older. `pyproject.toml` now floors `langchain>=1.4.2` and `langgraph>=1.2.12`, the versions `uv.lock` already ships, so websockets stays on 16.x through langgraph-sdk's own cap. It will move to 17 without any change here once langgraph-sdk allows it. `uv.lock` package versions are unchanged.
+
+### Security
+- **The hub proxy no longer hands hub credentials to remote fleet members (#3647).** A remote
+  is lent its own stored bearer only for an operator caller the hub authenticated; otherwise
+  it gets no Authorization at all. That closes four paths off the box: a tokenless remote was
+  sent the hub's fleet service token (proxy and telemetry rollup); a remote-controlled
+  "member-public" path let the caller's own hub bearer ride through; a federation-tier caller
+  was lent the remote's operator-tier bearer; and the hub-signed SSE `?token=` was forwarded
+  to the remote, which could replay it against the hub.
+
+- **Remote fleet members' WebSockets traverse the hub again, and the hub still never lends a credential (#3648).**
+  ADR 0113 D6 lifts the #1607 refusal, so a remote's terminal and agent_browser live views
+  work through the hub console. The hub never attaches the remote's stored bearer to an
+  upgrade on its own. A presented `?token=` or `Authorization: Bearer` is authenticated at
+  the hub without the open-mode shortcut and, if it is operator, swapped for the stored token.
+  An open hub therefore never swaps one in. Any other presented credential is closed with
+  `1008`, and so is a browser handshake from a foreign `Origin`: only same-origin, the desktop
+  webview and `A2A_ALLOWED_ORIGINS` are allowed. A ticket-based socket passes through with no
+  Authorization, and the remote checks the ticket. A remote registered without a token is
+  still refused. The hub neither attaches nor forwards a credential of its own, but in-band
+  frames are the plugin's responsibility, so remote terminal views need **terminal-plugin
+  ≥0.9.2**. Earlier versions sent the hub's bearer in-band when a ticket mint failed.
+
 ## [0.183.1] - 2026-09-26
 
 ### Fixed
