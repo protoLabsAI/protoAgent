@@ -465,7 +465,7 @@ logged to the client log, so a bug report carries them.
     and write every transcript, in IDB now as well, and the auth token.
     `docs/guides/plugin-views.md` states this. A namespaced helper in plugin-kit
     would be for attribution in Settings → Storage, not isolation.
-  - Incognito sessions (ADR 0069 D3b scopes *server memory*) still persist in the
+  - Incognito sessions (ADR 0069 D3 scopes *server memory*) still persist in the
     browser, as they do today.
 - **Dependencies.** `idb` is a runtime dependency and `fake-indexeddb` a dev one.
   Regenerate attribution (`scripts/gate.py --lint-only`).
