@@ -72,11 +72,26 @@ _VENDOR_FILES = {
 
 
 def _legacy_notes_dir() -> Path:
-    """Where the note lived before it was resolved through the instance store — the
-    home-derived path this plugin used before ADR 0004 / 0065. Read-only, for the
-    one-time migration and as the last-ditch fallback. Instance-scoped by
-    ``PROTOAGENT_INSTANCE`` exactly as the old code was (a bare dir when it's unset)."""
-    base = Path.home() / ".protoagent" / "notes"
+    """Where the note lived before it was resolved through the instance store — under the
+    machine's BOX ROOT (ADR 0004 / 0065), instance-scoped by ``PROTOAGENT_INSTANCE``
+    exactly as the old code was (a bare dir when it's unset). Read-only, for the one-time
+    migration and as the last-ditch fallback.
+
+    Derived from ``box_root()`` — which HONOURS ``PROTOAGENT_BOX_ROOT`` — not a bare
+    ``Path.home()``. An isolated/box-rooted server that shares the operator's real HOME
+    therefore looks for legacy data under ITS OWN box, never the operator's live
+    ``~/.protoagent/notes``: adopting that would MOVE the operator's real note into a
+    throwaway box (same filesystem) or, across a filesystem, EXDEV-fail back onto reading
+    and writing it — the very #3644 leak this change exists to close. For a default
+    install ``box_root()`` IS ``~/.protoagent``, so the pre-scoping path is unchanged and
+    a genuine upgrade still migrates. A bare ``Path.home()`` fallback covers the case
+    where even ``infra.paths`` can't be imported (so this never fails to resolve)."""
+    try:
+        from infra.paths import box_root
+
+        base = box_root() / "notes"
+    except Exception:  # noqa: BLE001 — the fallback path must never fail to resolve
+        base = Path.home() / ".protoagent" / "notes"
     inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
     return base / inst if inst else base
 
@@ -125,8 +140,9 @@ def _note_path() -> Path:
     which honours ``PROTOAGENT_BOX_ROOT`` / ``PROTOAGENT_HOME`` — so an isolated server
     or a fleet member never writes into the real home dir, and a default install stops
     landing the note one level above its instance root (issue #3644, sibling of the
-    artifact plugin). A pre-scoping note under ``~/.protoagent/notes`` is adopted on
-    first access.
+    artifact plugin). A pre-scoping note under the box root's ``notes/`` is adopted on
+    first access (see ``_legacy_notes_dir`` — box-scoped so a box-rooted server never
+    reaches into the operator's real home).
 
     Never raises: a path-resolution failure falls back to the legacy home path so a
     note tool can't fail because of where its file lives."""
