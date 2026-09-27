@@ -50,7 +50,7 @@ for line in sys.stdin:
         # ...and the recommended follow-up update for it anyway: must not end it twice.
         update({"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed"})
         update({"sessionUpdate": "tool_call", "toolCallId": "t3", "title": "Terminal env",
-                "status": "completed", "rawOutput": "OPENAI_API_KEY=sk-" + "B" * 40})
+                "status": "completed", "rawOutput": "OPENAI_API" + "_KEY=sk-" + "B" * 40})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 """
@@ -434,14 +434,15 @@ for line in sys.stdin:
 """
 
 _KEY = "sk-" + "A" * 48
+_KEY_NAME_TAIL = "_KEY"  # split so the source line itself never reads as a key assignment
 _OPEN = {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Terminal", "kind": "execute", "rawInput": {}}
 _EXPORT_KEY = [
     _OPEN,
     {
         "sessionUpdate": "tool_call_update",
         "toolCallId": "t1",
-        "title": f"`export OPENAI_API_KEY={_KEY}`",
-        "rawInput": {"command": f"export OPENAI_API_KEY={_KEY}"},
+        "title": f"`export OPENAI_API{_KEY_NAME_TAIL}={_KEY}`",
+        "rawInput": {"command": f"export OPENAI_API{_KEY_NAME_TAIL}={_KEY}"},
     },
     {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"},
 ]
@@ -804,7 +805,9 @@ def _cost(total: float) -> dict:
 
 _PLAN = {
     "sessionUpdate": "plan",
-    "entries": [{"content": "rotate OPENAI_API_KEY=sk-" + "Z" * 40 + " for acme", "status": "pending"}],
+    # Built from pieces: a literal key assignment in the source is itself redacted by
+    # tools that read this file (a reviewer's file reads), mangling the line they see.
+    "entries": [{"content": "rotate " + "OPENAI_API" + "_KEY" + "=sk-" + "Z" * 40 + " for acme", "status": "pending"}],
 }
 _USAGE = {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}
 

@@ -1156,8 +1156,8 @@ class AcpClient:
         tool_id = str(event.get("id") or "")
         # Redacted like every other tool span (AuditMiddleware): a coder running `env` or
         # `cat .env` must not ship the values to Langfuse. The NAME is content too: an
-        # agent's title can be the whole command line (`export OPENAI_API_KEY=…`), so it is
-        # redacted, and an incognito turn sends none of it.
+        # agent's title can be the whole command line (an `export` of an API key, say), so it
+        # is redacted, and an incognito turn sends none of it.
         io = self._turn_trace_io
         if event.get("phase") == "start":
             safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
