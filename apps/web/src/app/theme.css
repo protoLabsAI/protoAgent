@@ -65,47 +65,13 @@
 
 /* Panel toggles are DS icon buttons carrying aria-pressed (true = panel shown).
    The DS doesn't tone [aria-pressed="false"], so mark the collapsed state with
-   accent — matching the retired .util-btn.is-off, tokens only (no hex). */
+   accent — matching the retired collapsed-toggle tint, tokens only (no hex). */
 .utility-bar [aria-pressed="false"] {
   color: var(--pl-color-accent);
 }
 
 .utility-bar .util-spacer {
   flex: 1;
-}
-
-.util-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 20px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--pl-color-fg-muted);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.util-btn:not(:disabled):hover {
-  background: var(--pl-color-bg-raised, #1a1a1f);
-  color: var(--pl-color-fg);
-}
-
-/* Fully disabled toggle (#1234): the rail/dock it controls has no views, so the
-   button is greyed out and non-interactive (no hover feedback, no pointer). */
-.util-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.util-btn svg {
-  flex: none;
-}
-
-.util-btn.is-off {
-  color: var(--pl-color-accent, #7c8cff);
 }
 
 /* Undelivered priority-now page (#3351): tint the Feed pill's unread badge as an alert so a

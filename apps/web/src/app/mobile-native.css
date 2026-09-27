@@ -46,7 +46,6 @@
      acknowledgement at all — `:hover` never fires on touch. Opacity rather than transform,
      so a press never reflows a list. */
   .app-drawer-item:active,
-  .util-btn:active,
   .fleet-switcher-trigger:active,
   .composer-model-select:active {
     opacity: 0.6;

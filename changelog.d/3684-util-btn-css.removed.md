@@ -1,0 +1,1 @@
+- **Removed the orphaned `.util-btn` CSS (#3684).** Every utility-bar pill is now a DS `<Button>`, so `theme.css`'s `.util-btn` rules (and their `#7c8cff`/`#1a1a1f` hex fallbacks + 5px radius) and the `.util-btn:active` mobile press-feedback selector are deleted; the `.utility-bar` container and its `[aria-pressed="false"]` collapsed-toggle tint stay.
