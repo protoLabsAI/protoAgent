@@ -149,6 +149,67 @@ def test_no_match_says_what_was_not_searched(noisy_workspace):
     assert "no matches" in out and "include_generated" in out
 
 
+_CAN_CHMOD_DENY = os.name != "nt" and getattr(os, "geteuid", lambda: 0)() != 0
+
+
+@pytest.fixture
+def unreadable_workspace(tmp_path):
+    """A readable hit next to a chmod-000 subdirectory and a chmod-000 file. Permissions
+    are restored in teardown so pytest can clean the tree up."""
+    root = tmp_path / "locked"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "ok.py").write_text("x = 'needle'\n")
+    secret = root / "secret"
+    secret.mkdir()
+    (secret / "inner.py").write_text("y = 'needle'\n")
+    locked_file = root / "src" / "locked.py"
+    locked_file.write_text("z = 'needle'\n")
+    secret.chmod(0)
+    locked_file.chmod(0)
+    try:
+        yield root
+    finally:
+        secret.chmod(0o755)
+        locked_file.chmod(0o644)
+
+
+@pytest.mark.skipif(not _CAN_CHMOD_DENY, reason="chmod 000 doesn't deny access on Windows or as root")
+@pytest.mark.parametrize("include_generated", [False, True])
+def test_search_skips_unreadable_paths_and_says_so(unreadable_workspace, include_generated):
+    """An unreadable subdirectory used to crash the whole call on the include_generated
+    path (rglob outside the try) and was silently dropped on the default one — now both
+    skip it, keep the readable hits, and note the skip exactly once."""
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(unreadable_workspace)}]))
+
+    out = t["search_files"].invoke({"project": "n", "query": "needle", "include_generated": include_generated})
+
+    lines = out.splitlines()
+    assert lines[0] == "src/ok.py:1: x = 'needle'"
+    assert "secret" not in out and "locked.py" not in out
+    assert lines[-1] == "(skipped 2 unreadable paths)"
+    assert out.count("unreadable") == 1
+
+
+@pytest.mark.skipif(not _CAN_CHMOD_DENY, reason="chmod 000 doesn't deny access on Windows or as root")
+@pytest.mark.parametrize("include_generated", [False, True])
+def test_no_match_still_notes_unreadable_paths(unreadable_workspace, include_generated):
+    t = _tools(_Cfg(filesystem_projects=[{"name": "n", "path": str(unreadable_workspace)}]))
+
+    out = t["search_files"].invoke({"project": "n", "query": "zzz-absent", "include_generated": include_generated})
+
+    assert out.startswith("(no matches")
+    assert out.endswith("(skipped 2 unreadable paths)")
+
+
+def test_search_output_has_no_note_when_everything_was_readable(workspace):
+    _, a, _ = workspace
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a)}]))
+
+    for include_generated in (False, True):
+        out = t["search_files"].invoke({"project": "a", "query": "TODO", "include_generated": include_generated})
+        assert out == "src/main.py:2: TODO: fix"
+
+
 def test_search_lists_its_exclusions_in_the_tool_description(workspace):
     """Acceptance criterion: the model has to be told what it is not being shown."""
     _, a, _ = workspace
