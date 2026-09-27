@@ -772,3 +772,95 @@ def test_rename_with_a_null_name_is_400_not_the_string_none(client):
         r = client.patch("/api/fleet/alpha", json=body)
         assert r.status_code == 400 and "name is required" in r.json()["detail"], body
     assert next(a for a in client.get("/api/fleet").json()["agents"] if a["id"].startswith("alpha"))["name"] == "alpha"
+
+
+# ── POST /api/fleet/remotes/pair (ADR 0113 D1/D10) ────────────────────────────────────────
+# The route's contract at the HTTP layer, under this module's full fleet fixture: the status
+# the console and `protoagent fleet pair` branch on. The wire to the remote is faked at
+# httpx.post/get, the same seam the probe tests above use; supervisor-level pairing
+# behaviour (re-token, naming, redirects) is pinned in test_fleet_pairing.py.
+
+_PAIR_TOKEN = "dev-tok-ROUTE-5a4b3c"
+
+
+class _PairResp:
+    def __init__(self, status, body):
+        self.status_code = status
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture
+def pair_wire(client, monkeypatch):
+    """A remote at a tailnet address whose claim answer each test sets. Returns the claim
+    posts so a test can assert what was (or wasn't) sent."""
+    import httpx
+    from graph.fleet import supervisor
+
+    supervisor._probe_cache.clear()
+    supervisor._auth_cache.clear()
+    wire = {"claim": _PairResp(200, {"ok": True, "device": {"id": "ab" * 8}, "token": _PAIR_TOKEN}), "posts": []}
+
+    def post(url, json=None, timeout=None, **kw):
+        wire["posts"].append((url, dict(json or {})))
+        if isinstance(wire["claim"], Exception):
+            raise wire["claim"]
+        return wire["claim"]
+
+    def get(url, timeout=None, headers=None, **kw):
+        if url.endswith("/.well-known/agent-card.json"):
+            return _PairResp(200, {"name": "ava", "version": "0.1.0"})
+        bearer = (headers or {}).get("Authorization", "")
+        return _PairResp(200, {"devices": []}) if bearer == f"Bearer {_PAIR_TOKEN}" else _PairResp(401, {})
+
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx, "get", get)
+    yield wire
+    supervisor._probe_cache.clear()
+    supervisor._auth_cache.clear()
+
+
+def test_pair_route_success_registers_the_member_without_echoing_the_token(client, pair_wire):
+    r = client.post("/api/fleet/remotes/pair", json={"url": "http://100.64.0.5:7870", "code": "ABCDE-12345"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["action"] == "added" and body["agent"]["name"] == "ava"
+    assert body["reachable"] is True and body["auth"] == "ok"
+    assert _PAIR_TOKEN not in r.text
+    ((claim_url, sent),) = pair_wire["posts"]
+    assert claim_url == "http://100.64.0.5:7870/api/pairing/claim" and sent["code"] == "ABCDE-12345"
+    fleet = client.get("/api/fleet")
+    row = next(a for a in fleet.json()["agents"] if a.get("remote"))
+    assert row["name"] == "ava" and row["auth"] == "ok" and _PAIR_TOKEN not in fleet.text
+
+
+def test_pair_route_invalid_code_is_400_and_registers_nothing(client, pair_wire):
+    pair_wire["claim"] = _PairResp(403, {"ok": False, "error": "invalid or expired pairing code"})
+    r = client.post("/api/fleet/remotes/pair", json={"url": "http://100.64.0.5:7870", "code": "WRONG-CODE0"})
+    assert r.status_code == 400 and "invalid or expired" in r.json()["detail"]
+    assert not any(a.get("remote") for a in client.get("/api/fleet").json()["agents"])
+
+
+def test_pair_route_unreachable_remote_is_502(client, pair_wire):
+    import httpx
+
+    pair_wire["claim"] = httpx.ConnectError("connection refused")
+    r = client.post("/api/fleet/remotes/pair", json={"url": "http://100.64.0.5:7870", "code": "ABCDE-12345"})
+    assert r.status_code == 502 and "unreachable" in r.json()["detail"]
+    assert not any(a.get("remote") for a in client.get("/api/fleet").json()["agents"])
+
+
+def test_pair_route_refuses_plain_http_on_a_lan_before_dialling(client, pair_wire):
+    """ADR 0113 D10: the code and the token it turns into would cross the LAN in cleartext.
+    Refused with a 400 that names the fix, and nothing is sent; the explicit opt-in pairs."""
+    lan = "http://192.168.1.20:7870"
+    r = client.post("/api/fleet/remotes/pair", json={"url": lan, "code": "ABCDE-12345"})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "cleartext" in detail and "tailnet" in detail
+    assert pair_wire["posts"] == []
+    r = client.post("/api/fleet/remotes/pair", json={"url": lan, "code": "ABCDE-12345", "allow_insecure": True})
+    assert r.status_code == 200, r.text
+    assert len(pair_wire["posts"]) == 1

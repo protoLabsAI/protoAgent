@@ -445,3 +445,15 @@ def test_wildcard_bind_with_no_network_does_not_advertise_loopback(fake_zeroconf
     monkeypatch.setattr(discovery, "_local_ip", lambda: "127.0.0.1")
     discovery.advertise("alpha", 7871, "0.0.0.0")
     assert discovery._zc is None
+
+
+@pytest.mark.parametrize("egress", ["127.0.0.1", "127.0.1.1"])
+def test_advertise_address_with_an_unknown_bind_keeps_the_guess_but_never_loopback(monkeypatch, egress):
+    """``None`` is a caller that doesn't know its bind (the pre-D9 call shape). It keeps the
+    default-route guess — dropping it would silence every such caller's advert — but the
+    guess falls back to a 127.x address offline (and some distros resolve the hostname to
+    127.0.1.1), and a loopback advert is exactly the unreachable row D9 exists to prevent."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.1.20")
+    assert discovery._advertise_address(None) == "192.168.1.20"
+    monkeypatch.setattr(discovery, "_local_ip", lambda: egress)
+    assert discovery._advertise_address(None) is None

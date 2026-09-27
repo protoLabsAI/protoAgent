@@ -974,16 +974,32 @@ def _clean_device_id(value: object) -> str:
 
 
 def _hub_display_name() -> str:
-    """What the remote's Devices list calls this hub: ``<agent name> (fleet hub)``. The
-    identity name when a server is running here; the hostname from the offline CLI (no
-    graph config loaded) so the remote's operator can still tell which box it was."""
+    """What the remote's Devices list calls this hub: ``<agent name> (fleet hub)``.
+
+    The name is resolved the way ``server.agent_name()`` resolves the agent card's (this
+    package may not import ``server``): ``identity.name`` when set and not the
+    ``protoagent`` placeholder, then the ``AGENT_NAME`` env var, then ``protoagent``. Taking
+    ``identity_name`` as-is read the config DEFAULT, which is that placeholder, so a hub whose
+    card said ``qaHub`` (named by ``AGENT_NAME``, as the desktop app and the fleet name every
+    member) showed up on the remote as ``protoagent (fleet hub)``. From the offline CLI (no
+    graph config loaded) ``AGENT_NAME`` still names it, and failing that the hostname, so the
+    remote's operator can still tell which box it was."""
+    import os
+
     name = ""
+    loaded = False
     try:
         from runtime.state import STATE
 
-        name = str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
+        cfg = getattr(STATE, "graph_config", None)
+        loaded = cfg is not None
+        name = str(getattr(cfg, "identity_name", "") or "").strip()
     except Exception:  # pragma: no cover - STATE import never fails in-tree; belt + braces
         name = ""
+    if not name or name == "protoagent":
+        name = (os.environ.get("AGENT_NAME") or "").strip()
+    if not name and loaded:
+        name = "protoagent"  # the card's own last resort — say what the card says
     if not name:
         import socket
 
