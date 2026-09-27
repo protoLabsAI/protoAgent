@@ -60,9 +60,9 @@ than its Python.
 
 ## An instance with no token
 
-With no bearer token (the desktop default, bound to loopback) the operator API is open to
-anything that can reach the port, so the port itself is the boundary. Two hardening rules keep
-that boundary honest for browsers on the same machine
+With no bearer token (the desktop default, bound to loopback), the operator API is open to
+anything that can reach the port. On a shared machine that includes every web page open in a
+local browser. Three hardening rules narrow what a browser page can do
 ([#3668](https://github.com/protoLabsAI/protoAgent/issues/3668)):
 
 - **Host allowlist.** Every request and WebSocket must be addressed to a name the instance is
@@ -70,12 +70,24 @@ that boundary honest for browsers on the same machine
   `<name>.local`, a named bind, the hosts of `A2A_ALLOWED_ORIGINS`, or
   `PROTOAGENT_TRUSTED_HOSTS`. Anything else gets `403`. This is the same allowed-hosts check
   Jupyter, VS Code and Vite apply to their local servers.
-- **JSON only on `/a2a` and `/v1/*`.** A request with a body must say
-  `Content-Type: application/json` (or a `+json` type); anything else gets `415`.
+- **Cross-site requests.** A request that can change state (anything but `GET`/`HEAD`) and every
+  WebSocket must come from the console itself. That means one of:
+  - the same origin, including the console's plugin views;
+  - the desktop app;
+  - a loopback origin the server's CORS policy already admits;
+  - an `A2A_ALLOWED_ORIGINS` entry;
+  - a client that isn't a browser (no `Origin`, no `Sec-Fetch-Site: cross-site`, as with curl or
+    an SDK).
 
-A token-gated instance skips both: its credential is a header the client attaches (never a
-cookie), so a page on another origin has nothing to send. Anything reachable beyond loopback
-should have a token anyway. The server refuses a non-loopback open bind unless
+  Anything else gets `403`.
+- **JSON only on `/a2a` and `/v1/*`.** A request with a body must say
+  `Content-Type: application/json` (or a `+json` type). Anything else gets `415`.
+
+These rules narrow the exposure but aren't authentication. Any local process, and any other
+page on a loopback origin, can still use an open instance. If other people or programs share
+the machine, or the instance is reachable beyond loopback, set a token. A token-gated instance
+skips these rules: its credential is a header the client attaches (never a cookie), so a page
+on another origin has nothing to send. The server refuses a non-loopback open bind unless
 `PROTOAGENT_ALLOW_OPEN=1`.
 
 ## See also

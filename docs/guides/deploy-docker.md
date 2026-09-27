@@ -158,7 +158,9 @@ recognizes: IP literals, `localhost`, `*.ts.net` and the names in `PROTOAGENT_TR
 compose's `127.0.0.1` publish works as-is. If other containers call an open agent by its
 service name (`http://agent:7870`), add that name: `PROTOAGENT_TRUSTED_HOSTS=agent`.
 In open mode, `POST`s to `/a2a` and `/v1/*` must also send `Content-Type: application/json`
-(every protoAgent and OpenAI-compatible client already does).
+(every protoAgent and OpenAI-compatible client already does). A browser page on another origin
+can't change state there either. See
+[Security & trust](/explanation/security-and-trust#an-instance-with-no-token).
 
 ### Where the operator token lives
 

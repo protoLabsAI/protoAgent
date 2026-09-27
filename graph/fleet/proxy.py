@@ -25,7 +25,9 @@ import time
 import httpx
 from starlette.responses import JSONResponse, StreamingResponse
 
+from a2a_impl.hosts import cross_site_refusal as _cross_site_refusal
 from a2a_impl.hosts import host_allowed as _host_allowed
+from a2a_impl.hosts import origin_allowed as _origin_allowed
 from graph.fleet import supervisor
 
 log = logging.getLogger("protoagent.server")
@@ -410,44 +412,6 @@ def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
     return raw_query, True  # no token (ticket-based plugin) — the member self-authenticates
 
 
-# The desktop app's webview origins (apps/desktop/src-tauri/src/lib.rs ``is_own_origin``;
-# ``tauri://localhost`` on macOS/Linux, ``http://tauri.localhost`` on Windows) — the same pair
-# the server's CORS ``allow_origin_regex`` admits. The webview's origin never equals the hub's
-# ``Host``, so without these the desktop console couldn't open a remote member's live view.
-_DESKTOP_ORIGINS = frozenset({"tauri://localhost", "http://tauri.localhost"})
-
-
-def _origin_allowed(origin: str | None, host: str | None) -> bool:
-    """May a browser request with this ``Origin`` reach a REMOTE member through the hub?
-
-    Shared by the WS handshake (every remote upgrade) and the HTTP proxy (remote targets on an
-    open hub, #3662). The HTTP ``A2A_ALLOWED_ORIGINS`` check is middleware and never sees a WS
-    scope, and a browser lets ANY page open a WebSocket to any origin (no CORS on WS) — so
-    without this a page in the operator's browser could drive a remote's live sockets through
-    the hub. Allowed: no ``Origin`` at all (a non-browser client — browsers always send one on
-    a WS), same-origin with the hub (the Origin's host[:port] equals the ``Host`` header;
-    scheme-agnostic so a TLS front such as ``tailscale serve`` still matches), the desktop
-    webview, and anything in the ``A2A_ALLOWED_ORIGINS`` allowlist when one is set. Everything
-    else — including the opaque ``null`` origin — is refused."""
-    if origin is None:
-        return True
-    o = origin.strip().lower()
-    if o in _DESKTOP_ORIGINS:
-        return True
-    from a2a_impl.auth import allowed_origins
-
-    allow = allowed_origins()
-    if allow and o in allow:
-        return True
-    from urllib.parse import urlsplit
-
-    try:
-        parts = urlsplit(o)
-    except ValueError:
-        return False
-    return bool(parts.scheme in ("http", "https") and parts.netloc and host and parts.netloc == host.strip().lower())
-
-
 # --- Browser gates for REMOTE targets on an OPEN hub (#3662) ------------------------------
 #
 # On an open hub (no bearer, no X-API-Key: the desktop default on its loopback bind) the auth
@@ -478,78 +442,6 @@ def _origin_allowed(origin: str | None, host: str | None) -> bool:
 # the bind name): the same check now guards the whole open instance at the ASGI layer, so
 # there is one definition of "a name this instance is served under". This gate still calls it
 # — the proxy must stay safe on its own, e.g. in an app assembled without ``auth.install``.
-
-
-# A navigation (top-level or iframe) may be cross-site — links and the desktop webview's plugin
-# view iframes are exactly that — but never into an <object>/<embed> (web.dev's isolation policy).
-_NAV_BLOCKED_DESTS = frozenset({"object", "embed"})
-
-# Cross-site no-cors MEDIA loads a GET may make. The desktop console (``tauri://localhost``)
-# renders a remote's media as ``<img src="http://127.0.0.1:<port>/agents/<rid>/media/…">``, and
-# WebKit sends NO Referer from a non-http(s) page (``SecurityPolicy::generateReferrerHeader``
-# bails outside the HTTP family) — so that load carries neither Origin nor Referer, only
-# ``Sec-Fetch-Site: cross-site`` + ``Sec-Fetch-Dest: image``. Same threat level as the GET
-# navigation exemption: a media response is opaque to the page (at most an image's size or a
-# clip's duration leaks), and a GET with side effects would be the remote's bug. ``script`` and
-# ``style`` stay refused: a cross-site page can EXECUTE or APPLY those responses in its own
-# context (script inclusion / CSS-parsing leaks of a JSON or JS body), which reads data rather
-# than just displaying it — and nothing in the console loads a remote's script or stylesheet
-# from a foreign origin (plugin views are iframes, whose subresources are same-origin).
-_MEDIA_DESTS = frozenset({"image", "audio", "video", "track", "font"})
-
-
-def _origin_of(url: str) -> str | None:
-    """``scheme://netloc`` of a URL (a ``Referer``), or None when it has neither."""
-    from urllib.parse import urlsplit
-
-    try:
-        parts = urlsplit(url.strip())
-    except ValueError:
-        return None
-    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else None
-
-
-def _cross_site_refusal(method: str, headers) -> str | None:
-    """Why a browser request to a remote member must be refused, or None to let it through.
-
-    - **An ``Origin`` is present** (every cross-origin CORS request, and every POST from a
-      modern browser): it must pass ``_origin_allowed`` — same-origin with ``Host``, the desktop
-      webview, or ``A2A_ALLOWED_ORIGINS``. That decides it, whatever ``Sec-Fetch-Site`` says:
-      the desktop console (``tauri://localhost``) calling ``http://127.0.0.1:<port>`` IS
-      cross-site to the browser, and its Origin is what proves it is the operator's app.
-    - **No Origin, ``Sec-Fetch-Site: cross-site``** — a no-cors subresource or a navigation from
-      a foreign page. Refused, except a GET/HEAD that is
-      - a navigation (``Sec-Fetch-Mode: navigate``, not into an object/embed: the desktop
-        webview's iframe of a remote plugin view, or a link) — the attacker can't read it;
-      - a media load (``Sec-Fetch-Dest`` in ``_MEDIA_DESTS``: the desktop chat's ``<img>`` of a
-        remote's media, which WebKit sends with no Referer) — opaque to the page;
-      and, as a fallback for any other shape, a request whose ``Referer`` origin is trusted (a
-      page can suppress Referer, never forge it; Chromium-based webviews send one).
-    - ``same-origin``, ``same-site`` and ``none`` (typed URL / bookmark) pass, as does a request
-      with no Fetch Metadata and no Origin (curl, the D4 fleet-token delegate path, a browser
-      too old to send either). ``same-site`` passes because on this surface it only means
-      "another port of the same host" — the Vite dev server at :5173, a sibling instance — or a
-      sibling name in the same tailnet; any such request that carries an Origin (every POST)
-      still has to be same-origin or allowlisted by the rule above.
-    """
-    host = headers.get("host")
-    origin = headers.get("origin")
-    if origin is not None:
-        return None if _origin_allowed(origin, host) else "origin not allowed"
-    if (headers.get("sec-fetch-site") or "").strip().lower() != "cross-site":
-        return None
-    mode = (headers.get("sec-fetch-mode") or "").strip().lower()
-    dest = (headers.get("sec-fetch-dest") or "").strip().lower()
-    if method.upper() in ("GET", "HEAD"):
-        if mode == "navigate" and dest not in _NAV_BLOCKED_DESTS:
-            return None
-        if dest in _MEDIA_DESTS:
-            return None
-    referer = headers.get("referer")
-    ref_origin = _origin_of(referer) if referer else None
-    if ref_origin and _origin_allowed(ref_origin, host):
-        return None
-    return "cross-site request"
 
 
 def _log_refusal(slug: str, reason: str, headers) -> None:

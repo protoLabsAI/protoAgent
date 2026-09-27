@@ -50,6 +50,10 @@ def _app(tmp_path, *, bearer: str = "", origins: str = "") -> FastAPI:
     async def _proxied(slug: str):
         return {"slug": slug}
 
+    @app.post("/api/restart")
+    async def _restart():
+        return {"restarted": True}
+
     @app.post("/api/echo")
     async def _echo(request: Request):
         return {"got": (await request.body()).decode()}
@@ -214,6 +218,102 @@ async def test_content_type_rule_is_scoped_to_the_consumer_surfaces(tmp_path):
     assert hosts._json_surface("/a2a/v1/message:send")
 
 
+# ── Cross-site state-changing requests + WebSockets ──────────────────────────────────────
+
+_H = "127.0.0.1:7870"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors"},  # blind no-cors POST, no Origin
+        {"origin": "https://evil.example"},
+        {"origin": "https://evil.example", "sec-fetch-site": "same-origin"},  # Origin decides
+        {"origin": "null"},  # a fully sandboxed frame
+        {"origin": "http://127.0.0.1:7870.evil.example"},
+        {"origin": "tauri://evil"},
+    ],
+)
+@pytest.mark.parametrize("path", ["/api/restart", "/api/echo", "/a2a"])
+async def test_open_instance_refuses_cross_site_posts(tmp_path, headers, path):
+    # Empty body: FastAPI never parses it, so without the gate a bodyless route just runs.
+    r = await _req(_app(tmp_path), "POST", path, _H, headers={**headers, **_JSON})
+    assert r.status_code == 403
+    assert r.json() == {"detail": "Forbidden: cross-site request"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},  # curl / SDKs / the hub's loopback calls: no Origin, no Fetch Metadata
+        {"origin": "http://127.0.0.1:7870", "sec-fetch-site": "same-origin"},  # the console + its plugin iframes
+        {"origin": "https://127.0.0.1:7870"},  # scheme-agnostic same-origin (TLS front)
+        {"origin": "tauri://localhost", "sec-fetch-site": "cross-site"},  # desktop (macOS/Linux)
+        {"origin": "http://tauri.localhost", "sec-fetch-site": "cross-site"},  # desktop (Windows)
+        {"origin": "http://localhost:5173", "sec-fetch-site": "same-site"},  # Vite dev server origin
+        {"origin": "http://127.0.0.1:7871"},  # a sibling console the CORS policy already grants
+        {"sec-fetch-site": "same-origin"},
+        {"sec-fetch-site": "none"},
+    ],
+)
+async def test_open_instance_accepts_its_own_posts(tmp_path, headers):
+    r = await _req(_app(tmp_path), "POST", "/api/restart", _H, headers=headers)
+    assert r.status_code == 200 and r.json() == {"restarted": True}
+
+
+async def test_allowed_origins_list_admits_its_origin(tmp_path):
+    app = _app(tmp_path, origins="https://console.example.com")
+    ok = await _req(app, "POST", "/api/restart", _H, headers={"origin": "https://console.example.com"})
+    assert ok.status_code == 200
+    bad = await _req(app, "POST", "/api/restart", _H, headers={"origin": "https://other.example"})
+    assert bad.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document"},
+        {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "image"},
+        {"origin": "https://evil.example"},  # a GET must not change state; CORS guards the read
+    ],
+)
+async def test_gets_stay_open_to_navigation_and_subresources(tmp_path, headers):
+    r = await _req(_app(tmp_path), "GET", "/api/config", _H, headers=headers)
+    assert r.status_code == 200
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "null", "http://localhost.evil.example"])
+def test_open_instance_refuses_a_cross_site_websocket(tmp_path, origin):
+    client = TestClient(_app(tmp_path))
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/agents/alice/x", headers={"host": _H, "origin": origin}):
+            pass
+    assert exc.value.code == 1008
+
+
+def test_a_websocket_with_no_origin_but_cross_site_fetch_metadata_is_refused(tmp_path):
+    client = TestClient(_app(tmp_path))
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/agents/alice/x", headers={"host": _H, "sec-fetch-site": "cross-site"}):
+            pass
+
+
+@pytest.mark.parametrize(
+    "origin", [None, "http://127.0.0.1:7870", "tauri://localhost", "http://tauri.localhost", "http://localhost:5173"]
+)
+def test_console_websockets_still_open(tmp_path, origin):
+    client = TestClient(_app(tmp_path))
+    headers = {"host": _H, **({"origin": origin} if origin else {})}
+    with client.websocket_connect("/agents/alice/x", headers=headers) as ws:
+        assert ws.receive_text() == "hi alice"
+
+
+def test_host_guard_is_the_outermost_middleware(tmp_path):
+    app = _app(tmp_path)
+    assert app.user_middleware[0].cls is hosts.HostGuardMiddleware
+    assert app.user_middleware[1].cls is auth.A2AAuthMiddleware
+
+
 # ── Gated instance: unchanged ─────────────────────────────────────────────────────────────
 
 
@@ -228,8 +328,13 @@ async def test_gated_instance_is_unchanged(tmp_path):
     r = await _req(app, "POST", "/a2a", "evil.example", headers={**bearer, "content-type": "text/plain"}, content=b"{}")
     assert r.status_code == 200
     client = TestClient(app)
-    with client.websocket_connect("/agents/alice/x", headers={"host": "evil.example"}) as ws:
+    with client.websocket_connect(
+        "/agents/alice/x", headers={"host": "evil.example", "origin": "https://evil.example"}
+    ) as ws:
         assert ws.receive_text() == "hi alice"
+    # …and no cross-site rule: the credential gate (401) answers, never the cross-site 403.
+    xs = await _req(app, "POST", "/api/restart", _H, headers={"origin": "https://evil.example"})
+    assert xs.status_code == 401
 
 
 async def test_open_mode_is_read_per_request(tmp_path):

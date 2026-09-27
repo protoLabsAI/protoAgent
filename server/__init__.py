@@ -587,14 +587,14 @@ def _main():
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel as PydanticBaseModel
 
+    from a2a_impl.hosts import CONSOLE_ORIGIN_REGEX
+
     fastapi_app = FastAPI(title=f"{agent_name()} — protoAgent")
     STATE.fastapi_app = fastapi_app  # reload hot-mounts newly-enabled plugin routes onto it
     fastapi_app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=(
-            r"^(tauri://localhost|http://tauri\.localhost|"
-            r"https?://(localhost|127\.0\.0\.1)(:\d+)?)$"
-        ),
+        # One definition, shared with the open-mode cross-site gate (a2a_impl.hosts, #3668).
+        allow_origin_regex=CONSOLE_ORIGIN_REGEX,
         allow_methods=["*"],
         allow_headers=["*"],
         # The desktop webview is cross-origin. Without explicit exposure, fetch() can see
