@@ -183,6 +183,13 @@ def test_nested_list():
     assert result["headers"][1] == "Content-Type: application/json"
 
 
+def test_beyond_the_depth_guard_fails_closed():
+    data: dict = {"OPENAI_API_KEY": "sk-" + "Z" * 40}
+    for _ in range(15):
+        data = {"n": data}
+    assert "Z" * 40 not in str(redact(data))
+
+
 def test_deeply_nested():
     data = {"a": {"b": {"c": {"d": {"OPENAI_API_KEY": "deep-secret-value"}}}}}
     result = redact(data)

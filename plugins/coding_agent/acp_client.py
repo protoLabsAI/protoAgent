@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import glob
+import hashlib
 import json
 import logging
 import os
@@ -142,6 +143,15 @@ def _short_tool_name(title: str) -> str:
     # peels only the mcp+server segment; a non-namespaced name (`read_file`) is untouched.
     label = re.sub(r"^mcp__.+?__", "", label).strip()
     return (label or (title or "").strip() or "tool")[:80]
+
+
+def _coder_session_id(name: str, cwd: str) -> str:
+    """Langfuse session for a coder run outside any turn: one per coder per worktree, so a
+    feature's retries group together. The basename keeps it readable. The short hash of the
+    full path keeps two projects' same-named worktrees apart, and it survives the 200-char
+    trace-attribute cap, which the full path would not."""
+    digest = hashlib.sha256(cwd.encode("utf-8", "replace")).hexdigest()[:8]
+    return f"coder:{name}:{os.path.basename(cwd)[:120]}:{digest}"
 
 
 def _content_text(content) -> str:
@@ -960,7 +970,10 @@ class AcpClient:
             # sends ``tool_call`` at content_block_start with ``rawInput: {}`` and a generic
             # title ("Read File"), then REFINES it with a ``tool_call_update`` carrying the
             # real ``rawInput`` and title. Without this the trace recorded only the kind.
-            self._refine_tool_start(tool_id, update)
+            try:
+                self._refine_tool_start(tool_id, update)
+            except Exception:  # noqa: BLE001 — a trace refinement must never cost the end event
+                logger.debug("[acp/%s] could not refine tool call %s", self.name, tool_id, exc_info=True)
             if status in ("completed", "failed") and tool_id not in self._turn_ended_tool_ids:
                 self._turn_ended_tool_ids.add(tool_id)
                 await self._emit_tool(
@@ -1063,8 +1076,11 @@ class AcpClient:
         # Redacted like every other tool span (AuditMiddleware): a coder running `env`
         # or `cat .env` must not ship the values to Langfuse.
         io = self._turn_trace_io
+        # The NAME is content too: an agent's title can be the whole command line
+        # (`export OPENAI_API_KEY=…`). Redact it, and send none of it in an incognito turn.
+        name = name or str(event.get("name") or "tool")
         tracing.trace_tool_call(
-            name or str(event.get("name") or "tool"),
+            redact(name) if io else "coder",
             {"input": tool_input if io else ""},
             redact(str(event.get("output") or "")) if io else "",
             int((time.monotonic() - started) * 1000),
@@ -1092,12 +1108,24 @@ class AcpClient:
         if start is None:
             return
         started, name, tool_input = start
-        refined_input = self._safe_tool_input(update.get("rawInput"))
         title = str(update.get("title") or "")
+        raw_input = update.get("rawInput")
+        if raw_input in (None, "", {}, []):
+            # No structured input: an agent may still inline JSON args in the title. Only
+            # a title that PARSES counts (parsed back to data, so key-based redaction rules
+            # see the keys). A fragment that doesn't, such as ``awk '{print $1}'`` repeated
+            # on the completion update, must not overwrite a real refinement.
+            _, inline = _split_tool_title(title)
+            try:
+                raw_input = json.loads(inline) if inline else None
+            except (TypeError, ValueError, RecursionError):
+                raw_input = None
+            if not isinstance(raw_input, (dict, list)):
+                return
         self._turn_tool_starts[tool_id] = (
             started,
             _short_tool_name(title) if title else name,
-            refined_input or tool_input,
+            self._safe_tool_input(raw_input) or tool_input,
         )
 
     async def _emit_tool(self, event: dict, *, raw_input: Any = None) -> None:
@@ -1394,14 +1422,16 @@ class AcpClient:
                 as_type="agent",
             ) as span,
             tracing.trace_attributes(
-                session_id=f"coder:{self.name}:{os.path.basename(self.cwd)}" if is_root else "",
+                session_id=_coder_session_id(self.name, self.cwd) if is_root else "",
                 tags=[os.environ.get("AGENT_NAME", "protoagent")] if is_root else None,
                 trace_level=False,
             ),
         ):
             # The brief the coder was handed — for a root span, the trace's input.
             if tracing.io_allowed():
-                tracing.update_span(span, input=_redact(text[: tracing.MAX_IO_CHARS]))
+                # Redact BEFORE the cap: a secret cut in half no longer matches its pattern.
+                # (With headroom rather than the whole brief, which may be megabytes.)
+                tracing.update_span(span, input=_redact(text[: tracing.MAX_IO_CHARS + 512])[: tracing.MAX_IO_CHARS])
             try:
                 if self._turn_lock.locked():
                     logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)

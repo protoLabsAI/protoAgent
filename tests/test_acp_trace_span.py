@@ -8,13 +8,14 @@ before this a coder run never reached Langfuse at all."""
 
 from __future__ import annotations
 
+import json
 import sys
 from unittest.mock import MagicMock
 
 import pytest
 
 from observability import tracing
-from plugins.coding_agent.acp_client import AcpClient
+from plugins.coding_agent.acp_client import AcpClient, _coder_session_id
 
 # Two tool calls: t1 start → completed update; t2 arrives ALREADY completed with only
 # ``rawOutput`` (ACP allows both; the follow-up update is only recommended).
@@ -174,7 +175,7 @@ async def test_incognito_coder_run_records_no_content(fake_agent, tmp_path, fake
 
 
 # claude-agent-acp's streaming shape: the call opens at content_block_start with no
-# arguments and a generic title, and a later ``tool_call_update`` refines both.
+# arguments and a generic title, and a later ``tool_call_update`` (REFINE) refines both.
 _STREAMING_AGENT = r"""
 import sys, json
 
@@ -198,23 +199,38 @@ for line in sys.stdin:
     elif method == "session/prompt":
         update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read File",
                 "kind": "read", "status": "pending", "rawInput": {}})
-        update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "Read src/app.py",
-                "kind": "read", "rawInput": {"file_path": "src/app.py", "api_key": "hunter2"}})
+        update(REFINE)
         update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 """
 
 
-async def test_streamed_tool_call_records_the_refined_arguments(tmp_path, fake_langfuse):
-    _fake, span = fake_langfuse
+async def _run_streaming(tmp_path, refine: dict) -> None:
     script = tmp_path / "streaming_agent.py"
-    script.write_text(_STREAMING_AGENT, encoding="utf-8")
+    script.write_text(
+        f"REFINE = {json.dumps(refine)!r}\nimport json as _j\nREFINE = _j.loads(REFINE)\n" + _STREAMING_AGENT,
+        encoding="utf-8",
+    )
     client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="opus", record_runs=False)
     try:
         await client.prompt("fix it", timeout=30.0)
     finally:
         await client.close()
+
+
+async def test_streamed_tool_call_records_the_refined_arguments(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _run_streaming(
+        tmp_path,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "title": "Read src/app.py",
+            "kind": "read",
+            "rawInput": {"file_path": "src/app.py", "api_key": "hunter2"},
+        },
+    )
 
     (tool,) = (c.kwargs for c in span.start_observation.call_args_list)
     # The refined title and arguments — not "Read File" / {"input": "read"}.
@@ -243,7 +259,8 @@ async def test_root_coder_run_carries_a_session_tags_and_input(fake_agent, tmp_p
 
     await _run(fake_agent, tmp_path)
 
-    assert calls == [{"session_id": f"coder:codex:{tmp_path.name}", "tags": ["designSystem"]}]
+    assert calls == [{"session_id": _coder_session_id("codex", str(tmp_path)), "tags": ["designSystem"]}]
+    assert calls[0]["session_id"].startswith(f"coder:codex:{tmp_path.name}:")
     assert span.update.call_args_list[0].kwargs == {"input": "fix it"}
 
 
@@ -271,3 +288,142 @@ async def test_incognito_coder_run_sends_no_input(fake_agent, tmp_path, fake_lan
         tracing._io_suppressed_ctx.reset(token)
 
     assert all("input" not in c.kwargs for c in span.update.call_args_list)
+
+
+def test_coder_session_keeps_same_named_worktrees_apart():
+    a = _coder_session_id("opus", "/box/projects/protoContent/.worktrees/feat-x")
+    b = _coder_session_id("opus", "/box/projects/protoAgent/.worktrees/feat-x")
+    assert a != b
+    assert a == _coder_session_id("opus", "/box/projects/protoContent/.worktrees/feat-x")  # retries group
+    # Fits the trace-attribute cap whole, however deep the worktree sits.
+    assert len(_coder_session_id("opus", "/" + "d" * 400 + "/feat-x")) <= tracing._PROPAGATED_VALUE_MAX
+
+
+async def test_update_with_inline_title_args_refines_the_input(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    # No rawInput on the update: the args ride inline in the title.
+    await _run_streaming(
+        tmp_path,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "kind": "execute",
+            "title": 'Run {"cmd": "make", "api_key": "hunter2"}',
+        },
+    )
+
+    (tool,) = (c.kwargs for c in span.start_observation.call_args_list)
+    assert tool["input"] == {"input": '{"cmd": "make", "api_key": "[REDACTED]"}'}
+
+
+# Replays whatever update sequence argv[1] holds. For the refinement edge cases below.
+_REPLAY_AGENT = r"""
+import sys, json
+UPDATES = json.loads(sys.argv[1])
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def update(u):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1", "update": u}})
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        for u in UPDATES:
+            update(u)
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+"""
+
+_KEY = "sk-" + "A" * 48
+_OPEN = {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Terminal", "kind": "execute", "rawInput": {}}
+_EXPORT_KEY = [
+    _OPEN,
+    {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "t1",
+        "title": f"`export OPENAI_API_KEY={_KEY}`",
+        "rawInput": {"command": f"export OPENAI_API_KEY={_KEY}"},
+    },
+    {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"},
+]
+
+
+async def _replay(tmp_path, updates: list[dict], events: list | None = None) -> None:
+    script = tmp_path / "replay_agent.py"
+    script.write_text(_REPLAY_AGENT, encoding="utf-8")
+
+    async def on_tool(event: dict) -> None:
+        if events is not None:
+            events.append(event)
+
+    client = AcpClient(
+        sys.executable, [str(script), json.dumps(updates)], cwd=str(tmp_path), name="claude", record_runs=False
+    )
+    try:
+        await client.prompt("go", tool_callback=on_tool, timeout=30.0)
+    finally:
+        await client.close()
+
+
+async def test_a_refined_title_is_redacted_in_the_span_name(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _replay(tmp_path, _EXPORT_KEY)
+
+    kw = span.start_observation.call_args.kwargs
+    # The title is the whole command line: the name is content, redacted like the input.
+    assert "A" * 20 not in kw["name"]
+    assert "A" * 20 not in kw["input"]["input"]
+
+
+async def test_incognito_sends_no_command_in_the_span_name(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    token = tracing._io_suppressed_ctx.set(True)
+    try:
+        await _replay(tmp_path, _EXPORT_KEY)
+    finally:
+        tracing._io_suppressed_ctx.reset(token)
+
+    kw = span.start_observation.call_args.kwargs
+    assert kw["input"] == {"input": ""}
+    assert "export" not in kw["name"]
+
+
+async def test_a_repeated_title_fragment_keeps_the_refined_input(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    title = "`awk '{print $1}' f`"
+    await _replay(
+        tmp_path,
+        [
+            _OPEN,
+            {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": title, "rawInput": {"command": "awk"}},
+            # The completion repeats the title, whose brace fragment is not JSON.
+            {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": title, "status": "completed"},
+        ],
+    )
+
+    assert span.start_observation.call_args.kwargs["input"] == {"input": '{"command": "awk"}'}
+
+
+async def test_a_pathological_title_still_ends_the_tool(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    events: list[dict] = []
+    deep = 'x {"a": ' + "[" * 100000
+    await _replay(
+        tmp_path,
+        [_OPEN, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": deep, "status": "completed"}],
+        events,
+    )
+
+    assert [e["phase"] for e in events] == ["start", "end"]
+    assert span.start_observation.call_count == 1

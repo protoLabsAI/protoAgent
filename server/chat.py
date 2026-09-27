@@ -2476,7 +2476,9 @@ def _trace_terminal_output(ev: tuple) -> None:
     from observability import tracing
 
     try:
-        tracing.set_session_output(_redact(text[: tracing.MAX_IO_CHARS]))
+        # Redact BEFORE the cap: a secret cut in half no longer matches its pattern. The
+        # headroom covers one straddling the cap without redacting a multi-MB output whole.
+        tracing.set_session_output(_redact(text[: tracing.MAX_IO_CHARS + 512])[: tracing.MAX_IO_CHARS])
     except Exception:  # noqa: BLE001 — tracing never alters the turn
         log.debug("[tracing] terminal output not recorded", exc_info=True)
 

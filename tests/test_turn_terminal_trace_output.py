@@ -75,6 +75,17 @@ async def test_terminal_output_is_redacted(monkeypatch, session_span):
     assert "A" * 40 not in _outputs(session_span)[0]
 
 
+async def test_a_secret_straddling_the_cap_is_still_redacted(monkeypatch, session_span):
+    secret = "sk-" + "A" * 40
+    # Only "sk-" + 10 chars survive the cap: too short for the key pattern on its own.
+    text = "x" * (tracing.MAX_IO_CHARS - 14) + " " + secret
+    await _drain(monkeypatch, _impl_yielding(("done", text)))
+
+    (out,) = _outputs(session_span)
+    assert len(out) <= tracing.MAX_IO_CHARS
+    assert "A" * 10 not in out  # not even the half that survived the cut
+
+
 async def test_incognito_turn_records_no_output(monkeypatch, session_span):
     await _drain(monkeypatch, _impl_yielding(("done", "secret answer"), incognito=True))
 
