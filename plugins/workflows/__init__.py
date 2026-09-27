@@ -149,7 +149,7 @@ async def _run_prepared(
         run_store.step_started(step_id, prompt=prompt)
         if on_step:
             await _safe(on_step, {"phase": "start", "step_id": step_id, "subagent": subagent_type})
-        out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
+        out = await _traced_step(name, subagent_type, prompt, step_id)
         run_store.step_done(step_id, out)
         if on_step:
             await _safe(on_step, {"phase": "end", "step_id": step_id, "subagent": subagent_type, "output": out})
@@ -167,7 +167,9 @@ async def _run_prepared(
     try:
         # One trace per run: every step's `subagent:` span nests under it, instead of each
         # becoming its own root trace when the run has no turn around it (Studio, REST).
-        async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=resolved) as traced:
+        async with sdk.trace_run(
+            f"workflow:{name}", run_id=run_id, input=resolved, metadata={"workflow": name}
+        ) as traced:
             result = await execute_workflow(
                 recipe,
                 resolved,
@@ -252,6 +254,18 @@ async def _start_background(
 
     _spawn(_run())
     return run_id
+
+
+async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str) -> str:
+    """One step's subagent, with the step's identity on its ``subagent:`` span (#3565).
+
+    The run's own keys (``run_id``, ``workflow``, ``parent_session_id``, the redacted
+    ``input_*`` values) arrive from the enclosing ``sdk.trace_run``; this adds which step
+    it was, so a trace answers "which lane of which run" without a timestamp join."""
+    with sdk.trace_attributes(
+        {"workflow": name, "step_id": step_id, "subagent": subagent_type}, tags=[f"step:{step_id}"]
+    ):
+        return await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
 
 
 def _trace_outcome(traced: sdk.TracedRun, result: dict) -> None:
@@ -364,7 +378,7 @@ async def _resume(
 
     async def _run_step(subagent_type: str, prompt: str, step_id: str) -> str:
         run_store.step_started(step_id, prompt=prompt)
-        out = await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
+        out = await _traced_step(name, subagent_type, prompt, step_id)
         run_store.step_done(step_id, out)
         return out
 
@@ -389,7 +403,11 @@ async def _resume(
 
     try:
         async with sdk.trace_run(
-            f"workflow:{name}", run_id=run_id, input={"resume": action, "step": pending_step}
+            f"workflow:{name}",
+            run_id=run_id,
+            input={"resume": action, "step": pending_step},
+            inputs=inputs,  # the run's own parameters, so a resumed segment joins like the first
+            metadata={"workflow": name, "resume_action": action, "resumed_step": pending_step},
         ) as traced:
             result = await execute_workflow(recipe, inputs, **kwargs)
             _trace_outcome(traced, result)
