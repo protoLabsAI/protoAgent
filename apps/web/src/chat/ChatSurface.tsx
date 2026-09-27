@@ -31,6 +31,8 @@ import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
   chatStore,
+  mapMessageById,
+  sessionLoadState,
   useChatState,
   effectiveReasoningEffort,
   sessionCast,
@@ -83,6 +85,7 @@ import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
 import { reattachKeyForMessages, reattachOrReconcile } from "./reattach";
+import { PanelSkeleton } from "../app/ErrorBoundary";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
@@ -358,7 +361,7 @@ export function ChatSurface({
     }
     try {
       await api.clearChatSession(id, memory.harvest, memory.forget);
-      chatStore.updateMessages(id, []);
+      chatStore.updateMessages(id, () => []);
       return true;
     } catch (error) {
       onError(`Couldn't clear chat: ${errMsg(error)}. Its history was kept so you can retry.`);
@@ -824,6 +827,14 @@ function ChatSessionSlot({
   }, [composerFocusNonce]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
   const serverTurnControl = chat.serverTurnControls?.[sessionId] ?? null;
+  // ADR 0114 D2 load barrier: until this session's transcript has been read, nothing the
+  // operator does may edit it — send, regenerate, rewind, fork, dismiss and slash commands
+  // all wait for `loaded`. (Every session is `loaded` today; S5 loads them asynchronously.)
+  const loadState = sessionLoadState(chat, sessionId);
+  const transcriptLoaded = loadState === "loaded";
+  // Read live, not from the render closure: a handler can run before the re-render that
+  // follows a load finishing.
+  const loadedNow = () => chatStore.loadState(sessionId) === "loaded";
   // Escape-to-stop (#2968): the `chat.stop` keybinding runs outside React, so the VISIBLE
   // slot publishes its behavior on the escapeStop seam. No dep array — re-registered each
   // render so the binding always sees the CURRENT stop() closure (it reads taskId state);
@@ -1070,11 +1081,15 @@ function ChatSessionSlot({
   // seam for any non-agent in-thread notice — exposed to forks via the slash/composer registries.
   function noteToThread(text: string, opts?: { tone?: SystemNoteTone }) {
     if (!session) return;
-    const base = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? [];
-    chatStore.updateMessages(session.id, [
-      ...base,
-      { id: messageId(), role: "system", content: text, noteTone: opts?.tone, createdAt: Date.now(), status: "done" },
-    ]);
+    const note: ChatMessage = {
+      id: messageId(),
+      role: "system",
+      content: text,
+      noteTone: opts?.tone,
+      createdAt: Date.now(),
+      status: "done",
+    };
+    chatStore.updateMessages(session.id, (messages) => [...messages, note]);
   }
 
   // Dispatch a CLIENT-SIDE slash command through the registry (ADR 0061) — run locally,
@@ -1085,6 +1100,7 @@ function ChatSessionSlot({
   // client command (fall through to the server / draft path). Core commands (/new, /clear,
   // /effort) and any fork-registered commands flow through here identically.
   function runClientSlash(raw: string): boolean {
+    if (!loadedNow()) return false; // ADR 0114 D2: no local command edits an unread transcript
     const [verb, ...rest] = raw.split(/\s+/);
     const cmd = findSlashCommand(verb);
     if (!cmd) return false;
@@ -1363,8 +1379,10 @@ function ChatSessionSlot({
     });
     // `reattachKey` changes when boot hydration fills an ALREADY-MOUNTED empty
     // fixed-id tab; sessionId alone would strand that recovered HITL/live turn.
+    // `loadState`: a `pending` transcript defers the reattach (reattachOrReconcile), so
+    // its load must re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks intentionally bind this slot
-  }, [sessionId, reattachKey]);
+  }, [sessionId, reattachKey, loadState]);
 
   const messages = session?.messages || [];
   // Regenerate is offered only on the most recent OPERATOR-initiated assistant reply — a
@@ -1433,8 +1451,8 @@ function ChatSessionSlot({
         signedOut,
         serverTurnLabel,
         serverTurnControl,
-      }),
-    [draft, attachments, serverTurnControl, serverTurnLabel, status, signedOut],
+      }) && transcriptLoaded,
+    [draft, attachments, serverTurnControl, serverTurnLabel, status, signedOut, transcriptLoaded],
   );
 
   // The consumed ↑-recall warning shows only while the marker still applies to this session's
@@ -1442,7 +1460,7 @@ function ChatSessionSlot({
   const showDuplicateRisk = isDuplicateRiskActive(duplicateRisk, sessionId, draft);
 
   async function send() {
-    if (!session || signedOut) return;
+    if (!session || signedOut || !loadedNow()) return;
     // A HITL form/question/approval is open (#1560): a fresh send would race the
     // pending form — the server holds unmarked messages anyway — so queue it as a
     // steer instead. It folds into the agent's context right AFTER the form
@@ -1585,26 +1603,23 @@ function ChatSessionSlot({
   // turn, because each anchors to its own turn's bubbles.
   function settleServerInterjections(items: QueuedSteer[]) {
     if (!session || !items.length) return;
-    // Read the transcript BEFORE retiring anything from the queue: a bail-out between the
-    // two would drop the bubble without ever placing the message.
-    let next = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages;
-    if (!next) return;
-    const ids = new Set(items.map((item) => item.id));
-    setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
+    const sessionId = session.id;
     const byTask = new Map<string, QueuedSteer[]>();
     for (const item of items) {
       const key = item.serverTaskId ?? "";
       byTask.set(key, [...(byTask.get(key) ?? []), item]);
     }
-    for (const [taskId, group] of byTask) {
-      next = placeServerTurnSteers(next, group, {
-        liveId: liveMessageId(taskId, session.id),
-        exact: false,
-        frozenId: messageId(),
-        createdAt: Date.now(),
-      });
-    }
-    chatStore.updateMessages(session.id, next);
+    const placements = [...byTask].map(([taskId, group]) => ({
+      group,
+      opts: { liveId: liveMessageId(taskId, sessionId), exact: false, frozenId: messageId(), createdAt: Date.now() },
+    }));
+    // Place first, then retire from the queue: the store applies the updater (or queues
+    // it for a transcript still loading), so the message can't be dropped unplaced.
+    chatStore.updateMessages(sessionId, (messages) =>
+      placements.reduce((next, { group, opts }) => placeServerTurnSteers(next, group, opts), messages),
+    );
+    const ids = new Set(items.map((item) => item.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
   }
 
   // The server-turn counterpart of reconcileSteer: interjections sent to a server turn
@@ -2012,16 +2027,8 @@ function ChatSessionSlot({
     if (!session || !consumed.length) return;
     const consumedIds = new Set(consumed.map((c) => c.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !consumedIds.has(q.id)));
-    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-    if (!snap) return;
-    chatStore.updateMessages(
-      session.id,
-      placeConsumedSteers(snap.messages, consumed, {
-        inlineAssistantId,
-        frozenId: messageId(),
-        createdAt: Date.now(),
-      }),
-    );
+    const opts = { inlineAssistantId, frozenId: messageId(), createdAt: Date.now() };
+    chatStore.updateMessages(session.id, (messages) => placeConsumedSteers(messages, consumed, opts));
   }
 
   // After a turn ends, reconcile any still-queued steers: those the agent folded
@@ -2097,19 +2104,16 @@ function ChatSessionSlot({
   // never backend history (a reload omits it), so removing it here is purely local
   // and safe. Only errored messages expose the Dismiss action that calls this.
   function dismissErroredMessage(messageId: string) {
-    if (!session) return;
-    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-    if (!snap) return;
-    chatStore.updateMessages(
-      session.id,
-      snap.messages.filter((m) => m.id !== messageId),
+    if (!session || !loadedNow()) return;
+    chatStore.updateMessages(session.id, (messages) =>
+      messages.some((m) => m.id === messageId) ? messages.filter((m) => m.id !== messageId) : messages,
     );
     // Clear the session's error dot too (it drove the red status pill).
     if (status === "error") chatStore.setSessionStatus(session.id, "idle");
   }
 
   async function regenerate(assistantId?: string) {
-    if (!assistantId || !session || status === "streaming") return;
+    if (!assistantId || !session || status === "streaming" || !loadedNow()) return;
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
     if (!snap) return;
     const i = snap.messages.findIndex((m) => m.id === assistantId);
@@ -2138,7 +2142,11 @@ function ChatSessionSlot({
       onError(`Couldn't regenerate: ${errMsg(e)}`);
       return;
     }
-    chatStore.updateMessages(session.id, snap.messages.slice(0, i));
+    // Cut the CURRENT transcript at the regenerated reply (a missing reply is a no-op).
+    chatStore.updateMessages(session.id, (messages) => {
+      const at = messages.findIndex((m) => m.id === assistantId);
+      return at < 0 ? messages : messages.slice(0, at);
+    });
     void runTurn(user.content, { hidden: true });
   }
 
@@ -2149,7 +2157,7 @@ function ChatSessionSlot({
   // this the fork was display-only: the tab showed the transcript while the
   // agent's checkpoint was empty (a fork that looks like memory and is amnesia).
   function forkAtMessage(message: ChatMessage) {
-    if (!session) return;
+    if (!session || !loadedNow()) return;
     const source = session;
     const i = source.messages.findIndex((m) => m.id === message.id);
     if (i < 0) return;
@@ -2159,7 +2167,7 @@ function ChatSessionSlot({
       status: m.status === "streaming" ? "done" : m.status,
     }));
     const created = chatStore.createSession(); // becomes the current + active tab
-    chatStore.updateMessages(created.id, seed);
+    chatStore.updateMessages(created.id, () => seed);
     const baseTitle = source.title && source.title !== "New chat" ? source.title : "Chat";
     chatStore.renameSession(created.id, `${baseTitle} (fork)`);
     // Same occurrence discipline as rewind: client message ids never appear in the
@@ -2173,31 +2181,27 @@ function ChatSessionSlot({
         // operator must KNOW the agent can't see it, so surface the server's
         // honest status line rather than failing silently (the old behavior).
         if (!res.found) {
-          chatStore.updateMessages(created.id, [
-            ...(chatStore.getSnapshot().sessions.find((s) => s.id === created.id)?.messages ?? seed),
-            {
-              id: `sys-fork-${Date.now()}`,
-              role: "system",
-              content: `⚠️ ${res.message}`,
-              noteTone: "warning",
-              createdAt: Date.now(),
-              status: "done",
-            } as ChatMessage,
-          ]);
-        }
-      })
-      .catch((e) => {
-        chatStore.updateMessages(created.id, [
-          ...(chatStore.getSnapshot().sessions.find((s) => s.id === created.id)?.messages ?? seed),
-          {
+          const warning: ChatMessage = {
             id: `sys-fork-${Date.now()}`,
             role: "system",
-            content: `⚠️ Server-side fork failed — this branch is a display copy the agent can't see. (${errMsg(e)})`,
+            content: `⚠️ ${res.message}`,
             noteTone: "warning",
             createdAt: Date.now(),
             status: "done",
-          } as ChatMessage,
-        ]);
+          };
+          chatStore.updateMessages(created.id, (messages) => [...messages, warning]);
+        }
+      })
+      .catch((e) => {
+        const warning: ChatMessage = {
+          id: `sys-fork-${Date.now()}`,
+          role: "system",
+          content: `⚠️ Server-side fork failed — this branch is a display copy the agent can't see. (${errMsg(e)})`,
+          noteTone: "warning",
+          createdAt: Date.now(),
+          status: "done",
+        };
+        chatStore.updateMessages(created.id, (messages) => [...messages, warning]);
       });
   }
 
@@ -2207,12 +2211,12 @@ function ChatSessionSlot({
   // is the point — the LangGraph checkpoint is the agent's real context, so a
   // client-only trim would leave the agent still "remembering" the discarded turns.
   function rewindAtMessage(message: ChatMessage) {
-    if (!session || status === "streaming") return;
+    if (!session || status === "streaming" || !loadedNow()) return;
     setPendingRewind(message);
   }
 
   async function confirmRewind(message: ChatMessage) {
-    if (!session) return;
+    if (!session || !loadedNow()) return;
     const i = session.messages.findIndex((m) => m.id === message.id);
     if (i < 0) return;
     // WHICH occurrence of this exact text the clicked bubble is — client message ids never
@@ -2236,11 +2240,12 @@ function ChatSessionSlot({
       onError("Couldn't rewind — that message is no longer in the agent's live context.");
       return;
     }
-    // Keep the prefix through the selected message; drop everything after it.
-    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-    const base = snap?.messages ?? session.messages;
-    const at = base.findIndex((m) => m.id === message.id);
-    chatStore.updateMessages(session.id, base.slice(0, (at < 0 ? i : at) + 1));
+    // Keep the prefix through the selected message; drop everything after it — cut from
+    // the CURRENT transcript, and a message that has since vanished is a no-op.
+    chatStore.updateMessages(session.id, (messages) => {
+      const at = messages.findIndex((m) => m.id === message.id);
+      return at < 0 ? messages : messages.slice(0, at + 1);
+    });
   }
 
   // Resume a paused (input-required) turn: submitting the HITL form/question
@@ -2327,7 +2332,8 @@ function ChatSessionSlot({
       hitlResume?: boolean;
     } = {},
   ) {
-    if (!session || !content) return;
+    // ADR 0114 D2: a turn edits the transcript, so it never starts on an unread one.
+    if (!session || !content || !loadedNow()) return;
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
     // is what the user bubble shows.
     const sent = opts.sendAs ?? content;
@@ -2357,24 +2363,25 @@ function ChatSessionSlot({
 
     setDraft("");
     setStatusMessage("submitted");
-    // Build off the live store snapshot, not the render-closure `messages` — a
-    // regenerate trims the thread in the store then calls runTurn in the same tick
+    // An updater, so it builds off the live transcript, not the render-closure `messages` —
+    // a regenerate trims the thread in the store then calls runTurn in the same tick
     // (before a re-render), so the closure copy would be stale.
-    const base =
-      chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? messages;
     // `hidden` (an approval resume, or a regenerate) sends `content` to the server but
     // omits the user bubble — the agent still receives it, the chat just doesn't show it.
     // A resume flips the SAME assistant message back to streaming (keeping its parts/toolCalls).
-    chatStore.updateMessages(
-      session.id,
+    chatStore.updateMessages(session.id, (base) =>
       resuming
-        ? base.map((m) => (m.id === assistantId ? { ...m, status: "streaming" } : m))
+        ? mapMessageById(base, assistantId, (m) => ({ ...m, status: "streaming" }))
         : opts.hidden
           ? [...base, assistant]
           : [...base, userMessage, assistant],
     );
     chatStore.setSessionStatus(session.id, "streaming");
     onError("");
+    // Every stream frame below changes THIS turn's bubble through an updater of the
+    // current transcript; a bubble that has since gone (cleared, rewound) is a no-op.
+    const updateAssistant = (fn: (message: ChatMessage) => ChatMessage) =>
+      chatStore.updateMessages(session.id, (messages) => mapMessageById(messages, assistantId, fn));
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -2408,18 +2415,12 @@ function ChatSessionSlot({
     // delayed by the pacing.
     const reveal = createRevealQueue({
       apply: (text) => {
-        const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-        if (!latest) return;
-        chatStore.updateMessages(
-          session.id,
-          latest.messages.map((message) => {
-            if (message.id !== assistantId) return message;
-            const next = applyText(message, text, true);
-            // A late drip must never resurrect a bubble something else already
-            // settled (Stop / watchdog): keep the terminal status, land the text.
-            return message.status === "streaming" ? next : { ...next, status: message.status };
-          }),
-        );
+        updateAssistant((message) => {
+          const next = applyText(message, text, true);
+          // A late drip must never resurrect a bubble something else already
+          // settled (Stop / watchdog): keep the terminal status, land the text.
+          return message.status === "streaming" ? next : { ...next, status: message.status };
+        });
       },
     });
     revealFlushRef.current = reveal.flush;
@@ -2439,29 +2440,25 @@ function ChatSessionSlot({
     let settledByWatchdog = false;
     const finalizeFromTask = (state: string, text: string) => {
       const failed = /fail|cancel/i.test(state);
-      const latest = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-      if (latest) {
-        const now = Date.now();
+      const now = Date.now();
+      chatStore.updateMessages(session.id, (messages) => {
+        if (!messages.some((m) => m.id === assistantId)) return messages;
         // The task's text is the whole TURN's canonical answer, and a turn can span
         // several bubbles once a steer/delegation split it — so distribute it across
         // them rather than re-landing all of it on the live one (turnText.ts).
-        const reconciled = text ? applyCanonicalTurnText(latest.messages, assistantId, text) : latest.messages;
-        chatStore.updateMessages(
-          session.id,
-          settleTurnBubbles(
-            reconciled.map((m) => {
-              if (m.id !== assistantId) return m;
-              const toolCalls = m.toolCalls?.map((c) =>
-                c.status === "running"
-                  ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
-                  : c,
-              );
-              return { ...m, status: failed ? "error" : "done", toolCalls };
-            }),
-            assistantId,
-          ),
+        const reconciled = text ? applyCanonicalTurnText(messages, assistantId, text) : messages;
+        return settleTurnBubbles(
+          mapMessageById(reconciled, assistantId, (m) => {
+            const toolCalls = m.toolCalls?.map((c) =>
+              c.status === "running"
+                ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
+                : c,
+            );
+            return { ...m, status: failed ? "error" : "done", toolCalls };
+          }),
+          assistantId,
         );
-      }
+      });
       chatStore.setSessionStatus(session.id, failed ? "error" : "idle");
       setStatusMessage(failed ? "failed" : "idle");
     };
@@ -2497,13 +2494,7 @@ function ChatSessionSlot({
           setTaskId(id);
           // Persist the task id on the assistant message so a stuck `streaming`
           // turn can be reconciled against the server task after a reload (below).
-          const cur = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
-          if (cur) {
-            chatStore.updateMessages(
-              session.id,
-              cur.messages.map((m) => (m.id === assistantId ? { ...m, taskId: id } : m)),
-            );
-          }
+          updateAssistant((m) => ({ ...m, taskId: id }));
         },
         onStatus: (m) => {
           bumpWatchdog();
@@ -2519,15 +2510,7 @@ function ChatSessionSlot({
           onError(friendly);
           setStatusMessage("failed");
           chatStore.setSessionStatus(session.id, "error");
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (latest) {
-            chatStore.updateMessages(
-              session.id,
-              latest.messages.map((item) =>
-                item.id === assistantId ? { ...item, content: friendly, status: "error" } : item,
-              ),
-            );
-          }
+          updateAssistant((item) => ({ ...item, content: friendly, status: "error" }));
         },
         onInputRequired: (payload) => {
           updateHitl(payload);
@@ -2552,25 +2535,18 @@ function ChatSessionSlot({
           // The final answer is never delayed by the queue.
           sawAuthoritativeText = true;
           reveal.flush();
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
           // Spans the whole TURN, which may already have been split into several
           // bubbles to place a consumed steer / delegation (turnText.ts) — and lands
           // NOTHING on a turn whose answer the addressed participants already spoke
           // (#3449). That refusal lives there, not here, because four other producers of
           // this same text run after the stream is gone (watchdog, reconcile, reattach,
           // boot hydration) and all five pass through that one function.
-          chatStore.updateMessages(session.id, applyCanonicalTurnText(latest.messages, assistantId, text));
+          chatStore.updateMessages(session.id, (messages) => applyCanonicalTurnText(messages, assistantId, text));
         },
         onReasoning: (delta) => {
           bumpWatchdog();
           reveal.flush(); // part ordering — the reasoning run opens AFTER the text already streamed
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => (message.id === assistantId ? applyReasoning(message, delta) : message)),
-          );
+          updateAssistant((message) => applyReasoning(message, delta));
         },
         onToolCall: (evt) => {
           bumpWatchdog();
@@ -2579,27 +2555,20 @@ function ChatSessionSlot({
           // inline component (delivered via onComponent / message.components). Suppress its
           // tool card so it doesn't add noise to the collapsed work timeline (#1323).
           if (evt.name === "show_component") return;
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          const next = latest.messages.map((message) =>
-            message.id === assistantId ? applyToolEvent(message, evt) : message,
-          );
-          chatStore.updateMessages(session.id, next);
+          let card: ToolCall | undefined;
+          updateAssistant((message) => {
+            const next = applyToolEvent(message, evt);
+            card = next.toolCalls?.find((c) => c.id === evt.id);
+            return next;
+          });
           // Follow mode (ADR 0112) — the LIVE path only. The args live on the card (the
           // second start frame carries them); the end frame need not repeat them.
-          if (evt.phase === "end") {
-            const card = next.find((m) => m.id === assistantId)?.toolCalls?.find((c) => c.id === evt.id);
-            onLiveToolEvent(evt, card?.input, session.id);
-          }
+          if (evt.phase === "end") onLiveToolEvent(evt, card?.input, session.id);
         },
         onComponent: (spec) => {
           reveal.flush(); // part ordering — the component lands AFTER the text already streamed
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => (message.id === assistantId ? applyComponent(message, spec) : message)),
-          );
+          if (!chatStore.getSnapshot().sessions.some((item) => item.id === session.id)) return;
+          updateAssistant((message) => applyComponent(message, spec));
           // A `code-ref` (show_code) opens the code pane — here, on the live stream, and never
           // on hydration/replay, where the same component re-renders from history.
           onLiveComponent(spec, session.id);
@@ -2625,19 +2594,13 @@ function ChatSessionSlot({
           // streamed-so-far text into the placeholder BEFORE the split reads it — otherwise
           // the text is still buffered, the placeholder looks empty, every bubble takes the
           // insert-before path, and all the lead's prose flushes in at the END (the bug).
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
+          if (!chatStore.getSnapshot().sessions.some((item) => item.id === session.id)) return;
           if (reply.author) runAnswered.current = true; // a real reply — the continue prefill may fire
 
           if (!reply.text && reply.author) {
             // A pre-fan-out server frame carries no text — the single-address case, where
             // the terminal `done` text IS the reply. Stamp the byline on the live bubble.
-            chatStore.updateMessages(
-              session.id,
-              latest.messages.map((message) =>
-                message.id === assistantId ? { ...message, author: reply.author } : message,
-              ),
-            );
+            updateAssistant((message) => ({ ...message, author: reply.author }));
             return;
           }
           if (!reply.text) return; // an ask with no query — nothing to show
@@ -2674,11 +2637,11 @@ function ChatSessionSlot({
             // on the task.
             ...(claimsAnswer && turnTaskId ? { taskId: turnTaskId } : {}),
           };
-          const withBubble = insertRoomBubble(latest.messages, assistantId, authored, messageId());
-          chatStore.updateMessages(
-            session.id,
-            claimsAnswer ? markTurnAnsweredByParticipants(withBubble, assistantId) : withBubble,
-          );
+          const splitId = messageId();
+          chatStore.updateMessages(session.id, (messages) => {
+            const withBubble = insertRoomBubble(messages, assistantId, authored, splitId);
+            return claimsAnswer ? markTurnAnsweredByParticipants(withBubble, assistantId) : withBubble;
+          });
         },
         onSteerConsumed: (consumed) => {
           // Like a room reply, this is a chronology frame inside one long assistant
@@ -2690,26 +2653,12 @@ function ChatSessionSlot({
         onCost: (usage) => {
           // This turn's token/cost readout (terminal cost-v1 extension metadata) — pin it to the assistant
           // message so the per-turn footer survives reload with the rest of the message.
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) =>
-              message.id === assistantId ? { ...message, usage } : message,
-            ),
-          );
+          updateAssistant((message) => ({ ...message, usage }));
         },
         onContext: (contextWindow) => {
           // This turn's context-window fill + compaction threshold (terminal context-v1) —
           // pinned to the message so the footer meter persists with history.
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) =>
-              message.id === assistantId ? { ...message, contextWindow } : message,
-            ),
-          );
+          updateAssistant((message) => ({ ...message, contextWindow }));
         },
         onDone: () => {
           clearWatchdog();
@@ -2730,45 +2679,42 @@ function ChatSessionSlot({
             const run = continueRun(pendingRun.current);
             setDraft((d) => (d.trim() ? d : run));
           }
-          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-          if (!latest) return;
-          const placeholder = latest.messages.find((m) => m.id === assistantId);
-          const placeholderEmpty =
-            !placeholder?.content && !placeholder?.parts?.length && !placeholder?.toolCalls?.length;
-          if (roomReplies.current > 0 && placeholderEmpty) {
-            // Pure fan-out (`@x @y`, #3051): the lead never ran, every word of the turn
-            // was authored room messages, and the terminal `done` text is just the
-            // combined fallback — so drop the empty live bubble rather than show it twice.
-            // But when the lead DID run (it moderated a collaboration via delegate_to,
-            // #3042/#3114), its synthesis is IN this bubble and must stay: the room
-            // bubbles are the participants, this is the lead's own answer. The
-            // placeholder-empty guard is exactly that distinction.
-            //
-            // It is only ABLE to make it because `applyCanonicalTurnText` refused to land
-            // the answer on a turn the participants answered (#3449). Read against a
-            // bubble that had taken that text, this test answered "not empty" for every
-            // addressed turn — and since #3151 the address's own work card said so too —
-            // which is how a dead guard let the doubled answer through for three weeks.
-            // The stamp is the fact; this is the cleanup the fact makes correct again.
-            //
-            // FOLD, not delete (#3449 C): `onCost`/`onContext` pin this turn's spend and
-            // context-window meter to the live bubble, and a raw filter dropped the whole
-            // footer with it. `settleTurnBubbles` carries usage/context/error status onto
-            // the half that survives — the same move a spent steer continuation gets.
-            chatStore.updateMessages(session.id, settleTurnBubbles(latest.messages, assistantId));
-            return;
-          }
           const now = Date.now();
-          chatStore.updateMessages(
-            session.id,
+          const fanOut = roomReplies.current > 0;
+          chatStore.updateMessages(session.id, (messages) => {
+            const placeholder = messages.find((m) => m.id === assistantId);
+            if (!placeholder) return messages; // the bubble is gone (cleared / rewound): no-op
+            const placeholderEmpty =
+              !placeholder.content && !placeholder.parts?.length && !placeholder.toolCalls?.length;
+            if (fanOut && placeholderEmpty) {
+              // Pure fan-out (`@x @y`, #3051): the lead never ran, every word of the turn
+              // was authored room messages, and the terminal `done` text is just the
+              // combined fallback — so drop the empty live bubble rather than show it twice.
+              // But when the lead DID run (it moderated a collaboration via delegate_to,
+              // #3042/#3114), its synthesis is IN this bubble and must stay: the room
+              // bubbles are the participants, this is the lead's own answer. The
+              // placeholder-empty guard is exactly that distinction.
+              //
+              // It is only ABLE to make it because `applyCanonicalTurnText` refused to land
+              // the answer on a turn the participants answered (#3449). Read against a
+              // bubble that had taken that text, this test answered "not empty" for every
+              // addressed turn — and since #3151 the address's own work card said so too —
+              // which is how a dead guard let the doubled answer through for three weeks.
+              // The stamp is the fact; this is the cleanup the fact makes correct again.
+              //
+              // FOLD, not delete (#3449 C): `onCost`/`onContext` pin this turn's spend and
+              // context-window meter to the live bubble, and a raw filter dropped the whole
+              // footer with it. `settleTurnBubbles` carries usage/context/error status onto
+              // the half that survives — the same move a spent steer continuation gets.
+              return settleTurnBubbles(messages, assistantId);
+            }
             // A turn split to place a steer/delegation can end with NOTHING after the
             // split — the agent said everything before it consumed the interjection —
             // leaving a continuation that opened for text which never came. Settling
             // that draws a blank row under the answer, so fold it away (turnText.ts).
             // Same move as the pure-fan-out drop above, for the same reason.
-            settleTurnBubbles(
-              latest.messages.map((message) => {
-                if (message.id !== assistantId) return message;
+            return settleTurnBubbles(
+              mapMessageById(messages, assistantId, (message) => {
                 // A completed turn can't have tools still running: a tool_end frame
                 // that races with the terminal `done` (e.g. a workflow card whose
                 // end arrives in the same tick) would otherwise leave the card
@@ -2785,8 +2731,8 @@ function ChatSessionSlot({
                 return { ...message, status: "done", toolCalls };
               }),
               assistantId,
-            ),
-          );
+            );
+          });
         },
       }, {
         images: opts.images,
@@ -2821,13 +2767,9 @@ function ChatSessionSlot({
         try {
           const res = await api.getTask(turnTaskId);
           if (/completed/i.test(res.state) && res.text) {
-            const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-            if (latest) {
-              chatStore.updateMessages(
-                session.id,
-                settleTurnBubbles(applyCanonicalTurnText(latest.messages, assistantId, res.text), assistantId),
-              );
-            }
+            chatStore.updateMessages(session.id, (messages) =>
+              settleTurnBubbles(applyCanonicalTurnText(messages, assistantId, res.text), assistantId),
+            );
           }
         } catch {
           // Best-effort — the settled accumulation stands if the task read fails.
@@ -2851,15 +2793,7 @@ function ChatSessionSlot({
         onError(message);
         setStatusMessage(message);
         chatStore.setSessionStatus(session.id, "error");
-        const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
-        if (latest) {
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((item) =>
-              item.id === assistantId ? { ...item, content: item.content || message, status: "error" } : item,
-            ),
-          );
-        }
+        updateAssistant((item) => ({ ...item, content: item.content || message, status: "error" }));
         return;
       }
     } finally {
@@ -2903,7 +2837,7 @@ function ChatSessionSlot({
     const cancelId = resolveComposerStopTarget(before?.messages || [], taskId, control);
     // Settle the thread immediately: no bubble may stay `streaming` after Stop.
     // The send-loop only finalizes turns it owns; a re-attached turn has none.
-    if (before) chatStore.updateMessages(sessionId, finalizeStoppedMessages(before.messages));
+    chatStore.updateMessages(sessionId, finalizeStoppedMessages);
     if (control) {
       chatStore.clearServerTurnControl(sessionId, control.taskId);
       noteTurnFinished(sessionId);
@@ -2987,7 +2921,7 @@ function ChatSessionSlot({
       onRegenerate: transcriptRegenerate,
       onDismiss: transcriptDismissErroredMessage,
       lastAssistantId,
-      regenDisabled: status === "streaming",
+      regenDisabled: status === "streaming" || !transcriptLoaded,
       incognito: session?.incognito,
       rewindTailId,
     }),
@@ -2998,6 +2932,7 @@ function ChatSessionSlot({
       session?.id,
       session?.incognito,
       status,
+      transcriptLoaded,
       transcriptCopyMessage,
       transcriptDismissErroredMessage,
       transcriptForkAtMessage,
@@ -3008,20 +2943,43 @@ function ChatSessionSlot({
 
   if (!session) return null;
 
+  const transcript = (
+    <ChatTranscript
+      sessionId={sessionId}
+      messages={messages}
+      dismissedToolCalls={dismissedToolCalls}
+      actions={transcriptActions}
+      steerQueue={steerQueue}
+      serverTurnLabel={serverTurnLabel}
+      status={status}
+      onCancelDelegation={transcriptCancelDelegation}
+      onDismissToolCall={transcriptDismissToolCall}
+      onCancelSteer={transcriptCancelSteer}
+    />
+  );
+
   return (
     <div className="chat-session-slot" hidden={!visible}>
-      <ChatTranscript
-        sessionId={sessionId}
-        messages={messages}
-        dismissedToolCalls={dismissedToolCalls}
-        actions={transcriptActions}
-        steerQueue={steerQueue}
-        serverTurnLabel={serverTurnLabel}
-        status={status}
-        onCancelDelegation={transcriptCancelDelegation}
-        onDismissToolCall={transcriptDismissToolCall}
-        onCancelSteer={transcriptCancelSteer}
-      />
+      {loadState === "pending" ? (
+        // The transcript's record is still being read (ADR 0114 D2): a light placeholder,
+        // never an empty thread that reads as "no history".
+        <div className="chat-transcript-loading" data-testid="chat-transcript-loading">
+          <PanelSkeleton label="Loading this chat…" />
+        </div>
+      ) : loadState === "failed" ? (
+        // The read failed (or timed out): show what this tab has, say plainly that it
+        // isn't the saved history, and retry on the next pageshow / visibilitychange.
+        <div className="chat-load-failed-wrap">
+          <div className="chat-load-failed" role="status" data-testid="chat-load-failed">
+            {chatStore.hasUnsavedEdits(sessionId)
+              ? "This chat's saved history couldn't be loaded, and new messages here aren't saved yet. Retrying when you come back to this tab."
+              : "This chat's saved history couldn't be loaded. Retrying when you come back to this tab."}
+          </div>
+          {transcript}
+        </div>
+      ) : (
+        transcript
+      )}
 
       <div
         className="composer-wrap"
@@ -3170,6 +3128,8 @@ function ChatSessionSlot({
           // attended server turn is live, Enter queues an interjection through its
           // durable server-control task id instead of starting a competing turn.
           onSubmit={() => void send()}
+          // ADR 0114 D2: no send until this session's transcript has loaded.
+          disabled={!transcriptLoaded}
           busy={chatComposerBusy(status, serverTurnLabel, serverTurnControl)}
           onQueue={
             turnInterruptible

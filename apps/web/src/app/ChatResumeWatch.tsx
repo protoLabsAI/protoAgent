@@ -48,21 +48,16 @@ const seen = new Set<string>();
  * never moves the reattach key off a turn that is still running (leadAssistantMessage).
  */
 export function landResumedTurn(render: ResumedTurnRender): boolean {
-  const target = chatStore.getSnapshot().sessions.find((s) => s.id === render.session);
-  if (!target) return false;
+  if (!chatStore.getSnapshot().sessions.some((s) => s.id === render.session)) return false;
   // Replace the live preview in place (or append), distributing the answer across a
   // preview an interjection split — see settleResumedTurn. Tag the settled message with
   // its trigger origin (#3028) so ChatMessageView renders it as a compact, expandable
   // result card, not a full-size bubble. The server stamps `origin` on the event; fall
   // back to what the store captured at `turn.started` for an older server. Persisted on
   // the message, so the card treatment survives a reload.
-  const next = settleResumedTurn(
-    target.messages,
-    render,
-    render.origin || originForSession(render.session) || undefined,
-    `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  );
-  chatStore.updateMessages(render.session, next);
+  const origin = render.origin || originForSession(render.session) || undefined;
+  const fallbackId = `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  chatStore.updateMessages(render.session, (messages) => settleResumedTurn(messages, render, origin, fallbackId));
   reconcileSessionStatus(render.session);
   return true;
 }

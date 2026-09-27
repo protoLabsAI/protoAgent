@@ -199,7 +199,7 @@ describe("persist debouncing", () => {
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
     for (let i = 0; i < 50; i++) {
-      chatStore.updateMessages(sessionId, msg("token ".repeat(i + 1)));
+      chatStore.updateMessages(sessionId, () => msg("token ".repeat(i + 1)));
     }
     expect(setItem).not.toHaveBeenCalled(); // nothing synchronous
 
@@ -216,7 +216,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, msg("live"));
+    chatStore.updateMessages(sessionId, () => msg("live"));
     const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
     expect(session.messages[0]).toMatchObject({ content: "live" }); // before any timer fires
     expect(setItem).not.toHaveBeenCalled();
@@ -226,7 +226,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, msg("pending")); // debounced…
+    chatStore.updateMessages(sessionId, () => msg("pending")); // debounced…
     const created = chatStore.createSession(); // …structural change flushes NOW
     expect(setItem).toHaveBeenCalledTimes(1);
     const written = JSON.parse(setItem.mock.calls[0][1] as string);
@@ -285,7 +285,7 @@ describe("persist debouncing", () => {
     const first = chatStore.getSnapshot().currentSessionId!;
     // `first` has to be USED or createSession reuses it instead of making `b` — two
     // pristine blanks are interchangeable and the store now collapses them.
-    chatStore.updateMessages(first, [{ role: "user", content: "hi" }]);
+    chatStore.updateMessages(first, () => [{ role: "user", content: "hi" }]);
     const b = chatStore.createSession();
 
     chatStore.reorderSessions([b.id]); // omit `first`
@@ -296,7 +296,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, msg("final answer"));
+    chatStore.updateMessages(sessionId, () => msg("final answer"));
     chatStore.setSessionStatus(sessionId, "idle"); // ChatSurface's stream-done path
     expect(setItem).toHaveBeenCalledTimes(1);
     const written = JSON.parse(setItem.mock.calls[0][1] as string);
@@ -323,7 +323,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, msg("about to navigate"));
+    chatStore.updateMessages(sessionId, () => msg("about to navigate"));
     window.dispatchEvent(new Event("pagehide"));
     expect(setItem).toHaveBeenCalledTimes(1);
 
@@ -529,7 +529,7 @@ describe("cross-tab persistence", () => {
   it("ephemeral messages (/btw asides, #2483) never reach the persisted blob", async () => {
     const { chatStore } = await import("./chat-store");
     const sid = chatStore.getSnapshot().currentSessionId!;
-    chatStore.updateMessages(sid, [
+    chatStore.updateMessages(sid, () => [
       { id: "m1", role: "user", content: "real turn" },
       { id: "a1", role: "system", content: "↪ Aside: saved nowhere", noteTone: "info", ephemeral: true },
       { id: "a2", role: "system", content: "↩ Aside answer", noteTone: "info", ephemeral: true },
@@ -629,7 +629,7 @@ describe("incognito sessions", () => {
   it("a used session is never reused — createSession makes a real one", async () => {
     const { chatStore } = await import("./chat-store");
     const s = chatStore.createSession();
-    chatStore.updateMessages(s.id, [{ role: "user", content: "hi" }]);
+    chatStore.updateMessages(s.id, () => [{ role: "user", content: "hi" }]);
     const before = chatStore.getSnapshot().sessions.length;
     const next = chatStore.createSession();
     expect(next.id).not.toBe(s.id);
@@ -639,7 +639,7 @@ describe("incognito sessions", () => {
   it("reusing a blank on another tab SWITCHES to it (the visible feedback)", async () => {
     const { chatStore } = await import("./chat-store");
     const used = chatStore.createSession();
-    chatStore.updateMessages(used.id, [{ role: "user", content: "hi" }]);
+    chatStore.updateMessages(used.id, () => [{ role: "user", content: "hi" }]);
     const blank = chatStore.createSession(); // only creates because `used` is now used
     chatStore.switchSession(used.id);
     const got = chatStore.createSession();

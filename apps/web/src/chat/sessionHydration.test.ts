@@ -491,6 +491,7 @@ describe("boot hydration", () => {
       pendingDeleteRequest: null,
       pendingClearRequest: null,
       serverTurnControls: {},
+      loadStateMap: {},
     };
     expect(mergeHydratedSessions(current, [recovered]).sessions[0].incognito).toBe(true);
   });
@@ -545,6 +546,7 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
+        loadStateMap: {},
       },
       [recovered],
     );
@@ -621,6 +623,7 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
+        loadStateMap: {},
       },
       [recovered],
     );
@@ -680,6 +683,7 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
+        loadStateMap: {},
       },
       [recovered],
     );
@@ -774,6 +778,7 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
+        loadStateMap: {},
       },
       [recovered],
     );
@@ -818,6 +823,7 @@ describe("boot hydration", () => {
       pendingDeleteRequest: null,
       pendingClearRequest: null,
       serverTurnControls: {},
+      loadStateMap: {},
     };
     const recovered = sessionFromDurableTurns(summary(healthy.id), [turn({ text: canonical })]);
     if (!recovered) throw new Error("durable turn should produce a recovered session");
@@ -987,7 +993,7 @@ describe("boot hydration", () => {
 
     const hydration = hydrateDurableChatSessions();
     await vi.waitFor(() => expect(api.chatSessionTurns).toHaveBeenCalled());
-    chatStore.updateMessages(session.id, []);
+    chatStore.updateMessages(session.id, () => []);
     pending.resolve({ turns: [turn()] });
     await hydration;
 
@@ -1064,6 +1070,7 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
+        loadStateMap: {},
       } as never,
       [recovered],
     );

@@ -38,7 +38,7 @@ function claimReattach(sessionId: string) {
 /** A session reading "streaming" with this transcript. */
 function seed(messages: ChatMessage[], status: "streaming" | "error" = "streaming"): string {
   const session = chatStore.createSession();
-  chatStore.updateMessages(session.id, messages);
+  chatStore.updateMessages(session.id, () => messages);
   chatStore.setSessionStatus(session.id, status);
   return session.id;
 }
@@ -93,7 +93,7 @@ describe("reconcileSessionStatus", () => {
       [{ id: "u1", role: "user", content: "ask claude-code to check the diff", status: "done" }, preview],
       { session: session.id, taskId: "t1", kind: "room", id: "r1", author: "claude-code", text: "The diff is clean.", ok: true },
     );
-    chatStore.updateMessages(session.id, messages);
+    chatStore.updateMessages(session.id, () => messages);
     chatStore.setSessionStatus(session.id, "streaming");
     expect(messages[messages.length - 1]).toMatchObject({ author: { name: "claude-code" }, status: "done" });
 

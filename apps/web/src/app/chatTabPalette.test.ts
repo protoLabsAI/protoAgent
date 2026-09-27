@@ -255,8 +255,8 @@ describe("how the rows reach the palette", () => {
     const id = openTab("Busy chat");
     openTab("Somewhere else"); // so closing `id` below is an ordinary close, not the last tab
     const before = paletteCommandsVersion();
-    chatStore.updateMessages(id, [{ role: "user", content: "hello" }]);
-    chatStore.updateMessages(id, [
+    chatStore.updateMessages(id, () => [{ role: "user", content: "hello" }]);
+    chatStore.updateMessages(id, () => [
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
     ]);

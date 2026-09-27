@@ -59,6 +59,31 @@ export function effectiveReasoningEffort(session?: { reasoningEffort?: string } 
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
+/** ADR 0114 D2 load barrier. A session's transcript is `loaded` once its stored record
+ *  has been read (today: synchronously at boot; S5: asynchronously from IndexedDB).
+ *  `pending` is a read still in flight, `failed` a read that errored or timed out.
+ *  Never persisted — it describes this page's read, not the record. */
+export type SessionLoadState = "pending" | "loaded" | "failed";
+
+/** The only shape a message mutation takes (ADR 0114 D2): a function of the CURRENT
+ *  transcript, never a replacement array built from a snapshot the caller read earlier.
+ *  A caller whose target message is missing returns its input unchanged (a no-op). */
+export type MessagesUpdater = (messages: ChatMessage[]) => ChatMessage[];
+
+/** Replace the message with `id` by `fn(message)` — or hand `messages` back untouched when
+ *  there is no such message, so an updater built on it is a no-op for a missing target. */
+export function mapMessageById(
+  messages: ChatMessage[],
+  id: string,
+  fn: (message: ChatMessage) => ChatMessage,
+): ChatMessage[] {
+  const index = messages.findIndex((message) => message.id === id);
+  if (index < 0) return messages;
+  const next = messages.slice();
+  next[index] = fn(messages[index]);
+  return next;
+}
+
 export type ServerTurnControlState = {
   sessionId: string;
   taskId: string;
@@ -92,7 +117,23 @@ export type ChatState = PersistedChatState & {
   // durable task and republishes control frames while the turn is live; persisting this
   // would leave stale Stop/interjection controls after a completed turn.
   serverTurnControls: Record<string, ServerTurnControlState>;
+  // ADR 0114 D2 load barrier: sessions whose transcript is NOT loaded, by id. A session
+  // absent from the map is `loaded` (every session born in this tab, and every session
+  // read synchronously at boot). Ephemeral, never persisted — read it through
+  // `sessionLoadState`.
+  loadStateMap: Record<string, Exclude<SessionLoadState, "loaded">>;
 };
+
+/** A session's load state (ADR 0114 D2). Absent from the map means `loaded`. */
+export function sessionLoadState(state: Pick<ChatState, "loadStateMap">, sessionId: string): SessionLoadState {
+  return state.loadStateMap?.[sessionId] ?? "loaded";
+}
+
+/** True only for a session whose transcript has been read — the one state in which its
+ *  `messages` are the transcript rather than a placeholder for it. */
+export function isSessionLoaded(state: Pick<ChatState, "loadStateMap">, sessionId: string): boolean {
+  return sessionLoadState(state, sessionId) === "loaded";
+}
 
 // Chat sessions are PER AGENT — namespace the persisted key by the URL slug (ADR 0042 slug
 // routing), exactly like the per-agent layout. Without this every agent's window restores the
@@ -393,6 +434,9 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   for (const recovered of incoming) {
     if (!recovered.messages.length) continue;
     const existing = byId.get(recovered.id);
+    // ADR 0114 D2: a session whose record hasn't been read is never "locally empty" —
+    // server hydration must not fill (and so persist over) an unread transcript.
+    if (existing && !isSessionLoaded(current, existing.id)) continue;
     if (existing?.messages.length) {
       const messages = repairHydratedMessages(existing.messages, recovered.messages);
       if (!messages) continue;
@@ -503,6 +547,31 @@ function loadPersisted(): PersistedChatState {
   };
 }
 
+// ── load barrier: what a write may carry (ADR 0114 D2) ─────────────────────────
+// The last copy of each session known to be on disk — the record its load resolved
+// with. A session that is not `loaded` is written as THIS (or as the on-disk copy the
+// write is about to merge with), never as its in-memory placeholder: "no put ever runs
+// for a session that isn't loaded", so a slow or failed read can't overwrite history.
+const lastPersistedSessions = new Map<string, ChatSession>();
+
+/** The session list a write may carry: loaded sessions as they are in memory, every
+ *  other session as its on-disk (else last-known persisted) copy — or not at all. */
+function diskSafeSessions(state: ChatState, onDisk: ChatSession[] | null): ChatSession[] {
+  const unloaded = state.loadStateMap;
+  if (!unloaded || !Object.keys(unloaded).length) return state.sessions;
+  const diskById = new Map((onDisk ?? []).map((session) => [session.id, session]));
+  const out: ChatSession[] = [];
+  for (const session of state.sessions) {
+    if (!unloaded[session.id]) {
+      out.push(session);
+      continue;
+    }
+    const persisted = diskById.get(session.id) ?? lastPersistedSessions.get(session.id);
+    if (persisted) out.push(persisted);
+  }
+  return out;
+}
+
 // Storage recovery (ADR 0114 D6): after AppCrash's "Free up space & reload" (this page) or a
 // `storage-reset` broadcast (another tab), this store stops writing — see lib/storageReset.ts.
 function persist(state: ChatState) {
@@ -512,12 +581,12 @@ function persist(state: ChatState) {
     // don't have (or newer copies) since our last read. Fold them in so our write never
     // clobbers another tab's chats (the last-writer-wins data-loss bug). Our own
     // streaming sessions stay authoritative; locally-deleted ones are not resurrected.
-    let sessions = state.sessions;
+    let sessions = diskSafeSessions(state, null);
     try {
       const raw = readKey("local", STORAGE_KEY);
       const onDisk = raw ? sanitizePersisted(JSON.parse(raw)) : null;
       if (onDisk) {
-        sessions = mergeSessions(state.sessions, onDisk.sessions, {
+        sessions = mergeSessions(diskSafeSessions(state, onDisk.sessions), onDisk.sessions, {
           streamingIds: streamingIds(state),
           deletedIds: locallyDeletedIds,
         });
@@ -616,6 +685,9 @@ export function unusedSession(
   const wantIncognito = Boolean(opts.incognito);
   return state.sessions.find(
     (s) =>
+      // ADR 0114 D2: an unread (`pending`) or unreadable (`failed`) transcript is never
+      // "empty" — reusing or discarding it as a blank would lose its history.
+      isSessionLoaded(state, s.id) &&
       s.messages.length === 0 &&
       s.title === DEFAULT_SESSION_TITLE &&
       Boolean(s.incognito) === wantIncognito,
@@ -684,25 +756,27 @@ let state: ChatState = {
   pendingDeleteRequest: null,
   pendingClearRequest: null,
   serverTurnControls: {},
+  loadStateMap: {},
 };
 
 const listeners = new Set<() => void>();
 
 function setState(
   updater: (current: ChatState) => ChatState,
-  persistMode: "immediate" | "debounced" = "immediate",
+  persistMode: "immediate" | "debounced" | "none" = "immediate",
 ) {
   state = updater(state);
   if (persistMode === "immediate") {
     persistDirty = true;
     flushChatPersist(); // cancels any pending timer and writes the full state
-  } else {
+  } else if (persistMode === "debounced") {
     schedulePersist();
   }
   listeners.forEach((listener) => listener());
 }
 
 function removeLocalSession(sessionId: string) {
+  forgetSessionLoad(sessionId);
   setState((current) => {
     const sessions = current.sessions.filter((session) => session.id !== sessionId);
     const currentSessionId =
@@ -711,8 +785,11 @@ function removeLocalSession(sessionId: string) {
     const serverTurnControls = { ...current.serverTurnControls };
     delete sessionStatusMap[sessionId];
     delete serverTurnControls[sessionId];
+    const loadStateMap = { ...current.loadStateMap };
+    delete loadStateMap[sessionId];
     return {
       ...current,
+      loadStateMap,
       sessions,
       currentSessionId,
       activeSessions: ensureActiveSessions(
@@ -764,6 +841,201 @@ try {
   // non-browser context (tests without a full window)
 }
 
+// ── the load barrier (ADR 0114 D2) ──────────────────────────────────────────────
+// Today every session is read synchronously at boot, so every session is `loaded` and
+// none of this engages. It exists so that when transcripts load asynchronously (S5,
+// IndexedDB), a slow or failed read can never be overwritten:
+//
+//   * a message updater for a session that isn't `loaded` is QUEUED, and replayed in
+//     order on top of the record once it loads;
+//   * a `failed` session (read errored, or `pending` for SESSION_LOAD_TIMEOUT_MS) also
+//     shows its queued updaters in memory — marked unsaved — and the read is retried on
+//     `pageshow` / `visibilitychange`; a late success replays the queue onto the record;
+//   * no write ever carries a non-loaded session's in-memory copy (diskSafeSessions).
+//
+// `chatLoadBarrier` is the seam: S5 plugs its IndexedDB read in as the loader; tests
+// use it to boot sessions `pending` and resolve or fail them later.
+
+export const SESSION_LOAD_TIMEOUT_MS = 10_000;
+
+/** Reads one session's stored record. `null` = no record exists (a genuinely empty
+ *  session); a rejection = the read failed. */
+export type SessionRecordLoader = (sessionId: string) => Promise<ChatSession | null>;
+
+const queuedUpdaters = new Map<string, MessagesUpdater[]>();
+const loadBaselines = new Map<string, ChatMessage[]>();
+const loadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const sessionLoaders = new Map<string, SessionRecordLoader>();
+const loadListeners = new Set<(sessionId: string) => void>();
+
+/** Apply updaters to a session. Identity-preserving when nothing changed, so a no-op
+ *  updater (missing target) neither bumps `updatedAt` nor reads as a local edit. */
+function applyMessagesUpdaters(session: ChatSession, updaters: MessagesUpdater[]): ChatSession {
+  let messages = session.messages;
+  for (const updater of updaters) messages = updater(messages);
+  if (messages === session.messages) return session;
+  const deduped = dedupeMessages(messages);
+  return {
+    ...session,
+    title: session.title === DEFAULT_SESSION_TITLE ? titleFromMessages(deduped) : session.title,
+    messages: deduped,
+    updatedAt: Date.now(),
+  };
+}
+
+function withSession(
+  current: ChatState,
+  sessionId: string,
+  fn: (session: ChatSession) => ChatSession,
+): ChatSession[] {
+  let changed = false;
+  const sessions = current.sessions.map((session) => {
+    if (session.id !== sessionId) return session;
+    const next = fn(session);
+    if (next !== session) changed = true;
+    return next;
+  });
+  return changed ? sessions : current.sessions;
+}
+
+function clearLoadTimer(sessionId: string) {
+  const timer = loadTimers.get(sessionId);
+  if (timer !== undefined) clearTimeout(timer);
+  loadTimers.delete(sessionId);
+}
+
+function forgetSessionLoad(sessionId: string) {
+  clearLoadTimer(sessionId);
+  queuedUpdaters.delete(sessionId);
+  loadBaselines.delete(sessionId);
+  sessionLoaders.delete(sessionId);
+}
+
+function attemptSessionLoad(sessionId: string) {
+  const loader = sessionLoaders.get(sessionId);
+  if (!loader) return;
+  void Promise.resolve()
+    .then(() => loader(sessionId))
+    .then(
+      (record) => resolveSessionLoad(sessionId, record),
+      () => failSessionLoad(sessionId),
+    );
+}
+
+function resolveSessionLoad(sessionId: string, record: ChatSession | null) {
+  if (isSessionLoaded(state, sessionId)) return; // first answer wins; a late duplicate is ignored
+  const queue = queuedUpdaters.get(sessionId) ?? [];
+  const baseline = loadBaselines.get(sessionId);
+  forgetSessionLoad(sessionId);
+  if (record) lastPersistedSessions.set(sessionId, record);
+  setState(
+    (current) => {
+      const loadStateMap = { ...current.loadStateMap };
+      delete loadStateMap[sessionId];
+      const sessions = withSession(current, sessionId, (session) => {
+        const base: ChatSession = record
+          ? { ...session, ...record, id: session.id }
+          : { ...session, messages: baseline ?? session.messages };
+        return applyMessagesUpdaters(base, queue);
+      });
+      // Boot derives `streaming` for a transcript with a live turn (S2); a transcript
+      // that arrives late gets the same derivation, so its slot reattaches.
+      const loaded = sessions.find((session) => session.id === sessionId);
+      const last = loaded ? [...loaded.messages].reverse().find((m) => m.role === "assistant") : undefined;
+      const sessionStatusMap =
+        last?.status === "streaming" && last.taskId && !current.sessionStatusMap[sessionId]
+          ? { ...current.sessionStatusMap, [sessionId]: "streaming" as SessionStatus }
+          : current.sessionStatusMap;
+      return { ...current, sessions, loadStateMap, sessionStatusMap };
+    },
+    // The record is already on disk; only queued edits make this a write.
+    queue.length ? "immediate" : "none",
+  );
+  loadListeners.forEach((listener) => listener(sessionId));
+}
+
+function failSessionLoad(sessionId: string) {
+  if (sessionLoadState(state, sessionId) !== "pending") return;
+  clearLoadTimer(sessionId);
+  const queue = queuedUpdaters.get(sessionId) ?? [];
+  setState(
+    (current) => ({
+      ...current,
+      loadStateMap: { ...current.loadStateMap, [sessionId]: "failed" },
+      // In memory only: the queue stays queued, to replay onto the record on a retry.
+      sessions: withSession(current, sessionId, (session) => applyMessagesUpdaters(session, queue)),
+    }),
+    "none",
+  );
+}
+
+/** Re-read every `failed` session (the tab came back: `pageshow`, `visibilitychange`). */
+function retryFailedSessionLoads() {
+  for (const [sessionId, loadState] of Object.entries(state.loadStateMap)) {
+    if (loadState === "failed") attemptSessionLoad(sessionId);
+  }
+}
+
+try {
+  window.addEventListener("pageshow", retryFailedSessionLoads);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") retryFailedSessionLoads();
+  });
+} catch {
+  // non-browser context (tests without a full window)
+}
+
+/** The load-barrier seam (ADR 0114 D2). S5 passes its IndexedDB read as the loader;
+ *  tests pass a deferred promise to hold sessions `pending`. */
+export const chatLoadBarrier = {
+  /** Mark `sessionIds` `pending` and read each through `loader`. A read still pending
+   *  after SESSION_LOAD_TIMEOUT_MS becomes `failed`; a later success still loads it. */
+  begin(sessionIds: string[], loader: SessionRecordLoader) {
+    const ids = sessionIds.filter((id) => state.sessions.some((session) => session.id === id));
+    if (!ids.length) return;
+    for (const id of ids) {
+      clearLoadTimer(id);
+      if (isSessionLoaded(state, id)) {
+        loadBaselines.set(id, state.sessions.find((session) => session.id === id)!.messages);
+      }
+      sessionLoaders.set(id, loader);
+      loadTimers.set(
+        id,
+        setTimeout(() => {
+          loadTimers.delete(id);
+          failSessionLoad(id);
+        }, SESSION_LOAD_TIMEOUT_MS),
+      );
+    }
+    setState(
+      (current) => ({
+        ...current,
+        loadStateMap: {
+          ...current.loadStateMap,
+          ...Object.fromEntries(ids.map((id) => [id, "pending" as const])),
+        },
+      }),
+      "none",
+    );
+    ids.forEach(attemptSessionLoad);
+  },
+
+  /** Retry every `failed` read now (what `pageshow` / `visibilitychange` do). */
+  retryFailed: retryFailedSessionLoads,
+
+  /** Called with a session id each time a session becomes `loaded` through the barrier.
+   *  Returns the unsubscribe. */
+  onLoaded(listener: (sessionId: string) => void): () => void {
+    loadListeners.add(listener);
+    return () => loadListeners.delete(listener);
+  },
+
+  /** Updaters waiting for this session's record (tests / diagnostics). */
+  queuedCount(sessionId: string): number {
+    return queuedUpdaters.get(sessionId)?.length ?? 0;
+  },
+};
+
 export const chatStore = {
   subscribe(listener: () => void) {
     listeners.add(listener);
@@ -814,6 +1086,8 @@ export const chatStore = {
 
   captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
     if (locallyDeletedIds.has(sessionId) || locallyDismissedIds.has(sessionId)) return null;
+    // ADR 0114 D2: an unread transcript is never "locally empty" or "needs repair".
+    if (!isSessionLoaded(state, sessionId)) return null;
     const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
     if (localSession?.messages.length && !needsDurableHydration(localSession)) return null;
     return { sessionId, localSession };
@@ -826,6 +1100,7 @@ export const chatStore = {
         if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return false;
         if (!tokens.has(session.id)) return eligibility.length === 0;
         const now = current.sessions.find((candidate) => candidate.id === session.id) ?? null;
+        if (now && !isSessionLoaded(current, now.id)) return false;
         const tokenSession = tokens.get(session.id);
         return now === tokenSession && (!now?.messages.length || (now != null && needsDurableHydration(now)));
       });
@@ -919,28 +1194,44 @@ export const chatStore = {
     });
   },
 
-  updateMessages(sessionId: string, messages: ChatMessage[]) {
+  /** Change a session's transcript through `updater` — a function of the CURRENT
+   *  messages (ADR 0114 D2; there is no array form). For a session that isn't `loaded`
+   *  the updater is queued and replayed once it loads (a `failed` session also shows it
+   *  in memory, unsaved). An updater whose target is missing returns its input. */
+  updateMessages(sessionId: string, updater: MessagesUpdater) {
+    const loadState = sessionLoadState(state, sessionId);
+    if (loadState !== "loaded") {
+      if (!state.sessions.some((session) => session.id === sessionId)) return;
+      queuedUpdaters.set(sessionId, [...(queuedUpdaters.get(sessionId) ?? []), updater]);
+      if (loadState === "failed") {
+        setState(
+          (current) => ({
+            ...current,
+            sessions: withSession(current, sessionId, (session) => applyMessagesUpdaters(session, [updater])),
+          }),
+          "none",
+        );
+      }
+      return;
+    }
     // Fires per streamed SSE frame (~24 chars) and per reveal-queue tick
     // (~word-sized, #2993) — debounce the localStorage write. The stream-done
     // path flushes via setSessionStatus right after the final updateMessages,
     // so the terminal state always lands immediately.
-    const deduped = dedupeMessages(messages);
-    setState(
-      (current) => ({
-        ...current,
-        sessions: current.sessions.map((session) =>
-          session.id === sessionId
-            ? {
-                ...session,
-                title: session.title === DEFAULT_SESSION_TITLE ? titleFromMessages(deduped) : session.title,
-                messages: deduped,
-                updatedAt: Date.now(),
-              }
-            : session,
-        ),
-      }),
-      "debounced",
-    );
+    setState((current) => {
+      const sessions = withSession(current, sessionId, (session) => applyMessagesUpdaters(session, [updater]));
+      return sessions === current.sessions ? current : { ...current, sessions };
+    }, "debounced");
+  },
+
+  /** This session's load state (ADR 0114 D2). */
+  loadState(sessionId: string): SessionLoadState {
+    return sessionLoadState(state, sessionId);
+  },
+
+  /** A `failed` session holding edits that exist only in memory until its read succeeds. */
+  hasUnsavedEdits(sessionId: string): boolean {
+    return sessionLoadState(state, sessionId) === "failed" && (queuedUpdaters.get(sessionId)?.length ?? 0) > 0;
   },
 
   renameSession(sessionId: string, title: string) {

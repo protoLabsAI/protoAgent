@@ -54,7 +54,7 @@ it("changes the reattach dependency when hydration fills an already-mounted empt
  *  shape the ChatSurface reattach effect hands to reattachTurn. */
 function seedStuckSession(): string {
   const session = chatStore.createSession();
-  chatStore.updateMessages(session.id, [
+  chatStore.updateMessages(session.id, () => [
     { id: "u1", role: "user", content: "deploy the release", status: "done" },
     { id: ASSISTANT_ID, role: "assistant", content: "partial answer", status: "streaming", taskId: TASK_ID },
   ]);
@@ -70,7 +70,7 @@ function seedStuckSession(): string {
  *  patches `content` would leave the transcript stopped at the last tool card. */
 function seedStuckMultiPartSession(preamble = ""): string {
   const session = chatStore.createSession();
-  chatStore.updateMessages(session.id, [
+  chatStore.updateMessages(session.id, () => [
     { id: "u1", role: "user", content: "deploy the release", status: "done" },
     {
       id: ASSISTANT_ID,
@@ -143,7 +143,7 @@ describe("reattach cancelled before it settles", () => {
     const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
     chatStore.updateMessages(
       sessionId,
-      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+      () => cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
     );
     cancel();
 
@@ -194,12 +194,12 @@ describe("reattach cancelled before it settles", () => {
     const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
     chatStore.updateMessages(
       sessionId,
-      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+      () => cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
     );
     cancel();
     expect(sessionStatus(sessionId)).toBe("idle");
     const next = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
-    chatStore.updateMessages(sessionId, [
+    chatStore.updateMessages(sessionId, () => [
       ...next.messages,
       { id: "u2", role: "user", content: "and the changelog", status: "done" },
       { id: "a2", role: "assistant", content: "", status: "streaming" },
@@ -251,7 +251,7 @@ describe("reattach key skips participant rows", () => {
   it("a delegate's reply mid-turn keeps the reattach, so the turn's own end releases the session", async () => {
     const session = chatStore.createSession();
     const liveId = liveMessageId(TASK_ID, session.id);
-    chatStore.updateMessages(session.id, [
+    chatStore.updateMessages(session.id, () => [
       { id: "u1", role: "user", content: "ask claude-code to check the diff", status: "done" },
       { id: liveId, role: "assistant", content: "Asking claude-code…", status: "streaming", taskId: TASK_ID },
     ]);
@@ -280,7 +280,7 @@ describe("reattach key skips participant rows", () => {
     // already settled, AFTER the still-streaming preview. The turn has not ended.
     chatStore.updateMessages(
       session.id,
-      applyProgressFrame(messagesOf(), {
+      () => applyProgressFrame(messagesOf(), {
         session: session.id,
         taskId: TASK_ID,
         kind: "room",
@@ -297,7 +297,7 @@ describe("reattach key skips participant rows", () => {
     // The turn ends: `chat.resumed` settles the preview, which is what ends the reattach —
     // and with the reattach still the one holding the status, the session is handed back.
     const render = resumedTurnRender({ session_id: session.id, task_id: TASK_ID, text: "Checked: clean.", state: "completed" })!;
-    chatStore.updateMessages(session.id, settleResumedTurn(messagesOf(), render, undefined, "resume-1"));
+    chatStore.updateMessages(session.id, () => settleResumedTurn(messagesOf(), render, undefined, "resume-1"));
     rerender();
     expect(slotCancelled).toBe(true);
     expect(sessionStatus(session.id)).toBe("idle");
@@ -348,7 +348,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
   function seedServerTurn(): { sessionId: string; liveId: string } {
     const session = chatStore.createSession();
     const liveId = liveMessageId(TASK_ID, session.id);
-    chatStore.updateMessages(session.id, [
+    chatStore.updateMessages(session.id, () => [
       { id: "u1", role: "user", content: "check the nightly report", status: "done" },
       { id: liveId, role: "assistant", content: "Reading the report…", status: "streaming", taskId: TASK_ID },
     ]);
@@ -367,7 +367,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     const cur = messagesOf(sessionId);
     chatStore.updateMessages(
       sessionId,
-      cur.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+      () => cur.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
     );
     expect(reconcileSessionStatus(sessionId)).toBe(false);
     expect(sessionStatus(sessionId)).toBe("streaming");
@@ -383,7 +383,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     const { sessionId, liveId } = seedServerTurn();
     chatStore.updateMessages(
       sessionId,
-      messagesOf(sessionId).map((m) => (m.id === liveId ? { ...m, content: "Report is clean.", status: "done" as const } : m)),
+      () => messagesOf(sessionId).map((m) => (m.id === liveId ? { ...m, content: "Report is clean.", status: "done" as const } : m)),
     );
     expect(sessionStatus(sessionId)).toBe("streaming");
 
@@ -486,14 +486,14 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
 
     // Stop (ChatSurface.stop): settle every streaming bubble and go idle. The slot's key goes
     // "" and it cancels the reattach.
-    chatStore.updateMessages(sessionId, finalizeStoppedMessages(messagesOf(sessionId)));
+    chatStore.updateMessages(sessionId, () => finalizeStoppedMessages(messagesOf(sessionId)));
     chatStore.setSessionStatus(sessionId, "idle");
     slot.rerender();
     expect(sessionStatus(sessionId)).toBe("idle");
 
     // The operator sends at once (runTurn): a new streaming bubble, a claimed session.
     const endTurn = beginLocalTurn(sessionId);
-    chatStore.updateMessages(sessionId, [
+    chatStore.updateMessages(sessionId, () => [
       ...messagesOf(sessionId),
       { id: "u2", role: "user", content: "and the changelog", status: "done" },
       { id: "a2", role: "assistant", content: "", status: "streaming" },
@@ -531,7 +531,7 @@ describe("reattach run(): paused states", () => {
     assistant.components = [{ component: "key-value", props: { version: "1.2.3" } }];
     assistant.toolCalls = [{ id: "call-1", name: "run_command", status: "running" }];
     expect(assistant).toMatchObject({ content: "partial", status: "streaming", durableSnapshotFallback: true });
-    chatStore.updateMessages(session.id, messages);
+    chatStore.updateMessages(session.id, () => messages);
     chatStore.setSessionStatus(session.id, "streaming");
     resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
       handlers?.onTaskSnapshot?.();
@@ -566,7 +566,7 @@ describe("reattach run(): paused states", () => {
       history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
     });
     const assistant = messages.find((message) => message.role === "assistant")!;
-    chatStore.updateMessages(session.id, messages);
+    chatStore.updateMessages(session.id, () => messages);
     resumeTask.mockRejectedValue(new Error("task unavailable"));
     replayTask.mockRejectedValue(new Error("task unavailable"));
     getTask.mockRejectedValue(new Error("task unavailable"));
@@ -592,7 +592,7 @@ describe("reattach run(): paused states", () => {
       history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
     });
     const assistant = messages.find((message) => message.role === "assistant")!;
-    chatStore.updateMessages(session.id, messages);
+    chatStore.updateMessages(session.id, () => messages);
     chatStore.setSessionStatus(session.id, "streaming");
     const emitFullSnapshot = (handlers: Parameters<typeof api.resumeTask>[2]) => {
       handlers?.onTaskSnapshot?.();

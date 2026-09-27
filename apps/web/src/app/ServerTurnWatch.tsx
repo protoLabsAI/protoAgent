@@ -102,9 +102,8 @@ export function foldProgressEvent(data: ChatProgressEvent): void {
   const frame = parseProgress(data);
   if (!frame) return;
   if (!busMayFold(frame.kind, isReattaching(liveMessageId(frame.taskId, frame.session)))) return;
-  const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);
-  if (!target) return; // chat not open in this window — nothing to surface here
-  chatStore.updateMessages(frame.session, applyProgressFrame(target.messages, frame));
+  // Chat not open in this window → the store ignores it: nothing to surface here.
+  chatStore.updateMessages(frame.session, (messages) => applyProgressFrame(messages, frame));
 }
 
 export function ServerTurnWatch() {
