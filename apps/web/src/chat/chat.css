@@ -392,7 +392,7 @@
   background: var(--pl-color-fg-subtle);
 }
 .chat-usage-bar-fill[data-warn="true"] {
-  background: var(--pl-color-status-warning, #d98324);
+  background: var(--pl-color-status-warning);
 }
 
 /* Hover card (DS Tooltip content): a compact label/value breakdown of the turn. */
@@ -573,8 +573,8 @@
    .pl-message--user (anchored under .chat-session-slot), so it outranks the DS base
    user-bubble rule regardless of import order. */
 .chat-session-slot .pl-message--user.chat-slash-msg .pl-message__content {
-  background: color-mix(in srgb, var(--brand-violet) 12%, var(--pl-color-bg-raised));
-  border-color: color-mix(in srgb, var(--brand-violet) 40%, var(--pl-color-border-strong));
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, var(--pl-color-bg-raised));
+  border-color: color-mix(in srgb, var(--pl-color-accent) 40%, var(--pl-color-border-strong));
 }
 .chat-user-text.chat-slash-cmd {
   display: inline-flex;
@@ -592,7 +592,7 @@
   width: 1.2em;
   height: 1.2em;
   border-radius: 4px;
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
   color: var(--pl-color-fg-on-accent);
   font-weight: 600;
   line-height: 1;
@@ -641,11 +641,11 @@
   box-shadow: var(--pl-shadow-card);
 }
 .chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-status-info); }
-/* Success = "the agent did the thing", so it follows the workspace accent — the exact chain
-   the HITL card adopted in #2157 (see hitl.css / hitl-accent.test.ts) — not traffic-light
-   green. Warning/danger/info stay semantic: the #2197 export-blocked note relies on danger
-   reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
-.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent, var(--brand-indigo, #6366f1)); }
+/* Success = "the agent did the thing", so it follows the workspace accent — the semantic
+   --pl-color-accent the HITL card adopted (see hitl.css / hitl-accent.test.ts) — not
+   traffic-light green. Warning/danger/info stay semantic: the #2197 export-blocked note
+   relies on danger reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
+.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent); }
 .chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-status-warning); }
 .chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-status-error); }
 
@@ -749,7 +749,7 @@
 .slash-name {
   font-family: var(--pl-font-mono);
   font-size: 13px;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 .slash-title {
   display: flex;
@@ -862,7 +862,7 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: var(--pl-color-fg-muted, #8b8b93);
+  color: var(--pl-color-fg-muted);
   pointer-events: none;
 }
 

@@ -6,17 +6,15 @@ import { describe, expect, it } from "vitest";
 // (`test.css.include`) — that's what lets `?raw` return its real text.
 import hitlCss from "./hitl.css?raw";
 
-// #2153 — the HITL card pinned its operator-facing accents to the literal brand token
-// `var(--brand-indigo, #6366f1)`, so a workspace accent override (ThemePanel writes
-// `--pl-color-accent` on <html>; theme-base.css bridges it into --accent/--brand-violet,
-// which is why the composer's focus border follows it) recolored the composer but never the
-// card. Every accent site now reads `var(--pl-color-accent, var(--brand-indigo, #6366f1))`
-// — the semantic token layered over the literal fallback, so themed workspaces see the card
-// follow their accent and unthemed installs render byte-identically to before.
+// #2153 — the HITL card's operator-facing accents follow the workspace accent: they read the
+// semantic `--pl-color-accent` the ThemePanel override writes on <html> (theme-base.css
+// bridges the same token into the composer's focus border, which is why the card and the
+// composer recolour together). No literal fallback: the DS tokens are always loaded, so a
+// fallback could only paint a wrong, dark-only colour.
 
-// The exact chain every accent site must use. A lazy re-pin to the literal token during an
+// The exact form every accent site must use. A lazy re-pin to a literal token during an
 // unrelated edit fails the per-site assertion AND the whole-file sweep below.
-const ACCENT = /var\(--pl-color-accent,\s*var\(--brand-indigo,\s*#6366f1\)\)/;
+const ACCENT = /var\(--pl-color-accent\)/;
 
 // Pull a single top-level rule's body by its exact line-start selector, so each assertion
 // is scoped to its site (`.hitl-card` must not match `.hitl-float .hitl-card`).
@@ -60,14 +58,17 @@ describe("HITL card accents follow the workspace accent override (#2153)", () =>
     expect(rule(".hitl-card-mark")).toMatch(new RegExp(`color:\\s*${ACCENT.source}`));
   });
 
-  it("all 7 sites are chained — no bare --brand-indigo pin anywhere in the file", () => {
-    // Exactly the seven operator-facing sites: card border, active dot, option hover,
-    // focus outline, selected border, selected fill, checkmark.
+  it("exactly 7 accent sites read the bare semantic token", () => {
+    // The seven operator-facing sites: card border, active dot, option hover, focus outline,
+    // selected border, selected fill, checkmark.
     expect(hitlCss.match(new RegExp(ACCENT.source, "g"))).toHaveLength(7);
-    // Strip every properly-chained occurrence; any --brand-indigo left over is a re-pin
-    // to the literal token without the semantic accent in front of it.
-    const stripped = hitlCss.replace(new RegExp(ACCENT.source, "g"), "");
-    expect(stripped).not.toContain("var(--brand-indigo");
+  });
+
+  it("no legacy brand alias remains anywhere in the file", () => {
+    // Built by concatenation so this test file carries no such literal itself (a later card
+    // adds a repo-wide guard for it). The legacy aliases were retired to DS tokens.
+    const legacyPrefix = "--brand" + "-";
+    expect(hitlCss).not.toContain(legacyPrefix);
   });
 
   it("keeps every touched CSS comment free of the glued `*` `/` minifier trap", () => {
