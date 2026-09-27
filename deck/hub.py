@@ -638,24 +638,29 @@ class HubClient:
         path = f"/api/fleet/{segment(ident)}" + ("?purge=true" if purge else "")
         return _expect_dict(self.url, self._request("DELETE", path, timeout=_LIFECYCLE_TIMEOUT), "remove")
 
-    def remote_add(self, name: str, url: str, token: str = "") -> dict:
+    def remote_add(self, name: str, url: str, token: str = "", *, allow_insecure: bool = False) -> dict:
         body: dict[str, Any] = {"name": name, "url": url}
         if token:
             body["token"] = token  # sent once; the hub never returns it
+        if allow_insecure:
+            body["allow_insecure"] = True  # ADR 0113 D10: store it for a plain-http LAN remote anyway
         return _expect_dict(self.url, self._request("POST", "/api/fleet/remotes", json_body=body), "remote add")
 
     def remote_update(self, ident: str, **fields: Any) -> dict:
-        """Only the fields given change; ``token=""`` clears the stored bearer."""
-        body = {k: v for k, v in fields.items() if v is not None}
+        """Only the fields given change; ``token=""`` clears the stored bearer. A truthy
+        ``allow_insecure`` rides along (ADR 0113 D10); a falsy one is omitted."""
+        body = {k: v for k, v in fields.items() if v is not None and not (k == "allow_insecure" and not v)}
         return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/remotes/{segment(ident)}", json_body=body), "remote edit")
 
-    def remote_pair(self, url: str, code: str, name: str | None = None) -> dict:
+    def remote_pair(self, url: str, code: str, name: str | None = None, *, allow_insecure: bool = False) -> dict:
         """``POST /api/fleet/remotes/pair`` (ADR 0113 D1) — the HUB claims the code against
         the remote, so the minted token lands in the hub's registry and never passes
         through this client. Lifecycle timeout: the hub makes several calls to the remote."""
         body: dict[str, Any] = {"url": url, "code": code}
         if name:
             body["name"] = name
+        if allow_insecure:
+            body["allow_insecure"] = True  # ADR 0113 D10: the operator accepted cleartext to this remote
         return _expect_dict(self.url, self._request("POST", "/api/fleet/remotes/pair", json_body=body, timeout=_LIFECYCLE_TIMEOUT), "remote pair")
 
     def remote_remove(self, ident: str) -> dict:

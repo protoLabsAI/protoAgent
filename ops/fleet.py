@@ -122,24 +122,32 @@ def rename_sync(ident: str, new_name: object) -> dict:
     return manager.rename(ident, new_name)
 
 
-def remote_add_sync(name: str, url: str, token: str = "") -> dict:
+def remote_add_sync(name: str, url: str, token: str = "", allow_insecure: bool = False) -> dict:
     """Register a remote member and probe it at once, so the caller learns ``reachable``
     now instead of at the next poll — an unreachable peer is NOT rejected (deferred
     registration is intentional)."""
     from graph.fleet import supervisor
 
-    rec = supervisor.add_remote(str(name or ""), str(url or ""), token=str(token or ""))
+    rec = supervisor.add_remote(str(name or ""), str(url or ""), token=str(token or ""), allow_insecure=bool(allow_insecure))
     reachable, version = supervisor.probe_remote(rec["id"])
     return {"agent": rec, "reachable": reachable, "version": version, "auth": _auth_of(rec["id"])}
 
 
-def remote_update_sync(ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None) -> dict:
-    """Edit a remote in place — omitted fields stay, ``token=""`` clears the bearer."""
+def remote_update_sync(
+    ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None, allow_insecure: bool = False
+) -> dict:
+    """Edit a remote in place — omitted fields stay, ``token=""`` clears the bearer. Moving
+    the url to a new origin without a token CLEARS the stored one (it was issued by the old
+    host); the answer then carries ``token_cleared: true`` so every surface can say so."""
     from graph.fleet import supervisor
 
-    rec = supervisor.update_remote(ident, name=name, url=url, token=token)
+    rec = supervisor.update_remote(ident, name=name, url=url, token=token, allow_insecure=bool(allow_insecure))
+    token_cleared = bool(rec.pop("token_cleared", False))
     reachable, version = supervisor.probe_remote(rec["id"])
-    return {"agent": rec, "reachable": reachable, "version": version, "auth": _auth_of(rec["id"])}
+    out = {"agent": rec, "reachable": reachable, "version": version, "auth": _auth_of(rec["id"])}
+    if token_cleared:
+        out["token_cleared"] = True
+    return out
 
 
 def _auth_of(rid: str) -> str:
@@ -150,12 +158,14 @@ def _auth_of(rid: str) -> str:
     return supervisor.remote_auth(supervisor.remote_for_slug(rid) or {"id": rid})
 
 
-def remote_pair_sync(url: str, code: str, name: str | None = None) -> dict:
+def remote_pair_sync(url: str, code: str, name: str | None = None, allow_insecure: bool = False) -> dict:
     """Pair with a remote by redeeming a code its operator minted (ADR 0113 D1): add it,
     or re-token the member already at that URL. ``{agent, reachable, version, auth, action}``."""
     from graph.fleet import supervisor
 
-    return supervisor.pair_remote(str(url or ""), str(code or ""), name=(str(name) if name else None))
+    return supervisor.pair_remote(
+        str(url or ""), str(code or ""), name=(str(name) if name else None), allow_insecure=bool(allow_insecure)
+    )
 
 
 def remote_remove_sync(ident: str) -> dict:
@@ -212,18 +222,20 @@ async def rename(ident: str, new_name: str) -> dict:
 
 
 @op(name="fleet.remotes.add", mutates=True, summary="Register a remote protoAgent as a switchable fleet member (optional bearer, never returned) and probe it.")
-async def remotes_add(name: str, url: str, token: str = "") -> dict:
-    return await asyncio.to_thread(remote_add_sync, name, url, token)
+async def remotes_add(name: str, url: str, token: str = "", allow_insecure: bool = False) -> dict:
+    return await asyncio.to_thread(remote_add_sync, name, url, token, allow_insecure)
 
 
 @op(name="fleet.remotes.update", mutates=True, summary="Edit a remote member's name / url / token in place (omitted fields stay; an empty token clears it) and re-probe it.")
-async def remotes_update(ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None) -> dict:
-    return await asyncio.to_thread(remote_update_sync, ident, name=name, url=url, token=token)
+async def remotes_update(
+    ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None, allow_insecure: bool = False
+) -> dict:
+    return await asyncio.to_thread(remote_update_sync, ident, name=name, url=url, token=token, allow_insecure=allow_insecure)
 
 
 @op(name="fleet.remotes.pair", mutates=True, summary="Pair with a remote protoAgent by claiming a code its operator generated; stores the minted per-device token (never returned) and adds or re-tokens the member.")
-async def remotes_pair(url: str, code: str, name: str | None = None) -> dict:
-    return await asyncio.to_thread(remote_pair_sync, url, code, name)
+async def remotes_pair(url: str, code: str, name: str | None = None, allow_insecure: bool = False) -> dict:
+    return await asyncio.to_thread(remote_pair_sync, url, code, name, allow_insecure)
 
 
 @op(name="fleet.remotes.remove", mutates=True, summary="Unregister a remote fleet member (the remote agent itself is untouched).")

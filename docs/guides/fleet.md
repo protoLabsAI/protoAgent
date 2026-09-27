@@ -327,17 +327,58 @@ protoagent fleet pair http://100.101.189.45:7871 <code> [--name ava]
 ```
 
 The hub redeems the code against the remote's `POST /api/pairing/claim` and stores the
-per-device token it gets back — the remote lists the hub as `<hub name> (fleet hub)` in its
-Devices and can revoke it on its own. A URL that is already a member is **re-tokened** in
-place (the re-pair after a revoke); otherwise it is added, named after the remote's agent
-card (suffixed `-2`, `-3`… if that name is taken — an explicit `--name` that is taken is
-refused *before* the single-use code is spent). A wrong or expired code is a 400; a remote
-that is unreachable or isn't a protoAgent that supports pairing is a 502.
+per-device token it gets back. The remote lists the hub as `<hub name> (fleet hub)` in its
+Devices and can revoke it on its own. What happens next depends on the URL:
 
-**Token health.** When a remote has a stored token, the hub also checks it with an
-authenticated `GET /api/devices` on the remote (every 30s, and at once after add / edit /
-pair) and reports `auth` on the member: `ok`, `rejected` (401/403 — revoked or wrong: re-pair),
-`unknown` (no verdict yet, or an older remote without that route) or `none` (no token).
+- **The URL is already a member.** Its token is **replaced** in place: this is the re-pair
+  after a revoke. If the old token still works, the device it was issued for is revoked on
+  the remote, so re-pairing doesn't pile up live operator devices there.
+- **The URL is new.** The member is added, named after the remote's agent card (with `-2`,
+  `-3`… added if that name is taken). An explicit `--name` that is already taken is refused
+  *before* the single-use code is spent.
+
+A wrong or expired code is a 400. A remote that is unreachable, or doesn't reply the way a
+protoAgent that supports pairing would, is a 502.
+
+**Cleartext needs an explicit yes** *(ADR 0113 D10)*. A pairing code, and the token it
+turns into, cross plain `http://` without asking only when the address is safe:
+
+- loopback;
+- a tailnet: `100.64.0.0/10`, Tailscale's IPv6 range, or a `*.ts.net` MagicDNS name. A
+  tailnet is WireGuard-encrypted underneath.
+
+Any other name is judged by the addresses it resolves to at pairing time; every one of them
+must be safe. Plain `http://` to anything else is refused with a 400 that names the fix:
+use the remote's tailnet address or `https://`. To proceed anyway on a network you trust,
+opt in with `allow_insecure: true` on the API, or `--insecure-http` on the CLI (the same
+flag that allows a plain-http `--hub`).
+
+The same rule applies when a token is being stored by "Add a remote by URL" or by an edit.
+Registering an address with no token sends nothing, so it is never gated. This doesn't make
+LAN pairing safe. It makes it a decision the operator takes knowingly. TLS on the remote is
+the real fix.
+
+The URL is the agent's **base** URL: `scheme://host[:port]`. Scheme and host are
+lowercased and a default port (`:80` / `:443`) is dropped, so two spellings of one remote
+are one member. A path, query, fragment or `user:pass@` is refused. That includes a phone
+pairing link (`…/app/#pair=…`): use the base URL with an agent code instead.
+
+**A token never follows a moved URL.** If a remote's URL is edited to a different
+scheme, host or port without a new token in the same edit, the stored token is **cleared**,
+and the answer says `token_cleared: true`. The token was issued by the old host, and the
+hub won't present it to a different one. Pair again, or pass a token with the edit.
+
+**Token health.** When a remote has a stored token, the hub checks it with `GET
+/api/devices` on the remote, every 30s and at once after an add, edit or pair. It first
+asks without the token, and reports `auth` on the member:
+
+| `auth` | Meaning |
+|---|---|
+| `ok` | The remote requires auth, and the token passes. |
+| `rejected` | 401/403 with the token: it was revoked or is wrong. Re-pair. |
+| `open` | The remote answered *without* any token. Its auth is off, so the token can't be verified, and anyone who can reach it can drive it. |
+| `unknown` | No verdict yet, or an older remote without that route. |
+| `none` | No token is stored. |
 
 Remote members show a `remote` tag + their URL in the fleet manager; `running` is a cached
 reachability probe. You can't start/stop/rename them from here — their deployment owns

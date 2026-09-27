@@ -208,6 +208,8 @@ protoagent fleet rm scout --purge               # asks you to type the name; --y
 protoagent fleet remote add ava https://ava.tail:7870 --bearer-stdin < token.txt
 protoagent fleet remote edit ava --url https://ava2.tail:7870 --clear-bearer
 protoagent fleet pair http://100.64.0.5:7870 ABCDE-12345   # claim a code minted on the remote; the hub stores the token (ADR 0113)
+protoagent fleet pair http://100.64.0.5:7870                # no code in argv: prompted (no echo), or --code-stdin from a pipe
+protoagent fleet pair http://192.168.1.20:7870 --insecure-http   # plain http off loopback/tailnet: refused unless you opt in (ADR 0113 D10)
 protoagent fleet order protoagent scout-1a2b r-ava   # every member id, in the order wanted
 protoagent fleet --all                          # every hub on this box (and peers), probed; --json for scripts
 protoagent fleet ls --hub https://ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an explicit --hub that fails is an error, not a fallback)

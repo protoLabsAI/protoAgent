@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import ipaddress
 import os
+import re
 import subprocess
 import sys
 import time
@@ -512,18 +514,68 @@ def remote_for_slug(slug: str) -> dict | None:
     return _load_remotes().get(slug)
 
 
+def _canonical_url(url: str) -> str:
+    """Canonicalize a remote BASE URL, or raise ``FleetError`` — no egress check.
+
+    Identity matters here, not just syntax: the registry matches a remote by URL (add's
+    duplicate check, pair's add-vs-re-token decision) and the token-clearing rule compares
+    ORIGINS. So ``HTTP://Ava.Tail:80/`` and ``http://ava.tail`` must be the same string:
+    scheme + host lowercased, the scheme's default port dropped, trailing slash trimmed.
+
+    A remote is a protoAgent's BASE URL — the hub appends ``/a2a``, ``/api/…``,
+    ``/.well-known/…`` to it — so a path, query, fragment or userinfo is refused rather than
+    silently carried into every proxied request (ADR 0113 review). A phone pairing link
+    (``…/app/#pair=<code>``) is the likeliest thing to be pasted by mistake; it gets its own
+    message.
+    """
+    from urllib.parse import urlsplit
+
+    u = (url or "").strip()
+    if not u.lower().startswith(("http://", "https://")):
+        raise FleetError(f"remote url must be http(s), got {u!r}")
+    if "#pair=" in u:
+        raise FleetError("that's a phone pairing link — use the agent's base URL and an agent code")
+    try:
+        parts = urlsplit(u)
+        port = parts.port
+    except ValueError as exc:
+        raise FleetError(f"remote url {u!r} is not a valid URL ({exc})") from exc
+    host = (parts.hostname or "").lower()
+    if not host:
+        raise FleetError(f"remote url {u!r} has no host")
+    if parts.username is not None or parts.password is not None:
+        raise FleetError("remote url must not carry credentials — pair with a code, or pass the bearer as a token")
+    if parts.path.rstrip("/") or parts.query or parts.fragment:
+        raise FleetError(f"remote url must be the agent's base URL (scheme://host[:port]), not {u!r}")
+    scheme = parts.scheme.lower()
+    if port == {"http": 80, "https": 443}[scheme]:
+        port = None
+    netloc = f"[{host}]" if ":" in host else host  # IPv6 literal keeps its brackets
+    if port is not None:
+        netloc += f":{port}"
+    return f"{scheme}://{netloc}"
+
+
+def _url_key(url: object) -> str:
+    """A STORED record's URL in canonical form, for identity comparisons — tolerant, so a
+    record written before canonicalization (or hand-edited) still matches its canonical
+    twin instead of being duplicated, and one that no longer parses compares as itself."""
+    try:
+        return _canonical_url(str(url or ""))
+    except FleetError:
+        return str(url or "").strip().rstrip("/")
+
+
 def _normalize_remote_url(url: str) -> str:
-    """Validate + canonicalize a remote member URL (trailing slash trimmed, must be http(s),
-    SSRF-guarded). Shared by add/update. Raises FleetError.
+    """Validate + canonicalize a remote member URL (see ``_canonical_url``), SSRF-guarded.
+    Shared by add/update/pair. Raises FleetError.
 
     SSRF guard (#871): the hub reverse-proxies /agents/<slug>/* to this URL, so a registered
     remote can turn the hub into an internal-network proxy. Fleet remotes ARE normally private
     (LAN / tailnet / a co-located instance), so allow_private — but ALWAYS block
     link-local/cloud-metadata (169.254.169.254), multicast, reserved.
     """
-    u = (url or "").strip().rstrip("/")
-    if not u.startswith(("http://", "https://")):
-        raise FleetError(f"remote url must be http(s), got {u!r}")
+    u = _canonical_url(url)
     from security import egress
 
     if egress.check_url(u, allow_private=True, block_unresolvable=False):
@@ -534,29 +586,97 @@ def _normalize_remote_url(url: str) -> str:
     return u
 
 
-def add_remote(name: str, url: str, token: str = "") -> dict:
+# ── transport rule (ADR 0113 D10) ─────────────────────────────────────────────
+# A credential — a pairing code going out, a bearer being stored for the proxy to present on
+# every call — crosses plain http:// only where the network already encrypts or never leaves
+# the box: loopback, or a tailnet (WireGuard underneath; 100.64.0.0/10, Tailscale's IPv6
+# ULA, or a MagicDNS ``*.ts.net`` name). Any other name is judged by the addresses it
+# resolves to NOW. Everything else is refused unless the caller opts in explicitly
+# (``allow_insecure`` / ``--insecure-http``) — mirroring ``deck.hub.credential_allowed``,
+# plus the tailnet exception.
+_TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+
+
+class InsecureTransport(FleetError):
+    """Refused: a credential would cross a plaintext network (ADR 0113 D10). A 400."""
+
+
+def _cleartext_host(url: str) -> str | None:
+    """The host a credential sent to ``url`` would reach IN CLEARTEXT over an untrusted
+    network, or ``None`` when that's not the case (https, loopback, tailnet). A name that
+    doesn't resolve can't be judged, so it counts as cleartext."""
+    import socket
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme.lower() == "https":
+        return None
+    host = (parts.hostname or "").lower()
+    if host.endswith(".ts.net"):
+        return None
+    try:
+        addrs = {ipaddress.ip_address(host)}
+    except ValueError:
+        try:
+            addrs = {ipaddress.ip_address(ai[4][0].split("%")[0]) for ai in socket.getaddrinfo(host, None)}
+        except (OSError, ValueError, UnicodeError):
+            return host
+    if addrs and all(a.is_loopback or any(a in n for n in _TAILNET_NETS) for a in addrs):
+        return None
+    return host
+
+
+def _require_secure_transport(url: str, *, allow_insecure: bool, what: str) -> None:
+    """Raise ``InsecureTransport`` (nothing sent, nothing stored) unless ``what`` can go to
+    ``url`` without crossing an untrusted network in cleartext, or the caller opted in."""
+    if allow_insecure:
+        return
+    host = _cleartext_host(url)
+    if host is not None:
+        raise InsecureTransport(
+            f"plain http to {host} would send {what} in cleartext on this network — use its tailnet "
+            "address, https, or confirm with allow_insecure/--insecure-http"
+        )
+
+
+def add_remote(name: str, url: str, token: str = "", *, device_id: str = "", allow_insecure: bool = False) -> dict:
     """Register a remote protoAgent as a fleet member. Name follows the workspace
-    charset + uniqueness rules; the id is opaque like a local agent's (#823)."""
+    charset + uniqueness rules; the id is opaque like a local agent's (#823). ``device_id``
+    (set by ``pair_remote``) is the REMOTE's id for the device its token was minted for —
+    not a secret; it is what a later re-pair revokes. A non-empty ``token`` for a plain-http
+    URL off loopback/tailnet is refused unless ``allow_insecure`` (ADR 0113 D10)."""
     name = manager._safe(name)
     if name.lower() in manager._RESERVED_NAMES:
         raise FleetError(f"{name!r} is reserved — it's how the fleet addresses this instance")
     url = _normalize_remote_url(url)
+    if token:
+        _require_secure_transport(url, allow_insecure=allow_insecure, what="its stored token")
     with _remotes_lock():
         remotes = _load_remotes()
         taken = {r["name"] for r in remotes.values()} | {w["name"] for w in manager.list_workspaces()}
         if name in taken:
             raise FleetError(f"an agent named {name!r} already exists")
-        if any(r["url"] == url for r in remotes.values()):
+        if any(_url_key(r.get("url")) == url for r in remotes.values()):
             raise FleetError(f"a remote at {url} is already in the fleet")
         rid = manager._new_id(name)
         rec = {"id": rid, "name": name, "url": url, "token": token, "added": datetime.now(timezone.utc).isoformat()}
+        if device_id:
+            rec["device_id"] = device_id
         remotes[rid] = rec
         _save_remotes(remotes)
     log.info("[fleet] remote member added: %s (%s)", name, url)
     return {k: v for k, v in rec.items() if k != "token"}
 
 
-def update_remote(ident: str, *, name: str | None = None, url: str | None = None, token: str | None = None) -> dict:
+def update_remote(
+    ident: str,
+    *,
+    name: str | None = None,
+    url: str | None = None,
+    token: str | None = None,
+    device_id: str | None = None,
+    allow_insecure: bool = False,
+) -> dict:
     """Edit a registered remote's ``name`` / ``url`` / ``token`` in place (by id or name).
 
     Only the fields you pass change — a ``None`` field is left as-is, so ``token=None`` KEEPS
@@ -564,6 +684,21 @@ def update_remote(ident: str, *, name: str | None = None, url: str | None = None
     token). The id — and so the URL slug, open windows, and data scope — never changes. Re-runs
     the same reserved-name / SSRF-egress / collision checks as ``add_remote``. Returns the
     sanitized record (token stripped). ``FleetError`` if no such remote.
+
+    **A token never follows a URL to a new origin** (ADR 0113 review, M1). The stored bearer
+    was issued BY the old host; moving the url to a different scheme/host/port without
+    passing a ``token`` in the same call CLEARS it, and the response says
+    ``token_cleared: true``. Otherwise the proxy — and the auth probe, every 30s — would
+    present one host's operator credential to another. Re-pairing is one code. A url edit
+    that canonicalizes to the same origin (a trailing slash, case, a default port) is not a
+    move and keeps the token.
+
+    ``device_id`` is ``pair_remote``'s bookkeeping; any other token change (a paste, a
+    clear, a cleared-by-move) forgets the stored one, since it no longer names the device
+    the stored token belongs to.
+
+    Storing a non-empty ``token`` for a plain-http URL off loopback/tailnet is refused
+    unless ``allow_insecure`` (ADR 0113 D10) — checked against the url the record will have.
     """
     with _remotes_lock():
         remotes = _load_remotes()
@@ -581,19 +716,36 @@ def update_remote(ident: str, *, name: str | None = None, url: str | None = None
             if new_name in others:
                 raise FleetError(f"an agent named {new_name!r} already exists")
             rec["name"] = new_name
+        token_cleared = False
         if url is not None:
             new_url = _normalize_remote_url(url)
-            if any(r["url"] == new_url for k, r in remotes.items() if k != rid):
+            if any(_url_key(r.get("url")) == new_url for k, r in remotes.items() if k != rid):
                 raise FleetError(f"a remote at {new_url} is already in the fleet")
+            # A canonical remote URL IS its origin (no path is allowed), so comparing the
+            # canonical forms is the origin comparison.
+            if _url_key(rec.get("url")) != new_url and token is None and rec.get("token"):
+                token = ""
+                token_cleared = True
             rec["url"] = new_url
+        if token:
+            _require_secure_transport(str(rec.get("url") or ""), allow_insecure=allow_insecure, what="its stored token")
         if token is not None:
             rec["token"] = token
+            if device_id:
+                rec["device_id"] = device_id
+            else:
+                rec.pop("device_id", None)
         remotes[rid] = rec
         _save_remotes(remotes)
     _probe_cache.pop(rid, None)  # url/token may have changed reachability — force a fresh probe
     _auth_cache.pop(rid, None)  # …and the token the auth probe vouched for (ADR 0113 D5)
+    if token_cleared:
+        log.info("[fleet] remote member %s moved to a new origin — its stored token was cleared (re-pair)", rec["name"])
     log.info("[fleet] remote member updated: %s (%s)", rec["name"], rec["url"])
-    return {k: v for k, v in rec.items() if k != "token"}
+    out = {k: v for k, v in rec.items() if k != "token"}
+    if token_cleared:
+        out["token_cleared"] = True
+    return out
 
 
 def remove_remote(ident: str) -> dict:
@@ -623,7 +775,7 @@ _probe_cache: dict[str, tuple[bool, float]] = {}
 # agent card, so a remote whose stored token is wrong — or whose paired device was revoked
 # on the remote — still read "running", then 401'd on the first proxied click. When a token
 # is stored the hub also makes one cheap operator-gated GET with it and records
-# ``auth: ok | rejected | unknown`` (``none`` = no token stored, computed, never probed).
+# ``auth: ok | rejected | unknown | open`` (``none`` = no token stored, computed, never probed).
 # Slower TTL than reachability: a revocation is rare and 30s is soon enough, and it keeps
 # the 3s poll to one request per remote on most ticks. Same off-the-status-path posture:
 # ``refresh_remote_probes`` (run via to_thread by the route) fills it, ``status()`` only reads.
@@ -634,16 +786,31 @@ _probe_cache: dict[str, tuple[bool, float]] = {}
 # ``ps`` for its co-location probe, ``/api/fleet`` probes ITS remotes), and it is the ADR 0087
 # surface the paired token itself belongs to. A pre-0087 remote 404s it → ``unknown``, which
 # is honest: we can't tell from a 404 whether the token would have been accepted.
+#
+# ``open``: a 200 WITH the token proves nothing when the remote answers WITHOUT one too (an
+# instance with no auth configured accepts any bearer). So the probe asks unauthenticated
+# first: a 200 there is ``open`` — reachable and drivable, but the token is unverified and
+# anyone who can reach it can drive it — and only a 401/403 goes on to the tokened request.
 _AUTH_TTL = 30.0
 _AUTH_PROBE_PATH = "/api/devices"
 _auth_cache: dict[str, tuple[str, float]] = {}
 
 
+def _auth_get(url: str, token: str, timeout: float) -> int:
+    """GET the auth-probe path (with ``token`` as the bearer when given); the status code.
+    Redirects are NOT followed: a 3xx would carry the bearer to wherever it points."""
+    import httpx
+
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    return httpx.get(f"{url}{_AUTH_PROBE_PATH}", headers=headers, timeout=timeout, follow_redirects=False).status_code
+
+
 def _auth_probe_one(rec: dict, timeout: float) -> str:
     """Probe ONE remote with its stored bearer and cache the verdict. Returns ``"ok"``
-    (200), ``"rejected"`` (401/403), ``"unknown"`` (anything else, incl. transport errors),
-    or ``"none"`` (no token — nothing to probe, no request made). Network call — keep it off
-    the event loop. The token goes in a header only; it is never logged or cached."""
+    (200 with the token, 401/403 without), ``"open"`` (200 even WITHOUT a token — the token
+    is unverifiable), ``"rejected"`` (401/403 with the token), ``"unknown"`` (anything else,
+    incl. transport errors), or ``"none"`` (no token — no request made). Network call — keep
+    it off the event loop. The token goes in a header only; it is never logged or cached."""
     import httpx
 
     rid = str(rec.get("id") or "")
@@ -656,8 +823,14 @@ def _auth_probe_one(rec: dict, timeout: float) -> str:
         verdict = "unknown"
     else:
         try:
-            r = httpx.get(f"{url}{_AUTH_PROBE_PATH}", headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
-            verdict = "ok" if r.status_code == 200 else "rejected" if r.status_code in (401, 403) else "unknown"
+            anon = _auth_get(url, "", timeout)
+            if anon == 200:
+                verdict = "open"
+            elif anon in (401, 403):
+                code = _auth_get(url, token, timeout)
+                verdict = "ok" if code == 200 else "rejected" if code in (401, 403) else "unknown"
+            else:
+                verdict = "unknown"  # e.g. a 404 from a remote that predates the route
         except httpx.HTTPError:
             verdict = "unknown"
     _auth_cache[rid] = (verdict, time.monotonic())
@@ -689,7 +862,7 @@ def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
         _probe_cache[rid] = (False, time.monotonic())
         return False, ""
     try:
-        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout)
+        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout, follow_redirects=False)
         alive = r.status_code == 200
         if alive:
             try:
@@ -780,6 +953,24 @@ class PairingError(FleetError):
 
 
 _PAIR_TIMEOUT = 5.0
+_REMOTE_TEXT_CAP = 200
+_DEVICE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _clean_remote_text(value: object) -> str:
+    """Remote-supplied text made safe to show: strings only, control characters (ANSI
+    escapes, newlines that could forge a log line or rewrite a terminal) replaced, and
+    capped. Anything else reads as ``""`` — the caller supplies its own fallback."""
+    if not isinstance(value, str):
+        return ""
+    text = "".join(ch if ch.isprintable() else " " for ch in value).strip()
+    return text if len(text) <= _REMOTE_TEXT_CAP else text[: _REMOTE_TEXT_CAP - 1] + "…"
+
+
+def _clean_device_id(value: object) -> str:
+    """The remote's device id if it has the shape ADR 0087 mints (``secrets.token_hex``),
+    else ``""`` — it is logged, stored and later put in a URL path, so nothing looser gets in."""
+    return value if isinstance(value, str) and _DEVICE_ID_RE.fullmatch(value) else ""
 
 
 def _hub_display_name() -> str:
@@ -807,7 +998,7 @@ def _fetch_card_name(url: str, timeout: float) -> str:
     import httpx
 
     try:
-        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout)
+        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout, follow_redirects=False)
         if r.status_code == 200:
             return str((r.json() or {}).get("name", "") or "")
     except (httpx.HTTPError, ValueError, AttributeError):
@@ -836,7 +1027,9 @@ def _free_member_name(base: str, remotes: dict) -> str:
     return f"{base}-{i}"
 
 
-def pair_remote(url: str, code: str, name: str | None = None, timeout: float = _PAIR_TIMEOUT) -> dict:
+def pair_remote(
+    url: str, code: str, name: str | None = None, timeout: float = _PAIR_TIMEOUT, *, allow_insecure: bool = False
+) -> dict:
     """Pair this hub with a remote protoAgent by redeeming a code its operator minted
     (ADR 0113 D1), then register it — or, when a remote at that URL is already a member,
     re-token it in place (the "re-pair" path after a revoke; its id, slug and windows are
@@ -851,7 +1044,8 @@ def pair_remote(url: str, code: str, name: str | None = None, timeout: float = _
     an orphan device on the remote. A name defaulted from the remote's card is coerced to the
     member charset and suffixed (``-2``…) on a collision instead of failing.
 
-    Security: the URL goes through ``_normalize_remote_url`` (the SSRF egress guard) before
+    Security: the URL goes through ``_normalize_remote_url`` (the SSRF egress guard) and the
+    D10 transport rule (plain http only to loopback/tailnet unless ``allow_insecure``) before
     ANY request, redirects are not followed, and neither the code nor the minted token is
     ever logged. Blocking network I/O — the route runs it off the loop.
     """
@@ -861,9 +1055,13 @@ def pair_remote(url: str, code: str, name: str | None = None, timeout: float = _
     code = str(code or "").strip()
     if not code:
         raise PairingError("a pairing code is required — generate one on the remote (Settings ▸ Devices)")
+    try:
+        _require_secure_transport(url, allow_insecure=allow_insecure, what="the pairing code and token")
+    except InsecureTransport as exc:
+        raise PairingError(str(exc), 400) from exc
 
     remotes = _load_remotes()
-    existing = next((k for k, r in remotes.items() if isinstance(r, dict) and r.get("url") == url), None)
+    existing = next((k for k, r in remotes.items() if isinstance(r, dict) and _url_key(r.get("url")) == url), None)
     if name is not None and str(name).strip():
         try:
             name = manager._safe(str(name))
@@ -877,60 +1075,110 @@ def pair_remote(url: str, code: str, name: str | None = None, timeout: float = _
     else:
         name = None
 
+    not_protoagent = f"{url} is not a protoAgent (or too old to support pairing) — unexpected reply to the claim"
     try:
         r = httpx.post(
             f"{url}/api/pairing/claim",
             json={"code": code, "name": _hub_display_name()},
             timeout=timeout,
+            follow_redirects=False,
         )
     except httpx.HTTPError as exc:
         raise PairingError(
             f"{url} is unreachable ({type(exc).__name__}) — is it running and bound to an address this hub can reach?",
             502,
         ) from exc
-    if r.status_code == 403:
-        raise PairingError("that code is invalid or expired — generate a new one on the remote", 400)
-    if r.status_code == 404:
-        raise PairingError(f"{url} is not a protoAgent (or too old to support pairing)", 502)
     try:
         body = r.json()
     except ValueError:
         body = None
-    if not isinstance(body, dict):
-        raise PairingError(f"{url} is not a protoAgent (or too old to support pairing)", 502)
+    # Only a protoAgent-SHAPED refusal (``{"ok": false, …}``) is read as "your code was
+    # wrong": a 403 from a reverse proxy, a WAF or some other app says nothing about the
+    # code, and telling the operator to generate a new one would send them in circles.
+    if r.status_code == 403 and isinstance(body, dict) and body.get("ok") is False:
+        raise PairingError("that code is invalid or expired — generate a new one on the remote", 400)
+    if not isinstance(body, dict) or r.status_code in (403, 404):
+        raise PairingError(not_protoagent, 502)
     if r.status_code != 200 or not body.get("ok"):
         raise PairingError(
-            f"{url} refused the pairing claim (HTTP {r.status_code}): {body.get('error') or 'no reason given'}", 502
+            f"{url} refused the pairing claim (HTTP {r.status_code}): {_clean_remote_text(body.get('error')) or 'no reason given'}",
+            502,
         )
-    token = str(body.get("token") or "")
-    if not token:
+    token = body.get("token")
+    if not isinstance(token, str) or not token:
         raise PairingError(f"{url} accepted the code but returned no token — not a protoAgent pairing endpoint?", 502)
     device = body.get("device") if isinstance(body.get("device"), dict) else {}
-    device_id = str(device.get("id") or "?")
+    device_id = _clean_device_id(device.get("id"))
+    shown_id = device_id or "(id not reported)"
+    orphan_hint = f"revoke device {shown_id} on the remote (Settings ▸ Devices) and pair again"
 
     if existing is not None:
-        rec = update_remote(existing, token=token, name=name)
+        prev = remotes.get(existing) or {}
+        try:
+            rec = update_remote(
+                existing, token=token, name=name, device_id=device_id or None, allow_insecure=allow_insecure
+            )
+        except (FleetError, manager.WorkspaceError) as exc:
+            # Same spent-code situation as the add path below (the name was taken, or the
+            # member vanished, between the pre-check and the write).
+            raise PairingError(f"paired with {url} but could not store the new token: {exc} — {orphan_hint}") from exc
         action = "retokened"
+        _revoke_previous_device(url, prev, new_token=token, new_device_id=device_id, timeout=timeout)
     else:
         if name is None:
-            base = manager._slugify_display(_fetch_card_name(url, timeout)) or "remote"
+            base = manager._slugify_display(_fetch_card_name(url, timeout))[:48].strip("_-") or "remote"
             name = _free_member_name(base, _load_remotes())
         try:
-            rec = add_remote(name, url, token)
+            rec = add_remote(name, url, token, device_id=device_id, allow_insecure=allow_insecure)
         except (FleetError, manager.WorkspaceError) as exc:
             # Lost a race between the pre-check and the write (another add took the name or
             # url). The code is spent and the remote HAS a device for us — say so, so the
             # operator can revoke it there rather than wonder.
-            raise PairingError(
-                f"paired with {url} (remote device {device_id}) but could not register it: {exc} — "
-                "revoke that device on the remote and pair again"
-            ) from exc
+            raise PairingError(f"paired with {url} but could not register it: {exc} — {orphan_hint}") from exc
         action = "added"
     # Device id + url only — the token and the code never reach a log line.
-    log.info("[fleet] paired with remote %s (%s) as its device %s — %s", rec["name"], url, device_id, action)
+    log.info("[fleet] paired with remote %s (%s) as its device %s — %s", rec["name"], url, shown_id, action)
     reachable, version = probe_remote(rec["id"], timeout=min(timeout, 2.0))
     stored = _load_remotes().get(rec["id"]) or rec
     return {"agent": rec, "reachable": reachable, "version": version, "auth": remote_auth(stored), "action": action}
+
+
+def _revoke_previous_device(url: str, prev: dict, *, new_token: str, new_device_id: str, timeout: float) -> None:
+    """After a re-pair, retire the device the PREVIOUS token was minted for, so re-pairing
+    doesn't pile up live operator credentials on the remote. Best effort, and only when:
+
+      * the previous record names a device (``device_id`` — set by an earlier pairing; a
+        pasted shared bearer has none, and must never be "revoked" by guessing), and
+      * the OLD token still authenticates — if it's already revoked the device is gone, and
+        if it doesn't, it's not a credential anyone can use.
+
+    The DELETE is made with the NEW token. Failures are logged (ids + status only, never a
+    token) and swallowed: the pairing itself already succeeded."""
+    import httpx
+
+    old_id = _clean_device_id(prev.get("device_id"))
+    old_token = prev.get("token")
+    if not old_id or not isinstance(old_token, str) or not old_token or old_id == new_device_id:
+        return
+    try:
+        if _auth_get(url, old_token, timeout) != 200:
+            return
+        r = httpx.delete(
+            f"{url}/api/devices/{old_id}",
+            headers={"Authorization": f"Bearer {new_token}"},
+            timeout=timeout,
+            follow_redirects=False,
+        )
+        if r.status_code == 200:
+            log.info("[fleet] re-pair: revoked the previous device %s on %s", old_id, url)
+        else:
+            log.warning(
+                "[fleet] re-pair: could not revoke the previous device %s on %s (HTTP %s)", old_id, url, r.status_code
+            )
+    except httpx.HTTPError as exc:
+        log.warning(
+            "[fleet] re-pair: could not revoke the previous device %s on %s (%s)", old_id, url, type(exc).__name__
+        )
 
 
 # ── fleet roster order (ADR 0042 hub control-plane) ───────────────────────────

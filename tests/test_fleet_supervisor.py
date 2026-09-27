@@ -386,11 +386,15 @@ def test_update_remote_edits_url_token_name_in_place(tmp_path, monkeypatch):
     stored = supervisor.remote_for_slug(rid)  # proxy-side lookup DOES carry it
     assert stored["token"] == "new" and stored["url"] == "http://100.64.0.9:7999"
 
-    # token=None keeps the stored bearer; token="" clears it.
-    supervisor.update_remote(rid, url="http://100.64.0.9:8001")  # no token kwarg
+    # token=None keeps the stored bearer (a same-origin url edit included); token="" clears it.
+    supervisor.update_remote(rid, url="http://100.64.0.9:7999/")  # no token kwarg, same origin
     assert supervisor.remote_for_slug(rid)["token"] == "new"
     supervisor.update_remote(rid, token="")
     assert supervisor.remote_for_slug(rid)["token"] == ""
+    # …but a url on a NEW origin never inherits the token the old host issued (ADR 0113).
+    supervisor.update_remote(rid, token="again")
+    out = supervisor.update_remote(rid, url="http://100.64.0.9:8001")
+    assert out["token_cleared"] is True and supervisor.remote_for_slug(rid)["token"] == ""
 
 
 def test_update_remote_rejects_bad_url_collision_and_unknown(tmp_path, monkeypatch):
@@ -441,7 +445,7 @@ def test_probe_captures_remote_version(tmp_path, monkeypatch):
     surfaces it — while the stored bearer token still never leaves via status()."""
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     supervisor._probe_cache.clear()
-    rec = supervisor.add_remote("ava", "http://h:9", token="sek")
+    rec = supervisor.add_remote("ava", "http://100.64.0.9:9", token="sek")
 
     class FakeResp:
         status_code = 200
@@ -477,7 +481,7 @@ def test_probe_remote_reachable_returns_version(tmp_path, monkeypatch):
     up front. It refreshes the cache and persists the probed version."""
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     supervisor._probe_cache.clear()
-    rec = supervisor.add_remote("ava", "http://h:9", token="sek")
+    rec = supervisor.add_remote("ava", "http://100.64.0.9:9", token="sek")
 
     class FakeResp:
         status_code = 200

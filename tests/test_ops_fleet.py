@@ -80,8 +80,8 @@ async def test_rename_requires_a_name_and_wraps_the_manager(monkeypatch):
 
 async def test_remotes_add_update_remove_probe_and_wrap_the_supervisor(monkeypatch):
     seen: list = []
-    monkeypatch.setattr(supervisor, "add_remote", lambda name, url, token="": (seen.append(("add", name, url, token)) or {"id": "r-1", "name": name, "url": url, "remote": True}))
-    monkeypatch.setattr(supervisor, "update_remote", lambda ident, *, name=None, url=None, token=None: (seen.append(("update", ident, name, url, token)) or {"id": ident, "name": name or "ava", "url": url or "https://ava:7870", "remote": True}))
+    monkeypatch.setattr(supervisor, "add_remote", lambda name, url, token="", allow_insecure=False: (seen.append(("add", name, url, token)) or {"id": "r-1", "name": name, "url": url, "remote": True}))
+    monkeypatch.setattr(supervisor, "update_remote", lambda ident, *, name=None, url=None, token=None, allow_insecure=False: (seen.append(("update", ident, name, url, token)) or {"id": ident, "name": name or "ava", "url": url or "https://ava:7870", "remote": True}))
     monkeypatch.setattr(supervisor, "remove_remote", lambda ident: {"id": ident, "name": "ava", "removed": ["remote"]})
     monkeypatch.setattr(supervisor, "probe_remote", lambda ident, timeout=1.0: (True, "0.165.0"))
     # The auth verdict (ADR 0113 D5) is read from the FULL record probe_remote just refreshed.
