@@ -1347,7 +1347,7 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { ok: true });
     }
     if (pathname === "/api/__test__/fleet/seed-remotes" && req.method === "POST") {
-      // Remote members in every ADR 0113 D5 auth state (rejected / none / ok).
+      // Remote members in every ADR 0113 D5 auth state (rejected / none / open / ok).
       for (const r of PAIRED_REMOTES) if (!fleet.agents.some((a) => a.id === r.id)) fleet.agents.push({ ...r });
       return sendJson(res, { ok: true });
     }
@@ -1406,7 +1406,7 @@ const server = createServer(async (req, res) => {
       const lanLiteral = /^(10|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(host);
       if (url.startsWith("http://") && (lanLiteral || host === "studio.local") && body?.allow_insecure !== true) {
         return sendJson(res, {
-          detail: `refusing to send the pairing code over plain http to ${host} — use its tailnet address or https, or confirm allow_insecure`,
+          detail: `plain http to ${host} would send the pairing code and token in cleartext on this network — use its tailnet address, https, or confirm with allow_insecure/--insecure-http`,
         }, 400);
       }
       if (code === "EXPIRED000") {

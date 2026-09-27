@@ -566,7 +566,7 @@ test("Pair by URL: an http NAME the hub resolves to a LAN address reveals the op
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Pair", exact: true }).click();
   // …the hub's refusal is shown verbatim, and the opt-in appears.
-  await expect(page.getByText(/refusing to send the pairing code over plain http to studio\.local/)).toBeVisible();
+  await expect(page.getByText(/plain http to studio\.local would send the pairing code and token in cleartext/)).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Pair", exact: true })).toBeDisabled();
   await dialog.getByText("I trust this network — send it unencrypted").click();
   await dialog.getByRole("button", { name: "Pair", exact: true }).click();
@@ -600,6 +600,7 @@ test("remote rows show the auth verdict; Re-pair re-tokens a rejected member in 
   await expect(rex.getByTestId("fleet-auth-badge")).toHaveText("token rejected — re-pair");
   await expect(nova.getByTestId("fleet-auth-badge")).toHaveText("not paired");
   await expect(orbit.getByTestId("fleet-auth-badge")).toHaveText("paired");
+  await expect(page.locator(".fleet-row", { hasText: "opal" }).getByTestId("fleet-auth-badge")).toHaveText("open — no token needed");
   await expect(nova.getByRole("button", { name: "Pair…" })).toBeVisible();
 
   await rex.getByRole("button", { name: "Re-pair" }).click();

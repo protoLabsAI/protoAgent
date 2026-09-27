@@ -114,6 +114,10 @@ describe("remote auth badge", () => {
     expect(remoteAuthBadge("ok")).toMatchObject({ status: "success", repair: false });
   });
 
+  it("open → says no token is needed, without alarm", () => {
+    expect(remoteAuthBadge("open")).toMatchObject({ status: "neutral", label: "open — no token needed", repair: false });
+  });
+
   it("unknown / absent (older hub, first probe pending) → nothing", () => {
     expect(remoteAuthBadge("unknown")).toBeNull();
     expect(remoteAuthBadge(undefined)).toBeNull();
@@ -172,6 +176,9 @@ describe("D10 plaintext opt-in (mirrors the hub's credential rule)", () => {
       "http://100.64.0.1:7870",
       "http://100.100.100.100:7870",
       "http://100.127.255.255:7870",
+      "http://[fd7a:115c:a1e0::1234]:7870",
+      "http://[fd7a:115c:a1e0:ab12:4843:cd96:6258:b240]:7870",
+      "http://[0:0:0:0:0:0:0:1]:7870",
       "http://ava.tail1234.ts.net:7870",
       "http://AVA.TAIL1234.TS.NET.:7870",
     ]) {
@@ -189,6 +196,8 @@ describe("D10 plaintext opt-in (mirrors the hub's credential rule)", () => {
       "http://100.63.255.255:7870",
       "http://100.128.0.1:7870",
       "http://[fe80::1]:7870",
+      "http://[fd7a:115c:a1e1::1]:7870",
+      "http://[2001:db8::1]:7870",
     ]) {
       expect([url, transportSecurity(url)]).toEqual([url, "insecure"]);
       expect(needsInsecureOptIn(url)).toBe(true);
@@ -208,7 +217,11 @@ describe("D10 plaintext opt-in (mirrors the hub's credential rule)", () => {
   });
 
   it("recognizes the hub's refusal so the opt-in can be revealed after a 400", () => {
-    const refusal = Object.assign(new Error("refusing to send a credential over plain http to 192.168.1.9 — pass allow_insecure"), { status: 400 });
+    // The hub's actual wording (graph/fleet/supervisor.py _require_secure_transport).
+    const refusal = Object.assign(
+      new Error("plain http to studio.local would send the pairing code and token in cleartext on this network — use its tailnet address, https, or confirm with allow_insecure/--insecure-http"),
+      { status: 400 },
+    );
     expect(isInsecureRefusal(refusal)).toBe(true);
     const expired = Object.assign(new Error("that code is invalid or expired — generate a new one on the remote"), { status: 400 });
     expect(isInsecureRefusal(expired)).toBe(false);

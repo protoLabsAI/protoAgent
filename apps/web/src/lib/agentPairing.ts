@@ -85,6 +85,7 @@ export function hostKindLabel(kind: string): string {
  *  - `none` — no token stored (added by discovery or tokenless by URL): "not paired".
  *    Neutral, not a warning — an open remote on a trusted network is a legitimate setup.
  *  - `ok` — a subtle success mark; the absence of trouble shouldn't be louder than trouble.
+ *  - `open` — the remote answers without any token (so the stored one is unverifiable).
  *  - `unknown` / absent (an older hub, or the first probe hasn't landed) — nothing. Guessing
  *    would be worse than silence.
  */
@@ -108,6 +109,15 @@ export function remoteAuthBadge(
       };
     case "ok":
       return { status: "success", label: "paired", title: "The remote accepts this hub's paired token.", repair: false };
+    case "open":
+      // The remote answers without ANY token, so the stored one can't be verified — and isn't
+      // needed. Neutral: an open instance on a trusted network is a choice, not a fault.
+      return {
+        status: "neutral",
+        label: "open — no token needed",
+        title: "The remote answers without a token, so the stored one can't be checked (and isn't needed).",
+        repair: false,
+      };
     default:
       return null;
   }
@@ -172,16 +182,41 @@ function ipv4Octets(host: string): number[] | null {
   return o.every((n) => n <= 255) ? o : null;
 }
 
-/** How a base URL's transport protects a credential, mirroring the hub's rule (ADR 0113 D10,
- *  itself `deck/hub.py` `credential_allowed` plus a tailnet exception):
+/** The eight 16-bit groups of an IPv6 literal (`::` expanded), or null when it isn't one. */
+function ipv6Groups(host: string): number[] | null {
+  if (!host.includes(":") || !/^[0-9a-f:.]+$/.test(host)) return null;
+  const halves = host.split("::");
+  if (halves.length > 2) return null;
+  const part = (h: string) => (h ? h.split(":") : []);
+  const head = part(halves[0]);
+  const tail = halves.length === 2 ? part(halves[1]) : [];
+  // An embedded IPv4 tail (`::ffff:1.2.3.4`) counts as two groups.
+  const expand = (xs: string[]) =>
+    xs.flatMap((x) => {
+      const v4 = ipv4Octets(x);
+      return v4 ? [(v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]] : [parseInt(x, 16)];
+    });
+  const h = expand(head);
+  const t = expand(tail);
+  const fill = 8 - h.length - t.length;
+  if (halves.length === 1 ? fill !== 0 : fill < 0) return null;
+  const groups = [...h, ...Array(Math.max(0, fill)).fill(0), ...t];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
+}
+
+/** How a base URL's transport protects a credential — the browser half of the hub's rule
+ *  (ADR 0113 D10, `graph/fleet/supervisor.py` `_cleartext_host`):
  *
- *  - `secure` — `https://`, loopback (`localhost`, 127.0.0.0/8, `::1`), or tailnet (a
- *    100.64.0.0/10 address — WireGuard underneath — or a MagicDNS `*.ts.net` name).
- *  - `insecure` — plain `http://` to any other LITERAL address: the hub will refuse it
- *    without `allow_insecure`, so the console asks up front.
- *  - `unknown` — plain `http://` to some other NAME. The hub judges a name by the address it
- *    resolves to at pairing time, which a browser can't know; asking up front would nag for
- *    names that resolve to a tailnet. The hub's 400 reveals the opt-in instead.
+ *  - `secure` — `https://`; or plain http to a loopback address (127.0.0.0/8, `::1`) or a
+ *    tailnet one (100.64.0.0/10, Tailscale's IPv6 ULA `fd7a:115c:a1e0::/48` — WireGuard
+ *    underneath), or a MagicDNS `*.ts.net` name. `localhost` counts too: the hub resolves it
+ *    to loopback.
+ *  - `insecure` — plain `http://` to any other LITERAL address: the hub refuses it without
+ *    `allow_insecure`, so the console asks up front.
+ *  - `unknown` — plain `http://` to some other NAME. The hub judges a name by the addresses
+ *    it resolves to at that moment (and an unresolvable one as cleartext), which a browser
+ *    can't know; asking up front would nag for names that resolve to a tailnet. The hub's 400
+ *    reveals the opt-in instead.
  *  - `invalid` — not an http(s) URL at all (the submit gates on that separately).
  */
 export function transportSecurity(raw: string): "secure" | "insecure" | "unknown" | "invalid" {
@@ -194,15 +229,19 @@ export function transportSecurity(raw: string): "secure" | "insecure" | "unknown
   if (u.protocol === "https:") return "secure";
   if (u.protocol !== "http:") return "invalid";
   const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (host === "localhost" || host === "::1") return "secure";
-  if (host.endsWith(".ts.net")) return "secure";
+  if (host === "localhost" || host.endsWith(".ts.net")) return "secure";
   const v4 = ipv4Octets(host);
   if (v4) {
     if (v4[0] === 127) return "secure";
     if (v4[0] === 100 && v4[1] >= 64 && v4[1] <= 127) return "secure"; // 100.64.0.0/10
     return "insecure";
   }
-  if (host.includes(":")) return "insecure"; // any other IPv6 literal
+  const v6 = ipv6Groups(host);
+  if (v6) {
+    if (v6.slice(0, 7).every((g) => g === 0) && v6[7] === 1) return "secure"; // ::1
+    if (v6[0] === 0xfd7a && v6[1] === 0x115c && v6[2] === 0xa1e0) return "secure"; // tailnet ULA
+    return "insecure";
+  }
   return "unknown";
 }
 

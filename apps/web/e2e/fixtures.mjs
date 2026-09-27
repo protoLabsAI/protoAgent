@@ -160,6 +160,7 @@ export const FLEET = {
 export const PAIRED_REMOTES = [
   { name: "rex", id: "rex-re02", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.21:7870", a2a: "http://127.0.0.1:7871/agents/rex-re02/a2a", auth: "rejected" },
   { name: "nova", id: "nova-re03", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.22:7870", a2a: "http://127.0.0.1:7871/agents/nova-re03/a2a", auth: "none" },
+  { name: "opal", id: "opal-re05", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.24:7870", a2a: "http://127.0.0.1:7871/agents/opal-re05/a2a", auth: "open" },
   { name: "orbit", id: "orbit-re04", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.23:7870", a2a: "http://127.0.0.1:7871/agents/orbit-re04/a2a", auth: "ok" },
 ];
 

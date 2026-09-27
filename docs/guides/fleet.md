@@ -327,13 +327,14 @@ protoagent fleet pair http://100.101.189.45:7871 <code> [--name ava]
 #       -H 'content-type: application/json' -d '{"url": "http://100.101.189.45:7871", "code": "<code>"}'
 ```
 
-**In the console** *(ADR 0113)*: on the remote, **Settings ▸ Devices ▸ Pair an agent** shows
+**In the console** *([ADR 0113](../adr/0113-agent-pairing-for-remote-fleet-members.md))*: on the remote, **Settings ▸ Devices ▸ Pair an agent** shows
 a code like `7KQ2M-X9D4P`, a 5-minute countdown and the addresses it's reachable on (tailnet
 first). If the remote only listens on localhost, the same "Allow devices on my network" step
 the phone flow uses comes first. On the hub, **Pair…** on a discovered row (or **Pair by
 URL…**) takes the code; **Re-pair** on a remote member's row does the same for a member whose
 token was revoked. The row then shows the token's health: *token rejected — re-pair*, *not
-paired* (no token stored) or a quiet *paired*. Paired hubs appear in the remote's Devices list
+paired* (no token stored), *open — no token needed* (the remote answers without one) or a
+quiet *paired*. Paired hubs appear in the remote's Devices list
 badged **Agent** and are revoked there like any device. Plain `http://` to an address that is
 neither loopback nor tailnet asks you to confirm sending the code and token unencrypted
 (ADR 0113 D10) — prefer the tailnet address or `https://`. The Devices section is still

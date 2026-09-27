@@ -1850,13 +1850,14 @@ export type FleetAgent = {
   version?: string;
   /** A remote member's token verdict (ADR 0113 D5) — never the token itself. `ok`: the
    *  remote accepts the stored bearer; `rejected`: it refused it (revoked/rotated → re-pair);
+   *  `open`: it answers without any token (the stored one is unverifiable, and not needed);
    *  `unknown`: not probed yet; `none`: no token stored. Absent on local members and on hubs
    *  that predate pairing. */
   auth?: RemoteAuth;
 };
 
 /** See `FleetAgent.auth`. */
-export type RemoteAuth = "ok" | "rejected" | "unknown" | "none";
+export type RemoteAuth = "ok" | "rejected" | "unknown" | "none" | "open";
 
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.
 export type FleetStatus = { agents: FleetAgent[] };
