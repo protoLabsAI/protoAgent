@@ -339,6 +339,16 @@ export function readKey(area: StorageArea, key: string): string | null {
   }
 }
 
+/** Read a key, distinguishing "absent" from "unreadable": `null` when the key is missing,
+ *  but THROWS when storage is unavailable or the read itself fails. For callers (the
+ *  ADR 0114 load barrier) that must never treat a failed read as an empty one. */
+export function readKeyOrThrow(area: StorageArea, key: string): string | null {
+  const s = store(area);
+  if (!s) throw new Error(`${area}Storage is unavailable`);
+  const v = s.getItem(key);
+  return typeof v === "string" ? v : null;
+}
+
 /** Write a key. Never throws. On a localStorage quota error: evict once, retry once, then
  *  latch `failing`. While latched, evictable keys fail fast without touching storage. */
 export function writeKey(area: StorageArea, key: string, value: string): WriteResult {

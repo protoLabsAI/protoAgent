@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type G = { __protoagentNoFlush?: boolean };
 const KEY = "protoagent.chat.sessions";
-const msg = (content: string) => [{ id: "m1", role: "assistant" as const, content }] as never[];
+// updateMessages takes an updater (ADR 0114 S4: updater-only mutators).
+const msg = (content: string) => (() => [{ id: "m1", role: "assistant" as const, content }]) as never;
 
 beforeEach(() => {
   window.localStorage.clear();

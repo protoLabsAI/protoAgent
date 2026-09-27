@@ -4,7 +4,7 @@
 // chat-store's slug-namespacing + try/catch + debounce. `/clear` mints a fresh thread
 // and wipes the old one's checkpoints.
 import type { ChatMessage } from "../lib/types";
-import { readKey, writeKey } from "../lib/storage";
+import { readKeyOrThrow, writeKey } from "../lib/storage";
 import { persistBlocked } from "../lib/storageReset";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
@@ -62,7 +62,7 @@ export function loadPaletteThread(scope?: string): PaletteThread {
  *  in it is recoverable). THROWS when storage itself can't be read: that is a failed
  *  read, not an empty one, and the caller must not treat it as "no thread". */
 export function readStoredPaletteThread(scope?: string): PaletteThread | null {
-  const raw = window.localStorage.getItem(keyFor(scope));
+  const raw = readKeyOrThrow("local", keyFor(scope));
   if (!raw) return null;
   try {
     const p = JSON.parse(raw) as Partial<PaletteThread>;
