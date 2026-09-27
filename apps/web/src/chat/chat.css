@@ -228,7 +228,7 @@
   box-shadow: var(--pl-shadow-card);
 }
 .chat-scheduled-card--failed {
-  border-color: var(--pl-color-border-danger, var(--pl-color-border));
+  border-color: var(--pl-color-status-error, var(--pl-color-border));
 }
 .chat-scheduled-head {
   display: flex;
@@ -290,7 +290,7 @@
   overflow: hidden;
 }
 .chat-server-result-card--failed {
-  border-color: var(--pl-color-border-danger, var(--pl-color-status-error));
+  border-color: var(--pl-color-status-error);
 }
 /* Collapsed summary — one clickable line. The whole row is the disclosure toggle. */
 .chat-server-result-summary {
@@ -934,7 +934,7 @@
 .chat-roster-chip--active {
   color: var(--pl-color-fg);
   border-color: var(--pl-color-fg-subtle);
-  background: var(--pl-color-bg-sunken, var(--pl-color-bg));
+  background: var(--pl-color-bg-inset, var(--pl-color-bg));
 }
 
 /* A delegation (the lead's outgoing ask, #3042): ONE quiet row, not a bubble. Same ground
