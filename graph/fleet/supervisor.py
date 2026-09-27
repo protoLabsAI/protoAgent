@@ -804,6 +804,32 @@ def set_roster_order(order: object) -> list[str]:
     return ids
 
 
+def _remote_a2a(rid: str, url: str, hub_port: int | None) -> str | None:
+    """The A2A endpoint a remote member is ADVERTISED at — the one "Add as delegate" and any
+    ``delegate_to`` wiring should use (ADR 0113 D4): the hub's own loopback proxy,
+    ``http://127.0.0.1:<hub-port>/agents/<rid>/a2a``, not the remote's URL.
+
+    Why route a delegate through the hub instead of dialing the remote directly: one
+    registry, one token. A tokenless loopback delegate presents the fleet service token
+    (ADR 0089 D4), which the hub accepts as operator; the proxy then swaps it for the
+    remote's STORED (paired) bearer (``proxy._target_for_slug``). So the remote's credential
+    lives only in ``remotes.json`` — re-pairing or rotating it fixes the fleet row and every
+    delegate at once — and it never leaves the hub's box: the delegate only ever carries the
+    fleet token, which is loopback-only by construction. Dialing ``<url>/a2a`` directly
+    needed the remote's token copied into each delegate (and 401'd without it).
+
+    The remote's real URL stays in the entry's ``url``. Hub port unknown (no server bound —
+    a CLI read, a test) → fall back to the direct ``<url>/a2a``: an address that needs its
+    own token beats none. No url → None (nothing to route to either way)."""
+    if not url:
+        return None
+    if hub_port:
+        from urllib.parse import quote
+
+        return f"http://127.0.0.1:{hub_port}/agents/{quote(rid, safe='')}/a2a"
+    return f"{url}/a2a"
+
+
 def status() -> list[dict]:
     """The host (this instance) + every workspace + remote members, with live status
     (running/stopped; for remotes, the last cached reachability probe)."""
@@ -816,7 +842,8 @@ def status() -> list[dict]:
                 dirty = True
         if dirty:
             _save_state(state)
-    out: list[dict] = [_host_entry()]
+    host = _host_entry()
+    out: list[dict] = [host]
     for ws in manager.list_workspaces():
         rec = state.get(ws["id"]) or {}  # state is keyed by the immutable id
         running = _alive(rec.get("pid"))
@@ -867,7 +894,7 @@ def status() -> list[dict]:
                 "url": url,
                 # Last-probed remote version (from its A2A card) — NEVER the token.
                 "version": rec.get("version", ""),
-                "a2a": f"{url}/a2a" if url else None,
+                "a2a": _remote_a2a(rid, url, host.get("port")),
             }
         )
     # Apply the saved roster display order (ADR 0042 hub control-plane), reconciling live

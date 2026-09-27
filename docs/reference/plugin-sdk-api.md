@@ -39,7 +39,7 @@ the module's own.
 
 **Plugin metric timeseries (#1632)** — [`metric_history()`](#sdk-metric-history), [`metric_last()`](#sdk-metric-last), [`record_metric()`](#sdk-record-metric)
 
-**Run tracing (one Langfuse trace per multi-step plugin run)** — [`trace_run()`](#sdk-trace-run)
+**Run tracing (one Langfuse trace per multi-step plugin run)** — [`trace_attributes()`](#sdk-trace-attributes), [`trace_run()`](#sdk-trace-run)
 
 **Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
 
@@ -592,10 +592,32 @@ comparing the live reading against the last recorded one. Same namespacing +
 
 ## Run tracing (one Langfuse trace per multi-step plugin run)
 
+### `sdk.trace_attributes` {#sdk-trace-attributes}
+
+```python
+sdk.trace_attributes(metadata: dict | None = None, *, tags: list[str] | None = None)
+```
+
+Stamp `metadata` on every observation traced inside the block, `tags` on its trace.
+
+Every `subagent:<type>` span a `run_subagent` call opens in the block — however
+deep — and every tool call and generation under it carries `metadata` in its own
+metadata. The keys stay on the OBSERVATIONS, not the trace: a trace holds a whole
+run, and trace metadata has one value per key, so a per-step key there would read
+as whichever step started last. `tags` are a set and do go on the trace. Scopes
+nest and merge; the innermost key wins. Use it around one step of a multi-step run,
+inside `trace_run`::
+
+    with sdk.trace_attributes({"step_id": sid}, tags=[f"step:{sid}"]):
+        out = await sdk.run_subagent(subagent, prompt, description=...)
+
+Pass ids and labels — never raw content: nothing here is redacted for you. A no-op
+(beyond the contextvar) when tracing is disabled; the block always runs.
+
 ### `sdk.trace_run` {#sdk-trace-run}
 
 ```python
-sdk.trace_run(name: str, *, run_id: str = '', input: Any = None, metadata: dict | None = None)
+sdk.trace_run(name: str, *, run_id: str = '', input: Any = None, metadata: dict | None = None, inputs: dict | None = None, tags: list[str] | None = None)
 ```
 
 Group a plugin's multi-step run into ONE Langfuse observation.
@@ -610,14 +632,23 @@ around it (a REST route, a detached Studio run, a scheduled fire), each step bec
 its own sessionless ROOT trace — a 9-step review panel was 9 unrelated traces, and
 a busy reviewer buried every agent's turns under them.
 
-Inside a traced turn this opens a nested span; otherwise it opens the run's own
-root trace (session `run_id` when given). Input/output are redacted and capped;
-a block that raises marks the observation `ERROR` and re-raises unchanged. A
-no-op when tracing is disabled — the block always runs::
+Inside a traced turn this opens a nested span, in the turn's trace and session;
+otherwise it opens the run's own root trace, whose session is the caller's session
+when there is one and `run_id` when there isn't. Input/output are redacted and
+capped, and dropped entirely in an incognito turn. A block that raises marks the
+observation `ERROR` and re-raises unchanged. A no-op when tracing is disabled —
+the block always runs::
 
     async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=inputs) as run:
         result = await execute(...)
         run.output(result["output"], failed=bool(result["failed"]))
+
+**Join keys ([#3565](https://github.com/protoLabsAI/protoAgent/issues/3565)).** Every observation in the run — each step's `subagent:`
+span included — carries `run_id`, `metadata`, the caller's session as
+`parent_session_id`, and the run's scalar `inputs` (default: `input` when it
+is a dict) as redacted, capped `input_<name>` keys; the trace is tagged with
+`name`, `run:<run_id>` and `tags`. Incognito keeps the ids and drops the
+inputs. Add per-step keys with `trace_attributes`.
 
 ## Delegation ledger (who handed what work to whom)
 

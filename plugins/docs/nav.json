@@ -919,6 +919,10 @@
           "title": "0112 — Console code pane: a read-only navigator surface the agent points into"
         },
         {
+          "path": "adr/0113-agent-pairing-for-remote-fleet-members.md",
+          "title": "0113 — Agent pairing: remote fleet members get a paired, revocable token"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

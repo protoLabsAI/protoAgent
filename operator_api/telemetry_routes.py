@@ -215,7 +215,10 @@ async def _fetch_member_json(slug: str, path: str) -> dict | None:
             return None
         base, extra = target
         headers = dict(extra)
-        if not any(k.lower() == "authorization" for k in headers):
+        # The fleet token is for LOCAL members only — a remote the hub holds no token for
+        # reads anonymously (and 401s if it is secured) rather than receive the
+        # loopback-only fleet credential it could not verify anyway (ADR 0113 D4).
+        if slug not in proxy._remote_slugs and not any(k.lower() == "authorization" for k in headers):
             from graph.fleet.service_token import resolve_service_token
 
             headers["authorization"] = f"Bearer {resolve_service_token()}"

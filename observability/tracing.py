@@ -133,6 +133,19 @@ _io_suppressed_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar(
     default=False,
 )
 
+# Metadata every ``trace_span`` opened in this scope inherits (``trace_attributes``). How a
+# workflow's run id / step id reach the ``subagent:`` span that the subagent runner opens
+# several layers below, without threading them through every signature (#3565). Never
+# mutated in place — each scope sets a fresh merged dict.
+_inherited_meta_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "_protoagent_inherited_span_meta",
+    default={},
+)
+
+# Langfuse's propagated (trace-level) metadata values must be US-ASCII-keyed strings of at
+# most this many characters; anything longer is dropped by the SDK, so it stays span-only.
+_PROPAGATED_VALUE_MAX = 200
+
 # Holds the request's ALREADY-classified trust tier (a2a_impl.auth sets this from
 # request.state.trust_tier) so the structured request telemetry can carry it as a
 # bounded, non-secret dimension. Default "" = unclassified — the dimension is then
@@ -571,7 +584,7 @@ def trace_span(
         ctx = _langfuse.start_as_current_observation(
             name=name,
             as_type=as_type,
-            metadata=metadata or {},
+            metadata={**_inherited_meta_ctx.get(), **(metadata or {})},
         )
         span = ctx.__enter__()
     except Exception as e:  # noqa: BLE001 — never fail the wrapped work for tracing
@@ -590,6 +603,74 @@ def trace_span(
                 ctx.__exit__(None, None, None)
             except Exception:  # noqa: BLE001
                 pass
+
+
+@contextlib.contextmanager
+def trace_attributes(
+    metadata: dict | None = None,
+    *,
+    tags: list[str] | None = None,
+    session_id: str = "",
+    trace_level: bool = True,
+) -> Iterator[None]:
+    """Stamp ``metadata`` / ``tags`` / ``session_id`` on everything traced inside the block.
+
+    Two layers, because Langfuse has two (#3565):
+
+    * **Observation metadata** — every ``trace_span`` / ``trace_tool_call`` /
+      ``trace_generation`` in the scope (a subagent's ``subagent:<type>`` boundary,
+      however deep the call chain) merges ``metadata`` into its own. Nested scopes
+      merge; the innermost key wins.
+    * **Trace attributes** — through the SDK's ``propagate_attributes``: the tags and
+      session, plus (``trace_level=True``) each SCALAR ``metadata`` value short enough
+      for the SDK's 200-char limit (longer or structured values stay observation-only
+      rather than being dropped by the SDK). Pass ``trace_level=False`` for keys that
+      describe PART of a trace — one step of a multi-step run: trace metadata is one
+      value per trace, so the last step to start would overwrite it. Applied to the
+      current observation and every one opened after it. Must be entered INSIDE the
+      observation it should reach: ``trace_session`` starts a root from an empty OTel
+      context, which would discard attributes propagated around it.
+
+    Callers pass ids and already-redacted values only — this never sees raw content.
+    Empty values are skipped. The block always runs; tracing errors never escape.
+    """
+    meta = {str(k): v for k, v in (metadata or {}).items() if v not in (None, "")}
+    token = _inherited_meta_ctx.set({**_inherited_meta_ctx.get(), **meta})
+    attrs = None
+    if _enabled and _langfuse is not None:
+        try:
+            from langfuse import propagate_attributes
+
+            dims = {
+                k: str(v)
+                for k, v in meta.items()
+                if isinstance(v, (str, int, float, bool)) and k.isascii() and len(str(v)) <= _PROPAGATED_VALUE_MAX
+            }
+            kwargs: dict[str, Any] = {}
+            if dims and trace_level:
+                kwargs["metadata"] = dims
+            clean_tags = [str(t)[:_PROPAGATED_VALUE_MAX] for t in (tags or []) if t]
+            if clean_tags:
+                kwargs["tags"] = clean_tags
+            if session_id:
+                kwargs["session_id"] = str(session_id)[:_PROPAGATED_VALUE_MAX]
+            if kwargs:
+                attrs = propagate_attributes(**kwargs)
+                attrs.__enter__()
+        except Exception:  # noqa: BLE001 — older SDK: span metadata still carries the ids
+            attrs = None
+    try:
+        yield
+    finally:
+        if attrs is not None:
+            try:
+                attrs.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            _inherited_meta_ctx.reset(token)
+        except ValueError:
+            pass
 
 
 def trace_tool_call(
@@ -628,6 +709,7 @@ def trace_tool_call(
             input=safe_args,
             output=(result or "")[:1000],
             metadata={
+                **_inherited_meta_ctx.get(),
                 "duration_ms": duration_ms,
                 "success": success,
                 "session_id": session_id,
@@ -730,6 +812,7 @@ def trace_generation(
             usage_details=usage_details,
             cost_details=({"total": float(cost_usd)} if cost_usd else None),
             metadata={
+                **_inherited_meta_ctx.get(),
                 "session_id": session_id,
                 "trace_id": _trace_id_ctx.get(),
                 "duration_ms": duration_ms,

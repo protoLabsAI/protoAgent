@@ -322,6 +322,18 @@ their lifecycle; **Remove** only unregisters (the remote agent is untouched). Re
 as a member and adding as a [`delegate_to` target](delegates.md) compose: the same agent
 can be both a window you operate and a delegate your agents call.
 
+**"Add as delegate" on a remote routes through the hub** *(ADR 0113 D4)*. A remote's
+advertised A2A endpoint (the roster's `a2a` field, which "Add as delegate" wires) is the
+hub's own loopback proxy, `http://127.0.0.1:<hub-port>/agents/<remote-id>/a2a`, not the
+remote's URL (that stays in `url`). The delegate carries no token: on loopback it presents
+the fleet service token, the hub accepts it, and the proxy swaps in the remote's **stored**
+token. So the remote's credential lives in exactly one place — this fleet row — and
+re-pairing or editing its token fixes the window and every delegate at once; it never leaves
+the hub's machine. A remote with **no** stored token is proxied with no credential at all (the
+hub never forwards its fleet token off the box), so a secured one answers `401` and the
+delegate's error tells you to pair it. Local members can use the same URL (they hold the fleet
+token too), so it also works as a [fleet-shared delegate](delegates.md#share-a-delegate-with-the-whole-fleet-adr-0105).
+
 **Version skew is flagged.** The hub console drives a remote's full `/api/*` by proxy, so a
 remote on a *different protoAgent release* is a real compat surface. The reachability probe
 also reads the remote's app version off its A2A agent card; when it differs from the hub's,

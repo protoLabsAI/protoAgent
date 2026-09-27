@@ -1165,7 +1165,9 @@ class TracedRun:
             return
         from observability import tracing
 
-        fields: dict[str, Any] = {"output": _trace_io(value), "level": "ERROR" if failed else "DEFAULT"}
+        fields: dict[str, Any] = {"level": "ERROR" if failed else "DEFAULT"}
+        if tracing.io_allowed():  # incognito: the outcome's level and metadata, never its content
+            fields["output"] = _trace_io(value)
         if metadata:
             fields["metadata"] = metadata
         tracing.update_span(self._span, **fields)
@@ -1203,8 +1205,68 @@ def _trace_io(value: Any) -> Any:
     return f"{text[:MAX_IO_CHARS]}… [{len(text) - MAX_IO_CHARS} more chars]"
 
 
+# Per-value cap on a run input stamped into span metadata. Metadata is for joining and
+# filtering (repo, pr, head_sha, review_round) — the whole redacted input already rides
+# the run's own observation, capped at ``MAX_IO_CHARS``.
+_INPUT_META_CHARS = 200
+
+
+def _input_metadata(inputs: Any) -> dict[str, Any]:
+    """The run's SCALAR inputs as ``input_<name>`` metadata — redacted, each capped.
+
+    Structured values (lists, dicts, bytes) are skipped: they are content, not join
+    keys, and would not survive Langfuse's trace-level metadata limits anyway."""
+    if not isinstance(inputs, dict):
+        return {}
+    from graph.middleware.redaction import redact
+
+    out: dict[str, Any] = {}
+    # The whole dict, not value by value: redaction also blanks sensitive KEYS (api_key).
+    for key, value in redact(inputs).items():
+        if isinstance(value, (bool, int, float)):
+            out[f"input_{key}"] = value
+        elif isinstance(value, str):
+            text = value
+            if len(text) > _INPUT_META_CHARS:
+                text = f"{text[:_INPUT_META_CHARS]}…"
+            out[f"input_{key}"] = text
+    return out
+
+
+@contextlib.contextmanager
+def trace_attributes(metadata: dict | None = None, *, tags: list[str] | None = None):
+    """Stamp ``metadata`` on every observation traced inside the block, ``tags`` on its trace.
+
+    Every ``subagent:<type>`` span a ``run_subagent`` call opens in the block — however
+    deep — and every tool call and generation under it carries ``metadata`` in its own
+    metadata. The keys stay on the OBSERVATIONS, not the trace: a trace holds a whole
+    run, and trace metadata has one value per key, so a per-step key there would read
+    as whichever step started last. ``tags`` are a set and do go on the trace. Scopes
+    nest and merge; the innermost key wins. Use it around one step of a multi-step run,
+    inside :func:`trace_run`::
+
+        with sdk.trace_attributes({"step_id": sid}, tags=[f"step:{sid}"]):
+            out = await sdk.run_subagent(subagent, prompt, description=...)
+
+    Pass ids and labels — never raw content: nothing here is redacted for you. A no-op
+    (beyond the contextvar) when tracing is disabled; the block always runs.
+    """
+    from observability import tracing
+
+    with tracing.trace_attributes(metadata, tags=tags, trace_level=False):
+        yield
+
+
 @contextlib.asynccontextmanager
-async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata: dict | None = None):
+async def trace_run(
+    name: str,
+    *,
+    run_id: str = "",
+    input: Any = None,
+    metadata: dict | None = None,
+    inputs: dict | None = None,
+    tags: list[str] | None = None,
+):
     """Group a plugin's multi-step run into ONE Langfuse observation.
 
     Every ``run_subagent`` call opens a ``subagent:<type>`` span in the CURRENT trace.
@@ -1217,14 +1279,23 @@ async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata:
     its own sessionless ROOT trace — a 9-step review panel was 9 unrelated traces, and
     a busy reviewer buried every agent's turns under them.
 
-    Inside a traced turn this opens a nested span; otherwise it opens the run's own
-    root trace (session ``run_id`` when given). Input/output are redacted and capped;
-    a block that raises marks the observation ``ERROR`` and re-raises unchanged. A
-    no-op when tracing is disabled — the block always runs::
+    Inside a traced turn this opens a nested span, in the turn's trace and session;
+    otherwise it opens the run's own root trace, whose session is the caller's session
+    when there is one and ``run_id`` when there isn't. Input/output are redacted and
+    capped, and dropped entirely in an incognito turn. A block that raises marks the
+    observation ``ERROR`` and re-raises unchanged. A no-op when tracing is disabled —
+    the block always runs::
 
         async with sdk.trace_run(f"workflow:{name}", run_id=run_id, input=inputs) as run:
             result = await execute(...)
             run.output(result["output"], failed=bool(result["failed"]))
+
+    **Join keys (#3565).** Every observation in the run — each step's ``subagent:``
+    span included — carries ``run_id``, ``metadata``, the caller's session as
+    ``parent_session_id``, and the run's scalar ``inputs`` (default: ``input`` when it
+    is a dict) as redacted, capped ``input_<name>`` keys; the trace is tagged with
+    ``name``, ``run:<run_id>`` and ``tags``. Incognito keeps the ids and drops the
+    inputs. Add per-step keys with :func:`trace_attributes`.
     """
     from observability import tracing
 
@@ -1233,21 +1304,29 @@ async def trace_run(name: str, *, run_id: str = "", input: Any = None, metadata:
         # contextvar — which would re-attribute a run inside a chat turn to its run_id.
         yield TracedRun(None)
         return
+    io_ok = tracing.io_allowed()
+    parent_session = tracing.current_session_id()
     meta = dict(metadata or {})
     if run_id:
         meta.setdefault("run_id", run_id)
-    safe_input = _trace_io(input) if input is not None else None
+    if parent_session:
+        meta.setdefault("parent_session_id", parent_session)
+    if io_ok:
+        meta.update(_input_metadata(inputs if inputs is not None else input))
+    run_tags = [name, *([f"run:{run_id}"] if run_id else []), *(tags or [])]
+    safe_input = _trace_io(input) if input is not None and io_ok else None
     # Our own session contextvar, NOT ``current_trace_context()``: that also reports a
     # foreign OTel span (the a2a-sdk's), and nesting under one orphans the run.
     if tracing.current_trace_id():
         with tracing.trace_span(name, metadata=meta, as_type="chain") as span:
             if safe_input is not None:
                 tracing.update_span(span, input=safe_input)
-            with _failed_on_raise(span):
+            with tracing.trace_attributes(meta, tags=run_tags), _failed_on_raise(span):
                 yield TracedRun(span)
     else:
-        async with tracing.trace_session(run_id or name, name=name, metadata=meta, input=safe_input) as span:
-            with _failed_on_raise(span):
+        session = parent_session or run_id or name
+        async with tracing.trace_session(session, name=name, metadata=meta, input=safe_input) as span:
+            with tracing.trace_attributes(meta, tags=run_tags), _failed_on_raise(span):
                 yield TracedRun(span)
 
 

@@ -11,9 +11,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SetupWizard } from "./SetupWizard";
+import { defaultState, hydrateState, SetupWizard, withTimeout } from "./SetupWizard";
 import { api } from "../lib/api";
-import type { Archetype, ArchetypePreview } from "../lib/types";
+import type { Archetype, ArchetypePreview, ConfigPayload } from "../lib/types";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -211,5 +211,58 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     await click(radioFor("basic"));
     await click(button(/^Next/));
     expect(nameInput()?.value).toBe("protoagent");
+  });
+});
+
+// Partial /api/config payloads (a proxied fleet member on an older core) must not crash
+// the first-run render — every missing section falls back to defaultState().
+describe("hydrateState", () => {
+  const partial = (config: Record<string, unknown>) => ({ config, soul: "" }) as unknown as ConfigPayload;
+
+  it("an empty config hydrates to the defaults", () => {
+    expect(hydrateState(partial({}))).toEqual(defaultState());
+  });
+
+  it("missing sections fall back per section; present values win", () => {
+    const s = hydrateState(
+      partial({
+        identity: { name: "forge" },
+        model: { name: "gw:big", temperature: 0 },
+        middleware: { audit: false },
+      }),
+    );
+    const d = defaultState();
+    expect(s.agentName).toBe("forge");
+    expect(s.operatorName).toBe(d.operatorName);
+    expect(s.modelName).toBe("gw:big");
+    expect(s.temperature).toBe(0);
+    expect(s.maxTokens).toBe(d.maxTokens);
+    expect(s.apiBase).toBe(d.apiBase);
+    expect(s.middleware).toEqual({ ...d.middleware, audit: false });
+    expect(s.researcherTurns).toBe(d.researcherTurns);
+    expect(s.knowledgeTopK).toBe(d.knowledgeTopK);
+  });
+});
+
+describe("withTimeout", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("clears its timer when the main promise resolves first", async () => {
+    await expect(withTimeout(Promise.resolve("ok"), 5000, "probe")).resolves.toBe("ok");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears its timer when the main promise rejects first", async () => {
+    await expect(withTimeout(Promise.reject(new Error("boom")), 5000, "probe")).rejects.toThrow("boom");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects with the label once the timeout elapses", async () => {
+    const pending = withTimeout(new Promise<never>(() => {}), 5000, "Model probe");
+    const assertion = expect(pending).rejects.toThrow("Model probe timed out after 5s");
+    await vi.advanceTimersByTimeAsync(5000);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

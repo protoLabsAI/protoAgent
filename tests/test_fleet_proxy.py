@@ -20,8 +20,10 @@ from graph.fleet import proxy
 @pytest.fixture(autouse=True)
 def _clear_cache():
     proxy._slug_cache.clear()
+    proxy._remote_slugs.clear()
     yield
     proxy._slug_cache.clear()
+    proxy._remote_slugs.clear()
 
 
 class FakeRequest:
@@ -125,6 +127,65 @@ def test_remote_without_token_adds_no_header(monkeypatch):
     assert proxy._target_for_slug("r1") == ("http://h:1", {})
 
 
+def test_remote_slugs_track_resolution(monkeypatch):
+    """A tokenless remote resolves with EMPTY extra headers — ``_remote_slugs`` is what
+    tells forward_to it is a remote, not a local peer."""
+    state = {}
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: state)
+    monkeypatch.setattr(proxy.supervisor, "_alive", lambda pid: pid == 42)
+    monkeypatch.setattr(
+        proxy.supervisor, "remote_for_slug", lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": ""}
+    )
+    proxy._target_for_slug("r1")
+    assert "r1" in proxy._remote_slugs
+    # The same slug later resolving to a live LOCAL peer (which takes precedence) un-marks it.
+    state["r1"] = {"pid": 42, "port": 7001}
+    proxy._slug_cache.clear()
+    assert proxy._target_for_slug("r1") == ("http://127.0.0.1:7001", {})
+    assert "r1" not in proxy._remote_slugs
+
+
+async def test_forward_to_tokenless_remote_never_gets_the_fleet_token(monkeypatch):
+    """ADR 0113 D4: a delegate routed through the hub presents the loopback-only fleet
+    token. For a remote the hub holds NO token for, the hub must forward anonymously —
+    neither swapping in the fleet token (the old operator-tier swap, keyed on the headers)
+    nor letting the caller's fleet token ride through."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
+    monkeypatch.setattr(
+        proxy.supervisor, "remote_for_slug", lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": ""}
+    )
+    import graph.fleet.service_token as st
+
+    monkeypatch.setattr(st, "resolve_service_token", lambda: "FLEET")
+    client = FakeClient(upstream=FakeUpstream(status_code=401, headers={"content-type": "application/json"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(method="POST", headers={"authorization": "Bearer FLEET"}, body=b"{}")
+    req.state = SimpleNamespace(trust_tier="operator")
+    await proxy.forward_to("r1", req, "a2a")
+    assert not any(k.lower() == "authorization" for k in client.built["headers"])
+
+
+async def test_forward_to_paired_remote_swaps_caller_token_for_stored_bearer(monkeypatch):
+    """The D4 happy path end to end through _forward_to_base: the caller's fleet token is
+    REPLACED by the remote's stored bearer, never sent beside it."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
+    monkeypatch.setattr(
+        proxy.supervisor, "remote_for_slug", lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": "sek"}
+    )
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "application/json"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(method="POST", headers={"Authorization": "Bearer FLEET"}, body=b"{}")
+    req.state = SimpleNamespace(trust_tier="operator")
+    await proxy.forward_to("r1", req, "a2a")
+    auth = [v for k, v in client.built["headers"].items() if k.lower() == "authorization"]
+    assert auth == ["Bearer sek"]
+    assert client.built["url"] == "http://h:1/a2a"
+
+
 def test_resolution_is_cached_within_ttl(monkeypatch):
     calls = {"n": 0}
 
@@ -183,15 +244,16 @@ async def test_forward_to_member_public_drops_stored_remote_bearer(monkeypatch):
     )
     seen = {}
 
-    async def fake_fwd(base, request, path, extra=None):
-        seen.update(extra=extra)
+    async def fake_fwd(base, request, path, extra=None, **kw):
+        seen.update(extra=extra, **kw)
         return "OK"
 
     monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
     req = FakeRequest()
     req.state = SimpleNamespace(member_public=True)
     assert await proxy.forward_to("matt", req, "plugins/content/view") == "OK"
-    assert seen["extra"] == {}
+    # ``None`` DROPS the caller's header too — an empty dict would let it ride through.
+    assert seen["extra"] == {"authorization": None}
 
 
 async def test_forward_to_authed_request_keeps_stored_remote_bearer(monkeypatch):
@@ -202,15 +264,99 @@ async def test_forward_to_authed_request_keeps_stored_remote_bearer(monkeypatch)
     )
     seen = {}
 
-    async def fake_fwd(base, request, path, extra=None):
-        seen.update(extra=extra)
+    async def fake_fwd(base, request, path, extra=None, **kw):
+        seen.update(extra=extra, **kw)
         return "OK"
 
     monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
     req = FakeRequest()
-    req.state = SimpleNamespace()  # no member_public stamp — normal authed traffic
+    req.state = SimpleNamespace(trust_tier="operator")  # no member_public stamp — normal authed traffic
     assert await proxy.forward_to("matt", req, "api/chat") == "OK"
     assert seen["extra"] == {"authorization": "Bearer sekrit"}
+
+
+def _remote(monkeypatch, token="sek"):
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
+    monkeypatch.setattr(
+        proxy.supervisor, "remote_for_slug", lambda slug: {"id": "r1", "name": "r", "url": "http://h:1", "token": token}
+    )
+
+
+def _sent_auth(client) -> list[str]:
+    return [v for k, v in client.built["headers"].items() if k.lower() == "authorization"]
+
+
+async def test_member_public_to_remote_drops_the_callers_own_hub_bearer(monkeypatch):
+    """review MAJOR 1: member_public is stamped BEFORE any credential check, off a public list
+    the REMOTE controls. The caller's own hub bearer must not ride through to it — a
+    compromised remote could list a path public and harvest the hub's operator token."""
+    from types import SimpleNamespace
+
+    _remote(monkeypatch)
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "text/html"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(headers={"authorization": "Bearer HUB-OPERATOR"})
+    req.state = SimpleNamespace(member_public=True, trust_tier="operator")
+    await proxy.forward_to("r1", req, "plugins/content/view")
+    assert _sent_auth(client) == []
+
+
+async def test_member_public_to_local_member_keeps_callers_header(monkeypatch):
+    """A LOCAL member is inside the box's trust boundary — the #1890 behavior is unchanged:
+    no fleet token is lent, the caller's own header is left as it was."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "text/html"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(headers={"authorization": "Bearer caller"})
+    req.state = SimpleNamespace(member_public=True, trust_tier="operator")
+    await proxy.forward_to("alice", req, "plugins/content/view")
+    assert _sent_auth(client) == ["Bearer caller"]
+
+
+@pytest.mark.parametrize("tier", ["federation", None])
+async def test_non_operator_caller_is_not_lent_the_remotes_stored_bearer(monkeypatch, tier):
+    """review: the stored bearer is OPERATOR on the remote — lending it to a federation-tier
+    caller (ADR 0066: /a2a, /v1, /plugins) elevates it across the hop. Operator only."""
+    from types import SimpleNamespace
+
+    _remote(monkeypatch)
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "application/json"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(method="POST", headers={"authorization": "Bearer FED"}, body=b"{}")
+    req.state = SimpleNamespace(trust_tier=tier)
+    await proxy.forward_to("r1", req, "a2a")
+    assert _sent_auth(client) == []
+
+
+async def test_sse_query_token_never_rides_to_a_remote(monkeypatch):
+    """review: the hub-signed ``?token=`` (HMAC'd with the HUB's bearer) authenticated the
+    caller at the hub; forwarded, a remote could replay it against the hub. The remote gets
+    the stored bearer instead; other query params still ride."""
+    from types import SimpleNamespace
+
+    _remote(monkeypatch)
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "text/event-stream"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(query={"token": "HUB-SIGNED", "session": "s1"})
+    req.state = SimpleNamespace(trust_tier="operator")
+    await proxy.forward_to("r1", req, "api/events")
+    assert client.built["params"] == {"session": "s1"}
+    assert _sent_auth(client) == ["Bearer sek"]
+
+
+async def test_sse_query_token_still_rides_to_a_local_member(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "FLEET")
+    client = FakeClient(upstream=FakeUpstream(headers={"content-type": "text/event-stream"}))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+    req = FakeRequest(query={"token": "HUB-SIGNED"})
+    req.state = SimpleNamespace(trust_tier="operator")
+    await proxy.forward_to("alice", req, "api/events")
+    assert client.built["params"] == {"token": "HUB-SIGNED"}  # local behavior unchanged
 
 
 # --- _forward_to_base -----------------------------------------------------
@@ -286,8 +432,8 @@ async def test_forward_to_local_operator_swaps_in_fleet_token(monkeypatch):
     monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-secret")
     seen = {}
 
-    async def fake_fwd(base, request, path, extra=None):
-        seen.update(extra=extra)
+    async def fake_fwd(base, request, path, extra=None, **kw):
+        seen.update(extra=extra, **kw)
         return "OK"
 
     monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
@@ -304,8 +450,8 @@ async def test_forward_to_local_non_operator_gets_no_fleet_token(monkeypatch):
     monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
     seen = {}
 
-    async def fake_fwd(base, request, path, extra=None):
-        seen.update(extra=extra)
+    async def fake_fwd(base, request, path, extra=None, **kw):
+        seen.update(extra=extra, **kw)
         return "OK"
 
     monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
@@ -323,8 +469,8 @@ async def test_forward_to_local_member_public_gets_no_fleet_token(monkeypatch):
     monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
     seen = {}
 
-    async def fake_fwd(base, request, path, extra=None):
-        seen.update(extra=extra)
+    async def fake_fwd(base, request, path, extra=None, **kw):
+        seen.update(extra=extra, **kw)
         return "OK"
 
     monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
