@@ -8,10 +8,9 @@ import { Launcher } from "./app/Launcher";
 import { AppCrash } from "./app/AppCrash";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import { isLauncherWindow } from "./lib/desktop";
-// ADR 0037 — design-system foundation. Order matters: brand tokens (--pl-*) first, then
-// Tailwind + the shadcn→token bridge, then the legacy theme.css (which may reference --pl-*).
+// ADR 0037 — design-system foundation. Order matters: brand tokens (--pl-*) load first,
+// then the DS component styles, then the legacy theme.css (which may reference --pl-*).
 import "@protolabsai/design/css/tokens";
-import "./app/tailwind.css";
 import "@protolabsai/ui/styles.css"; // component styles, incl. the DS `.pl-markdown` renderer
 import "streamdown/styles.css"; // streaming per-token fade (opt-in; see DS <Markdown> docstring)
 import "katex/dist/katex.min.css"; // KaTeX glyph layout for math in the DS <Markdown>
