@@ -109,7 +109,7 @@
   text-decoration: underline;
 }
 .fleet-name-link:focus-visible {
-  outline: 1px solid var(--pl-color-fg);
+  outline: 2px solid var(--pl-color-focus);
   outline-offset: 2px;
 }
 /* Inline display-rename sizing — the chrome is the DS EditableText (.pl-editable__input);
