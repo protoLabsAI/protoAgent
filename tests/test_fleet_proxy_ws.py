@@ -15,6 +15,14 @@ from starlette.websockets import WebSocketDisconnect
 from graph.fleet import proxy
 
 
+@pytest.fixture(autouse=True)
+def _testserver_is_a_trusted_host(monkeypatch):
+    """TestClient sends ``Host: testserver``, which the open-hub remote Host gate (#3662) would
+    refuse as a possible DNS-rebinding name. Declare it the way an operator declares a
+    reverse-proxy name; the gate's own tests override the Host explicitly."""
+    monkeypatch.setenv("PROTOAGENT_TRUSTED_HOSTS", "testserver")
+
+
 def _echo_ws_server():
     """A real echo WebSocket server on a free port, in a background thread.
     Returns (port, stop) — proves forward_ws relays frames BOTH ways over real sockets."""
@@ -573,3 +581,65 @@ def test_remote_path_is_requoted_and_failure_log_carries_no_url(monkeypatch, cap
         assert _refused(f"/agents/ava/x?token={_HUB_OP}") == 1011
     assert "InvalidURI" in caplog.text
     assert _STORED not in caplog.text
+
+
+# ── Host gate (DNS rebinding, #3662) for remote WS targets on an open hub ──────
+
+
+def _refused_at(host: str, url: str, headers: dict) -> int:
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with TestClient(_ws_app()).websocket_connect(url, headers={"host": host, **headers}):
+            pass
+    return exc.value.code
+
+
+def test_open_hub_refuses_remote_ws_under_a_rebound_host(monkeypatch, real_open_hub):
+    """A rebound page is same-origin with its attacker name, so the Origin gate passes it; the
+    Host gate refuses it before anything is dialled."""
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    code = _refused_at("evil.example", "/agents/ava/stream?ticket=t1", headers={"origin": "http://evil.example"})
+    assert code == 1008
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:7870", "localhost:7870", "hub.tail1234.ts.net"])
+def test_open_hub_remote_ws_passes_under_its_own_host(monkeypatch, real_open_hub, host):
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    port, stop = _recording_ws_server()
+    try:
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1", headers={"host": host}) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+
+
+def test_gated_hub_remote_ws_has_no_host_gate(monkeypatch):
+    """A gated hub lends nothing to a caller without a hub credential, so the Host gate is
+    open-hub only — a ticket socket under any Host still passes."""
+    from a2a_impl import auth
+
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    monkeypatch.setattr(auth, "_BEARER", ["hub-bearer"])
+    port, stop = _recording_ws_server()
+    try:
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect(
+            "/agents/ava/stream?ticket=t1", headers={"host": "evil.example"}
+        ) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+
+
+def test_local_member_ws_has_no_host_gate(monkeypatch, real_open_hub):
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    port, stop = _echo_ws_server()
+    try:
+        monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", f"http://127.0.0.1:{port}", None))
+        with TestClient(_ws_app()).websocket_connect("/agents/peer/live", headers={"host": "evil.example"}) as ws:
+            ws.send_text("ping")
+            assert ws.receive_text() == "ping"
+    finally:
+        stop()

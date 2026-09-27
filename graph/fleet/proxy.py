@@ -271,6 +271,16 @@ async def forward_to(slug: str, request, path: str):
     # with NO stored token also carries nothing, so the headers alone can't tell it from a
     # local peer — ``_remote_slugs`` (set from the remote resolution) does.
     is_remote = bool(extra.get("authorization")) or slug in _remote_slugs
+    if is_remote:
+        # #3662: on an OPEN hub, refuse a cross-site / rebound browser request BEFORE any
+        # credential decision or upstream dial — see ``_remote_browser_refusal``.
+        refusal = _remote_browser_refusal(request.method, request.headers)
+        if refusal is not None:
+            _log_refusal(slug, refusal, request.headers)
+            return JSONResponse(
+                {"detail": f"Forbidden: {refusal} — this open hub only proxies a remote member for its own console"},
+                status_code=403,
+            )
     tier = getattr(state, "trust_tier", None)
     member_public = getattr(state, "member_public", False)
     drop_params: frozenset[str] = frozenset()
@@ -290,8 +300,9 @@ async def forward_to(slug: str, request, path: str):
         #    which must never leave the box. Anonymous is honest — an open remote answers, a
         #    secured one 401s and the delegate error says to pair it.
         # Open hub (no credential configured): every caller is ``operator``, so the stored
-        # bearer is lent to anyone who can reach the hub — pre-existing and accepted: an open
-        # hub already hands its whole console, remotes included, to whoever reaches it.
+        # bearer is lent to any caller that reaches this line. A browser page is only one if
+        # it is the hub's own console — the #3662 gates above refused cross-site and rebound
+        # requests; non-browser local callers are the "open instance is open" posture.
         if member_public or tier != "operator" or not extra.get("authorization"):
             extra = {"authorization": None}  # None = drop the caller's header (_forward_to_base)
         # The hub-signed SSE ``?token=`` (30s, HMAC'd with the HUB's bearer) authenticated the
@@ -405,16 +416,18 @@ def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
 _DESKTOP_ORIGINS = frozenset({"tauri://localhost", "http://tauri.localhost"})
 
 
-def _ws_origin_allowed(origin: str | None, host: str | None) -> bool:
-    """May a WS handshake with this ``Origin`` reach a REMOTE member through the hub?
+def _origin_allowed(origin: str | None, host: str | None) -> bool:
+    """May a browser request with this ``Origin`` reach a REMOTE member through the hub?
 
-    The HTTP ``A2A_ALLOWED_ORIGINS`` check is middleware and never sees a WS scope, and a
-    browser lets ANY page open a WebSocket to any origin (no CORS on WS) — so without this a
-    page in the operator's browser could drive a remote's live sockets through the hub. Allowed:
-    no ``Origin`` at all (a non-browser client — browsers always send one on a WS), same-origin
-    with the hub (the Origin's host[:port] equals the ``Host`` header; scheme-agnostic so a TLS
-    front such as ``tailscale serve`` still matches), the desktop webview, and anything in the
-    ``A2A_ALLOWED_ORIGINS`` allowlist when one is set. Everything else is refused."""
+    Shared by the WS handshake (every remote upgrade) and the HTTP proxy (remote targets on an
+    open hub, #3662). The HTTP ``A2A_ALLOWED_ORIGINS`` check is middleware and never sees a WS
+    scope, and a browser lets ANY page open a WebSocket to any origin (no CORS on WS) — so
+    without this a page in the operator's browser could drive a remote's live sockets through
+    the hub. Allowed: no ``Origin`` at all (a non-browser client — browsers always send one on
+    a WS), same-origin with the hub (the Origin's host[:port] equals the ``Host`` header;
+    scheme-agnostic so a TLS front such as ``tailscale serve`` still matches), the desktop
+    webview, and anything in the ``A2A_ALLOWED_ORIGINS`` allowlist when one is set. Everything
+    else — including the opaque ``null`` origin — is refused."""
     if origin is None:
         return True
     o = origin.strip().lower()
@@ -432,6 +445,206 @@ def _ws_origin_allowed(origin: str | None, host: str | None) -> bool:
     except ValueError:
         return False
     return bool(parts.scheme in ("http", "https") and parts.netloc and host and parts.netloc == host.strip().lower())
+
+
+# --- Browser gates for REMOTE targets on an OPEN hub (#3662) ------------------------------
+#
+# On an open hub (no bearer, no X-API-Key: the desktop default on its loopback bind) the auth
+# middleware rates every caller operator, so ``forward_to`` lends a paired remote's stored
+# operator-tier device token to anyone who can make the browser send a request to the hub.
+# CORS stops a foreign page READING the answer, not SENDING it: a form or text/plain POST to
+# ``http://127.0.0.1:<port>/agents/<rid>/…`` is a "simple" request with no preflight. And DNS
+# rebinding (an attacker name that resolves to 127.0.0.1) makes the page same-origin with the
+# hub, so neither CORS nor an Origin check sees it. Two gates close both, before any upstream
+# is dialled:
+#
+#   1. ``_cross_site_refusal`` — Fetch Metadata + Origin (the web.dev resource-isolation policy,
+#      with the desktop webview and the Origin allowlist admitted).
+#   2. ``_host_allowed`` — a Host allowlist: a rebinding page's requests carry the ATTACKER's
+#      name in ``Host`` (the browser writes the name it resolved), which no honest hub URL does.
+#
+# Scope: remote targets, open hub only. A token-gated hub is already safe: its only credentials
+# are an ``Authorization`` bearer or ``X-API-Key`` the console keeps in per-origin localStorage
+# (nothing auth-bearing is a cookie), so neither a cross-site page nor a rebound origin — whose
+# localStorage is empty — can attach one, and the middleware 401s them before this proxy runs.
+# Local members and the host slug are unaffected: they live inside this box's trust boundary
+# and are the same "open instance is open" posture the hub's own ``/api`` already has; a remote
+# crosses a machine boundary, and its operator granted that token to the HUB, not to every page
+# the hub's operator happens to have open.
+
+# Resolved bind interface, pushed in by the server bootstrap (graph/ can't import the pairing
+# routes that already hold it). Only a NAME matters here — any IP literal passes on its own.
+_BIND_HOST: list[str] = ["127.0.0.1"]
+
+
+def set_bind_host(host: str) -> None:
+    """Record the resolved bind interface (called from the server bootstrap)."""
+    _BIND_HOST[0] = (host or "").strip().lower() or "127.0.0.1"
+
+
+def _host_name(host: str) -> str:
+    """The name part of a ``Host`` header, lowercased: port dropped, IPv6 brackets and a
+    trailing root dot removed (``[::1]:7870`` → ``::1``, ``Localhost.:7870`` → ``localhost``)."""
+    h = host.strip().lower()
+    if h.startswith("["):
+        return h[1 : h.find("]")] if "]" in h else h[1:]
+    if h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return h.rstrip(".")
+
+
+def _own_names() -> set[str]:
+    """This machine's own names: its hostname, the short form, and ``<short>.local`` (mDNS).
+    ``gethostname`` reads the kernel's name — no resolution, so no 5s DNS stall."""
+    import socket
+
+    try:
+        name = socket.gethostname().strip().lower().rstrip(".")
+    except OSError:
+        return set()
+    if not name:
+        return set()
+    short = name.split(".", 1)[0]
+    return {name, short, f"{short}.local"}
+
+
+def _trusted_host_names() -> set[str]:
+    """Operator-declared names the hub is served under: ``PROTOAGENT_TRUSTED_HOSTS`` (comma-
+    separated, for a reverse proxy that forwards its own public name) plus the host of every
+    ``A2A_ALLOWED_ORIGINS`` entry (an origin you trust to CALL the hub names a host that serves
+    it). Read per call — both are cheap and an env change must not need a cache flush."""
+    import os
+    from urllib.parse import urlsplit
+
+    from a2a_impl.auth import allowed_origins
+
+    names = {_host_name(n) for n in os.environ.get("PROTOAGENT_TRUSTED_HOSTS", "").split(",") if n.strip()}
+    for o in allowed_origins() or []:
+        try:
+            netloc = urlsplit(o).netloc
+        except ValueError:
+            continue
+        if netloc:
+            names.add(_host_name(netloc))
+    return names
+
+
+def _host_allowed(host: str | None) -> bool:
+    """Is ``host`` (the request's ``Host`` header) a name this hub is honestly served under?
+
+    DNS rebinding needs a NAME the attacker's DNS answers, so:
+    - **Any IP literal** passes (127.x, ::1, this box's LAN/tailnet IPs, the bind address). A
+      browser only sends an IP ``Host`` when it connected to that IP, so the page came from
+      whatever serves there — this hub — never from an attacker's domain. That makes an
+      explicit "this machine's addresses" list unnecessary (and it can't go stale).
+    - ``localhost`` and ``*.localhost`` (RFC 6761: browsers resolve them to loopback
+      themselves, no DNS involved).
+    - ``*.ts.net`` — Tailscale MagicDNS (a hub behind ``tailscale serve`` sees its own
+      ``<machine>.<tailnet>.ts.net``). That zone is Tailscale's; nobody can point a ts.net name
+      at another tailnet's loopback.
+    - This machine's hostname / ``<short>.local``, and the bind address when it is a name.
+    - ``PROTOAGENT_TRUSTED_HOSTS`` and the hosts of ``A2A_ALLOWED_ORIGINS`` (a reverse proxy
+      that forwards its public name, e.g. nginx ``proxy_set_header Host $host``).
+    No ``Host`` at all is a non-browser client (browsers always send one) and passes."""
+    if host is None or not host.strip():
+        return True
+    name = _host_name(host)
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    if name == "localhost" or name.endswith(".localhost") or name.endswith(".ts.net"):
+        return True
+    if name == _host_name(_BIND_HOST[0]) or name in _own_names():
+        return True
+    return name in _trusted_host_names()
+
+
+# A navigation (top-level or iframe) may be cross-site — links and the desktop webview's plugin
+# view iframes are exactly that — but never into an <object>/<embed> (web.dev's isolation policy).
+_NAV_BLOCKED_DESTS = frozenset({"object", "embed"})
+
+
+def _origin_of(url: str) -> str | None:
+    """``scheme://netloc`` of a URL (a ``Referer``), or None when it has neither."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else None
+
+
+def _cross_site_refusal(method: str, headers) -> str | None:
+    """Why a browser request to a remote member must be refused, or None to let it through.
+
+    - **An ``Origin`` is present** (every cross-origin CORS request, and every POST from a
+      modern browser): it must pass ``_origin_allowed`` — same-origin with ``Host``, the desktop
+      webview, or ``A2A_ALLOWED_ORIGINS``. That decides it, whatever ``Sec-Fetch-Site`` says:
+      the desktop console (``tauri://localhost``) calling ``http://127.0.0.1:<port>`` IS
+      cross-site to the browser, and its Origin is what proves it is the operator's app.
+    - **No Origin, ``Sec-Fetch-Site: cross-site``** — a no-cors subresource or a navigation from
+      a foreign page. Refused, except a GET/HEAD navigation (``Sec-Fetch-Mode: navigate``, not
+      into an object/embed: the desktop webview's iframe of a remote plugin view, or a link) —
+      the attacker can't read the result — and a request whose ``Referer`` origin is trusted
+      (the desktop chat's ``<img>`` of a remote's media; a page can suppress Referer, never
+      forge it).
+    - ``same-origin``, ``same-site`` and ``none`` (typed URL / bookmark) pass, as does a request
+      with no Fetch Metadata and no Origin (curl, the D4 fleet-token delegate path, a browser
+      too old to send either). ``same-site`` passes because on this surface it only means
+      "another port of the same host" — the Vite dev server at :5173, a sibling instance — or a
+      sibling name in the same tailnet; any such request that carries an Origin (every POST)
+      still has to be same-origin or allowlisted by the rule above.
+    """
+    host = headers.get("host")
+    origin = headers.get("origin")
+    if origin is not None:
+        return None if _origin_allowed(origin, host) else "origin not allowed"
+    if (headers.get("sec-fetch-site") or "").strip().lower() != "cross-site":
+        return None
+    mode = (headers.get("sec-fetch-mode") or "").strip().lower()
+    dest = (headers.get("sec-fetch-dest") or "").strip().lower()
+    if method.upper() in ("GET", "HEAD") and mode == "navigate" and dest not in _NAV_BLOCKED_DESTS:
+        return None
+    referer = headers.get("referer")
+    ref_origin = _origin_of(referer) if referer else None
+    if ref_origin and _origin_allowed(ref_origin, host):
+        return None
+    return "cross-site request"
+
+
+def _log_refusal(slug: str, reason: str, headers) -> None:
+    """One INFO line per refusal: the browser-set context headers only (never Authorization,
+    Cookie or the query, which can carry a token), each clipped so a hostile value can't flood
+    the log."""
+
+    def clip(name: str) -> str:
+        v = headers.get(name)
+        return "-" if v is None else repr(v[:120])
+
+    log.info(
+        "[fleet] refusing proxied request to remote member %r — %s (host=%s origin=%s sec-fetch-site=%s)",
+        slug,
+        reason,
+        clip("host"),
+        clip("origin"),
+        clip("sec-fetch-site"),
+    )
+
+
+def _remote_browser_refusal(method: str, headers) -> str | None:
+    """Both #3662 gates for a request to a REMOTE member, or None. Open hub only (see above)."""
+    from a2a_impl.auth import open_mode
+
+    if not open_mode():
+        return None
+    if not _host_allowed(headers.get("host")):
+        return "untrusted Host header"
+    return _cross_site_refusal(method, headers)
 
 
 def _remote_ws_handshake(
@@ -523,7 +736,8 @@ async def forward_ws(slug: str, ws, path: str) -> None:
       remote's stored bearer on its own; it only swaps it in for a credential it authenticated
       as operator (never on an open hub), passes ticket-based sockets through with no
       Authorization, and refuses a remote registered with no token. A browser handshake must
-      also pass ``_ws_origin_allowed`` (same-origin, desktop webview, or the allowlist).
+      also pass ``_origin_allowed`` (same-origin, desktop webview, or the allowlist), and on an
+      open hub its ``Host`` must pass ``_host_allowed`` (DNS rebinding, #3662).
       (#1607 refused remotes outright; D6 re-enables them.)
 
     There is no WS analog of ``member_public``: that flag marks an HTTP request the middleware
@@ -550,7 +764,15 @@ async def forward_ws(slug: str, ws, path: str) -> None:
     raw_query = (ws.scope.get("query_string") or b"").decode("latin-1")
 
     if kind == "remote":
-        if not _ws_origin_allowed(ws.headers.get("origin"), ws.headers.get("host")):
+        # #3662: a rebound page is same-origin with its own attacker name, so the Origin check
+        # below can't see it — the Host gate can. Open hub only (``_remote_browser_refusal``).
+        from a2a_impl.auth import open_mode
+
+        if open_mode() and not _host_allowed(ws.headers.get("host")):
+            _log_refusal(slug, "untrusted Host header", ws.headers)
+            await ws.close(code=1008, reason="host not allowed")
+            return
+        if not _origin_allowed(ws.headers.get("origin"), ws.headers.get("host")):
             log.info("[fleet] refusing WS to remote member %r — cross-origin handshake", slug)
             await ws.close(code=1008, reason="origin not allowed")
             return

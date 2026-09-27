@@ -1446,9 +1446,11 @@ def _main():
     # Tell the pairing routes what we actually bound to (ADR 0087 D6). Enumerating the
     # host's interfaces isn't enough: a loopback-bound server still HAS a LAN address, and
     # offering it as a pairing target produces a QR that silently can't work.
+    from graph.fleet.proxy import set_bind_host as set_proxy_bind_host
     from operator_api.pairing_routes import set_bind_host
 
     set_bind_host(args.host)
+    set_proxy_bind_host(args.host)  # the remote-member Host gate (#3662) admits a named bind
 
     # Boot gate: a non-loopback bind with no A2A auth token exposes the full
     # operator API (plugin install+enable = code execution, config/SOUL

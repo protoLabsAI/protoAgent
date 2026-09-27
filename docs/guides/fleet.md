@@ -412,6 +412,26 @@ because its sockets would be a blind pipe into an open instance. The hub doesn't
 plugin sends *inside* the socket, so remote terminal views need **terminal-plugin ≥0.9.2**.
 Older versions sent the console's bearer in-band when minting a ticket failed.
 
+**An open hub only proxies a remote for its own console** *(#3662)*. On a hub with no token
+of its own (the desktop default on loopback) every caller is operator, so the hub lends a
+remote's stored token to whatever reaches `/agents/<remote>/…`. CORS stops a web page in your
+browser from *reading* the answer, not from *sending* a form POST there, and a DNS-rebinding
+page (an attacker's name that resolves to `127.0.0.1`) is even same-origin with the hub. So for
+a **remote** member on an **open** hub, the proxy refuses with `403` before contacting the remote:
+
+- a request with `Sec-Fetch-Site: cross-site`, unless it carries a trusted `Origin`, is a
+  GET navigation (a link, the desktop app's plugin-view iframe), or has a trusted `Referer`;
+- a request whose `Origin` is not the hub's own origin, the desktop app
+  (`tauri://localhost`, `http://tauri.localhost`) or in `A2A_ALLOWED_ORIGINS`;
+- a request (or WebSocket) whose `Host` isn't a name this hub is served under: IP
+  literals, `localhost`, `*.ts.net`, this machine's hostname / `.local` name, a named bind,
+  the hosts of `A2A_ALLOWED_ORIGINS`, or `PROTOAGENT_TRUSTED_HOSTS`. If you front an open hub
+  with a reverse proxy that forwards its own public name, add that name there.
+
+curl, scripts and the `delegate_to` path send neither header and pass. Local members and the
+host are unaffected, and so is a token-gated hub. Its credential is a header, never a cookie,
+so a foreign or rebound page has nothing to attach.
+
 **Version skew is flagged.** The hub console drives a remote's full `/api/*` by proxy, so a
 remote on a *different protoAgent release* is a real compat surface. The reachability probe
 also reads the remote's app version off its A2A agent card; when it differs from the hub's,
