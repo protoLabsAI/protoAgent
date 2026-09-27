@@ -445,6 +445,22 @@ function useScrollToLine(
     let frames = 0;
     let estimated = false;
     let settled = 0;
+    // The operator's scroll wins: the moment they show intent inside the pane (wheel, touch,
+    // a press — the scrollbar included — or a scroll key) the settle loop stops for good,
+    // until the next open re-runs this effect. It used to re-snap any scroll that landed
+    // mid-loop — and a target past the max scroll (a line near the end of a short file) never
+    // settled, so a wheel-up was yanked back to the bottom for the loop's whole ~4 s.
+    const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+    const onIntent = (e: Event) => {
+      if (e instanceof KeyboardEvent && !SCROLL_KEYS.has(e.key)) return;
+      stop();
+    };
+    const INTENT = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    const stop = () => {
+      cancelAnimationFrame(raf);
+      for (const t of INTENT) body.removeEventListener(t, onIntent, true);
+    };
+    for (const t of INTENT) body.addEventListener(t, onIntent, { capture: true, passive: true });
     const tick = () => {
       const sc = scroller();
       const row = body
@@ -455,8 +471,9 @@ function useScrollToLine(
         // Re-measure until it holds still: the virtual window re-lays rows out after a jump,
         // so the first measurement can be taken mid-layout.
         const top = row.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
-        const want = Math.max(0, top - sc.clientHeight / 3);
-        if (Math.abs(sc.scrollTop - want) <= 2 && ++settled >= 3) return;
+        // Clamped to the max scroll, or a line near the end of a short file never "arrives".
+        const want = Math.max(0, Math.min(top - sc.clientHeight / 3, sc.scrollHeight - sc.clientHeight));
+        if (Math.abs(sc.scrollTop - want) <= 2 && ++settled >= 3) return stop();
         if (Math.abs(sc.scrollTop - want) > 2) {
           settled = 0;
           scrollTo(want);
@@ -469,9 +486,10 @@ function useScrollToLine(
         scrollTo(Math.max(0, ROW_PX * (line - 1) - sc.clientHeight / 3));
       }
       if (++frames < 240) raf = requestAnimationFrame(tick);
+      else stop();
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return stop;
   }, [bodyRef, virtRef, line, seq, ready, page]);
 }
 
