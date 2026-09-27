@@ -3,10 +3,10 @@
     "status": "Planned",
     "items": [
       {
-        "title": "Ollama & Hugging Face listings",
-        "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
+        "title": "The trajectory",
+        "detail": "an append-only log of everything the model sees, so resume, fork, search and replay all work from one session record.",
         "refs": [
-          "#1990"
+          "#2806"
         ]
       }
     ]
@@ -14,6 +14,11 @@
   {
     "status": "In progress",
     "items": [
+      {
+        "title": "Ollama & Hugging Face listings",
+        "detail": "protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app; the listing PRs are open upstream, awaiting maintainer review.",
+        "refs": []
+      },
       {
         "title": "Design-system alignment",
         "detail": "migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).",
