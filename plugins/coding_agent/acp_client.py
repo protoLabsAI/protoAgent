@@ -145,6 +145,28 @@ def _short_tool_name(title: str) -> str:
     return (label or (title or "").strip() or "tool")[:80]
 
 
+def _tool_refinement(update: dict) -> tuple[str, Any] | None:
+    """A ``tool_call_update``'s refinement of an open call as ``(title, raw_input)``, or
+    None when it carries no usable arguments.
+
+    Structured ``rawInput`` wins. Failing that, an agent may inline JSON args in the
+    title. Only a title that PARSES counts (parsed back to data, so key-based redaction
+    rules see the keys). A fragment that doesn't, such as ``awk '{print $1}'`` repeated
+    on the completion update, must not overwrite a real refinement.
+    """
+    title = str(update.get("title") or "")
+    raw_input = update.get("rawInput")
+    if raw_input in (None, "", {}, []):
+        _, inline = _split_tool_title(title)
+        try:
+            raw_input = json.loads(inline) if inline else None
+        except (TypeError, ValueError, RecursionError):
+            raw_input = None
+        if not isinstance(raw_input, (dict, list)):
+            return None
+    return title, raw_input
+
+
 def _coder_session_id(name: str, cwd: str) -> str:
     """Langfuse session for a coder run outside any turn: one per coder per worktree, so a
     feature's retries group together. The basename keeps it readable. The short hash of the
@@ -538,6 +560,9 @@ class AcpClient:
         # Tool calls already ended this turn. ACP lets a call arrive terminal AND still
         # send the (recommended) follow-up update; end it once.
         self._turn_ended_tool_ids: set[str] = set()
+        # Tool calls started this turn → their card name, so a later refinement can be
+        # sent as an ``update`` for a call the UI actually has a card for (#3691).
+        self._turn_open_tools: dict[str, str] = {}
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -938,6 +963,7 @@ class AcpClient:
             else:
                 _, inline = _split_tool_title(title)
                 tool_input = inline or str(update.get("kind") or "")
+            self._turn_open_tools[str(update.get("toolCallId") or title)] = name
             await self._emit_tool(
                 {
                     "phase": "start",
@@ -969,18 +995,38 @@ class AcpClient:
             # A streaming agent opens the call before its arguments exist: claude-agent-acp
             # sends ``tool_call`` at content_block_start with ``rawInput: {}`` and a generic
             # title ("Read File"), then REFINES it with a ``tool_call_update`` carrying the
-            # real ``rawInput`` and title. Without this the trace recorded only the kind.
+            # real ``rawInput`` and title. Without this the trace recorded only the kind and
+            # the chat card showed "Read File" with a body of `read`.
             try:
-                self._refine_tool_start(tool_id, update)
-            except Exception:  # noqa: BLE001 — a trace refinement must never cost the end event
+                refinement = _tool_refinement(update)
+            except Exception:  # noqa: BLE001 — a refinement must never cost the end event
                 logger.debug("[acp/%s] could not refine tool call %s", self.name, tool_id, exc_info=True)
+                refinement = None
+            if refinement is not None and tool_id in self._turn_open_tools and tool_id not in self._turn_ended_tool_ids:
+                title, raw_input = refinement
+                self._refine_tool_start(tool_id, title, raw_input)
+                name = _short_tool_name(title) if title else self._turn_open_tools[tool_id]
+                self._turn_open_tools[tool_id] = name
+                try:
+                    tool_input = json.dumps(raw_input, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    tool_input = str(raw_input)
+                # A separate ``update`` phase, not a second ``start``: consumers that count
+                # or list starts (a plugin's recent-tools feed) would double a call, and an
+                # old consumer that knows only start/end ignores it harmlessly (#3691).
+                await self._emit_tool({"phase": "update", "id": tool_id, "name": name, "input": tool_input})
             if status in ("completed", "failed") and tool_id not in self._turn_ended_tool_ids:
                 self._turn_ended_tool_ids.add(tool_id)
+                end_title = str(update.get("title") or "")
                 await self._emit_tool(
                     {
                         "phase": "end",
                         "id": tool_id,
-                        "name": _short_tool_name(str(update.get("title") or "")),
+                        # A completion update usually carries no title; name the end after
+                        # the (refined) card rather than the placeholder "tool".
+                        "name": _short_tool_name(end_title)
+                        if end_title
+                        else self._turn_open_tools.get(tool_id, "tool"),
                         "output": _tool_output_preview(update),
                         "status": status,
                     }
@@ -1062,8 +1108,8 @@ class AcpClient:
         stringified: the event's ``input`` is already JSON text, where key-based rules
         (``api_key``, …) can no longer see the keys.
         """
-        if self._turn_span is None:
-            return
+        if self._turn_span is None or event.get("phase") == "update":
+            return  # an update is folded into the start record by ``_refine_tool_start``
         tool_id = str(event.get("id") or "")
         if event.get("phase") == "start":
             safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
@@ -1101,27 +1147,13 @@ class AcpClient:
             return redact(raw_input)
         return json.dumps(redact(raw_input), ensure_ascii=False, default=str)
 
-    def _refine_tool_start(self, tool_id: str, update: dict) -> None:
-        """Fold a ``tool_call_update``'s later ``rawInput`` / title into the open call's
-        trace record, so the span shows the real arguments and not just the kind."""
+    def _refine_tool_start(self, tool_id: str, title: str, raw_input: Any) -> None:
+        """Fold a refinement (see ``_tool_refinement``) into the open call's trace record,
+        so the span shows the real arguments and title, not just the kind."""
         start = self._turn_tool_starts.get(tool_id)
         if start is None:
             return
         started, name, tool_input = start
-        title = str(update.get("title") or "")
-        raw_input = update.get("rawInput")
-        if raw_input in (None, "", {}, []):
-            # No structured input: an agent may still inline JSON args in the title. Only
-            # a title that PARSES counts (parsed back to data, so key-based redaction rules
-            # see the keys). A fragment that doesn't, such as ``awk '{print $1}'`` repeated
-            # on the completion update, must not overwrite a real refinement.
-            _, inline = _split_tool_title(title)
-            try:
-                raw_input = json.loads(inline) if inline else None
-            except (TypeError, ValueError, RecursionError):
-                raw_input = None
-            if not isinstance(raw_input, (dict, list)):
-                return
         self._turn_tool_starts[tool_id] = (
             started,
             _short_tool_name(title) if title else name,
@@ -1577,6 +1609,7 @@ class AcpClient:
         self._last_chunk = ""
         self._turn_tool_calls = 0
         self._turn_ended_tool_ids = set()
+        self._turn_open_tools = {}
         self._turn_session_id = None
         self._progress = progress_callback
         self._on_tool = tool_callback

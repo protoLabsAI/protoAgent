@@ -302,6 +302,22 @@ async def _acp_drive_turn(rt, message: str):
             await frame_q.put(
                 ("tool_start", {"id": ev.get("id", ""), "name": ev.get("name", "tool"), "input": ev.get("input", "")})
             )
+        elif ev.get("phase") == "update":
+            # The coder refined an open call's name/args (claude-agent-acp streams them
+            # after the start). Re-announce the SAME id: the console fills the card in by
+            # id, exactly as for the native runtime's second tool_start with full args.
+            # Marked so it isn't counted as another call (#3691).
+            await frame_q.put(
+                (
+                    "tool_start",
+                    {
+                        "id": ev.get("id", ""),
+                        "name": ev.get("name", "tool"),
+                        "input": ev.get("input", ""),
+                        "refine": True,
+                    },
+                )
+            )
         elif ev.get("phase") == "end":
             await frame_q.put(
                 ("tool_end", {"id": ev.get("id", ""), "name": ev.get("name", "tool"), "output": ev.get("output", "")})
@@ -319,7 +335,7 @@ async def _acp_drive_turn(rt, message: str):
         frame = await frame_q.get()
         if frame is _ACP_DONE:
             break
-        if frame[0] == "tool_start":
+        if frame[0] == "tool_start" and not frame[1].get("refine"):
             tool_calls += 1
         yield frame  # (kind, payload) — already normalized
     try:

@@ -1632,6 +1632,7 @@ def _fresh_client():
     c._text_after_tool = False
     c._last_chunk = ""
     c._turn_tool_calls = 0
+    c._turn_open_tools = {}
     c._turn_session_id = None
     c._progress = None
     c._on_tool = None
