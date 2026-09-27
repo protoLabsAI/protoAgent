@@ -432,10 +432,11 @@ class _FakeLangfuse:
     installed. Records the kwargs it was constructed with — those ARE the outcome
     under test (which credentials and host actually reached the client)."""
 
-    def __init__(self, public_key="", secret_key="", host=""):
+    def __init__(self, public_key="", secret_key="", host="", tracer_provider=None):
         self.public_key = public_key
         self.secret_key = secret_key
         self.host = host
+        self.tracer_provider = tracer_provider
 
 
 def _install_fake_langfuse(monkeypatch):
@@ -445,6 +446,19 @@ def _install_fake_langfuse(monkeypatch):
     mod = types.ModuleType("langfuse")
     mod.Langfuse = _FakeLangfuse
     monkeypatch.setitem(sys.modules, "langfuse", mod)
+    _isolate_global_tracer_provider(monkeypatch)
+
+
+def _isolate_global_tracer_provider(monkeypatch):
+    """``init`` registers a named provider as OTel's GLOBAL one (#3565), which OTel allows
+    once per process. Keep each test's registration local: the global reads as unset
+    (a proxy) and a registration lands in the returned list instead."""
+    from opentelemetry import trace as otel_trace
+
+    registered: list = []
+    monkeypatch.setattr(otel_trace, "get_tracer_provider", lambda: otel_trace.ProxyTracerProvider())
+    monkeypatch.setattr(otel_trace, "set_tracer_provider", registered.append)
+    return registered
 
 
 class _Cfg:
@@ -1172,3 +1186,115 @@ async def test_a_turn_exception_reaches_the_caller_unchanged(session_langfuse):
             raise KeyError("boom")
     assert tracing.current_session_id() == ""
     assert tracing.current_trace_id() == ""
+
+
+# ── service.name on the OTel resource (#3565) ─────────────────────────────────
+#
+# Every fleet member exported to one shared Langfuse project as `unknown_service`, so a
+# trace-level filter by agent was impossible. These assert the resource attribute on the
+# provider the (fake) Langfuse client was actually handed — the boundary the SDK exports.
+
+
+def _service_env(monkeypatch, **env):
+    _clear_langfuse_env(monkeypatch)
+    for var in ("OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES", "AGENT_NAME", "LANGFUSE_RELEASE"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+def _named_cfg(name):
+    cfg = _Cfg()
+    cfg.identity_name = name
+    return cfg
+
+
+def test_init_names_the_service_after_the_agent_identity(monkeypatch):
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _service_env(monkeypatch)
+    registered = _isolate_global_tracer_provider(monkeypatch)
+
+    tracing.init(config=_named_cfg("vera"))
+
+    provider = tracing._langfuse.tracer_provider
+    assert provider is not None
+    assert provider.resource.attributes["service.name"] == "vera"
+    # Registered globally, as the SDK does with the provider it would otherwise build,
+    # so non-Langfuse OTel instrumentation lands under the same name.
+    assert registered == [provider]
+
+
+def test_each_fleet_instance_gets_its_own_service_name(monkeypatch):
+    """Members share the hub's environment (AGENT_NAME included) but each has its own
+    identity config — the config is what must decide."""
+    names = []
+    for identity in ("frank", "matt"):
+        tracing = _reload_tracing()
+        _install_fake_langfuse(monkeypatch)
+        _service_env(monkeypatch, AGENT_NAME="hub")
+        tracing.init(config=_named_cfg(identity))
+        names.append(tracing._langfuse.tracer_provider.resource.attributes["service.name"])
+    assert names == ["frank", "matt"]
+
+
+def test_service_name_falls_back_to_agent_name_env_then_protoagent(monkeypatch):
+    tracing = _reload_tracing()
+    _service_env(monkeypatch, AGENT_NAME="jon")
+    assert tracing.resolve_service_name(_named_cfg("protoagent")) == "jon"
+    monkeypatch.delenv("AGENT_NAME")
+    assert tracing.resolve_service_name(None) == "protoagent"
+
+
+def test_otel_service_name_env_wins_over_the_identity(monkeypatch):
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _service_env(monkeypatch, OTEL_SERVICE_NAME="from-deploy")
+
+    tracing.init(config=_named_cfg("vera"))
+
+    assert tracing._langfuse.tracer_provider.resource.attributes["service.name"] == "from-deploy"
+
+
+def test_otel_resource_attributes_service_name_wins_and_other_attributes_survive(monkeypatch):
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _service_env(monkeypatch, OTEL_RESOURCE_ATTRIBUTES="deployment.environment=prod,service.name=from-attrs")
+
+    tracing.init(config=_named_cfg("vera"))
+
+    attrs = tracing._langfuse.tracer_provider.resource.attributes
+    assert attrs["service.name"] == "from-attrs"
+    assert attrs["deployment.environment"] == "prod"
+
+
+def test_unrelated_resource_attributes_do_not_suppress_the_identity_name(monkeypatch):
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _service_env(monkeypatch, OTEL_RESOURCE_ATTRIBUTES="deployment.environment=prod")
+
+    tracing.init(config=_named_cfg("vera"))
+
+    attrs = tracing._langfuse.tracer_provider.resource.attributes
+    assert attrs["service.name"] == "vera"
+    assert attrs["deployment.environment"] == "prod"
+
+
+def test_an_existing_global_provider_is_left_to_its_owner(monkeypatch):
+    """Someone else registered a real provider first — its resource is theirs to name, and
+    the SDK attaches to it on its own; init must not swap it out."""
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _service_env(monkeypatch)
+    existing = TracerProvider()
+    monkeypatch.setattr(otel_trace, "get_tracer_provider", lambda: existing)
+
+    tracing.init(config=_named_cfg("vera"))
+
+    assert tracing.is_enabled() is True
+    assert tracing._langfuse.tracer_provider is None

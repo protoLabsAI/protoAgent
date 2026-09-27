@@ -94,12 +94,9 @@ async def test_a_failed_subagent_delegation_is_still_recorded(ledger_db, monkeyp
     assert "subagent exploded" in row["error"]
 
 
-async def test_a_subagent_edge_records_no_cost_because_it_is_billed_to_the_parent(
-    ledger_db, monkeypatch
-):
-    # Subagent spend is already billed to the PARENT turn's telemetry via usage_sink
-    # (#2872). Storing a number here too would double-count the same work against itself;
-    # the cost of the edge is recovered by joining to `turns` on parent_task_id.
+async def test_a_subagent_edge_with_no_reported_usage_records_cost_as_unknown(ledger_db, monkeypatch):
+    # No model call reported usage (a native-OAuth path with no usage_metadata, or a run
+    # that died before its first call). NULL, never 0: unknown is not free (#3565).
     import graph.agent as agent
 
     async def _inner(**_kw):
@@ -116,6 +113,81 @@ async def test_a_subagent_edge_records_no_cost_because_it_is_billed_to_the_paren
     )
 
     assert ledger_db.recent()[0]["cost_usd"] is None
+
+
+def _billing_inner(*costs):
+    """A sub-graph stand-in that bills one usage row per model call into the sink it is
+    handed — the boundary ``_run_subagent_inner`` writes through."""
+
+    async def _inner(*, usage_sink=None, **_kw):
+        for cost in costs:
+            usage_sink.append({"input_tokens": 10, "output_tokens": 5, "cost_usd": cost, "model": "m"})
+        return "done"
+
+    return _inner
+
+
+async def test_a_workflow_step_subagent_edge_carries_its_priced_spend(ledger_db, monkeypatch):
+    # A workflow step reaches _run_subagent through sdk.run_subagent with NO usage_sink —
+    # and telemetry's `turns` holds A2A turns only, so before #3565 its cost existed
+    # nowhere but Langfuse. The edge now carries the sum of its priced calls.
+    import graph.agent as agent
+
+    monkeypatch.setattr(agent, "_run_subagent_inner", _billing_inner(0.0125, 0.0031))
+    await agent._run_subagent(
+        config=None,
+        tool_map={},
+        available_subagents="review-finder",
+        description="workflow code-review:find",
+        prompt="p",
+        subagent_type="review-finder",
+    )
+
+    assert ledger_db.recent()[0]["cost_usd"] == pytest.approx(0.0156)
+
+
+async def test_the_parent_turn_is_still_billed_the_same_rows(ledger_db, monkeypatch):
+    # The ledger cost is a per-edge view; the parent turn's usage_sink must still get
+    # every row (#2872) — collecting locally for the ledger must not swallow them.
+    import graph.agent as agent
+
+    monkeypatch.setattr(agent, "_run_subagent_inner", _billing_inner(0.5, 0.25))
+    parent_rows: list[dict] = []
+    await agent._run_subagent(
+        config=None,
+        tool_map={},
+        available_subagents="researcher",
+        description="d",
+        prompt="p",
+        subagent_type="researcher",
+        usage_sink=parent_rows,
+    )
+
+    assert [r["cost_usd"] for r in parent_rows] == [0.5, 0.25]
+    assert ledger_db.recent()[0]["cost_usd"] == pytest.approx(0.75)
+
+
+async def test_a_failed_subagent_still_records_what_it_spent(ledger_db, monkeypatch):
+    import graph.agent as agent
+
+    async def _inner(*, usage_sink=None, **_kw):
+        usage_sink.append({"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.02, "model": "m"})
+        raise RuntimeError("died after one call")
+
+    monkeypatch.setattr(agent, "_run_subagent_inner", _inner)
+    with pytest.raises(RuntimeError):
+        await agent._run_subagent(
+            config=None,
+            tool_map={},
+            available_subagents="researcher",
+            description="d",
+            prompt="p",
+            subagent_type="researcher",
+        )
+
+    row = ledger_db.recent()[0]
+    assert row["outcome"] == "failed"
+    assert row["cost_usd"] == pytest.approx(0.02)
 
 
 # --- funnel 2: external delegates -------------------------------------------------------
@@ -374,3 +446,43 @@ async def test_a_redundant_settle_cannot_restate_a_recorded_outcome(
     row = ledger_db.recent()[0]
     assert row["outcome"] == "failed"
     assert "real failure" in row["error"]
+
+
+async def test_a_background_edge_settles_with_the_turns_cost(ledger_db, tmp_path, monkeypatch):
+    """The A2A terminal hook knows the background turn's priced spend; it lands on the
+    edge (#3565). A zero from the executor means no usage was reported — left NULL."""
+    from types import SimpleNamespace
+
+    import server.a2a as a2a
+    from a2a_impl.executor import TurnOutcome
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+    from runtime.state import STATE
+
+    store = BackgroundStore(str(Path(tmp_path) / "bg.db"))
+    mgr = BackgroundManager(
+        agent_name="a", invoke_url="http://127.0.0.1:7870", store=store, api_key="k", bearer_token="b"
+    )
+
+    async def _fire(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(mgr, "_fire", _fire)
+    monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+    monkeypatch.setattr(a2a._event_bus, "publish", lambda *_a, **_kw: None)
+    monkeypatch.setattr(mgr, "resume_origin", lambda *_a, **_kw: None, raising=False)
+    monkeypatch.setattr(a2a, "_spawn_background_wake", lambda *_a, **_kw: None)
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(), raising=False)
+
+    costs = {}
+    for cost in (0.42, 0.0):
+        job_id = await mgr.spawn(origin_session="s1", subagent_type="researcher", description=f"c{cost}", prompt="go")
+        outcome = TurnOutcome(
+            task_id="t", context_id=f"background:{job_id}", state="completed", text="done",
+            cost_usd=cost, origin="background", trigger=job_id,
+        )
+        a2a._handle_background_terminal(outcome)
+        costs[cost] = next(r["cost_usd"] for r in ledger_db.recent() if r["task_id"] == job_id)
+
+    assert costs[0.42] == pytest.approx(0.42)
+    assert costs[0.0] is None

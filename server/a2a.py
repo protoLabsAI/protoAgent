@@ -1027,8 +1027,12 @@ def _handle_background_terminal(outcome) -> None:
     state = getattr(outcome, "state", "completed")
     status = state if state in ("completed", "canceled") else "failed"
     text = extract_output(outcome.text) or outcome.text or ""
+    # The background turn's own priced spend, onto its ledger edge (#3565). The executor
+    # reports 0.0 when no call reported usage — unknown, not free — so only a positive
+    # total is recorded (the same rule its cost-v1 extension applies).
+    cost = float(getattr(outcome, "cost_usd", 0.0) or 0.0)
     try:
-        mgr.store.mark_complete(job_id, status, text)
+        mgr.store.mark_complete(job_id, status, text, cost_usd=cost if cost > 0 else None)
     except Exception:  # noqa: BLE001
         log.exception("[background] failed to settle job %s", job_id)
         return
