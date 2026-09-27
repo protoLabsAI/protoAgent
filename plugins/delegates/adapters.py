@@ -123,6 +123,17 @@ def _is_loopback_url(url: str) -> bool:
     return host in ("localhost", "::1") or host == "127.0.0.1" or host.startswith("127.")
 
 
+def _fleet_token_available() -> bool:
+    """Would ``_a2a_headers`` have presented the fleet service token? (Same lookup, same
+    failure mode — it degrades to "no credential" rather than raising.)"""
+    try:
+        from graph.fleet.service_token import resolve_service_token
+
+        return bool(resolve_service_token())
+    except Exception:  # noqa: BLE001 — not in a fleet / unreadable token: nothing was sent
+        return False
+
+
 def _hub_proxied_slug(url: str) -> str:
     """The member slug when ``url`` is a hub's loopback fleet proxy to another agent —
     ``http://127.0.0.1:<port>/agents/<slug>/a2a`` (ADR 0113 D4, what ``supervisor.status()``
@@ -816,18 +827,24 @@ def _a2a_auth_hint(d: Delegate, status_code: int) -> str:
     """
     if status_code not in (401, 403) or d.auth_token:
         return ""
-    remote = _hub_proxied_slug(d.url)
-    if remote:
-        # A delegate to a remote fleet member routes through the hub's proxy (ADR 0113 D4):
-        # the fleet token got this call past the hub, and the hub then presents the
-        # remote's STORED bearer — so the 401 is the remote refusing the hub's token (none
-        # stored, or a stale/revoked one). The fix is on the hub's fleet row, not here:
-        # setting a token on this delegate would bypass the one-registry design.
+    slug = _hub_proxied_slug(d.url)
+    if slug:
+        # A hub-proxied member (ADR 0113 D4 — what a remote's roster ``a2a`` points at). From
+        # here we can't tell a REMOTE slug from a LOCAL one (the registry is the hub's), nor
+        # which hop refused, so the wording stays neutral and names both fixes. The one thing
+        # we DO know: whether a fleet token went out at all.
+        if not _fleet_token_available():
+            return (
+                f" — no fleet service token could be resolved, so no credential reached the hub"
+                f" proxy at {d.url}: the hub itself refused the call. Check that this instance is"
+                " part of that hub's fleet, or set an explicit Auth token on the delegate."
+            )
         return (
-            f" — {d.name!r} reaches remote fleet member {remote!r} through the hub, and the"
-            f" hub has no working token for remote {remote!r}: pair it (Settings ▸ Agents ▸"
-            " Pair…) or update its token on the hub's fleet row. Don't set a token on this"
-            " delegate — the hub supplies the remote's credential."
+            f" — the hub proxy at {d.url} refused the call. If {slug!r} is a remote fleet"
+            " member, the hub has no working token for it: pair it (Settings ▸ Agents ▸ Pair…)"
+            " or update its token on the hub's fleet row — don't set a token on this delegate,"
+            " the hub supplies the remote's credential. Otherwise check that the hub accepts"
+            " this instance's fleet service token."
         )
     if _is_loopback_url(d.url):
         # Loopback AND no credential reached the peer — the service token lookup failed
