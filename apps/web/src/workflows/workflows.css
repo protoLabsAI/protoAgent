@@ -50,11 +50,11 @@
 }
 
 .builder-dot-ok {
-  background: var(--pl-color-success, #57b880);
+  background: var(--pl-color-status-success, #57b880);
 }
 
 .builder-dot-err {
-  background: var(--pl-color-error, #d8635b);
+  background: var(--pl-color-status-error, #d8635b);
 }
 
 .builder-step-head {
@@ -722,7 +722,7 @@
 }
 
 .builder-toolchip-bad {
-  border-color: var(--pl-color-error, #d8635b);
+  border-color: var(--pl-color-status-error, #d8635b);
 }
 
 /* Mobile-first: canvas on top, editor below; side-by-side once the PANEL is

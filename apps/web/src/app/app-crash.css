@@ -11,8 +11,8 @@
   gap: 12px;
   padding: 24px;
   text-align: center;
-  background: var(--pl-color-bg, var(--pl-bg, #0a0a0c));
-  color: var(--pl-color-fg, var(--pl-fg, #ededed));
+  background: var(--pl-color-bg, #0a0a0c);
+  color: var(--pl-color-fg, #ededed);
 }
 
 .app-crash > svg {
