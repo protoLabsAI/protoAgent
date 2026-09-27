@@ -683,3 +683,46 @@ def test_an_unmeasured_lane_is_not_accused(monkeypatch):
 def test_only_unmeasured_lanes_yields_no_verdict(monkeypatch):
     """An agent that runs nothing but coder legs has no evidence either way."""
     assert _cache(_client(monkeypatch, _CacheStore([_lane("acp:coder", input_tokens=0)])))["engaging"] is None
+
+
+async def test_member_read_never_sends_the_fleet_token_to_a_tokenless_remote(monkeypatch):
+    """ADR 0113 D4: the fleet token is loopback-only. A remote the hub holds no token for
+    resolves with EMPTY extra headers — same as a local member — so the rollup read used to
+    attach the fleet token to it. It reads anonymously now; a LOCAL member still gets it."""
+    from graph.fleet import proxy, service_token
+    from operator_api import telemetry_routes as tr
+
+    monkeypatch.setattr(service_token, "resolve_service_token", lambda: "FLEET")
+    monkeypatch.setattr(proxy.supervisor, "_load_state", lambda: {})
+    monkeypatch.setattr(
+        proxy.supervisor, "remote_for_slug", lambda slug: {"id": slug, "name": slug, "url": "http://h:1", "token": ""}
+    )
+    proxy._slug_cache.clear()
+    proxy._remote_slugs.clear()
+    sent = []
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"turns": 1}
+
+    class _Client:
+        async def get(self, url, headers=None, timeout=None):
+            sent.append((url, dict(headers or {})))
+            return _Resp()
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: _Client())
+    try:
+        assert await tr._fetch_member_json("r1", "api/telemetry/summary") == {"turns": 1}
+        assert sent[-1][0] == "http://h:1/api/telemetry/summary"
+        assert not any(k.lower() == "authorization" for k in sent[-1][1])
+
+        # A LOCAL member resolving the same way (empty extra) still gets the fleet token.
+        monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+        await tr._fetch_member_json("alice", "api/telemetry/summary")
+        assert sent[-1][1] == {"authorization": "Bearer FLEET"}
+    finally:
+        proxy._slug_cache.clear()
+        proxy._remote_slugs.clear()

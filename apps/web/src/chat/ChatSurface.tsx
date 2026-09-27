@@ -3092,7 +3092,9 @@ function ChatSessionSlot({
                 onSubmit={resumeHitl}
                 onCancel={dismissHitl}
                 onApproveAlways={
-                  hitl.kind === "approval" && session
+                  // Not for a gate that can't be session-approved (it moves the fence, or
+                  // it is a floor bypass can't skip), nor one with its own choices.
+                  hitl.kind === "approval" && session && hitl.session_allow !== false && !hitl.options?.length
                     ? () => {
                         chatStore.setSessionBypassPermissions(session.id, true); // turn bypass on for this tab
                         void resumeHitl("approved"); // …and approve the pending command

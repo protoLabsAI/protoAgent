@@ -1629,7 +1629,7 @@ FIELDS: list[Field] = [
         "Project onboarding",
         "Surfaces the onboarding tools and the fields below. The CONSENT is those "
         "fields, not this switch: with no allowed sources nothing can be cloned, and "
-        "with no root nothing can be registered — so a stock install onboards nothing. "
+        "with no root a local folder is registered only when you approve it on a card. "
         "Turn this off to remove the onboarding surface entirely.",
     ),
     Field(
@@ -1662,6 +1662,19 @@ FIELDS: list[Field] = [
         "Project onboarding",
         "When on, onboarded projects are registered read-write; when off (default), "
         "read-only unless the agent explicitly requests write access.",
+        depends_on={"key": "onboarding.enabled"},
+    ),
+    Field(
+        "onboarding.approve_outside_root",
+        "onboarding_approve_outside_root",
+        "Ask before registering outside the root",
+        "bool",
+        "Project onboarding",
+        "When the agent asks to register a local folder outside the onboarding root (or any "
+        "folder, when no root is set), show "
+        "you an approval card for that one folder (allow read-only / read-write / deny) "
+        "instead of refusing. Never auto-approved by bypass mode. System, home and "
+        "credential directories are refused either way. Off = always refuse.",
         depends_on={"key": "onboarding.enabled"},
     ),
 ]

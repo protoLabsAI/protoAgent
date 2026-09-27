@@ -288,6 +288,19 @@ delegates:
     workdir: /Users/you/dev
 ```
 
+## Delegate to a remote fleet member (through the hub)
+
+A [remote fleet member](./fleet.md#remote-fleet-members-the-agent-there-the-ui-here)'s
+**Add as delegate** creates an `a2a` delegate whose URL is the hub's loopback proxy —
+`http://127.0.0.1:<hub-port>/agents/<remote-id>/a2a` — with **no** Auth token (ADR 0113 D4).
+That is deliberate: a tokenless loopback delegate presents the fleet service token, the hub
+accepts it, and the hub's proxy presents the remote's **stored** (paired) token. The remote's
+credential stays on the hub's fleet row, so rotating or re-pairing it fixes every delegate
+at once. Don't set a token on such a delegate. If it answers `401`, the hub has no working
+token for that remote: pair it (Settings ▸ Agents ▸ Pair…) or edit its token on the fleet
+row. A remote agent that is *not* a fleet member is still a plain `a2a` delegate with its
+own Auth token.
+
 ## Secrets
 
 Auth tokens / API keys are stored in the gitignored `config/secrets.yaml` (or

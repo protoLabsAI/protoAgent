@@ -171,6 +171,43 @@ async def test_deny_and_escape_in_the_approval_modal():
         assert _resume_call(fake, hidden=True)["text"] == "denied"
 
 
+OUTSIDE_ROOT = {
+    "kind": "approval",
+    "title": "Allow access to a folder outside the onboarding root?",
+    "detail": "Folder:     /Users/op/dev/munda",
+    "session_allow": False,
+    "options": [
+        {"value": "allow-read-only@abc", "label": "Allow read-only", "kind": "allow_once", "primary": True},
+        {"value": "allow-read-write@abc", "label": "Allow read-write", "kind": "allow_once"},
+        {"value": "deny", "label": "Deny", "kind": "reject_once"},
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_an_approval_with_its_own_choices_answers_with_the_chosen_value():
+    """register_local_project outside the root: the modal shows the server's choices, the
+    pressed one resumes with its value verbatim, and a bare `a` (a plain approve, which
+    the server refuses to register on) does nothing."""
+    fake = Parking(OUTSIDE_ROOT)
+    be = TalkBackend(a2a_client=fake)
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await _send(app, pilot, "explore munda")
+        await pilot.press("ctrl+r")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ApprovalModal)
+        labels = [str(b.label) for b in app.screen.query(Button)]
+        assert labels[:3] == ["Allow read-only", "Allow read-write", "Deny"] and "Approve (a)" not in labels
+        await pilot.press("a")
+        await pilot.pause(0.2)
+        assert isinstance(app.screen, ApprovalModal) and len(fake.sent) == 1  # nothing sent
+        await pilot.click("#opt-1")
+        await _settle(app, pilot)
+        assert _resume_call(fake, hidden=True)["text"] == "allow-read-write@abc"
+
+
 @pytest.mark.asyncio
 async def test_a_question_takes_the_typed_answer_and_shows_it():
     fake = Parking({"question": "Merge this PR?"})

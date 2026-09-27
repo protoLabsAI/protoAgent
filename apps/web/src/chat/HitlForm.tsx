@@ -314,11 +314,28 @@ export function HitlForm({
         <div className="hitl-title">{payload.title || "Approve this action?"}</div>
         {payload.description && <HitlProse text={payload.description} />}
         {payload.detail && <pre className="hitl-detail">{payload.detail}</pre>}
+        {payload.options && payload.options.length > 0 ? (
+          // Server-supplied choices: each resumes with its own value, verbatim (the
+          // server binds them to what the card shows). Never an "always" button here.
+          <div className="hitl-actions">
+            {payload.options.map((opt) => (
+              <Button
+                key={opt.value}
+                type="button"
+                variant={opt.primary ? "primary" : "ghost"}
+                onClick={() => onSubmit(opt.value)}
+                disabled={busy}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </div>
+        ) : (
         <div className="hitl-actions">
           <Button type="button" variant="ghost" onClick={() => onSubmit("denied")} disabled={busy}>
             Deny
           </Button>
-          {onApproveAlways && (
+          {onApproveAlways && payload.session_allow !== false && (
             <Button
               type="button"
               variant="ghost"
@@ -334,6 +351,7 @@ export function HitlForm({
             Approve
           </Button>
         </div>
+        )}
       </div>
     );
   }

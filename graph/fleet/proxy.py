@@ -105,6 +105,11 @@ def _get_client() -> httpx.AsyncClient:
 # was stored — replacing the browser's Authorization, which carries the HUB's token, not the
 # remote's). 1s TTL cache, keyed by slug, to keep the proxy hot path cheap.
 _slug_cache: dict = {}
+# Slugs whose last resolution was a REMOTE member (kept beside the cache rather than in the
+# ``(base, extra)`` tuple so every existing caller keeps its shape). A remote with no stored
+# token has an EMPTY ``extra`` — indistinguishable from a local peer by the headers alone —
+# and ``forward_to`` must never hand such a remote the fleet service token (see there).
+_remote_slugs: set[str] = set()
 
 
 def _target_for_slug(slug: str) -> tuple[str, dict] | None:
@@ -114,6 +119,7 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
     if hit and now - hit[1] < 1.0:
         return hit[0]
     target: tuple[str, dict] | None = None
+    is_remote = False  # set ONLY in the remote branch (kind == "remote") — no second _alive race
     if slug == "host":
         from runtime.state import STATE
 
@@ -128,6 +134,11 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
             if remote:
                 extra = {"authorization": f"Bearer {remote['token']}"} if remote.get("token") else {}
                 target = (remote["url"], extra)
+                is_remote = True
+    if is_remote:
+        _remote_slugs.add(slug)
+    else:
+        _remote_slugs.discard(slug)
     _slug_cache[slug] = (target, now)
     return target
 
@@ -136,8 +147,11 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
 _SSE_KEEPALIVE_S = 30.0
 
 
-async def _forward_to_base(base: str, request, path: str, extra_headers: dict | None = None):
-    """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe)."""
+async def _forward_to_base(
+    base: str, request, path: str, extra_headers: dict | None = None, *, drop_params: frozenset[str] = frozenset()
+):
+    """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe). ``drop_params`` names query
+    params that must not ride upstream (a remote never gets the hub-signed ``?token=``)."""
     url = f"{base}/{path}"
     body = await request.body()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
@@ -145,9 +159,10 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
         # A header in extra REPLACES the caller's — drop any case-variant first, else the
         # upstream carries both (dict keys are case-sensitive, HTTP header names aren't) and
         # a swapped Authorization would sit BESIDE the caller's instead of overriding it.
+        # A None value drops the header outright (a tokenless remote's Authorization).
         overridden = {k.lower() for k in extra_headers}
         headers = {k: v for k, v in headers.items() if k.lower() not in overridden}
-        headers.update(extra_headers)
+        headers.update({k: v for k, v in extra_headers.items() if v is not None})
 
     client = _get_client()
     upstream_req = client.build_request(
@@ -155,7 +170,7 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
         url,
         headers=headers,
         content=body,
-        params=dict(request.query_params),
+        params={k: v for k, v in dict(request.query_params).items() if k not in drop_params},
         timeout=_timeout_for(request, path),
     )
     try:
@@ -238,21 +253,50 @@ async def forward_to(slug: str, request, path: str):
     base, extra = target
     state = getattr(request, "state", None)
     # A remote member carries its own stored bearer in ``extra``; a host/local peer carries
-    # nothing (the browser's own header rides through unless we swap it below).
-    is_local = not extra.get("authorization")
-    if getattr(state, "member_public", False):
-        # A request the hub admitted off the MEMBER's public list (#1890 — the auth middleware
-        # stamps ``member_public``) arrived anonymous; forward it anonymous. Lending EITHER the
-        # stored remote bearer OR the fleet service token would hand an unauthenticated caller a
-        # credential (same rule as the remote-WS refusal in forward_ws).
+    # nothing (the browser's own header rides through unless we swap it below). A remote
+    # with NO stored token also carries nothing, so the headers alone can't tell it from a
+    # local peer — ``_remote_slugs`` (set from the remote resolution) does.
+    is_remote = bool(extra.get("authorization")) or slug in _remote_slugs
+    tier = getattr(state, "trust_tier", None)
+    member_public = getattr(state, "member_public", False)
+    drop_params: frozenset[str] = frozenset()
+    if is_remote:
+        # A REMOTE is off this box and outside the hub's trust boundary: nothing the hub holds
+        # or the caller presented rides there except the remote's OWN stored bearer, and that
+        # only on behalf of an OPERATOR caller the hub already authenticated.
+        #  - member_public (#1890) is stamped BEFORE any credential check, off a public list
+        #    the REMOTE controls — so the request may still carry the caller's hub bearer or
+        #    device token. Forward it with NO Authorization (``None`` drops the caller's; an
+        #    empty ``extra`` would have let it ride through — a compromised remote could list a
+        #    path as public and harvest the hub's operator token).
+        #  - A federation-tier caller (ADR 0066: /a2a, /v1, /plugins only) must not be lent a
+        #    stored bearer that is OPERATOR on the remote — that elevates it across the hop.
+        #  - A remote the hub holds no token for (unpaired, ADR 0113) gets no credential
+        #    rather than the caller's: a D4 delegate presents the loopback-only fleet token,
+        #    which must never leave the box. Anonymous is honest — an open remote answers, a
+        #    secured one 401s and the delegate error says to pair it.
+        # Open hub (no credential configured): every caller is ``operator``, so the stored
+        # bearer is lent to anyone who can reach the hub — pre-existing and accepted: an open
+        # hub already hands its whole console, remotes included, to whoever reaches it.
+        if member_public or tier != "operator" or not extra.get("authorization"):
+            extra = {"authorization": None}  # None = drop the caller's header (_forward_to_base)
+        # The hub-signed SSE ``?token=`` (30s, HMAC'd with the HUB's bearer) authenticated the
+        # caller HERE; forwarded, the remote could replay it against the hub. The proxied call
+        # authenticates to the remote with the stored bearer instead (#1607).
+        drop_params = frozenset({"token"})
+    elif member_public:
+        # A LOCAL member's public path: forward without lending the fleet token (#1890). The
+        # caller's own header is left as it was — a local member is inside this box's trust
+        # boundary (same user, spawned by this hub, already holding the fleet token that
+        # outranks anything the caller could carry), so there is nothing to protect by
+        # stripping it and a plugin view that reads it would change behavior.
         extra = {k: v for k, v in extra.items() if k.lower() != "authorization"}
-    elif is_local and getattr(state, "trust_tier", None) == "operator":
+    elif tier == "operator":
         # ADR 0089 D3: the hub already authenticated this operator caller. Present a LOCAL
         # member with the fleet service token in place of the caller's credential — a device
         # token the member's own registry (a different instance_root) can't verify, which is
         # why proxied plugin calls to sister agents 401'd. Swap only for the operator tier
-        # (never elevate a lesser credential) and only for a local peer (a remote member keeps
-        # its own stored bearer, resolved above).
+        # (never elevate a lesser credential) and only for a local peer.
         from graph.fleet.service_token import resolve_service_token
 
         extra = {**extra, "authorization": f"Bearer {resolve_service_token()}"}
@@ -262,6 +306,8 @@ async def forward_to(slug: str, request, path: str):
         # covers agents that are WORKING, not just ones the operator clicked.
         with contextlib.suppress(Exception):
             supervisor.touch(slug)
+    if drop_params:
+        return await _forward_to_base(base, request, path, extra, drop_params=drop_params)
     return await _forward_to_base(base, request, path, extra)
 
 
