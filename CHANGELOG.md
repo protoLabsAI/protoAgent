@@ -15,6 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.183.1] - 2026-09-26
+
+### Fixed
+- **Fleet members that build `FROM protoagent:latest` now rebuild when a new base is published (#3574).**
+  `docker-publish.yml` pushed `latest` and stopped, so the `protoagent-base-published`
+  `repository_dispatch` that matt, roxy and ava subscribe to was never sent and they drifted
+  for several releases until rebuilt by hand. After the image is pushed and verified, the
+  workflow now dispatches that event (with image, digest, `sha-` tag and version in
+  `client_payload`) to each subscriber via the org `GH_PAT`. It is best-effort: a missing
+  token or refused dispatch is a warning annotation, never a failed publish.
+
+- **A config reload no longer leaves a plugin's background surface running on the previous registration (#3593).**
+  `register()` re-runs on every reload, but a surviving surface was only sent its `reload(cfg)` hook — so a
+  surface without one (pr-reviewer's sweep) kept driving the FIRST instance's dispatcher while the freshly
+  registered webhook used a second one, and the two started duplicate review panels for the same head. A
+  surviving surface with no `reload` hook whose new registration hands back a different `stop` is now stopped
+  and restarted from the new registration; surfaces with a `reload` hook, or the same `stop`, are unchanged.
+
+- **The fleet deck no longer re-sends a steer when two turn-end reconciles judge it (#3622).**
+  A steer whose enqueue landed just as its turn ended could be reconciled twice — once by
+  the turn's end (which saw the steer marked queued) and again by the enqueue's own
+  callback. The first re-sent it as a turn of its own; the second, if it landed after that
+  turn finished, sent it again. A reconcile now skips steers an earlier one already
+  settled. The deck's in-flight-steer test and the supervisor's crash re-kick test (#3549)
+  also wait on the state they check instead of a wall-clock window, so they no longer
+  flake on a loaded runner.
+
+- **New-agent set-up waits for the bundle's questions before Create / Next (#3632).** Picking a bundle archetype fetches its peek to learn the `config_inputs` it asks; until that landed the form had no fields, so the required-answer gate couldn't fire and a fast Create (button or Enter) in the New-agent dialog posted past them into the server's #2977 refusal, while a fast Next in the Setup Wizard skipped the set-up step and left Finish disabled later with nothing on screen to explain it. Both now hold until the peek's answer is actually in hand — while it loads, and after a failed fetch too, which now says so inline with a Retry. The `help` line under a folder-picker or text field is also announced to screen readers now (`aria-describedby`), as it already was for switches.
+
 ## [0.183.0] - 2026-09-26
 
 ### Added

@@ -99,9 +99,9 @@ export async function routePluginCodeOpen(t: PluginCodeTarget, deps: RouteDeps):
   return (await deps.copy(targetLabel(t))) ? "copied" : "none";
 }
 
-/** The console's deps. `fromSurface` is the plugin view that asked — kept on screen beside the
- *  code pane, so a diagram and the code it links to sit side by side. */
-export function defaultRouteDeps(fromSurface?: string): RouteDeps {
+/** The console's deps. The pane opens on the dock the operator keeps it on (placeCodeSurface),
+ *  even when that dock is the one showing the plugin view that asked. */
+export function defaultRouteDeps(): RouteDeps {
   return {
     paneOn: isCodePaneEnabled(),
     openIn: getOpenFilesIn(),
@@ -114,7 +114,7 @@ export function defaultRouteDeps(fromSurface?: string): RouteDeps {
           staleTime: 60_000,
         })
       )?.roots ?? null,
-    open: (ref) => openCode(ref, { keep: fromSurface }),
+    open: (ref) => openCode(ref),
     navigate: (href) => {
       // A custom scheme (zed://, vscode://) goes to the OS without unloading the page.
       window.location.href = href;

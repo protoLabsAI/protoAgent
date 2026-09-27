@@ -324,3 +324,28 @@ def test_anchor_does_not_bypass_the_fence_or_the_secret_list(src, tmp_path):
     )
     assert "escapes project" in out and "looks like a secret" in out
     assert "links" not in _latest(src)
+
+
+def test_participant_keys_on_a_flowchart_are_reported_as_dead(art):
+    """A real onboarding run keyed a flowchart's nodes `participant:PAGE`: the renderer only
+    matches that prefix on sequence participants, so every link was dead while the reply said
+    they were linked. The source check must flag it (the bare id is fine)."""
+    flow = "flowchart LR\n  PAGE[page.tsx] --> LIB[gang-data.ts]"
+    out = art.show_artifact.invoke(
+        {"kind": "mermaid", "code": flow, "links": {"participant:PAGE": _link(), "LIB": _link()}}
+    )
+    tail = out.split("don't match anything")[1]
+    assert "participant:PAGE" in tail and "LIB" not in tail
+
+
+def test_an_update_with_a_partial_map_says_it_replaced_the_stored_links(art):
+    """`links` on update_artifact replaces, never merges — "add one link" used to strip the
+    other seven silently."""
+    flow = "flowchart TD\n  A --> B --> C"
+    art.show_artifact.invoke({"kind": "mermaid", "code": flow, "links": {"A": _link(), "B": _link()}})
+    out = art.update_artifact.invoke({"old_string": "--> C", "new_string": "--> C", "links": {"C": _link()}})
+    assert "REPLACED the stored map" in out and "A, B" in out
+    assert set(_latest(art)["links"]) == {"C"}
+    # Clearing on purpose ({}) and passing the full map stay quiet.
+    out = art.update_artifact.invoke({"old_string": "--> C", "new_string": "--> C", "links": {"A": _link(), "C": _link()}})
+    assert "REPLACED" not in out

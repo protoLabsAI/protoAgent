@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.183.1",
+    "date": "2026-09-26",
+    "changes": [
+      "Fleet members that build FROM protoagent:latest now rebuild when a new base is published (#3574).",
+      "A config reload no longer leaves a plugin's background surface running on the previous registration (#3593).",
+      "The fleet deck no longer re-sends a steer when two turn-end reconciles judge it (#3622).",
+      "New-agent set-up waits for the bundle's questions before Create / Next (#3632)."
+    ]
+  },
+  {
     "version": "v0.183.0",
     "date": "2026-09-26",
     "changes": [

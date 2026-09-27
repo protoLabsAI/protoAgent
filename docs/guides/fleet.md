@@ -149,8 +149,9 @@ plugins into the new agent. See [Install & publish plugins](./plugin-registry.md
 
 **Engineer** ([engineer-archetype](https://github.com/protoLabsAI/engineer-archetype)) is a
 hands-on pair-programming *navigator* for the operator's own machine: point it at a repo
-(a git URL or a folder), and it clones or registers it, proves the toolchain, writes a short
-repo card, and then works through a problem **one checkpoint per turn** — reproduce, narrow,
+(a git URL or a folder), and it clones or registers it, shows you its README and manifest,
+draws a code-linked architecture overview (click a node to open its code), proves the
+toolchain, writes a short repo card, and then works through a problem **one checkpoint per turn** — reproduce, narrow,
 *your* hypothesis first, you type the fix, it reviews and runs the checks, you commit. It
 never edits or commits unless your latest message says so. The design follows research that
 passive, delegated AI help costs the operator comprehension; the bundle's README has the
