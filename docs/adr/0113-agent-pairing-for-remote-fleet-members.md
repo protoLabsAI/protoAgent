@@ -178,6 +178,15 @@ it self-updates over the build), and these steps:
 
 Any failure is fixed before the flag is removed.
 
+**Amendment (2026-09-26): exercised 2026-09-26 in an isolated desktop build — passed.** In a
+local QA build of the desktop app: loopback offered "Allow devices"; the token was minted and
+`0.0.0.0` written, and after a restart the console loaded (no hang, no 401, no CORS
+failure); an agent code was shown with the tailnet URL; a hub paired over the tailnet (`auth:
+ok`) and an A2A message through the hub completed; revoking gave an immediate 401 at the hub
+and `auth: rejected`; the bind went back to `127.0.0.1`, a restart came up loopback-only, and
+the console loaded. The `settings.devices` flag is removed (#3651), and the operator guide is
+[Pair devices and agents](../guides/pairing.md).
+
 ### D9 — Discovery hygiene
 
 - mDNS advertises only when the server is bound to a non-loopback address, and advertises an

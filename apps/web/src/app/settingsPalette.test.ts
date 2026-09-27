@@ -259,7 +259,6 @@ describe("gating is declarative — the rows are never pre-filtered", () => {
     // runs at module load, before /api/flags has answered, and the predicate fails closed —
     // so the row would be computed as "hidden" once and never recomputed.
     expect(byId("settings:secrets")).toMatchObject({ flag: "secrets-panel" });
-    expect(byId("settings:devices")).toMatchObject({ flag: "settings.devices" });
     expect(byId("settings:publish")).toMatchObject({ flag: "chat.publish" });
     // Nothing invented and nothing dropped: the row's flag is the section's flag, verbatim.
     for (const c of rows()) expect(c.flag).toBe(meta(c.id.slice("settings:".length)).flag);
