@@ -90,14 +90,14 @@
 }
 
 .prompt-viewer__budget-fill--context {
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
 }
 
 /* The per-turn projection (ADR 0108 D2) is neither the cacheable prefix nor the
    legacy tail — its own tint, or the breakdown can't show the one split it exists
    to show. */
 .prompt-viewer__budget-fill--projected {
-  background: var(--pl-color-accent, var(--brand-violet));
+  background: var(--pl-color-accent);
   opacity: 0.75;
 }
 
@@ -128,7 +128,7 @@
 }
 
 .prompt-viewer__budget-fill--delivery {
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
 }
 
 .prompt-viewer__overflow {
@@ -141,7 +141,7 @@
 .prompt-viewer__speculative {
   font-size: 12px;
   color: var(--pl-color-fg-subtle);
-  border-left: 2px solid var(--brand-violet);
+  border-left: 2px solid var(--pl-color-accent);
   padding: 4px 0 4px 8px;
   margin: 4px 0;
 }

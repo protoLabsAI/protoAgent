@@ -226,9 +226,9 @@
   opacity: 0.7;
 }
 .tool-manage-btn:hover {
-  color: var(--pl-color-accent, #7c8cff);
-  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 12%, transparent);
-  border-color: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 28%, transparent);
+  color: var(--pl-color-accent);
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--pl-color-accent) 28%, transparent);
   opacity: 1;
 }
 .tool-manage-btn svg {
@@ -341,7 +341,7 @@
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
   font-size: 0.74rem;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 .tool-null {
   color: var(--pl-color-fg-subtle);
@@ -351,7 +351,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
   text-decoration: none;
   word-break: break-all;
 }
@@ -439,7 +439,7 @@
 }
 .tool-wait-head svg {
   flex: none;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 .tool-wait-then {
   color: var(--pl-color-fg-subtle);
@@ -476,7 +476,7 @@
 }
 .tool-calc strong {
   font-family: var(--pl-font-mono);
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 /* current_time */
@@ -538,7 +538,7 @@
    inline-flex: they sit inside pre-wrap text (a search hit's `file:line`), and a flex box
    there would break the line flow and the selection/copy of the surrounding text. */
 .tool-editor-link {
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
   text-decoration: none;
 }
 .tool-editor-link:hover {
