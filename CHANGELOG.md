@@ -15,6 +15,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.184.1] - 2026-09-27
+
+### Added
+- **Console: pair a remote agent with a code instead of pasting its token (#3650).** Settings
+  ▸ Devices ▸ **Pair an agent** shows a typeable `XXXXX-XXXXX` code with a countdown, copy,
+  and the agent's tailnet-first addresses, reusing the phone flow's "Allow devices on my
+  network" step when the agent is loopback-bound; paired hubs are badged **Agent**, and each
+  dialog cancels only its own kind of code. On the hub, **Pair…** (discovered rows, and **Pair
+  by URL…**) and **Re-pair** (remote rows) redeem the code, remote rows show the token's
+  health (*token rejected — re-pair* / *not paired* / *open — no token needed* / *paired*),
+  and plain `http://` to a non-tailnet LAN address asks for an explicit "send it unencrypted"
+  confirmation (ADR 0113 D10). "Add as a delegate" writes the hub-proxy A2A URL only from the
+  hub's or a local member's window, and a discovered row's delegate link now pairs first.
+
+### Changed
+- **Settings ▸ Devices is on for everyone: the `settings.devices` developer flag is gone (#3651).** The section pairs phones by QR and, since ADR 0113, other agents by a typed code, and it hosts the "Allow devices on my network" step that makes a loopback-bound agent reachable (a token if there is none, then a `0.0.0.0` bind, then a restart). That step stopped the desktop app from starting four times before each layer was fixed, so it stayed behind a flag until the whole path was exercised in the desktop app itself. It has now passed there: allow devices, restart with no hang, 401 or CORS failure, pair a hub over the tailnet and message it through the hub, revoke with an immediate 401 at the hub, and back to a loopback-only bind that still loads the console. New guide: `docs/guides/pairing.md` (Pair devices and agents), covering phones, agents, the tailnet/LAN plaintext rule, revoking, the fleet `auth` badges, reachability and how to undo it, and delegating to a paired remote.
+
+### Fixed
+- **A paired hub now shows up on the remote under its own name, not "protoagent (fleet hub)" (#3671).** The hub names itself when it claims a pairing code, and it read the config's `identity.name` as-is. That field defaults to the placeholder `protoagent`, so an `AGENT_NAME` (how the desktop app and the fleet name every member) was never consulted, and the remote's Settings ▸ Devices listed every hub the same way. The name is now resolved the way the agent card resolves it: `identity.name` when set, then `AGENT_NAME`, then `protoagent`. Re-pair an existing hub to update its entry on the remote.
+
+- **The CLI no longer crashes on a Windows cp1252 console, which failed the v0.184.0 desktop build (#3675).** The frozen `protoagent-server fleet --help` raised `UnicodeEncodeError` on the Windows runner because its help said "Settings ▸ Devices", and a Windows pipe defaults to cp1252, which has no "▸". Both entrypoints (`protoagent` and `python -m server`, the frozen sidecar's entry) now switch stdout/stderr to `errors="replace"` when those streams can't encode our glyphs, so a stray "▸", "✓" or "⚠" prints as "?" instead of aborting the command. CLI-printed text now uses ">" and "->" instead. A new test checks that every forwarded CLI's `--help` can be encoded in cp1252.
+
+- **A chat that delegated to a peer agent no longer fails every later turn on Anthropic models (#3676).**
+  A foreground `delegate_to` recorded its room messages ahead of the tool result, and
+  Anthropic rejects a history where a tool call isn't immediately followed by its result
+  ("`tool_use` ids were found without `tool_result` blocks immediately after"), so the
+  chat broke on the next turn. The result now comes first, and chats already in that
+  state heal on their next turn: the tool-call repair reorders the history it hands the
+  model, leaving the stored transcript as it was.
+
+### Security
+- **An open hub no longer lends a paired remote's token to other web pages (#3662).** On a
+  hub with no token of its own (the desktop default), any page open in the operator's browser
+  could send a blind form POST to `/agents/<remote>/…`, and a DNS-rebinding page could even do
+  it same-origin; the hub proxied both with the remote's stored operator token. For remote
+  members on an open hub, the proxy now refuses `Sec-Fetch-Site: cross-site`, a foreign
+  `Origin` and an untrusted `Host` with `403` before contacting the remote. The console, the
+  desktop app, the Vite dev server, curl and delegates are unaffected, as are local members
+  and token-gated hubs. Extra reverse-proxy names go in `PROTOAGENT_TRUSTED_HOSTS`.
+
+- **A tokenless instance only answers its own host names and its own console (#3668).** An open
+  instance (no bearer, no X-API-Key, which is the desktop default on loopback) now hardens every
+  HTTP path and WebSocket. A `Host` allowlist admits IP literals, `localhost` and `*.localhost`,
+  `*.ts.net`, this machine's `<name>.local`, a named bind, the hosts of `A2A_ALLOWED_ORIGINS`
+  and `PROTOAGENT_TRUSTED_HOSTS`. State-changing requests and WebSockets must come from the
+  console's own origin, the desktop app, a loopback origin, `A2A_ALLOWED_ORIGINS` or a
+  non-browser client. Requests with a body to `/a2a` and `/v1/*` must send a JSON content type.
+  Refusals are `403` (WebSocket close `1008`), or `415` for the content type. The fleet proxy
+  already applied the Host allowlist to remote members (#3662); it now covers the whole
+  instance. Token-gated instances are unchanged. If other containers call an open agent by its
+  compose service name, add that name to `PROTOAGENT_TRUSTED_HOSTS`.
+
 ## [0.184.0] - 2026-09-27
 
 ### Added
