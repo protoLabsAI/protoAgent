@@ -202,10 +202,13 @@ def build_router():
         return {"ok": ok, "message": msg, **_list_payload()}
 
     @router.put("/api/delegates/{name}")
-    async def _update(name: str, entry: dict = Body(...)):
-        if entry.get("name") and entry["name"] != name:
-            raise HTTPException(400, "name in body must match the path")
-        entry["name"] = name
+    async def _update(name: str, entry: dict = Body(...), force: bool = False, repoint_to: str | None = None):
+        # A body name that DIFFERS from the path is a rename; a matching or absent one is
+        # a plain edit. A rename strands references to the OLD name exactly as a delete
+        # does, so it takes the same reference check (#3692).
+        body_name = str(entry.get("name") or "").strip()
+        renaming = bool(body_name) and body_name != name
+        entry["name"] = body_name if renaming else name
         try:
             _validate(entry)
         except ValueError as e:
@@ -220,22 +223,40 @@ def build_router():
         if current.get("scope") == store.SCOPE_HOST and not store.can_write_host_layer():
             raise HTTPException(403, "fleet-shared delegates are managed on the hub — this agent can't edit them")
         try:
-            # Off the loop; `expect="present"` re-checks under the lock that a concurrent
-            # delete hasn't removed it — an edit must not bring a deleted delegate back.
-            await asyncio.to_thread(partial(store.upsert_delegate, entry, expect="present"))
+            if renaming:
+                await asyncio.to_thread(
+                    partial(store.rename_delegate, name, entry, force=force, repoint_to=repoint_to)
+                )
+            else:
+                # Off the loop; `expect="present"` re-checks under the lock that a concurrent
+                # delete hasn't removed it — an edit must not bring a deleted delegate back.
+                await asyncio.to_thread(partial(store.upsert_delegate, entry, expect="present"))
+        except store.DelegateReferencedError as e:
+            raise HTTPException(409, str(e))
         except store.DelegateNotFoundError as e:
             raise HTTPException(404, str(e))
-        except store.DelegateScopeError as e:
+        except store.DelegateConflictError as e:
+            raise HTTPException(409, str(e))
+        except store.DelegateScopeError as e:  # subclass of ValueError — catch before it
             raise HTTPException(403, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         ok, msg = await _reload()
         return {"ok": ok, "message": msg, **_list_payload()}
 
     @router.delete("/api/delegates/{name}")
-    async def _delete(name: str):
+    async def _delete(name: str, force: bool = False, repoint_to: str | None = None):
+        # Refuse (409) when live config still NAMES this delegate — the board loop would
+        # otherwise pause itself with no warning (#3692). `force` deletes anyway;
+        # `repoint_to` rewrites every reference to another delegate in the same save.
         try:
-            await asyncio.to_thread(store.delete_delegate, name)
-        except store.DelegateScopeError as e:
+            await asyncio.to_thread(partial(store.delete_delegate, name, force=force, repoint_to=repoint_to))
+        except store.DelegateReferencedError as e:
+            raise HTTPException(409, str(e))
+        except store.DelegateScopeError as e:  # subclass of ValueError — catch before it
             raise HTTPException(403, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         ok, msg = await _reload()
         return {"ok": ok, "message": msg, **_list_payload()}
 
