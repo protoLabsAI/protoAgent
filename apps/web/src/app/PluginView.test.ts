@@ -70,14 +70,21 @@ describe("consoleTheme() — the bridge payload (#2225)", () => {
     for (const name of PL_TOKEN_VARS) expect(theme[name]).toBe(varValue(name));
   });
 
-  it("keeps the six legacy curated keys, read from the console's own vars", () => {
+  it("keeps the six legacy curated keys, now read from the real --pl-color-* tokens", () => {
+    // theme-base.css retired the old --bg/--fg/--border aliases (#2233), so the legacy
+    // keys must read the real tokens: reading the retired vars sent "" to older kits.
     const theme = consoleTheme();
-    expect(theme.bg).toBe(varValue("--bg"));
-    expect(theme.bgPanel).toBe(varValue("--bg-panel"));
-    expect(theme.fg).toBe(varValue("--fg"));
-    expect(theme.fgMuted).toBe(varValue("--fg-muted"));
-    expect(theme.brand).toBe(varValue("--brand-violet-light"));
-    expect(theme.border).toBe(varValue("--border"));
+    for (const [key, source] of [
+      ["bg", "--pl-color-bg"],
+      ["bgPanel", "--pl-color-bg-raised"],
+      ["fg", "--pl-color-fg"],
+      ["fgMuted", "--pl-color-fg-muted"],
+      ["brand", "--pl-color-accent"],
+      ["border", "--pl-color-border"],
+    ] as const) {
+      expect(theme[key]).toBe(varValue(source));
+      expect(theme[key]).not.toBe(""); // the retired-alias regression sent empties
+    }
   });
 
   it("carries the active data-theme mode, falling back to the OS scheme when unforced", () => {
@@ -174,8 +181,10 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
     expect(themed.length).toBe(1);
     const theme = themed[0].theme!;
     expect(theme.mode).toBe("light");
-    expect(theme.bg).toBe("resolved(--bg:1)");
-    expect(theme.brand).toBe("resolved(--brand-violet-light:1)");
+    expect(theme.bg).toBe("resolved(--pl-color-bg:1)");
+    expect(theme.bg).not.toBe("");
+    expect(theme.brand).toBe("resolved(--pl-color-accent:1)");
+    expect(theme.brand).not.toBe("");
     for (const name of PL_TOKEN_VARS) expect(theme[name]).toBe(varValue(name));
   });
 
