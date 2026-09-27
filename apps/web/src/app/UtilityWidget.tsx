@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
+import { Button } from "@protolabsai/ui/primitives";
 import { RefreshButton } from "./ui-kit";
 
 // Lets a UtilityWidget's dialog BODY register an action (a reload button) into the dialog
@@ -62,9 +63,11 @@ export function UtilityWidget({
   // stale action never lingers when the dialog re-opens.
   const [headerAction, setHeaderAction] = useState<ReactNode>(null);
   const pill = (
-    <button
+    <Button
+      icon
+      size="xs"
+      variant="ghost"
       type="button"
-      className="util-btn"
       aria-label={label}
       title={info ? undefined : label}
       data-testid={testId}
@@ -76,7 +79,7 @@ export function UtilityWidget({
     >
       {icon}
       {badge}
-    </button>
+    </Button>
   );
   return (
     <>

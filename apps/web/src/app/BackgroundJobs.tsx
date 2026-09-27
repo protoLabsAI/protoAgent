@@ -238,9 +238,12 @@ export function BackgroundJobs() {
   return (
     <>
       <Tooltip label={info}>
-        <button
+        <Button
+          icon
+          size="xs"
+          variant="ghost"
           type="button"
-          className="util-btn bg-jobs-pill"
+          className="bg-jobs-pill"
           onClick={() => {
             setOpen(true);
             // Persist past this session (#2692) — a reload must not re-show a badge
@@ -255,7 +258,7 @@ export function BackgroundJobs() {
           {running > 0 ? <Spinner size={13} /> : <Bot size={13} />}
           {running > 0 ? <span>{running}</span> : null}
           {unread > 0 ? <span className="bg-jobs-unread" aria-label={`${unread} finished`} /> : null}
-        </button>
+        </Button>
       </Tooltip>
       {open ? (
         <Dialog open onClose={() => setOpen(false)} title="Background agents" width="min(640px, 94vw)">
