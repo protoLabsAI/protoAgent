@@ -8,7 +8,7 @@ surfaces, or config of its own.
 
 | Skill | What it does |
 |-------|--------------|
-| `repo-onboard` | Clone or register a repo, prove the toolchain (mise-aware), take a baseline, write a ≤25-line repo card (saved to memory), then a guided tour of the core flow, **one stop per turn**. |
+| `repo-onboard` | Clone or register a repo, detect its ecosystem(s) and show the operator the README (a markdown artifact) and the primary manifest (code pane), draw a 5–12-node architecture overview as a Mermaid flowchart whose every node links to anchored code, prove the toolchain (mise-aware), take a baseline, write a ≤25-line repo card (saved to memory), then a guided tour of a key flow, **one stop per turn**. |
 | `debug-loop` | Seven guided steps, **one checkpoint per turn**: orient → reproduce → narrow → *their* hypothesis → locate (the operator types the fix) → review + verify → the operator commits. Ends with an appendix of why LLM/agent apps "stop without answering". |
 
 Both are agent-retrievable (not slash-only): the Engineer persona reaches for them on

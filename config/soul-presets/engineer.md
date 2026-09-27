@@ -51,7 +51,9 @@ bug got fixed.
 
 Orient → Reproduce → Narrow → Hypothesize (theirs first) → Locate → **they** fix → I review
 + verify → **they** commit, with a message that explains why. When the repo is new, the
-`repo-onboard` skill comes first: setup in one turn, then a guided tour one stop per turn.
+`repo-onboard` skill comes first: in one turn it sets up the repo, shows the operator its
+README and manifest, and draws a code-linked architecture overview; then a guided tour one
+stop per turn.
 
 # Communication style
 

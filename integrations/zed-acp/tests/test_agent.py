@@ -39,6 +39,8 @@ class RecordingConn:
         if self.approve == "always":
             ids = [o.option_id for o in options if o.kind == "allow_always"] or [o.option_id for o in options if o.kind == "allow_once"]
             return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=ids[0]))
+        if isinstance(self.approve, str):  # pick this option id (an approval's own choices)
+            return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=self.approve))
         chosen = "approve" if self.approve else "deny"
         return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=chosen))
 
@@ -1100,3 +1102,81 @@ def test_continuing_notice_never_doubles_the_full_stop():
     assert continuing_notice("Fix the bug") == "\u21aa Continuing your console chat \u201cFix the bug\u201d."
     assert continuing_notice("Really?") .endswith("\u201d")
     assert continuing_notice("") == "\u21aa Continuing your console chat."
+
+
+# ── an approval with its OWN choices (register_local_project outside the root) ─────
+
+OUTSIDE_ROOT = {
+    "kind": "approval",
+    "title": "Allow access to a folder outside the onboarding root?",
+    "detail": "Folder:     /Users/op/dev/munda\nRepository: git checkout",
+    "tool": "register_local_project",
+    "session_allow": False,
+    "options": [
+        {"value": "allow-read-only@abc", "label": "Allow read-only", "kind": "allow_once", "primary": True},
+        # A server can't make the shim offer a standing yes: allow_always is downgraded.
+        {"value": "allow-read-write@abc", "label": "Allow read-write", "kind": "allow_always"},
+        {"value": "deny", "label": "Deny", "kind": "reject_once"},
+    ],
+}
+
+
+def _register_park(ctx, tid="t1"):
+    return [
+        fa.tool(ctx, "r1", "register_local_project", "started", args='{"path": "/Users/op/dev/munda"}', tid=tid),
+        fa.hitl(ctx, OUTSIDE_ROOT, tid=tid),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pick", "sent"),
+    [
+        ("allow-read-write@abc", "allow-read-write@abc"),
+        ("allow-read-only@abc", "allow-read-only@abc"),
+        ("deny", "deny"),
+        (None, "denied"),  # dismissed → fail closed
+        ("approve", "denied"),  # an id we never offered is not an approval
+    ],
+)
+async def test_own_choices_are_relayed_verbatim_and_never_session_wide(pick, sent):
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            if len(fake.requests) == 1:
+                return [fa.task(ctx), *_register_park(ctx)]
+            return [fa.tool(ctx, "r1", "register_local_project", "completed", result="ok"), fa.done(ctx)]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, approve=pick)
+        sess = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("explore munda")], session_id=sess.session_id)
+        await client.aclose()
+    assert conn.options[0] == [
+        ("allow-read-only@abc", "allow_once"),
+        ("allow-read-write@abc", "allow_once"),
+        ("deny", "reject_once"),
+    ]
+    assert fake.requests[1]["parts"][0]["text"] == sent
+    assert fake.requests[1]["metadata"] == {"hitl_resume": True}  # no bypass rides along
+
+
+async def test_allow_for_session_does_not_auto_approve_an_outside_root_registration():
+    """After "Allow for this session" on a command, a register park in the SAME turn —
+    even with the command still the most recent open tool — is asked, not auto-approved."""
+    with fa.FakeA2A() as fake:
+        def script(ctx, msg):
+            n = len(fake.requests)
+            if n == 1:
+                return [fa.task(ctx), *_run_command_park(ctx, "c1")]
+            if n == 2:
+                # c1 still open (parallel calls): the pending-tool guess would say run_command
+                return [fa.hitl(ctx, OUTSIDE_ROOT)]
+            return [fa.tool(ctx, "c1", "run_command", "completed", result="ok"), fa.done(ctx)]
+
+        fake.script = script
+        agent, conn, client = await _agent(fake, approve="always")
+        sess = await agent.new_session(cwd="/")
+        await agent.prompt(prompt=[text_block("x")], session_id=sess.session_id)
+        await client.aclose()
+    assert len(conn.permissions) == 2  # the registration WAS asked
+    assert all(k != "allow_always" for _, k in conn.options[1])
+    assert fake.requests[2]["parts"][0]["text"] == "allow-read-only@abc"  # "always" fell back to the first allow_once

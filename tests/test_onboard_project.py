@@ -830,7 +830,9 @@ async def test_local_refuses_outside_root(tmp_path, applied, where):
         "parent": str(tmp_path),
         "traversal": str(root / ".." / "elsewhere"),
     }[where]
-    out = await _local(_cfg(root)).ainvoke({"path": path})
+    # approve_outside_root off = the pre-card behavior (the card is covered in
+    # tests/test_onboard_outside_root.py).
+    out = await _local(_cfg(root, onboarding_approve_outside_root=False)).ainvoke({"path": path})
 
     assert out.startswith("Refused:")
     assert str(root) in out and "onboarding.root" in out  # names the root + how it widens
@@ -842,7 +844,7 @@ async def test_local_refuses_symlink_escape(tmp_path, applied):
     root.mkdir()
     outside = _repo(tmp_path / "secret")
     _symlink_or_skip(root / "innocent", outside)
-    out = await _local(_cfg(root)).ainvoke({"path": str(root / "innocent")})
+    out = await _local(_cfg(root, onboarding_approve_outside_root=False)).ainvoke({"path": str(root / "innocent")})
 
     assert out.startswith("Refused:") and str(outside.resolve()) in out
     assert applied == []
@@ -880,8 +882,12 @@ async def test_local_refuses_bad_paths(tmp_path, applied, case, expect):
 
 
 async def test_local_refuses_without_root(tmp_path, applied):
+    # approve_outside_root off: the pre-card refusal (an unset root with the card on is
+    # covered in tests/test_onboard_outside_root.py).
     _repo(tmp_path / "widget")
-    out = await _local(_cfg(tmp_path, onboarding_root="")).ainvoke({"path": str(tmp_path / "widget")})
+    out = await _local(_cfg(tmp_path, onboarding_root="", onboarding_approve_outside_root=False)).ainvoke(
+        {"path": str(tmp_path / "widget")}
+    )
     assert out.startswith("Refused:") and "onboarding.root isn't set" in out
     assert applied == []
 

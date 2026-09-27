@@ -1,15 +1,18 @@
 """Device pairing + the device registry (ADR 0087).
 
     POST   /api/pairing/start   → mint a short-TTL pairing code + the URLs it works on
-    POST   /api/pairing/cancel  → drop pending codes (operator closed the dialog)
+                                  (body ``{"kind": "agent"}`` → a typeable agent code, ADR 0113)
+    POST   /api/pairing/cancel  → drop pending codes (operator closed the dialog; optional
+                                  ``{"kind": …}`` scopes it to that dialog's kind)
     POST   /api/pairing/claim   → redeem a code for a device token  ← UNAUTHENTICATED
     GET    /api/devices         → list paired devices
     DELETE /api/devices/{id}    → revoke one
 
 Every route here is behind the ``/api/*`` operator bearer (a2a_impl/auth.py) EXCEPT
 ``claim``, which is on the auth allowlist by necessity — obtaining auth is its purpose. Its
-guards live in ``security.devices``: ~190-bit codes, 120s TTL, single-use consumption, and a
-failed-attempt counter. See ADR 0087 D4 for the residual risk that buys.
+guards live in ``security.devices``: ~190-bit device codes (120s) or ~50-bit agent codes
+(300s), single-use consumption, and one failed-attempt counter shared by both kinds. See ADR
+0087 D4 and ADR 0113 D2 for the residual risk that buys.
 
 ``operator_api`` may import ``security``/``infra`` but never ``server`` (import-linter).
 """
@@ -207,33 +210,88 @@ def _pairable_addresses() -> list[dict]:
     return out
 
 
-def register_pairing_routes(app) -> None:
+async def _json_body(request: Request) -> dict:
+    """The request's JSON object, or ``{}`` for an empty / non-JSON / non-object body — the
+    console's pre-ADR-0113 calls send no body at all, and that must keep meaning "device"."""
+    try:
+        body = await request.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _requested_kind(body: dict) -> str | None:
+    """``"agent"`` / ``"device"`` from an operator-authed body, else None (unknown → caller's
+    default). Never consulted on the UNAUTHENTICATED claim route: a code's kind is fixed at
+    mint time (ADR 0113 D2)."""
+    from security.devices import KIND_AGENT, KIND_DEVICE
+
+    kind = str(body.get("kind") or "").strip().lower()
+    return kind if kind in (KIND_AGENT, KIND_DEVICE) else None
+
+
+def _default_agent_name() -> str:
+    """This agent's name when the server didn't inject its resolver. Mirrors
+    ``server.agent_name`` (identity.name → ``AGENT_NAME`` → "protoagent"), which this
+    package may not import."""
+    import os
+
+    from runtime.state import STATE
+
+    cfg = STATE.graph_config
+    name = getattr(cfg, "identity_name", "") if cfg else ""
+    if name and name != "protoagent":
+        return name
+    return os.environ.get("AGENT_NAME", "protoagent")
+
+
+def register_pairing_routes(app, agent_name=None) -> None:
+    """Mount the pairing + devices routes.
+
+    ``agent_name`` is the server's own name resolver (the one the A2A card uses), injected
+    because ``operator_api`` can't import ``server``. The agent-code start response carries
+    it so a hub can default the remote's display name to what its card already says.
+    """
     from fastapi import APIRouter
     from fastapi.responses import JSONResponse
 
     router = APIRouter()
+    resolve_name = agent_name or _default_agent_name
 
     @router.post("/api/pairing/start")
     async def _start(request: Request):  # noqa: ANN202
-        from security.devices import PAIRING_TTL_SECONDS, start_pairing
+        from security.devices import (
+            AGENT_PAIRING_TTL_SECONDS,
+            KIND_AGENT,
+            KIND_DEVICE,
+            PAIRING_TTL_SECONDS,
+            start_pairing,
+        )
+
+        kind = _requested_kind(await _json_body(request)) or KIND_DEVICE
 
         # Socket probes + QR rendering are blocking. Run them in a worker thread: a sync
         # call here stalls the ENTIRE event loop, which is how a 5s hostname lookup managed
         # to freeze every other request on the server, not just this one.
         hosts = await asyncio.to_thread(_candidate_hosts)
         if not hosts:
-            # Nothing to encode — but don't dead-end. Report what this machine COULD be
-            # reached on so the console can offer to bind there (the desktop app ships
-            # loopback-only by design, which made pairing unusable in exactly the place it
-            # was asked for). Still no PROTOAGENT_ALLOW_OPEN suggestion: the fix is a
-            # reachable bind WITH a token, never an open instance.
+            # Nothing to encode — but don't dead-end. Same answer for BOTH kinds: a hub on
+            # another machine can't reach a loopback-bound instance any more than a phone can.
+            # Report what this machine COULD be reached on so the console can offer to bind
+            # there (the desktop app ships loopback-only by design, which made pairing
+            # unusable in exactly the place it was asked for). Still no PROTOAGENT_ALLOW_OPEN
+            # suggestion: the fix is a reachable bind WITH a token, never an open instance.
             available = await asyncio.to_thread(_pairable_addresses)
             from a2a_impl.auth import bearer_configured
 
             return JSONResponse(
                 {
                     "ok": False,
-                    "error": "This agent only listens on localhost, so a phone can't reach it.",
+                    "error": (
+                        "This agent only listens on localhost, so another agent can't reach it."
+                        if kind == KIND_AGENT
+                        else "This agent only listens on localhost, so a phone can't reach it."
+                    ),
                     "hosts": [],
                     "available": available,
                     "bind": _BIND_HOST[0],
@@ -245,8 +303,26 @@ def register_pairing_routes(app) -> None:
                 },
                 status_code=409,
             )
-        code, expires_at = start_pairing()
         port = request.url.port or 7870
+        if kind == KIND_AGENT:
+            # A hub pairs against a BASE URL (it POSTs /api/pairing/claim there itself), so
+            # each host carries that — no QR, no fragment: the code is typed, not scanned.
+            code, expires_at = start_pairing(KIND_AGENT)
+            for host in hosts:
+                host["url"] = f"http://{host['host']}:{port}"
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "kind": KIND_AGENT,
+                    "code": code,
+                    "expires_at": expires_at,
+                    "ttl": AGENT_PAIRING_TTL_SECONDS,
+                    "hosts": hosts,
+                    "name": resolve_name(),
+                }
+            )
+        code, expires_at = start_pairing()
+
         # The code rides the FRAGMENT (ADR 0087 D5): fragments are never sent to the server,
         # so it stays out of access logs, proxy logs and Referer headers.
         def _render() -> None:
@@ -256,14 +332,23 @@ def register_pairing_routes(app) -> None:
 
         await asyncio.to_thread(_render)
         return JSONResponse(
-            {"ok": True, "code": code, "expires_at": expires_at, "ttl": PAIRING_TTL_SECONDS, "hosts": hosts}
+            {
+                "ok": True,
+                "kind": KIND_DEVICE,
+                "code": code,
+                "expires_at": expires_at,
+                "ttl": PAIRING_TTL_SECONDS,
+                "hosts": hosts,
+            }
         )
 
     @router.post("/api/pairing/cancel")
-    async def _cancel():  # noqa: ANN202
+    async def _cancel(request: Request):  # noqa: ANN202
         from security.devices import cancel_pairings
 
-        cancel_pairings()
+        # No kind → drop everything (the pre-ADR-0113 console sends no body). A kind scopes
+        # it to the dialog that closed, so the phone and agent flows can't cancel each other.
+        cancel_pairings(_requested_kind(await _json_body(request)))
         return JSONResponse({"ok": True})
 
     @router.post("/api/pairing/claim")
@@ -271,10 +356,9 @@ def register_pairing_routes(app) -> None:
         """UNAUTHENTICATED (allowlisted in a2a_impl/auth.py). See the module docstring."""
         from security.devices import claim_pairing
 
-        try:
-            body = await request.json()
-        except ValueError:
-            body = {}
+        body = await _json_body(request)
+        # Deliberately NOT read: body["kind"]. The device's kind is the code's kind, fixed
+        # when the operator minted it — a claimer can't relabel itself (ADR 0113 D2).
         code = str(body.get("code") or "")
         name = str(body.get("name") or "")
         result = claim_pairing(code, name)
@@ -283,7 +367,7 @@ def register_pairing_routes(app) -> None:
             # attacker learns nothing about which codes exist.
             return JSONResponse({"ok": False, "error": "invalid or expired pairing code"}, status_code=403)
         device, token = result
-        log.info("[pairing] device %s claimed a pairing code", device["id"])
+        log.info("[pairing] %s %s claimed a pairing code", device["kind"], device["id"])
         return JSONResponse({"ok": True, "device": device, "token": token})
 
     @router.get("/api/devices")

@@ -18,6 +18,7 @@ Zed ──ACP/stdio──▶ protoagent-acp ──A2A 1.0 (HTTP+SSE)──▶ pr
 | **follow-the-agent** jumps into files | `project` + `path` (+ `offset`) args, resolved to absolute paths |
 | search-hit locations on a finished `search_files` | the `file:line:` hits in its result |
 | a permission prompt: **Allow once / Allow for this session / Deny** | a parked `approval` (e.g. `run_command`, permanent delete) |
+| a permission prompt with the server's own choices, e.g. **Allow read-only / Allow read-write / Deny** | an `approval` that carries `options` (registering a folder outside `onboarding.root`) |
 | Stop button | A2A `CancelTask`, sent after a short grace window (see Send Now below) |
 | **Send Now** on a queued message | **steers the running turn**: the message is queued into it with protoAgent's mid-turn steering, and the turn carries on with it |
 | thread history: list and reopen past threads, **console chats included** | `GET /api/chat/sessions` + `…/turns`; a reopened thread continues on the same session, so the agent keeps its memory |
@@ -90,6 +91,13 @@ instance forbids bypass (`filesystem.bypass_allowed: false`), the server keeps a
 does the shim; it says so once and never works around the refusal. **Permanent deletes
 always ask.** They are never offered "for this session" and never auto-approved, which
 matches the server's delete floor.
+
+**Registering a folder outside the onboarding root always asks, too.** That approval brings
+its own choices (`options`: Allow read-only / Allow read-write / Deny, with
+`session_allow: false`); the shim relays them as they are, sends the chosen option's value
+back verbatim (the server binds it to the folder on the card), never offers or honours
+"for this session" for it, and treats a dismissed prompt as Deny. With the harness,
+`--approve` picks the first allow option (read-only).
 
 ### Send Now steers the running turn
 

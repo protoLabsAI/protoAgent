@@ -71,7 +71,8 @@ show_artifact(
 Keys:
 
 - **flowchart / class / state**: the node id exactly as written (`A`, `Agent`, `Running`), or a
-  flowchart `subgraph` id.
+  flowchart `subgraph` id — bare, never `participant:A` (that prefix only matches sequence
+  participants, so on a flowchart the link is dead).
 - **sequence participants**: `participant:<id>` or `participant:<alias>` (`participant:A` or
   `participant:Agent`).
 - **sequence messages**: `msg:<n>` — the n-th message arrow in the source, counting from 1 (notes,
@@ -99,7 +100,9 @@ diagram (a typo'd node id, `msg:9` in a 7-message diagram). Resend a corrected `
 already made (the version arrows and the chat's version chips keep every step):
 
 - `update_artifact(old_string, new_string)` for a small change — the links **carry over**. If the
-  edit renumbers messages (you inserted one), pass the corrected `links` map with it.
+  edit renumbers messages (you inserted one), pass the corrected `links` map with it. A `links`
+  argument **replaces** the stored map, it never merges: to add or fix one link, pass the
+  complete map.
 - `rewrite_artifact(code, links=…)` for a new diagram in the same slot — links do **not** carry
   over a rewrite, so pass them.
 

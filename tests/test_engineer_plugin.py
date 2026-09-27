@@ -65,3 +65,18 @@ def test_the_engineer_soul_preset_names_both_skills():
     soul = Path("config/soul-presets/engineer.md").read_text(encoding="utf-8")
     for name in EXPECTED_SKILLS:
         assert f"`{name}`" in soul, f"the engineer persona never points at its {name} skill"
+
+
+def test_repo_onboard_renders_readme_manifest_and_a_linked_overview():
+    """The onboarding contract Josh asked for: README as a markdown artifact, the manifest in
+    the code pane, a code-linked Mermaid flowchart overview grounded per `diagramming-code`
+    (which must still exist to be pointed at), and the turn ends with a choice — no edits."""
+    artifact = parse_skill_md(ROOT / "skills/repo-onboard/SKILL.md")
+    assert artifact is not None
+    body, desc = artifact.prompt_template, artifact.description.lower()
+    for trigger in ("get up to speed", "onboard", "what is this codebase", "show me the readme"):
+        assert trigger in desc, f"repo-onboard description lost the {trigger!r} trigger"
+    for must in ('kind="markdown"', "show_code", 'kind="mermaid"', "flowchart", "anchor",
+                 "`diagramming-code`", "memory_ingest", "Never change code during onboarding"):
+        assert must in body, f"repo-onboard no longer says {must!r}"
+    assert Path("plugins/artifact/skills/diagramming-code/SKILL.md").is_file()

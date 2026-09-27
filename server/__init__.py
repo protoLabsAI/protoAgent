@@ -1034,7 +1034,7 @@ def _main():
     # credential); see a2a_impl/auth.py `_PUBLIC_EXACT` and ADR 0087 D4.
     from operator_api.pairing_routes import register_pairing_routes
 
-    register_pairing_routes(fastapi_app)
+    register_pairing_routes(fastapi_app, agent_name=agent_name)
 
     # Fleet control plane (ADR 0042) — /api/fleet (list/create/start/stop) +
     # /api/archetypes. The CLI + the desktop GUI panels both drive these.

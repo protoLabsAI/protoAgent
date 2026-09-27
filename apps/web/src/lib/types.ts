@@ -1206,6 +1206,13 @@ export type HitlFormStep = {
   title?: string;
   description?: string;
 };
+export type HitlApprovalOption = {
+  value: string;
+  label: string;
+  kind?: "allow_once" | "reject_once" | string;
+  primary?: boolean;
+};
+
 export type HitlPayload = {
   kind?: "form" | "approval";
   title?: string;
@@ -1213,6 +1220,13 @@ export type HitlPayload = {
   steps?: HitlFormStep[];
   question?: string; // ask_human shape
   detail?: string; // approval shape — the command/action being approved
+  // Approval with its own choices (e.g. register_local_project outside the onboarding
+  // root: Allow read-only / Allow read-write / Deny). Each button resumes with `value`
+  // verbatim. Absent ⇒ the classic Approve / Deny.
+  options?: HitlApprovalOption[];
+  // false ⇒ this gate can't be approved "for the session" (it moves the fence, or it is
+  // a floor like permanent delete) — the console hides "Approve & don't ask again".
+  session_allow?: boolean;
   // #1701 Slice 2: set when this input-required is a PLUGIN composer-form (not a graph
   // interrupt). The console redeems the answers via POST /api/chat/commands/submit with
   // this id instead of resuming the agent graph.
