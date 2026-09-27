@@ -29,7 +29,7 @@
 }
 
 .activity-role {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted));
@@ -40,7 +40,7 @@
   border-radius: var(--pl-radius);
   padding: 8px 12px;
   background: var(--pl-color-bg-raised);
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
 }
 
 /* Stimulus attribution (#1375): a quiet quoted line above the response naming what it
@@ -54,7 +54,7 @@
   padding-left: 8px;
   border-left: 2px solid var(--pl-color-border);
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   min-width: 0;
 }
 .activity-stimulus svg {
@@ -66,7 +66,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   opacity: 0.85;
 }
 .activity-stimulus-text {
@@ -88,7 +88,7 @@
   border: 1px solid var(--pl-color-status-error);
   border-radius: var(--pl-radius);
   color: var(--pl-color-status-error);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 /* Activity provenance feed (ADR 0022) ------------------------------------- */
@@ -128,7 +128,7 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
 }
 .activity-origin {
   display: inline-flex;
@@ -189,7 +189,7 @@
 }
 
 .inbox-source {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-mono);
 }
@@ -199,7 +199,7 @@
 }
 
 .inbox-text {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -216,7 +216,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
