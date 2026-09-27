@@ -2,7 +2,7 @@
    review sections are bespoke, because nothing else in Settings is a pre-download report. */
 .snapshot-lede {
   margin: 0 0 16px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   max-width: 62ch;
 }
@@ -11,7 +11,7 @@
   align-items: center;
   gap: 8px;
   padding: 12px 0;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
 .snapshot-section {
@@ -27,7 +27,7 @@
   align-items: center;
   gap: 6px;
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 600;
 }
 /* The one section that is a call to action rather than a readout: something credential-shaped
@@ -38,7 +38,7 @@
 .snapshot-hint,
 .snapshot-none {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   max-width: 62ch;
 }
@@ -58,19 +58,19 @@
   padding: 6px 10px;
   border-radius: 6px;
   background: var(--pl-color-bg-inset, rgba(255, 255, 255, 0.03));
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .snapshot-row code {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   word-break: break-all;
 }
 .snapshot-kinds {
   flex: none;
   color: var(--pl-color-fg-muted);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
 }
 .snapshot-note {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .snapshot-caveat {
@@ -78,7 +78,7 @@
   padding: 10px 12px;
   border-radius: 6px;
   background: var(--pl-color-bg-inset, rgba(255, 255, 255, 0.03));
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   max-width: 62ch;
 }
@@ -98,7 +98,7 @@
   margin-bottom: -1px;
   background: transparent;
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   cursor: pointer;
 }
 .new-agent-source button.is-active {
@@ -114,7 +114,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
 }
 .snapshot-import-actions {
