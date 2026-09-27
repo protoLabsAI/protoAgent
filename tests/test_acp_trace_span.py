@@ -8,6 +8,7 @@ before this a coder run never reached Langfuse at all."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from unittest.mock import MagicMock
@@ -49,7 +50,7 @@ for line in sys.stdin:
         # ...and the recommended follow-up update for it anyway: must not end it twice.
         update({"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed"})
         update({"sessionUpdate": "tool_call", "toolCallId": "t3", "title": "Terminal env",
-                "status": "completed", "rawOutput": "OPENAI_API_KEY=sk-" + "B" * 40})
+                "status": "completed", "rawOutput": "OPENAI_API" + "_KEY=sk-" + "B" * 40})
         update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}})
         send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 """
@@ -78,9 +79,34 @@ def fake_langfuse(monkeypatch):
         return cm
 
     fake.start_as_current_observation.side_effect = _start
+
+    # Each tool call gets its OWN child span (opened at its start event, updated on a
+    # refinement, ended at its end event), so they're recorded in order.
+    span.children = []
+
+    def _child(**kwargs):
+        child = MagicMock()
+        child.start_kwargs = kwargs
+        span.children.append(child)
+        return child
+
+    span.start_observation.side_effect = _child
     monkeypatch.setattr(tracing, "_langfuse", fake)
     monkeypatch.setattr(tracing, "_enabled", True)
     return fake, span
+
+
+def _tool_spans(span) -> list[dict]:
+    """Each tool span's final fields: its start kwargs overlaid with every update, in
+    order, plus whether it was ended."""
+    out = []
+    for child in span.children:
+        fields = dict(child.start_kwargs)
+        for call in child.update.call_args_list:
+            fields.update(call.kwargs)
+        fields["ended"] = child.end.called
+        out.append(fields)
+    return out
 
 
 async def _run(fake_agent, tmp_path) -> str:
@@ -117,7 +143,7 @@ async def test_coder_tool_call_is_parented_explicitly_on_the_run_span(fake_agent
     fake.start_observation.assert_not_called()
     # t2's follow-up update does NOT end it a second time (no phantom `tool:tool` span).
     assert span.start_observation.call_count == 3
-    tool, terminal, env = (c.kwargs for c in span.start_observation.call_args_list)
+    tool, terminal, env = _tool_spans(span)
     assert tool["name"] == "tool:Read app.py"
     assert tool["as_type"] == "tool"
     # Redacted as DATA: a key-based rule catches `api_key` even though "hunter2"
@@ -178,8 +204,8 @@ async def test_incognito_coder_run_records_no_content(fake_agent, tmp_path, fake
         tracing._io_suppressed_ctx.reset(token)
 
     assert span.update.call_args.kwargs["output"] == ""
-    for call in span.start_observation.call_args_list:
-        assert call.kwargs["input"] == {"input": ""} and call.kwargs["output"] == ""
+    for tool in _tool_spans(span):
+        assert tool["input"] == {"input": ""} and tool["output"] == ""
 
 
 # claude-agent-acp's streaming shape: the call opens at content_block_start with no
@@ -240,7 +266,7 @@ async def test_streamed_tool_call_records_the_refined_arguments(tmp_path, fake_l
         },
     )
 
-    (tool,) = (c.kwargs for c in span.start_observation.call_args_list)
+    (tool,) = _tool_spans(span)
     # The refined title and arguments — not "Read File" / {"input": "read"}.
     assert tool["name"] == "tool:Read src/app.py"
     assert tool["input"] == {"input": '{"file_path": "src/app.py", "api_key": "[REDACTED]"}'}
@@ -372,7 +398,7 @@ async def test_update_with_inline_title_args_refines_the_input(tmp_path, fake_la
         },
     )
 
-    (tool,) = (c.kwargs for c in span.start_observation.call_args_list)
+    (tool,) = _tool_spans(span)
     assert tool["input"] == {"input": '{"cmd": "make", "api_key": "[REDACTED]"}'}
 
 
@@ -408,14 +434,15 @@ for line in sys.stdin:
 """
 
 _KEY = "sk-" + "A" * 48
+_KEY_NAME_TAIL = "_KEY"  # split so the source line itself never reads as a key assignment
 _OPEN = {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Terminal", "kind": "execute", "rawInput": {}}
 _EXPORT_KEY = [
     _OPEN,
     {
         "sessionUpdate": "tool_call_update",
         "toolCallId": "t1",
-        "title": f"`export OPENAI_API_KEY={_KEY}`",
-        "rawInput": {"command": f"export OPENAI_API_KEY={_KEY}"},
+        "title": f"`export OPENAI_API{_KEY_NAME_TAIL}={_KEY}`",
+        "rawInput": {"command": f"export OPENAI_API{_KEY_NAME_TAIL}={_KEY}"},
     },
     {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"},
 ]
@@ -444,7 +471,7 @@ async def test_a_refined_title_is_redacted_in_the_span_name(tmp_path, fake_langf
     _fake, span = fake_langfuse
     await _replay(tmp_path, _EXPORT_KEY)
 
-    kw = span.start_observation.call_args.kwargs
+    kw = _tool_spans(span)[-1]
     # The title is the whole command line: the name is content, redacted like the input.
     assert "A" * 20 not in kw["name"]
     assert "A" * 20 not in kw["input"]["input"]
@@ -458,7 +485,7 @@ async def test_incognito_sends_no_command_in_the_span_name(tmp_path, fake_langfu
     finally:
         tracing._io_suppressed_ctx.reset(token)
 
-    kw = span.start_observation.call_args.kwargs
+    kw = _tool_spans(span)[-1]
     assert kw["input"] == {"input": ""}
     assert "export" not in kw["name"]
 
@@ -476,7 +503,7 @@ async def test_a_repeated_title_fragment_keeps_the_refined_input(tmp_path, fake_
         ],
     )
 
-    assert span.start_observation.call_args.kwargs["input"] == {"input": '{"command": "awk"}'}
+    assert _tool_spans(span)[-1]["input"] == {"input": '{"command": "awk"}'}
 
 
 async def test_a_pathological_title_still_ends_the_tool(tmp_path, fake_langfuse):
@@ -538,3 +565,313 @@ async def test_no_update_for_an_ended_or_unknown_call(tmp_path, fake_langfuse):
     )
 
     assert [e["phase"] for e in events] == ["start", "end"]
+
+
+# ─── trace fidelity: timing, usage/cost, failure output, reasoning, shutdown ───────────
+
+# A scriptable agent: argv[1] is a JSON file {"new": {...}, "updates": [...],
+# "prompt_result": {...}} or {..., "prompt_error": {"code": ..., "message": ...}}.
+_SCRIPTED_AGENT = r"""
+import sys, json
+with open(sys.argv[1], encoding="utf-8") as f:
+    SPEC = json.load(f)
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1", **SPEC.get("new", {})}})
+    elif method == "session/prompt":
+        for u in SPEC.get("updates", []):
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1", "update": u}})
+        if "prompt_error" in SPEC:
+            send({"jsonrpc": "2.0", "id": mid, "error": SPEC["prompt_error"]})
+        else:
+            send({"jsonrpc": "2.0", "id": mid, "result": SPEC.get("prompt_result", {"stopReason": "end_turn"})})
+"""
+
+
+async def _scripted(tmp_path, spec: dict):
+    script = tmp_path / "scripted_agent.py"
+    script.write_text(_SCRIPTED_AGENT, encoding="utf-8")
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps(spec), encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script), str(spec_file)], cwd=str(tmp_path), name="opus", record_runs=False)
+    try:
+        return await client.prompt("fix it", timeout=30.0)
+    finally:
+        await client.close()
+
+
+def _msg(text: str) -> dict:
+    return {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}
+
+
+async def test_a_tool_span_opens_at_its_start_and_closes_at_its_end(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _scripted(
+        tmp_path,
+        {
+            "updates": [
+                {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run tests", "rawInput": {"cmd": "pytest"}},
+                _msg("working"),
+                {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "failed"},
+            ]
+        },
+    )
+
+    (child,) = span.children
+    assert child.start_kwargs["name"] == "tool:Run tests" and child.start_kwargs["as_type"] == "tool"
+    assert child.end.call_count == 1
+    assert child.update.call_args.kwargs["level"] == "ERROR"
+
+
+async def test_a_tool_still_open_at_turn_end_is_closed_as_unfinished(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _scripted(
+        tmp_path,
+        {"updates": [{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run", "rawInput": {}}, _msg("x")]},
+    )
+
+    (tool,) = _tool_spans(span)
+    assert tool["ended"] and tool["level"] == "WARNING"
+    assert "turn ended" in tool["status_message"]
+
+
+async def test_the_coders_reported_usage_and_cost_become_a_generation(tmp_path, fake_langfuse):
+    fake, _span = fake_langfuse
+    await _scripted(
+        tmp_path,
+        {
+            "new": {"models": {"currentModelId": "claude-opus-5-5"}},
+            "updates": [
+                _msg("done"),
+                {
+                    "sessionUpdate": "usage_update",
+                    "used": 900,
+                    "size": 200000,
+                    "cost": {"amount": 0.42, "currency": "USD"},
+                },
+            ],
+            "prompt_result": {
+                "stopReason": "end_turn",
+                "usage": {
+                    "inputTokens": 100,
+                    "outputTokens": 50,
+                    "cachedReadTokens": 700,
+                    "cachedWriteTokens": 30,
+                    "totalTokens": 880,
+                },
+            },
+        },
+    )
+
+    gen = fake.start_observation.call_args.kwargs
+    assert gen["as_type"] == "generation" and gen["name"] == "acp:opus-model"
+    assert gen["model"] == "claude-opus-5-5"
+    assert gen["usage_details"] == {
+        "input": 100,
+        "output": 50,
+        "input_cache_read": 700,
+        "input_cache_creation": 30,
+        "total": 880,
+    }
+    assert gen["cost_details"] == {"total": 0.42}
+    assert gen["metadata"]["cost_basis"] == "API-equivalent"
+
+
+async def test_the_model_is_read_from_the_newer_config_options_shape(tmp_path, fake_langfuse):
+    fake, _span = fake_langfuse
+    await _scripted(
+        tmp_path,
+        {
+            "new": {"configOptions": [{"id": "mode", "currentValue": "auto"}, {"id": "model", "currentValue": "opus"}]},
+            "updates": [_msg("done")],
+            "prompt_result": {
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        },
+    )
+    assert fake.start_observation.call_args.kwargs["model"] == "opus"
+
+
+async def test_no_generation_when_the_agent_reports_nothing(fake_agent, tmp_path, fake_langfuse):
+    fake, _span = fake_langfuse
+    await _run(fake_agent, tmp_path)
+    fake.start_observation.assert_not_called()
+
+
+async def test_a_failed_run_records_why_as_its_output(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    with pytest.raises(Exception):
+        await _scripted(tmp_path, {"prompt_error": {"code": -32000, "message": "model overloaded"}})
+
+    outcome = span.update.call_args.kwargs
+    assert outcome["level"] == "ERROR"
+    assert outcome["output"].startswith("[failed] AcpError:") and "model overloaded" in outcome["output"]
+
+
+async def test_reasoning_tail_and_plan_ride_on_the_run_span(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _scripted(
+        tmp_path,
+        {
+            "updates": [
+                {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "key sk-" + "Q" * 40 + " then fix"},
+                },
+                {
+                    "sessionUpdate": "plan",
+                    "entries": [{"content": "fix bug", "status": "in_progress", "priority": "high"}],
+                },
+                _msg("done"),
+            ]
+        },
+    )
+
+    md = span.update.call_args.kwargs["metadata"]
+    assert md["plan"] == [{"content": "fix bug", "status": "in_progress", "priority": "high"}]
+    assert md["reasoning_tail"].endswith("then fix") and "Q" * 40 not in md["reasoning_tail"]
+
+
+async def test_incognito_sends_no_reasoning(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    token = tracing._io_suppressed_ctx.set(True)
+    try:
+        await _scripted(
+            tmp_path,
+            {
+                "updates": [
+                    {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "secret plan"}},
+                    _msg("x"),
+                ]
+            },
+        )
+    finally:
+        tracing._io_suppressed_ctx.reset(token)
+
+    assert "reasoning_tail" not in span.update.call_args.kwargs["metadata"]
+
+
+def test_end_open_spans_ends_what_is_still_running(fake_langfuse):
+    _fake, span = fake_langfuse
+    with tracing.trace_span("acp:opus", as_type="agent"):
+        assert tracing.end_open_spans("restart") == 1
+        span.update.assert_called_with(level="WARNING", status_message="not finished: restart")
+        span.end.assert_called_once()
+    assert tracing.end_open_spans("again") == 0  # the block's own exit untracked nothing twice
+
+
+# ─── review round: cumulative cost, plan privacy, per-turn plan, redaction window ──────
+
+# The Nth prompt plays SPEC["turns"][N] (one pooled client, several turns).
+_POOLED_AGENT = _SCRIPTED_AGENT.replace(
+    'elif method == "session/prompt":\n        for u in SPEC.get("updates", []):',
+    'elif method == "session/prompt":\n        SPEC.update(SPEC["turns"].pop(0))\n        for u in SPEC.get("updates", []):',
+)
+
+
+async def _pooled(tmp_path, turns: list[dict], incognito: tuple[bool, ...] = ()):
+    script = tmp_path / "pooled_agent.py"
+    script.write_text(_POOLED_AGENT, encoding="utf-8")
+    spec = tmp_path / "pooled.json"
+    spec.write_text(json.dumps({"turns": turns}), encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script), str(spec)], cwd=str(tmp_path), name="opus", record_runs=False)
+    try:
+        for flag in incognito or (False,) * len(turns):
+            token = tracing._io_suppressed_ctx.set(flag)
+            try:
+                await client.prompt("go", timeout=30.0)
+            finally:
+                tracing._io_suppressed_ctx.reset(token)
+    finally:
+        await client.close()
+
+
+def _cost(total: float) -> dict:
+    return {"sessionUpdate": "usage_update", "used": 1, "size": 2, "cost": {"amount": total, "currency": "USD"}}
+
+
+_PLAN = {
+    "sessionUpdate": "plan",
+    # Built from pieces: a literal key assignment in the source is itself redacted by
+    # tools that read this file (a reviewer's file reads), mangling the line they see.
+    "entries": [{"content": "rotate " + "OPENAI_API" + "_KEY" + "=sk-" + "Z" * 40 + " for acme", "status": "pending"}],
+}
+_USAGE = {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2}}
+
+
+async def test_a_cumulative_session_cost_is_recorded_per_turn(tmp_path, fake_langfuse):
+    """claude-agent-acp's cost.amount is its SDK's running session total (confirmed live:
+    $0.0105 after turn 1, $0.0243 after turn 2). Each turn's generation gets the change."""
+    fake, _span = fake_langfuse
+    await _pooled(
+        tmp_path,
+        [
+            {"updates": [_msg("a"), _cost(0.10)], "prompt_result": _USAGE},
+            {"updates": [_msg("b"), _cost(0.25)], "prompt_result": _USAGE},
+        ],
+    )
+    costs = [c.kwargs["cost_details"]["total"] for c in fake.start_observation.call_args_list]
+    assert costs == [pytest.approx(0.10), pytest.approx(0.15)]
+
+
+async def test_plan_is_redacted_and_absent_in_incognito(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _pooled(tmp_path, [{"updates": [_PLAN, _msg("x")]}, {"updates": [_PLAN, _msg("y")]}], incognito=(False, True))
+    first, second = (c.kwargs["metadata"] for c in span.update.call_args_list if "metadata" in c.kwargs)
+    assert "Z" * 40 not in json.dumps(first["plan"]) and first["plan"][0]["status"] == "pending"
+    assert "plan" not in second  # task text is content: none of it in an incognito turn
+
+
+async def test_a_turn_without_a_plan_does_not_inherit_the_last_one(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    await _pooled(tmp_path, [{"updates": [_PLAN, _msg("x")]}, {"updates": [_msg("y")]}])
+    last = [c.kwargs["metadata"] for c in span.update.call_args_list if "metadata" in c.kwargs][-1]
+    assert "plan" not in last
+
+
+def test_a_resumed_session_takes_its_first_cost_reading_as_a_baseline():
+    client = AcpClient(sys.executable, ["-c", "pass"], cwd=".", name="opus", record_runs=False)
+    client._session_cost_seen = None  # what session/load leaves
+    asyncio.run(client._handle_update({"update": _cost(3.0)}))
+    assert client._turn_cost_usd is None  # pre-resume spend is not attributed to this turn
+    asyncio.run(client._handle_update({"update": _cost(3.4)}))
+    assert client._turn_cost_usd == pytest.approx(0.4)
+
+
+async def test_a_key_straddling_the_reasoning_window_is_still_redacted(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    key = "sk-" + "ab12" * 10
+    # Place the key so a plain last-4000-chars cut would start inside it.
+    thought = "x" * 5000 + key + "y" * 3990
+    await _scripted(
+        tmp_path,
+        {
+            "updates": [
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": thought}},
+                _msg("d"),
+            ]
+        },
+    )
+    tail = span.update.call_args.kwargs["metadata"]["reasoning_tail"]
+    assert "ab12ab12ab12" not in tail
+
+
+def test_end_open_spans_also_ends_an_open_tool_span(fake_langfuse):
+    _fake, span = fake_langfuse
+    with tracing.trace_span("acp:opus", as_type="agent") as run:
+        tool = tracing.start_child(run, "tool:Terminal", as_type="tool")
+        assert tracing.end_open_spans("restart") == 2
+        tool.end.assert_called_once()

@@ -107,3 +107,8 @@ async def test_non_terminal_frames_write_nothing(monkeypatch, session_span):
     await _drain(monkeypatch, _impl_yielding(("tool_start", {"id": "t"}), ("usage", {"tokens": 3})))
 
     assert _outputs(session_span) == []
+
+
+async def test_an_empty_reply_is_recorded_as_such(monkeypatch, session_span):
+    await _drain(monkeypatch, _impl_yielding(("tool_start", {"id": "w"}), ("done", "")))
+    assert _outputs(session_span) == ["(the turn ended without reply text)"]

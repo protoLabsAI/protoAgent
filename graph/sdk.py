@@ -1332,10 +1332,23 @@ async def trace_run(
 
 @contextlib.contextmanager
 def _failed_on_raise(span: Any):
-    """Mark the run's observation ERROR when its block raises — otherwise the run
-    store says ``failed`` while the trace closes looking fine — then re-raise."""
+    """Mark the run's observation ERROR when its block raises or is cancelled — otherwise
+    the run store says ``failed`` while the trace closes looking fine — then re-raise."""
     try:
         yield
+    except asyncio.CancelledError:
+        # A BaseException, so the branch below never saw it: a run cancelled by its caller
+        # (a reviewer's attempt timeout, a stop) closed looking healthy, with no level, no
+        # status and no output, and read as a silent success.
+        from observability import tracing
+
+        tracing.update_span(
+            span,
+            level="ERROR",
+            status_message="cancelled before it finished (caller timeout or stop)",
+            output="[cancelled] the run was cancelled before it finished",
+        )
+        raise
     except Exception as exc:
         from graph.middleware.redaction import redact
         from observability import tracing

@@ -154,3 +154,37 @@ async def test_output_with_tracing_off_never_serializes(monkeypatch):
     monkeypatch.setattr(tracing, "_langfuse", None)
     async with sdk.trace_run("workflow:x", run_id="r1") as run:
         run.output({("tuple", "key"): object()})
+
+
+async def test_a_cancelled_run_is_marked_not_left_looking_healthy(monkeypatch, fake_langfuse):
+    """A caller's timeout cancels the run (the QA reviewer's per-attempt budget): the trace
+    used to close with no level, no status and no output, reading as a silent success."""
+    import asyncio
+
+    _opened, span = fake_langfuse
+
+    with pytest.raises(asyncio.CancelledError):
+        async with sdk.trace_run("workflow:x", run_id="r1"):
+            raise asyncio.CancelledError
+
+    marked = [c.kwargs for c in span.update.call_args_list if c.kwargs.get("level") == "ERROR"]
+    assert marked and "cancelled" in marked[0]["status_message"]
+    assert marked[0]["output"].startswith("[cancelled]")
+
+
+async def test_a_cancelled_run_finishes_its_record(tmp_path, monkeypatch, fake_langfuse):
+    import asyncio
+
+    import plugins.workflows as wf
+    from plugins.workflows.run_state import STATUS_FAILED, WorkflowRunStore
+
+    async def cancelled(*_a, **_k):
+        raise asyncio.CancelledError
+
+    _patch_sdk(monkeypatch, _subagent([]))
+    monkeypatch.setattr(wf, "execute_workflow", cancelled)
+    store = WorkflowRunStore(tmp_path)
+
+    with pytest.raises(asyncio.CancelledError):
+        await wf._execute(_GatedReg(), "gated", {"topic": "ai"}, run_store=store)
+    assert store.load(store.run_id)["status"] == STATUS_FAILED  # not left "running"
