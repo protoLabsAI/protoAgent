@@ -80,9 +80,18 @@ The code's **kind** is recorded when it is minted, not claimed: a code minted as
 code yields a device with `kind: "agent"`. The claimer cannot upgrade or relabel what it is.
 Phone codes are unchanged (32 url-safe characters, 120s, in the URL fragment).
 
+**When the counter resets:** on a successful claim, when the lockout fires, and whenever a new
+code is minted. So each code the operator issues gets its own budget of 5 misses, and a typo
+made on an earlier code does not count against the next one. Codes expiring does not reset it,
+because nothing is pending to guess against then (a claim with nothing pending is rejected
+before the counter is touched).
+
 **Accepted residual risk:** the 5-miss lockout means anyone who can reach the unauthenticated
 claim route can cancel a pending pairing by guessing wrong 5 times. That is a nuisance, not a
-compromise, and it exists for phone codes today.
+compromise, and it exists for phone codes today. Scoping the counter per caller was considered
+and rejected: a guesser rotates source addresses for free, and a miss can't be attributed to a
+particular code without revealing which codes exist. The operator's recourse is to mint
+another code.
 
 ### D3 — The paired token is an ordinary device token
 
@@ -183,6 +192,29 @@ behind TLS almost always sits behind a reverse proxy on 443, not in that range. 
 both schemes doubles scan time for a case the manual "Add a remote by URL" form (which
 accepts `https://`) already covers.
 
+### D10 — A credential never crosses a plaintext network without an explicit opt-in
+
+Pairing sends the code to the remote, gets an operator-tier token back, and the proxy then
+presents that token on every call. Over plain `http://` on a LAN, anyone on that network can
+read both. The fleet CLI already has a rule for this (`deck/hub.py` `credential_allowed`): a
+credential goes over `http://` only to loopback, and to any other host only with
+`--insecure-http`. Pairing adopts the same rule, and adds one exception for encryption the
+network already provides:
+
+- **`https://`, loopback, and tailnet addresses (100.64.0.0/10) pair without asking.** A tailnet
+  link is WireGuard-encrypted underneath, which is why ADR 0087 already ranks it above LAN.
+- **Plain `http://` to any other address is refused** unless the caller opts in:
+  `allow_insecure: true` on `POST /api/fleet/remotes/pair` (and on add/update when a token is
+  set), `--insecure-http` on `protoagent fleet pair`, or a "this network is trusted, send the
+  code in cleartext" confirmation in the console's Pair dialog. The refusal says why, and names
+  the tailnet as the fix that needs no confirmation.
+- A MagicDNS name (`*.ts.net`) counts as tailnet. Any other name is judged by the address it
+  resolves to at pairing time.
+
+This does not make LAN pairing safe; it makes it a decision the operator takes knowingly
+rather than a default. TLS on the remote is the real fix and stays the operator's to set up
+(the add-by-URL form accepts `https://`).
+
 ## Consequences
 
 - **Adding a secured remote becomes: discover → Pair… → type the code.** No token is
@@ -204,7 +236,7 @@ accepts `https://`) already covers.
 1. **Agent codes on the remote**: `security/devices.py` code kinds, normalization, the
    device `kind` field; `POST /api/pairing/start {kind: "agent"}`; tests for TTL,
    single-use, lockout, normalization, and that the kind comes from the code.
-2. **Hub-side pairing + authenticated probe**: `POST /api/fleet/remotes/pair`
+2. **Hub-side pairing + authenticated probe**: `POST /api/fleet/remotes/pair` (with the D10 transport rule)
    (`supervisor.pair_remote`: SSRF-guarded claim, add or re-token), `auth` status (D5),
    `protoagent fleet pair` (D7).
 3. **Delegates through the hub**: the remote's `a2a` in `status()` is the hub's loopback
