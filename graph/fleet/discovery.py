@@ -134,8 +134,34 @@ def _local_ip() -> str:
 
 
 # ── mDNS advertise (wired into server startup) ────────────────────────────────
-def advertise(name: str, port: int) -> None:
+# Binds that mean "every interface": advertise the LAN address the default route faces.
+_WILDCARD_BINDS = frozenset({"0.0.0.0", "::", ""})
+
+
+def _advertise_address(bind: str | None) -> str | None:
+    """The address to announce for a server bound to ``bind``, or None to stay quiet.
+
+    An advert is a promise that a sibling can connect, so it has to name an address the
+    server really listens on (ADR 0113 D9). A loopback bind listens on nothing a sibling can
+    reach: announcing the LAN IP there put an unreachable row in every other hub's Discover
+    list. A wildcard bind listens everywhere, so the default-route address is honest. A
+    specific bind listens on exactly that address, so that is the one to announce.
+    ``None`` (a caller that doesn't know its bind) keeps the old default-route guess.
+    """
+    host = (bind or "").strip() if bind is not None else None
+    if host is None or host in _WILDCARD_BINDS:
+        ip = _local_ip()
+        return None if ip.startswith("127.") else ip
+    if host == "localhost" or host == "::1" or host.startswith("127."):
+        return None
+    return host
+
+
+def advertise(name: str, port: int, bind: str | None = None) -> None:
     """Announce this agent on mDNS so LAN siblings can discover it. Idempotent + best-effort.
+
+    ``bind`` is the interface the server actually bound (``--host`` / ``network.bind``);
+    a loopback bind is not advertised at all — see ``_advertise_address``.
 
     Sync zeroconf — call via ``asyncio.to_thread`` from async code (the ``_browse_mdns``
     convention): constructed on a running event loop it attaches to that loop, and
@@ -155,10 +181,13 @@ def advertise(name: str, port: int) -> None:
             "(sync zeroconf would deadlock it); call via asyncio.to_thread"
         )
         return
+    ip = _advertise_address(bind)
+    if ip is None:
+        log.info("[discovery] %s is bound to loopback (%s) — nothing on the network can reach it, not advertising", name, bind)
+        return
     try:
         from zeroconf import ServiceInfo, Zeroconf
 
-        ip = _local_ip()
         _info = ServiceInfo(
             _SERVICE_TYPE,
             f"{name}.{_SERVICE_TYPE}",

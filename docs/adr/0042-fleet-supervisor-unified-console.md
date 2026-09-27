@@ -249,9 +249,12 @@ with a remote address + `remote: true`. Show a "remote" tag (like the `host` tag
 start/stop on the lifecycle tier, and the switcher's address swap already routes through the
 proxy. The only real new UI is the **"add remote agent"** form (URL + token) alongside "+ New."
 
-Honest scope: this is **not built** — it's the designed-for next axis. The proxy +
-independent-endpoint + self-registration design were chosen so it's an extension, not a
-rewrite.
+Status: the register-only tier shipped (#839, slice 6 below), and remote credentials are now
+paired rather than pasted. **[ADR 0113](./0113-agent-pairing-for-remote-fleet-members.md)**
+covers that: the remote shows a one-time code, and the hub claims a per-hub device token the
+remote can revoke. The same ADR routes delegates to a remote through the hub (one registry,
+one token), re-enables remote WebSockets without the hub lending a credential, and advertises
+on mDNS only from a reachable bind. Remote-hub start/stop (tier b) is still future work.
 
 > **Amendment (2026-09) — the fleet deck (#3466).** The fleet gained a terminal: bare
 > `protoagent fleet` / `protoagent top` opens a Textual deck over the running hub — the
