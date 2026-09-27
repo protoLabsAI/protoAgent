@@ -126,17 +126,16 @@
   }
 }
 
+/* The member button is a DS ghost Button now (padding/border/hover/focus/radius
+ * are the DS's); this keeps only the two-line, left-aligned layout — with
+ * align-items:stretch so the meta line can still ellipsis inside the grid cell. */
 .flr__who {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 2px;
   text-align: left;
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
 }
 .flr__name {
   display: flex;
@@ -178,25 +177,8 @@
   align-items: center;
   gap: 2px;
 }
-.flr__icon {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 0;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.flr__icon:hover:not(:disabled) {
-  background: var(--pl-color-bg-inset);
-  color: var(--pl-color-fg);
-}
-.flr__icon:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
+/* The row's icon controls are DS icon Buttons (size/hover/focus/radius owned by
+ * the DS); the .flr__actions flex row still lays them out. */
 
 /* status pills on a member row (e.g. a turn in flight) */
 .flr__pill {
@@ -244,21 +226,13 @@
   border-radius: 10px;
   box-shadow: var(--pl-shadow-popover, 0 -10px 28px -14px rgba(0, 0, 0, 0.45));
 }
+/* Mention items are DS ghost Buttons; the DS owns padding/border/hover/radius —
+ * keep only the row layout (dot · name · meta) and left alignment. */
 .flr__mention {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 7px;
-  background: none;
-  cursor: pointer;
   text-align: left;
-  font: inherit;
-  color: var(--pl-color-fg);
-}
-.flr__mention:hover {
-  background: var(--pl-color-bg-hover);
 }
 .flr__mention-name {
   font-size: 13px;
@@ -269,13 +243,7 @@
   font-size: 11px;
   color: var(--pl-color-fg-subtle);
 }
-/* focus visibility (keyboard) — the DS PromptInput owns its own field/send focus rings */
-.flr__who:focus-visible,
-.flr__icon:focus-visible {
-  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
-  outline-offset: 1px;
-  border-radius: 7px;
-}
+/* The DS Button (roster + icon controls) and PromptInput own their own focus rings. */
 
 /* footer keycap hints */
 .flr__hint {
@@ -307,10 +275,6 @@
 .flr__member.is-diag {
   background: color-mix(in srgb, var(--pl-color-accent) 9%, transparent);
 }
-.flr__icon.is-active {
-  background: color-mix(in srgb, var(--pl-color-accent) 16%, transparent);
-  color: var(--pl-color-accent);
-}
 
 .flr__diag {
   display: flex;
@@ -325,21 +289,9 @@
   padding: 10px 12px 8px;
   border-bottom: 1px solid var(--pl-color-border);
 }
+/* DS icon Button; keep only flex:none so it holds its square in the head row. */
 .flr__diag-back {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  border: 0;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
   flex: none;
-}
-.flr__diag-back:hover {
-  background: var(--pl-color-bg-inset);
-  color: var(--pl-color-fg);
 }
 .flr__diag-name {
   font-size: 14px;
@@ -382,28 +334,8 @@
   text-transform: uppercase;
   color: var(--pl-color-fg-muted);
 }
-.flr__diag-refresh,
-.flr__diag-inspect {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 7px;
-  border: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg-inset);
-  color: var(--pl-color-fg);
-  font: 600 11.5px inherit;
-  cursor: pointer;
-}
-.flr__diag-refresh:hover:not(:disabled),
-.flr__diag-inspect:hover:not(:disabled) {
-  background: var(--pl-color-bg-hover);
-}
-.flr__diag-refresh:disabled,
-.flr__diag-inspect:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
+/* Refresh + Inspect are DS ghost Buttons (chrome + loading spinner are the DS's);
+ * the .flr__diag-sechead / .flr__diag-taskbar flex rows still place them. */
 
 .flr__diag-state {
   padding: 14px 12px;
@@ -461,23 +393,13 @@
   display: flex;
   gap: 6px;
 }
+/* DS Input owns the field chrome (border/background/radius/focus/placeholder);
+ * keep the flex sizing in the task bar and the monospace task-id typography. */
 .flr__diag-taskinput {
   flex: 1;
   min-width: 0;
-  padding: 6px 9px;
-  border-radius: 7px;
-  border: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg);
-  color: var(--pl-color-fg);
   font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   font-size: 12px;
-  outline: none;
-}
-.flr__diag-taskinput:focus {
-  border-color: var(--pl-color-accent);
-}
-.flr__diag-taskinput::placeholder {
-  color: var(--pl-color-fg-subtle);
 }
 
 .flr__diag-task {
@@ -597,31 +519,14 @@
   font-size: 12px;
   color: var(--pl-color-fg-muted);
 }
+/* DS ghost Button; keep only its placement at the right of the error row. */
 .flr__diag-retry {
   margin-left: auto;
   flex: none;
   align-self: center;
-  padding: 4px 10px;
-  border-radius: 7px;
-  border: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg);
-  color: var(--pl-color-fg);
-  font: 600 11.5px inherit;
-  cursor: pointer;
-}
-.flr__diag-retry:hover {
-  background: var(--pl-color-bg-hover);
 }
 
-.flr__diag-back:focus-visible,
-.flr__diag-refresh:focus-visible,
-.flr__diag-inspect:focus-visible,
-.flr__diag-retry:focus-visible,
-.flr__diag-taskinput:focus-visible {
-  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
-  outline-offset: 1px;
-  border-radius: 7px;
-}
+/* The DS Button + Input in the diagnostics drawer own their own focus rings. */
 
 @media (prefers-reduced-motion: reduce) {
   .flr__dot--online::after,
