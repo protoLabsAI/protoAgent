@@ -50,11 +50,11 @@
 }
 
 .builder-dot-ok {
-  background: var(--pl-color-status-success, #57b880);
+  background: var(--pl-color-status-success);
 }
 
 .builder-dot-err {
-  background: var(--pl-color-status-error, #d8635b);
+  background: var(--pl-color-status-error);
 }
 
 .builder-step-head {
@@ -165,12 +165,12 @@
   padding: 8px 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  background: var(--pl-color-bg-raised, #111114);
+  background: var(--pl-color-bg-raised);
   font-size: 13px;
 }
 
 .workflow-step svg {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
   flex: none;
 }
 
@@ -245,7 +245,7 @@
   min-width: 18px;
   padding: 1px 6px;
   border-radius: 9px;
-  background: var(--pl-color-accent, #7c8cff);
+  background: var(--pl-color-accent);
   color: var(--pl-color-fg-on-accent);
   font-size: 11px;
   font-weight: 600;
@@ -260,7 +260,7 @@
   padding: 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  background: var(--pl-color-bg-raised, #111114);
+  background: var(--pl-color-bg-raised);
 }
 
 .workflow-gate-head {
@@ -271,7 +271,7 @@
 }
 
 .workflow-gate-head svg {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
   flex: none;
 }
 
@@ -321,7 +321,7 @@
   padding: 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  background: var(--pl-color-bg-raised, #111114);
+  background: var(--pl-color-bg-raised);
   overflow-x: auto;
 }
 
@@ -365,23 +365,23 @@
 }
 
 .lane-chip-running {
-  border-color: var(--pl-color-accent, #7c8cff);
+  border-color: var(--pl-color-accent);
   color: var(--pl-color-fg);
 }
 
 .lane-chip-done {
-  color: var(--pl-color-status-success, #46a758);
-  border-color: color-mix(in srgb, var(--pl-color-status-success, #46a758) 40%, transparent);
+  color: var(--pl-color-status-success);
+  border-color: color-mix(in srgb, var(--pl-color-status-success) 40%, transparent);
 }
 
 .lane-chip-failed {
-  color: var(--pl-color-status-error, #e5484d);
-  border-color: color-mix(in srgb, var(--pl-color-status-error, #e5484d) 40%, transparent);
+  color: var(--pl-color-status-error);
+  border-color: color-mix(in srgb, var(--pl-color-status-error) 40%, transparent);
 }
 
 .lane-chip-gated {
-  color: var(--pl-color-status-warning, #ffb224);
-  border-color: color-mix(in srgb, var(--pl-color-status-warning, #ffb224) 40%, transparent);
+  color: var(--pl-color-status-warning);
+  border-color: color-mix(in srgb, var(--pl-color-status-warning) 40%, transparent);
 }
 
 /* Run timeline — the live (and historical) per-step view of one run. */
@@ -403,7 +403,7 @@
 }
 
 .run-timeline-head svg {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
 }
 
 .run-timeline-head > :last-child {
@@ -427,23 +427,23 @@
 }
 
 .run-status-running {
-  color: var(--pl-color-accent, #7c8cff);
-  border-color: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 45%, transparent);
+  color: var(--pl-color-accent);
+  border-color: color-mix(in srgb, var(--pl-color-accent) 45%, transparent);
 }
 
 .run-status-done {
-  color: var(--pl-color-status-success, #46a758);
-  border-color: color-mix(in srgb, var(--pl-color-status-success, #46a758) 45%, transparent);
+  color: var(--pl-color-status-success);
+  border-color: color-mix(in srgb, var(--pl-color-status-success) 45%, transparent);
 }
 
 .run-status-failed {
-  color: var(--pl-color-status-error, #e5484d);
-  border-color: color-mix(in srgb, var(--pl-color-status-error, #e5484d) 45%, transparent);
+  color: var(--pl-color-status-error);
+  border-color: color-mix(in srgb, var(--pl-color-status-error) 45%, transparent);
 }
 
 .run-status-paused {
-  color: var(--pl-color-status-warning, #ffb224);
-  border-color: color-mix(in srgb, var(--pl-color-status-warning, #ffb224) 45%, transparent);
+  color: var(--pl-color-status-warning);
+  border-color: color-mix(in srgb, var(--pl-color-status-warning) 45%, transparent);
 }
 
 .run-steps {
@@ -456,7 +456,7 @@
 .run-step {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  background: var(--pl-color-bg-raised, #111114);
+  background: var(--pl-color-bg-raised);
 }
 
 .run-step summary {
@@ -489,7 +489,7 @@
 }
 
 .run-step-gate-mark {
-  color: var(--pl-color-status-warning, #ffb224);
+  color: var(--pl-color-status-warning);
 }
 
 .run-step-queued {
@@ -497,23 +497,23 @@
 }
 
 .run-step-running {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
 }
 
 .run-step-done {
-  color: var(--pl-color-status-success, #46a758);
+  color: var(--pl-color-status-success);
 }
 
 .run-step-failed {
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 
 .run-step-gated {
-  color: var(--pl-color-status-warning, #ffb224);
+  color: var(--pl-color-status-warning);
 }
 
 .run-gate {
-  border-color: color-mix(in srgb, var(--pl-color-status-warning, #ffb224) 40%, transparent);
+  border-color: color-mix(in srgb, var(--pl-color-status-warning) 40%, transparent);
 }
 
 .run-gate-loading {
@@ -527,7 +527,7 @@
   align-items: center;
   gap: 6px;
   margin: 0 12px;
-  color: var(--pl-color-status-warning, #ffb224);
+  color: var(--pl-color-status-warning);
   font-size: 12px;
 }
 
@@ -597,7 +597,7 @@
 
 .run-history-row-active {
   border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-raised, #111114);
+  background: var(--pl-color-bg-raised);
 }
 
 .run-history-steps {
@@ -639,9 +639,9 @@
   gap: 8px;
   align-items: flex-start;
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--pl-color-status-warning, #ffb224) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl-color-status-warning) 40%, transparent);
   border-radius: var(--pl-radius);
-  color: var(--pl-color-status-warning, #ffb224);
+  color: var(--pl-color-status-warning);
   font-size: 12px;
 }
 
@@ -722,7 +722,7 @@
 }
 
 .builder-toolchip-bad {
-  border-color: var(--pl-color-status-error, #d8635b);
+  border-color: var(--pl-color-status-error);
 }
 
 /* Mobile-first: canvas on top, editor below; side-by-side once the PANEL is

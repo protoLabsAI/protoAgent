@@ -59,10 +59,17 @@ describe("phantom CSS tokens re-pointed to real DS tokens (#3682)", () => {
     expect(count(source("/chat/chat.css"), "var(--pl-color-fg-muted, #8b8b93)")).toBe(1);
   });
 
-  it("workflows.css: the ok dot reads --pl-color-status-success, the err dot + bad toolchip --pl-color-status-error, fallbacks intact", () => {
+  it("workflows.css: the ok dot / err dot / bad toolchip now read the bare real tokens — #3685(a) stripped the fallbacks", () => {
     const wf = source("/workflows/workflows.css");
-    expect(count(wf, "var(--pl-color-status-success, #57b880)")).toBe(1);
-    expect(count(wf, "var(--pl-color-status-error, #d8635b)")).toBe(2);
+    // #3685 part (a): the hex fallbacks this rename preserved (#57b880 on the ok dot,
+    // #d8635b on the err dot + bad toolchip) are removed — the DS tokens always load, so a
+    // fallback could only paint a wrong dark-only colour. The sites keep the real tokens,
+    // now bare. (The wider strip of the other status/accent fallbacks is pinned in
+    // workflows/workflows-token-fallbacks.test.ts.)
+    expect(count(wf, "var(--pl-color-status-success, #57b880)")).toBe(0);
+    expect(count(wf, "var(--pl-color-status-error, #d8635b)")).toBe(0);
+    expect(wf).toContain("var(--pl-color-status-success)");
+    expect(wf).toContain("var(--pl-color-status-error)");
   });
 
   it("app-crash.css: bg/fg read the real tokens with a single flat fallback, no nested --pl-bg/--pl-fg", () => {
