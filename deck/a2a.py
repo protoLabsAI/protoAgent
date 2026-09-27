@@ -77,6 +77,11 @@ DISMISS_SENTINEL = (
 STREAM_READ_S = 60.0
 _STREAM_TIMEOUT = httpx.Timeout(STREAM_READ_S, connect=5.0)
 _RPC_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+# SubscribeToTask's TASK_NOT_FOUND retry (see ``A2AClient.subscribe``): delays double
+# per attempt, 0.05 → 0.1 → 0.2 → 0.4, ~0.75s worst case — the eval client's bound.
+_TASK_NOT_FOUND_CODE = -32001
+_SUBSCRIBE_ATTEMPTS = 5
+_SUBSCRIBE_BACKOFF_S = 0.05
 
 
 def norm_state(state: str | None) -> str:
@@ -764,9 +769,28 @@ class A2AClient:
 
     def subscribe(self, task_id: str) -> Iterator[dict]:
         """``SubscribeToTask``: re-attach to an in-flight task; the first frame is a Task
-        snapshot (history + text so far), then the live frames."""
-        payload = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "SubscribeToTask", "params": {"id": task_id}}
-        yield from self._sse("POST", payload)
+        snapshot (history + text so far), then the live frames.
+
+        A task is live in the server's active registry before its first store write, and
+        since a2a-sdk 1.1.5 ``SubscribeToTask`` reads the store even for a live task (the
+        owner guard), so attaching on the ``turn_started`` announcement can be refused
+        with TASK_NOT_FOUND for a task that exists (#3575). A refusal arrives as the only
+        frame, before anything is yielded, so it is retried here with a short bounded
+        backoff. A genuinely unknown task still surfaces its error, ~0.75s later."""
+        for attempt in range(_SUBSCRIBE_ATTEMPTS):
+            payload = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "SubscribeToTask", "params": {"id": task_id}}
+            frames = self._sse("POST", payload)
+            first = next(frames, None)
+            if first is None:
+                return
+            err = first.get("error") if isinstance(first, dict) else None
+            if isinstance(err, dict) and err.get("code") == _TASK_NOT_FOUND_CODE and attempt < _SUBSCRIBE_ATTEMPTS - 1:
+                frames.close()
+                time.sleep(_SUBSCRIBE_BACKOFF_S * 2**attempt)
+                continue
+            yield first
+            yield from frames
+            return
 
     def _sse(self, method: str, payload: dict) -> Iterator[dict]:
         try:

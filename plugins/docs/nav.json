@@ -154,6 +154,10 @@
           "title": "The fleet deck (the fleet in a terminal)"
         },
         {
+          "path": "guides/pairing.md",
+          "title": "Pair devices & agents"
+        },
+        {
           "path": "guides/portfolio.md",
           "title": "Portfolio (one PM across boards)"
         },

@@ -235,6 +235,7 @@ CLI_FORWARD_MODULES = [
     "server.knowledge_cli",
     "server.operator_mcp",
     "graph.snapshot_cli",
+    "deck.pair",
 ]
 
 

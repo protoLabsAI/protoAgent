@@ -54,8 +54,8 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     // Agent group
     "Identity",
     "Operator & access",
-    // "Devices" is NOT here — gated behind the `settings.devices` developer flag, default
-    // OFF (ADR 0068). Its absence from this list IS the assertion that the gate holds.
+    // Paired devices + agents (ADR 0087 / 0113). Ungated since ADR 0113 D8.
+    "Devices",
     "Model",
     "Behavior",
     "Knowledge",

@@ -94,6 +94,7 @@ test("the generated rows cover the table, carry their nav heading, and honour th
   expect(labels).toEqual([
     "Settings: Identity",
     "Settings: Operator & access",
+    "Settings: Devices",
     "Settings: Model",
     "Settings: Behavior",
     "Settings: Knowledge",
@@ -115,12 +116,12 @@ test("the generated rows cover the table, carry their nav heading, and honour th
     "Settings: Chat",
     "Settings: Keyboard",
   ]);
-  // Absent, and the absences are the assertion. Devices (`settings.devices`) and Publish
-  // (`chat.publish`) are flag-OFF even on this dev channel. Developer is the interesting one:
+  // Absent, and the absences are the assertion. Publish (`chat.publish`) is flag-OFF even on
+  // this dev channel. Developer is the interesting one:
   // it IS in the dialog's rail here (settings.spec.ts pins that), and SETTINGS_PALETTE_EXCLUDED
   // still drops its row, because its visibility is a CHANNEL decision — neither of the two
   // axes a row gate can express — so an ungated row would list it to production operators.
-  for (const gated of ["Devices", "Publish", "Developer"]) {
+  for (const gated of ["Publish", "Developer"]) {
     expect(labels).not.toContain(`Settings: ${gated}`);
   }
   // The nav heading rides as the trailing hint, and is searchable.

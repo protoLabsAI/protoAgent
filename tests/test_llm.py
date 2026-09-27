@@ -447,15 +447,24 @@ def test_an_operator_can_hand_the_wire_choice_back_to_langchain(monkeypatch):
     # The escape hatch for an openai-compat connection pointed straight at api.openai.com
     # with a Responses-only model. `None` — not `True` — because the operator has a MIX of
     # models and wants the per-call inference back, not Responses forced on all of them.
-    def _build():
-        return _ReasoningChatOpenAI(model="gpt-5.6-sol", api_key="sk-test", base_url="http://localhost:1/v1")
+    #
+    # Asserts the wire each client WOULD speak, not the stored field. langchain-openai
+    # >= 1.6.3 resolves `None` at construction (the `_infer_use_responses_api` validator
+    # stores `True` for a Responses-preferring model), so `use_responses_api is None`
+    # stopped holding even though the hand-back still works (#3575).
+    def _wire(model):
+        llm = _ReasoningChatOpenAI(model=model, api_key="sk-test", base_url="http://localhost:1/v1")
+        return llm._use_responses_api({})
 
-    # The contrast is the assertion. `is None` alone would also hold on the unpinned
-    # default this fix replaced, so the test would pass on the broken code.
+    # The contrast is the assertion: the same Responses-preferring model is pinned to
+    # chat-completions by default, and gets langchain's Responses inference with the hatch.
     monkeypatch.delenv("PROTOAGENT_GATEWAY_RESPONSES_API", raising=False)
-    assert _build().use_responses_api is False
+    assert _wire("gpt-5.6-sol") is False
     monkeypatch.setenv("PROTOAGENT_GATEWAY_RESPONSES_API", "1")
-    assert _build().use_responses_api is None
+    assert _wire("gpt-5.6-sol") is True
+    # ...and the hatch hands the choice back rather than forcing Responses on the whole
+    # mix: a chat-completions model still gets chat-completions.
+    assert _wire("gpt-4o-mini") is False
 
 
 def test_the_native_codex_builder_still_asks_for_the_responses_wire(monkeypatch):

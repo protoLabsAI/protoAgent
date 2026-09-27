@@ -39,6 +39,8 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "fleet": ("graph.fleet.cli", "run_fleet_cli"),
     # `top` = the fleet deck straight away (same as bare `fleet`); the TUI over the running hub.
     "top": ("graph.fleet.cli", "run_deck_cli"),
+    # `pair` = the remote half of agent pairing (ADR 0113 D7): a one-time code a hub claims.
+    "pair": ("deck.pair", "run_pair_cli"),
     "config": ("graph.config_explain", "run_config_cli"),
     "model": ("graph.model_cli", "run_model_cli"),
     "reset": ("ops.reset", "run_reset_cli"),
@@ -63,6 +65,7 @@ _FORWARD_HELP = {
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
     "fleet": "The fleet deck: bare = interactive TUI over the running hub; ls/up/down = non-interactive (ADR 0042)",
     "top": "Open the fleet deck (alias for bare `protoagent fleet`)",
+    "pair": "Print a one-time code another agent's hub can use to pair with this one (ADR 0113)",
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
     "reset": "Factory-reset this instance, or the whole machine box for handoff",

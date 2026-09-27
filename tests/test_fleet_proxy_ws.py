@@ -15,6 +15,14 @@ from starlette.websockets import WebSocketDisconnect
 from graph.fleet import proxy
 
 
+@pytest.fixture(autouse=True)
+def _testserver_is_a_trusted_host(monkeypatch):
+    """TestClient sends ``Host: testserver``, which the open-hub remote Host gate (#3662) would
+    refuse as a possible DNS-rebinding name. Declare it the way an operator declares a
+    reverse-proxy name; the gate's own tests override the Host explicitly."""
+    monkeypatch.setenv("PROTOAGENT_TRUSTED_HOSTS", "testserver")
+
+
 def _echo_ws_server():
     """A real echo WebSocket server on a free port, in a background thread.
     Returns (port, stop) — proves forward_ws relays frames BOTH ways over real sockets."""
@@ -59,7 +67,7 @@ def _ws_app() -> FastAPI:
 def test_ws_proxy_relays_text_and_binary(monkeypatch):
     port, stop = _echo_ws_server()
     try:
-        monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: (f"http://127.0.0.1:{port}", {}))
+        monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", f"http://127.0.0.1:{port}", None))
         with TestClient(_ws_app()).websocket_connect("/agents/peer/live") as ws:
             ws.send_text("ping")
             assert ws.receive_text() == "ping"  # text round-trips through the hub
@@ -71,46 +79,24 @@ def test_ws_proxy_relays_text_and_binary(monkeypatch):
 
 def test_ws_proxy_rejects_when_agent_not_running(monkeypatch):
     # No live target → the proxy closes the handshake (the WS analog of the HTTP 409).
-    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: None)
+    monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: None)
     with pytest.raises(WebSocketDisconnect):
         with TestClient(_ws_app()).websocket_connect("/agents/ghost/live"):
             pass
 
 
-def test_ws_proxy_refuses_remote_member(monkeypatch):
-    """Security: the hub's default-deny auth is HTTP-only (BaseHTTPMiddleware skips WS
-    scopes), so a WS proxied to a REMOTE member would lend that member's stored bearer to
-    an unauthenticated caller. forward_ws refuses it (1008) BEFORE opening any upstream —
-    even though a target would resolve. Local peers/host are unaffected (no stored creds)."""
-    from graph.fleet import supervisor
-
-    # Slug resolves to a registered remote (with a stored token) and NOT to a live local peer.
-    monkeypatch.setattr(supervisor, "_load_state", lambda: {})
-    monkeypatch.setattr(
-        supervisor, "remote_for_slug", lambda slug: {"id": slug, "url": "http://100.64.0.9:7870", "token": "sek"}
-    )
-    # If the guard failed to fire, _target_for_slug would hand back the remote target and the
-    # relay would try to dial it — make that loud rather than a silent connect attempt.
-    monkeypatch.setattr(
-        proxy, "_target_for_slug", lambda slug: pytest.fail("must refuse a remote before resolving a target")
-    )
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with TestClient(_ws_app()).websocket_connect("/agents/ava/live"):
-            pass
-    assert exc.value.code == 1008  # policy violation, not a transient "not running"
-
-
 def test_ws_proxy_still_serves_live_local_peer(monkeypatch):
-    """A running LOCAL peer (a live pid in fleet state) still proxies — the remote refusal
-    must not catch same-slug local members."""
+    """A running LOCAL peer (a live pid in fleet state) shadows a same-slug remote — resolved
+    for real through ``_resolve_slug``, so the remote rules can't catch a local member."""
     port, stop = _echo_ws_server()
     try:
         from graph.fleet import supervisor
 
         monkeypatch.setattr(supervisor, "_load_state", lambda: {"peer": {"pid": 4242, "port": port}})
         monkeypatch.setattr(supervisor, "_alive", lambda pid: True)
-        monkeypatch.setattr(supervisor, "remote_for_slug", lambda slug: None)
-        monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: (f"http://127.0.0.1:{port}", {}))
+        monkeypatch.setattr(
+            supervisor, "remote_for_slug", lambda slug: {"id": slug, "url": "http://100.64.0.9:7870", "token": "sek"}
+        )
         with TestClient(_ws_app()).websocket_connect("/agents/peer/live") as ws:
             ws.send_text("ping")
             assert ws.receive_text() == "ping"
@@ -172,3 +158,488 @@ def test_member_ws_query_host_passes_through(monkeypatch):
     _patch_fleet(monkeypatch)
     q, allowed = proxy._member_ws_query("host", "token=op")
     assert allowed and q == "token=op"
+
+
+# ── Remote members over WS (ADR 0113 D6) ──────────────────────────────────────
+#
+# The one rule: the hub never attaches a remote's stored bearer to an upgrade ON ITS OWN. These
+# tests dial a real recording server as the "remote" and assert on exactly what it received —
+# the query string, the Authorization header (or its absence) and the subprotocols — because a
+# mocked wire is how an inert fix ships. Every refusal also proves nothing was dialled.
+
+_STORED = "remote-stored-bearer"
+_HUB_OP = "hub-operator-bearer"
+
+
+def _recording_ws_server(subprotocols=None):
+    """A real WS server that, on connect, sends back what its handshake carried as JSON:
+    ``{path, authorization, subprotocol, headers}``. Returns (port, stop)."""
+    import json
+
+    import websockets
+
+    holder: dict = {}
+    ready = threading.Event()
+    loop = asyncio.new_event_loop()
+
+    async def _handler(conn):
+        req = conn.request
+        await conn.send(
+            json.dumps(
+                {
+                    "path": req.path,
+                    "authorization": req.headers.get("authorization"),
+                    "subprotocol": conn.subprotocol,
+                    "offered": req.headers.get("sec-websocket-protocol"),
+                    "headers": {k.lower(): v for k, v in req.headers.raw_items()},
+                }
+            )
+        )
+        async for msg in conn:
+            await conn.send(msg)
+
+    async def _main():
+        server = await websockets.serve(_handler, "127.0.0.1", 0, subprotocols=subprotocols)
+        holder["port"] = server.sockets[0].getsockname()[1]
+        ready.set()
+        await asyncio.Future()
+
+    def _run():
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_main())
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
+    assert ready.wait(5), "recording ws server didn't start"
+    return holder["port"], (lambda: loop.call_soon_threadsafe(loop.stop))
+
+
+def _closed_hub(monkeypatch):
+    """A token-gated hub: only ``_HUB_OP`` authenticates, as operator (both ladders — the local
+    path uses ``bearer_tier``, the remote path the open-mode-free ``credential_tier``)."""
+    fn = lambda t: "operator" if t == _HUB_OP else None  # noqa: E731
+    _patch_bt(monkeypatch, fn)
+    monkeypatch.setattr("a2a_impl.auth.credential_tier", fn)
+    _patch_fleet(monkeypatch, "fleet-tok-must-not-leave-this-machine")
+
+
+def _remote(monkeypatch, port: int | None, token: str | None = _STORED):
+    url = f"http://127.0.0.1:{port}" if port else "http://100.64.0.9:7870"
+    monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("remote", url, token))
+
+
+def _no_dial(monkeypatch):
+    """A refusal must happen BEFORE any upstream is dialled — make a dial loud."""
+    import websockets
+
+    async def _boom(*a, **k):
+        pytest.fail("a refused remote WS must not dial the upstream")
+
+    monkeypatch.setattr(websockets, "connect", _boom)
+
+
+def _seen(ws) -> dict:
+    import json
+
+    return json.loads(ws.receive_text())
+
+
+def _query(seen: dict) -> dict:
+    from urllib.parse import parse_qs, urlsplit
+
+    return parse_qs(urlsplit(seen["path"]).query, keep_blank_values=True)
+
+
+def _refused(url: str, **kw) -> int:
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with TestClient(_ws_app()).websocket_connect(url, **kw):
+            pass
+    return exc.value.code
+
+
+def test_remote_without_stored_token_is_refused(monkeypatch):
+    """Nothing to authenticate against ⇒ the hub would be a blind pipe into an open instance.
+    Refused even for an operator caller, and nothing is dialled."""
+    _closed_hub(monkeypatch)
+    _remote(monkeypatch, None, token=None)
+    _no_dial(monkeypatch)
+    assert _refused(f"/agents/ava/live?token={_HUB_OP}") == 1008
+    assert _refused("/agents/ava/live?ticket=t1") == 1008
+
+
+def test_remote_operator_query_token_is_swapped_for_stored_token(monkeypatch):
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect(f"/agents/ava/pty?token={_HUB_OP}&cols=80") as ws:
+            seen = _seen(ws)
+        q = _query(seen)
+        assert q["token"] == [_STORED]  # swapped into the slot it was presented in
+        assert q["cols"] == ["80"]  # other params kept
+        assert seen["authorization"] is None  # the hub added NO Authorization header
+        wire = seen["path"] + repr(seen["headers"])
+        assert _HUB_OP not in wire  # the hub's credential never reaches the remote
+        assert "fleet-tok" not in wire  # nor the loopback-only fleet token
+    finally:
+        stop()
+
+
+@pytest.mark.parametrize("presented", ["garbage", "", "fed-token"])
+def test_remote_non_operator_query_token_is_refused(monkeypatch, presented):
+    # garbage, an EMPTY token=, and a real-but-lesser tier (federation) are all refused.
+    monkeypatch.setattr(
+        "a2a_impl.auth.credential_tier",
+        lambda t: "federation" if t == "fed-token" else ("operator" if t == _HUB_OP else None),
+    )
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    assert _refused(f"/agents/ava/pty?token={presented}") == 1008
+
+
+def test_remote_ticket_without_token_passes_through_with_no_authorization(monkeypatch):
+    """Ticket-based plugins (agent_browser): the ticket was minted over the authenticated HTTP
+    proxy and the remote checks it. The hub adds NOTHING — not the stored bearer in a header,
+    not a ?token= param."""
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/api/plugins/agent_browser/stream?ticket=t1") as ws:
+            seen = _seen(ws)
+        assert _query(seen) == {"ticket": ["t1"]}
+        assert seen["authorization"] is None
+        assert _STORED not in seen["path"] + repr(seen["headers"])
+    finally:
+        stop()
+
+
+def test_remote_ticket_on_open_hub_still_gets_no_credential(monkeypatch):
+    """An OPEN hub makes every presented token operator, but it never presents one on the
+    caller's behalf — unlike the local path, which injects the fleet token in open mode."""
+    port, stop = _recording_ws_server()
+    try:
+        _patch_bt(monkeypatch, lambda t: "operator")  # open hub
+        _patch_fleet(monkeypatch)
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1") as ws:
+            seen = _seen(ws)
+        assert _query(seen) == {"ticket": ["t1"]}
+        assert seen["authorization"] is None
+    finally:
+        stop()
+
+
+def test_remote_operator_authorization_header_is_replaced_by_stored_bearer(monkeypatch):
+    """Server-to-server caller with the HUB's bearer in a header: authenticated at the hub, then
+    replaced by the remote's stored bearer — the hub credential is never forwarded."""
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        _remote(monkeypatch, port)
+        hdr = {"authorization": f"Bearer {_HUB_OP}"}
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1", headers=hdr) as ws:
+            seen = _seen(ws)
+        assert seen["authorization"] == f"Bearer {_STORED}"
+        assert _query(seen) == {"ticket": ["t1"]}  # no ?token= invented for a header caller
+        assert _HUB_OP not in seen["path"] + repr(seen["headers"])
+    finally:
+        stop()
+
+
+@pytest.mark.parametrize("header", ["Bearer garbage", "Bearer ", f"Basic {_HUB_OP}", "garbage"])
+def test_remote_bad_authorization_header_is_refused_not_stripped(monkeypatch, header):
+    # A presented credential that fails is a policy violation, not a silent fallback to anonymous.
+    _closed_hub(monkeypatch)
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    assert _refused("/agents/ava/stream?ticket=t1", headers={"authorization": header}) == 1008
+
+
+def test_remote_good_token_does_not_excuse_bad_header(monkeypatch):
+    _closed_hub(monkeypatch)
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    code = _refused(f"/agents/ava/pty?token={_HUB_OP}", headers={"authorization": "Bearer garbage"})
+    assert code == 1008
+
+
+def test_remote_subprotocols_pass_through_and_never_carry_the_stored_token(monkeypatch):
+    port, stop = _recording_ws_server(subprotocols=["binary", "json"])
+    try:
+        _closed_hub(monkeypatch)
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1", subprotocols=["json"]) as ws:
+            seen = _seen(ws)
+            assert ws.accepted_subprotocol == "json"  # the remote's pick reaches the client
+        assert seen["offered"] == "json"  # exactly the caller's offer, nothing added
+        assert _STORED not in repr(seen["headers"])
+    finally:
+        stop()
+
+
+def test_local_member_regression_fleet_swap_and_caller_header(monkeypatch):
+    """Local members are unchanged: operator ?token= → the fleet token; the caller's own
+    Authorization header rides through (the hub attaches no stored credential)."""
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        _patch_fleet(monkeypatch, "fleet-tok")
+        monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", f"http://127.0.0.1:{port}", None))
+        hdr = {"authorization": "Bearer caller-own"}
+        with TestClient(_ws_app()).websocket_connect(f"/agents/alice/pty?token={_HUB_OP}", headers=hdr) as ws:
+            seen = _seen(ws)
+        assert _query(seen)["token"] == ["fleet-tok"]
+        assert seen["authorization"] == "Bearer caller-own"
+    finally:
+        stop()
+    # …and a non-operator token is still refused for a local member.
+    monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", "http://127.0.0.1:1", None))
+    _no_dial(monkeypatch)
+    assert _refused("/agents/alice/pty?token=garbage") == 1008
+
+
+def test_host_regression_passes_token_and_header_through(monkeypatch):
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("host", f"http://127.0.0.1:{port}", None))
+        hdr = {"authorization": "Bearer caller-own"}
+        with TestClient(_ws_app()).websocket_connect(f"/agents/host/pty?token={_HUB_OP}", headers=hdr) as ws:
+            seen = _seen(ws)
+        assert _query(seen)["token"] == [_HUB_OP]  # host plugins expect the operator bearer
+        assert seen["authorization"] == "Bearer caller-own"
+    finally:
+        stop()
+
+
+def test_resolve_slug_precedence(monkeypatch):
+    """host → live local → remote; a remote's token comes from its own record."""
+    from graph.fleet import supervisor
+
+    monkeypatch.setattr(supervisor, "_load_state", lambda: {"alice": {"pid": 1, "port": 7001}})
+    monkeypatch.setattr(supervisor, "_alive", lambda pid: True)
+    monkeypatch.setattr(supervisor, "remote_for_slug", lambda slug: {"id": slug, "url": "http://r:1", "token": "sek"})
+    assert proxy._resolve_slug("alice") == ("local", "http://127.0.0.1:7001", None)
+    assert proxy._resolve_slug("ava") == ("remote", "http://r:1", "sek")
+    monkeypatch.setattr(supervisor, "remote_for_slug", lambda slug: {"id": slug, "url": "http://r:1", "token": ""})
+    assert proxy._resolve_slug("ava") == ("remote", "http://r:1", None)
+
+
+def test_remote_repeated_token_param_every_one_must_authenticate(monkeypatch):
+    # A first-token-only check would let ``token=OP&token=x`` through with the junk riding along.
+    _closed_hub(monkeypatch)
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    assert _refused(f"/agents/ava/pty?token={_HUB_OP}&token=x") == 1008
+    assert _refused(f"/agents/ava/pty?token=x&token={_HUB_OP}") == 1008
+
+
+@pytest.fixture
+def real_open_hub(monkeypatch):
+    """The REAL ``a2a_impl.auth`` in open mode — no bearer, no X-API-Key (the desktop default).
+    Here ``bearer_tier`` calls ANY string operator; the remote path must not believe it."""
+    from a2a_impl import auth
+
+    monkeypatch.setattr(auth, "_BEARER", [None])
+    monkeypatch.setattr(auth, "_API_KEY", [""])
+    monkeypatch.setattr(auth, "_FEDERATION", [None])
+    monkeypatch.setattr(auth, "_FLEET", [None])
+    monkeypatch.setattr(auth, "_device_token_ok", lambda t: False)
+    assert auth.bearer_tier("attacker") == "operator"  # the trap this guards against
+    return auth
+
+
+@pytest.mark.parametrize(
+    "url, headers",
+    [
+        ("/agents/ava/pty?token=attacker", None),
+        ("/agents/ava/pty?token=", None),
+        ("/agents/ava/pty?ticket=t1", {"authorization": "Bearer "}),
+        ("/agents/ava/pty?ticket=t1", {"authorization": "Bearer attacker"}),
+    ],
+)
+def test_open_hub_never_swaps_in_the_stored_token(monkeypatch, real_open_hub, url, headers):
+    """M1: on an open hub an anonymous ``?token=`` / Authorization must NOT trade itself for the
+    remote's stored bearer — refused, nothing dialled."""
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    assert _refused(url, headers=headers or {}) == 1008
+
+
+def test_open_hub_ticket_still_passes_with_no_authorization(monkeypatch, real_open_hub):
+    port, stop = _recording_ws_server()
+    try:
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1") as ws:
+            seen = _seen(ws)
+        assert _query(seen) == {"ticket": ["t1"]}
+        assert seen["authorization"] is None
+    finally:
+        stop()
+
+
+# ── Origin gate for remote WS targets ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["http://testserver", "https://testserver", "tauri://localhost", "http://tauri.localhost", None],
+)
+def test_remote_ws_allows_same_origin_desktop_and_originless(monkeypatch, origin):
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        _remote(monkeypatch, port)
+        hdr = {"origin": origin} if origin else {}  # TestClient's Host is "testserver"
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1", headers=hdr) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+
+
+@pytest.mark.parametrize(
+    "origin", ["https://evil.example", "http://testserver.evil", "http://testserver:8080", "null", "tauri://evil"]
+)
+def test_remote_ws_refuses_cross_origin(monkeypatch, origin):
+    _closed_hub(monkeypatch)
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    # Refused BEFORE credentials are even looked at — an operator token doesn't excuse it.
+    assert _refused(f"/agents/ava/pty?token={_HUB_OP}", headers={"origin": origin}) == 1008
+
+
+def test_remote_ws_honors_allowed_origins_list(monkeypatch):
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        monkeypatch.setattr("a2a_impl.auth._ALLOWED_ORIGINS", [["https://console.example"]])
+        _remote(monkeypatch, port)
+        hdr = {"origin": "https://Console.example"}
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1", headers=hdr) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+    _no_dial(monkeypatch)
+    assert _refused("/agents/ava/stream?ticket=t1", headers={"origin": "https://other.example"}) == 1008
+
+
+def test_local_member_ws_has_no_origin_gate(monkeypatch):
+    """The Origin gate is scoped to REMOTE targets (the brief); local/host keep today's shape."""
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", f"http://127.0.0.1:{port}", None))
+        hdr = {"origin": "https://evil.example"}
+        with TestClient(_ws_app()).websocket_connect("/agents/alice/stream?ticket=t1", headers=hdr) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+
+
+# ── path quoting + log hygiene (m2/m3) ────────────────────────────────────────
+
+
+def test_remote_path_is_requoted_and_failure_log_carries_no_url(monkeypatch, caplog):
+    """``%23`` in the caller's path decodes to ``#``; unquoted, it became a fragment and
+    websockets raised InvalidURI quoting the full URL — the swapped-in stored token included —
+    into the hub log. Re-quoted, it reaches the remote as a path byte."""
+    port, stop = _recording_ws_server()
+    try:
+        _closed_hub(monkeypatch)
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect(f"/agents/ava/a%23b%3Fc/d?token={_HUB_OP}") as ws:
+            seen = _seen(ws)
+        from urllib.parse import urlsplit
+
+        assert urlsplit(seen["path"]).path == "/a%23b%3Fc/d"
+        assert _query(seen) == {"token": [_STORED]}  # the REAL query, authenticated and swapped
+    finally:
+        stop()
+    # …and path bytes can't smuggle a query past the hub: ``%3Ftoken=junk`` in the path is a
+    # path segment, not a second token= the hub never checked.
+    port, stop = _recording_ws_server()
+    try:
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect(f"/agents/ava/p%3Ftoken%3Djunk?token={_HUB_OP}") as ws:
+            seen = _seen(ws)
+        assert _query(seen) == {"token": [_STORED]}
+    finally:
+        stop()
+
+    import logging
+
+    import websockets
+
+    async def _fail(url, **k):
+        raise websockets.exceptions.InvalidURI(url, "boom")
+
+    monkeypatch.setattr(websockets, "connect", _fail)
+    with caplog.at_level(logging.INFO, logger="protoagent.server"):
+        assert _refused(f"/agents/ava/x?token={_HUB_OP}") == 1011
+    assert "InvalidURI" in caplog.text
+    assert _STORED not in caplog.text
+
+
+# ── Host gate (DNS rebinding, #3662) for remote WS targets on an open hub ──────
+
+
+def _refused_at(host: str, url: str, headers: dict) -> int:
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with TestClient(_ws_app()).websocket_connect(url, headers={"host": host, **headers}):
+            pass
+    return exc.value.code
+
+
+def test_open_hub_refuses_remote_ws_under_a_rebound_host(monkeypatch, real_open_hub):
+    """A rebound page is same-origin with its attacker name, so the Origin gate passes it; the
+    Host gate refuses it before anything is dialled."""
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    _remote(monkeypatch, None)
+    _no_dial(monkeypatch)
+    code = _refused_at("evil.example", "/agents/ava/stream?ticket=t1", headers={"origin": "http://evil.example"})
+    assert code == 1008
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:7870", "localhost:7870", "hub.tail1234.ts.net"])
+def test_open_hub_remote_ws_passes_under_its_own_host(monkeypatch, real_open_hub, host):
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    port, stop = _recording_ws_server()
+    try:
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect("/agents/ava/stream?ticket=t1", headers={"host": host}) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+
+
+def test_gated_hub_remote_ws_has_no_host_gate(monkeypatch):
+    """A gated hub lends nothing to a caller without a hub credential, so the Host gate is
+    open-hub only — a ticket socket under any Host still passes."""
+    from a2a_impl import auth
+
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    monkeypatch.setattr(auth, "_BEARER", ["hub-bearer"])
+    port, stop = _recording_ws_server()
+    try:
+        _remote(monkeypatch, port)
+        with TestClient(_ws_app()).websocket_connect(
+            "/agents/ava/stream?ticket=t1", headers={"host": "evil.example"}
+        ) as ws:
+            assert _query(_seen(ws)) == {"ticket": ["t1"]}
+    finally:
+        stop()
+
+
+def test_local_member_ws_has_no_host_gate(monkeypatch, real_open_hub):
+    monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS")
+    port, stop = _echo_ws_server()
+    try:
+        monkeypatch.setattr(proxy, "_resolve_slug", lambda slug: ("local", f"http://127.0.0.1:{port}", None))
+        with TestClient(_ws_app()).websocket_connect("/agents/peer/live", headers={"host": "evil.example"}) as ws:
+            ws.send_text("ping")
+            assert ws.receive_text() == "ping"
+    finally:
+        stop()

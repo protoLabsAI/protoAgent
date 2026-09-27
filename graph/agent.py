@@ -690,13 +690,24 @@ async def _run_subagent(
     instead would leave the next one that forgets unmeasured, which is precisely how
     CLI coding-agent runs stayed invisible to turn telemetry (#3015).
 
-    ``cost_usd`` is deliberately left unset. A subagent's spend is already billed to the
-    PARENT turn's telemetry through ``usage_sink`` (#2872), so putting a number here too
-    would double-count it against the same work. The cost of a subagent edge is recovered
-    by joining the ledger to ``turns`` on ``parent_task_id`` — not by storing it twice.
+    The edge's ``cost_usd`` is the delegation's own model spend (#3565): the sum of the
+    per-call rows ``_extract_subagent_usage`` prices — the same numbers the parent turn is
+    billed through ``usage_sink`` (#2872) and Langfuse records on each generation. It is a
+    per-edge VIEW of spend the parent turn already counts, so a rollup must never add
+    ``delegations.cost_usd`` to ``turns.cost_usd`` for the same work. It is stored anyway
+    because the ``turns`` join does not exist for most delegations: ``turns`` holds A2A
+    turns only, so a workflow step (``sdk.run_subagent``) had no queryable cost outside
+    Langfuse.
+
+    ``cost_usd`` stays NULL — never ``0`` — when no model call reported usage (a provider
+    or native-OAuth path that returns no ``usage_metadata``, or a delegation that failed
+    before its first call): unknown is not free. Rows are collected even when the caller
+    passed no ``usage_sink``, and the cost is recorded on the failure path too — rows are
+    extracted in place, so a salvaged or raising run still bills what it spent.
     """
     from graph import ledger
 
+    rows: list[dict] = []
     with ledger.dispatch(
         to_kind="subagent",
         to_name=subagent_type,
@@ -704,19 +715,35 @@ async def _run_subagent(
         session_id=session_id,
         parent_task_id=parent_task_id or "",
         origin="task",
-    ):
-        return await _run_subagent_inner(
-            config=config,
-            tool_map=tool_map,
-            available_subagents=available_subagents,
-            description=description,
-            prompt=prompt,
-            subagent_type=subagent_type,
-            truncate=truncate,
-            parent_task_id=parent_task_id,
-            usage_sink=usage_sink,
-            session_id=session_id,
-        )
+    ) as edge:
+        try:
+            return await _run_subagent_inner(
+                config=config,
+                tool_map=tool_map,
+                available_subagents=available_subagents,
+                description=description,
+                prompt=prompt,
+                subagent_type=subagent_type,
+                truncate=truncate,
+                parent_task_id=parent_task_id,
+                usage_sink=rows,
+                session_id=session_id,
+            )
+        finally:
+            if usage_sink is not None:
+                usage_sink.extend(rows)
+            edge.cost_usd = _delegation_cost_usd(rows)
+
+
+def _delegation_cost_usd(rows: list[dict]) -> float | None:
+    """Total priced spend across a delegation's usage rows, or None when unknown.
+
+    None when no row carries a numeric ``cost_usd`` — nothing reported usage, so the
+    ledger records the cost as unknown rather than a confident ``0`` that would make an
+    unmeasured delegation look free (see ``graph/ledger.py::record_delegation``).
+    """
+    costs = [float(r["cost_usd"]) for r in rows if isinstance(r.get("cost_usd"), (int, float))]
+    return round(sum(costs), 6) if costs else None
 
 
 async def _run_subagent_inner(

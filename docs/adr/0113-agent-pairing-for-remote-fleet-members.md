@@ -178,6 +178,15 @@ it self-updates over the build), and these steps:
 
 Any failure is fixed before the flag is removed.
 
+**Amendment (2026-09-26): exercised 2026-09-26 in an isolated desktop build — passed.** In a
+local QA build of the desktop app: loopback offered "Allow devices"; the token was minted and
+`0.0.0.0` written, and after a restart the console loaded (no hang, no 401, no CORS
+failure); an agent code was shown with the tailnet URL; a hub paired over the tailnet (`auth:
+ok`) and an A2A message through the hub completed; revoking gave an immediate 401 at the hub
+and `auth: rejected`; the bind went back to `127.0.0.1`, a restart came up loopback-only, and
+the console loaded. The `settings.devices` flag is removed (#3651), and the operator guide is
+[Pair devices and agents](../guides/pairing.md).
+
 ### D9 — Discovery hygiene
 
 - mDNS advertises only when the server is bound to a non-loopback address, and advertises an
@@ -230,6 +239,12 @@ rather than a default. TLS on the remote is the real fix and stays the operator'
   strictly better than a pasted shared bearer.
 - **Remote WebSockets come back**, so the terminal and agent-browser live views work on a
   paired remote, and an anonymous caller still gets no credential lent.
+- **An open hub lends the stored token only to its own console** (#3662). On a hub with
+  no credential every caller is operator, so a cross-site page (a blind form POST) or a
+  DNS-rebinding page could have ridden the remote's operator token through the HTTP proxy.
+  For remote targets on an open hub, the proxy refuses cross-site Fetch Metadata, a foreign
+  `Origin` and an untrusted `Host` with `403` before dialling (the WS path gains the `Host`
+  gate too). A token-gated hub needs no gate: its credential is a header, never a cookie.
 
 ## Implementation slices
 

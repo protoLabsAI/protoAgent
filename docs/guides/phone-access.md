@@ -9,6 +9,10 @@ store, and **no offline mode** — the install is convenience, not a cached copy
 It's three steps: bind the server to the network behind a token, open it on the phone, add
 it to the home screen.
 
+**Rather not type the token into the phone?** Pair it instead: Settings ▸ Devices ▸ *Add a
+device* shows a QR that gives the phone its own revocable token. See
+[Pair devices and agents](./pairing.md).
+
 ## 1. Bind to the network + set a token
 
 By default protoAgent binds **loopback only** (`127.0.0.1`) so a desktop run isn't exposed.

@@ -59,6 +59,7 @@ then exits:
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `pair` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| `protoagent pair` | Print a **one-time code** another agent's hub claims to pair with the protoAgent running on this machine — the headless half of agent pairing (see below). `--json` for scripts. | [0113](../adr/0113-agent-pairing-for-remote-fleet-members.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
@@ -232,6 +233,35 @@ cleartext off-box**: a non-loopback `http://` hub is refused unless you pass
 never followed. A fleet *member* is refused as a hub even when named explicitly: it is a
 fleet of itself, and lifecycle belongs to its hub. `--json` emits per-member result rows of
 one shape (`{name, ok, …}`) plus `mode` and `hub`.
+
+#### Pairing another agent with this one: `protoagent pair`
+
+A hub adds a remote protoAgent by **pairing** with it rather than being handed its token
+([ADR 0113](../adr/0113-agent-pairing-for-remote-fleet-members.md)). The remote shows a
+one-time code, and the hub claims it. The claim mints a token for that hub alone, which the
+remote lists under **Settings ▸ Devices** and can revoke without touching anything else.
+
+On a machine with a console, the code comes from Settings ▸ Devices ▸ *Pair an agent*. On a
+headless box (docker, a server), run `protoagent pair` beside the running instance. It finds
+the instance the same way `fleet` finds a hub, and prints the code with a claim command for
+each address the instance is reachable on:
+
+```bash
+$ protoagent pair
+Pairing code for ava:  K7QM2-XPA4F   (expires in 4:59)
+
+On the hub, enter it under Settings ▸ Agents ▸ Pair…, or run:
+  protoagent fleet pair http://100.64.1.2:7870 K7QM2-XPA4F   (tailnet)
+  protoagent fleet pair http://192.168.1.20:7870 K7QM2-XPA4F   (lan)
+```
+
+The code is ten characters, case-insensitive (dashes optional), works **once**, and expires
+after five minutes. Five wrong guesses at the instance cancel every pending code. An
+instance bound to loopback can't be paired, because nothing else can reach it:
+`protoagent pair` says so, lists the addresses it could use, and points at the fix. The fix
+is a reachable bind *with* an auth token (`--host 0.0.0.0`, or *Allow devices on my network*
+in Settings ▸ Devices), never an open instance. A fleet member listens on loopback behind
+its hub, so pair the hub instead.
 
 ### Point at a local model
 

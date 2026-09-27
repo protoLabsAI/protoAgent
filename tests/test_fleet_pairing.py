@@ -824,3 +824,46 @@ async def test_m1_after_a_url_move_nothing_reaches_the_new_host_with_a_credentia
     for secret in (TOKEN, "FLEET-SECRET", "HUB-CALLER-SECRET"):
         assert secret not in everything
     assert not any(k.lower() == "authorization" for _, h in sent for k in h)
+
+
+# ── the hub's name on the remote (what its Devices list shows) ───────────────
+
+
+@pytest.mark.parametrize(
+    "identity,env,want",
+    [
+        # The live-test bug: the config default "protoagent" is a placeholder, and it hid the
+        # AGENT_NAME the desktop app / fleet sets on every member — the remote's Devices list
+        # read "protoagent (fleet hub)" for a hub whose card said qaHub.
+        ("protoagent", "qaHub", "qaHub (fleet hub)"),
+        ("Ava", "qaHub", "Ava (fleet hub)"),  # a set identity.name wins, as on the card
+        ("", "qaHub", "qaHub (fleet hub)"),
+        ("protoagent", None, "protoagent (fleet hub)"),  # the card's own fallback
+    ],
+)
+def test_hub_display_name_matches_the_agent_card_identity(monkeypatch, identity, env, want):
+    from types import SimpleNamespace
+
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(identity_name=identity), raising=False)
+    if env is None:
+        monkeypatch.delenv("AGENT_NAME", raising=False)
+    else:
+        monkeypatch.setenv("AGENT_NAME", env)
+    assert supervisor._hub_display_name() == want
+
+
+def test_hub_display_name_offline_uses_agent_name_then_the_hostname(monkeypatch):
+    """No server here (the offline CLI): no graph config. AGENT_NAME still names it; with
+    neither, the hostname tells the remote's operator which box it was."""
+    import socket
+
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph_config", None, raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: "kj-mbp.local")
+    monkeypatch.setenv("AGENT_NAME", "qaHub")
+    assert supervisor._hub_display_name() == "qaHub (fleet hub)"
+    monkeypatch.delenv("AGENT_NAME")
+    assert supervisor._hub_display_name() == "kj-mbp (fleet hub)"

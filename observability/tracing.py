@@ -235,6 +235,114 @@ def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
     return "", "", "", ""
 
 
+def resolve_service_name(config: Any = None) -> str:
+    """The OTel ``service.name`` this instance's traces should carry (#3565).
+
+    The agent's identity name, resolved the way ``server.agent_name()`` resolves it —
+    ``identity.name`` from config when set and not the ``protoagent`` placeholder, then
+    the ``AGENT_NAME`` env var, then ``protoagent`` — so the resource attribute says
+    the same thing as the agent card and the ``<agent>-turn`` generation names. Read
+    per instance from that instance's own config: every fleet member is its own process
+    with its own ``identity.name``, which is what lets a shared Langfuse project be
+    split by agent. (``getattr``, not the type: this module sits below ``graph/``.)
+    """
+    name = str(getattr(config, "identity_name", "") or "").strip()
+    if name and name != "protoagent":
+        return name
+    return (os.environ.get("AGENT_NAME") or "").strip() or "protoagent"
+
+
+def _env_names_service() -> bool:
+    """True when the environment already sets ``service.name`` by OTel's own rules —
+    ``OTEL_SERVICE_NAME``, or a ``service.name=`` entry in ``OTEL_RESOURCE_ATTRIBUTES``.
+
+    The deployment's explicit choice wins over the identity default, exactly as it
+    would for any OTel SDK. Note the fleet consequence: a member inherits its hub's
+    environment, so an ``OTEL_SERVICE_NAME`` exported on the hub names every member
+    the same — leave it unset to get one name per agent.
+    """
+    if (os.environ.get("OTEL_SERVICE_NAME") or "").strip():
+        return True
+    for pair in (os.environ.get("OTEL_RESOURCE_ATTRIBUTES") or "").split(","):
+        key, sep, value = pair.partition("=")
+        if sep and key.strip() == "service.name" and value.strip():
+            return True
+    return False
+
+
+def service_resource_attributes(config: Any = None) -> dict[str, str]:
+    """The resource attributes protoAgent contributes to its tracer provider.
+
+    ``service.name`` from ``resolve_service_name`` unless the environment names the
+    service itself (then it is omitted, and ``Resource.create`` reads the env value) —
+    plus the ``langfuse.environment`` / ``langfuse.release`` attributes the Langfuse
+    SDK would have set on the provider it builds when handed none, so supplying our
+    own provider loses nothing the SDK did.
+    """
+    attrs: dict[str, str] = {}
+    if not _env_names_service():
+        attrs["service.name"] = resolve_service_name(config)
+    environment = (os.environ.get("LANGFUSE_TRACING_ENVIRONMENT") or "").strip()
+    if environment:
+        attrs["langfuse.environment"] = environment
+    release = (os.environ.get("LANGFUSE_RELEASE") or "").strip()
+    if not release:
+        try:
+            from langfuse._utils.environment import get_common_release_envs
+
+            release = get_common_release_envs() or ""
+        except Exception:  # noqa: BLE001 — a private SDK helper; its absence costs only the release tag
+            release = ""
+    if release:
+        attrs["langfuse.release"] = release
+    return attrs
+
+
+def _build_tracer_provider(config: Any = None) -> Any:
+    """A global OTel ``TracerProvider`` whose resource names this agent, or None.
+
+    Without one the Langfuse SDK builds its own provider from ``Resource.create`` with
+    no ``service.name``, and OTel fills in ``unknown_service`` — every agent in a shared
+    Langfuse project looked the same at the trace level (#3565). This mirrors the SDK's
+    own construction (same resource attributes, same ``LANGFUSE_SAMPLE_RATE`` sampler,
+    registered as the global provider) with ``service.name`` added.
+
+    Returns None — and leaves the SDK to its default behavior — when some other code has
+    already registered a real global provider (its resource is its owner's to name; the
+    SDK attaches to it either way) or when the OTel SDK is unavailable.
+    """
+    try:
+        from opentelemetry import trace as otel_trace_api
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+    except ImportError:
+        return None
+    try:
+        if not isinstance(otel_trace_api.get_tracer_provider(), otel_trace_api.ProxyTracerProvider):
+            return None
+        sampler = None
+        try:
+            rate = float(os.environ.get("LANGFUSE_SAMPLE_RATE", 1.0))
+            if 0.0 <= rate < 1.0:
+                sampler = TraceIdRatioBased(rate)
+        except ValueError:
+            pass  # the SDK itself rejects a malformed rate when the client is built
+        provider = TracerProvider(resource=Resource.create(service_resource_attributes(config)), sampler=sampler)
+        otel_trace_api.set_tracer_provider(provider)
+        return provider
+    except Exception as e:  # noqa: BLE001 — naming the service must never cost the traces
+        print(f"[tracing] could not build a named tracer provider ({e}); service.name falls back to the SDK default.")
+        return None
+
+
+def _provider_service_name(provider: Any) -> str:
+    try:
+        return str(provider.resource.attributes.get("service.name") or "") if provider is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def init(config: Any = None) -> None:
     """Connect to Langfuse from the environment, falling back to ``config``.
 
@@ -245,6 +353,11 @@ def init(config: Any = None) -> None:
     Idempotent, and re-entrant on purpose: once connected this returns immediately
     rather than rebuilding the client, so a later config-aware call can't replace a
     live client (or double-register the SDK's OTel provider) behind a running turn.
+
+    The client is handed a tracer provider whose resource carries ``service.name`` = this
+    agent's identity name (#3565; see ``_build_tracer_provider``), so traces from a fleet
+    sharing one Langfuse project can be told apart. ``OTEL_SERVICE_NAME`` /
+    ``OTEL_RESOURCE_ATTRIBUTES`` in the environment still win.
     """
     global _langfuse, _enabled
 
@@ -269,13 +382,14 @@ def init(config: Any = None) -> None:
     try:
         from langfuse import Langfuse
 
-        _langfuse = Langfuse(
-            public_key=public_key,
-            secret_key=secret_key,
-            host=host,
-        )
+        client_kwargs: dict[str, Any] = {"public_key": public_key, "secret_key": secret_key, "host": host}
+        provider = _build_tracer_provider(config)
+        if provider is not None:
+            client_kwargs["tracer_provider"] = provider
+        _langfuse = Langfuse(**client_kwargs)
         _enabled = True
-        print(f"[tracing] Langfuse initialized from {source} -> {host}")
+        service = _provider_service_name(provider)
+        print(f"[tracing] Langfuse initialized from {source} -> {host}" + (f" (service.name={service})" if service else ""))
     except ImportError:
         print("[tracing] langfuse not installed. Tracing disabled.")
     except Exception as e:

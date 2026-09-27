@@ -305,9 +305,40 @@ def bearer_tier(token: str) -> str | None:
     operator bearer, a configured federation token, the fleet service token (ADR 0089), or a
     paired device token ⇒ their tier, else ``None``.
     """
-    if _BEARER[0] is None and not _API_KEY[0]:
+    if open_mode():
         return "operator"  # open mode — the surface is unauthenticated
     return _bearer_tier_for(token)
+
+
+def open_mode() -> bool:
+    """True when this server enforces NO credential (no bearer AND no X-API-Key) — the
+    desktop default on its loopback bind, where the middleware rates every caller operator.
+
+    For callers that must treat "operator because nothing is checked" differently from
+    "operator because a secret matched": the fleet proxy gates browser-driven requests to a
+    REMOTE member on an open hub (#3662), because there an anonymous cross-site page would
+    otherwise be lent the remote's stored credential."""
+    return _BEARER[0] is None and not _API_KEY[0]
+
+
+def credential_tier(token: str) -> str | None:
+    """The tier a PRESENTED raw bearer earns on its own merits — ``bearer_tier`` without the
+    open-mode shortcut. On an open hub nothing authenticates here, so every token is None.
+
+    For a caller that is about to hand out something stronger than "this surface is open":
+    the fleet WS proxy swaps an authenticated credential for a REMOTE member's stored bearer
+    (ADR 0113 D6). ``bearer_tier`` says "operator" for ANY string on an open hub, which would
+    let an anonymous ``?token=x`` — from any web page in the operator's browser, since the WS
+    route has no Origin gate of its own — trade itself for the remote's credential. An open
+    hub has no credential to authenticate against, so it can't vouch for one either."""
+    return _bearer_tier_for(token)
+
+
+def allowed_origins() -> list[str] | None:
+    """The configured ``A2A_ALLOWED_ORIGINS`` allowlist (lowercased), or None when origin
+    verification is disabled (unset or ``*``). For scopes the HTTP middleware skips — the
+    fleet WS proxy."""
+    return _ALLOWED_ORIGINS[0]
 
 
 def _bearer_tier_for(token: str) -> str | None:

@@ -96,6 +96,26 @@ browser only ever talks to the hub (same-origin), so no per-agent CORS/token spr
 > (`/api/events`) **hub-signed** (the console fetches `/api/sse-token` with `host:true`),
 > because the hub's auth middleware validates the proxied stream *before* forwarding — a
 > member-signed token 401'd at the hub for every non-host member on a bearer-gated hub.
+>
+> **Amendment — ADR 0113 D6 ([#3648](https://github.com/protoLabsAI/protoAgent/issues/3648)):**
+> the #1607 refusal above is **lifted**; remote members' WebSockets traverse the hub again,
+> under one rule: **the hub never attaches the remote's stored bearer to an upgrade on its
+> own.** A presented `?token=` (or a server-to-server caller's `Authorization: Bearer`) is
+> authenticated at the hub on the tier ladder *without* the open-mode shortcut
+> (`credential_tier`). If it is operator, it is **swapped** for the remote's stored token in
+> the slot it was presented in; anything else closes `1008`, so an open hub never swaps one
+> in. A browser handshake must also come from the hub's own origin, the desktop webview
+> (`tauri://localhost`, `http://tauri.localhost`) or the `A2A_ALLOWED_ORIGINS` allowlist,
+> since the HTTP Origin check never sees a WS scope. A socket with no credential (ticket-based
+> plugins such as agent_browser's `?ticket=` and the terminal plugin's in-band ticket, both
+> minted over the authenticated HTTP proxy) is passed through with **no** Authorization, and
+> the remote checks the ticket itself. A remote registered **without** a stored token is still
+> refused. The hub neither attaches nor forwards a credential of its own, and the
+> loopback-only fleet token (ADR 0089) never leaves the machine. In-band frames are the
+> plugin's responsibility: the hub pumps them opaquely. The terminal plugin ≤0.9.1 put the
+> hub's bearer in its first frame when a ticket mint failed, so remote terminal views need
+> **terminal-plugin ≥0.9.2**. An unauthenticated caller still gets nothing through the hub it
+> couldn't get by dialling the remote directly, which is the property #1607 protected.
 
 > **Amendment — A2A URL-based multi-tenancy:** the slug proxy makes each member an
 > independently-addressable **A2A tenant** at `/agents/<slug>/a2a`, which is exactly the
@@ -229,9 +249,12 @@ with a remote address + `remote: true`. Show a "remote" tag (like the `host` tag
 start/stop on the lifecycle tier, and the switcher's address swap already routes through the
 proxy. The only real new UI is the **"add remote agent"** form (URL + token) alongside "+ New."
 
-Honest scope: this is **not built** — it's the designed-for next axis. The proxy +
-independent-endpoint + self-registration design were chosen so it's an extension, not a
-rewrite.
+Status: the register-only tier shipped (#839, slice 6 below), and remote credentials are now
+paired rather than pasted. **[ADR 0113](./0113-agent-pairing-for-remote-fleet-members.md)**
+covers that: the remote shows a one-time code, and the hub claims a per-hub device token the
+remote can revoke. The same ADR routes delegates to a remote through the hub (one registry,
+one token), re-enables remote WebSockets without the hub lending a credential, and advertises
+on mDNS only from a reachable bind. Remote-hub start/stop (tier b) is still future work.
 
 > **Amendment (2026-09) — the fleet deck (#3466).** The fleet gained a terminal: bare
 > `protoagent fleet` / `protoagent top` opens a Textual deck over the running hub — the

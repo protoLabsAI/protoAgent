@@ -260,12 +260,17 @@ class BackgroundStore:
         result: str = "",
         *,
         now: datetime | None = None,
+        cost_usd: float | None = None,
     ) -> bool:
         """Transition a job to a terminal state, idempotently.
 
         Returns ``True`` if this call performed the transition (the row was still
         ``running``), ``False`` if it was already terminal — so a redundant
         delivery-failure write can't clobber a real result.
+
+        ``cost_usd`` is the job's model spend when the settling path knows it (the A2A
+        terminal hook does — the background turn's own priced usage), carried onto the
+        delegation ledger edge (#3565). None means unknown and leaves the column NULL.
         """
         if status not in _TERMINAL:
             raise ValueError(f"mark_complete status must be terminal, got {status!r}")
@@ -310,6 +315,7 @@ class BackgroundStore:
                     outcome={"completed": "ok", "failed": "failed"}.get(status, "cancelled"),
                     duration_ms=elapsed,
                     error=result if status == "failed" else "",
+                    cost_usd=cost_usd,
                 )
             except Exception:  # noqa: BLE001 — the ledger must never break a completion
                 log.exception("[background] ledger settle failed for %s", job_id)

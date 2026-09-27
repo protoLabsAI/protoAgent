@@ -300,6 +300,8 @@ instance that may run its own fleet, and registration is one-sided on the hub.
 *(ADR 0042 §I.)* A fleet member doesn't have to be local: register any reachable protoAgent
 by URL and it becomes a **switchable member** — a slug window like any peer, with the hub
 reverse-proxying its console + A2A. The remote runs fully headless; this console is its UI.
+The end-to-end walkthrough (making the remote reachable, pairing it by code, revoking,
+the `auth` badges and delegating through the hub) is [Pair devices and agents](./pairing.md).
 
 On the other machine:
 
@@ -415,6 +417,42 @@ In the console, the fleet row's link button writes exactly that URL, so it is en
 in the hub's window or a local member's (both on the hub's machine); in a remote member's
 window it is disabled with the reason, since `127.0.0.1` there is the remote itself. The
 link button on a *discovered* row pairs first, then links the new member the same way.
+
+**Live views (WebSockets) work on a remote too** — the terminal, agent_browser's viewport —
+as long as the remote was registered **with a token** (ADR 0113 D6,
+[#3648](https://github.com/protoLabsAI/protoAgent/issues/3648)). The hub still never lends
+that token on its own. A socket that presents your operator bearer (`?token=`) has it checked
+at the hub and swapped for the stored one. An **open** hub (no token of its own) has nothing
+to check it against, so it never swaps. A ticket-based socket (the ticket is minted over the
+authenticated HTTP proxy) reaches the remote with no credential attached, and the remote
+checks the ticket. Any other presented credential is closed with `1008`, and so is a browser
+page on a foreign origin: the console's own origin, the desktop app and `A2A_ALLOWED_ORIGINS`
+are let through. A remote registered without a token gets no WebSocket proxying at all,
+because its sockets would be a blind pipe into an open instance. The hub doesn't read what a
+plugin sends *inside* the socket, so remote terminal views need **terminal-plugin ≥0.9.2**.
+Older versions sent the console's bearer in-band when minting a ticket failed.
+
+**An open hub only proxies a remote for its own console** *(#3662)*. On a hub with no token
+of its own (the desktop default on loopback) every caller is operator, so the hub lends a
+remote's stored token to whatever reaches `/agents/<remote>/…`. CORS stops a web page in your
+browser from *reading* the answer, not from *sending* a form POST there, and a DNS-rebinding
+page (an attacker's name that resolves to `127.0.0.1`) is even same-origin with the hub. So for
+a **remote** member on an **open** hub, the proxy refuses with `403` before contacting the remote:
+
+- a request with `Sec-Fetch-Site: cross-site`, unless it carries a trusted `Origin`, is a
+  GET navigation (a link, the desktop app's plugin-view iframe), is a GET media load (an image,
+  audio, video, subtitle track or font, like the desktop chat's pictures from a remote), or
+  has a trusted `Referer`;
+- a request whose `Origin` is not the hub's own origin, the desktop app
+  (`tauri://localhost`, `http://tauri.localhost`) or in `A2A_ALLOWED_ORIGINS`;
+- a request (or WebSocket) whose `Host` isn't a name this hub is served under: IP
+  literals, `localhost`, `*.ts.net`, this machine's `<name>.local` mDNS name, a named bind,
+  the hosts of `A2A_ALLOWED_ORIGINS`, or `PROTOAGENT_TRUSTED_HOSTS`. If you front an open hub
+  with a reverse proxy that forwards its own public name, add that name there.
+
+curl, scripts and the `delegate_to` path send neither header and pass. Local members and the
+host are unaffected, and so is a token-gated hub. Its credential is a header, never a cookie,
+so a foreign or rebound page has nothing to attach.
 
 **Version skew is flagged.** The hub console drives a remote's full `/api/*` by proxy, so a
 remote on a *different protoAgent release* is a real compat surface. The reachability probe
