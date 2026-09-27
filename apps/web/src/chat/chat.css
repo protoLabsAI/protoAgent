@@ -862,7 +862,7 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: var(--pl-color-text-muted, #8b8b93);
+  color: var(--pl-color-fg-muted, #8b8b93);
   pointer-events: none;
 }
 
