@@ -494,8 +494,15 @@ def _host_name(host: str) -> str:
 
 
 def _own_names() -> set[str]:
-    """This machine's own names: its hostname, the short form, and ``<short>.local`` (mDNS).
-    ``gethostname`` reads the kernel's name — no resolution, so no 5s DNS stall."""
+    """This machine's own mDNS name, ``<short>.local`` — and deliberately nothing else.
+
+    The bare short name and a dotted FQDN are both resolved through the NETWORK's DNS: a DHCP
+    search domain turns ``joshs-mbp`` into ``joshs-mbp.<their-domain>``, and a DHCP-assigned
+    FQDN sits in a zone the network runs — so a hostile Wi-Fi could answer either with
+    127.0.0.1. ``.local`` is multicast DNS, and this machine's own responder owns its own name
+    (a conflicting answer forces a rename rather than winning). ``gethostname`` reads the
+    kernel's name — no resolution, so no 5s DNS stall. Anything else goes in
+    ``PROTOAGENT_TRUSTED_HOSTS``."""
     import socket
 
     try:
@@ -505,7 +512,7 @@ def _own_names() -> set[str]:
     if not name:
         return set()
     short = name.split(".", 1)[0]
-    return {name, short, f"{short}.local"}
+    return {f"{short}.local"} if short else set()
 
 
 def _trusted_host_names() -> set[str]:
@@ -542,7 +549,8 @@ def _host_allowed(host: str | None) -> bool:
     - ``*.ts.net`` — Tailscale MagicDNS (a hub behind ``tailscale serve`` sees its own
       ``<machine>.<tailnet>.ts.net``). That zone is Tailscale's; nobody can point a ts.net name
       at another tailnet's loopback.
-    - This machine's hostname / ``<short>.local``, and the bind address when it is a name.
+    - This machine's ``<short>.local`` mDNS name (see ``_own_names`` for why not the bare or
+      DNS hostname), and the bind address when it is a name.
     - ``PROTOAGENT_TRUSTED_HOSTS`` and the hosts of ``A2A_ALLOWED_ORIGINS`` (a reverse proxy
       that forwards its public name, e.g. nginx ``proxy_set_header Host $host``).
     No ``Host`` at all is a non-browser client (browsers always send one) and passes."""
@@ -567,6 +575,19 @@ def _host_allowed(host: str | None) -> bool:
 # view iframes are exactly that — but never into an <object>/<embed> (web.dev's isolation policy).
 _NAV_BLOCKED_DESTS = frozenset({"object", "embed"})
 
+# Cross-site no-cors MEDIA loads a GET may make. The desktop console (``tauri://localhost``)
+# renders a remote's media as ``<img src="http://127.0.0.1:<port>/agents/<rid>/media/…">``, and
+# WebKit sends NO Referer from a non-http(s) page (``SecurityPolicy::generateReferrerHeader``
+# bails outside the HTTP family) — so that load carries neither Origin nor Referer, only
+# ``Sec-Fetch-Site: cross-site`` + ``Sec-Fetch-Dest: image``. Same threat level as the GET
+# navigation exemption: a media response is opaque to the page (at most an image's size or a
+# clip's duration leaks), and a GET with side effects would be the remote's bug. ``script`` and
+# ``style`` stay refused: a cross-site page can EXECUTE or APPLY those responses in its own
+# context (script inclusion / CSS-parsing leaks of a JSON or JS body), which reads data rather
+# than just displaying it — and nothing in the console loads a remote's script or stylesheet
+# from a foreign origin (plugin views are iframes, whose subresources are same-origin).
+_MEDIA_DESTS = frozenset({"image", "audio", "video", "track", "font"})
+
 
 def _origin_of(url: str) -> str | None:
     """``scheme://netloc`` of a URL (a ``Referer``), or None when it has neither."""
@@ -588,11 +609,13 @@ def _cross_site_refusal(method: str, headers) -> str | None:
       the desktop console (``tauri://localhost``) calling ``http://127.0.0.1:<port>`` IS
       cross-site to the browser, and its Origin is what proves it is the operator's app.
     - **No Origin, ``Sec-Fetch-Site: cross-site``** — a no-cors subresource or a navigation from
-      a foreign page. Refused, except a GET/HEAD navigation (``Sec-Fetch-Mode: navigate``, not
-      into an object/embed: the desktop webview's iframe of a remote plugin view, or a link) —
-      the attacker can't read the result — and a request whose ``Referer`` origin is trusted
-      (the desktop chat's ``<img>`` of a remote's media; a page can suppress Referer, never
-      forge it).
+      a foreign page. Refused, except a GET/HEAD that is
+      - a navigation (``Sec-Fetch-Mode: navigate``, not into an object/embed: the desktop
+        webview's iframe of a remote plugin view, or a link) — the attacker can't read it;
+      - a media load (``Sec-Fetch-Dest`` in ``_MEDIA_DESTS``: the desktop chat's ``<img>`` of a
+        remote's media, which WebKit sends with no Referer) — opaque to the page;
+      and, as a fallback for any other shape, a request whose ``Referer`` origin is trusted (a
+      page can suppress Referer, never forge it; Chromium-based webviews send one).
     - ``same-origin``, ``same-site`` and ``none`` (typed URL / bookmark) pass, as does a request
       with no Fetch Metadata and no Origin (curl, the D4 fleet-token delegate path, a browser
       too old to send either). ``same-site`` passes because on this surface it only means
@@ -608,8 +631,11 @@ def _cross_site_refusal(method: str, headers) -> str | None:
         return None
     mode = (headers.get("sec-fetch-mode") or "").strip().lower()
     dest = (headers.get("sec-fetch-dest") or "").strip().lower()
-    if method.upper() in ("GET", "HEAD") and mode == "navigate" and dest not in _NAV_BLOCKED_DESTS:
-        return None
+    if method.upper() in ("GET", "HEAD"):
+        if mode == "navigate" and dest not in _NAV_BLOCKED_DESTS:
+            return None
+        if dest in _MEDIA_DESTS:
+            return None
     referer = headers.get("referer")
     ref_origin = _origin_of(referer) if referer else None
     if ref_origin and _origin_allowed(ref_origin, host):

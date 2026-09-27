@@ -19,6 +19,7 @@ from a2a_impl import auth
 from graph.fleet import proxy
 
 _STORED = "remote-operator-device-token"
+_REAL_OWN_NAMES = proxy._own_names  # captured before the autouse fixture stubs it
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,7 @@ def _clean(monkeypatch):
     monkeypatch.delenv("PROTOAGENT_TRUSTED_HOSTS", raising=False)
     monkeypatch.setattr(auth, "_ALLOWED_ORIGINS", [None])
     monkeypatch.setattr(proxy, "_BIND_HOST", ["127.0.0.1"])
-    monkeypatch.setattr(proxy, "_own_names", lambda: {"joshs-mbp", "joshs-mbp.local"})
+    monkeypatch.setattr(proxy, "_own_names", lambda: {"joshs-mbp.local"})
     yield
     proxy._slug_cache.clear()
     proxy._remote_slugs.clear()
@@ -114,7 +115,12 @@ def _auth_sent(client):
     [
         ("POST", {"sec-fetch-site": "cross-site"}),  # blind form / text/plain POST
         ("GET", {"sec-fetch-site": "cross-site"}),  # no-cors subresource, no mode
-        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "image"}),
+        # the WebKit <img> shape, but as a state-changing method
+        ("POST", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "image"}),
+        # script / style inclusion can execute or apply the body in the foreign page — refused
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "script"}),
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "style"}),
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "empty"}),
         ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "object"}),
         ("POST", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document"}),
         ("POST", {"origin": "https://evil.example"}),
@@ -146,8 +152,15 @@ async def test_open_hub_refuses_cross_site_to_remote_without_dialling(monkeypatc
         ("GET", {"sec-fetch-site": "same-site"}),  # sibling port, no Origin
         # desktop plugin-view iframe: a cross-site GET navigation
         ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "iframe"}),
-        # desktop chat <img> of the remote's media: no Origin, trusted Referer
-        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-dest": "image", "referer": "tauri://localhost/"}),
+        # desktop chat <img> of the remote's media, WebKit shape: no Origin, NO Referer
+        # (WebKit sends none from a tauri:// page), cross-site, dest image
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "image"}),
+        ("HEAD", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "video"}),
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "audio"}),
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "no-cors", "sec-fetch-dest": "track"}),
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-mode": "cors", "sec-fetch-dest": "font"}),
+        # Referer fallback (Chromium webviews send one): a non-media no-cors load from the desktop
+        ("GET", {"sec-fetch-site": "cross-site", "sec-fetch-dest": "empty", "referer": "http://tauri.localhost/"}),
     ],
 )
 async def test_open_hub_lets_its_own_console_and_non_browsers_through(monkeypatch, open_hub, client, method, headers):
@@ -195,7 +208,18 @@ async def test_refusal_log_carries_no_credential(monkeypatch, open_hub, client, 
 
 @pytest.mark.parametrize(
     "host",
-    ["evil.example", "evil.example:7870", "localhost.evil.example", "127.0.0.1.evil.example", "joshs-mbp.evil"],
+    [
+        "evil.example",
+        "evil.example:7870",
+        "localhost.evil.example",
+        "127.0.0.1.evil.example",
+        "joshs-mbp.evil",
+        "evillocalhost",  # suffix match must include the dot
+        "notts.net",
+        "evil.ts.net.attacker.com",
+        "joshs-mbp",  # bare short name: a DHCP search domain resolves it on the network's DNS
+        "joshs-mbp.corp.example",  # a DHCP-derived FQDN is the network's zone too
+    ],
 )
 async def test_open_hub_refuses_a_rebound_host(monkeypatch, open_hub, client, host):
     """A rebound page is same-origin with its own attacker name, so Origin and Fetch Metadata
@@ -220,7 +244,6 @@ async def test_open_hub_refuses_a_rebound_host(monkeypatch, open_hub, client, ho
         "100.101.189.45:7870",
         "hub.tail1234.ts.net",  # tailscale serve forwards its MagicDNS name
         "joshs-mbp.local:7870",
-        "joshs-mbp",
     ],
 )
 async def test_open_hub_accepts_its_own_hosts(monkeypatch, open_hub, client, host):
@@ -267,3 +290,19 @@ def test_open_mode_tracks_both_credentials(monkeypatch):
     assert not auth.open_mode()
     monkeypatch.setattr(auth, "_API_KEY", [""])
     assert auth.open_mode()
+
+
+@pytest.mark.parametrize(
+    "hostname, expected",
+    [
+        ("Joshs-MBP.local", {"joshs-mbp.local"}),
+        ("joshs-mbp", {"joshs-mbp.local"}),
+        ("box.corp.example.", {"box.local"}),  # never the DHCP-derived FQDN or the bare name
+        ("", set()),
+    ],
+)
+def test_own_names_is_only_the_mdns_name(monkeypatch, hostname, expected):
+    import socket
+
+    monkeypatch.setattr(socket, "gethostname", lambda: hostname)
+    assert _REAL_OWN_NAMES() == expected

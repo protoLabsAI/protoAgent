@@ -420,11 +420,13 @@ page (an attacker's name that resolves to `127.0.0.1`) is even same-origin with 
 a **remote** member on an **open** hub, the proxy refuses with `403` before contacting the remote:
 
 - a request with `Sec-Fetch-Site: cross-site`, unless it carries a trusted `Origin`, is a
-  GET navigation (a link, the desktop app's plugin-view iframe), or has a trusted `Referer`;
+  GET navigation (a link, the desktop app's plugin-view iframe), is a GET media load (an image,
+  audio, video, subtitle track or font, like the desktop chat's pictures from a remote), or
+  has a trusted `Referer`;
 - a request whose `Origin` is not the hub's own origin, the desktop app
   (`tauri://localhost`, `http://tauri.localhost`) or in `A2A_ALLOWED_ORIGINS`;
 - a request (or WebSocket) whose `Host` isn't a name this hub is served under: IP
-  literals, `localhost`, `*.ts.net`, this machine's hostname / `.local` name, a named bind,
+  literals, `localhost`, `*.ts.net`, this machine's `<name>.local` mDNS name, a named bind,
   the hosts of `A2A_ALLOWED_ORIGINS`, or `PROTOAGENT_TRUSTED_HOSTS`. If you front an open hub
   with a reverse proxy that forwards its own public name, add that name there.
 
