@@ -17,12 +17,26 @@ again. Already-answered calls and message text are preserved.
 It is a **no-op on a healthy history** — ``before_model`` returns ``None`` unless
 there is an actual orphan — so it can never alter a normal turn; it only ever
 touches a thread that would otherwise 400.
+
+**Out-of-order answers.** An answered call can still 400 if its ``ToolMessage`` isn't
+the next thing after the assistant message. Anthropic requires the ``tool_result``
+blocks to lead the very next user turn, and rejects anything in between:
+
+    messages.N: `tool_use` ids were found without `tool_result` blocks immediately after
+
+A foreground ``delegate_to`` used to record its room envelopes (``<room-message>``
+human turns) *before* its ``ToolMessage``, which bricked every later turn of that chat
+on a native Anthropic model. ``reorder_tool_results`` repairs such a history for the
+model request only (``wrap_model_call``): each call's answers are pulled up to sit
+directly after it and whatever was interleaved follows them, in its original order.
+The checkpointed history is untouched (a reducer can't reorder by id), and a healthy
+history passes through as the same list.
 """
 
 from __future__ import annotations
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 
 def _tc_id(tc) -> str | None:
@@ -47,6 +61,49 @@ def repair_messages(messages: list) -> list:
             content = "[tool call abandoned — no result was produced]"
         repairs.append(m.model_copy(update={"tool_calls": kept, "content": content}))
     return repairs
+
+
+def reorder_tool_results(messages: list) -> list | None:
+    """``messages`` with every assistant tool call's answers moved to directly follow
+    it, or ``None`` when nothing is out of order (the common case).
+
+    For each assistant message with tool calls, the scan runs forward to the next
+    assistant message: that call's ``ToolMessage``s are collected, and anything else met
+    on the way (a room envelope, a steering note) is deferred to just after them. Only
+    a group whose answers were actually preceded by something else is rewritten.
+    """
+    msgs = list(messages)
+    out: list = []
+    changed = False
+    i, n = 0, len(msgs)
+    while i < n:
+        m = msgs[i]
+        out.append(m)
+        i += 1
+        if not isinstance(m, AIMessage):
+            continue
+        pending = {cid for cid in (_tc_id(tc) for tc in (getattr(m, "tool_calls", None) or [])) if cid}
+        if not pending:
+            continue
+        results: list = []
+        deferred: list = []
+        j = i
+        while j < n and pending:
+            x = msgs[j]
+            if isinstance(x, AIMessage):
+                break  # the next assistant turn — this call's answers aren't coming
+            if isinstance(x, ToolMessage) and x.tool_call_id in pending:
+                results.append(x)
+                pending.discard(x.tool_call_id)
+            else:
+                deferred.append(x)
+            j += 1
+        if results and deferred:
+            out.extend(results)
+            out.extend(deferred)
+            i = j
+            changed = True
+    return out if changed else None
 
 
 class ToolCallRepairMiddleware(AgentMiddleware):
@@ -75,3 +132,11 @@ class ToolCallRepairMiddleware(AgentMiddleware):
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         return self._repair(state)
+
+    def wrap_model_call(self, request, handler):  # type: ignore[override]
+        fixed = reorder_tool_results(getattr(request, "messages", None) or [])
+        return handler(request.override(messages=fixed) if fixed is not None else request)
+
+    async def awrap_model_call(self, request, handler):  # type: ignore[override]
+        fixed = reorder_tool_results(getattr(request, "messages", None) or [])
+        return await handler(request.override(messages=fixed) if fixed is not None else request)
