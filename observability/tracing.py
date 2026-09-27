@@ -475,7 +475,14 @@ def current_trace_context() -> dict | None:
 
 
 def in_active_trace() -> bool:
-    """True when an observation is current — a span opened now nests instead of rooting.
+    """True when the current OTel span is one Langfuse will EXPORT, so a span opened now
+    nests under a parent that reaches Langfuse instead of rooting.
+
+    Any valid span is not enough. The global tracer provider is set, so the a2a-sdk's
+    own handler spans (scope ``a2a-python-sdk``) are current inside its handlers, and
+    the SDK's default export filter drops them. Counting one would parent the new span
+    under a node that never arrives: the rootless-trace failure #3607 fixed for turns
+    (#3696). The SDK's own public filter decides, so this can't drift from what it exports.
 
     Reads the OTel context directly: asking the Langfuse SDK
     (``get_current_trace_id``) with nothing active logs a "No active span" warning
@@ -486,7 +493,22 @@ def in_active_trace() -> bool:
     try:
         from opentelemetry import trace as otel_trace
 
-        return otel_trace.get_current_span().get_span_context().is_valid
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context()
+        if not ctx.is_valid:
+            return False
+        if not span.is_recording():
+            # A local non-recording span is a turn that SAMPLING dropped: nest under it so
+            # the coder run is dropped with its turn, rather than rooting a fresh trace
+            # that re-rolls the sampling dice and lands orphaned. A remote-only context
+            # (no local span at all) is nothing Langfuse holds.
+            return not ctx.is_remote
+        try:
+            from langfuse.span_filter import is_default_export_span
+        except ImportError:
+            # Pre-v4 SDK: no default export filter, every span is exported.
+            return True
+        return bool(is_default_export_span(span))
     except Exception:  # noqa: BLE001 — best-effort, like every helper here
         return False
 
@@ -692,6 +714,7 @@ def trace_span(
     name: str,
     metadata: dict | None = None,
     as_type: str = "span",
+    root: bool = False,
 ) -> Iterator[Any]:
     """Open a child observation in the CURRENT trace for the duration of the block.
 
@@ -704,6 +727,11 @@ def trace_span(
     disabled or the SDK errors on setup, it yields None and proceeds. A body
     exception propagates unchanged (the span still closes) — tracing never
     alters control flow.
+
+    ``root=True`` starts the span from an EMPTY OTel context, as ``trace_session``
+    does for a turn: the caller has decided this span is a trace's root
+    (``not in_active_trace()``), so a foreign non-exported span that happens to be
+    current must not become its parent.
     """
     if not _enabled or _langfuse is None:
         yield None
@@ -711,7 +739,12 @@ def trace_span(
 
     ctx = None
     span = None
+    root_token = None
     try:
+        if root:
+            from opentelemetry import context as otel_context
+
+            root_token = otel_context.attach(otel_context.Context())
         ctx = _langfuse.start_as_current_observation(
             name=name,
             as_type=as_type,
@@ -733,6 +766,13 @@ def trace_span(
             try:
                 ctx.__exit__(None, None, None)
             except Exception:  # noqa: BLE001
+                pass
+        if root_token is not None:
+            try:
+                from opentelemetry import context as otel_context
+
+                otel_context.detach(root_token)
+            except Exception:  # noqa: BLE001 — torn down in another context; it resets itself
                 pass
 
 

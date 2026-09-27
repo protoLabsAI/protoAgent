@@ -69,7 +69,15 @@ def fake_langfuse(monkeypatch):
     cm = MagicMock()
     cm.__enter__ = MagicMock(return_value=span)
     cm.__exit__ = MagicMock(return_value=None)
-    fake.start_as_current_observation.return_value = cm
+    fake.started_under_valid_parent = []
+
+    def _start(**_kw):
+        from opentelemetry import trace as otel_trace
+
+        fake.started_under_valid_parent.append(otel_trace.get_current_span().get_span_context().is_valid)
+        return cm
+
+    fake.start_as_current_observation.side_effect = _start
     monkeypatch.setattr(tracing, "_langfuse", fake)
     monkeypatch.setattr(tracing, "_enabled", True)
     return fake, span
@@ -264,19 +272,71 @@ async def test_root_coder_run_carries_a_session_tags_and_input(fake_agent, tmp_p
     assert span.update.call_args_list[0].kwargs == {"input": "fix it"}
 
 
+def _span_from(scope: str):
+    """A real SDK span from tracer ``scope``: ``langfuse-sdk`` is what the Langfuse SDK
+    exports; ``a2a-python-sdk`` is the a2a-sdk's handler span, which it drops."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    return TracerProvider().get_tracer(scope).start_as_current_span("outer")
+
+
 async def test_nested_coder_run_leaves_the_turns_session_alone(fake_agent, tmp_path, fake_langfuse, monkeypatch):
-    from opentelemetry import trace as otel_trace
-    from opentelemetry.trace import NonRecordingSpan, SpanContext
-
-    _fake, span = fake_langfuse
+    fake, span = fake_langfuse
     calls = _capture_propagation(monkeypatch)
-    turn = NonRecordingSpan(SpanContext(trace_id=0xA1, span_id=0xB2, is_remote=False))
 
-    with otel_trace.use_span(turn):  # inside a traced turn
+    with _span_from("langfuse-sdk"):  # inside a traced turn
         await _run(fake_agent, tmp_path)
 
     assert calls == []
     assert span.update.call_args_list[0].kwargs == {"input": "fix it"}
+    # ...and it nests: the span is NOT started from a fresh context.
+    assert fake.started_under_valid_parent == [True]
+
+
+async def test_a_foreign_otel_span_does_not_make_the_run_a_child(fake_agent, tmp_path, fake_langfuse, monkeypatch):
+    """#3696: an a2a-sdk handler span is current but never exported. The run is still a
+    ROOT: it gets the session and tags, and starts from an empty context rather than
+    nesting under a parent that never reaches Langfuse."""
+    fake, _span = fake_langfuse
+    calls = _capture_propagation(monkeypatch)
+
+    with _span_from("a2a-python-sdk"):
+        await _run(fake_agent, tmp_path)
+
+    assert calls and calls[0]["session_id"].startswith("coder:codex:")
+    assert fake.started_under_valid_parent == [False]
+
+
+def test_in_active_trace_counts_only_spans_langfuse_exports(fake_langfuse):
+    assert tracing.in_active_trace() is False
+    with _span_from("langfuse-sdk"):
+        assert tracing.in_active_trace() is True
+    with _span_from("a2a-python-sdk"):
+        assert tracing.in_active_trace() is False
+
+
+def test_a_sampled_out_turn_still_counts_so_the_coder_run_drops_with_it(fake_langfuse):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+
+    dropped = TracerProvider(sampler=TraceIdRatioBased(0)).get_tracer("langfuse-sdk")
+    with dropped.start_as_current_span("turn"):
+        assert tracing.in_active_trace() is True
+
+
+def test_a_remote_only_context_is_not_a_local_trace(fake_langfuse):
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import NonRecordingSpan, SpanContext
+
+    remote = NonRecordingSpan(SpanContext(trace_id=0xA1, span_id=0xB2, is_remote=True))
+    with otel_trace.use_span(remote):
+        assert tracing.in_active_trace() is False
+
+
+def test_a_pre_v4_sdk_without_the_export_filter_counts_every_span(fake_langfuse, monkeypatch):
+    monkeypatch.setitem(sys.modules, "langfuse.span_filter", None)  # import → ImportError
+    with _span_from("a2a-python-sdk"):
+        assert tracing.in_active_trace() is True
 
 
 async def test_incognito_coder_run_sends_no_input(fake_agent, tmp_path, fake_langfuse):
