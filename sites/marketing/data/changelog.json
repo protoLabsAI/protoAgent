@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.184.1",
+    "date": "2026-09-27",
+    "changes": [
+      "Console: pair a remote agent with a code instead of pasting its token (#3650).",
+      "Settings ▸ Devices is on for everyone: the settings.devices developer flag is gone (#3651).",
+      "A paired hub now shows up on the remote under its own name, not \"protoagent (fleet hub)\" (#3671).",
+      "The CLI no longer crashes on a Windows cp1252 console, which failed the v0.184.0 desktop build (#3675).",
+      "A chat that delegated to a peer agent no longer fails every later turn on Anthropic models (#3676).",
+      "An open hub no longer lends a paired remote's token to other web pages (#3662).",
+      "A tokenless instance only answers its own host names and its own console (#3668)."
+    ]
+  },
+  {
     "version": "v0.184.0",
     "date": "2026-09-27",
     "changes": [
