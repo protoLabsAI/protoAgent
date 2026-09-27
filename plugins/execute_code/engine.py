@@ -26,6 +26,9 @@ desktop app, ADR 0094) with:
   serialises the call over a loopback socket back to the **parent**, which runs
   the real (async) tool and returns the result. Tools therefore execute with the
   parent's credentials and audit/trace context — the child only orchestrates.
+  Bridged calls are **serialized** (one in flight at a time, under a lock in the
+  prelude): safe to make from threads, never parallel — the parent serves them
+  in order anyway.
 
 Security posture
 ----------------
@@ -48,6 +51,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets as _secrets
 import sys
 import tempfile
@@ -66,7 +70,7 @@ log = logging.getLogger(__name__)
 # Windows, where fd numbers don't survive spawn and anon pipes aren't
 # Proactor-drivable (ADR 0098 / #2449). Kept dependency-free (stdlib only).
 _RUNNER_PRELUDE = r'''
-import os as _os, sys as _sys, json as _json, socket as _socket
+import os as _os, sys as _sys, json as _json, socket as _socket, threading as _threading
 
 _sock = _socket.create_connection(("127.0.0.1", int(_os.environ["EC_PORT"])))
 _REQ = _sock.makefile("w")   # child -> parent
@@ -74,17 +78,30 @@ _RESP = _sock.makefile("r")  # parent -> child
 _REQ.write(_os.environ["EC_TOKEN"] + "\n")  # authenticate this run's connection
 _REQ.flush()
 _SEQ = 0
+# One request/response exchange at a time. The two makefiles are shared by every
+# thread in the script: unlocked, concurrent writes interleave (the text buffer
+# flushes in ~8K chunks, splitting JSON frames) and concurrent readlines steal each
+# other's replies. The parent serves requests strictly one after another, so
+# holding this across write+flush+readline costs no real parallelism — tools.*
+# calls are thread-SAFE, just serialized.
+_LOCK = _threading.Lock()
 
 def _ec_call(_name, **kwargs):
     global _SEQ
-    _SEQ += 1
-    _rid = _SEQ
-    _REQ.write(_json.dumps({"id": _rid, "tool": _name, "args": kwargs}) + "\n")
-    _REQ.flush()
-    _line = _RESP.readline()
+    with _LOCK:
+        _SEQ += 1
+        _rid = _SEQ
+        _REQ.write(_json.dumps({"id": _rid, "tool": _name, "args": kwargs}) + "\n")
+        _REQ.flush()
+        _line = _RESP.readline()
     if not _line:
         raise RuntimeError("tool bridge closed before responding")
     _resp = _json.loads(_line)
+    _got = _resp.get("id")
+    # Defense in depth: never hand a caller someone else's reply. A null id is the
+    # parent's answer to a frame it couldn't parse (always the one in flight).
+    if _got != _rid and not (_got is None and not _resp.get("ok")):
+        raise RuntimeError("tool bridge desync: sent request %r, got reply for %r" % (_rid, _got))
     if not _resp.get("ok"):
         raise RuntimeError(_resp.get("error") or ("tool '%s' failed" % _name))
     return _resp.get("result")
@@ -163,6 +180,11 @@ def _deny_reason(name: str, gate, fence) -> str | None:
     return None
 
 
+# The request id at the head of a child frame (`{"id": 7, ...`) — the prelude's
+# json.dumps puts it first — so even an unparseable frame can be answered by id.
+_FRAME_ID_RE = re.compile(rb'\s*\{\s*"id"\s*:\s*(\d+)')
+
+
 async def _service_rpc(
     req_reader: asyncio.StreamReader, resp_writer, tool_map: dict, *, session_id: str = "", gate=None, fence=None
 ):
@@ -175,8 +197,21 @@ async def _service_rpc(
             return
         try:
             msg = json.loads(line.decode())
-        except Exception as exc:  # pragma: no cover - defensive
+            if not isinstance(msg, dict):
+                raise ValueError(f"expected a JSON object, got {type(msg).__name__}")
+        except Exception as exc:
+            # ANSWER it rather than drop it: the child's bridge has exactly one call
+            # in flight (it serializes under a lock), and that caller is blocked on
+            # readline — a silently dropped frame would park it until the hard
+            # timeout. Recover the id when the frame's prefix still carries it.
             log.warning("[execute_code] bad RPC frame: %s", exc)
+            m = _FRAME_ID_RE.match(line)
+            resp = {"id": int(m.group(1)) if m else None, "ok": False, "error": f"malformed tool-bridge request: {exc}"}
+            try:
+                resp_writer.write((json.dumps(resp) + "\n").encode())
+                await resp_writer.drain()
+            except Exception:
+                return  # child gone
             continue
         rid, name, args = msg.get("id"), msg.get("tool"), msg.get("args") or {}
         tool = tool_map.get(name)
@@ -482,6 +517,8 @@ def build_execute_code_tool(
         "    results = [tools.web_search(query=q) for q in queries]\n"
         "    print('\\n\\n'.join(results)[:2000])\n\n"
         f"Each tool returns a string. Available tools (call signatures):\n{available}\n\n"
+        "tools.* calls are serialized: safe to make from threads, but they run one "
+        "at a time, so a thread pool adds no tool parallelism — a plain loop is as fast.\n\n"
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
         "and a scrubbed environment (no credentials), fresh each call (no state "
         "persists between runs). Only stdout is returned; write your result with "

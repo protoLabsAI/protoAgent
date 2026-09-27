@@ -85,6 +85,60 @@ async def test_env_is_scrubbed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_threaded_tool_calls_never_cross_responses():
+    """Regression (live friction log): ``tools.*`` from a ThreadPoolExecutor
+    returned file N's content for file N+1, and some calls died with
+    JSONDecodeError at char ~8190. The child's bridge shared one socket
+    makefile pair with no lock — concurrent writes interleaved (the text-mode
+    buffer flushes in ~8K chunks, splitting JSON frames the parent then
+    dropped) and concurrent readlines raced for each other's replies.
+
+    Real child process, real socket bridge: 8 threads x 32 calls, each request
+    and each reply >16KB and distinct, and every result must be its own."""
+    from langchain_core.tools import tool as _tool
+
+    @_tool
+    async def blob_tool(n: int, pad: str) -> str:
+        """Return a large payload unique to ``n`` (echoing the request's pad length)."""
+        return f"<{n}:{len(pad)}>" + chr(65 + n % 26) * 20_000 + f"</{n}>"
+
+    code = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "def one(n):\n"
+        "    try:\n"
+        "        body = tools.blob_tool(n=n, pad=str(n) * 20000)\n"
+        "    except Exception as e:\n"
+        "        return n, 'EXC ' + type(e).__name__ + ': ' + str(e)[:120]\n"
+        "    want = f'<{n}:{len(str(n) * 20000)}>' + chr(65 + n % 26) * 20000 + f'</{n}>'\n"
+        "    return n, 'ok' if body == want else 'MISMATCH got ' + body[:24]\n"
+        "with ThreadPoolExecutor(8) as ex:\n"
+        "    results = list(ex.map(one, range(32)))\n"
+        "bad = [(n, r) for n, r in results if r != 'ok']\n"
+        "print('bad:', len(bad), bad[:3])\n"
+    )
+    out = await run_code(code, {"blob_tool": blob_tool}, timeout=30.0)
+    assert out == "bad: 0 []"
+
+
+@pytest.mark.asyncio
+async def test_malformed_frame_is_answered_not_dropped():
+    """A frame the parent can't parse gets an error reply (by id when its head
+    still carries one) — dropping it parked the waiting caller until the hard
+    timeout. The script drives the bridge's raw stream to send the bad frames."""
+    code = (
+        "import json\n"
+        '_REQ.write(\'{"id": 99, "tool": oops\\n\'); _REQ.flush()\n'
+        "r1 = json.loads(_RESP.readline())\n"
+        "_REQ.write('not json at all\\n'); _REQ.flush()\n"
+        "r2 = json.loads(_RESP.readline())\n"
+        "print(r1['id'], r1['ok'], r2['id'], r2['ok'], 'malformed' in r1['error'])\n"
+        "print(tools.echo_tool(text='still works'))\n"
+    )
+    out = await run_code(code, _TOOL_MAP, timeout=10.0)
+    assert out == "99 False None False True\nSTILL WORKS"
+
+
+@pytest.mark.asyncio
 async def test_output_truncation():
     out = await run_code("print('x' * 100)", {}, truncate=20)
     assert out.startswith("x" * 20)
