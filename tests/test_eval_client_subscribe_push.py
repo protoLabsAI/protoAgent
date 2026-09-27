@@ -34,6 +34,7 @@ is proof the agent actually called the webhook.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -164,8 +165,10 @@ async def test_resubscribe_reattaches_to_an_in_flight_task(monkeypatch):
     resub = asyncio.create_task(client.resubscribe(task_id, timeout_s=10))
     # Only release the agent once the resubscriber has actually tapped the queue —
     # a terminal task is an UnsupportedOperationError, not a replay.
-    # (the original stream() consumer is subscriber #1, so wait for #2)
-    await _poll(lambda: _subscriber_count(handler, task_id) >= 2, what="the resubscriber to attach")
+    # `ActiveTask.start()` holds a reference for the producer and the original
+    # stream() consumer holds a second, so the resubscriber is #3. (Waiting for #2
+    # released the gate before the resubscribe landed at all (#3575).)
+    await _poll(lambda: _subscriber_count(handler, task_id) >= 3, what="the resubscriber to attach")
     gate.set()
 
     events, final = await asyncio.wait_for(resub, 10)
@@ -187,9 +190,95 @@ async def test_resubscribe_to_an_unknown_task_reports_failure(monkeypatch):
     than pretending the stream completed."""
     app, _ = _build_app(_gated_stream(asyncio.Event()))
     client = _route(monkeypatch, app)
+    monkeypatch.setattr(ec, "_TASK_VISIBLE_BACKOFF_S", 0.0)  # keep the bounded retry instant
     events, final = await client.resubscribe("no-such-task", timeout_s=5)
     assert final is None  # never reached a terminal frame
     assert not any(e["kind"] in ("statusUpdate", "artifactUpdate") for e in events)
+    # The refusal is surfaced, not swallowed into an empty event log.
+    assert [e["kind"] for e in events] == ["error"]
+    assert events[0]["result"]["code"] == ec.A2ARpcError.TASK_NOT_FOUND_CODE
+
+
+def _scripted_subscribe_app(fail_first_n: int) -> tuple[FastAPI, list[str]]:
+    """A scripted ``/a2a`` that refuses ``SubscribeToTask`` with TASK_NOT_FOUND
+    ``fail_first_n`` times, then streams a snapshot and a terminal status.
+
+    The deterministic stand-in for the a2a-sdk >= 1.1.5 race (#3575): a live
+    task is in the active registry before its first store write, and the
+    subscribe path now reads the store even on a registry hit."""
+    from fastapi.responses import StreamingResponse
+
+    calls: list[str] = []
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def a2a(request: Request):
+        body = await request.json()
+        calls.append(body["method"])
+        if len(calls) <= fail_first_n:
+            return {"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32001, "message": "Task not found"}}
+        tid = body["params"]["id"]
+        frames = [
+            {"task": {"id": tid, "status": {"state": "TASK_STATE_WORKING"}}},
+            {"statusUpdate": {"taskId": tid, "status": {"state": "TASK_STATE_COMPLETED"}}},
+        ]
+
+        async def _sse():
+            for f in frames:
+                yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': body['id'], 'result': f})}\n\n"
+
+        return StreamingResponse(_sse(), media_type="text/event-stream")
+
+    return app, calls
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_retries_while_a_live_task_is_not_yet_stored(monkeypatch):
+    """TASK_NOT_FOUND on a re-attach is retried (bounded), then the stream is
+    consumed normally: snapshot first, terminal status last."""
+    app, calls = _scripted_subscribe_app(fail_first_n=2)
+    client = _route(monkeypatch, app)
+    monkeypatch.setattr(ec, "_TASK_VISIBLE_BACKOFF_S", 0.0)
+
+    events, final = await client.resubscribe("task-1", timeout_s=5)
+
+    assert calls == ["SubscribeToTask"] * 3
+    assert [e["kind"] for e in events] == ["task", "statusUpdate"]
+    assert final is not None and final.state == "completed" and final.task_id == "task-1"
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_gives_up_after_bounded_retries(monkeypatch):
+    """A genuinely unknown task is not retried forever."""
+    app, calls = _scripted_subscribe_app(fail_first_n=10_000)
+    client = _route(monkeypatch, app)
+    monkeypatch.setattr(ec, "_TASK_VISIBLE_BACKOFF_S", 0.0)
+
+    events, final = await client.resubscribe("no-such-task", timeout_s=5)
+
+    assert final is None
+    assert [e["kind"] for e in events] == ["error"]
+    assert len(calls) == ec._TASK_VISIBLE_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_records_an_undecodable_non_stream_body_as_raw(monkeypatch):
+    """A proxy answering with bytes that are not valid UTF-8/16/32 must not raise
+    out of the consumer; it lands as a ``raw`` event like any other non-JSON body."""
+    from fastapi.responses import Response
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def a2a(request: Request):
+        return Response(content=b"\x80\x81 garbage", media_type="application/octet-stream")
+
+    client = _route(monkeypatch, app)
+
+    events, final = await client.resubscribe("task-1", timeout_s=5)
+
+    assert final is None
+    assert [e["kind"] for e in events] == ["raw"]
 
 
 # ── push notification config ────────────────────────────────────────────────

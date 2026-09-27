@@ -281,14 +281,29 @@ class AgentClient:
 
         Note the server-side precondition: the task must still be running. A
         terminal task is an ``UnsupportedOperationError``, not a replay.
+
+        A refusal comes back as a one-piece JSON-RPC error, recorded as a single
+        ``{"kind": "error"}`` event with ``final`` None. ``TASK_NOT_FOUND`` is
+        retried with the same bounded backoff as ``_rpc_until_task_visible``:
+        a task is live in the active registry before its first store write, and
+        since a2a-sdk 1.1.5 ``SubscribeToTask`` checks the store even for a live
+        task (the owner guard, a2a-sdk #1159), so a re-attach right after a task
+        starts can be refused for a task that provably exists (#3575).
         """
-        payload = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": "SubscribeToTask",
-            "params": {"id": task_id},
-        }
-        return await self._consume_sse(payload, timeout_s=timeout_s)
+        for attempt in range(_TASK_VISIBLE_ATTEMPTS):
+            payload = {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "SubscribeToTask",
+                "params": {"id": task_id},
+            }
+            events, final = await self._consume_sse(payload, timeout_s=timeout_s)
+            refused = events[0].get("result") if len(events) == 1 and events[0].get("kind") == "error" else None
+            not_found = isinstance(refused, dict) and refused.get("code") == A2ARpcError.TASK_NOT_FOUND_CODE
+            if not not_found or attempt == _TASK_VISIBLE_ATTEMPTS - 1:
+                return events, final
+            await asyncio.sleep(_TASK_VISIBLE_BACKOFF_S * 2**attempt)
+        raise AssertionError("unreachable: the last attempt returns")
 
     async def _consume_sse(self, payload: dict, *, timeout_s: int) -> tuple[list[dict], TaskResult | None]:
         """POST a streaming JSON-RPC request and drain its SSE frames.
@@ -311,6 +326,20 @@ class AgentClient:
                         state="failed",
                         error=f"HTTP {r.status_code}: {body.decode()[:300]}",
                     )
+                if "text/event-stream" not in (r.headers.get("content-type") or ""):
+                    # A one-piece JSON-RPC answer instead of a stream: the server
+                    # refused (unknown or terminal task). Record the error rather than
+                    # skipping its non-``data:`` line and returning an empty log.
+                    body = await r.aread()
+                    try:
+                        resp = json.loads(body)
+                    except ValueError:  # JSONDecodeError, or UnicodeDecodeError on non-UTF bytes
+                        resp = None
+                    if isinstance(resp, dict) and isinstance(resp.get("error"), dict):
+                        events.append({"kind": "error", "result": resp["error"]})
+                    else:
+                        events.append({"kind": "raw", "raw": body.decode(errors="replace")[:300]})
+                    return events, final
                 async for line in r.aiter_lines():
                     if not line or line.startswith(":"):
                         continue

@@ -516,6 +516,36 @@ def test_a_json_answer_instead_of_a_stream_is_surfaced_not_swallowed():
         list(c.stream("x", context_id=CID))
 
 
+def test_subscribe_retries_a_live_task_the_store_has_not_caught_up_with(monkeypatch):
+    """#3575: under a2a-sdk >= 1.1.5 a re-attach on the `turn_started` announcement can
+    be refused TASK_NOT_FOUND before the task's first store write. Retried, bounded."""
+    monkeypatch.setattr(a2a, "_SUBSCRIBE_BACKOFF_S", 0.0)
+    calls: list[int] = []
+    sse = 'data: {"jsonrpc": "2.0", "id": "1", "result": {"task": {"id": "t1", "contextId": "%s", "status": {"state": "TASK_STATE_WORKING"}}}}\n\n' % CID
+
+    def racy(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) <= 2:
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32001, "message": "Task not found"}})
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse)
+
+    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(racy))
+    frames = list(c.subscribe("t1"))
+    assert len(calls) == 3
+    assert [f["result"]["task"]["id"] for f in frames] == ["t1"]
+
+    calls.clear()
+
+    def unknown(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "error": {"code": -32001, "message": "Task not found"}})
+
+    c = a2a.A2AClient("http://127.0.0.1:7870", transport=httpx.MockTransport(unknown))
+    frames = list(c.subscribe("nope"))
+    assert len(calls) == a2a._SUBSCRIBE_ATTEMPTS  # bounded
+    assert len(frames) == 1 and frames[0]["error"]["code"] == -32001  # still surfaced
+
+
 def test_a_repeated_tool_start_keeps_the_recorded_result():
     """CodeRabbit (epic): a live `started` reusing an id overwrote the output, chars and
     duration with None. A start sets what it carries (status, input, started_at) and keeps
