@@ -1613,7 +1613,7 @@ class AcpClient:
                 self._record_run_telemetry(state, started, tool_calls, session_id)
                 io = tracing.io_allowed()
                 if usage or cost_usd:
-                    self._trace_generation(usage, cost_usd, started)
+                    self._trace_generation(usage, cost_usd, started, session_id)
                 output = reply
                 if state != "completed":
                     # A failed run has no reply, so without this its trace had no output
@@ -1640,7 +1640,7 @@ class AcpClient:
                     level="DEFAULT" if state == "completed" else "ERROR",
                 )
 
-    def _trace_generation(self, usage: dict | None, cost_usd: float | None, started: float) -> None:
+    def _trace_generation(self, usage: dict | None, cost_usd: float | None, started: float, session_id: str) -> None:
         """The coder's own model usage, as a generation under the run's ``acp:`` span.
 
         The coding agent calls its model itself, so no gateway callback or middleware ever
@@ -1671,7 +1671,8 @@ class AcpClient:
             },
             cost_usd=cost_usd or 0.0,
             duration_ms=int((time.monotonic() - started) * 1000),
-            session_id=self._turn_session_id or "",
+            # Captured while the turn lock was held: by now a queued turn may have reset it.
+            session_id=session_id,
             metadata={"usage_source": "reported by the coding agent", "cost_basis": "API-equivalent"},
         )
 
