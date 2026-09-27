@@ -230,6 +230,12 @@ rather than a default. TLS on the remote is the real fix and stays the operator'
   strictly better than a pasted shared bearer.
 - **Remote WebSockets come back**, so the terminal and agent-browser live views work on a
   paired remote, and an anonymous caller still gets no credential lent.
+- **An open hub lends the stored token only to its own console** (#3662). On a hub with
+  no credential every caller is operator, so a cross-site page (a blind form POST) or a
+  DNS-rebinding page could have ridden the remote's operator token through the HTTP proxy.
+  For remote targets on an open hub, the proxy refuses cross-site Fetch Metadata, a foreign
+  `Origin` and an untrusted `Host` with `403` before dialling (the WS path gains the `Host`
+  gate too). A token-gated hub needs no gate: its credential is a header, never a cookie.
 
 ## Implementation slices
 

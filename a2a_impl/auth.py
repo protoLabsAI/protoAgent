@@ -305,9 +305,20 @@ def bearer_tier(token: str) -> str | None:
     operator bearer, a configured federation token, the fleet service token (ADR 0089), or a
     paired device token ⇒ their tier, else ``None``.
     """
-    if _BEARER[0] is None and not _API_KEY[0]:
+    if open_mode():
         return "operator"  # open mode — the surface is unauthenticated
     return _bearer_tier_for(token)
+
+
+def open_mode() -> bool:
+    """True when this server enforces NO credential (no bearer AND no X-API-Key) — the
+    desktop default on its loopback bind, where the middleware rates every caller operator.
+
+    For callers that must treat "operator because nothing is checked" differently from
+    "operator because a secret matched": the fleet proxy gates browser-driven requests to a
+    REMOTE member on an open hub (#3662), because there an anonymous cross-site page would
+    otherwise be lent the remote's stored credential."""
+    return _BEARER[0] is None and not _API_KEY[0]
 
 
 def credential_tier(token: str) -> str | None:
