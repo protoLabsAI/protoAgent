@@ -6,11 +6,11 @@
 }
 .kb-panel__hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   max-width: 60ch;
 }
 .kb-panel__hint kbd {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   padding: 0 4px;
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-radius: 4px;
@@ -22,7 +22,7 @@
   flex-direction: column;
 }
 .kb-group__label {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -42,10 +42,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .kb-row__scope {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--pl-color-fg-subtle);
@@ -61,7 +61,7 @@
 .kb-key {
   min-width: 84px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   text-align: center;
   padding: 4px 10px;
   border: var(--pl-border-width) solid var(--pl-color-border);
@@ -92,7 +92,7 @@
 }
 .kb-row__conflict {
   grid-column: 1 / -1;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
   padding-top: 4px;
 }
