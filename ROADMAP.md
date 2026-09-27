@@ -9,10 +9,11 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Planned
 
-- **Ollama & Hugging Face listings** — register protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app. (#1990)
+- **The trajectory** — an append-only log of everything the model sees, so resume, fork, search and replay all work from one session record. (#2806)
 
 ## In progress
 
+- **Ollama & Hugging Face listings** — protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app; the listing PRs are open upstream, awaiting maintainer review.
 - **Design-system alignment** — migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).
 
 
