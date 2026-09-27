@@ -299,8 +299,11 @@ def _log_host_refusal(host: str, path: str) -> None:
     shown = host[:120]
     if shown in _LOGGED_HOSTS:
         return
-    if len(_LOGGED_HOSTS) < _LOGGED_HOSTS_MAX:
-        _LOGGED_HOSTS.add(shown)
+    if len(_LOGGED_HOSTS) >= _LOGGED_HOSTS_MAX:
+        return  # cap reached — a flood of distinct names must not become a flood of lines
+    _LOGGED_HOSTS.add(shown)
+    if len(_LOGGED_HOSTS) == _LOGGED_HOSTS_MAX:
+        logger.warning("[auth] untrusted-Host refusal log cap reached; further names are not logged")
     logger.warning(
         "[auth] refusing request with untrusted Host %r (path %s) — this instance has no auth token, "
         "so it only answers the names it is served under. Add the name to PROTOAGENT_TRUSTED_HOSTS "

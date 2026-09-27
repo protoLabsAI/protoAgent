@@ -342,3 +342,20 @@ async def test_open_mode_is_read_per_request(tmp_path):
     assert (await _req(app, "GET", "/api/config", "evil.example")).status_code == 401
     auth.set_bearer_token(None)
     assert (await _req(app, "GET", "/api/config", "evil.example")).status_code == 403
+
+
+def test_refusal_log_is_bounded_under_a_flood_of_distinct_hosts(monkeypatch, caplog):
+    """One WARNING per new name up to the cap, one cap notice, then silence — distinct
+    Host values must not turn into one log line per request."""
+    import logging
+
+    from a2a_impl import hosts
+
+    monkeypatch.setattr(hosts, "_LOGGED_HOSTS", set())
+    monkeypatch.setattr(hosts, "_LOGGED_HOSTS_MAX", 3)
+    with caplog.at_level(logging.WARNING, logger=hosts.logger.name):
+        for i in range(10):
+            hosts._log_host_refusal(f"evil{i}.example", "/api/x")
+    lines = [r.getMessage() for r in caplog.records]
+    assert sum("untrusted Host" in m for m in lines) == 3
+    assert sum("log cap reached" in m for m in lines) == 1
