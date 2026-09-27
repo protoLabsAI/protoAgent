@@ -52,3 +52,35 @@ def test_localhost_counts_as_loopback():
 def test_a_non_auth_error_gets_no_hint():
     for code in (400, 404, 429, 500, 503):
         assert _a2a_auth_hint(_d(url="http://192.168.1.20:7875/a2a", auth_token=""), code) == ""
+
+
+def test_a_hub_proxied_401_says_pair_it_if_remote(monkeypatch):
+    """ADR 0113 D4: a delegate to a remote fleet member points at the hub's loopback proxy.
+    The old loopback hint ("the fleet service token could not be resolved") sent the operator
+    after the wrong fix. The adapter can't know whether the slug is a remote, so the hint is
+    conditional rather than asserting it."""
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "FLEET")
+    hint = _a2a_auth_hint(_d(name="ava", url="http://127.0.0.1:7870/agents/ava-1a2b/a2a", auth_token=""), 401)
+    assert "hub proxy at http://127.0.0.1:7870/agents/ava-1a2b/a2a refused the call" in hint
+    assert "If 'ava-1a2b' is a remote fleet member" in hint and "Pair" in hint
+    assert "could not be resolved" not in hint
+
+
+def test_a_hub_proxied_401_without_a_fleet_token_blames_the_hub_hop(monkeypatch):
+    """No fleet token resolved → no credential went out, so the HUB refused, not the remote."""
+
+    def _boom():
+        raise RuntimeError("not in a fleet")
+
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", _boom)
+    hint = _a2a_auth_hint(_d(url="http://127.0.0.1:7870/agents/ava-1a2b/a2a", auth_token=""), 401)
+    assert "no fleet service token could be resolved" in hint
+    assert "the hub itself refused" in hint
+    assert "Pair" not in hint
+
+
+def test_the_hubs_own_host_path_is_not_a_proxied_remote():
+    # /agents/host/a2a is the hub itself; a bare /a2a or a non-loopback proxy path isn't D4.
+    assert "loopback delegate" in _a2a_auth_hint(_d(url="http://127.0.0.1:7870/agents/host/a2a"), 401)
+    assert "loopback delegate" in _a2a_auth_hint(_d(url="http://127.0.0.1:7870/a2a"), 401)
+    assert "not loopback" in _a2a_auth_hint(_d(url="http://10.0.0.5:7870/agents/ava/a2a"), 401)
