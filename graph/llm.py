@@ -47,10 +47,30 @@ try:  # pragma: no cover - trivial import guard
 except ImportError:  # pragma: no cover
     _STALL_ERRORS = ()
 
+
+class StreamStallTimeout(TimeoutError):
+    """A streaming model call produced no chunk within ``model.request_timeout`` (#3699).
+
+    langchain_openai's ``StreamChunkTimeoutError`` (above) is that client's OWN stall
+    guard, but it only covers the OpenAI client and only fires if its
+    ``stream_chunk_timeout`` is configured — the anthropic-oauth path (a ``ChatAnthropic``
+    subclass) has no such guard at all. And an httpx read timeout only bounds a single
+    socket read, not an SSE stream that stays open and silent (or trickles keep-alive
+    pings) while producing no assistant chunk. That gap is how a 262K-token lead-agent
+    call hung >17 min under ``request_timeout: 120`` with no failure and no retry (#3699).
+
+    :func:`_guard_stream_timeout` raises this when the time-to-first-token OR inter-chunk
+    idle deadline lapses. It subclasses ``TimeoutError`` and is listed in
+    ``RETRYABLE_STREAM_ERRORS`` so the existing reconnect path treats it as transient and
+    ``max_retries`` applies before the turn finally fails with this (provider/model-naming)
+    error."""
+
+
 RETRYABLE_STREAM_ERRORS: tuple[type[BaseException], ...] = (
     httpx.TransportError,  # httpx.ReadError / ConnectError / ReadTimeout / …
     httpcore.NetworkError,  # httpcore.ReadError / WriteError / ConnectError (raw, unwrapped)
     httpcore.TimeoutException,  # httpcore.ReadTimeout / ConnectTimeout
+    StreamStallTimeout,  # our first-token / inter-chunk idle deadline lapsed (#3699)
     *_STALL_ERRORS,  # provider went silent mid-stream (#2305)
 )
 
@@ -147,10 +167,13 @@ async def _stream_with_reconnect(
                 raise
             # Two different failures reach here and the distinction matters when reading
             # logs: a transport drop (provider CLOSED the stream — often a rate limit) vs
-            # a stall (socket still open, provider went SILENT — #2305).
+            # a stall (socket still open, provider went SILENT — #2305/#3699).
+            stalled = isinstance(exc, StreamStallTimeout) or (
+                _STALL_ERRORS and isinstance(exc, _STALL_ERRORS)
+            )
             cause = (
                 "provider went silent mid-stream"
-                if _STALL_ERRORS and isinstance(exc, _STALL_ERRORS)
+                if stalled
                 else "provider closed stream; possible rate limit"
             )
             log.warning(
@@ -164,6 +187,81 @@ async def _stream_with_reconnect(
             )
             await sleep(delay)
             delay *= 2
+
+
+def _stream_timeout_s(value: object) -> float | None:
+    """The per-chunk stream deadline derived from a client's ``request_timeout`` (#3699).
+
+    A positive number becomes the deadline; anything else — ``None``, ``0``, or a
+    ``(connect, read)`` tuple / ``httpx.Timeout`` — disables the guard, so a client with
+    no plain numeric timeout streams exactly as it did before."""
+    return float(value) if isinstance(value, int | float) and value > 0 else None
+
+
+async def _guard_stream_timeout(
+    stream: AsyncIterator, *, timeout: float, label: str
+) -> AsyncIterator:
+    """Bound a model stream's time-to-first-token AND inter-chunk idle by ``timeout`` (#3699).
+
+    httpx's read timeout bounds a single socket read; a provider that holds an SSE
+    connection open — or trickles keep-alive pings — while emitting no assistant chunk is
+    invisible to it, which is how a lead-agent call hung >17 min under ``request_timeout:
+    120``. This waits at most ``timeout`` seconds for EACH next chunk (the first token, and
+    then every gap after it) and raises :class:`StreamStallTimeout` when a wait lapses. It
+    never bounds total wall-clock: every chunk resets the deadline, so a stream that keeps
+    producing — a long output — still completes. The underlying stream is closed on the way
+    out so a cancelled read doesn't leak its connection."""
+    it = stream.__aiter__()
+    waiting_for_first = True
+    try:
+        while True:
+            try:
+                chunk = await asyncio.wait_for(it.__anext__(), timeout)
+            except StopAsyncIteration:
+                return
+            except RETRYABLE_STREAM_ERRORS:
+                # A real transport drop, or the provider client's OWN stall guard — hand it
+                # to the reconnect loop unchanged. (Some of these subclass ``TimeoutError``,
+                # so this clause must precede the deadline branch below.)
+                raise
+            except (TimeoutError, asyncio.TimeoutError) as exc:  # our deadline lapsed
+                phase = "waiting for the first token" if waiting_for_first else "between chunks"
+                raise StreamStallTimeout(
+                    f"{label} produced no output for {timeout:.0f}s while {phase}; the "
+                    f"streaming request exceeded model.request_timeout and was aborted (#3699)."
+                ) from exc
+            waiting_for_first = False
+            yield chunk
+    finally:
+        aclose = getattr(it, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:  # noqa: BLE001 — best-effort close of an aborted/cancelled stream
+                log.debug("[llm] stream close after timeout guard failed", exc_info=True)
+
+
+def _guarded_reconnecting_stream(
+    make_stream: Callable[[], AsyncIterator],
+    *,
+    timeout: float | None,
+    max_retries: int,
+    label: str,
+    sleep: Callable = asyncio.sleep,
+) -> AsyncIterator:
+    """:func:`_stream_with_reconnect` wrapping each attempt in the per-chunk timeout guard (#3699).
+
+    Shared by the openai-compatible client and the anthropic-oauth client so both enforce
+    ``request_timeout`` on the stream itself the same way. A guard timeout before any
+    content has streamed is retryable, so the reconnect loop restarts the call within
+    ``max_retries`` and then re-raises the clear :class:`StreamStallTimeout`. ``timeout=None``
+    skips the guard entirely — exactly the prior reconnect-only behavior."""
+
+    def guarded() -> AsyncIterator:
+        stream = make_stream()
+        return _guard_stream_timeout(stream, timeout=timeout, label=label) if timeout else stream
+
+    return _stream_with_reconnect(guarded, max_retries=max_retries, sleep=sleep)
 
 
 def _gateway_wire_default() -> bool | None:
@@ -485,13 +583,15 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             yield chunk
 
     async def _stream_measured(self, args, kwargs, state: dict):
-        """One provider stream (with #1728 reconnects) whose usage calibrates the output
-        budget of this conversation's later requests (#3502)."""
+        """One provider stream (with #1728 reconnects + the #3699 timeout guard) whose usage
+        calibrates the output budget of this conversation's later requests (#3502)."""
         input_tokens = None
         measure = None
-        async for chunk in _stream_with_reconnect(
+        async for chunk in _guarded_reconnecting_stream(
             lambda: super(_ReasoningChatOpenAI, self)._astream(*args, **kwargs),
+            timeout=_stream_timeout_s(self.request_timeout),
             max_retries=self.max_retries or 0,
+            label=self._stream_label(),
         ):
             if not state.get("streamed"):
                 # Read on the FIRST chunk: this request's body is built by then, and a model
@@ -509,6 +609,10 @@ class _ReasoningChatOpenAI(ChatOpenAI):
     def _window_key(self) -> str:
         """Where a learned window applies: this endpoint + model (#3502)."""
         return f"{self.openai_api_base or ''}|{self.model_name or ''}"
+
+    def _stream_label(self) -> str:
+        """How this client names itself in a stream-timeout error (#3699)."""
+        return f"openai-compatible model {self.model_name!r}"
 
     def _overflow_retry_budget(self, exc: BaseException) -> int | None:
         """The budget to retry an overflowed request with, or None to let the error stand."""
