@@ -509,3 +509,170 @@ def test_history_ui_is_wired_and_four_rules_compliant() -> None:
     assert "#histwrap{position:absolute" in html
     for hexish in ("#0a0a0c", "#fff;", "#000;"):
         assert hexish not in html
+
+
+# ── store resolution + legacy migration (#3644 sibling) ───────────────────────
+#
+# These exercise the NOTES_DIR-UNSET path — the note is resolved through the instance
+# store (sdk.plugin_store → instance_paths().store("notes")), which honours
+# PROTOAGENT_BOX_ROOT / PROTOAGENT_HOME, and a pre-scoping note is migrated in.
+#
+# EVERY test here pins HOME/USERPROFILE to a tmp dir, on purpose. The legacy path and the
+# resolution-failure fallback both derive from Path.home() (which the conftest does NOT
+# isolate), so a stray migration would MOVE the developer's real ~/.protoagent/notes —
+# live data — and moving it under the verify gate is what times the whole suite out.
+
+
+def _reset_instance_paths() -> None:
+    from infra.paths import reset_instance_paths
+
+    reset_instance_paths()
+
+
+def _pin_home(monkeypatch, home: Path) -> None:
+    """Pin Path.home() to a tmp dir on every platform — POSIX reads $HOME, Windows
+    USERPROFILE. Without this the legacy/fallback path resolves to the real home."""
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+def test_note_lands_in_the_instance_store_not_the_home_dir(tmp_path, monkeypatch) -> None:
+    """AC1: NOTES_DIR unset + PROTOAGENT_BOX_ROOT/INSTANCE/HOME set — the note and a
+    history snapshot land under the box'd instance store, and nothing is written under
+    the home dir."""
+    home, box = tmp_path / "home", tmp_path / "box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "onb")
+    _reset_instance_paths()
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "first"})
+    notes.write_note.invoke({"content": "second"})  # archives "first" → a history snapshot
+
+    store = box / "onb" / "notes"
+    assert (store / "note.md").read_text(encoding="utf-8") == "second"
+    assert list((store / "history").glob("*.md")), "the snapshot must live in the store"
+    assert notes.read_note.invoke({}) == "second"
+    # Nothing leaked into the real-home shape.
+    assert not (home / ".protoagent").exists()
+
+
+def test_migrates_a_legacy_instance_note_on_first_access(tmp_path, monkeypatch) -> None:
+    """AC2: an existing ~/.protoagent/notes/onb/note.md + history/ is adopted into the
+    store on first access — the content reads back and its versions list."""
+    home, box = tmp_path / "home", tmp_path / "box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "onb")
+    _reset_instance_paths()
+
+    legacy = home / ".protoagent" / "notes" / "onb"
+    (legacy / "history").mkdir(parents=True)
+    (legacy / "note.md").write_text("legacy note", encoding="utf-8")
+    vid = "20250101T000000.000000Z-agent-abcd1234"
+    (legacy / "history" / f"{vid}.md").write_text("old version", encoding="utf-8")
+
+    notes = _load_notes()
+    assert notes.read_note.invoke({}) == "legacy note"  # first access triggers the move
+
+    store = box / "onb" / "notes"
+    assert (store / "note.md").read_text(encoding="utf-8") == "legacy note"
+    assert not (legacy / "note.md").exists()  # moved, not copied
+    versions = notes._list_versions()
+    assert [v["id"] for v in versions] == [vid]
+    assert notes._read_version(vid) == "old version"
+    assert vid in notes.list_note_versions.invoke({})
+
+
+def test_migrates_a_bare_legacy_note_and_leaves_siblings(tmp_path, monkeypatch) -> None:
+    """AC3: with PROTOAGENT_INSTANCE unset the legacy dir is the BARE ~/.protoagent/notes;
+    its note migrates, but sibling instance subdirs under it are left untouched."""
+    home, box = tmp_path / "home", tmp_path / "box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    _reset_instance_paths()
+
+    legacy = home / ".protoagent" / "notes"
+    legacy.mkdir(parents=True)
+    (legacy / "note.md").write_text("bare legacy", encoding="utf-8")
+    sibling = legacy / "alpha"  # another instance's note under the bare dir — must NOT move
+    sibling.mkdir()
+    (sibling / "note.md").write_text("other instance", encoding="utf-8")
+
+    notes = _load_notes()
+    assert notes.read_note.invoke({}) == "bare legacy"
+
+    store = box / "default" / "notes"  # instance unset → "default"
+    assert (store / "note.md").read_text(encoding="utf-8") == "bare legacy"
+    assert not (legacy / "note.md").exists()
+    # The sibling instance's note stayed exactly where it was.
+    assert (sibling / "note.md").read_text(encoding="utf-8") == "other instance"
+
+
+def test_no_migration_when_the_store_already_has_a_note(tmp_path, monkeypatch) -> None:
+    """AC4: the store already holds a note → no migration runs, and the legacy files
+    stay put."""
+    home, box = tmp_path / "home", tmp_path / "box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "onb")
+    _reset_instance_paths()
+
+    store = box / "onb" / "notes"
+    store.mkdir(parents=True)
+    (store / "note.md").write_text("current", encoding="utf-8")
+    legacy = home / ".protoagent" / "notes" / "onb"
+    legacy.mkdir(parents=True)
+    (legacy / "note.md").write_text("legacy stays", encoding="utf-8")
+
+    notes = _load_notes()
+    assert notes.read_note.invoke({}) == "current"
+    assert (legacy / "note.md").read_text(encoding="utf-8") == "legacy stays"
+
+
+def test_notes_dir_override_never_migrates_or_touches_home(tmp_path, monkeypatch) -> None:
+    """AC5: NOTES_DIR keeps its exact old behaviour (base + per-instance subdir) and never
+    consults or migrates the legacy home dir, even when one exists."""
+    home, nd = tmp_path / "home", tmp_path / "nd"
+    _pin_home(monkeypatch, home)
+    monkeypatch.setenv("NOTES_DIR", str(nd))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "onb")
+    _reset_instance_paths()
+
+    legacy = home / ".protoagent" / "notes" / "onb"
+    legacy.mkdir(parents=True)
+    (legacy / "note.md").write_text("legacy stays", encoding="utf-8")
+
+    notes = _load_notes()
+    notes.write_note.invoke({"content": "override"})
+    assert (nd / "onb" / "note.md").read_text(encoding="utf-8") == "override"
+    # NOTES_DIR short-circuits before any migration — legacy is untouched.
+    assert (legacy / "note.md").read_text(encoding="utf-8") == "legacy stays"
+
+
+def test_path_resolution_failure_falls_back_to_the_legacy_path(tmp_path, monkeypatch) -> None:
+    """AC6: if the instance-store resolver raises, the plugin uses the legacy home path
+    rather than failing the tool call."""
+    import graph.sdk
+
+    home = tmp_path / "home"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("no instance store")
+
+    monkeypatch.setattr(graph.sdk, "plugin_store", _boom)
+    notes = _load_notes()
+
+    notes.write_note.invoke({"content": "resilient"})  # must not raise
+    assert notes.read_note.invoke({}) == "resilient"
+    # Landed at the bare legacy home path (instance unset).
+    assert (home / ".protoagent" / "notes" / "note.md").read_text(encoding="utf-8") == "resilient"
