@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, beforeAll } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest";
 
 import { applyAgentTheme, persistedThemeIsForCurrentAgent, syncBrowserChrome } from "./agentTheme";
+import { __resetStorageSeamForTests } from "./storage";
 
 // #1762 boot-merge blocker — `pl-theme` is a single GLOBAL localStorage key shared by every
 // same-origin agent window (the fleet console is slug-routed on one origin, ADR 0042). So the
@@ -46,6 +47,27 @@ describe("persistedThemeIsForCurrentAgent — cross-agent boot-merge guard (#176
     expect(persistedThemeIsForCurrentAgent()).toBe(true);
     applyAgentTheme(null, { animate: false }); // reset to design-system defaults
     expect(persistedThemeIsForCurrentAgent()).toBe(false);
+  });
+
+  it("never stamps ownership over a blob that failed to save (ADR 0114 — a full quota)", () => {
+    // alpha's blob is on disk and stamped; beta's apply hits a full quota for the big blob but
+    // would have room for the tiny owner stamp. Stamping it would adopt alpha's look as beta's.
+    focusAgent("alpha");
+    applyAgentTheme(THEME, { animate: false });
+    focusAgent("beta");
+    const real = Storage.prototype.setItem;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === "pl-theme") throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      return real.call(this, k, v);
+    });
+    try {
+      applyAgentTheme({ mode: "light", overrides: {} }, { animate: false });
+    } finally {
+      spy.mockRestore();
+      __resetStorageSeamForTests();
+    }
+    expect(persistedThemeIsForCurrentAgent()).toBe(false);
+    expect(localStorage.getItem("pl-theme:agent")).toBeNull(); // alpha's stale stamp is gone too
   });
 });
 

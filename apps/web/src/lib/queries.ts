@@ -1,6 +1,7 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { api, currentSlug } from "./api";
+import { setDevHooksEnabled } from "./storage";
 import type { FleetTelemetry, ReviewState } from "./types";
 
 // Centralized query keys + option factories (ADR 0013). Surfaces read these via
@@ -160,7 +161,13 @@ export const fleetQuery = () =>
 export const flagsQuery = () =>
   queryOptions({
     queryKey: queryKeys.flags,
-    queryFn: () => api.flags(),
+    queryFn: async () => {
+      const flags = await api.flags();
+      // Off the prod channel, the storage QA hooks go live (ADR 0114; gated like ADR 0068's
+      // Developer panel). A dev build has them on already.
+      if (flags?.channel && flags.channel !== "prod") setDevHooksEnabled(true);
+      return flags;
+    },
     staleTime: 5 * 60_000,
   });
 

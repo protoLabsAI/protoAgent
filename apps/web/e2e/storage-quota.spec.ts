@@ -63,23 +63,32 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
 test("the simulateQuotaBytes dev flag fails writes without crashing", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  // A 1 KB "quota" the pre-seeded key already exceeds: every seam write to localStorage fails.
+  // A 1 KB "quota" the pre-seeded key already exceeds. The knob is gated like the Developer
+  // panel (ADR 0068): this is a production build, so it goes live once /api/flags reports the
+  // mock's non-prod channel — every seam write to localStorage fails from then on.
   await page.addInitScript(() => localStorage.setItem("e2e.seed", "z".repeat(2048)));
+  const flags = page.waitForResponse((r) => r.url().includes("/api/flags"));
   await page.goto("/app/?flag:storage.simulateQuotaBytes=1024", { waitUntil: "load" });
-  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+  await flags;
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await expect(composer).toBeVisible();
+  // Sending records input history (a seam write) — it must fail quietly, not crash.
+  await composer.fill("remember me?");
+  await composer.press("Enter");
+  await expect(page.locator(".pl-message--user").last()).toContainText("remember me?");
   await page.getByTestId("settings-widget").click();
   await expect(page.locator(".settings-overlay")).toBeVisible();
   await expect(page.locator(".app-crash")).toHaveCount(0);
-  // Nothing the console tried to persist got in (the flag really gated the seam).
-  const layout = await page.evaluate(() => localStorage.getItem("protoagent.ui"));
-  expect(layout).toBeNull();
+  const history = await page.evaluate(() => localStorage.getItem("protoagent.chat.inputHistory"));
+  expect(history).toBeNull(); // the flag really gated the seam
   expect(errors).toEqual([]);
 });
 
 test("a render-time quota crash recovers through Free up space & reload", async ({ page }) => {
   // A >64 KB saved transcript (the realistic hog) plus keys the recovery must NOT touch.
   // While the transcript key exists, the e2e hook forces a render-time quota throw — so the
-  // crash reproduces on every load until the recovery actually clears it (a Reload loop).
+  // crash reproduces on every load until the recovery actually clears it (a Reload loop). The
+  // hook is gated like the Developer panel; the mock's non-prod channel turns it on.
   await page.addInitScript(() => {
     if (!sessionStorage.getItem("e2e.seeded")) {
       sessionStorage.setItem("e2e.seeded", "1");

@@ -48,8 +48,13 @@ export function applyAgentTheme(theme: unknown, opts: { animate?: boolean; prese
     const blob = resolveThemeToPersist(theme, currentThemeBlob(), { preservePersisted });
     if (blob) {
       try {
-        writeKey("local", PL_THEME_KEY, JSON.stringify(blob));
-        writeKey("local", PL_THEME_OWNER_KEY, currentSlug()); // stamp the owning agent
+        // Stamp the owner ONLY over a blob that actually landed: a stale blob stamped with the
+        // current agent is the #1762 theme bleed (another agent's look adopted as ours).
+        if (writeKey("local", PL_THEME_KEY, JSON.stringify(blob)).ok) {
+          writeKey("local", PL_THEME_OWNER_KEY, currentSlug());
+        } else {
+          removeKey("local", PL_THEME_OWNER_KEY);
+        }
       } catch {
         /* ignore */
       }

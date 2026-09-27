@@ -99,7 +99,8 @@ silent accretion.
 
 A few console-only switches reuse the `?flag:` query syntax but take a **value** and have no
 registry entry, tier or `remove_by` — they're QA instruments, not pre-release gates, and last
-only for the page load:
+only for the page load. They are gated like the Developer panel: live only in a Vite dev build
+or once `/api/flags` reports a non-`prod` channel, so a production console ignores them:
 
 - **`?flag:storage.simulateQuotaBytes=<N>`** (ADR 0114)
   — the console's storage seam (`apps/web/src/lib/storage.ts`) throws a synthetic

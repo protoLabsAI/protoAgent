@@ -1,9 +1,20 @@
 import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle, HardDrive, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 
 // The storage seam is import-free by contract (lib/storage.ts), so the crash page may use it.
-import { entryBytes, isQuotaError, keySizes, listKeys, matchKey, readKey, removeKey } from "../lib/storage";
+import {
+  devHooksEnabled,
+  entryBytes,
+  isQuotaError,
+  keySizes,
+  listKeys,
+  matchKey,
+  readKey,
+  removeKey,
+  subscribeDevHooks,
+} from "../lib/storage";
+import { blockPersistInThisPage, broadcastStorageReset } from "../lib/storageReset";
 import "./app-crash.css";
 
 // Full-page fallback for the ROOT error boundary (#872) — a render throw that
@@ -11,32 +22,14 @@ import "./app-crash.css";
 // while the app is broken, so it must stay dependency-light: no stores, no
 // queries, no router — any of them may be the thing that threw.
 
-type NoFlushGlobals = { __protoagentNoFlush?: boolean; __protoagentForceQuotaCrash?: boolean };
-
-/** Stop the chat store's unload flush (and any pending debounced write) from writing the
- *  cleared data straight back. In-realm flag — this page must not import the store. */
-function stopChatFlush() {
-  (globalThis as NoFlushGlobals).__protoagentNoFlush = true;
-}
-
-/** Tell other tabs their in-memory transcripts are stale and must not be persisted back. */
-function broadcastStorageReset() {
-  try {
-    if (typeof BroadcastChannel === "undefined") return;
-    const ch = new BroadcastChannel("protoagent.storage");
-    ch.postMessage({ type: "storage-reset" });
-    ch.close();
-  } catch {
-    /* best-effort */
-  }
-}
+type NoFlushGlobals = { __protoagentForceQuotaCrash?: boolean };
 
 /** Clear the persisted chat sessions (all agents' slug-suffixed keys included) but
  *  keep layout/theme/authToken — the same selective scope as the tenant guard. A
  *  corrupt saved session is the known way to brick render (issue #872); everything
  *  else persisted is cheap to keep. */
 export function resetChatData() {
-  stopChatFlush();
+  blockPersistInThisPage();
   listKeys("local")
     .filter((k) => k.startsWith("protoagent.chat.sessions"))
     .forEach((k) => removeKey("local", k));
@@ -52,7 +45,7 @@ export const MIN_FREED_BYTES = 64 * 1024;
  *  auth, theme and layout survive), stop this page's chat flush, and tell other tabs.
  *  Returns the bytes freed. */
 export function freeTranscriptSpace(): number {
-  stopChatFlush();
+  blockPersistInThisPage();
   let freed = 0;
   for (const key of listKeys("local")) {
     if (matchKey("local", key)?.spec.category !== "transcript") continue;
@@ -72,15 +65,21 @@ function formatBytes(n: number): string {
 
 /** e2e/QA hook (ADR 0114): with `globalThis.__protoagentForceQuotaCrash` set, render throws a
  *  quota error so the recovery path stays testable now that the storage seam never lets a
- *  real one reach a render. Rendered inside the root boundary by main.tsx; inert otherwise. */
+ *  real one reach a render. Rendered inside the root boundary by main.tsx; inert unless the
+ *  storage dev hooks are live (a dev build or a non-prod channel — never in production). */
 export function ForcedQuotaCrash() {
-  if ((globalThis as NoFlushGlobals).__protoagentForceQuotaCrash) {
+  const enabled = useSyncExternalStore(subscribeDevHooks, devHooksEnabled, devHooksEnabled);
+  if (enabled && (globalThis as NoFlushGlobals).__protoagentForceQuotaCrash) {
     const err = new Error("The quota has been exceeded.");
     err.name = "QuotaExceededError";
     throw err;
   }
   return null;
 }
+
+/** Credentials and the tenant stamp: listed (their size counts), but never one click away —
+ *  clearing a remote operator's token from a crash page locks them out. */
+const PROTECTED = new Set(["auth", "tenant"]);
 
 function LargestKeys({ freed }: { freed: number }) {
   const [rows, setRows] = useState(() => keySizes("local").slice(0, 12));
@@ -96,6 +95,9 @@ function LargestKeys({ freed }: { freed: number }) {
           <li key={r.key}>
             <code title={r.key}>{r.key}</code>
             <span>{formatBytes(r.bytes)}</span>
+            {PROTECTED.has(matchKey("local", r.key)?.spec.category ?? "") ? (
+              <span className="app-crash__kept">kept</span>
+            ) : (
             <Button
               type="button"
               size="sm"
@@ -108,6 +110,7 @@ function LargestKeys({ freed }: { freed: number }) {
             >
               <Trash2 size={12} /> Clear
             </Button>
+            )}
           </li>
         ))}
       </ul>

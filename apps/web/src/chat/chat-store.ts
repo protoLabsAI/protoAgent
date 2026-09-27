@@ -10,6 +10,7 @@ import {
   turnBubbleIndexes,
 } from "./turnText";
 import { readKey, writeKey } from "../lib/storage";
+import { persistBlocked } from "../lib/storageReset";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -502,28 +503,8 @@ function loadPersisted(): PersistedChatState {
   };
 }
 
-// Storage recovery (ADR 0114 D6): AppCrash's "Free up space & reload" sets the in-realm
-// `__protoagentNoFlush` flag (it may not import this store), and broadcasts `storage-reset`
-// to other tabs. Either way this store stops writing, so neither the crashed page's
-// pagehide flush nor another tab's in-memory copy writes the cleared chats straight back.
-let persistStopped = false;
-
-function persistBlocked(): boolean {
-  return persistStopped || (globalThis as { __protoagentNoFlush?: boolean }).__protoagentNoFlush === true;
-}
-
-try {
-  if (typeof BroadcastChannel !== "undefined") {
-    const resetChannel = new BroadcastChannel("protoagent.storage");
-    resetChannel.onmessage = (e: MessageEvent) => {
-      if ((e.data as { type?: string } | null)?.type === "storage-reset") persistStopped = true;
-    };
-    (resetChannel as { unref?: () => void }).unref?.(); // Node (tests): don't hold the loop open
-  }
-} catch {
-  // no BroadcastChannel — the in-realm flag still covers the crashed page itself
-}
-
+// Storage recovery (ADR 0114 D6): after AppCrash's "Free up space & reload" (this page) or a
+// `storage-reset` broadcast (another tab), this store stops writing — see lib/storageReset.ts.
 function persist(state: ChatState) {
   if (persistBlocked()) return;
   try {

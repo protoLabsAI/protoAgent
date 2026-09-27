@@ -1,7 +1,8 @@
-import { act, createElement as h } from "react";
+import { act, Component, createElement as h, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setDevHooksEnabled } from "../lib/storage";
 import { AppCrash, ForcedQuotaCrash, MIN_FREED_BYTES, freeTranscriptSpace, resetChatData } from "./AppCrash";
 
 // ADR 0114 D6 — the crash page's quota recovery. "Free up space & reload" clears ONLY the
@@ -149,7 +150,13 @@ describe("<AppCrash> on a quota error", () => {
     expect(reload).not.toHaveBeenCalled();
     const rows = [...container.querySelectorAll(".app-crash__keys li code")].map((c) => c.textContent);
     expect(rows[0]).toBe("design-system.hog"); // largest first
-    expect(rows).toContain("protoagent.authToken"); // listed, but only cleared on request
+    expect(rows).toContain("protoagent.authToken"); // listed (its size counts)…
+    // …but credentials and the tenant stamp get no Clear: one click must not lock out a
+    // remote operator.
+    expect(container.querySelector('button[aria-label="Clear protoagent.authToken"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Clear protoagent.deviceId"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Clear protoagent.tenant.uid"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Clear pl-theme"]')).not.toBeNull();
 
     const clear = container.querySelector<HTMLButtonElement>('button[aria-label="Clear design-system.hog"]')!;
     act(() => clear.click());
@@ -161,9 +168,49 @@ describe("<AppCrash> on a quota error", () => {
 });
 
 describe("ForcedQuotaCrash (e2e hook)", () => {
+  let container: HTMLElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    setDevHooksEnabled(true); // vitest runs as a dev build
+  });
+
+  // A tiny boundary so the throw is observable without React's uncaught-error path.
+  class Catch extends Component<{ children?: ReactNode }, { err: Error | null }> {
+    state = { err: null as Error | null };
+    static getDerivedStateFromError(err: Error) {
+      return { err };
+    }
+    render() {
+      return this.state.err ? h("p", { id: "caught" }, this.state.err.name) : this.props.children;
+    }
+  }
+
   it("is inert by default and throws a quota error when forced", () => {
-    expect(ForcedQuotaCrash()).toBeNull();
+    act(() => root.render(h(Catch, null, h(ForcedQuotaCrash))));
+    expect(container.querySelector("#caught")).toBeNull();
     (globalThis as G).__protoagentForceQuotaCrash = true;
-    expect(() => ForcedQuotaCrash()).toThrow(expect.objectContaining({ name: "QuotaExceededError" }));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    act(() => root.render(h(Catch, { key: "again" }, h(ForcedQuotaCrash))));
+    err.mockRestore();
+    expect(container.querySelector("#caught")?.textContent).toBe("QuotaExceededError");
+  });
+
+  it("stays inert in production (dev hooks off), even with the global set", () => {
+    setDevHooksEnabled(false);
+    (globalThis as G).__protoagentForceQuotaCrash = true;
+    act(() => root.render(h(Catch, null, h(ForcedQuotaCrash))));
+    expect(container.querySelector("#caught")).toBeNull();
+    // …and goes live the moment the channel turns out to be non-prod.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    act(() => setDevHooksEnabled(true));
+    err.mockRestore();
+    expect(container.querySelector("#caught")?.textContent).toBe("QuotaExceededError");
   });
 });

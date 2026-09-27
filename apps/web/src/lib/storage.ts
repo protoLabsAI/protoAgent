@@ -209,7 +209,38 @@ const _querySimBytes: number | null = (() => {
   }
 })();
 
+// Gated like the Developer panel (ADR 0068): a dev build, or a runtime channel that isn't
+// prod (flags/flags.ts reports it once /api/flags answers). A production console ignores the
+// knob and the crash hook, so a crafted link can't switch a real operator's saving off.
+let _devHooks: boolean = (() => {
+  try {
+    return import.meta.env?.DEV === true;
+  } catch {
+    return false;
+  }
+})();
+const _devHookListeners = new Set<() => void>();
+
+/** Are the storage QA hooks (simulateQuotaBytes, the forced crash) live on this page? */
+export function devHooksEnabled(): boolean {
+  return _devHooks;
+}
+
+export function setDevHooksEnabled(on: boolean): void {
+  if (_devHooks === on) return;
+  _devHooks = on;
+  _devHookListeners.forEach((fn) => fn());
+}
+
+export function subscribeDevHooks(fn: () => void): () => void {
+  _devHookListeners.add(fn);
+  return () => {
+    _devHookListeners.delete(fn);
+  };
+}
+
 function simulatedQuota(): number | null {
+  if (!_devHooks) return null;
   const g = (globalThis as SimGlobals).__protoagentSimulateQuotaBytes;
   if (typeof g === "number" && Number.isFinite(g) && g >= 0) return g;
   return _querySimBytes;
@@ -268,7 +299,11 @@ export function registerEvictionHook(hook: EvictionHook | null): void {
   _evict = hook ?? (() => 0);
 }
 
+/** Per key: the smallest write size that failed even after eviction, while latched. */
+const _failedBytes = new Map<string, number>();
+
 function releaseLatch() {
+  _failedBytes.clear();
   setPressure("ok");
 }
 
@@ -309,25 +344,45 @@ export function readKey(area: StorageArea, key: string): string | null {
 export function writeKey(area: StorageArea, key: string, value: string): WriteResult {
   const s = store(area);
   if (!s) return { ok: false, reason: "unavailable" };
+  const bytes = entryBytes(key, value);
+  let prevBytes: number | null = null;
+  try {
+    const prev = s.getItem(key);
+    prevBytes = prev === null ? null : entryBytes(key, prev);
+  } catch {
+    /* unreadable — treat as new */
+  }
+  // A write that doesn't grow usage (a chat deleted, a layout reset) can always go through —
+  // it frees space rather than taking it, so the latch must never block it.
+  const shrinking = prevBytes !== null && bytes <= prevBytes;
+  const latched = area === "local" && _pressure.state === "failing";
   const evictable = matchKey(area, key)?.spec.evictable ?? false;
-  if (area === "local" && evictable && _pressure.state === "failing") return { ok: false, reason: "quota" };
+  if (latched && evictable && !shrinking) return { ok: false, reason: "quota" };
   try {
     rawSet(area, s, key, value);
+    if (area === "local" && shrinking) releaseLatch(); // usage didn't grow — space came back
     return { ok: true };
   } catch (err) {
     if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };
     // sessionStorage has its own per-tab quota: no eviction, no latch — just report it.
     if (area === "session") return { ok: false, reason: "quota" };
   }
-  runEviction(key, entryBytes(key, value));
-  try {
-    rawSet(area, s, key, value);
-    return { ok: true };
-  } catch (err) {
-    if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };
-    setPressure("failing");
-    return { ok: false, reason: "quota" };
+  // While latched, don't re-run eviction for a write this size (or larger) of a key that
+  // already failed after one — the hook found nothing then, and nothing has changed since
+  // (any removal, storage event or successful eviction releases the latch and clears this).
+  const failed = _failedBytes.get(key);
+  if (!(latched && failed !== undefined && bytes >= failed)) {
+    runEviction(key, bytes);
+    try {
+      rawSet(area, s, key, value);
+      return { ok: true };
+    } catch (err) {
+      if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };
+    }
   }
+  _failedBytes.set(key, bytes);
+  setPressure("failing");
+  return { ok: false, reason: "quota" };
 }
 
 export class StorageWriteError extends Error {
@@ -383,4 +438,5 @@ export function persistStorage(area: StorageArea, mapKey: (name: string) => stri
 export function __resetStorageSeamForTests(): void {
   _pressure = { state: "ok" };
   _evict = () => 0;
+  _failedBytes.clear();
 }

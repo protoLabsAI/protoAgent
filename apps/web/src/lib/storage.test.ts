@@ -9,6 +9,7 @@ import {
   readKey,
   registerEvictionHook,
   removeKey,
+  setDevHooksEnabled,
   storagePressure,
   subscribeStoragePressure,
   usageBytes,
@@ -163,6 +164,61 @@ describe("the quota latch: evict → retry → latch", () => {
   });
 });
 
+describe("the latch never blocks a write that frees space (review r1)", () => {
+  // latch.mts: a transcript grows past the quota → latched. The operator then DELETES chats,
+  // so the next write of that same key is smaller. Failing it fast would bring the deleted
+  // chats back on reload — and with no eviction yet (S1) the latch would never release.
+  it("a shrinking write to an evictable key goes through and releases the latch", () => {
+    local = new QuotaStorage(10_000);
+    vi.stubGlobal("localStorage", local);
+    const K = "protoagent.chat.sessions";
+    expect(writeKey("local", K, big(4000))).toEqual({ ok: true }); // ~8 KB
+    expect(writeKey("local", K, big(6000))).toEqual({ ok: false, reason: "quota" });
+    expect(storagePressure().state).toBe("failing");
+    expect(writeKey("local", K, big(100))).toEqual({ ok: true });
+    expect(readKey("local", K)?.length).toBe(100);
+    expect(storagePressure().state).toBe("ok");
+    expect(writeKey("local", "protoagent.ui", "{}")).toEqual({ ok: true }); // layout saves again
+  });
+
+  it("an equal-size rewrite also goes through (usage doesn't grow)", () => {
+    local.setItem("protoagent.ui", big(100));
+    local.setItem("plugin.hog", big(370)); // 988 of 1000 bytes used
+    expect(writeKey("local", "protoagent.chat.sessions", big(50)).ok).toBe(false);
+    expect(storagePressure().state).toBe("failing");
+    expect(writeKey("local", "protoagent.ui", "y".repeat(100))).toEqual({ ok: true });
+    expect(storagePressure().state).toBe("ok");
+  });
+
+  it("a GROWING evictable write still fails fast while latched", () => {
+    local.setItem("protoagent.ui", big(10));
+    local.setItem("plugin.hog", big(450));
+    expect(writeKey("local", "protoagent.chat.sessions", big(100)).ok).toBe(false);
+    const calls = local.setCalls;
+    expect(writeKey("local", "protoagent.ui", big(20))).toEqual({ ok: false, reason: "quota" });
+    expect(local.setCalls).toBe(calls);
+  });
+});
+
+describe("eviction isn't re-run for a write that already failed at that size (review r1)", () => {
+  it("records the failed size per key while latched", () => {
+    local.setItem("plugin.hog", big(450));
+    const hook = vi.fn(() => 0);
+    registerEvictionHook(hook);
+    expect(writeKey("local", "protoagent.keybindings", big(100)).ok).toBe(false); // evicts once
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(writeKey("local", "protoagent.keybindings", big(100)).ok).toBe(false); // same size
+    expect(writeKey("local", "protoagent.keybindings", big(120)).ok).toBe(false); // larger
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(writeKey("local", "protoagent.inputHistoryish", big(100)).ok).toBe(false); // another key
+    expect(hook).toHaveBeenCalledTimes(2);
+    // A release (here: a removal) clears the memo — the next failure may evict again.
+    removeKey("local", "protoagent.editor");
+    expect(writeKey("local", "protoagent.keybindings", big(100)).ok).toBe(false);
+    expect(hook).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("writeKeyStrict", () => {
   it("throws when the browser can't keep the value — never reports a silent success", () => {
     local.setItem("plugin.hog", big(490));
@@ -172,6 +228,14 @@ describe("writeKeyStrict", () => {
 });
 
 describe("storage.simulateQuotaBytes (dev flag)", () => {
+  afterEach(() => setDevHooksEnabled(true)); // vitest runs as a dev build
+
+  it("is ignored in production (dev hooks off)", () => {
+    setDevHooksEnabled(false);
+    (globalThis as { __protoagentSimulateQuotaBytes?: number }).__protoagentSimulateQuotaBytes = 10;
+    expect(writeKey("local", "protoagent.editor", "zed")).toEqual({ ok: true });
+  });
+
   it("throws a synthetic QuotaExceededError once total usage would exceed N bytes", () => {
     local = new QuotaStorage(10_000_000);
     vi.stubGlobal("localStorage", local);

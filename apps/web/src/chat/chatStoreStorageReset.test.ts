@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // ADR 0114 D6 — after AppCrash's "Free up space & reload" clears the transcripts, nothing may
 // write them straight back: not the crashed page's pagehide flush (the in-realm
 // `__protoagentNoFlush` flag, set without importing this store), and not another tab's
-// in-memory copy (the `storage-reset` broadcast).
+// in-memory copy (the `storage-reset` broadcast — which also reloads that tab).
 
 type G = { __protoagentNoFlush?: boolean };
 const KEY = "protoagent.chat.sessions";
@@ -42,18 +42,52 @@ describe("chat-store stops persisting after a storage reset", () => {
     vi.useRealTimers();
   });
 
-  it("a storage-reset broadcast from another tab stops this tab persisting", async () => {
+  it("a storage-reset broadcast from another tab stops persisting AND reloads the tab", async () => {
     expect(typeof BroadcastChannel).toBe("function"); // Node provides it — no silent skip
+    const reset = await import("../lib/storageReset");
+    const reload = vi.fn();
+    reset.__setStorageResetReloadForTests(reload);
     const { chatStore, flushChatPersist } = await import("./chat-store");
     const other = new BroadcastChannel("protoagent.storage");
     other.postMessage({ type: "storage-reset" });
     other.close();
-    await new Promise((r) => setTimeout(r, 50)); // delivery is async
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1)); // delivery is async
+    // Until the reload lands, nothing is written back.
     window.localStorage.removeItem(KEY);
     const id = chatStore.getSnapshot().currentSessionId!;
     chatStore.renameSession(id, "after reset");
     chatStore.updateMessages(id, msg("after reset"));
     flushChatPersist();
     expect(window.localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("the crash page that SENT the reset ignores its own broadcast (no reload out from under the key list)", async () => {
+    const reset = await import("../lib/storageReset");
+    const reload = vi.fn();
+    reset.__setStorageResetReloadForTests(reload);
+    (globalThis as G).__protoagentNoFlush = true;
+    reset.handleStorageReset({ type: "storage-reset" });
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("palette/DM threads honour the same block (review r1)", () => {
+  it("neither an immediate save nor a pending trailing save writes after a reset", async () => {
+    vi.useFakeTimers();
+    const { savePaletteThread } = await import("../app/paletteChatStore");
+    savePaletteThread({ contextId: "c1", messages: [] }, false); // trailing timer pending
+    (globalThis as G).__protoagentNoFlush = true;
+    vi.advanceTimersByTime(1000);
+    savePaletteThread({ contextId: "c2", messages: [] }, true);
+    savePaletteThread({ contextId: "c3", messages: [] }, false);
+    vi.advanceTimersByTime(1000);
+    expect(window.localStorage.getItem("protoagent.palette.chat")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("control: without the block the thread is saved", async () => {
+    const { savePaletteThread } = await import("../app/paletteChatStore");
+    savePaletteThread({ contextId: "c1", messages: [] }, true);
+    expect(window.localStorage.getItem("protoagent.palette.chat")).toContain("c1");
   });
 });
