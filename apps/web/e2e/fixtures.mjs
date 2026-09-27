@@ -146,7 +146,22 @@ export const FLEET = {
     { name: "roxy", id: "roxy", port: 7891, pid: null, running: false, bundle: "https://github.com/protoLabsAI/project-manager-archetype" },
   ],
   active: null,
+  // Settings ▸ Devices (ADR 0087 + 0113): paired clients of THIS instance. Lives on the fleet
+  // scope so a revoke in one spec can't leak into another (reset restores it). One phone,
+  // one other agent's hub — the kind badge is the difference.
+  devices: [
+    { id: "dev-phone1", name: "Josh's iPhone", created_at: 1780000000, last_seen_at: null, kind: "device" },
+    { id: "dev-hub001", name: "studio-hub", created_at: 1780000500, last_seen_at: null, kind: "agent" },
+  ],
 };
+
+// Remote members in each ADR 0113 D5 auth state, seeded on demand via
+// POST /api/__test__/fleet/seed-remotes (not in the baseline — other specs count rows).
+export const PAIRED_REMOTES = [
+  { name: "rex", id: "rex-re02", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.21:7870", a2a: "http://127.0.0.1:7871/agents/rex-re02/a2a", auth: "rejected" },
+  { name: "nova", id: "nova-re03", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.22:7870", a2a: "http://127.0.0.1:7871/agents/nova-re03/a2a", auth: "none" },
+  { name: "orbit", id: "orbit-re04", port: null, pid: null, running: true, bundle: "", remote: true, url: "http://100.64.0.23:7870", a2a: "http://127.0.0.1:7871/agents/orbit-re04/a2a", auth: "ok" },
+];
 
 // GET /api/archetypes — the picker's catalog (ADR 0100). Bundle ids follow the
 // `<name>-archetype` repo convention of config/archetype-catalog.json ("stack" is retired).

@@ -25,6 +25,7 @@ import type {
   DiagnosticsTask,
   DiscoveredAgent,
   FleetAgent,
+  RemoteAuth,
   FleetStatus,
   FlagsPayload,
   GoalState,
@@ -79,6 +80,7 @@ import type {
   VerifierCatalog,
   WorkflowSummary,
 } from "./types";
+import { cancelBody, type PairKind } from "./agentPairing";
 import { delegationFromFrame } from "./delegation";
 
 import type { WatchCreateBody } from "../chat/watchForm";
@@ -1069,10 +1071,33 @@ async function consumeSse(
   }
 }
 
-export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr: string | null };
+/** A reachable address in a pairing-start answer. For a PHONE code `url` is the full
+ *  `…/app/#pair=<code>` link and `qr` its rendered SVG; for an AGENT code (ADR 0113) `url` is
+ *  the bare base URL a hub pairs against and there is no QR — the code is typed, not scanned. */
+export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr?: string | null };
 export type PairAddress = { host: string; kind: "tailnet" | "lan" };
+/** A row of `GET /api/devices`. `kind` says whether the client is a phone/tablet or another
+ *  agent's hub (ADR 0113 D3) — fixed by the code it claimed; absent (pre-0113) reads `device`. */
+export type PairedDevice = {
+  id: string;
+  name: string;
+  created_at: number;
+  last_seen_at: number | null;
+  kind?: PairKind;
+};
 export type PairingStart =
-  | { ok: true; code: string; expires_at: number; ttl: number; hosts: PairHost[] }
+  | {
+      ok: true;
+      /** Which code this is — echoed by the server; absent from pre-ADR-0113 servers (a phone code). */
+      kind?: PairKind;
+      /** A phone code is 32 url-safe chars; an agent code is `XXXXX-XXXXX`. */
+      code: string;
+      expires_at: number;
+      ttl: number;
+      hosts: PairHost[];
+      /** Agent codes only: this agent's display name, so the hint can say who's pairing. */
+      name?: string;
+    }
   /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6).
    *  `authConfigured` is THIS SERVER's answer to "do I have a token", which a client cannot
    *  infer: localStorage holding one says nothing about what the server accepts. */
@@ -1087,9 +1112,7 @@ export const api = {
   // The CLAIM half deliberately lives outside this object (lib/pairing.ts): `request`
   // attaches the operator bearer, and claiming runs precisely when there isn't one.
   devices() {
-    return request<{ devices: { id: string; name: string; created_at: number; last_seen_at: number | null }[] }>(
-      "/api/devices",
-    );
+    return request<{ devices: PairedDevice[] }>("/api/devices");
   },
   /** Start pairing.
    *
@@ -1098,10 +1121,15 @@ export const api = {
    * offer to bind there. `request` collapses every non-2xx into a thrown string, which would
    * throw that payload away — and the alternative (returning 200 with ok:false) would weaken
    * a correct status code for client convenience. */
-  async pairingStart(): Promise<PairingStart> {
+  async pairingStart(kind: PairKind = "device"): Promise<PairingStart> {
+    const headers = applyAuth(new Headers());
+    headers.set("Content-Type", "application/json");
     const res = await fetch(apiUrl("/api/pairing/start"), {
       method: "POST",
-      headers: applyAuth(new Headers()),
+      headers,
+      // `kind` is fixed at MINT time (ADR 0113 D2) — the claimer can't relabel a phone code
+      // as an agent, so this body is the only place the kind is ever chosen.
+      body: JSON.stringify({ kind }),
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) return { ok: true, ...data } as PairingStart;
@@ -1115,8 +1143,10 @@ export const api = {
       authConfigured: data?.auth_configured === true,
     };
   },
-  pairingCancel() {
-    return request<{ ok: boolean }>("/api/pairing/cancel", { method: "POST" });
+  /** Drop this dialog's pending code. Scoped by kind (see `cancelBody`): an unscoped cancel
+   *  would also kill a code of the OTHER kind that another dialog is still showing. */
+  pairingCancel(kind: PairKind) {
+    return request<{ ok: boolean }>("/api/pairing/cancel", { method: "POST", body: cancelBody(kind) });
   },
   revokeDevice(id: string) {
     return request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -2211,24 +2241,47 @@ export const api = {
       method: "POST",
     });
   },
-  addRemoteAgent(body: { name: string; url: string; token?: string }) {
+  /** Pair this hub with a remote protoAgent (ADR 0113 D1): the HUB's server redeems a code
+   *  minted on the remote (its Settings ▸ Devices ▸ Pair an agent, or `protoagent pair`) and
+   *  stores the per-device token it gets back — the token never reaches this browser. Adds the
+   *  member, or re-tokens it in place when that URL is already one (`action: "retokened"` —
+   *  the Re-pair path; id, slug and open windows survive). Errors carry the server's `detail`
+   *  (400: bad url/name, invalid/expired code; 502: unreachable or not a pairing protoAgent). */
+  pairRemote(body: { url: string; code: string; name?: string; allow_insecure?: boolean }) {
+    return request<{
+      ok: boolean;
+      agent: FleetAgent;
+      reachable?: boolean;
+      version?: string;
+      auth?: RemoteAuth;
+      action?: "added" | "retokened";
+    }>("/api/fleet/remotes/pair", { method: "POST", body });
+  },
+  addRemoteAgent(body: { name: string; url: string; token?: string; allow_insecure?: boolean }) {
     // Register a remote protoAgent as a SWITCHABLE fleet member (ADR 0042 §I) —
     // it gets a slug window; the hub reverse-proxies its console + A2A. The server
     // probes it at register time and returns `reachable`/`version` so the caller can
     // warn up front (registration is NOT rejected for an unreachable peer — deferred
     // registration is intentional; a peer can come online later).
-    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string }>("/api/fleet/remotes", {
+    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string; auth?: RemoteAuth }>("/api/fleet/remotes", {
       method: "POST",
       body,
     });
   },
-  updateRemoteAgent(ident: string, body: { name?: string; url?: string; token?: string }) {
+  updateRemoteAgent(ident: string, body: { name?: string; url?: string; token?: string; allow_insecure?: boolean }) {
     // Edit a remote member in place (ADR 0042 §I) — omitted fields keep their value;
     // token:"" clears the stored bearer. The id/slug is unchanged, so open windows survive.
-    // The server re-probes and returns fresh {reachable, version}. A url on a NEW origin with
-    // no token in the same body clears the stored token (it was issued by the old host) and
-    // the answer says `token_cleared: true` (ADR 0113).
-    return request<{ ok: boolean; agent: FleetAgent; reachable?: boolean; version?: string; token_cleared?: boolean }>(
+    // The server re-probes and returns fresh {reachable, version, auth}. A url on a NEW origin
+    // with no token in the same body clears the stored token (it was issued by the old host)
+    // and the answer says `token_cleared: true` (ADR 0113).
+    return request<{
+      ok: boolean;
+      agent: FleetAgent;
+      reachable?: boolean;
+      version?: string;
+      auth?: RemoteAuth;
+      token_cleared?: boolean;
+    }>(
       `/api/fleet/remotes/${encodeURIComponent(ident)}`,
       { method: "PATCH", body },
     );

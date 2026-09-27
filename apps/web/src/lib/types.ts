@@ -1848,7 +1848,15 @@ export type FleetAgent = {
   // for a remote member it's the last-probed value ("" until the first probe lands).
   // The console flags hub↔remote skew — the proxied /api/* surface has no other versioning.
   version?: string;
+  /** A remote member's token verdict (ADR 0113 D5) — never the token itself. `ok`: the
+   *  remote accepts the stored bearer; `rejected`: it refused it (revoked/rotated → re-pair);
+   *  `unknown`: not probed yet; `none`: no token stored. Absent on local members and on hubs
+   *  that predate pairing. */
+  auth?: RemoteAuth;
 };
+
+/** See `FleetAgent.auth`. */
+export type RemoteAuth = "ok" | "rejected" | "unknown" | "none";
 
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.
 export type FleetStatus = { agents: FleetAgent[] };
@@ -1894,6 +1902,10 @@ export type DiagnosticsTask = {
 };
 
 // Another protoAgent found on the box / LAN (ADR 0042 §I) — a candidate remote delegate.
+/** A protoAgent found by `GET /api/fleet/discover` (loopback, tailnet, mDNS). Never a
+ *  member: the route drops every registered remote, so a discovered agent is by definition
+ *  unpaired (ADR 0113 D9) — its primary action is Pair…. `url` is its base URL (no `/a2a`);
+ *  `name` is its agent-card name, or `host:port` when the card had none. */
 export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
 
 export type Archetype = {

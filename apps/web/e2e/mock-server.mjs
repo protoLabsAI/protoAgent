@@ -25,6 +25,7 @@ import {
   DELEGATES,
   DELEGATE_TYPES,
   FLEET,
+  PAIRED_REMOTES,
   GOALS,
   GOAL_PLAN,
   INBOX_ITEMS,
@@ -562,6 +563,8 @@ function handleApiGet(
       return { theme: null }; // per-agent theme (ADR 0042); null → DS defaults
     case "/api/fleet":
       return { agents: fleet.agents };
+    case "/api/devices":
+      return { devices: fleet.devices ?? [] };
     case "/api/fleet/discover":
       // One discoverable sibling on the LAN (not in the fleet) — candidates for
       // add-as-delegate or add-to-fleet (remote member).
@@ -1342,6 +1345,86 @@ const server = createServer(async (req, res) => {
       // Per-spec hermeticity: restore this scope's fleet to the baseline.
       fleetScopes.set(req.headers["x-e2e-fleet"] || "default", cloneFleet(FLEET));
       return sendJson(res, { ok: true });
+    }
+    if (pathname === "/api/__test__/fleet/seed-remotes" && req.method === "POST") {
+      // Remote members in every ADR 0113 D5 auth state (rejected / none / ok).
+      for (const r of PAIRED_REMOTES) if (!fleet.agents.some((a) => a.id === r.id)) fleet.agents.push({ ...r });
+      return sendJson(res, { ok: true });
+    }
+    // Agent pairing (ADR 0113) — the remote's half. `x-e2e-pairing: loopback` drives the 409
+    // "only listens on localhost" answer so the shared reachability step renders.
+    if (pathname === "/api/pairing/start" && req.method === "POST") {
+      const kind = body?.kind === "agent" ? "agent" : "device";
+      if (req.headers["x-e2e-pairing"] === "loopback") {
+        return sendJson(res, {
+          ok: false,
+          error: kind === "agent"
+            ? "This agent only listens on localhost, so another agent can't reach it."
+            : "This agent only listens on localhost, so a phone can't reach it.",
+          hosts: [],
+          available: [{ host: "100.64.0.5", kind: "tailnet" }, { host: "192.168.5.20", kind: "lan" }],
+          bind: "127.0.0.1",
+          auth_configured: true,
+        }, 409);
+      }
+      const ttl = kind === "agent" ? 300 : 120;
+      const expires_at = Math.floor(nowFor(req) / 1000) + ttl;
+      if (kind === "agent") {
+        return sendJson(res, {
+          ok: true, kind, code: "7KQ2M-X9D4P", expires_at, ttl, name: "main",
+          // LAN listed first on purpose — the console must still show tailnet first.
+          hosts: [
+            { host: "192.168.5.20", kind: "lan", url: "http://192.168.5.20:7871" },
+            { host: "100.64.0.5", kind: "tailnet", url: "http://100.64.0.5:7871" },
+          ],
+        });
+      }
+      return sendJson(res, {
+        ok: true, kind, code: "e2e-phone-code", expires_at, ttl,
+        hosts: [{ host: "100.64.0.5", kind: "tailnet", url: "http://100.64.0.5:7871/app/#pair=e2e-phone-code", qr: null }],
+      });
+    }
+    if (pathname === "/api/pairing/cancel" && req.method === "POST") {
+      return sendJson(res, { ok: true });
+    }
+    if (req.method === "DELETE" && /^\/api\/devices\/[^/]+$/.test(pathname)) {
+      const id = decodeURIComponent(pathname.split("/").pop());
+      fleet.devices = (fleet.devices ?? []).filter((d) => d.id !== id);
+      return sendJson(res, { ok: true });
+    }
+    // Hub-side pairing (ADR 0113 D1): redeem a code against a remote URL. Mirrors the real
+    // route's error words (the console toasts `detail` verbatim) and its re-pair semantics —
+    // a URL that's already a member is re-tokened in place, not added twice.
+    if (pathname === "/api/fleet/remotes/pair" && req.method === "POST") {
+      const url = String(body?.url || "").trim().replace(/\/+$/, "");
+      const code = String(body?.code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (!/^https?:\/\/.+/.test(url)) return sendJson(res, { detail: "url must be http(s)://host[:port]" }, 400);
+      // ADR 0113 D10: plain http to a non-loopback, non-tailnet host needs allow_insecure.
+      // `studio.local` stands in for a NAME that resolves to a LAN address — the case only the
+      // hub can judge, so the console learns it from this 400.
+      const host = (url.match(/^https?:\/\/([^/:]+)/) || [])[1] || "";
+      const lanLiteral = /^(10|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(host);
+      if (url.startsWith("http://") && (lanLiteral || host === "studio.local") && body?.allow_insecure !== true) {
+        return sendJson(res, {
+          detail: `refusing to send the pairing code over plain http to ${host} — use its tailnet address or https, or confirm allow_insecure`,
+        }, 400);
+      }
+      if (code === "EXPIRED000") {
+        return sendJson(res, { detail: "that code is invalid or expired — generate a new one on the remote" }, 400);
+      }
+      const existing = fleet.agents.find((a) => a.remote && a.url === url);
+      if (existing) {
+        existing.auth = "ok";
+        if (body?.name) existing.name = String(body.name);
+        return sendJson(res, { ok: true, agent: existing, reachable: true, version: "", auth: "ok", action: "retokened" });
+      }
+      // No name → the remote's card name, as the real hub defaults it (the discovered sibling).
+      const name = String(body?.name || "").trim() || (url === "http://192.168.5.50:7871" ? "remy" : "remote");
+      if (fleet.agents.some((a) => a.name === name)) return sendJson(res, { detail: `an agent named '${name}' already exists` }, 400);
+      const id = `${name}-pr01`;
+      const agent = { name, id, port: null, pid: null, running: true, bundle: "", remote: true, url, a2a: `http://127.0.0.1:7871/agents/${id}/a2a`, auth: "ok" };
+      fleet.agents.push(agent);
+      return sendJson(res, { ok: true, agent, reachable: true, version: "", auth: "ok", action: "added" });
     }
     if (pathname === "/api/__test__/secrets/reset" && req.method === "POST") {
       // Per-spec hermeticity: undo a Sync-now flip so status GETs are order-independent.
