@@ -252,6 +252,71 @@ def test_design_system_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+# The `# Personality` block is a golden: the persona refresh must leave it byte-identical.
+_DESIGN_SYSTEM_PERSONALITY = (
+    "# Personality\n"
+    "\n"
+    "- **Precise** — I cite the token, the component, the WCAG criterion; evidence over\n"
+    "  taste.\n"
+    "- **Consistent** — the system's coherence outranks any single clever screen.\n"
+    '- **Calibrated** — I say "the system doesn\'t cover this yet" rather than invent a\n'
+    "  one-off.\n"
+    "- **Accountable** — I never call something shipped that hasn't merged, and I never\n"
+    "  call something accessible that I haven't checked.\n"
+)
+
+
+def test_design_system_preset_is_pure_persona() -> None:
+    """The shipped Design System Engineer persona preset stays a PURE PERSONA (ADR 0079):
+    first-person capabilities and values only — no tool names, config keys, procedures, or
+    org-specific repo/package/agent/model names. It keeps its three top-level sections in
+    order, stays within budget, preserves `# Personality` verbatim, and advertises the
+    archetype's current reach (adherence audits, pattern breakdown, brand theming) and its
+    two-board operating model."""
+    preset = CONFIG / "soul-presets" / "design-system.md"
+    text = preset.read_text()
+    lines = text.splitlines()
+
+    # Budget: roughly the original size, never more than 60 lines total.
+    assert len(lines) <= 60, f"preset grew to {len(lines)} lines; keep it <= 60"
+
+    # Exactly the three top-level headings, in order.
+    headings = [ln for ln in lines if ln.startswith("# ")]
+    assert headings == ["# Identity", "# How I work", "# Personality"], headings
+
+    lower = text.lower()
+
+    # Capabilities: audit a codebase AND a live URL for adherence, returning a score with
+    # findings split into system gaps vs consumer fixes; decompose a rendered site into
+    # repeated patterns (covered / needs a variant / missing component); and generate a
+    # dark + light brand theme against the live token contract, every pair contrast-checked.
+    for needle in ("audit", "codebase", "url", "score", "variant", "missing",
+                   "theme", "contrast", "dark", "light", "token contract"):
+        assert needle in lower, f"capabilities description is missing {needle!r}"
+
+    # Two-board model: brief the consuming app's PM (title beside its number, file:line
+    # evidence, replacement token/component, acceptance criteria) instead of editing the
+    # app; a consumer change waits on a *published* version, verified merged AND published.
+    for needle in ("board", "brief", "published", "merged", "acceptance criteria"):
+        assert needle in lower, f"two-board model is missing {needle!r}"
+
+    # Every existing principle survives the refresh.
+    for needle in ("read before i write", "the tokens are law", "one concern per pr",
+                   "humans do", "accessibility is a requirement", "findings, not flags"):
+        assert needle in lower, f"an existing principle was dropped: {needle!r}"
+
+    # Pure persona / generic: no tool syntax, config keys, or org-specific names leak in.
+    banned = ("protoagent", "protocontent", "protolabs", "@protolabsai", "designsystem",
+              "claude", "anthropic", "opus", "sonnet", "python -m", "```", "slash command")
+    for token in banned:
+        assert token not in lower, f"preset leaks a non-persona/org-specific token {token!r}"
+
+    # `# Personality` is preserved byte-for-byte and remains the final section.
+    assert text.endswith(_DESIGN_SYSTEM_PERSONALITY), (
+        "the `# Personality` section must stay byte-identical to the shipped golden"
+    )
+
+
 def test_engineer_archetype_row() -> None:
     """The Engineer archetype (a hands-on navigator coding agent) ships as a standard
     picker row backed by the engineer-archetype bundle: unique id, a `soul_preset` that
