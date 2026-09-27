@@ -316,10 +316,12 @@ async def test_update_with_inline_title_args_refines_the_input(tmp_path, fake_la
     assert tool["input"] == {"input": '{"cmd": "make", "api_key": "[REDACTED]"}'}
 
 
-# Replays whatever update sequence argv[1] holds. For the refinement edge cases below.
+# Replays the update sequence in the JSON file argv[1] names (a file, not argv itself:
+# the pathological-title case is far past Windows' 32k command-line limit).
 _REPLAY_AGENT = r"""
 import sys, json
-UPDATES = json.loads(sys.argv[1])
+with open(sys.argv[1], encoding="utf-8") as f:
+    UPDATES = json.load(f)
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -362,13 +364,15 @@ _EXPORT_KEY = [
 async def _replay(tmp_path, updates: list[dict], events: list | None = None) -> None:
     script = tmp_path / "replay_agent.py"
     script.write_text(_REPLAY_AGENT, encoding="utf-8")
+    updates_file = tmp_path / "updates.json"
+    updates_file.write_text(json.dumps(updates), encoding="utf-8")
 
     async def on_tool(event: dict) -> None:
         if events is not None:
             events.append(event)
 
     client = AcpClient(
-        sys.executable, [str(script), json.dumps(updates)], cwd=str(tmp_path), name="claude", record_runs=False
+        sys.executable, [str(script), str(updates_file)], cwd=str(tmp_path), name="claude", record_runs=False
     )
     try:
         await client.prompt("go", tool_callback=on_tool, timeout=30.0)
