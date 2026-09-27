@@ -243,3 +243,71 @@ test("follow mode (opt-in): a completed read_file moves the pane; the pin holds 
   await page.waitForTimeout(900);
   await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
 });
+
+/** Hover the pane body and wheel UP — no click, the way a reader scrolls back. */
+async function wheelUpOverPane(page: Page, dy = 150) {
+  const box = (await page.locator(".code-pane__virt").boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 5; i++) {
+    await page.mouse.wheel(0, -dy / 5);
+    await page.waitForTimeout(30);
+  }
+}
+
+const paneScrollTop = (page: Page) => page.locator(".code-pane__virt").evaluate((el) => el.scrollTop);
+
+// The scroll-to-line settle loop used to re-snap for ~4 s after an open, undoing a wheel-up —
+// for good on a short file whose target sits near the end (the wanted offset is past the max
+// scroll, so it never "settles"): the view kept yanking back to the bottom.
+for (const [label, lines] of [
+  ["a short file whose target sits near the end", 30],
+  ["a file with room above and below the target", 0],
+] as const) {
+  test(`a wheel-up right after opening is not fought: ${label}`, async ({ page }) => {
+    if (lines) {
+      await page.route("**/api/fs/file?*", async (route) => {
+        const res = await route.fetch();
+        const body = await res.json();
+        if (body.path !== "src/server.ts" || !body.text) return route.fulfill({ response: res, json: body });
+        const text = body.text.split("\n").slice(0, lines).join("\n") + "\n";
+        await route.fulfill({ response: res, json: { ...body, text, line_count: lines, end: lines } });
+      });
+    }
+    await send(page, "SHOWCODE: scroll back");
+    await expect.poll(() => shadowCount(page, "[data-selected-line]")).toBeGreaterThanOrEqual(7);
+    await expect.poll(() => lineVisible(page, 23)).toBe(true);
+    const landed = await paneScrollTop(page);
+    expect(landed).toBeGreaterThan(100);
+
+    await wheelUpOverPane(page);
+    await expect.poll(() => paneScrollTop(page)).toBeLessThan(landed - 100);
+    const scrolled = await paneScrollTop(page);
+    await page.waitForTimeout(1000);
+    expect(await paneScrollTop(page)).toBe(scrolled);
+  });
+}
+
+test("follow: a new jump still moves the pane after the operator scrolled away", async ({ page }) => {
+  await send(page, "SHOWCODE: start");
+  await expect(page.getByTestId("code-pane-range")).toHaveText("L23–29");
+  await page.getByTestId("code-follow").click();
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.fill("FOLLOWREAD: one");
+  await composer.press("Enter");
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/big.ts");
+  await expect.poll(() => lineVisible(page, 2400), { timeout: 15_000 }).toBe(true);
+
+  // The operator reads upward — not fought…
+  await wheelUpOverPane(page, 1500);
+  await expect.poll(() => lineVisible(page, 2400)).toBe(false);
+  const scrolled = await paneScrollTop(page);
+  await page.waitForTimeout(1000);
+  expect(await paneScrollTop(page)).toBe(scrolled);
+
+  // …and the agent's next read still lands the pane on it (a new open re-arms the scroll).
+  await page.waitForTimeout(900); // past the follow throttle
+  await composer.fill("FOLLOWREAD: two");
+  await composer.press("Enter");
+  await expect(page.getByText("Read the generated rows.").nth(1)).toBeVisible();
+  await expect.poll(() => lineVisible(page, 2400), { timeout: 15_000 }).toBe(true);
+});
