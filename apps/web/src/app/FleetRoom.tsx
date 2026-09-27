@@ -13,8 +13,9 @@
 // fleet really is a fleet-of-one — see fleetSettingsGate.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Activity, AlertTriangle, ChevronLeft, ExternalLink, FileText, Play, RefreshCw, Radio, ScrollText, Send, Square } from "lucide-react";
+import { Activity, AlertTriangle, ChevronLeft, ExternalLink, FileText, Play, RefreshCw, ScrollText, Square } from "lucide-react";
 import { useToast } from "@protolabsai/ui/overlays";
+import { PromptInput, type PromptAttachment } from "@protolabsai/ui/ai";
 import type { PaletteContext, PaletteView } from "@protolabsai/ui/command-palette";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, currentSlug } from "../lib/api";
@@ -57,7 +58,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   // the focused-window slug, so a fleet-selection change never retargets an open drawer; only
   // a fresh Diagnostics click does. Null = the drawer is closed (the activity feed shows).
   const [diag, setDiag] = useState<{ slug: string; name: string } | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const here = currentSlug();
 
   useEffect(() => inputRef.current?.focus(), []);
@@ -161,6 +162,13 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
 
   const targetAgent = target === "broadcast" ? undefined : roster.find((a) => slugOf(a) === target);
 
+  // The address target rendered as a PromptInput attachment chip above the field — the DS
+  // owns the composer chrome now (ADR: designSystem). A specific member is a removable chip
+  // (removing it = back to broadcast); the broadcast fan-out is a read-only chip.
+  const targetChip: PromptAttachment = targetAgent
+    ? { id: `to-${slugOf(targetAgent)}`, name: `@${targetAgent.name}`, kind: "file" }
+    : { id: "broadcast", name: `Everyone else · ${broadcastTargets.length}`, kind: "file" };
+
   // Send: an addressed member opens its DM with the message pre-sent (the wired chat streams
   // the reply); otherwise broadcast to all online. ⌘↵ always broadcasts.
   /** Resolve a typed leading "@name" even when the picker was never used — people type
@@ -213,7 +221,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     broadcast(raw);
   };
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionMatches.length && (e.key === "Enter" || e.key === "Tab")) {
       e.preventDefault();
       pickMention(mentionMatches[0]);
@@ -355,48 +363,19 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
             })}
           </div>
         )}
-        <button
-          type="button"
-          className={`flr__target${targetAgent ? "" : " is-cast"}`}
-          onClick={() => setTarget("broadcast")}
-          title={
-            targetAgent
-              ? `Messaging ${targetAgent.name} — click to broadcast instead`
-              : "Broadcast to every OTHER online member (not this instance, which you're already in)"
-          }
-        >
-          {targetAgent ? (
-            <>
-              <span>@{targetAgent.name}</span>
-              <span className="flr__target-x" aria-hidden>
-                ×
-              </span>
-            </>
-          ) : (
-            <>
-              <Radio size={13} />
-              <span>Everyone else · {broadcastTargets.length}</span>
-            </>
-          )}
-        </button>
-        <input
-          ref={inputRef}
-          className="flr__input"
+        <PromptInput
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={setDraft}
+          // Enter/Send both route here; submit(false) keeps its own guards (blank draft returns
+          // early; a broadcast with zero online targets toasts and sends nothing). onKeyDown
+          // (below) owns Enter so ⌘↵ still forces a broadcast and @-mention nav still works.
+          onSubmit={() => submit(false)}
+          inputRef={inputRef}
           onKeyDown={onKeyDown}
           placeholder={targetAgent ? `Message @${targetAgent.name}…` : "Message everyone…  (@ to address one)"}
-          aria-label={targetAgent ? `Message ${targetAgent.name}` : "Broadcast message"}
+          attachments={[targetChip]}
+          onRemoveAttachment={targetAgent ? () => setTarget("broadcast") : undefined}
         />
-        <button
-          type="button"
-          className="flr__send"
-          onClick={() => submit(false)}
-          disabled={!draft.trim() || (!targetAgent && broadcastTargets.length === 0)}
-          aria-label={targetAgent ? `Message ${targetAgent.name}` : "Broadcast"}
-        >
-          <Send size={15} />
-        </button>
       </div>
     </div>
   );
