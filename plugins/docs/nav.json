@@ -927,6 +927,10 @@
           "title": "0113 — Agent pairing: remote fleet members get a paired, revocable token"
         },
         {
+          "path": "adr/0114-console-browser-storage-budget.md",
+          "title": "0114: Console browser storage — transcripts in IndexedDB, a budget, and a full quota never crashes"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
