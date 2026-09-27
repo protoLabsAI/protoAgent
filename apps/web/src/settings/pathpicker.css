@@ -76,7 +76,7 @@
   background: var(--pl-color-bg-raised);
 }
 .path-browser-row.is-selected {
-  background: color-mix(in srgb, var(--brand-violet-light) 22%, transparent);
+  background: color-mix(in srgb, var(--pl-color-accent) 22%, transparent);
 }
 .path-browser-name {
   flex: 1;

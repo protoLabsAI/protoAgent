@@ -51,8 +51,14 @@ function offenders(sources: Record<string, string>): string[] {
 }
 
 describe("phantom CSS tokens re-pointed to real DS tokens (#3682)", () => {
-  it("memory.css: all seven muted-text sites read --pl-color-fg-muted with the #8a8f98 fallback", () => {
-    expect(count(source("/memory/memory.css"), "var(--pl-color-fg-muted, #8a8f98)")).toBe(7);
+  it("memory.css: every muted-text site reads --pl-color-fg-muted; the #8a8f98 fallback was stripped in #3685 (d2)", () => {
+    const mem = source("/memory/memory.css");
+    // #3682's rename target still holds — no phantom --pl-color-text-muted survives.
+    expect(mem).not.toContain("--pl-color-text-muted");
+    // #3685 (d2) then deleted the dark-only hex fallbacks: the seven renamed sites plus the
+    // pre-existing .memory-injections-context site now all read the bare real token.
+    expect(count(mem, "var(--pl-color-fg-muted, #8a8f98)")).toBe(0);
+    expect(count(mem, "var(--pl-color-fg-muted)")).toBe(8);
   });
 
   it("chat.css: the model-lane label reads --pl-color-fg-muted with its #8b8b93 fallback", () => {
