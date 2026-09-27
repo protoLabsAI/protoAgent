@@ -71,15 +71,104 @@ _VENDOR_FILES = {
 }
 
 
-def _note_path() -> Path:
-    """The single note file, instance-scoped (ADR 0004). ``NOTES_DIR`` overrides
-    the base; ``PROTOAGENT_INSTANCE`` adds a per-instance subdir."""
-    base = Path(os.environ.get("NOTES_DIR") or (Path.home() / ".protoagent" / "notes"))
+def _legacy_notes_dir() -> Path:
+    """Where the note lived before it was resolved through the instance store — under the
+    machine's BOX ROOT (ADR 0004 / 0065), instance-scoped by ``PROTOAGENT_INSTANCE``
+    exactly as the old code was (a bare dir when it's unset). Read-only, for the one-time
+    migration and as the last-ditch fallback.
+
+    Derived from ``box_root()`` — which HONOURS ``PROTOAGENT_BOX_ROOT`` — not a bare
+    ``Path.home()``. An isolated/box-rooted server that shares the operator's real HOME
+    therefore looks for legacy data under ITS OWN box, never the operator's live
+    ``~/.protoagent/notes``: adopting that would MOVE the operator's real note into a
+    throwaway box (same filesystem) or, across a filesystem, EXDEV-fail back onto reading
+    and writing it — the very #3644 leak this change exists to close. For a default
+    install ``box_root()`` IS ``~/.protoagent``, so the pre-scoping path is unchanged and
+    a genuine upgrade still migrates. A bare ``Path.home()`` fallback covers the case
+    where even ``infra.paths`` can't be imported (so this never fails to resolve)."""
+    try:
+        from infra.paths import box_root
+
+        base = box_root() / "notes"
+    except Exception:  # noqa: BLE001 — the fallback path must never fail to resolve
+        base = Path.home() / ".protoagent" / "notes"
     inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
-    if inst:
-        base = base / inst
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "note.md"
+    return base / inst if inst else base
+
+
+def _legacy_note_path() -> Path:
+    """The legacy note file, its dir created — the fallback used when the instance
+    store can't be resolved. Note tools must never fail over where their file lives."""
+    d = _legacy_notes_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "note.md"
+
+
+def _adopt_legacy(target_dir: Path) -> None:
+    """One-time move of a pre-scoping note (and its ``history/``) into the instance
+    store, so an upgrade keeps the operator's note instead of appearing to start empty.
+
+    Atomic-rename only (``os.replace``): a cross-filesystem or busy move raises OSError,
+    which the caller turns into "keep using the legacy dir" — it never copies, so it can
+    never be slow or half-write. Raises only if the NOTE itself can't be moved and nothing
+    has changed yet; once the note has moved, a failure to move ``history/`` is swallowed
+    (the live note is what matters). Only THIS instance's note moves — a sibling instance
+    subdir under the bare legacy dir is left untouched."""
+    legacy = _legacy_notes_dir()
+    if legacy.resolve() == target_dir.resolve():
+        return  # legacy IS the target (e.g. box_root == ~/.protoagent) — nothing to move
+    src_note = legacy / "note.md"
+    if not src_note.is_file():
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    os.replace(src_note, target_dir / "note.md")  # may raise OSError → caller falls back
+    src_hist = legacy / "history"
+    if src_hist.is_dir():
+        try:
+            os.replace(src_hist, target_dir / "history")
+        except OSError:  # note is already moved; a stray history dir is harmless
+            log.warning("[notes] migrated note but left history behind at %s", src_hist)
+    log.info("[notes] migrated legacy note %s -> %s", legacy, target_dir)
+
+
+def _note_path() -> Path:
+    """The single note file, instance-scoped (ADR 0004 / 0065).
+
+    ``NOTES_DIR`` overrides the base (behaviour unchanged, including the per-instance
+    subdir). Otherwise the note lives in this plugin's own instance store
+    (``sdk.plugin_store(plugin_id="notes")`` → ``instance_paths().store("notes")``),
+    which honours ``PROTOAGENT_BOX_ROOT`` / ``PROTOAGENT_HOME`` — so an isolated server
+    or a fleet member never writes into the real home dir, and a default install stops
+    landing the note one level above its instance root (issue #3644, sibling of the
+    artifact plugin). A pre-scoping note under the box root's ``notes/`` is adopted on
+    first access (see ``_legacy_notes_dir`` — box-scoped so a box-rooted server never
+    reaches into the operator's real home).
+
+    Never raises: a path-resolution failure falls back to the legacy home path so a
+    note tool can't fail because of where its file lives."""
+    override = os.environ.get("NOTES_DIR")
+    if override:
+        base = Path(override)
+        inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+        if inst:
+            base = base / inst
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "note.md"
+    try:
+        from graph.sdk import plugin_store
+
+        base = plugin_store(plugin_id="notes")  # created on demand, under the instance root
+        path = base / "note.md"
+        if not path.exists():
+            try:
+                _adopt_legacy(base)
+            except OSError:
+                # Can't move it (cross-filesystem, busy, permissions) — keep using the
+                # legacy dir where it is, rather than starting a second, empty note.
+                return _legacy_note_path()
+        return path
+    except Exception:  # noqa: BLE001 — path resolution must never fail a note tool
+        return _legacy_note_path()
 
 
 def _read() -> str:
