@@ -491,12 +491,25 @@ def in_active_trace() -> bool:
     if not _enabled or _langfuse is None:
         return False
     try:
-        from langfuse.span_filter import is_default_export_span
         from opentelemetry import trace as otel_trace
 
         span = otel_trace.get_current_span()
-        return span.get_span_context().is_valid and bool(is_default_export_span(span))
-    except Exception:  # noqa: BLE001 — a non-SDK span (no scope) or an old SDK: not ours
+        ctx = span.get_span_context()
+        if not ctx.is_valid:
+            return False
+        if not span.is_recording():
+            # A local non-recording span is a turn that SAMPLING dropped: nest under it so
+            # the coder run is dropped with its turn, rather than rooting a fresh trace
+            # that re-rolls the sampling dice and lands orphaned. A remote-only context
+            # (no local span at all) is nothing Langfuse holds.
+            return not ctx.is_remote
+        try:
+            from langfuse.span_filter import is_default_export_span
+        except ImportError:
+            # Pre-v4 SDK: no default export filter, every span is exported.
+            return True
+        return bool(is_default_export_span(span))
+    except Exception:  # noqa: BLE001 — best-effort, like every helper here
         return False
 
 

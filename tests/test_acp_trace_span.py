@@ -315,6 +315,30 @@ def test_in_active_trace_counts_only_spans_langfuse_exports(fake_langfuse):
         assert tracing.in_active_trace() is False
 
 
+def test_a_sampled_out_turn_still_counts_so_the_coder_run_drops_with_it(fake_langfuse):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+
+    dropped = TracerProvider(sampler=TraceIdRatioBased(0)).get_tracer("langfuse-sdk")
+    with dropped.start_as_current_span("turn"):
+        assert tracing.in_active_trace() is True
+
+
+def test_a_remote_only_context_is_not_a_local_trace(fake_langfuse):
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import NonRecordingSpan, SpanContext
+
+    remote = NonRecordingSpan(SpanContext(trace_id=0xA1, span_id=0xB2, is_remote=True))
+    with otel_trace.use_span(remote):
+        assert tracing.in_active_trace() is False
+
+
+def test_a_pre_v4_sdk_without_the_export_filter_counts_every_span(fake_langfuse, monkeypatch):
+    monkeypatch.setitem(sys.modules, "langfuse.span_filter", None)  # import → ImportError
+    with _span_from("a2a-python-sdk"):
+        assert tracing.in_active_trace() is True
+
+
 async def test_incognito_coder_run_sends_no_input(fake_agent, tmp_path, fake_langfuse):
     _fake, span = fake_langfuse
     token = tracing._io_suppressed_ctx.set(True)
