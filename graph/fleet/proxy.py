@@ -105,6 +105,11 @@ def _get_client() -> httpx.AsyncClient:
 # was stored — replacing the browser's Authorization, which carries the HUB's token, not the
 # remote's). 1s TTL cache, keyed by slug, to keep the proxy hot path cheap.
 _slug_cache: dict = {}
+# Slugs whose last resolution was a REMOTE member (kept beside the cache rather than in the
+# ``(base, extra)`` tuple so every existing caller keeps its shape). A remote with no stored
+# token has an EMPTY ``extra`` — indistinguishable from a local peer by the headers alone —
+# and ``forward_to`` must never hand such a remote the fleet service token (see there).
+_remote_slugs: set[str] = set()
 
 
 def _target_for_slug(slug: str) -> tuple[str, dict] | None:
@@ -128,6 +133,10 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
             if remote:
                 extra = {"authorization": f"Bearer {remote['token']}"} if remote.get("token") else {}
                 target = (remote["url"], extra)
+    if target is not None and slug != "host" and not (rec and supervisor._alive(rec.get("pid"))):
+        _remote_slugs.add(slug)
+    else:
+        _remote_slugs.discard(slug)
     _slug_cache[slug] = (target, now)
     return target
 
@@ -145,9 +154,10 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
         # A header in extra REPLACES the caller's — drop any case-variant first, else the
         # upstream carries both (dict keys are case-sensitive, HTTP header names aren't) and
         # a swapped Authorization would sit BESIDE the caller's instead of overriding it.
+        # A None value drops the header outright (a tokenless remote's Authorization).
         overridden = {k.lower() for k in extra_headers}
         headers = {k: v for k, v in headers.items() if k.lower() not in overridden}
-        headers.update(extra_headers)
+        headers.update({k: v for k, v in extra_headers.items() if v is not None})
 
     client = _get_client()
     upstream_req = client.build_request(
@@ -238,8 +248,20 @@ async def forward_to(slug: str, request, path: str):
     base, extra = target
     state = getattr(request, "state", None)
     # A remote member carries its own stored bearer in ``extra``; a host/local peer carries
-    # nothing (the browser's own header rides through unless we swap it below).
-    is_local = not extra.get("authorization")
+    # nothing (the browser's own header rides through unless we swap it below). A remote
+    # with NO stored token also carries nothing, so the headers alone can't tell it from a
+    # local peer — ``_remote_slugs`` does.
+    is_remote = bool(extra.get("authorization")) or slug in _remote_slugs
+    is_local = not is_remote
+    if is_remote and not extra.get("authorization"):
+        # A remote the hub holds no token for (added unpaired, ADR 0113). Forward it with NO
+        # credential rather than the caller's: an operator caller used to get the fleet
+        # service token swapped in below (``is_local`` was keyed on the headers), and a
+        # delegate routed through the hub (ADR 0113 D4) presents that same token — either
+        # way the loopback-only fleet credential rode off the box to a remote that can't
+        # verify it anyway. Anonymous is honest: an open remote answers, a secured one 401s
+        # and the fix is to pair it, which the delegate error names.
+        extra = {"authorization": None}  # None = drop the caller's header (_forward_to_base)
     if getattr(state, "member_public", False):
         # A request the hub admitted off the MEMBER's public list (#1890 — the auth middleware
         # stamps ``member_public``) arrived anonymous; forward it anonymous. Lending EITHER the

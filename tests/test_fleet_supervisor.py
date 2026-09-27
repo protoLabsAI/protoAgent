@@ -299,7 +299,10 @@ def test_load_roster_order_tolerates_corrupt_and_wrong_shape(tmp_path, monkeypat
 
 # ── remote fleet members (ADR 0042 §I) ────────────────────────────────────────
 def test_remote_member_lifecycle(tmp_path, monkeypatch):
+    from runtime.state import STATE
+
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(STATE, "active_port", None, raising=False)  # no bound hub → direct a2a
     rec = supervisor.add_remote("ava", "http://100.101.189.45:7871/", token="sek")
     assert rec["name"] == "ava" and rec["id"].startswith("ava-")
     assert rec["url"] == "http://100.101.189.45:7871"  # trailing slash trimmed
@@ -333,6 +336,35 @@ def test_remote_member_lifecycle(tmp_path, monkeypatch):
 
     out = supervisor.remove_remote("ava")  # by name (id works too)
     assert out["removed"] == ["remote"] and supervisor.list_remotes() == []
+
+
+def test_remote_a2a_routes_through_the_hub_proxy(tmp_path, monkeypatch):
+    """ADR 0113 D4: a remote's advertised ``a2a`` — what "Add as delegate" wires — is the
+    hub's own loopback proxy, so a tokenless delegate presents the fleet token and the hub
+    swaps in the remote's stored bearer. The remote's real URL stays in ``url``."""
+    from runtime.state import STATE
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    monkeypatch.setattr(STATE, "active_port", 7870, raising=False)
+    rec = supervisor.add_remote("ava", "http://100.101.189.45:7871", token="sek")
+
+    entry = next(a for a in supervisor.status() if a.get("remote"))
+    assert entry["a2a"] == f"http://127.0.0.1:7870/agents/{rec['id']}/a2a"
+    assert entry["url"] == "http://100.101.189.45:7871"  # the real address is still reported
+    assert "sek" not in repr(entry)  # routing through the hub never surfaces the bearer
+    host = next(a for a in supervisor.status() if a.get("host"))
+    assert host["a2a"] == "http://127.0.0.1:7870/a2a"  # the host's own endpoint is unchanged
+
+
+def test_remote_a2a_falls_back_to_direct_url_without_a_hub_port(tmp_path, monkeypatch):
+    """No bound port (a CLI read, a test): advertise the direct ``<url>/a2a`` rather than
+    nothing — it needs its own token, but it is a real address."""
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "active_port", None, raising=False)
+    assert supervisor._remote_a2a("ava-1", "http://h:1", None) == "http://h:1/a2a"
+    assert supervisor._remote_a2a("ava-1", "", 7870) is None  # no url → nothing to route to
+    assert supervisor._remote_a2a("a b", "http://h:1", 7870) == "http://127.0.0.1:7870/agents/a%20b/a2a"
 
 
 def test_remote_name_collides_with_workspace(tmp_path, monkeypatch):

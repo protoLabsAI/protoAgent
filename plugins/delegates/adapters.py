@@ -123,6 +123,24 @@ def _is_loopback_url(url: str) -> bool:
     return host in ("localhost", "::1") or host == "127.0.0.1" or host.startswith("127.")
 
 
+def _hub_proxied_slug(url: str) -> str:
+    """The member slug when ``url`` is a hub's loopback fleet proxy to another agent —
+    ``http://127.0.0.1:<port>/agents/<slug>/a2a`` (ADR 0113 D4, what ``supervisor.status()``
+    advertises for a remote member) — else ``""``. ``host`` is the hub itself, not a proxied
+    member, so it doesn't count."""
+    from urllib.parse import unquote, urlsplit
+
+    if not _is_loopback_url(url):
+        return ""
+    try:
+        parts = [p for p in urlsplit(url).path.split("/") if p]
+    except ValueError:
+        return ""
+    if len(parts) == 3 and parts[0] == "agents" and parts[2] == "a2a" and parts[1] != "host":
+        return unquote(parts[1])
+    return ""
+
+
 # ── field schema (drives the panel form + validation) ─────────────────────────
 
 
@@ -798,6 +816,19 @@ def _a2a_auth_hint(d: Delegate, status_code: int) -> str:
     """
     if status_code not in (401, 403) or d.auth_token:
         return ""
+    remote = _hub_proxied_slug(d.url)
+    if remote:
+        # A delegate to a remote fleet member routes through the hub's proxy (ADR 0113 D4):
+        # the fleet token got this call past the hub, and the hub then presents the
+        # remote's STORED bearer — so the 401 is the remote refusing the hub's token (none
+        # stored, or a stale/revoked one). The fix is on the hub's fleet row, not here:
+        # setting a token on this delegate would bypass the one-registry design.
+        return (
+            f" — {d.name!r} reaches remote fleet member {remote!r} through the hub, and the"
+            f" hub has no working token for remote {remote!r}: pair it (Settings ▸ Agents ▸"
+            " Pair…) or update its token on the hub's fleet row. Don't set a token on this"
+            " delegate — the hub supplies the remote's credential."
+        )
     if _is_loopback_url(d.url):
         # Loopback AND no credential reached the peer — the service token lookup failed
         # rather than being withheld. Different problem, different fix.
