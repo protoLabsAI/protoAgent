@@ -162,8 +162,10 @@ socket with the *operator* bearer; a plugin that mints a **member-side ticket** 
 The fix mirrors D3 on the socket: `forward_ws` authenticates a presented `?token=` at the hub
 (`a2a_impl.auth.bearer_tier`) and swaps it for the fleet token the member expects — refusing a token
 that doesn't authenticate, and passing through the `host` slug (its plugins want the operator bearer)
-and ticket-based plugins (no `token` param). Remote-member WS stays refused (its stored bearer must not
-be lent to an unauthenticated caller).
+and ticket-based plugins (no `token` param). Remote-member WS was refused here (its stored bearer must
+not be lent to an unauthenticated caller); ADR 0113 D6 re-enables it without lending: an operator
+credential is swapped for the remote's **stored** token (never the fleet token, which stays on this
+machine), a credential-less ticket socket passes with no Authorization, and a tokenless remote is refused.
 
 ### D6 — Rotation and lifecycle
 

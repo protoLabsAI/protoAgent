@@ -310,6 +310,26 @@ def bearer_tier(token: str) -> str | None:
     return _bearer_tier_for(token)
 
 
+def credential_tier(token: str) -> str | None:
+    """The tier a PRESENTED raw bearer earns on its own merits — ``bearer_tier`` without the
+    open-mode shortcut. On an open hub nothing authenticates here, so every token is None.
+
+    For a caller that is about to hand out something stronger than "this surface is open":
+    the fleet WS proxy swaps an authenticated credential for a REMOTE member's stored bearer
+    (ADR 0113 D6). ``bearer_tier`` says "operator" for ANY string on an open hub, which would
+    let an anonymous ``?token=x`` — from any web page in the operator's browser, since the WS
+    route has no Origin gate of its own — trade itself for the remote's credential. An open
+    hub has no credential to authenticate against, so it can't vouch for one either."""
+    return _bearer_tier_for(token)
+
+
+def allowed_origins() -> list[str] | None:
+    """The configured ``A2A_ALLOWED_ORIGINS`` allowlist (lowercased), or None when origin
+    verification is disabled (unset or ``*``). For scopes the HTTP middleware skips — the
+    fleet WS proxy."""
+    return _ALLOWED_ORIGINS[0]
+
+
 def _bearer_tier_for(token: str) -> str | None:
     """The tier a raw bearer earns, or None. Open mode is the CALLER's concern.
 

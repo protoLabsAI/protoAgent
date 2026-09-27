@@ -398,6 +398,20 @@ hub never forwards its fleet token off the box), so a secured one answers `401` 
 delegate's error tells you to pair it. Local members can use the same URL (they hold the fleet
 token too), so it also works as a [fleet-shared delegate](delegates.md#share-a-delegate-with-the-whole-fleet-adr-0105).
 
+**Live views (WebSockets) work on a remote too** — the terminal, agent_browser's viewport —
+as long as the remote was registered **with a token** (ADR 0113 D6,
+[#3648](https://github.com/protoLabsAI/protoAgent/issues/3648)). The hub still never lends
+that token on its own. A socket that presents your operator bearer (`?token=`) has it checked
+at the hub and swapped for the stored one. An **open** hub (no token of its own) has nothing
+to check it against, so it never swaps. A ticket-based socket (the ticket is minted over the
+authenticated HTTP proxy) reaches the remote with no credential attached, and the remote
+checks the ticket. Any other presented credential is closed with `1008`, and so is a browser
+page on a foreign origin: the console's own origin, the desktop app and `A2A_ALLOWED_ORIGINS`
+are let through. A remote registered without a token gets no WebSocket proxying at all,
+because its sockets would be a blind pipe into an open instance. The hub doesn't read what a
+plugin sends *inside* the socket, so remote terminal views need **terminal-plugin ≥0.9.2**.
+Older versions sent the console's bearer in-band when minting a ticket failed.
+
 **Version skew is flagged.** The hub console drives a remote's full `/api/*` by proxy, so a
 remote on a *different protoAgent release* is a real compat surface. The reachability probe
 also reads the remote's app version off its A2A agent card; when it differs from the hub's,
