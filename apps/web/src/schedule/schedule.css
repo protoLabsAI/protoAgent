@@ -29,7 +29,7 @@
   cursor: pointer;
 }
 .schedule-modes button.active {
-  background: var(--pl-color-accent, #9b87f2);
+  background: var(--pl-color-accent);
   color: var(--pl-color-fg-on-accent);
 }
 .schedule-repeat {
@@ -46,11 +46,11 @@
   margin-left: 8px;
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--pl-color-bg-raised, #131316);
+  background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   font-size: 12px;
 }
-.schedule-preview .muted { color: var(--pl-color-fg-subtle, #71717a); }
+.schedule-preview .muted { color: var(--pl-color-fg-subtle); }
 
 /* A job row's content is a button so the whole row opens the detail dialog; it must
    look like the plain .subagent-row > div content (grid, no button chrome). */
@@ -68,7 +68,7 @@
   color: inherit;
   font: inherit;
 }
-.schedule-row-open:hover strong { color: var(--pl-color-accent, #9b87f2); }
+.schedule-row-open:hover strong { color: var(--pl-color-accent); }
 .schedule-row-open strong {
   min-width: 0;
   overflow: hidden;
@@ -91,16 +91,16 @@
   margin: 0;
   font-size: 13px;
 }
-.schedule-detail-grid dt { color: var(--pl-color-fg-subtle, #71717a); }
+.schedule-detail-grid dt { color: var(--pl-color-fg-subtle); }
 .schedule-detail-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .schedule-detail-grid code {
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--pl-color-bg-raised, #131316);
+  background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   font-size: 12px;
 }
-.schedule-detail-grid .muted { color: var(--pl-color-fg-subtle, #71717a); }
+.schedule-detail-grid .muted { color: var(--pl-color-fg-subtle); }
 .schedule-detail-promptbody {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -140,8 +140,8 @@
 .cal-day:hover { background: var(--pl-color-bg-hover, rgba(127,127,127,.14)); }
 .cal-out { color: var(--pl-color-fg-subtle); opacity: .55; }
 .cal-today { border-color: var(--pl-color-border); font-weight: 600; }
-.cal-sel { background: var(--brand-violet-light, #6d5efc); color: #fff; border-color: transparent; }
-.cal-sel:hover { background: var(--brand-violet-light, #6d5efc); }
+.cal-sel { background: var(--pl-color-accent); color: var(--pl-color-fg-on-accent); border-color: transparent; }
+.cal-sel:hover { background: var(--pl-color-accent); }
 
 /* #2159 — the extracted when-to-run builder (shared by New + Edit) and its sticky,
    highlighted live-preview banner with an inline error line. */
@@ -154,12 +154,12 @@
   padding: 8px 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
-  background: var(--pl-color-bg-raised, #131316);
+  background: var(--pl-color-bg-raised);
   font-size: 13px;
   color: var(--pl-color-fg);
 }
 .schedule-preview-banner.has-error {
-  border-color: var(--pl-color-status-error, #e5484d);
+  border-color: var(--pl-color-status-error);
 }
 .schedule-preview-banner .preview-line {
   display: flex;
@@ -170,18 +170,18 @@
 .schedule-preview-banner .preview-cron {
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--pl-color-bg, #0b0b0d);
+  background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-size: 12px;
 }
-.schedule-preview-banner .muted { color: var(--pl-color-fg-subtle, #71717a); }
+.schedule-preview-banner .muted { color: var(--pl-color-fg-subtle); }
 .schedule-preview-banner .preview-error {
   display: flex;
   align-items: center;
   gap: 5px;
   margin-top: 6px;
   font-size: 12px;
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 
 .field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
