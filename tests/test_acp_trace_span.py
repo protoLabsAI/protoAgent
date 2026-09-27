@@ -171,3 +171,103 @@ async def test_incognito_coder_run_records_no_content(fake_agent, tmp_path, fake
     assert span.update.call_args.kwargs["output"] == ""
     for call in span.start_observation.call_args_list:
         assert call.kwargs["input"] == {"input": ""} and call.kwargs["output"] == ""
+
+
+# claude-agent-acp's streaming shape: the call opens at content_block_start with no
+# arguments and a generic title, and a later ``tool_call_update`` refines both.
+_STREAMING_AGENT = r"""
+import sys, json
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def update(u):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1", "update": u}})
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        update({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read File",
+                "kind": "read", "status": "pending", "rawInput": {}})
+        update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "title": "Read src/app.py",
+                "kind": "read", "rawInput": {"file_path": "src/app.py", "api_key": "hunter2"}})
+        update({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+        update({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done"}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+"""
+
+
+async def test_streamed_tool_call_records_the_refined_arguments(tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    script = tmp_path / "streaming_agent.py"
+    script.write_text(_STREAMING_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="opus", record_runs=False)
+    try:
+        await client.prompt("fix it", timeout=30.0)
+    finally:
+        await client.close()
+
+    (tool,) = (c.kwargs for c in span.start_observation.call_args_list)
+    # The refined title and arguments — not "Read File" / {"input": "read"}.
+    assert tool["name"] == "tool:Read src/app.py"
+    assert tool["input"] == {"input": '{"file_path": "src/app.py", "api_key": "[REDACTED]"}'}
+
+
+def _capture_propagation(monkeypatch) -> list[dict]:
+    import langfuse
+
+    calls: list[dict] = []
+
+    def fake_propagate(**kwargs):
+        calls.append(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr(langfuse, "propagate_attributes", fake_propagate)
+    return calls
+
+
+async def test_root_coder_run_carries_a_session_tags_and_input(fake_agent, tmp_path, fake_langfuse, monkeypatch):
+    _fake, span = fake_langfuse
+    # No current observation: dispatched outside any turn, as the board does.
+    monkeypatch.setenv("AGENT_NAME", "designSystem")
+    calls = _capture_propagation(monkeypatch)
+
+    await _run(fake_agent, tmp_path)
+
+    assert calls == [{"session_id": f"coder:codex:{tmp_path.name}", "tags": ["designSystem"]}]
+    assert span.update.call_args_list[0].kwargs == {"input": "fix it"}
+
+
+async def test_nested_coder_run_leaves_the_turns_session_alone(fake_agent, tmp_path, fake_langfuse, monkeypatch):
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import NonRecordingSpan, SpanContext
+
+    _fake, span = fake_langfuse
+    calls = _capture_propagation(monkeypatch)
+    turn = NonRecordingSpan(SpanContext(trace_id=0xA1, span_id=0xB2, is_remote=False))
+
+    with otel_trace.use_span(turn):  # inside a traced turn
+        await _run(fake_agent, tmp_path)
+
+    assert calls == []
+    assert span.update.call_args_list[0].kwargs == {"input": "fix it"}
+
+
+async def test_incognito_coder_run_sends_no_input(fake_agent, tmp_path, fake_langfuse):
+    _fake, span = fake_langfuse
+    token = tracing._io_suppressed_ctx.set(True)
+    try:
+        await _run(fake_agent, tmp_path)
+    finally:
+        tracing._io_suppressed_ctx.reset(token)
+
+    assert all("input" not in c.kwargs for c in span.update.call_args_list)
