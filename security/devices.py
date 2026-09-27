@@ -118,6 +118,7 @@ def _load() -> list[Device]:
     out: list[Device] = []
     for item in raw if isinstance(raw, list) else []:
         try:
+            raw_kind = item.get("kind")
             out.append(
                 Device(
                     id=str(item["id"]),
@@ -128,10 +129,12 @@ def _load() -> list[Device]:
                     # A registry written before ADR 0113 has no kind: every entry was a phone.
                     # An unknown value also reads as "device" — the less-trusted-sounding label
                     # is the safe default for anything we can't vouch for.
-                    kind=(item.get("kind") if item.get("kind") in _KINDS else KIND_DEVICE),
+                    # isinstance first: a hand-edited list/dict is unhashable, and a TypeError
+                    # here would skip the whole entry — which the next `_save` then deletes.
+                    kind=(raw_kind if isinstance(raw_kind, str) and raw_kind in _KINDS else KIND_DEVICE),
                 )
             )
-        except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):  # AttributeError: a non-dict entry
             continue  # skip a hand-edited/partial entry rather than failing the whole load
     return out
 
@@ -271,6 +274,10 @@ def start_pairing(kind: str = KIND_DEVICE) -> tuple[str, float]:
             stored = shown = secrets.token_urlsafe(_CODE_BYTES)
             expires_at = now + PAIRING_TTL_SECONDS
         _PENDING[stored] = (expires_at, kind)
+        # A fresh code gets a fresh 5-miss budget (ADR 0113 D2: "5 guesses per code the
+        # operator issues"). Without this the counter never decays: four stale misses, then
+        # one honest typo of a NEW typed code, would lock the legitimate claimer out.
+        _failed_claims[0] = 0
     return shown, expires_at
 
 
@@ -279,7 +286,9 @@ def cancel_pairings(kind: str | None = None) -> None:
 
     With ``kind``, only that kind goes: closing the phone dialog must not kill an agent code
     the operator is halfway through typing on another machine (and vice versa). With no
-    argument, every pending code goes — the pre-ADR-0113 behaviour.
+    argument, every pending code goes — the pre-ADR-0113 behaviour. NOTE: until the console
+    slice (ADR 0113 S6) the console's cancel still sends no kind, so closing either dialog
+    still clears both.
     """
     with _LOCK:
         if kind is None:
@@ -331,8 +340,9 @@ def claim_pairing(code: str, device_name: str) -> tuple[dict, str] | None:
 
         _expires, kind = _PENDING.pop(matched)  # consume BEFORE minting, so a race can't double-issue
         _failed_claims[0] = 0
-        # Minted under the lock too: `_register` is a load→append→save of devices.json, and
-        # two different codes claimed at once would otherwise each save a list missing the
-        # other's device.
+        # Minted under the lock too, so two CLAIMS can't interleave their load→append→save of
+        # devices.json. This does not make the registry lock-protected in general: `_touch`
+        # and `revoke_device` don't take `_LOCK` — in practice the event loop serializes them
+        # (every caller is a sync call on the loop).
         device, token = _register(device_name, kind)
     return device.public(), token

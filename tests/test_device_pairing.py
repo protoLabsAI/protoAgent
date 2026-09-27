@@ -348,25 +348,36 @@ def test_racing_claims_mint_exactly_one_device(devices, monkeypatch):
     import threading
 
     code, _ = devices.start_pairing("agent")
-    real_register = devices._register
+    real_match = devices._match
 
-    def slow_register(name, kind="device"):
-        time.sleep(0.05)  # widen the window a check-then-consume bug would slip through
-        return real_register(name, kind)
+    def slow_match(candidate):
+        found = real_match(candidate)
+        # Widen the window BETWEEN match and pop: without `_LOCK` every thread matches the
+        # still-pending code here before any of them consumes it.
+        time.sleep(0.05)
+        return found
 
-    monkeypatch.setattr(devices, "_register", slow_register)
+    monkeypatch.setattr(devices, "_match", slow_match)
     results: list = []
+    errors: list = []
     barrier = threading.Barrier(8)
 
     def claim():
         barrier.wait()
-        results.append(devices.claim_pairing(code, "racer"))
+        try:
+            results.append(devices.claim_pairing(code, "racer"))
+        except Exception as exc:  # noqa: BLE001 — a loser must get a clean None, not a 500
+            errors.append(exc)
 
     threads = [threading.Thread(target=claim) for _ in range(8)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    # Without the lock every thread matches, then all but one die on the pop (a KeyError the
+    # route would surface as a 500) — so "every loser returned None" is what pins the lock.
+    assert errors == []
+    assert len(results) == 8
     assert sum(r is not None for r in results) == 1
     assert len(devices.list_devices()) == 1
 
@@ -400,6 +411,27 @@ def test_a_success_resets_the_shared_counter(devices):
     later, _ = devices.start_pairing()
     devices.claim_pairing("nope", "attacker")  # one miss after a reset must not trip it
     assert devices.claim_pairing(later, "phone") is not None
+
+
+@pytest.mark.parametrize("bad_kind", [["agent"], {"k": "agent"}, 7, None])
+def test_a_malformed_kind_keeps_the_device(devices, bad_kind):
+    """An unhashable hand-edited kind must not skip the entry — the next save would then
+    delete the device for good."""
+    path = devices._registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"id": "c3", "name": "edited", "token_sha256": devices._hash("t"), "created_at": 1.0, "kind": bad_kind}
+    path.write_text(json.dumps(["not-an-object", entry]), "utf-8")  # a stray non-dict too
+    assert [(d["id"], d["kind"]) for d in devices.list_devices()] == [("c3", "device")]
+
+
+def test_a_new_code_gets_a_fresh_miss_budget(devices):
+    """Four stale misses + one honest typo of a NEW code must not lock the operator out."""
+    devices.start_pairing("agent")  # an old code — misses only count while one is pending
+    for _ in range(devices._MAX_FAILED_CLAIMS - 1):
+        assert devices.claim_pairing("stale-guess", "x") is None
+    code, _ = devices.start_pairing("agent")
+    assert devices.claim_pairing("ZZZZZ-ZZZZ0", "typo") is None  # the typo
+    assert devices.claim_pairing(code, "hub") is not None
 
 
 def test_legacy_registry_without_kind_loads_as_device(devices):
