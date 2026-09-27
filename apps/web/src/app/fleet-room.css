@@ -216,12 +216,12 @@
   background: color-mix(in srgb, var(--pl-color-status-error) 16%, transparent);
 }
 
-/* composer */
+/* composer — the DS PromptInput owns the field/send chrome; this only frames it and
+ * anchors the @-mention popover (position: relative). */
 .flr__composer {
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
   padding: 10px 12px;
   border-top: 1px solid var(--pl-color-border);
 }
@@ -269,67 +269,9 @@
   font-size: 11px;
   color: var(--pl-color-fg-subtle);
 }
-.flr__target {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: color-mix(in srgb, var(--pl-color-accent) 12%, transparent);
-  color: var(--pl-color-accent);
-  font-size: 12.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.flr__target:not(.is-cast) {
-  background: var(--pl-color-bg-inset);
-  color: var(--pl-color-fg);
-}
-.flr__target-x {
-  opacity: 0.55;
-  font-weight: 700;
-}
-.flr__input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: none;
-  outline: none;
-  color: var(--pl-color-fg);
-  font-family: inherit; /* inputs don't inherit the family by default */
-  font-size: 14px;
-}
-.flr__input::placeholder {
-  color: var(--pl-color-fg-subtle);
-}
-.flr__send {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: 0;
-  background: var(--pl-color-accent);
-  color: var(--pl-color-fg-on-accent, var(--pl-color-accent-fg));
-  cursor: pointer;
-  flex: none;
-}
-.flr__send:hover:not(:disabled) {
-  background: var(--pl-color-accent-hover);
-}
-.flr__send:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-/* focus visibility (keyboard) */
+/* focus visibility (keyboard) — the DS PromptInput owns its own field/send focus rings */
 .flr__who:focus-visible,
-.flr__icon:focus-visible,
-.flr__target:focus-visible,
-.flr__send:focus-visible,
-.flr__input:focus-visible {
+.flr__icon:focus-visible {
   outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
   outline-offset: 1px;
   border-radius: 7px;

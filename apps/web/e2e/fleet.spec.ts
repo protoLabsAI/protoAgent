@@ -756,8 +756,9 @@ test("⌘K → Fleet Room: presence, DM a member (the wired chat), broadcast", a
   await expect(room.locator(".flr__composer")).toBeVisible();
 
   // The bottom bar broadcasts to everyone online → a success toast.
-  await room.locator(".flr__input").fill("standup in 5");
-  await room.locator(".flr__send").click();
+  const composer = room.locator(".flr__composer");
+  await composer.getByRole("textbox").fill("standup in 5");
+  await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to \d+ member/ })).toBeVisible();
 });
 
@@ -778,24 +779,41 @@ test("⌘K → Fleet Room: @-address a member in the composer, then send opens i
   await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
-  // Typing "@" opens a member picker; picking sets the address chip.
-  await room.locator(".flr__input").fill("@ava");
+  const composer = room.locator(".flr__composer");
+  // Typing "@" opens a member picker; picking sets the address chip (a PromptInput attachment).
+  await composer.getByRole("textbox").fill("@ava");
   await room.locator(".flr__mention", { hasText: "ava" }).click();
-  await expect(room.locator(".flr__target")).toContainText("@ava");
+  await expect(composer.locator(".pl-prompt__chip")).toContainText("@ava");
   // Type a message and send → morphs into ava's DM (the wired chat), message pre-sent.
-  await room.locator(".flr__input").fill("ship it");
-  await room.locator(".flr__send").click();
+  await composer.getByRole("textbox").fill("ship it");
+  await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+});
+
+test("⌘K → Fleet Room: removing the @-address chip clears the target back to broadcast", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  const composer = room.locator(".flr__composer");
+  // Address ava → a removable attachment chip.
+  await composer.getByRole("textbox").fill("@ava");
+  await room.locator(".flr__mention", { hasText: "ava" }).click();
+  await expect(composer.locator(".pl-prompt__chip")).toContainText("@ava");
+  // Removing the chip drops the target back to the read-only broadcast chip.
+  await composer.getByRole("button", { name: "Remove @ava" }).click();
+  await expect(composer.locator(".pl-prompt__chip")).toContainText("Everyone else");
+  await expect(composer.locator(".pl-prompt__chip")).not.toContainText("@ava");
 });
 
 test("⌘K → Fleet Room: a TYPED @name addresses that member without using the picker", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
+  const composer = room.locator(".flr__composer");
   // Never touch the picker — just type "@ava <message>" and send, the way people actually
   // type. It must address ava (open its DM), NOT broadcast the literal text.
-  await room.locator(".flr__input").fill("@ava ship it");
-  await room.locator(".flr__send").click();
+  await composer.getByRole("textbox").fill("@ava ship it");
+  await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to/ })).toHaveCount(0);
 });
@@ -960,9 +978,9 @@ test("Fleet Room diagnostics: switching members retargets the drawer; a fleet-se
 
   // Change the ACTIVE FLEET SELECTION (the composer address) to a different member — the drawer
   // is drawer-local and authoritative (ADR 0042), so it must NOT retarget to follow it.
-  await room.locator(".flr__input").fill("@ro");
+  await room.locator(".flr__composer").getByRole("textbox").fill("@ro");
   await room.locator(".flr__mention", { hasText: "roxy" }).click();
-  await expect(room.locator(".flr__target")).toContainText("@roxy");
+  await expect(room.locator(".flr__composer").locator(".pl-prompt__chip")).toContainText("@roxy");
   await expect(page.getByTestId("diag-member")).toHaveText("ava");
   await expect(page.getByTestId("diag-logs")).toContainText("[ava]");
 
