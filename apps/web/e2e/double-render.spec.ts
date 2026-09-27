@@ -70,14 +70,17 @@ test("two live tabs: a slow streamed turn renders its reply exactly once in each
 
   // Sender settles to the terminal text.
   await expect(page.getByText(ANSWER)).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700); // let the debounced persist + storage sync settle
 
+  // Persistence is a trailing debounce timer, so POLL the store to its terminal count
+  // rather than sleeping a fixed gap a loaded CI box can outrun (a fixed 700ms wait
+  // fired with the store still empty under parallel load). The dedup contract is
+  // unchanged: exactly one persisted assistant copy for the turn.
+  await expect.poll(() => persistedAnswerCount(page), { timeout: 10_000 }).toBe(1);
   expect(await renderedAnswerCount(page), "sender tab").toBe(1);
-  expect(await persistedAnswerCount(page), "persisted store").toBe(1);
 
   // The sibling synced the turn via the storage event — once, not twice.
   await expect(sibling.getByText(ANSWER)).toBeVisible({ timeout: 5_000 });
-  expect(await renderedAnswerCount(sibling), "sibling tab").toBe(1);
+  await expect.poll(() => renderedAnswerCount(sibling), { timeout: 5_000 }).toBe(1);
 });
 
 test("sibling tab reloading mid-turn (double-boot): reply still renders exactly once everywhere", async ({
@@ -96,10 +99,13 @@ test("sibling tab reloading mid-turn (double-boot): reply still renders exactly 
   await sibling.reload({ waitUntil: "load" });
 
   await expect(page.getByText(ANSWER)).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700);
 
+  // Persistence is a trailing debounce timer, so POLL the store to its terminal count
+  // rather than sleeping a fixed gap a loaded CI box can outrun (a fixed 700ms wait
+  // fired with the store still empty under parallel load). The dedup contract is
+  // unchanged: exactly one persisted assistant copy for the turn.
+  await expect.poll(() => persistedAnswerCount(page), { timeout: 10_000 }).toBe(1);
   expect(await renderedAnswerCount(page), "sender tab").toBe(1);
-  expect(await persistedAnswerCount(page), "persisted store").toBe(1);
 
   // The reloaded sibling settles to exactly one copy too — either the storage sync
   // of the sender's final write or its own reconcile, never both stacked.

@@ -107,8 +107,8 @@ export function consoleTheme(): Record<string, string> {
   const s = getComputedStyle(document.documentElement);
   const g = (n: string) => s.getPropertyValue(n).trim();
   const theme: Record<string, string> = {
-    bg: g("--bg"), bgPanel: g("--bg-panel"), fg: g("--fg"),
-    fgMuted: g("--fg-muted"), brand: g("--brand-violet-light"), border: g("--border"),
+    bg: g("--pl-color-bg"), bgPanel: g("--pl-color-bg-raised"), fg: g("--pl-color-fg"),
+    fgMuted: g("--pl-color-fg-muted"), brand: g("--pl-color-accent"), border: g("--pl-color-border"),
     mode: themeMode(),
   };
   for (const name of PL_TOKEN_VARS) {
