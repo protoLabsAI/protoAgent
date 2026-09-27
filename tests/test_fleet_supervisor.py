@@ -422,7 +422,7 @@ def test_refresh_remote_probes_ttl(tmp_path, monkeypatch):
         def json(self):
             return {"name": "ava", "version": "0.9.9"}
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, **kw):
         calls["n"] += 1
         return FakeResp()
 
@@ -451,7 +451,7 @@ def test_probe_captures_remote_version(tmp_path, monkeypatch):
 
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeResp())
     supervisor.refresh_remote_probes()
 
     entry = next(a for a in supervisor.status() if a.get("remote"))
@@ -487,7 +487,7 @@ def test_probe_remote_reachable_returns_version(tmp_path, monkeypatch):
 
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeResp())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeResp())
     reachable, version = supervisor.probe_remote(rec["id"])
     assert reachable is True and version == "0.31.0"
     assert supervisor._probe_cache[rec["id"]][0] is True
@@ -507,7 +507,7 @@ def test_probe_remote_unreachable_is_false(tmp_path, monkeypatch):
 
     import httpx
 
-    def boom(url, timeout):
+    def boom(url, timeout, **kw):
         raise httpx.HTTPError("connection refused")
 
     monkeypatch.setattr(httpx, "get", boom)
@@ -538,7 +538,7 @@ def test_probe_card_without_version_keeps_last_known(tmp_path, monkeypatch):
 
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: NoVersionResp())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: NoVersionResp())
     supervisor.refresh_remote_probes()
     assert supervisor.remote_for_slug(rec["id"])["version"] == "0.28.0"
     assert next(a for a in supervisor.status() if a.get("remote"))["version"] == "0.28.0"
@@ -1167,6 +1167,7 @@ def test_status_reports_a_malformed_remote_instead_of_raising(tmp_path, monkeypa
         "url": "",
         "version": "",
         "a2a": None,  # no url ⇒ no endpoint to advertise, rather than "/a2a"
+        "auth": "none",  # no token stored ⇒ nothing to verify (ADR 0113 D5)
     }
     assert rows["no-id"]["name"] == "bo" and rows["no-id"]["url"] == "http://100.64.0.9:7870"
     # The same records must not blow up the probe sweep either — /api/fleet runs
@@ -1174,7 +1175,7 @@ def test_status_reports_a_malformed_remote_instead_of_raising(tmp_path, monkeypa
     # the surface just as surely.
     import httpx
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: (_ for _ in ()).throw(httpx.ConnectError("down")))
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: (_ for _ in ()).throw(httpx.ConnectError("down")))
     supervisor.refresh_remote_probes()
     assert supervisor._probe_cache["no-url"][0] is False
 

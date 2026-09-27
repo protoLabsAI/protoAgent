@@ -114,6 +114,14 @@ def _build_parser() -> argparse.ArgumentParser:
     rr = rsub.add_parser("rm", help="unregister a remote member (the remote agent itself is untouched)")
     rr.add_argument("name")
     _common(rr, top=False)
+    pp = sub.add_parser(
+        "pair",
+        help="pair with a remote protoAgent using a code generated on it (Settings ▸ Devices, or `protoagent pair` there)",
+    )
+    pp.add_argument("url", help="the remote's URL, e.g. http://100.64.0.5:7870")
+    pp.add_argument("code", help="the pairing code the remote showed (single-use, expires in minutes)")
+    pp.add_argument("--name", dest="member_name", help="the member's name in this fleet (default: the remote's agent name)")
+    _common(pp, top=False)
     po = sub.add_parser("order", help="persist the roster's display order: every member id, in the order wanted")
     po.add_argument("ids", nargs="+", metavar="ID")
     _common(po, top=False)
@@ -767,6 +775,42 @@ def _cmd_remote(args: argparse.Namespace) -> int:
     return _finish(args, "offline", results)
 
 
+def _pair_text(res: dict) -> str:
+    verb = "re-paired (new token)" if res.get("action") == "retokened" else "paired + added"
+    auth = {"ok": "token accepted", "rejected": "token REJECTED", "unknown": "token not verified yet", "none": "no token"}.get(str(res.get("auth")), str(res.get("auth")))
+    return f"{verb}: {_remote_text(res)} · {auth}"
+
+
+def _cmd_pair(args: argparse.Namespace) -> int:
+    """``protoagent fleet pair <url> <code> [--name N]`` (ADR 0113 D7, hub side). Live: the
+    running hub claims the code, so the token lands in ITS registry. Offline: the claim runs
+    here and the token is written to this instance's remotes.json — same op either way."""
+    results: list[dict] = []
+    label = args.member_name or args.url
+    conn = _open_hub(args)
+    if conn is not None:
+        hub_url = conn.client.url
+        try:
+            res = conn.client.remote_pair(args.url, args.code, args.member_name)
+            name = (res.get("agent") or {}).get("name") or label
+            _row_ok(name, args, results, f"{_pair_text(res)} via hub {hub_url}", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), auth=res.get("auth"), action=res.get("action"))
+        except deckhub.HubError as exc:
+            _row_fail(label, args, results, _hub_detail(exc))
+        finally:
+            conn.client.close()
+        return _finish(args, "live", results, hub_url)
+    from graph.workspaces import manager
+    from ops import fleet as fleet_ops
+
+    try:
+        res = _run_op(fleet_ops.remotes_pair, args.url, args.code, args.member_name)
+        name = (res.get("agent") or {}).get("name") or label
+        _row_ok(name, args, results, f"{_pair_text(res)} via disk (offline)", agent=res.get("agent"), reachable=res.get("reachable"), version=res.get("version"), auth=res.get("auth"), action=res.get("action"))
+    except (supervisor.FleetError, manager.WorkspaceError) as exc:
+        _row_fail(label, args, results, str(exc))
+    return _finish(args, "offline", results)
+
+
 def _cmd_order(args: argparse.Namespace) -> int:
     conn = _open_hub(args)
     results: list[dict] = []
@@ -927,6 +971,8 @@ def run_fleet_cli(argv: list[str]) -> int:
             return _cmd_remote(args)
         if args.cmd == "order":
             return _cmd_order(args)
+        if args.cmd == "pair":
+            return _cmd_pair(args)
         return _cmd_ls(args)
     except ValueError as exc:  # a malformed --hub (deck.hub.normalize_url)
         if args.as_json:

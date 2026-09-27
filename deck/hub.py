@@ -649,6 +649,15 @@ class HubClient:
         body = {k: v for k, v in fields.items() if v is not None}
         return _expect_dict(self.url, self._request("PATCH", f"/api/fleet/remotes/{segment(ident)}", json_body=body), "remote edit")
 
+    def remote_pair(self, url: str, code: str, name: str | None = None) -> dict:
+        """``POST /api/fleet/remotes/pair`` (ADR 0113 D1) — the HUB claims the code against
+        the remote, so the minted token lands in the hub's registry and never passes
+        through this client. Lifecycle timeout: the hub makes several calls to the remote."""
+        body: dict[str, Any] = {"url": url, "code": code}
+        if name:
+            body["name"] = name
+        return _expect_dict(self.url, self._request("POST", "/api/fleet/remotes/pair", json_body=body, timeout=_LIFECYCLE_TIMEOUT), "remote pair")
+
     def remote_remove(self, ident: str) -> dict:
         return _expect_dict(self.url, self._request("DELETE", f"/api/fleet/remotes/{segment(ident)}"), "remote remove")
 

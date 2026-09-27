@@ -420,7 +420,7 @@ def test_fleet_list_carries_versions(client, monkeypatch):
         def json(self):
             return {"name": "ava", "version": "0.30.0"}
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeCard())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeCard())
     agents = client.get("/api/fleet").json()["agents"]
     host = next(a for a in agents if a.get("host"))
     assert host["version"]  # the hub always knows its own version
@@ -443,7 +443,7 @@ def test_add_remote_probes_on_register_reachable(client, monkeypatch):
         def json(self):
             return {"name": "ava", "version": "0.31.0"}
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: FakeCard())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: FakeCard())
     body = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://1.2.3.4:7871"}).json()
     assert body["ok"] is True and body["agent"]["name"] == "ava"
     assert body["reachable"] is True and body["version"] == "0.31.0"
@@ -458,7 +458,7 @@ def test_add_remote_unreachable_is_registered_not_rejected(client, monkeypatch):
 
     supervisor._probe_cache.clear()
 
-    def boom(url, timeout):
+    def boom(url, timeout, **kw):
         raise httpx.HTTPError("connection refused")
 
     monkeypatch.setattr(httpx, "get", boom)
@@ -478,7 +478,7 @@ def test_patch_remote_edits_and_reprobes(client, monkeypatch):
     from graph.fleet import supervisor
 
     supervisor._probe_cache.clear()
-    monkeypatch.setattr(httpx, "get", lambda url, timeout: type("C", (), {"status_code": 200, "json": lambda s: {}})())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout, **kw: type("C", (), {"status_code": 200, "json": lambda s: {}})())
     rid = client.post("/api/fleet/remotes", json={"name": "ava", "url": "http://1.2.3.4:7871"}).json()["agent"]["id"]
 
     r = client.patch(f"/api/fleet/remotes/{rid}", json={"url": "http://1.2.3.4:7999", "token": "sek"})

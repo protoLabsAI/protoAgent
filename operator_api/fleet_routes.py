@@ -68,6 +68,29 @@ def register_fleet_routes(app) -> None:
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
+    @app.post("/api/fleet/remotes/pair")
+    async def _pair_remote(req: dict):
+        """Pair with a remote protoAgent (ADR 0113 D1). Body ``{url, code, name?}``: the hub
+        redeems the code (minted on the remote, Settings ▸ Devices / ``protoagent pair``)
+        against the remote's ``/api/pairing/claim`` and stores the per-device token it gets
+        back as the member's bearer — added, or re-tokened when that URL is already a member.
+        Answers the sanitized record + ``reachable`` + ``auth`` (never the token). 400 for a
+        bad url/name or an invalid/expired code; 502 when the remote is unreachable or isn't a
+        protoAgent that supports pairing. Declared BEFORE the ``{ident}`` routes (no clash —
+        those are PATCH/DELETE — but it keeps the literal path obviously first)."""
+        body = req or {}
+        try:
+            out = await fleet_ops.remotes_pair(
+                str(body.get("url", "") or ""),
+                str(body.get("code", "") or ""),
+                (str(body["name"]) if body.get("name") else None),
+            )
+            return {"ok": True, **out}
+        except supervisor.PairingError as exc:
+            raise HTTPException(exc.status, str(exc))
+        except (supervisor.FleetError, manager.WorkspaceError) as exc:
+            raise HTTPException(400, str(exc))
+
     @app.patch("/api/fleet/remotes/{ident}")
     async def _update_remote(ident: str, req: dict):
         """Edit a remote member's ``url`` / ``token`` / display ``name`` in place (ADR 0042 §I).

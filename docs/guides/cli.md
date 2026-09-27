@@ -57,7 +57,7 @@ then exits:
 |---|---|---|
 | `protoagent plugin install <git-url>` · `list` · `update` · `uninstall` · `sync` | Manage drop-in plugins (pinned in `plugins.lock`). | [0027](../adr/0027-install-plugins-from-git-url.md) |
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
-| `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+| `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `pair` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
@@ -207,6 +207,7 @@ protoagent fleet rename scout scout-prime        # display name only (letters, d
 protoagent fleet rm scout --purge               # asks you to type the name; --yes off a terminal
 protoagent fleet remote add ava https://ava.tail:7870 --bearer-stdin < token.txt
 protoagent fleet remote edit ava --url https://ava2.tail:7870 --clear-bearer
+protoagent fleet pair http://100.64.0.5:7870 ABCDE-12345   # claim a code minted on the remote; the hub stores the token (ADR 0113)
 protoagent fleet order protoagent scout-1a2b r-ava   # every member id, in the order wanted
 protoagent fleet --all                          # every hub on this box (and peers), probed; --json for scripts
 protoagent fleet ls --hub https://ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an explicit --hub that fails is an error, not a fallback)

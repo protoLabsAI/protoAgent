@@ -316,6 +316,29 @@ curl -X POST http://127.0.0.1:7871/api/fleet/remotes \
   -d '{"name": "ava", "url": "http://100.101.189.45:7871", "token": "<secret>"}'
 ```
 
+**Pairing instead of pasting a token** *(ADR 0113)*. Rather than handing the hub the
+remote's shared bearer, have the remote's operator generate a pairing code on it
+(Settings ▸ Devices) and claim it from the hub:
+
+```bash
+protoagent fleet pair http://100.101.189.45:7871 <code> [--name ava]
+# or: curl -X POST http://127.0.0.1:7871/api/fleet/remotes/pair \
+#       -H 'content-type: application/json' -d '{"url": "http://100.101.189.45:7871", "code": "<code>"}'
+```
+
+The hub redeems the code against the remote's `POST /api/pairing/claim` and stores the
+per-device token it gets back — the remote lists the hub as `<hub name> (fleet hub)` in its
+Devices and can revoke it on its own. A URL that is already a member is **re-tokened** in
+place (the re-pair after a revoke); otherwise it is added, named after the remote's agent
+card (suffixed `-2`, `-3`… if that name is taken — an explicit `--name` that is taken is
+refused *before* the single-use code is spent). A wrong or expired code is a 400; a remote
+that is unreachable or isn't a protoAgent that supports pairing is a 502.
+
+**Token health.** When a remote has a stored token, the hub also checks it with an
+authenticated `GET /api/devices` on the remote (every 30s, and at once after add / edit /
+pair) and reports `auth` on the member: `ok`, `rejected` (401/403 — revoked or wrong: re-pair),
+`unknown` (no verdict yet, or an older remote without that route) or `none` (no token).
+
 Remote members show a `remote` tag + their URL in the fleet manager; `running` is a cached
 reachability probe. You can't start/stop/rename them from here — their deployment owns
 their lifecycle; **Remove** only unregisters (the remote agent is untouched). Registering

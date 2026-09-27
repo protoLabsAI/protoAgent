@@ -79,6 +79,10 @@ class FakeClient:
         self.calls.append(("remote_update", ident, fields))
         return {"ok": True, "agent": {"id": ident, "name": "ava", "url": fields.get("url", "https://ava.tail:7870"), "remote": True}, "reachable": True, "version": "0.165.0"}
 
+    def remote_pair(self, url, code, name=None):
+        self.calls.append(("remote_pair", url, code, name))
+        return {"ok": True, "agent": {"id": "r-ava", "name": name or "ava", "url": url, "remote": True}, "reachable": True, "version": "0.183.1", "auth": "ok", "action": "added"}
+
     def remote_remove(self, ident):
         self.calls.append(("remote_remove", ident))
         return {"ok": True, "id": ident, "name": "ava", "removed": ["remote"]}
@@ -641,6 +645,56 @@ def test_remote_offline_runs_the_ops(monkeypatch, capsys):
     assert cli.run_fleet_cli(["remote", "rm", "bo", "--json"]) == 0
     assert seen == [("add", "bo", "https://bo:7870", "t"), ("update", "bo", "bob", None, ""), ("remove", "bo")]
     assert json.loads(capsys.readouterr().out)["mode"] == "offline"
+
+
+def test_pair_live_goes_through_the_hub(monkeypatch, capsys):
+    """``fleet pair <url> <code> [--name N]`` (ADR 0113 D7): the HUB claims the code, so the
+    minted token lands in its registry and never passes through this process."""
+    client = FakeClient()
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "ABCDE-12345", "--name", "ava", "--json"]) == 0
+    assert ("remote_pair", "http://100.64.0.5:7870", "ABCDE-12345", "ava") in client.calls
+    row = json.loads(capsys.readouterr().out)["results"][0]
+    assert row["ok"] and row["auth"] == "ok" and row["action"] == "added" and row["name"] == "ava"
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "ABCDE-12345"]) == 0
+    assert client.calls[-1] == ("remote_pair", "http://100.64.0.5:7870", "ABCDE-12345", None)
+    assert "paired + added" in capsys.readouterr().out and client.closed
+
+
+def test_pair_live_hub_error_is_a_failed_row(monkeypatch, capsys):
+    client = FakeClient()
+
+    def refuse(url, code, name=None):
+        raise deckhub.HubRequestError(client.url, 400, "that code is invalid or expired — generate a new one on the remote")
+
+    client.remote_pair = refuse
+    _live(monkeypatch, client)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "WRONG"]) == 1
+    assert "invalid or expired" in capsys.readouterr().err
+
+
+def test_pair_offline_runs_the_op(monkeypatch, capsys):
+    _offline(monkeypatch)
+    from ops import fleet as fleet_ops
+
+    seen: list = []
+
+    async def pair(url, code, name=None):
+        seen.append((url, code, name))
+        return {"agent": {"id": "r-1", "name": "ava", "url": url}, "reachable": True, "version": "0.1", "auth": "ok", "action": "retokened"}
+
+    monkeypatch.setattr(fleet_ops, "remotes_pair", pair)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "C0DE", "--json"]) == 0
+    assert seen == [("http://100.64.0.5:7870", "C0DE", None)]
+    body = json.loads(capsys.readouterr().out)
+    assert body["mode"] == "offline" and body["results"][0]["action"] == "retokened"
+
+    async def refuse(url, code, name=None):
+        raise cli.supervisor.PairingError("that code is invalid or expired — generate a new one on the remote")
+
+    monkeypatch.setattr(fleet_ops, "remotes_pair", refuse)
+    assert cli.run_fleet_cli(["pair", "http://100.64.0.5:7870", "C0DE"]) == 1
+    assert "invalid or expired" in capsys.readouterr().err
 
 
 def test_order_live_and_offline(monkeypatch, capsys):

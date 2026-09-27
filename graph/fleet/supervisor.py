@@ -591,6 +591,7 @@ def update_remote(ident: str, *, name: str | None = None, url: str | None = None
         remotes[rid] = rec
         _save_remotes(remotes)
     _probe_cache.pop(rid, None)  # url/token may have changed reachability — force a fresh probe
+    _auth_cache.pop(rid, None)  # …and the token the auth probe vouched for (ADR 0113 D5)
     log.info("[fleet] remote member updated: %s (%s)", rec["name"], rec["url"])
     return {k: v for k, v in rec.items() if k != "token"}
 
@@ -604,6 +605,8 @@ def remove_remote(ident: str) -> dict:
             raise FleetError(f"no remote member {ident!r}")
         rec = remotes.pop(rid)
         _save_remotes(remotes)
+    _probe_cache.pop(rid, None)
+    _auth_cache.pop(rid, None)
     log.info("[fleet] remote member removed: %s", rec["name"])
     return {"id": rid, "name": rec["name"], "removed": ["remote"]}
 
@@ -615,6 +618,58 @@ def remove_remote(ident: str) -> dict:
 # 'running' for a full poll-and-a-bit after it dies.
 _PROBE_TTL = 3.0
 _probe_cache: dict[str, tuple[bool, float]] = {}
+
+# Authenticated probe (ADR 0113 D5). The reachability probe above is the UNAUTHENTICATED
+# agent card, so a remote whose stored token is wrong — or whose paired device was revoked
+# on the remote — still read "running", then 401'd on the first proxied click. When a token
+# is stored the hub also makes one cheap operator-gated GET with it and records
+# ``auth: ok | rejected | unknown`` (``none`` = no token stored, computed, never probed).
+# Slower TTL than reachability: a revocation is rare and 30s is soon enough, and it keeps
+# the 3s poll to one request per remote on most ticks. Same off-the-status-path posture:
+# ``refresh_remote_probes`` (run via to_thread by the route) fills it, ``status()`` only reads.
+#
+# Why ``/api/devices``: it is operator-gated like every ``/api/*`` route (a non-operator
+# bearer is 403'd by the auth middleware before routing, a wrong one 401'd), it is a small
+# JSON-file read with no subprocess or network fan-out (``/api/runtime/status`` shells out to
+# ``ps`` for its co-location probe, ``/api/fleet`` probes ITS remotes), and it is the ADR 0087
+# surface the paired token itself belongs to. A pre-0087 remote 404s it → ``unknown``, which
+# is honest: we can't tell from a 404 whether the token would have been accepted.
+_AUTH_TTL = 30.0
+_AUTH_PROBE_PATH = "/api/devices"
+_auth_cache: dict[str, tuple[str, float]] = {}
+
+
+def _auth_probe_one(rec: dict, timeout: float) -> str:
+    """Probe ONE remote with its stored bearer and cache the verdict. Returns ``"ok"``
+    (200), ``"rejected"`` (401/403), ``"unknown"`` (anything else, incl. transport errors),
+    or ``"none"`` (no token — nothing to probe, no request made). Network call — keep it off
+    the event loop. The token goes in a header only; it is never logged or cached."""
+    import httpx
+
+    rid = str(rec.get("id") or "")
+    token = str(rec.get("token") or "")
+    url = str(rec.get("url") or "")
+    if not token:
+        _auth_cache.pop(rid, None)
+        return "none"
+    if not url:
+        verdict = "unknown"
+    else:
+        try:
+            r = httpx.get(f"{url}{_AUTH_PROBE_PATH}", headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+            verdict = "ok" if r.status_code == 200 else "rejected" if r.status_code in (401, 403) else "unknown"
+        except httpx.HTTPError:
+            verdict = "unknown"
+    _auth_cache[rid] = (verdict, time.monotonic())
+    return verdict
+
+
+def remote_auth(rec: dict) -> str:
+    """The cached auth verdict for a remote record (``none`` when it stores no token,
+    ``unknown`` until the first authenticated probe lands). Cache-only — no network."""
+    if not str(rec.get("token") or ""):
+        return "none"
+    return _auth_cache.get(str(rec.get("id") or ""), ("unknown", 0.0))[0]
 
 
 def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
@@ -657,8 +712,19 @@ def refresh_remote_probes(timeout: float = 1.0) -> None:
     for rec in list_remotes():
         hit = _probe_cache.get(rec["id"])  # list_remotes() guarantees the key
         if hit and now - hit[1] < _PROBE_TTL:
+            alive = hit[0]
+        else:
+            alive, _ = _probe_one(rec, timeout)
+        # The authenticated probe (D5) on its own, slower TTL. Skipped while the card
+        # probe says the remote is down: it would only burn another timeout to learn
+        # "unknown", and the last verdict (e.g. "rejected") stays the more useful thing
+        # to show. Once it answers again the normal TTL decides when to re-check.
+        if not alive or not rec.get("token"):
             continue
-        _probe_one(rec, timeout)
+        ahit = _auth_cache.get(rec["id"])
+        if ahit and now - ahit[1] < _AUTH_TTL:
+            continue
+        _auth_probe_one(rec, timeout)
 
 
 def probe_remote(ident: str, timeout: float = 1.0) -> tuple[bool, str]:
@@ -675,6 +741,11 @@ def probe_remote(ident: str, timeout: float = 1.0) -> tuple[bool, str]:
         raise FleetError(f"no remote member {ident!r}")
     rec = remotes[rid]
     alive, version = _probe_one(rec, timeout)
+    # Also refresh the authenticated verdict NOW (ADR 0113 D5): this is the register /
+    # edit / pair path, so a just-pasted wrong token (or a just-claimed good one) shows
+    # up in the response instead of 30s later. Only when reachable — see refresh above.
+    if alive:
+        _auth_probe_one(rec, timeout)
     return alive, version or str(rec.get("version", "") or "")
 
 
@@ -689,6 +760,177 @@ def _record_remote_version(rid: str, version: str) -> None:
         if rec is not None and rec.get("version") != version:
             rec["version"] = version
             _save_remotes(remotes)
+
+
+# ── pairing (ADR 0113 D1): the hub claims a code the remote's operator minted ──────
+# The remote's operator generates a pairing code (Settings ▸ Devices, or `protoagent pair`);
+# the hub redeems it against the remote's EXISTING, unauthenticated `POST /api/pairing/claim`
+# (ADR 0087 D4) and stores the per-device token it gets back as the remote's bearer. The hub
+# never learns the remote's shared operator bearer, and the remote can revoke the hub alone.
+
+
+class PairingError(FleetError):
+    """A pairing attempt failed. ``status`` is the HTTP status the route should answer:
+    400 when the operator's input is wrong (bad url/name, invalid or expired code), 502
+    when the remote didn't answer like a protoAgent that supports pairing."""
+
+    def __init__(self, message: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+_PAIR_TIMEOUT = 5.0
+
+
+def _hub_display_name() -> str:
+    """What the remote's Devices list calls this hub: ``<agent name> (fleet hub)``. The
+    identity name when a server is running here; the hostname from the offline CLI (no
+    graph config loaded) so the remote's operator can still tell which box it was."""
+    name = ""
+    try:
+        from runtime.state import STATE
+
+        name = str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
+    except Exception:  # pragma: no cover - STATE import never fails in-tree; belt + braces
+        name = ""
+    if not name:
+        import socket
+
+        name = socket.gethostname().split(".")[0] or "protoAgent"
+    return f"{name} (fleet hub)"
+
+
+def _fetch_card_name(url: str, timeout: float) -> str:
+    """The remote's agent-card ``name`` (best effort, ``""`` on any failure) — the default
+    member name for a pairing that didn't pass one. Same unauthenticated endpoint the
+    reachability probe hits."""
+    import httpx
+
+    try:
+        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout)
+        if r.status_code == 200:
+            return str((r.json() or {}).get("name", "") or "")
+    except (httpx.HTTPError, ValueError, AttributeError):
+        pass
+    return ""
+
+
+def _free_member_name(base: str, remotes: dict) -> str:
+    """``base`` if no member (remote or local workspace) holds it and it isn't reserved,
+    else ``base-2``, ``base-3``… — used ONLY for a name DEFAULTED from the remote's card.
+    Two protoAgents both calling themselves "protoagent" is the normal case (it's the
+    default identity), and failing a pairing over a name the operator never typed — after
+    the single-use code is already spent — would be the worst outcome."""
+    taken = {str(r.get("name")) for r in remotes.values() if isinstance(r, dict)} | {
+        w["name"] for w in manager.list_workspaces()
+    }
+
+    def _free(n: str) -> bool:
+        return n not in taken and n.lower() not in manager._RESERVED_NAMES
+
+    if _free(base):
+        return base
+    i = 2
+    while not _free(f"{base}-{i}"):
+        i += 1
+    return f"{base}-{i}"
+
+
+def pair_remote(url: str, code: str, name: str | None = None, timeout: float = _PAIR_TIMEOUT) -> dict:
+    """Pair this hub with a remote protoAgent by redeeming a code its operator minted
+    (ADR 0113 D1), then register it — or, when a remote at that URL is already a member,
+    re-token it in place (the "re-pair" path after a revoke; its id, slug and windows are
+    kept, and a passed ``name`` renames it).
+
+    Returns ``{agent, reachable, version, auth, action}`` where ``agent`` is the SANITIZED
+    record (no token), ``auth`` the freshly-probed verdict (D5) and ``action`` is ``added``
+    or ``retokened``. Raises ``PairingError`` (a ``FleetError``) with an honest message.
+
+    Naming: an explicit ``name`` is validated (charset, reserved, collision) BEFORE the code
+    is claimed — a code is single-use, so an error after the claim would burn it and leave
+    an orphan device on the remote. A name defaulted from the remote's card is coerced to the
+    member charset and suffixed (``-2``…) on a collision instead of failing.
+
+    Security: the URL goes through ``_normalize_remote_url`` (the SSRF egress guard) before
+    ANY request, redirects are not followed, and neither the code nor the minted token is
+    ever logged. Blocking network I/O — the route runs it off the loop.
+    """
+    import httpx
+
+    url = _normalize_remote_url(url)  # FleetError → 400 at the route; nothing dialled yet
+    code = str(code or "").strip()
+    if not code:
+        raise PairingError("a pairing code is required — generate one on the remote (Settings ▸ Devices)")
+
+    remotes = _load_remotes()
+    existing = next((k for k, r in remotes.items() if isinstance(r, dict) and r.get("url") == url), None)
+    if name is not None and str(name).strip():
+        try:
+            name = manager._safe(str(name))
+        except manager.WorkspaceError as exc:
+            raise PairingError(str(exc)) from exc
+        if name.lower() in manager._RESERVED_NAMES:
+            raise PairingError(f"{name!r} is reserved — it's how the fleet addresses this instance")
+        others = {str(r.get("name")) for k, r in remotes.items() if k != existing and isinstance(r, dict)}
+        if name in others | {w["name"] for w in manager.list_workspaces()}:
+            raise PairingError(f"an agent named {name!r} already exists")
+    else:
+        name = None
+
+    try:
+        r = httpx.post(
+            f"{url}/api/pairing/claim",
+            json={"code": code, "name": _hub_display_name()},
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise PairingError(
+            f"{url} is unreachable ({type(exc).__name__}) — is it running and bound to an address this hub can reach?",
+            502,
+        ) from exc
+    if r.status_code == 403:
+        raise PairingError("that code is invalid or expired — generate a new one on the remote", 400)
+    if r.status_code == 404:
+        raise PairingError(f"{url} is not a protoAgent (or too old to support pairing)", 502)
+    try:
+        body = r.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, dict):
+        raise PairingError(f"{url} is not a protoAgent (or too old to support pairing)", 502)
+    if r.status_code != 200 or not body.get("ok"):
+        raise PairingError(
+            f"{url} refused the pairing claim (HTTP {r.status_code}): {body.get('error') or 'no reason given'}", 502
+        )
+    token = str(body.get("token") or "")
+    if not token:
+        raise PairingError(f"{url} accepted the code but returned no token — not a protoAgent pairing endpoint?", 502)
+    device = body.get("device") if isinstance(body.get("device"), dict) else {}
+    device_id = str(device.get("id") or "?")
+
+    if existing is not None:
+        rec = update_remote(existing, token=token, name=name)
+        action = "retokened"
+    else:
+        if name is None:
+            base = manager._slugify_display(_fetch_card_name(url, timeout)) or "remote"
+            name = _free_member_name(base, _load_remotes())
+        try:
+            rec = add_remote(name, url, token)
+        except (FleetError, manager.WorkspaceError) as exc:
+            # Lost a race between the pre-check and the write (another add took the name or
+            # url). The code is spent and the remote HAS a device for us — say so, so the
+            # operator can revoke it there rather than wonder.
+            raise PairingError(
+                f"paired with {url} (remote device {device_id}) but could not register it: {exc} — "
+                "revoke that device on the remote and pair again"
+            ) from exc
+        action = "added"
+    # Device id + url only — the token and the code never reach a log line.
+    log.info("[fleet] paired with remote %s (%s) as its device %s — %s", rec["name"], url, device_id, action)
+    reachable, version = probe_remote(rec["id"], timeout=min(timeout, 2.0))
+    stored = _load_remotes().get(rec["id"]) or rec
+    return {"agent": rec, "reachable": reachable, "version": version, "auth": remote_auth(stored), "action": action}
 
 
 # ── fleet roster order (ADR 0042 hub control-plane) ───────────────────────────
@@ -895,6 +1137,9 @@ def status() -> list[dict]:
                 # Last-probed remote version (from its A2A card) — NEVER the token.
                 "version": rec.get("version", ""),
                 "a2a": _remote_a2a(rid, url, host.get("port")),
+                # Whether the stored token is accepted (ADR 0113 D5) — the VERDICT, never
+                # the token: ok | rejected | unknown | none (no token stored).
+                "auth": remote_auth(rec),
             }
         )
     # Apply the saved roster display order (ADR 0042 hub control-plane), reconciling live
