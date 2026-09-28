@@ -213,6 +213,11 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_context_max_doc_chars": 12000,
     "knowledge_attach_inline_budget": 8000,
     "llm_max_retries": 2,
+    # In-flight limiter (ADR 0115 D2, #3760) — example ships no keys, so these resolve
+    # to the dataclass defaults: off (0), 300 s queue bound, 1 interactive-reserved slot.
+    "llm_max_inflight": 0,
+    "llm_inflight_queue_timeout": 300.0,
+    "llm_inflight_interactive_reserve": 1,
     "max_iterations": 2000,
     "turn_stall_timeout_seconds": 900.0,
     "round_nudge_after": 25,
@@ -662,6 +667,50 @@ def test_case7_key_rename_max_retries(tmp_path):
     path = _write_yaml(tmp_path, "model:\n  max_retries: 7\n")
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.llm_max_retries == 7
+
+
+def test_inflight_limiter_keys_parse_and_default(tmp_path):
+    """ADR 0115 D2 (#3760): model.max_inflight / inflight_queue_timeout /
+    inflight_interactive_reserve parse onto the renamed llm_* attrs; absent = defaults."""
+    # Absent → dataclass defaults (limiter off).
+    default_cfg = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "model:\n  name: x\n"))
+    assert default_cfg.llm_max_inflight == 0
+    assert default_cfg.llm_inflight_queue_timeout == 300.0
+    assert default_cfg.llm_inflight_interactive_reserve == 1
+
+    # Explicit values parse from the model.* keys.
+    path = _write_yaml(
+        tmp_path,
+        """
+        model:
+          max_inflight: 6
+          inflight_queue_timeout: 45.5
+          inflight_interactive_reserve: 2
+        """,
+    )
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.llm_max_inflight == 6
+    assert cfg.llm_inflight_queue_timeout == 45.5
+    assert cfg.llm_inflight_interactive_reserve == 2
+
+
+def test_inflight_limiter_keys_survive_config_to_dict_round_trip(tmp_path):
+    """Non-default limiter values survive config_to_dict -> apply -> from_yaml, so a
+    Settings save is lossless (they ride the FIELDS-driven serialization)."""
+    cfg = LangGraphConfig()
+    cfg.llm_max_inflight = 8
+    cfg.llm_inflight_queue_timeout = 120.0
+    cfg.llm_inflight_interactive_reserve = 3
+
+    doc: dict = {}
+    apply_updates_to_yaml(doc, config_to_dict(cfg))
+    out = tmp_path / "langgraph-config.yaml"
+    save_yaml_doc(doc, out)
+    reloaded = LangGraphConfig.from_yaml(str(out))
+
+    assert reloaded.llm_max_inflight == 8
+    assert reloaded.llm_inflight_queue_timeout == 120.0
+    assert reloaded.llm_inflight_interactive_reserve == 3
 
 
 def test_case8a_researcher_partial_only_model(tmp_path):

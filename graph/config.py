@@ -1183,6 +1183,24 @@ class LangGraphConfig:
     request_timeout: float = 120.0
     llm_max_retries: int = 2
 
+    # In-flight limiter (ADR 0115). PER-PROCESS caps on concurrent model calls per
+    # lane (resolved endpoint + model) — off by default. Nothing reads these yet; card
+    # C4 wires them into graph/llm_limiter.py. The budgets are per-process by design
+    # (scope="agent", not host): a box-wide default would silently give each instance N
+    # slots, so the operator sizes them across instances to sum within the gateway's
+    # parallel capacity (ADR 0115 D2, Options d).
+    #   ``llm_max_inflight`` — max concurrent model calls per lane in THIS process.
+    #     0 disables the limiter entirely (today's behaviour, one branch of overhead).
+    #   ``llm_inflight_queue_timeout`` — seconds one acquisition may wait for a slot.
+    #     Separate from ``request_timeout`` (which times the HTTP call once a slot is
+    #     held); kept below ``turn_stall_timeout_seconds`` (900) so a queued turn fails
+    #     with a queue error, not a stall.
+    #   ``llm_inflight_interactive_reserve`` — slots only interactive callers may take;
+    #     clamped to ``max_inflight − 1`` at use, so other work always keeps one slot.
+    llm_max_inflight: int = 0
+    llm_inflight_queue_timeout: float = 300.0
+    llm_inflight_interactive_reserve: int = 1
+
     # Advanced sampling — all opt-in. ``None`` (or a negative top_k) means
     # "let the gateway / model card decide". top_p and presence_penalty are
     # standard OpenAI params; top_k and repetition_penalty aren't, so they
@@ -2403,6 +2421,13 @@ class LangGraphConfig:
             round_hard_cap=model.get("round_hard_cap", cls.round_hard_cap),
             request_timeout=model.get("request_timeout", cls.request_timeout),
             llm_max_retries=model.get("max_retries", cls.llm_max_retries),
+            llm_max_inflight=model.get("max_inflight", cls.llm_max_inflight),
+            llm_inflight_queue_timeout=model.get(
+                "inflight_queue_timeout", cls.llm_inflight_queue_timeout
+            ),
+            llm_inflight_interactive_reserve=model.get(
+                "inflight_interactive_reserve", cls.llm_inflight_interactive_reserve
+            ),
             top_p=model.get("top_p", cls.top_p),
             top_k=model.get("top_k", cls.top_k),
             presence_penalty=model.get("presence_penalty", cls.presence_penalty),

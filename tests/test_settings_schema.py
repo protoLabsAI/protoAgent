@@ -76,6 +76,44 @@ def test_schema_groups_and_values():
     assert next(f for f in FIELDS if f.key == "agent_runtime").ui_hidden is True
 
 
+def test_inflight_limiter_fields_surfaced_in_model_runtime():
+    """ADR 0115 D2 (#3760): the three limiter knobs render in Settings ▸ Model & runtime,
+    agent-scoped, hot-reloaded, minimum=0, with descriptions stating the per-process scope
+    and that the queue bound is separate from `request_timeout`."""
+    groups = build_schema(LangGraphConfig())
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+
+    for key, attr in (
+        ("model.max_inflight", "llm_max_inflight"),
+        ("model.inflight_queue_timeout", "llm_inflight_queue_timeout"),
+        ("model.inflight_interactive_reserve", "llm_inflight_interactive_reserve"),
+    ):
+        f = by_key.get(key)
+        assert f is not None, f"{key} must render in the settings UI"
+        assert f["type"] == "number"
+        assert f["section"] == "Model & runtime"
+        assert f["scope"] == "agent"  # per-process budget, NOT box-wide (ADR 0115 D2)
+        assert f["restart"] is False  # hot-reloadable
+        schema_field = next(sf for sf in FIELDS if sf.key == key)
+        assert schema_field.attr == attr
+        assert schema_field.minimum == 0
+
+    # Defaults mirror the dataclass (off / 300 s / 1 reserved).
+    assert by_key["model.max_inflight"]["default"] == 0
+    assert by_key["model.inflight_queue_timeout"]["default"] == 300.0
+    assert by_key["model.inflight_interactive_reserve"]["default"] == 1
+
+    # The descriptions carry the two contract points the ADR requires operators to see.
+    assert "per-process" in by_key["model.max_inflight"]["description"].lower()
+    assert "request_timeout" in by_key["model.inflight_queue_timeout"]["description"]
+
+    # 0 is a valid value on each (limiter off / no wait / no reserve); negatives are not.
+    assert validate_flat({"model.max_inflight": 0})[0] is True
+    assert validate_flat({"model.max_inflight": -1})[0] is False
+    assert validate_flat({"model.inflight_queue_timeout": 0})[0] is True
+    assert validate_flat({"model.inflight_interactive_reserve": -1})[0] is False
+
+
 def test_fleet_autostart_row_toggle_schema_contract():
     """The Fleet rows resolve this exact host-scoped list from /api/settings/schema."""
     fields = {
