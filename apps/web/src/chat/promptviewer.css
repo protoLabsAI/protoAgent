@@ -10,7 +10,7 @@
 }
 
 .prompt-viewer__diff {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   padding: 2px 0 0;
 }
@@ -20,7 +20,7 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 
@@ -38,7 +38,7 @@
   border-radius: 8px;
   background: var(--pl-color-bg-raised);
   font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -59,7 +59,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .prompt-viewer__budget-row {
@@ -123,7 +123,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   padding: 8px 0;
 }
 
@@ -133,13 +133,13 @@
 
 .prompt-viewer__overflow {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
 }
 
 /* The speculative next-call preview is a projection, not a record — say so
    before any of its numbers are read. */
 .prompt-viewer__speculative {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   border-left: 2px solid var(--pl-color-accent);
   padding: 4px 0 4px 8px;
@@ -159,7 +159,7 @@
   border: 1px solid var(--pl-color-status-warning);
   border-radius: var(--pl-radius);
   padding: 8px 10px;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
 }
 .prompt-viewer__wire-head--alarm {
   color: var(--pl-color-status-error);
@@ -172,14 +172,14 @@
 }
 .prompt-viewer__delivery {
   color: var(--pl-color-fg-muted);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-style: italic;
 }
 
 /* Rendered (markdown) prompt view — same pipeline as chat messages; the raw
    monospace dump stays behind the Raw toggle for byte-exact reading. */
 .prompt-viewer__md {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   overflow-y: auto;
   min-height: 0;
 }
@@ -190,12 +190,12 @@
 /* #2843: the conversation-history block reuses the budget-row grammar; these two
    carry its header and the muted footnotes (top tools, the as-of-now caveat). */
 .prompt-viewer__history-head {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-weight: 600;
   margin-top: 4px;
 }
 .prompt-viewer__history-note {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
   font-weight: 400;
 }
