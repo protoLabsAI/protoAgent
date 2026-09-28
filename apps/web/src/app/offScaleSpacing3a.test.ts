@@ -201,15 +201,22 @@ describe("no exact-scale px spacing literal in the app/theme + docviewer CSS (DS
     expect(CSS_SOURCES["../docviewer/docviewer.css"]).toContain("gap: 2px");
   });
 
-  it("r3 — proves the two drifted color literals now read DS tokens", () => {
-    // The auth-dialog overlay scrim reads the bg token (was a hardcoded near-black rgb()).
-    expect(CSS_SOURCES["./theme.css"]).toContain(
-      ".pl-overlay:has(.auth-dialog) {\n  background: var(--pl-color-bg);\n}",
-    );
+  it("r3 — proves the streamdown menu shadow reads a DS token, and the auth scrim stays a theme-independent near-black", () => {
     // The streamdown table "copy as" menu shadow reads the popover-shadow token (was a raw
     // `0 6px 20px rgb(…)`); assert it in its own block, right after the radius line.
     expect(CSS_SOURCES["./theme.css"]).toContain(
       "border-radius: var(--pl-radius);\n  box-shadow: var(--pl-shadow-popover);",
+    );
+    // The auth-dialog overlay scrim is DELIBERATELY NOT tokenized: `--pl-color-bg` is theme
+    // dependent (light in light mode), which would defeat the comment's stated "fully opaque
+    // near-black … so even bright content behind it can't bleed through" intent. The AuthGate is
+    // a blocking 401 modal; the scrim must stay a theme-independent near-black regardless of theme.
+    expect(CSS_SOURCES["./theme.css"]).toContain(
+      ".pl-overlay:has(.auth-dialog) {\n  background: rgb(8, 8, 12);\n}",
+    );
+    // …and it must NOT read the theme bg token (guards against a re-drift back to the rejected form).
+    expect(CSS_SOURCES["./theme.css"]).not.toContain(
+      ".pl-overlay:has(.auth-dialog) {\n  background: var(--pl-color-bg);\n}",
     );
   });
 });

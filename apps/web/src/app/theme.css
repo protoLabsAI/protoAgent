@@ -550,7 +550,7 @@ select:disabled {
    `:has()` pattern for drawer alignment). Fully opaque near-black (not a high-alpha
    wash) so even bright content behind it can't bleed through. */
 .pl-overlay:has(.auth-dialog) {
-  background: var(--pl-color-bg);
+  background: rgb(8, 8, 12);
 }
 
 /* Toast top-right anchoring now comes from the DS prop (`<ToastProvider position="top-right">`,
