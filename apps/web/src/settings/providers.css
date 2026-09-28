@@ -1,16 +1,16 @@
 /* Settings ▸ Model ▸ Connections (ADR 0106). Every source uses the same card shell;
    provider type changes its status/actions, not its visual hierarchy. */
 .providers-panel > .muted {
-  margin: 0 0 12px;
+  margin: 0 0 var(--pl-space-3);
   font-size: var(--pl-font-size-sm);
 }
 .provider-list {
   display: grid;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: var(--pl-space-2);
 }
 .provider-row {
-  padding: 12px;
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -19,27 +19,27 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   flex-wrap: wrap;
 }
 .provider-row__name {
   font-weight: 600;
-  margin-right: 8px;
+  margin-right: var(--pl-space-2);
 }
 .provider-row__id {
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
-  margin-right: 8px;
+  margin-right: var(--pl-space-2);
 }
 .provider-row__actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .provider-row__meta {
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
-  margin-top: 4px;
+  margin-top: var(--pl-space-1);
   overflow-wrap: anywhere;
 }
 .provider-row__warn {
@@ -54,5 +54,5 @@
 }
 .provider-dialog__form {
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
