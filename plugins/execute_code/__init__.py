@@ -27,9 +27,42 @@ from __future__ import annotations
 import logging
 import sys
 
-from .engine import build_execute_code_tool
+from .engine import _DEFAULT_BRIDGE_TOOLS, build_execute_code_tool
 
 log = logging.getLogger("protoagent.plugins.execute_code")
+
+
+def _effective_tools(explicit, extra, all_tools):
+    """Fold the additive ``extra_tools`` config into the bridge allowlist (#3701).
+
+    ``explicit`` (the ``tools`` config) REPLACES the curated default when set;
+    ``extra`` (the ``extra_tools`` config) is UNIONED on top of whichever base
+    applies — the curated ``_DEFAULT_BRIDGE_TOOLS`` when ``tools`` is empty,
+    otherwise the explicit list. That lets an operator bridge one plugin read
+    tool (say ``github_search_issues``) without re-listing every core tool.
+
+    Names that aren't registered tools — and ``execute_code`` itself, which is
+    never self-bridgeable — are dropped with a single log line, never raised: a
+    typo in Settings must not wedge tool assembly. Returns ``explicit`` verbatim
+    (so ``None`` still lets the engine apply its curated default) when
+    ``extra_tools`` widens nothing — existing behavior is untouched.
+    """
+    if not extra:
+        return explicit
+    registered = {t.name for t in all_tools}
+    additions, dropped = set(), []
+    for name in extra:
+        if name == "execute_code" or name not in registered:
+            dropped.append(name)
+        else:
+            additions.add(name)
+    if dropped:
+        log.warning(
+            "[execute_code] extra_tools: ignoring unregistered/ineligible name(s): %s",
+            ", ".join(sorted(dropped)),
+        )
+    base = set(explicit) if explicit else set(_DEFAULT_BRIDGE_TOOLS)
+    return sorted(base | additions)
 
 
 def register(registry) -> None:
@@ -49,7 +82,7 @@ def register(registry) -> None:
         cfg = registry.live_config() if hasattr(registry, "live_config") else registry.config
         return build_execute_code_tool(
             all_tools,
-            tools=cfg.get("tools") or None,
+            tools=_effective_tools(cfg.get("tools") or None, cfg.get("extra_tools") or [], all_tools),
             timeout=float(cfg.get("timeout", 30.0)),
             truncate=int(cfg.get("output_truncate", 6000)),
             graph_config=config,
