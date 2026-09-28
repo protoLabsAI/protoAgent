@@ -132,6 +132,7 @@ export function PairRemoteDialog({
   return (
     <Dialog
       open={target !== null}
+      padding="roomy"
       onClose={pair.isPending ? undefined : onClose}
       title={title}
       width={460}

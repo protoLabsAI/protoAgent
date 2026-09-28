@@ -222,6 +222,7 @@ export function NewAgentPanel({
       {setupOpen && archetype ? (
         <Dialog
           open
+          padding="roomy"
           onClose={back}
           title={`Set up ${archetype.label}`}
           width="min(560px, 100%)"
