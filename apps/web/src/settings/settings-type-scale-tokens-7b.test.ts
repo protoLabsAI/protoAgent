@@ -92,7 +92,7 @@ describe("Settings type scale → DS tokens (#3688 part 7b)", () => {
     // telemetry .insight-note: 11.5px -> 2xs (11px).
     expect(telemetryCss).toContain(".insight-note {\n  font-size: var(--pl-font-size-2xs);");
     // providers .providers-panel > .muted: 12.5px -> sm (13px).
-    expect(providersCss).toContain("margin: 0 0 12px;\n  font-size: var(--pl-font-size-sm);");
+    expect(providersCss).toContain("margin: 0 0 var(--pl-space-3);\n  font-size: var(--pl-font-size-sm);");
   });
 
   it("the px/token/fallback patterns still bite (meta-guard, literals built by concat)", () => {
