@@ -61,13 +61,9 @@
 
 /* New-goal modal (GoalCreateDialog) — a chromeless DS Dialog around the shared HitlForm
    wizard (ADR 0073), the one creator for both the Goals panel header action and the Work
-   overview quick-add. HitlForm brings its own title/stepper/actions, so drop the dialog
-   body padding and the card's own margin/border/background: the dialog frame provides the
-   border + elevation, and the wizard fills it instead of floating as a box-in-a-box. */
-.goal-create-modal .pl-dialog__body {
-  padding: 0;
-}
-
+   overview quick-add. The body padding is gone (the dialog passes padding="none"); here we
+   drop the card's own margin/border/background so the dialog frame provides the border +
+   elevation and the wizard fills it instead of floating as a box-in-a-box. */
 .goal-create-modal .hitl-card {
   margin: 0;
   border: 0;

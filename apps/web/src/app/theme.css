@@ -540,15 +540,6 @@ select:disabled {
   line-height: 1.5;
 }
 
-/* Roomier dialog body padding than the bare DS default (16px). Content dialogs —
-   forms, card pickers, the full-width search + multi-column grids — read as cramped
-   flush to the body edge, so the app-wide default is 24px. Dialogs that embed a full
-   surface override back to padding:0 at higher specificity (.settings-overlay /
-   .theme-quick-dialog). Loads after the DS overlays.css, so equal specificity wins. */
-.pl-dialog__body {
-  padding: var(--pl-space-6, 24px);
-}
-
 /* Auth gate scrim (#1921) — the AuthGate is a BLOCKING modal (no onClose; see
    AuthGate.tsx). While a 401 stands, everything behind it is dead, so the scrim must
    fully obscure that dead UI rather than let it peek through. The shared DS
@@ -1776,8 +1767,8 @@ textarea {
 .kb-group-body { margin-left: 14px; }
 
 /* New/Edit skill dialog (PlaybooksSurface) — a little more space between fields than
-   the knowledge inline form it grew out of. (Body padding is the app-wide
-   .pl-dialog__body default now.) */
+   the knowledge inline form it grew out of. (The dialog passes padding="roomy", so the
+   body already has the 24px inset.) */
 .skill-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 /* The trailing action row gets a little separation from the fields above it. */
 .skill-form > .knowledge-chunk-form-row:last-child { margin-top: 4px; }
