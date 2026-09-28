@@ -13,17 +13,17 @@
 .path-browser {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .path-browser-roots {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .path-browser-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 /* The current path can be arbitrarily long; it truncates rather than widening the
@@ -54,14 +54,14 @@
   overflow-y: auto;
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
-  padding: 4px;
+  padding: var(--pl-space-1);
 }
 .path-browser-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   width: 100%;
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -92,9 +92,9 @@
 .path-browser-empty {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: auto;
-  padding: 12px;
+  padding: var(--pl-space-3);
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-sm);
 }
@@ -118,5 +118,5 @@
 .path-browser-buttons {
   display: flex;
   flex: none;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }

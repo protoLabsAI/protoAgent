@@ -7,13 +7,13 @@
 .plugin-market {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .plugin-market-link {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: var(--pl-space-3);
+  padding: 10px var(--pl-space-3);
   border-radius: 8px;
   border: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-raised);
@@ -35,56 +35,56 @@
 }
 
 /* Plugins panel (ADR 0027) — install from a git URL, under Settings → Plugins. */
-.plugin-install-form { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+.plugin-install-form { display: flex; gap: var(--pl-space-2); margin: 10px 0; flex-wrap: wrap; }
 /* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input). */
 .plugin-install-form input { flex: 1; min-width: 220px; }
-.plugin-install-status { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: 4px 0 10px; }
+.plugin-install-status { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: var(--pl-space-1) 0 10px; }
 /* .plugin-sync-banner retired — the locked-but-missing notice is a DS <Alert status="warning"> now. */
-.plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--pl-space-2); }
 .plugin-row-main { flex: 1; min-width: 0; }
-.plugin-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plugin-row-title { display: flex; align-items: center; gap: var(--pl-space-2); flex-wrap: wrap; }
 .plugin-ver { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); }
 /* .plugin-state* retired — enabled / not-enabled / missing / local are DS <Badge>s now. */
-.plugin-desc { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: 4px 0; }
+.plugin-desc { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: var(--pl-space-1) 0; }
 .plugin-meta { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
-.plugin-review { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.plugin-review { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); margin: var(--pl-space-1) 0 0; display: flex; flex-wrap: wrap; gap: var(--pl-space-1) var(--pl-space-3); }
 .plugin-review .warn { color: var(--pl-color-status-warning); display: inline-flex; align-items: center; gap: 3px; }
 .plugin-enable-hint { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-muted); margin: 6px 0 0; }
 .btn-icon.danger:hover { color: var(--pl-color-status-error); }
-.plugin-restart-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--pl-color-border); }
+.plugin-restart-row { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-3); margin-top: var(--pl-space-4); padding-top: var(--pl-space-3); border-top: 1px solid var(--pl-color-border); }
 .plugin-restart-row > span { margin: 0; }
 
 /* Discover (ADR 0059) — the in-app official-plugin directory: search + category
    filter over a grid of installable cards. */
-.plugin-discover-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 12px; }
+.plugin-discover-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 var(--pl-space-3); }
 /* Search (DS Input + `icon`) and category filter (DS segmented Tabs) own their
    styling now; the controls row just sizes the search to fill. */
 .plugin-search { flex: 1; min-width: 200px; }
 .plugin-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
-.plugin-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--pl-color-border); border-radius: 9px; background: var(--pl-color-bg-raised); }
-.plugin-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.plugin-card { display: flex; flex-direction: column; gap: 6px; padding: var(--pl-space-3); border: 1px solid var(--pl-color-border); border-radius: 9px; background: var(--pl-color-bg-raised); }
+.plugin-card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-2); }
 .plugin-card-head strong { font-size: var(--pl-font-size-base); }
 .plugin-chip { font-size: var(--pl-font-size-3xs); text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); white-space: nowrap; }
 .plugin-card-tagline { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: 0; flex: 1; }
 /* Why a bundled plugin is on when the operator didn't turn it on (another plugin enables it). */
 .plugin-card-why { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-muted); margin: 0; font-style: italic; }
-.plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.plugin-card-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); text-decoration: none; }
+.plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-2); margin-top: 2px; }
+.plugin-card-link { display: inline-flex; align-items: center; gap: var(--pl-space-1); font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); text-decoration: none; }
 .plugin-card-link:hover { color: var(--pl-color-fg-muted); }
-.plugin-card-adds { display: flex; flex-wrap: wrap; gap: 4px; }
+.plugin-card-adds { display: flex; flex-wrap: wrap; gap: var(--pl-space-1); }
 .plugin-card-links { display: inline-flex; align-items: center; gap: 10px; }
 
 /* Installed plugins TABLE — the list outgrew the two-section row layout once a box
    could hold dozens of plugins; now one sortable/filterable table (search + status
    chips in a controls row above it). Configure still opens the per-plugin settings
    dialog (ADR 0059); the action cluster lives in the last cell. */
-.plugin-installed-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 12px; }
+.plugin-installed-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 var(--pl-space-3); }
 
 /* Installed BUNDLES strip (#2718) — the provenance chips' bundles, actionable:
    one compact row per installed bundle (name, freshness badge, Update, Uninstall)
    above the members table. */
-.plugin-bundles-strip { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
-.plugin-bundle-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--pl-color-border); border-radius: 8px; background: var(--pl-color-bg-raised); }
+.plugin-bundles-strip { display: flex; flex-direction: column; gap: var(--pl-space-1); margin: 0 0 10px; }
+.plugin-bundle-row { display: flex; align-items: center; gap: var(--pl-space-2); padding: var(--pl-space-1) var(--pl-space-2); border: 1px solid var(--pl-color-border); border-radius: 8px; background: var(--pl-color-bg-raised); }
 .plugin-bundle-name { font-size: var(--pl-font-size-sm); font-weight: 600; margin-right: auto; }
 
 .plugin-table-wrap { overflow-x: auto; }
@@ -105,7 +105,7 @@
 .plugin-cell-contrib { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); white-space: nowrap; }
 /* Name · version · badge on one baseline-aligned line with real breathing room
    (the old layout jammed the version + badge straight against the name). */
-.plugin-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.plugin-row-head { display: flex; align-items: center; gap: var(--pl-space-2); flex-wrap: wrap; min-width: 0; }
 .plugin-row-head > strong { min-width: 0; }
 /* #2248 — the manifest description, under the row name. Clamped to two lines so a
    verbose manifest can't stretch every row; the full text rides the title attribute. */
@@ -123,7 +123,7 @@
 .plugin-cell-actions .plugin-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-shrink: 0; }
 .plugin-row-danger:hover:not(:disabled) { color: var(--pl-color-status-error); }
 .settings-flat-group { display: flex; flex-direction: column; }
-.plugin-install-advanced { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--pl-color-border); }
+.plugin-install-advanced { margin-top: 14px; padding-top: var(--pl-space-3); border-top: 1px solid var(--pl-color-border); }
 
 /* Category filter overflow (#2319). The DS segmented Tabs is an `inline-flex` strip with
    no max-width and no scroll, and its `responsive` collapse keys on the CONTAINER's width
@@ -143,12 +143,12 @@
 
 /* Install-time "install these Python packages?" dialog (plugins/depsInstall.tsx). */
 .plugin-deps-list {
-  margin: 4px 0 12px;
+  margin: var(--pl-space-1) 0 var(--pl-space-3);
   padding-left: 18px;
 }
 .plugin-deps-list code {
   overflow-wrap: anywhere;
 }
 .plugin-deps-dialog .pl-alert {
-  margin-top: 8px;
+  margin-top: var(--pl-space-2);
 }
