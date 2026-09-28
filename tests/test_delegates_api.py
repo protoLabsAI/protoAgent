@@ -506,3 +506,184 @@ def test_scope_classification_is_normalized_everywhere(client, fake_io, monkeypa
     monkeypatch.setattr(store, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}])
     r = client.post("/api/delegates", json={"name": "cc", "type": "acp", "command": "/y", "workdir": "/w", "scope": " Host "})
     assert r.status_code == 409  # same layer as the existing host entry — a dup, not a shadow
+
+
+# ── delete/rename refuses when config still names the delegate (#3692) ──────────
+
+
+def _acp(name):
+    return {"name": name, "type": "acp", "command": "proto", "workdir": "/tmp"}
+
+
+def test_find_delegate_references_covers_every_shape():
+    # A bare name, a list, a {rung: name-or-list} ladder, a per-project map, and a
+    # delegate fallback list all resolve to their dotted paths; the entry's OWN name
+    # is not a reference to itself.
+    doc = {
+        "project_board": {
+            "coder": "fable",
+            "coders": {"reasoning": "fable", "opus": ["gpt", "fable"]},
+            "projects": {"acme": {"coder": "fable", "coders": "fable"}},
+        },
+        "delegates": [
+            _acp("fable"),  # itself — not a reference
+            {**_acp("lead"), "fallbacks": ["fable"]},
+        ],
+    }
+    assert set(store.find_delegate_references("fable", doc)) == {
+        "project_board.coder",
+        "project_board.coders.reasoning",
+        "project_board.coders.opus[1]",
+        "project_board.projects.acme.coder",
+        "project_board.projects.acme.coders",
+        "delegates.lead.fallbacks[0]",
+    }
+    assert store.find_delegate_references("unused", doc) == []
+
+
+def test_delete_referenced_by_coders_ladder_is_refused_and_left_in_place(client, fake_io):
+    # r1: a delegate the board's coders ladder names on two rungs — 409 naming each path,
+    # and the delegate is left in place.
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable", "opus": "fable"}}
+    r = client.request("DELETE", "/api/delegates/fable")
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "project_board.coders.reasoning" in detail and "project_board.coders.opus" in detail
+    assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["fable"]
+
+
+def test_delete_finds_single_coder_and_per_project_coders_map(client, fake_io):
+    # r2: references in project_board.coder and a per-project coders map are also found.
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {
+        "coder": "fable",
+        "projects": {"acme": {"coders": ["fable", "other"]}},
+    }
+    r = client.request("DELETE", "/api/delegates/fable")
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert "project_board.coder" in detail
+    assert "project_board.projects.acme.coders[0]" in detail
+
+
+def test_delete_unreferenced_delegate_works_as_before(client, fake_io):
+    # r3: an unreferenced delegate deletes exactly as before.
+    client.post("/api/delegates", json=_acp("solo"))
+    fake_io["doc"]["project_board"] = {"coder": "someone-else"}
+    assert client.request("DELETE", "/api/delegates/solo").status_code == 200
+    assert client.get("/api/delegates").json()["delegates"] == []
+
+
+def test_force_deletes_despite_references(client, fake_io):
+    # r4: the explicit force opt-in deletes despite references.
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable"}}
+    assert client.request("DELETE", "/api/delegates/fable", params={"force": "true"}).status_code == 200
+    assert client.get("/api/delegates").json()["delegates"] == []
+
+
+def test_rename_referenced_delegate_is_refused_the_same_way(client, fake_io):
+    # r5: renaming a referenced delegate (name in body differs from the path) is refused
+    # the same way and leaves it in place.
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable"}}
+    r = client.put("/api/delegates/fable", json=_acp("fable2"))
+    assert r.status_code == 409
+    assert "project_board.coders.reasoning" in r.json()["detail"]
+    assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["fable"]
+
+
+def test_delete_with_repoint_rewrites_every_reference(client, fake_io):
+    # Bonus: repoint_to rewrites every reference to another delegate in the same save.
+    client.post("/api/delegates", json=_acp("fable"))
+    client.post("/api/delegates", json=_acp("opusx"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable", "opus": "fable"}}
+    r = client.request("DELETE", "/api/delegates/fable", params={"repoint_to": "opusx"})
+    assert r.status_code == 200
+    assert [d["name"] for d in r.json()["delegates"]] == ["opusx"]
+    assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "opusx", "opus": "opusx"}
+
+
+def test_delete_repoint_to_unknown_delegate_is_rejected(client, fake_io):
+    # A repoint target must name another configured delegate — a missing one just moves
+    # the dangling reference, so it's a 400.
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coder": "fable"}
+    r = client.request("DELETE", "/api/delegates/fable", params={"repoint_to": "ghost"})
+    assert r.status_code == 400
+    assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["fable"]
+
+
+def test_delete_repoint_refused_by_scope_leaves_references_untouched(client, fake_io, monkeypatch):
+    # #3692 review: a host-shared delegate a member can't delete must 403 WITHOUT having
+    # already rewritten its config references. The repoint save is deferred until after
+    # the removal succeeds, so a refusal leaves both the delegate and every reference
+    # exactly as they were — not silently repointed behind a 403.
+    monkeypatch.setattr(
+        store,
+        "read_host_delegates_raw",
+        lambda: [{"name": "fable", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}],
+    )
+    monkeypatch.setattr(store, "can_write_host_layer", lambda: False)
+    client.post("/api/delegates", json=_acp("opusx"))  # a valid (agent-layer) repoint target
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable", "opus": "fable"}}
+    r = client.request("DELETE", "/api/delegates/fable", params={"repoint_to": "opusx"})
+    assert r.status_code == 403
+    # references NOT rewritten to opusx despite repoint_to — the refusal touched nothing
+    assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "fable", "opus": "fable"}
+    # and the host-shared delegate is still on the bench
+    assert "fable" in [d["name"] for d in client.get("/api/delegates").json()["delegates"]]
+
+
+def test_rename_with_force_repoints_references_to_the_new_name(client, fake_io):
+    # Bonus: a forced rename doesn't strand references — they follow to the new name.
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable"}}
+    r = client.put("/api/delegates/fable", params={"force": "true"}, json=_acp("fable2"))
+    assert r.status_code == 200
+    assert [d["name"] for d in r.json()["delegates"]] == ["fable2"]
+    assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "fable2"}
+
+
+def test_force_with_repoint_still_rewrites_every_reference(client, fake_io):
+    # QA panel (#3736): `force` waives the refusal, it must not drop an explicit
+    # `repoint_to` — both together delete AND repoint, never strand the references.
+    client.post("/api/delegates", json=_acp("fable"))
+    client.post("/api/delegates", json=_acp("opusx"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable", "opus": "fable"}}
+    r = client.request("DELETE", "/api/delegates/fable", params={"force": "true", "repoint_to": "opusx"})
+    assert r.status_code == 200
+    assert [d["name"] for d in r.json()["delegates"]] == ["opusx"]
+    assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "opusx", "opus": "opusx"}
+
+
+def test_force_with_unknown_repoint_target_is_still_rejected(client, fake_io):
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coder": "fable"}
+    r = client.request("DELETE", "/api/delegates/fable", params={"force": "true", "repoint_to": "ghost"})
+    assert r.status_code == 400
+    assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["fable"]
+    assert fake_io["doc"]["project_board"] == {"coder": "fable"}
+
+
+def test_rename_with_repoint_to_sends_references_to_the_third_delegate(client, fake_io):
+    # A rename's `repoint_to` overrides the new name as the reference target.
+    client.post("/api/delegates", json=_acp("fable"))
+    client.post("/api/delegates", json=_acp("opusx"))
+    fake_io["doc"]["project_board"] = {"coder": "fable", "coders": {"reasoning": "fable"}}
+    r = client.put("/api/delegates/fable", params={"repoint_to": "opusx"}, json=_acp("fable2"))
+    assert r.status_code == 200
+    assert sorted(d["name"] for d in r.json()["delegates"]) == ["fable2", "opusx"]
+    assert fake_io["doc"]["project_board"] == {"coder": "opusx", "coders": {"reasoning": "opusx"}}
+
+
+def test_rename_keeps_the_stored_secret_under_the_new_name(fake_io):
+    # _rekey_secrets: a renamed delegate keeps its credential — stored under the new name
+    # and overlaid back at load.
+    store.upsert_delegate({"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "api_key": "K"})
+    assert fake_io["secrets"]["delegate_secrets"]["opus.api_key"] == "K"
+    store.rename_delegate("opus", {"name": "opus2", "type": "openai", "url": "https://g/v1", "model": "m"})
+    assert fake_io["secrets"]["delegate_secrets"]["opus2.api_key"] == "K"
+    merged = {d["name"]: d for d in store.merged_delegates()}
+    assert set(merged) == {"opus2"} and merged["opus2"]["api_key"] == "K"

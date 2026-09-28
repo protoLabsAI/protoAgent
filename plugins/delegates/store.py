@@ -41,6 +41,26 @@ class DelegateNotFoundError(Exception):
 class DelegateScopeError(ValueError):
     """A write to the host (fleet-shared) layer from an instance that may not write it."""
 
+
+class DelegateReferencedError(Exception):
+    """A delete/rename left ``name`` still NAMED by live config (the board's coder
+    ladder, a per-project coders map, a delegate fallback list), so the board loop
+    would strand itself at save time with no warning (#3692). ``refs`` is every dotted
+    config path that names it; the message lists them so the console error surface
+    shows the operator exactly what to repoint. ``force`` (proceed anyway) or
+    ``repoint_to`` (rewrite every reference to another delegate) override it."""
+
+    def __init__(self, name: str, refs: list[str], *, action: str = "Deleting"):
+        self.name = name
+        self.refs = list(refs)
+        listed = ", ".join(self.refs)
+        plural = "reference" if len(self.refs) == 1 else "references"
+        super().__init__(
+            f"{action} delegate {name!r} would strand {len(self.refs)} config {plural}: "
+            f"{listed}. Repoint {'it' if len(self.refs) == 1 else 'them'} to another "
+            f"delegate, remove the reference, or pass force to proceed anyway."
+        )
+
 # A per-delegate env secret is keyed ``<name>.env.<VARNAME>`` in the overlay — the
 # secret VALUE lives in secrets.yaml while the tracked config keeps only an empty
 # reference (``env: {VARNAME: ""}``). Mirrors the single-field ``<name>.<field>``
@@ -474,11 +494,227 @@ def upsert_delegate(entry: dict, *, expect: str | None = None) -> list:
     return read_delegates_raw()
 
 
+# ── reference scan (#3692) ──────────────────────────────────────────────────────
+#
+# A delegate lives at its NAME; other config fields name it back. Deleting or renaming
+# one that config still names strands the reference — the board loop then pauses itself
+# at save time with no warning. These helpers find (and, for repoint, rewrite) every
+# such reference so the delete/rename path can refuse and name them.
+#
+# Config fields that NAME a delegate — grepped from how delegate names are consumed:
+#   • ``project_board.coder``            — the board's single coder (a bare name)
+#   • ``project_board.coders``           — the model-tier ladder (bare name, list, or a
+#                                          {rung: name-or-list} map — .reasoning/.opus…)
+#   • ``project_board.projects.<p>.coder`` / ``.coders`` — the same, per registered project
+#   • ``delegates[].fallback`` / ``.fallbacks``          — a delegate entry naming other
+#                                          delegates as fallbacks (a fork/plugin field)
+# A value in any of these slots may be a bare name, a list of names, or a nested
+# {key: name-or-list} map; ``_nested_refs`` walks all three, so a fork that adds the
+# same shape under one of these keys is covered by the shared walk.
+
+
+def _nested_refs(val, path: str, name: str, target: str | None = None) -> list[str]:
+    """Dotted subpaths under ``path`` where ``val`` (a list or dict of names-or-lists)
+    names ``name``. When ``target`` is given, rewrite each hit to it in place."""
+    out: list[str] = []
+    if isinstance(val, list):
+        for i, item in enumerate(val):
+            if isinstance(item, str):
+                if item.strip() == name:
+                    if target is not None:
+                        val[i] = target
+                    out.append(f"{path}[{i}]")
+            elif isinstance(item, (list, dict)):
+                out.extend(_nested_refs(item, f"{path}[{i}]", name, target))
+    elif isinstance(val, dict):
+        for k, v in list(val.items()):
+            if isinstance(v, str):
+                if v.strip() == name:
+                    if target is not None:
+                        val[k] = target
+                    out.append(f"{path}.{k}")
+            elif isinstance(v, (list, dict)):
+                out.extend(_nested_refs(v, f"{path}.{k}", name, target))
+    return out
+
+
+def _slot_refs(container: dict, key: str, path: str, name: str, target: str | None = None) -> list[str]:
+    """Refs to ``name`` in ``container[key]`` — a bare name (str), a list, or a nested
+    map. When ``target`` is given, rewrite hits to it in place."""
+    val = container.get(key)
+    if isinstance(val, str):
+        if val.strip() == name:
+            if target is not None:
+                container[key] = target
+            return [path]
+        return []
+    if isinstance(val, (list, dict)):
+        return _nested_refs(val, path, name, target)
+    return []
+
+
+def _scan_references(doc: dict, name: str, target: str | None = None) -> list[str]:
+    """The shared find/rewrite walk over the config doc. Read-only when ``target`` is
+    None; rewrites every hit to ``target`` (mutating ``doc``) otherwise."""
+    refs: list[str] = []
+    pb = doc.get("project_board")
+    if isinstance(pb, dict):
+        refs += _slot_refs(pb, "coder", "project_board.coder", name, target)
+        refs += _slot_refs(pb, "coders", "project_board.coders", name, target)
+        projects = pb.get("projects")
+        if isinstance(projects, dict):
+            for pname, pcfg in projects.items():
+                if not isinstance(pcfg, dict):
+                    continue
+                base = f"project_board.projects.{pname}"
+                refs += _slot_refs(pcfg, "coder", f"{base}.coder", name, target)
+                refs += _slot_refs(pcfg, "coders", f"{base}.coders", name, target)
+    delegates = doc.get("delegates")
+    if isinstance(delegates, list):
+        for entry in delegates:
+            if not isinstance(entry, dict):
+                continue
+            # An entry's OWN fields aren't a reference TO it — skip the delegate itself.
+            if str(entry.get("name") or "").strip() == name:
+                continue
+            ename = str(entry.get("name") or "").strip() or "?"
+            for field in ("fallback", "fallbacks"):
+                if field in entry:
+                    refs += _slot_refs(entry, field, f"delegates.{ename}.{field}", name, target)
+    return refs
+
+
+def find_delegate_references(name: str, doc: dict | None = None) -> list[str]:
+    """Every dotted config path that NAMES delegate ``name``, so a delete/rename can
+    refuse instead of silently stranding the board loop (#3692). Reads the live agent
+    config doc when ``doc`` is None."""
+    name = str(name or "").strip()
+    if not name:
+        return []
+    if doc is None:
+        from graph.config_io import load_yaml_doc
+
+        doc = load_yaml_doc() or {}
+    if not isinstance(doc, dict):
+        return []
+    return _scan_references(doc, name)
+
+
+def _apply_repoint(name: str, target: str) -> list[str]:
+    """Rewrite every config reference to delegate ``name`` to ``target`` in the agent
+    config doc, persisted in place under the caller's config lock. Returns the paths
+    rewritten."""
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+
+    doc = load_yaml_doc() or {}
+    if not isinstance(doc, dict):
+        return []
+    changed = _scan_references(doc, name, target=target)
+    if changed:
+        save_yaml_doc(doc)
+    return changed
+
+
+def _rekey_secrets(old: str, new: str, scope: str = SCOPE_AGENT) -> None:
+    """Copy delegate ``old``'s stored secrets to the ``new`` name (same layer) so a
+    rename keeps its credentials. Matching is STRUCTURED — ``<old>.env.`` and each
+    ``<old>.<secret_field>`` — never a bare ``<old>.`` prefix (a dotted neighbour is
+    safe). The old keys are pruned afterwards by the delete that finishes the rename."""
+    from graph.config_io import load_secrets, save_secrets
+
+    path = _secrets_path_for(scope)
+    current = load_secrets(path) if scope == SCOPE_HOST else load_secrets()
+    section = current.get(SECRETS_SECTION)
+    if not isinstance(section, dict) or not section:
+        return
+    env_prefix = f"{old}{ENV_KEY_SEP}"
+    adapter_fields = {a.secret_field for a in ADAPTERS.values() if a.secret_field}
+    moved: dict[str, str] = {}
+    for k, v in section.items():
+        if k.startswith(env_prefix):
+            moved[f"{new}{ENV_KEY_SEP}{k[len(env_prefix):]}"] = v
+        elif k in {f"{old}.{f}" for f in adapter_fields}:
+            field = k[len(old) + 1 :]
+            moved[f"{new}.{field}"] = v
+    if not moved:
+        return
+    if scope == SCOPE_HOST:
+        save_secrets({SECRETS_SECTION: moved}, _secrets_path_for(SCOPE_HOST))
+    else:
+        save_secrets({SECRETS_SECTION: moved})
+
+
+def _validate_repoint_target(name: str, repoint_to: str) -> str:
+    """A repoint target must name ANOTHER configured delegate — repointing to a missing
+    one just moves the dangling reference."""
+    repoint_to = str(repoint_to or "").strip()
+    names = {str(e.get("name") or "") for e in read_delegates_raw() if isinstance(e, dict)}
+    if repoint_to == name or repoint_to not in names:
+        raise ValueError(f"repoint_to must name another configured delegate, not {repoint_to!r}")
+    return repoint_to
+
+
 @_under_config_lock
-def delete_delegate(name: str) -> list:
+def rename_delegate(old_name: str, entry: dict, *, force: bool = False, repoint_to: str | None = None) -> list:
+    """Rename delegate ``old_name`` to ``entry['name']``. A delegate lives at its name,
+    so a rename strands every config reference to the OLD name exactly as a delete does
+    (#3692): refuse (``DelegateReferencedError``) when the old name is still referenced,
+    unless ``force`` or ``repoint_to``. On success the entry is re-created under the new
+    name with its stored secrets re-keyed, the old entry removed, and references
+    repointed to the new name (``repoint_to`` overrides the target so a rename never
+    leaves a dangling reference behind)."""
+    old_name = str(old_name).strip()
+    new_name = str(entry.get("name") or "").strip()
+    if not new_name:
+        raise ValueError("rename needs a new name")
+    if new_name == old_name:
+        return upsert_delegate(entry, expect="present")  # a plain edit, not a rename
+    roster = read_delegates_raw()
+    cur = next((e for e in roster if isinstance(e, dict) and e.get("name") == old_name), None)
+    if cur is None:
+        raise DelegateNotFoundError(f"delegate {old_name!r} not found")
+    if any(isinstance(e, dict) and e.get("name") == new_name for e in roster):
+        raise DelegateConflictError(f"delegate {new_name!r} already exists — pick another name")
+    refs = find_delegate_references(old_name)
+    if repoint_to:
+        repoint_to = _validate_repoint_target(old_name, repoint_to)
+    elif refs and not force:
+        raise DelegateReferencedError(old_name, refs, action="Renaming")
+    scope = _scope_of(cur)
+    _rekey_secrets(old_name, new_name, scope)
+    upsert_delegate(entry, expect="absent")
+    delete_delegate(old_name, force=True)  # drops the old entry + its now-moved secrets
+    if refs:
+        _apply_repoint(old_name, repoint_to or new_name)
+    return read_delegates_raw()
+
+
+@_under_config_lock
+def delete_delegate(name: str, *, force: bool = False, repoint_to: str | None = None) -> list:
     """Remove ``name`` from whichever layer holds it (agent first — a member deleting
     a name that exists only in the host layer is refused). Secrets go with it,
-    matched structurally (never a bare name prefix)."""
+    matched structurally (never a bare name prefix).
+
+    Refuses (``DelegateReferencedError``) when live config still NAMES ``name`` — the
+    board loop would strand itself otherwise (#3692) — unless ``force`` (delete anyway)
+    or ``repoint_to`` (rewrite every reference to another delegate in the same save)."""
+    name = str(name).strip()
+    # Decide the repoint up front but DON'T save it yet — the removal below can still
+    # refuse (a host-shared entry on a member that can't write the host layer raises
+    # DelegateScopeError; an OSError on the layer write does too). Saving the repoint
+    # first would leave every reference permanently rewritten while the delegate stayed
+    # and the operator got a 403 — so the rewrite is deferred until AFTER the removal
+    # succeeds (#3692 review). The target is validated here (no writes), so an invalid
+    # ``repoint_to`` refuses without touching config either.
+    # ``repoint_to`` is honored with or without ``force`` — force only waives the refusal,
+    # it must never turn an explicit repoint into a delete that strands every reference.
+    repoint_target: str | None = None
+    if repoint_to:
+        repoint_target = _validate_repoint_target(name, repoint_to)
+    elif not force:
+        refs = find_delegate_references(name)
+        if refs:
+            raise DelegateReferencedError(name, refs)
     if not _remove_from_layer(name, SCOPE_AGENT):
         host_has = any(isinstance(e, dict) and e.get("name") == name for e in read_host_delegates_raw())
         if host_has:
@@ -492,4 +728,7 @@ def delete_delegate(name: str) -> list:
             _prune_secrets(name, None, scope=SCOPE_AGENT)
             if can_write_host_layer():
                 _prune_secrets(name, None, scope=SCOPE_HOST)
+    # The delegate is gone — only now is it safe to rewrite the references that named it.
+    if repoint_target:
+        _apply_repoint(name, repoint_target)
     return read_delegates_raw()
