@@ -21,9 +21,9 @@
 
 .hitl-float .hitl-card {
   pointer-events: auto;
-  /* Elevated off the chat — the DS popover shadow, same literal fallback as
-     .slash-menu / .chat-report-card for themes without the token. */
-  box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
+  /* Elevated off the chat — the DS popover shadow, as on
+     .slash-menu / .chat-report-card. */
+  box-shadow: var(--pl-shadow-popover);
   /* A long wizard scrolls INSIDE the card (dvh per the mobile overlay convention)
      instead of growing to cover the conversation. */
   max-height: min(60dvh, 520px);

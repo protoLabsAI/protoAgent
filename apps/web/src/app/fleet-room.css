@@ -38,7 +38,7 @@
   color: var(--pl-color-fg-muted);
 }
 .flr__count {
-  font: 500 11px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 500 11px var(--pl-font-mono);
   color: var(--pl-color-fg-subtle);
 }
 
@@ -164,7 +164,7 @@
   background: color-mix(in srgb, var(--pl-color-status-info) 15%, transparent);
 }
 .flr__meta {
-  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   overflow: hidden;
@@ -224,7 +224,7 @@
   background: var(--pl-color-bg-raised, var(--pl-color-bg));
   border: 1px solid var(--pl-color-border-strong, var(--pl-color-border));
   border-radius: 10px;
-  box-shadow: var(--pl-shadow-popover, 0 -10px 28px -14px rgba(0, 0, 0, 0.45));
+  box-shadow: var(--pl-shadow-popover);
 }
 /* Mention items are DS ghost Buttons; the DS owns padding/border/hover/radius —
  * keep only the row layout (dot · name · meta) and left alignment. */
@@ -258,7 +258,7 @@
   gap: 6px;
 }
 .flr__kbd {
-  font: 500 10.5px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 500 10.5px var(--pl-font-mono);
   color: var(--pl-color-fg-muted);
   background: var(--pl-color-bg-subtle);
   border: 1px solid var(--pl-color-border);
@@ -300,7 +300,7 @@
 }
 .flr__diag-sub {
   margin-left: auto;
-  font: 500 11px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 500 11px var(--pl-font-mono);
   color: var(--pl-color-fg-subtle);
   white-space: nowrap;
 }
@@ -350,7 +350,7 @@
   border: 1px dashed var(--pl-color-border);
 }
 .flr__diag-meta {
-  font: 500 11px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 500 11px var(--pl-font-mono);
   color: var(--pl-color-fg-subtle);
 }
 .flr__diag-note {
@@ -374,7 +374,7 @@
   overflow: auto;
   border-radius: 8px;
   background: var(--pl-color-bg-inset);
-  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
   line-height: 1.5;
 }
@@ -398,7 +398,7 @@
 .flr__diag-taskinput {
   flex: 1;
   min-width: 0;
-  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
 
@@ -413,7 +413,7 @@
   gap: 8px;
 }
 .flr__diag-pill {
-  font: 600 10px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 600 10px var(--pl-font-mono);
   letter-spacing: 0.03em;
   padding: 2px 7px;
   border-radius: 999px;
@@ -422,7 +422,7 @@
   white-space: nowrap;
 }
 .flr__diag-taskmeta {
-  font: 500 11px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 500 11px var(--pl-font-mono);
   color: var(--pl-color-fg-subtle);
 }
 .flr__diag-block {
@@ -450,7 +450,7 @@
   overflow: auto;
 }
 .flr__diag-pre {
-  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
 }
 .flr__diag-msgs {
@@ -471,7 +471,7 @@
 }
 .flr__diag-role {
   flex: none;
-  font: 600 10px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font: 600 10px var(--pl-font-mono);
   color: var(--pl-color-fg-subtle);
   text-transform: lowercase;
 }
