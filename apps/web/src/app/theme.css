@@ -56,8 +56,8 @@
 .utility-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px 8px;
+  gap: var(--pl-space-2);
+  padding: 0 10px var(--pl-space-2);
   border-top: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg);
   font-size: var(--pl-font-size-2xs);
@@ -129,7 +129,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   max-height: min(60vh, 520px);
   max-height: min(60dvh, 520px);
   overflow-y: auto;
@@ -137,7 +137,7 @@
 .bg-jobs-toolbar {
   display: flex;
   justify-content: flex-end;
-  padding: 0 4px 8px;
+  padding: 0 var(--pl-space-1) var(--pl-space-2);
 }
 .bg-jobs-icon {
   flex: none;
@@ -161,7 +161,7 @@
 .bg-jobs-tools {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
+  gap: var(--pl-space-1) var(--pl-space-2);
   margin-top: 3px;
   font-size: var(--pl-font-size-3xs);
   font-family: var(--pl-font-mono);
@@ -187,10 +187,10 @@
 .bg-jobs-resulthead {
   display: flex;
   justify-content: flex-end;
-  padding: 6px 12px 0;
+  padding: 6px var(--pl-space-3) 0;
 }
 .bg-jobs-result {
-  padding: 4px 12px 12px 33px;
+  padding: var(--pl-space-1) var(--pl-space-3) var(--pl-space-3) 33px;
   font-size: var(--pl-font-size-sm);
   border-top: 1px solid var(--pl-color-border);
   /* A long report (research agents emit thousands of words) scrolls within the row
@@ -201,7 +201,7 @@
 }
 
 .bg-jobs-feed {
-  padding: 8px 12px 8px 33px;
+  padding: var(--pl-space-2) var(--pl-space-3) var(--pl-space-2) 33px;
   /* A chatty job (many tools) scrolls within the row rather than growing the dialog. */
   max-height: 40vh;
   overflow-y: auto;
@@ -221,8 +221,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px;
+  gap: var(--pl-space-4);
+  padding: 0 var(--pl-space-4);
   border-bottom: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg);
 }
@@ -276,7 +276,7 @@
 .topbar-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .workspace {
@@ -296,7 +296,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 8px;
+  padding: 10px var(--pl-space-2);
   border-right: 1px solid var(--pl-color-border);
 }
 
@@ -312,7 +312,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   border: 1px solid transparent;
   border-radius: var(--pl-radius);
   background: transparent;
@@ -339,7 +339,7 @@
 .stage {
   min-width: 0;
   min-height: 0;
-  padding: 12px;
+  padding: var(--pl-space-3);
   border-right: 1px solid var(--pl-color-border);
 }
 
@@ -348,7 +348,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 12px;
+  padding: var(--pl-space-3);
   /* Mirror .stage exactly (ADR 0035 D1 — symmetric rails): a plain cell whose single surface
      child fills via its own height:100%. (The old inner grid auto/auto/1fr was for a multi-child
      right panel; post-renderSurface it left the lone surface stuck in the content-sized first row.) */
@@ -434,18 +434,18 @@
   /* Horizontal inset matches the DS PanelHeader (--pl-space-4) so body content lines
      up with the header; a top gap clears the header divider; bottom gives breathing
      room above the utility bar. */
-  padding: var(--pl-space-3) var(--pl-space-4) 12px;
+  padding: var(--pl-space-3) var(--pl-space-4) var(--pl-space-3);
 }
 
 /* Section headings stacked inside a scrolling stage body (Runtime, Schedule,
    Subagents) — inset to align with the inset rows (.table-row padding) below
    them, with vertical separation from the preceding block. */
 .stage-body > .panel-kicker {
-  padding: 0 12px;
-  margin: 22px 0 8px;
+  padding: 0 var(--pl-space-3);
+  margin: 22px 0 var(--pl-space-2);
 }
 .stage-body > .panel-kicker:first-child {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
 }
 
 .side-panel {
@@ -495,11 +495,11 @@ select:disabled {
 .plugin-row-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .plugin-hint {
-  margin: 0 0 8px;
-  padding: 8px 10px;
+  margin: 0 0 var(--pl-space-2);
+  padding: var(--pl-space-2) 10px;
   border-radius: 6px;
   font-size: var(--pl-font-size-sm);
   background: var(--pl-color-bg-raised);
@@ -510,7 +510,7 @@ select:disabled {
 .mcp-add-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin-bottom: 10px;
   padding: 10px;
   border-radius: 8px;
@@ -519,7 +519,7 @@ select:disabled {
 }
 .mcp-add-row {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-add-row > * {
   flex: 1;
@@ -527,7 +527,7 @@ select:disabled {
 }
 .mcp-add-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-add-modes {
   align-self: flex-start;
@@ -573,7 +573,7 @@ select:disabled {
 .mcp-browse-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: 0 0 6px;
 }
 .mcp-server-name {
@@ -586,7 +586,7 @@ select:disabled {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  margin: 2px 0 12px;
+  margin: 2px 0 var(--pl-space-3);
 }
 /* The search box (DS Input + `icon`) and category filter (DS segmented Tabs)
    own their own styling now; the controls row just sizes the search to fill. */
@@ -607,7 +607,7 @@ select:disabled {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px;
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: 9px;
   background: var(--pl-color-bg-raised);
@@ -616,7 +616,7 @@ select:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-catalog-card-head strong {
   font-size: var(--pl-font-size-base);
@@ -641,13 +641,13 @@ select:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin-top: 2px;
 }
 .mcp-catalog-docs {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   text-decoration: none;
@@ -658,14 +658,14 @@ select:disabled {
 .mcp-catalog-back {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   background: none;
   border: 0;
   color: var(--pl-color-fg-muted);
   cursor: pointer;
   font-size: var(--pl-font-size-xs);
   padding: 0;
-  margin-bottom: 8px;
+  margin-bottom: var(--pl-space-2);
 }
 .mcp-catalog-back:hover {
   color: var(--pl-color-fg);
@@ -673,12 +673,12 @@ select:disabled {
 .mcp-catalog-config-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-catalog-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   margin: 10px 0 0;
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
@@ -739,11 +739,11 @@ select:disabled {
 .pl-markdown [data-streamdown="table-wrapper"] .relative > div {
   min-width: 150px;
   white-space: nowrap;
-  padding: 4px;
+  padding: var(--pl-space-1);
   background: var(--pl-color-bg-raised);
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  box-shadow: var(--pl-shadow-popover);
   /* streamdown positions the menu with an inline left offset (its right-0/top-full Tailwind is
      inert), which shoved the 150px menu off the wrapper's right edge and out of view. Anchor it
      explicitly under the button, right-aligned, so it stays on-screen. !important beats the
@@ -776,7 +776,7 @@ select {
   /* token-bridged so inputs flip in light mode (was a hardcoded #0c0c0f dark). */
   background: var(--pl-color-bg-inset);
   color: var(--pl-color-fg);
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
 }
 
 textarea {
@@ -802,7 +802,7 @@ textarea {
 
 .field.grow {
   min-height: 0;
-  padding: 0 12px;
+  padding: 0 var(--pl-space-3);
 }
 
 /* New-task dialog form (TasksPanel) — a vertical stack of .field rows, with
@@ -810,12 +810,12 @@ textarea {
 .task-create-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 .task-create-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 /* Identity panel — the SOUL.md field — moved to src/agent/identity.css (#832). */
@@ -835,11 +835,11 @@ textarea {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) auto;
   gap: 10px;
-  padding: 12px;
+  padding: var(--pl-space-3);
 }
 
 .subagent-mode {
-  margin: 12px 12px 0;
+  margin: var(--pl-space-3) var(--pl-space-3) 0;
 }
 
 .batch-task-list {
@@ -847,12 +847,12 @@ textarea {
   display: grid;
   gap: 10px;
   overflow: auto;
-  padding: 0 12px;
+  padding: 0 var(--pl-space-3);
 }
 
 .batch-task-row {
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   padding: 10px;
@@ -880,7 +880,7 @@ textarea {
   align-self: end;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-sm);
 }
@@ -894,13 +894,13 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .output-block {
   max-height: 260px;
   overflow: auto;
-  margin: 0 12px 12px;
+  margin: 0 var(--pl-space-3) var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -973,7 +973,7 @@ textarea {
 /* Workflows surface — moved to src/workflows/workflows.css (#832), except
    .workflow-failed below which is shared (TasksPanel renders it too). */
 .workflow-failed {
-  margin: 0 12px;
+  margin: 0 var(--pl-space-3);
   color: var(--pl-color-status-error);
   font-size: var(--pl-font-size-sm);
 }
@@ -992,10 +992,10 @@ textarea {
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: auto auto;
   align-content: center;
-  column-gap: 8px;
+  column-gap: var(--pl-space-2);
   row-gap: 0;
   background: var(--pl-color-bg-raised);
-  padding: 6px 12px;
+  padding: 6px var(--pl-space-3);
 }
 
 .metric svg {
@@ -1017,9 +1017,9 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   border-bottom: 1px solid var(--pl-color-border);
-  padding: 8px 12px;
+  padding: var(--pl-space-2) var(--pl-space-3);
 }
 
 .subagent-row > div,
@@ -1056,14 +1056,14 @@ textarea {
   border: 0;
   border-radius: 0 0 var(--pl-radius) var(--pl-radius);
   background: transparent;
-  padding: 12px;
+  padding: var(--pl-space-3);
 }
 
 .notes-tabbar {
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
   border-bottom: 1px solid var(--pl-color-border);
 }
 
@@ -1091,7 +1091,7 @@ textarea {
 .notes-meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
+  gap: var(--pl-space-2);
   align-items: center;
   padding: 10px;
   border-bottom: 1px solid var(--pl-color-border);
@@ -1104,7 +1104,7 @@ textarea {
 .issue-create {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: var(--pl-space-2);
   padding: 10px;
   border-bottom: 1px solid var(--pl-color-border);
 }
@@ -1113,7 +1113,7 @@ textarea {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: 104px 82px minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .issue-list {
@@ -1127,8 +1127,8 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 28px 16px;
+  gap: var(--pl-space-2);
+  padding: 28px var(--pl-space-4);
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-sm);
 }
@@ -1137,9 +1137,9 @@ textarea {
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 8px 10px;
-  margin: 12px;
-  padding: 12px;
+  gap: var(--pl-space-2) 10px;
+  margin: var(--pl-space-3);
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-status-error) 6%, transparent);
@@ -1191,7 +1191,7 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   border-bottom: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-inset);
   padding: 6px 10px;
@@ -1232,7 +1232,7 @@ textarea {
 .issue-row {
   min-height: 36px;
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
   border-bottom: 1px solid var(--pl-color-border);
   padding: 10px;
 }
@@ -1256,7 +1256,7 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .issue-badges {
@@ -1324,7 +1324,7 @@ textarea {
   place-items: center;
   overflow: auto;
   background: color-mix(in srgb, var(--pl-color-bg) 98%, transparent);
-  padding: 24px;
+  padding: var(--pl-space-6);
 }
 
 /* New-schedule modal (friendly builder, .schedule-*) — moved to src/schedule/schedule.css (#832). */
@@ -1336,7 +1336,7 @@ textarea {
 .setup-progress {
   display: flex;
   justify-content: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin-bottom: 20px;
 }
 
@@ -1364,14 +1364,14 @@ textarea {
 
 .setup-step {
   display: grid;
-  gap: 16px;
+  gap: var(--pl-space-4);
   padding: 18px;
 }
 
 .setup-heading {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 .setup-heading p {
@@ -1394,7 +1394,7 @@ textarea {
 .finish-list,
 .toggle-grid {
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .status-line,
@@ -1403,10 +1403,10 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
 }
 
 .status-line {
@@ -1446,7 +1446,7 @@ textarea {
 
 .setup-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 .setup-grid.two {
@@ -1488,7 +1488,7 @@ textarea {
 /* "Test connection" result line in the model step. */
 /* Short explanatory line under a field/step (replaces ad-hoc inline `opacity` smalls). */
 .setup-hint {
-  margin: 8px 0 0;
+  margin: var(--pl-space-2) 0 0;
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-xs);
   line-height: 1.4;
@@ -1496,7 +1496,7 @@ textarea {
 
 /* Archetype "what's included" preview (setup wizard + fleet new-agent panel) */
 .archetype-preview-link {
-  margin-top: 8px;
+  margin-top: var(--pl-space-2);
   padding: 0;
   border: none;
   background: none;
@@ -1513,7 +1513,7 @@ textarea {
 /* Choose-time runtime requirement (#2186 follow-on): the picked archetype needs the
    managed Python runtime and this host hasn't provisioned it. */
 .archetype-runtime-notice {
-  margin: 8px 0 0;
+  margin: var(--pl-space-2) 0 0;
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-warning);
 }
@@ -1527,26 +1527,26 @@ textarea {
 .archetype-preview-members {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .archetype-preview-member {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 10px 12px;
+  padding: 10px var(--pl-space-3);
 }
 .archetype-preview-member-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .archetype-preview-desc {
-  margin: 4px 0 0;
+  margin: var(--pl-space-1) 0 0;
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-sm);
   line-height: 1.45;
 }
 .archetype-preview-muted {
-  margin: 4px 0 0;
+  margin: var(--pl-space-1) 0 0;
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-xs);
 }
@@ -1554,19 +1554,19 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: var(--pl-space-2);
 }
 .archetype-preview-chip {
   border: 1px solid var(--pl-color-border);
   border-radius: 999px;
-  padding: 1px 8px;
+  padding: 1px var(--pl-space-2);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
 }
 .archetype-preview-soul {
   margin: 6px 0 0;
-  padding: 10px 12px;
+  padding: 10px var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -1583,7 +1583,7 @@ textarea {
 .setup-actions {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   padding: 18px;
   border-top: 1px solid var(--pl-color-border);
 }
@@ -1640,7 +1640,7 @@ textarea {
   }
 
   .setup-overlay {
-    padding: 12px;
+    padding: var(--pl-space-3);
     place-items: start center;
   }
 
@@ -1686,7 +1686,7 @@ textarea {
 .setup-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-accent-fg);
   text-decoration: none;
@@ -1703,7 +1703,7 @@ textarea {
 /* Playbooks surface (ADR 0009) */
 .playbook-search {
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--pl-space-2) var(--pl-space-3);
   margin-bottom: 14px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -1712,19 +1712,19 @@ textarea {
   font-size: var(--pl-font-size-sm);
 }
 .playbook-search:focus { outline: none; border-color: var(--pl-color-border-strong); }
-.playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--pl-space-2); }
 .playbook-card {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
+  gap: var(--pl-space-4);
+  padding: var(--pl-space-3) 14px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
 }
 .playbook-card:hover { border-color: var(--pl-color-border-strong); }
 .playbook-main { min-width: 0; }
-.playbook-title { display: flex; align-items: center; gap: 8px; }
+.playbook-title { display: flex; align-items: center; gap: var(--pl-space-2); }
 .playbook-title strong { font-size: var(--pl-font-size-base); }
 /* .playbook-badge / .pinned / .learned retired (#832) — pinned/learned/domain/
    finding-type tags are now DS <Badge> (info / success / neutral). */
@@ -1732,14 +1732,14 @@ textarea {
 .playbook-tools { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
 .playbook-tools code { font-size: var(--pl-font-size-2xs); padding: 1px 6px; border-radius: 4px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); }
 .playbook-meta {
-  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--pl-space-1);
   font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 /* Knowledge store curation (add / edit / delete a chunk from the console). */
-.knowledge-chunk-form { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; margin: 8px 0; }
-.knowledge-chunk-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.knowledge-chunk-form { display: flex; flex-direction: column; gap: var(--pl-space-2); flex: 1; min-width: 0; margin: var(--pl-space-2) 0; }
+.knowledge-chunk-form-row { display: flex; gap: var(--pl-space-2); align-items: center; flex-wrap: wrap; }
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
 .knowledge-chunk-actions { display: flex; gap: 2px; }
 /* Shift held → the delete button arms red (chat-tab quick-delete parity, #1582). */
@@ -1747,14 +1747,14 @@ textarea {
 
 /* Collapsible source groups in the Knowledge Base (#1575). A group is a plain
    list item holding a full-width header button + (when open) a nested card list. */
-.kb-group { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.kb-group { list-style: none; display: flex; flex-direction: column; gap: var(--pl-space-2); }
 /* Toggle + a bulk delete-by-source button sit side by side (#1770); the toggle
    flexes to fill, the trash button is a fixed sibling at the end. */
-.kb-group-header-row { display: flex; align-items: center; gap: 4px; }
+.kb-group-header-row { display: flex; align-items: center; gap: var(--pl-space-1); }
 .kb-group-header {
   flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 12px; border: 1px solid var(--pl-color-border); border-radius: var(--pl-radius);
+  display: flex; align-items: center; gap: var(--pl-space-2); width: 100%;
+  padding: var(--pl-space-2) var(--pl-space-3); border: 1px solid var(--pl-color-border); border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised); color: var(--pl-color-fg); cursor: pointer; text-align: left;
 }
 .kb-group-header:hover { border-color: var(--pl-color-border-strong); }
@@ -1769,14 +1769,14 @@ textarea {
 /* New/Edit skill dialog (PlaybooksSurface) — a little more space between fields than
    the knowledge inline form it grew out of. (The dialog passes padding="roomy", so the
    body already has the 24px inset.) */
-.skill-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.skill-form { display: flex; flex-direction: column; gap: var(--pl-space-3); min-width: 0; }
 /* The trailing action row gets a little separation from the fields above it. */
-.skill-form > .knowledge-chunk-form-row:last-child { margin-top: 4px; }
+.skill-form > .knowledge-chunk-form-row:last-child { margin-top: var(--pl-space-1); }
 
 /* Document ingestion drop-zone (ADR 0021) — file/URL "Add source". */
 .knowledge-ingest-drop {
-  display: flex; align-items: center; gap: 8px;
-  padding: 14px 12px;
+  display: flex; align-items: center; gap: var(--pl-space-2);
+  padding: 14px var(--pl-space-3);
   border: 1px dashed var(--pl-color-border);
   border-radius: 8px;
   background: var(--pl-color-bg-inset);
@@ -1807,7 +1807,7 @@ textarea {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
 .knowledge-ingest-preview-snippet {
-  margin: 0; padding: 10px 12px;
+  margin: 0; padding: 10px var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   background: var(--pl-color-bg-inset);
@@ -1822,7 +1822,7 @@ textarea {
 .plugin-view { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .plugin-view-body { position: relative; flex: 1; min-height: 0; }
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--pl-color-bg); display: block; }
-.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--pl-color-fg-subtle); font-size: var(--pl-font-size-sm); }
+.plugin-view-state { display: flex; align-items: center; gap: var(--pl-space-2); padding: var(--pl-space-6); color: var(--pl-color-fg-subtle); font-size: var(--pl-font-size-sm); }
 /* A plugin view hosted in a utility-widget DIALOG (vs the stage): give it a fixed height
    so the iframe has room to fill (the stage normally supplies that via its flex column). */
 .plugin-widget-dialog { display: flex; flex-direction: column; height: 70vh; height: 70dvh; min-height: 0; }
@@ -1832,14 +1832,14 @@ textarea {
    .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint
    + .btn-icon.danger:hover) — moved to src/settings/plugins.css (#832). The bare
    .plugin-row stays here: it's shared with the MCP panel + the Plugins surface. */
-.plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: var(--pl-color-bg-raised); border: 1px solid var(--pl-color-border); border-radius: 9px; }
+.plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: var(--pl-space-3); background: var(--pl-color-bg-raised); border: 1px solid var(--pl-color-border); border-radius: 9px; }
 
 /* Federated plugin view (ADR 0034) — loading + bounded error card (D6). */
 .federated-loading,
 .federated-error {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--pl-space-2);
   padding: 14px;
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-subtle);
@@ -1848,7 +1848,7 @@ textarea {
 .federated-error { color: var(--pl-color-status-warning); }
 .federated-error strong { color: var(--pl-color-fg); }
 .federated-error-detail {
-  margin: 4px 0 8px;
+  margin: var(--pl-space-1) 0 var(--pl-space-2);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
@@ -1891,7 +1891,7 @@ textarea {
 .archetype-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   min-width: 0;
 }
 .archetype-card > .pl-radiocard {
@@ -1899,11 +1899,11 @@ textarea {
 }
 .archetype-card > .archetype-preview-link {
   margin-top: 0;
-  padding: 2px 4px;
+  padding: 2px var(--pl-space-1);
   align-self: flex-start;
 }
 .archetype-step-actions {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
 }
 
 /* Step 2 (ArchetypeSetupForm) — the name, the bundle's questions, Advanced. Shared by
@@ -1913,7 +1913,7 @@ textarea {
 .archetype-setup {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--pl-space-4);
   min-width: 0;
   color: var(--pl-color-fg);
   font-family: var(--pl-font-sans);
@@ -1936,7 +1936,7 @@ textarea {
   color: var(--pl-color-status-error);
 }
 .archetype-setup-switch .pl-field__hint {
-  margin-top: 4px;
+  margin-top: var(--pl-space-1);
   padding-left: 2px;
 }
 .archetype-setup-soul {
@@ -1946,7 +1946,7 @@ textarea {
   font-size: var(--pl-font-size-xs);
 }
 .archetype-setup-advanced .pl-accordion__panel {
-  padding-top: 4px;
+  padding-top: var(--pl-space-1);
 }
 /* The set-up dialog: a long bundle scrolls inside the body, the Back/Create foot stays. */
 .archetype-setup-dialog .pl-dialog__body {
@@ -1961,7 +1961,7 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 4px;
+  margin-top: var(--pl-space-1);
 }
 .field-hint {
   font-size: var(--pl-font-size-2xs);
@@ -1978,7 +1978,7 @@ textarea {
   gap: 5px;
   background: none;
   border: none;
-  padding: 2px 4px;
+  padding: 2px var(--pl-space-1);
   margin: -2px -4px;
   border-radius: var(--pl-radius);
   color: inherit;
@@ -2024,7 +2024,7 @@ textarea {
     max-width: 100vw;
     border: 0;
     border-radius: 0;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    padding: var(--pl-space-2) var(--pl-space-2) calc(8px + env(safe-area-inset-bottom));
     /* Radix positions the portal wrapper with a transform; inset:0 only wins once the
        element is taken out of that flow. */
     transform: none !important;
@@ -2062,7 +2062,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: var(--pl-space-1) var(--pl-space-3);
   border-radius: 999px;
   border: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-raised);
@@ -2098,12 +2098,12 @@ textarea {
   overscroll-behavior: contain;
 }
 .update-notice-empty {
-  margin-top: 8px;
+  margin-top: var(--pl-space-2);
   font-size: var(--pl-font-size-xs);
   opacity: 0.7;
 }
 .update-notice-progress {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2128,7 +2128,7 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 .update-notice-err {
-  margin-top: 8px;
+  margin-top: var(--pl-space-2);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
 }
@@ -2137,16 +2137,16 @@ textarea {
 .setup-postinstall {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .setup-postinstall-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 10px 12px;
+  padding: 10px var(--pl-space-3);
 }
 .setup-postinstall-info {
   display: flex;
