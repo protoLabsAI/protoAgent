@@ -67,7 +67,7 @@ export function ArchetypePreviewDialog({ archetype, onClose }: { archetype: Arch
   });
 
   return (
-    <Dialog open onClose={onClose} title={`What's included — ${archetype.label}`} width="min(680px, 95vw)">
+    <Dialog open onClose={onClose} title={`What's included — ${archetype.label}`} width="min(680px, 95vw)" padding="roomy">
       <div className="archetype-preview">
         <p className="archetype-preview-desc">{archetype.blurb}</p>
 

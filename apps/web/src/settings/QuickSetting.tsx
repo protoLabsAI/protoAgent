@@ -149,6 +149,7 @@ function QuickSettingDialog({
       onClose={onClose}
       title={title}
       width={460}
+      padding="roomy"
       className="quick-setting-dialog"
       footer={
         <>
