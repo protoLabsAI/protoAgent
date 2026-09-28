@@ -71,7 +71,9 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
   });
 
   it("migrated every in-range site to an in-scale token, at the expected per-file counts", () => {
-    expect(tokenCount(chatCss)).toBe(15);
+    // chat.css: 15 from the px migration (#3688 part 4) + 20 from the rem→scale migration
+    // (DS audit type-scale 2b). The other three files are untouched by 2b.
+    expect(tokenCount(chatCss)).toBe(35);
     expect(tokenCount(promptviewerCss)).toBe(12);
     expect(tokenCount(chatComponentCss)).toBe(8);
     expect(tokenCount(hitlCss)).toBe(7);

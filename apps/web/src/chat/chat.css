@@ -160,7 +160,7 @@
   border-radius: 0;
   padding: 0;
   text-align: left;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
 }
 /* One line, chip-sized (~40px tall): inline-flex hugs the content instead of stretching
@@ -186,7 +186,7 @@
 .chat-report-title {
   min-width: 0;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -243,18 +243,18 @@
   min-width: 0;
   flex: 1 1 auto;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .chat-scheduled-time {
   flex: 0 0 auto;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .chat-scheduled-summary {
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -316,21 +316,21 @@
 .chat-server-result-label {
   flex: 0 0 auto;
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
 }
 /* The preview takes the slack and ellipsizes on one line; the full text is in the body below. */
 .chat-server-result-preview {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .chat-server-result-time {
   flex: 0 0 auto;
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .chat-server-result-chevron {
@@ -347,7 +347,7 @@
   padding: 10px 12px 12px;
   border-top: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg);
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
 }
 .chat-server-result-body .markdown > :first-child { margin-top: 0; }
 .chat-server-result-body .markdown > :last-child { margin-bottom: 0; }
@@ -613,7 +613,7 @@
 .chat-session-slot .pl-message--system .pl-message__content {
   display: block;
   text-align: left;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
   background: var(--pl-color-bg-inset);
   border: var(--pl-border-width) solid var(--pl-color-border);
@@ -635,7 +635,7 @@
    union in lib/types.ts. The `.chat-note--*` class sits ON `.pl-message--system`, so these
    (4 classes) outrank the base system rule above (3 classes). */
 .chat-session-slot .pl-message--system.chat-note .pl-message__content {
-  font-size: 0.85rem;
+  font-size: var(--pl-font-size-sm);
   padding: 8px 12px;
   background: var(--pl-color-bg-raised);
   box-shadow: var(--pl-shadow-card);
@@ -882,7 +882,7 @@
 }
 .chat-author-name {
   font-weight: 600;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   letter-spacing: 0.01em;
 }
 
@@ -908,7 +908,7 @@
   gap: 4px;
   padding: 2px 6px 2px 8px;
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   font-weight: 600;
   color: var(--pl-color-fg-muted);
   background: var(--pl-color-bg-raised);
@@ -947,7 +947,7 @@
   gap: 8px;
   min-width: 0;
   padding: 5px 10px;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
@@ -964,7 +964,7 @@
 .chat-delegation-kind {
   flex: 0 0 auto;
   padding: 0 6px;
-  font-size: 0.72rem;
+  font-size: var(--pl-font-size-xs);
   border: 1px solid var(--pl-color-border);
   border-radius: 999px;
 }
@@ -991,7 +991,7 @@
   flex: 0 0 auto;
   padding: 0;
   font: inherit;
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   background: none;
   border: 0;
@@ -1004,12 +1004,12 @@
 }
 .chat-delegation-error {
   margin: 4px 0 0 2px;
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
 }
 .chat-delegation-brief {
   margin: 6px 0 0 12px;
   padding-left: 10px;
-  font-size: 0.86rem;
+  font-size: var(--pl-font-size-sm);
   border-left: 2px solid var(--pl-color-border);
 }
 
@@ -1021,7 +1021,7 @@
   gap: 8px;
   min-width: 0;
   padding: 0 2px 6px;
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .chat-bgwork-list {
@@ -1048,7 +1048,7 @@
 /* One activity cue per server-fired turn: its label rides the message's own spinner. */
 .chat-streaming-label {
   margin-left: 6px;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   font-style: italic;
   color: var(--pl-color-fg-muted);
 }
