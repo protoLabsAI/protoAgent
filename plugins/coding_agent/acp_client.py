@@ -42,6 +42,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from infra import clock
 from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack_tree
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
@@ -1366,7 +1367,9 @@ class AcpClient:
         self._pending[rid] = fut
         await self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         try:
-            return await asyncio.wait_for(fut, timeout)
+            # Sleep-aware: a coder dispatched on a sleeping Mac must not hold an 1800s bound
+            # for hours of wall time (#3724). Awake, this is asyncio.wait_for.
+            return await clock.wait_for(fut, timeout)
         except asyncio.TimeoutError as exc:
             self._pending.pop(rid, None)
             # "timed out" alone can't distinguish a wedged agent from a working one that
@@ -1662,7 +1665,7 @@ class AcpClient:
                 if self._turn_lock.locked():
                     logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
                 try:
-                    await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
+                    await clock.wait_for(self._turn_lock.acquire(), timeout=timeout)
                 except TimeoutError:
                     raise AcpError(
                         f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
