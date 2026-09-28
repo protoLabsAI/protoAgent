@@ -2206,3 +2206,89 @@ def test_concurrent_first_access_migration_never_diverges_to_legacy(monkeypatch,
     assert (new_dir / "blobs" / "a-1" / "b.txt").read_bytes() == b"blob-bytes"  # blobs travelled too
     assert not (legacy / "history.json").exists()  # the winner's move landed, once
     assert [x["id"] for x in art._read_store()["artifacts"]] == ["a-1"]  # a single intact store
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="msvcrt byte-range locks don't contend within one process; the reentrancy is POSIX-flock-specific",
+)
+def test_migration_lock_is_reentrant_with_the_store_write_lock(monkeypatch, tmp_path):
+    """The blocking finding: an adoption triggered from INSIDE a serialized write must NOT
+    re-open the store's own flock. On POSIX flock is per-open-file-description, so a second
+    LOCK_EX on the same file from this same process conflicts with the one the write already
+    holds — without the _FILE_LOCK_DEPTH reentrancy guard the nested acquire polls to the
+    _LOCK_TIMEOUT_S deadline (60s in prod) and then runs unlocked. We drop the timeout so a
+    regression FAILS FAST here instead of merely running ~60s slower."""
+    import time
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+    monkeypatch.setattr(art._store, "_LOCK_TIMEOUT_S", 2.0)
+
+    art._store._store_dir()  # resolve + cache the dir so _lock_path() is stable
+    lock_file = art._store._lock_path()
+
+    start = time.monotonic()
+    with art._store._store_lock():  # takes the real flock; _FILE_LOCK_DEPTH -> 1
+        with art._store._migration_lock(lock_file):  # same file — must skip, not re-flock
+            pass
+    # << _LOCK_TIMEOUT_S (2.0s): the guard returns at once. Without it the inner acquire would
+    # self-conflict and poll to the 2.0s deadline.
+    assert time.monotonic() - start < 1.0
+
+
+def _record_os_lock(monkeypatch, art):
+    """Record every _os_lock call so a test can assert a code path took no store OS lock."""
+    calls: list[int] = []
+    real = art._store._os_lock
+
+    def rec(fd, deadline):
+        calls.append(1)
+        return real(fd, deadline)
+
+    monkeypatch.setattr(art._store, "_os_lock", rec)
+    return calls
+
+
+def test_reads_on_a_fresh_store_take_no_store_lock(monkeypatch, tmp_path):
+    """The major finding, case (a): on a fresh/empty store (nothing to adopt) resolving the
+    store dir takes NO lock — so the lock-free read path (the async /history and /current
+    polls) never waits behind a writer while resolving the path."""
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+    calls = _record_os_lock(monkeypatch, art)
+
+    assert art._read_store()["artifacts"] == []  # a pure read, exactly what /history does
+    assert calls == []  # the read path took no store OS lock at all
+
+
+def test_reads_after_a_failed_migration_take_no_store_lock(monkeypatch, tmp_path):
+    """The major finding, case (b): once an adoption that can't move falls back to legacy, the
+    resolution is CACHED — later reads don't re-attempt the migration under the lock on every
+    poll. Without the cache each /history / /current poll would take _MUTATION_LOCK and poll the
+    flock on the event-loop thread for as long as a writer held it."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb", box=tmp_path / "home" / ".protoagent")
+    legacy = box / "artifact" / "onb"
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+
+    # First access: the one-time adoption. Make the history.json move fail so it falls back to
+    # legacy and caches it (blobs absent here, so no roll-back is involved).
+    real_replace = Path.replace
+
+    def failing_replace(self, target):
+        if self.name == "history.json":
+            raise OSError("history.json is not moveable")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    assert art._store._store_dir().resolve() == legacy.resolve()  # fell back and cached legacy
+    monkeypatch.setattr(Path, "replace", real_replace)
+
+    calls = _record_os_lock(monkeypatch, art)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]  # still served, from legacy
+    assert calls == []  # the cached fallback means a later read never re-takes the store lock
