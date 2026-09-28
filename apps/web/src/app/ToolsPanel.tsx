@@ -271,7 +271,7 @@ function WorkFoldersButton() {
         <FolderTree size={15} /> Work folders
       </Button>
       {open ? (
-        <Dialog open onClose={() => setOpen(false)} title="Work folders" width={520}>
+        <Dialog open padding="roomy" onClose={() => setOpen(false)} title="Work folders" width={520}>
           <ManagedProjectsList />
           <FsProjectsEditor />
         </Dialog>

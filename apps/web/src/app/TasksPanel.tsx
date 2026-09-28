@@ -83,6 +83,7 @@ export function TaskCreateDialog({
   return (
     <Dialog
       open={open}
+      padding="roomy"
       onClose={onClose}
       title={<><Boxes size={16} /> New task</>}
       width="min(520px, 94vw)"
