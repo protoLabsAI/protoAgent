@@ -169,9 +169,9 @@
 .chat-report-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   max-width: 100%;
-  padding: 5px 6px 5px 12px;
+  padding: 5px 6px 5px var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   border-radius: 999px;
@@ -219,9 +219,9 @@
 .chat-scheduled-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
   max-width: 100%;
-  padding: 10px 12px;
+  padding: 10px var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   border-radius: 12px;
@@ -233,7 +233,7 @@
 .chat-scheduled-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .chat-scheduled-head > svg {
   flex: 0 0 auto;
@@ -296,7 +296,7 @@
 .chat-server-result-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   width: 100%;
   padding: 7px 10px;
   border: none;
@@ -344,7 +344,7 @@
 /* Expanded body — the FULL markdown answer + tool cards, no truncation. A hairline separates
    it from the summary; the CONTENT reads at full foreground strength (only the chrome is muted). */
 .chat-server-result-body {
-  padding: 10px 12px 12px;
+  padding: 10px var(--pl-space-3) var(--pl-space-3);
   border-top: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg);
   font-size: var(--pl-font-size-base);
@@ -358,7 +358,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: var(--pl-space-3);
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-sm);
@@ -369,7 +369,7 @@
 .chat-usage-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .chat-usage-item svg {
   opacity: 0.85;
@@ -409,7 +409,7 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--pl-space-4);
 }
 .chat-usage-tip-label {
   color: var(--pl-color-fg-subtle);
@@ -447,7 +447,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: var(--pl-space-3);
   margin-top: 7px;
 }
 /* Sent-time chip (#3458): the full local sent date-and-time lives in the DS Tooltip on hover or
@@ -456,7 +456,7 @@
 .chat-sent-time {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-sm);
@@ -562,7 +562,7 @@
 .chat-server-turn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   color: var(--pl-color-fg-subtle);
   font-style: italic;
 }
@@ -619,7 +619,7 @@
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-left: 3px solid var(--pl-color-border-strong);
   border-radius: var(--pl-radius);
-  padding: 12px 16px;
+  padding: var(--pl-space-3) var(--pl-space-4);
 }
 /* The lede ("✅ Background agent finished — …") is the first markdown line; keep
    the report's own margins tidy inside the card. */
@@ -636,7 +636,7 @@
    (4 classes) outrank the base system rule above (3 classes). */
 .chat-session-slot .pl-message--system.chat-note .pl-message__content {
   font-size: var(--pl-font-size-sm);
-  padding: 8px 12px;
+  padding: var(--pl-space-2) var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   box-shadow: var(--pl-shadow-card);
 }
@@ -680,7 +680,7 @@
 .composer-model-select {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   font: inherit;
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
@@ -734,7 +734,7 @@
   gap: 2px;
   width: 100%;
   text-align: left;
-  padding: 8px 12px;
+  padding: var(--pl-space-2) var(--pl-space-3);
   background: none;
   border: 0;
   border-bottom: 1px solid var(--pl-color-border);
@@ -777,7 +777,7 @@
 
 /* Delete/clear dialog: the note that compaction may already have archived parts of the chat. */
 .chat-memory-note {
-  margin: 12px 0 0;
+  margin: var(--pl-space-3) 0 0;
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
@@ -787,8 +787,8 @@
 .chat-delete-forget {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-3);
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   cursor: pointer;
@@ -810,7 +810,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   padding: 10px 14px;
   border: 1px dashed var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -828,9 +828,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  padding: 8px 12px;
+  gap: var(--pl-space-3);
+  margin-bottom: var(--pl-space-2);
+  padding: var(--pl-space-2) var(--pl-space-3);
   border: 1px solid var(--pl-color-status-warning);
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-status-warning) 12%, var(--pl-color-bg-raised));
@@ -905,8 +905,8 @@
 .chat-roster-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 6px 2px 8px;
+  gap: var(--pl-space-1);
+  padding: 2px 6px 2px var(--pl-space-2);
   font: inherit;
   font-size: var(--pl-font-size-xs);
   font-weight: 600;
@@ -944,7 +944,7 @@
 .chat-delegation-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
   padding: 5px 10px;
   font-size: var(--pl-font-size-sm);
@@ -1003,11 +1003,11 @@
   text-decoration: underline;
 }
 .chat-delegation-error {
-  margin: 4px 0 0 2px;
+  margin: var(--pl-space-1) 0 0 2px;
   font-size: var(--pl-font-size-xs);
 }
 .chat-delegation-brief {
-  margin: 6px 0 0 12px;
+  margin: 6px 0 0 var(--pl-space-3);
   padding-left: 10px;
   font-size: var(--pl-font-size-sm);
   border-left: 2px solid var(--pl-color-border);
@@ -1018,7 +1018,7 @@
 .chat-bgwork {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
   padding: 0 2px 6px;
   font-size: var(--pl-font-size-xs);
