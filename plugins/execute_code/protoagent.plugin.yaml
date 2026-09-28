@@ -26,7 +26,9 @@ config:
   timeout: 30.0
   output_truncate: 6000
   tools: []
+  extra_tools: []
 settings:
   - { key: timeout, label: "Script timeout (s)", type: number, description: "Hard timeout (seconds) before the subprocess is killed." }
   - { key: output_truncate, label: "Output truncate (chars)", type: number, description: "Max characters of stdout returned to the model." }
-  - { key: tools, label: "Exposed tools", type: string_list, description: "Restrict which tools the script may call (empty = all)." }
+  - { key: tools, label: "Exposed tools", type: string_list, description: "Tools the script may call. Empty means the curated read-only default set (ADR 0103 D3); a non-empty list REPLACES that default with exactly the names you list." }
+  - { key: extra_tools, label: "Additional exposed tools", type: string_list, description: "Bridge these tools IN ADDITION to whichever set above applies (union, not replace) — e.g. a plugin read tool like github_search_issues, without re-listing every core tool. Unregistered names are ignored; execute_code can't bridge itself." }

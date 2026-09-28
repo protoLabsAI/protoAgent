@@ -227,6 +227,87 @@ def test_plugin_register_wires_a_late_factory_that_builds_the_tool():
     assert "echo_tool" in ec.description and "boom_tool" not in ec.description
 
 
+# --- additive extra_tools bridge (#3701) -------------------------------------
+
+
+@tool
+async def read_file(project: str, path: str) -> str:
+    """Fake core read tool (name matches the curated default set)."""
+    return "content"
+
+
+@tool
+async def github_search_issues(query: str) -> str:
+    """Fake plugin read tool the operator wants to bridge additively."""
+    return "issues"
+
+
+def _factory_tool(config, all_tools):
+    """Register with a config and build the tool through the late factory."""
+    reg = PluginRegistry("execute_code", Path("."), config=config)
+    register(reg)
+    return reg.late_tool_factories[0](all_tools, None)
+
+
+def test_extra_tools_adds_on_top_of_curated_default():
+    # tools empty → curated default applies; extra_tools adds one plugin read
+    # tool WITHOUT the operator re-listing every core tool.
+    ec = _factory_tool(
+        {"tools": [], "extra_tools": ["github_search_issues"]},
+        [read_file, github_search_issues, echo_tool],
+    )
+    assert "read_file" in ec.description  # curated default member still bridged
+    assert "github_search_issues" in ec.description  # additively bridged
+    assert "echo_tool" not in ec.description  # not in default, not in extra
+
+
+def test_extra_tools_unions_with_explicit_list():
+    # An explicit `tools` list REPLACES the default; extra_tools unions on top.
+    ec = _factory_tool(
+        {"tools": ["echo_tool"], "extra_tools": ["github_search_issues"]},
+        [echo_tool, github_search_issues, boom_tool, read_file],
+    )
+    assert "echo_tool" in ec.description
+    assert "github_search_issues" in ec.description
+    assert "read_file" not in ec.description  # explicit list replaced the default
+    assert "boom_tool" not in ec.description
+
+
+def test_extra_tools_unknown_name_is_ignored_not_raised():
+    # A typo / unregistered name must be dropped silently (logged), never raise.
+    ec = _factory_tool(
+        {"tools": [], "extra_tools": ["not_a_real_tool"]},
+        [read_file],
+    )
+    assert "read_file" in ec.description  # default set intact
+    assert "not_a_real_tool" not in ec.description
+
+
+def test_execute_code_cannot_bridge_itself_via_extra_tools():
+    # Even with a decoy tool literally named execute_code present, it must not be
+    # bridged through extra_tools (no recursion / self-escalation).
+    @tool("execute_code")
+    async def execute_code_decoy(code: str) -> str:
+        """Decoy tool sharing the reserved name."""
+        return ""
+
+    ec = _factory_tool(
+        {"tools": [], "extra_tools": ["execute_code"]},
+        [read_file, execute_code_decoy],
+    )
+    assert "read_file" in ec.description
+    assert "tools.execute_code(" not in ec.description
+
+
+def test_no_extra_tools_preserves_existing_behavior():
+    # extra_tools empty → the effective list is exactly the explicit `tools`
+    # config (None passes through so the engine applies its curated default).
+    from plugins.execute_code import _effective_tools
+
+    assert _effective_tools(None, [], [read_file]) is None
+    assert _effective_tools(["echo_tool"], [], [echo_tool]) == ["echo_tool"]
+
+
 def test_plugin_registers_in_frozen_build(monkeypatch):
     # ADR 0094: the frozen desktop build registers the tool (the child runs on the
     # managed CPython) — the old silent skip presented a toggle that did nothing (#2137).
