@@ -260,8 +260,7 @@ async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_su
         await _send(app, pilot, "release please")
         assert "needs you (form): Release" in str(app.screen.query_one("#talk-status", Static).content)
         await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
-        assert isinstance(app.screen, FormModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, FormModal))
         modal = app.screen
         assert "step 1 / 2" in str(modal.query_one("#form-step-head", Static).content)
         assert modal.query_one("#next").disabled  # name is required and empty
@@ -270,24 +269,29 @@ async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_su
         await pilot.pause(0.1)
         assert modal.current == 0
         modal.query_one("#in-name", Input).focus()
+        assert await _until(pilot, lambda: modal.query_one("#in-name", Input).has_focus)
         await pilot.press(*"bob")
-        await pilot.pause(0.1)
-        assert not modal.query_one("#next").disabled
+        assert await _until(pilot, lambda: not modal.query_one("#next").disabled)
         await pilot.press("enter")  # enter in a field = next step
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: modal.current == 1)
         assert modal.current == 1 and "step 2 / 2" in str(modal.query_one("#form-step-head", Static).content)
         assert not modal.query(".hitl-field#field-notes")  # hidden until mode == safe
         modal.query_one("#in-mode", Select).value = "safe"
-        await pilot.pause(0.3)
-        assert modal.query("#field-notes")
+        assert await _until(pilot, lambda: bool(modal.query("#in-notes")))
         modal.query_one("#in-notes", TextArea).focus()
+        # the field was JUST mounted by the showWhen re-render; keys pressed before focus
+        # actually lands go to the previously focused widget and are lost (the Windows
+        # flake: 'go slow' arrived as 'g')
+        assert await _until(pilot, lambda: modal.query_one("#in-notes", TextArea).has_focus)
         await pilot.press(*"go slow")
-        await pilot.pause(0.1)
+        # every keystroke must land before Back re-renders the step (the Windows flake
+        # was 'go slow' arriving as 'g' after a fixed 0.1 s pause)
+        assert await _until(pilot, lambda: modal.query_one("#in-notes", TextArea).text == "go slow")
         await pilot.press("ctrl+left")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: modal.current == 0)
         assert modal.current == 0 and modal.query_one("#in-name", Input).value == "bob"  # answers survive Back
         await pilot.press("ctrl+right")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: modal.current == 1)
         await pilot.press("ctrl+s")
         await _settle(app, pilot)
         assert isinstance(app.screen, ConversationScreen)
@@ -932,7 +936,10 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
         await pilot.press(*"main")
         be3._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "history": [], "artifacts": [{"parts": [{"text": "took develop"}]}]}]
         fe3.pending.append(ev("protoEngineer-ba4c", "turn.finished", session_id=sid, task_id="t1", ok=True))
-        await pilot.pause(0.8)
+        # Wait for the deck to have SEEN the park end — not a fixed sleep. Under CI load the
+        # event wasn't consumed within 0.8 s, the modal still thought the task was parked, and
+        # enter sent a stale hitl_resume (2 sends instead of 1).
+        assert await _until(pilot, lambda: convo_screen.convo.parked is None)
         await pilot.press("enter")
         await _settle(app3, pilot)
         assert len(fake3.sent) == 1 and convo_screen.query_one("#composer", Input).value == "main"
@@ -954,7 +961,9 @@ async def test_a_server_turn_the_bus_showed_continues_its_in_flight_durable_row(
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"origin": "scheduler", "trigger": "daily", "operator_controllable": True}))
-        await pilot.pause(0.7)
+        # wait for the bus row to be RECORDED, not a fixed 0.7 s — opening before it lands
+        # reads the turn as not operator-controllable
+        assert await _until(pilot, lambda: app.activity._st("protoEngineer-ba4c").server_turns.get(sid, {}).get("task_id") == "t7")
         app.open_member("protoEngineer-ba4c", sid)
         await _settle(app, pilot)
         assert await _until(pilot, lambda: fake.subscribed == ["t7"] and app.screen.convo.live is None)
