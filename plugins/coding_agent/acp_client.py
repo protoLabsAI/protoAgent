@@ -145,6 +145,22 @@ def _short_tool_name(title: str) -> str:
     return (label or (title or "").strip() or "tool")[:80]
 
 
+#: How long a closed coding agent's relay registration outlives it (its exit-time flush).
+_RELAY_GRACE_S = 30.0
+
+
+def _current_span_ids() -> tuple[str, str] | None:
+    """``(trace_id, span_id)`` as hex of the current span when tracing is on, else None."""
+    from observability import tracing
+
+    if not tracing.in_active_trace():
+        return None
+    from opentelemetry import trace as otel_trace
+
+    ctx = otel_trace.get_current_span().get_span_context()
+    return f"{ctx.trace_id:032x}", f"{ctx.span_id:016x}"
+
+
 #: How much of a coder's reasoning (the tail) and of one tool call's input a trace keeps.
 _THOUGHTS_TRACE_CHARS = 4000
 _TOOL_TRACE_CHARS = 2000
@@ -451,6 +467,7 @@ class AcpClient:
         mcp_servers: list[dict] | None = None,
         session_id_path: Path | None = None,
         record_runs: bool = True,
+        native_tracing: bool | None = None,
     ) -> None:
         self.command = command
         self.args = list(args or [])
@@ -460,6 +477,10 @@ class AcpClient:
         # spawned coder's inherited environment (see ``_launch_env``). Additive ``env``
         # above is overlaid AFTER this removal, so a var can be removed-then-set.
         self.env_remove = list(env_remove or [])
+        # Export the coding agent's own OTel spans into our trace through the local relay
+        # (#3742). None = auto: on for Claude Code agents while tracing is enabled.
+        self.native_tracing = native_tracing
+        self._relay_token: str | None = None
         self.name = name
         # Where the session id is persisted so a restart can ``session/load`` the
         # same thread instead of starting fresh (ADR 0024 / #970). ``None`` ⇒ the
@@ -669,7 +690,7 @@ class AcpClient:
                 # AND the delegate's env_remove matches (#2117) so a spawned backend
                 # doesn't inherit host identity/credentials or refuse to launch "inside
                 # another Claude Code session" (#1296); the delegate's env is overlaid last.
-                env=_launch_env(self.env, self.env_remove),
+                env=_launch_env({**(self.env or {}), **self._native_tracing_env()} or None, self.env_remove),
                 # Anchor the agent as its OWN tree root so teardown can kill the
                 # WHOLE tree (the adapter *and* the backend it spawns). Without
                 # this, terminate() signals only the adapter; its child reparents
@@ -722,6 +743,72 @@ class AcpClient:
         ``signal.SIGKILL`` doesn't exist on Windows.)"""
         signal_tree(proc.pid, force=force)
 
+    def _drop_relay(self) -> None:
+        """Let go of this process's relay registration, after a grace period: the agent
+        flushes its last spans as it exits."""
+        if self._relay_token is not None:
+            from observability import otlp_relay
+
+            otlp_relay.unregister(self._relay_token, delay=_RELAY_GRACE_S)
+            self._relay_token = None
+
+    def _uses_claude_code(self) -> bool:
+        launch = " ".join([os.path.basename(self.command), *self.args])
+        return "claude-agent-acp" in launch or "claude-code-acp" in launch
+
+    def _native_tracing_env(self) -> dict[str, str]:
+        """Env that makes the coding agent export its own OTel spans to the local relay,
+        joined under the CURRENT span (this run's ``acp:`` span), or {} when off.
+
+        The relay strips account identity and maps usage before anything reaches
+        Langfuse, and this process keeps the credentials: the agent only ever sees a
+        127.0.0.1 URL with a per-process token.
+        """
+        self._drop_relay()  # a respawn gets a fresh registration under the new span
+        enabled = self.native_tracing
+        if enabled is None:
+            enabled = self._uses_claude_code() and os.environ.get("PROTOAGENT_ACP_NATIVE_TRACING", "1") != "0"
+        if not enabled:
+            return {}
+        ids = _current_span_ids()
+        if ids is None:
+            return {}
+        from observability import otlp_relay
+
+        registered = otlp_relay.register(*ids)
+        if registered is None:
+            return {}
+        token, port = registered
+        self._relay_token = token
+        otlp_relay.begin_turn(token, *ids, time.time_ns())
+        return {
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+            "OTEL_METRICS_EXPORTER": "none",
+            "OTEL_LOGS_EXPORTER": "none",
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": f"http://127.0.0.1:{port}/{token}/v1/traces",
+            # Signal-specific, so an inherited OTEL_EXPORTER_OTLP_HEADERS (the host's own
+            # exporter credentials) never rides along to the relay.
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-protoagent-relay=1",
+            "OTEL_METRICS_INCLUDE_ACCOUNT_UUID": "false",
+            "OTEL_METRICS_INCLUDE_SESSION_ID": "false",
+            "OTEL_SERVICE_NAME": f"{os.environ.get('AGENT_NAME', 'protoagent')}-acp-{self.name}",
+            "TRACEPARENT": f"00-{ids[0]}-{ids[1]}-01",
+        }
+
+    def _begin_relay_turn(self) -> None:
+        """Tell the relay a new turn started, so a pooled process's later spans (which
+        still carry the spawn trace) are moved into this turn's trace."""
+        if self._relay_token is None:
+            return
+        ids = _current_span_ids()
+        if ids is not None:
+            from observability import otlp_relay
+
+            otlp_relay.begin_turn(self._relay_token, *ids, time.time_ns())
+
     def kill_now(self) -> None:
         """Synchronously SIGKILL the agent's whole process group — no awaits, so it's
         safe from a CancelledError handler where awaiting cleanup would itself be
@@ -734,6 +821,7 @@ class AcpClient:
         for task in (self._reader_task, self._stderr_task):
             if task and not task.done():
                 task.cancel()
+        self._drop_relay()
 
     async def close(self) -> None:
         """Cancel the I/O tasks and reap the subprocess TREE. Crucially this ``await``s
@@ -746,6 +834,7 @@ class AcpClient:
         direct child, so the backend it spawned dies with it instead of reparenting to
         init. The kill is a synchronous syscall, so even if this runs on a cancelled
         task the tree still dies."""
+        self._drop_relay()
         with contextlib.suppress(Exception):
             await self._close_session()
         for task in (self._reader_task, self._stderr_task):
@@ -1525,6 +1614,7 @@ class AcpClient:
         usage: dict | None = None
         cost_usd: float | None = None
         thoughts, plan = "", None
+        native = False
         failure: BaseException | None = None
         from graph.middleware.redaction import redact as _redact
         from observability import tracing
@@ -1572,6 +1662,7 @@ class AcpClient:
                 # in-flight turn's tool calls onto its own span.
                 self._turn_span = span
                 self._turn_trace_io = tracing.io_allowed()
+                self._begin_relay_turn()
                 try:
                     answer = await self._prompt_locked(
                         text,
@@ -1589,6 +1680,7 @@ class AcpClient:
                     tool_calls = self._turn_tool_calls
                     session_id = self._turn_session_id or ""
                     usage, cost_usd = self._turn_usage, self._turn_cost_usd
+                    native = self._relay_token is not None
                     thoughts, plan = self._turn_thoughts, self._turn_plan
                     self._end_open_tool_spans()
                     self._turn_span = None
@@ -1612,7 +1704,7 @@ class AcpClient:
             finally:
                 self._record_run_telemetry(state, started, tool_calls, session_id)
                 io = tracing.io_allowed()
-                if usage or cost_usd:
+                if (usage or cost_usd) and not native:
                     self._trace_generation(usage, cost_usd, started, session_id)
                 output = reply
                 if state != "completed":
@@ -1629,6 +1721,14 @@ class AcpClient:
                 }
                 if self._model_id:
                     metadata["model"] = self._model_id
+                if native:
+                    # The agent's own spans carry per-call generations (usage + cost) via
+                    # the relay: a turn-level generation too would count the spend twice.
+                    metadata["native_tracing"] = True
+                    if usage:
+                        metadata["reported_usage"] = usage
+                    if cost_usd:
+                        metadata["reported_cost_usd"] = cost_usd
                 if plan and io:  # task text: content, so none of it in an incognito turn
                     metadata["plan"] = [{**e, "content": _redact(e.get("content") or "")} for e in plan]
                 if thoughts and io:
