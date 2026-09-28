@@ -243,6 +243,30 @@ def llm_priority(cls: str) -> _LlmPriorityScope:
     return _LlmPriorityScope(cls)
 
 
+def llm_lanes() -> dict:
+    """The ADR 0115 D8 gateway in-flight-limiter snapshot for this process, read straight
+    out of memory (no HTTP, no DB).
+
+    The same payload the operator console reads over ``GET /api/telemetry/llm-lanes``, but
+    a plugin running *inside* the agent process (pr-reviewer's review panels, say) reads it
+    here without a round-trip. Use it to tell a lane that is *deliberately* queuing from a
+    gateway that has gone slow: high ``queued`` / ``wait_p90_s_5m`` or ``saturated: true``
+    with slots full is local back-pressure this process is applying on purpose; retries or
+    timeouts while slots are NOT saturated point at the gateway itself.
+
+    Returns:
+        ``{"enabled": bool, "generated_at": iso, "lanes": [...]}``. ``enabled`` is false
+        (and ``lanes`` empty) when the limiter is off (``model.max_inflight: 0``, the
+        default). Each lane entry carries ``lane``, ``limit``, ``reserve``, ``inflight``,
+        ``queued``, ``queued_by_priority`` (interactive/default/bulk), ``oldest_wait_s``,
+        ``wait_p50_s_5m`` / ``wait_p90_s_5m``, ``queue_timeouts_5m`` and ``saturated``
+        (``queued > 0`` held continuously for 60 s or more).
+    """
+    from graph import llm_limiter
+
+    return llm_limiter.snapshot()
+
+
 # ── knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge") ──
 # The consumption SDK exposed run_subagent/complete but not the knowledge store, so a
 # plugin couldn't ground its work in (or contribute to) what the agent knows. These

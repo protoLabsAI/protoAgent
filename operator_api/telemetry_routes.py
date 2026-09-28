@@ -345,6 +345,21 @@ def register_telemetry_routes(app) -> None:
     async def _api_telemetry_summary(since: str | None = None):
         return _local_summary_payload(since)
 
+    # Gateway in-flight limiter lane telemetry (ADR 0115 D8). Reads the per-process
+    # limiter snapshot straight out of memory — queue depth per priority, wait
+    # percentiles, timeouts and `saturated` per lane — so it's cheap enough to poll
+    # every tick and makes no network or DB call. `{enabled: false}` when the limiter is
+    # off (`model.max_inflight: 0`, the default), the same shape a disabled telemetry
+    # store degrades to. Read-only; behind the same operator auth as its neighbours.
+    @app.get("/api/telemetry/llm-lanes")
+    async def _api_telemetry_llm_lanes():
+        from graph import llm_limiter
+
+        snap = llm_limiter.snapshot()
+        if not snap.get("enabled"):
+            return {"enabled": False}
+        return snap
+
     @app.get("/api/telemetry/recent")
     async def _api_telemetry_recent(limit: int = 50):
         # Rows come through wholesale (SELECT *), so ``trace_id`` is already on
