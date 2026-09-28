@@ -70,7 +70,7 @@ describe("Chat rem/em font-sizes → DS type scale (DS audit type-scale 2b)", ()
     expect(chatCss).toContain(".chat-delegation-kind {\n  flex: 0 0 auto;\n  padding: 0 6px;\n  font-size: var(--pl-font-size-xs);");
     // tool-calls.css 0.82rem → sm, 0.72rem → xs, 0.84rem → sm.
     expect(toolCallsCss).toContain(".reasoning-text {\n  white-space: pre-wrap;\n  word-break: break-word;\n  font-size: var(--pl-font-size-sm);");
-    expect(toolCallsCss).toContain(".tool-cancel-btn {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n  padding: 1px 7px;\n  width: auto;\n  border-radius: 6px;\n  font-size: var(--pl-font-size-xs);");
+    expect(toolCallsCss).toContain(".tool-cancel-btn {\n  display: inline-flex;\n  align-items: center;\n  gap: var(--pl-space-1);\n  padding: 1px 7px;\n  width: auto;\n  border-radius: 6px;\n  font-size: var(--pl-font-size-xs);");
     expect(toolCallsCss).toContain(".tool-calc {\n  display: flex;\n  align-items: baseline;\n  flex-wrap: wrap;\n  gap: 6px;\n  font-size: var(--pl-font-size-sm);");
   });
 

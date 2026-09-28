@@ -8,8 +8,8 @@
 .watch-row {
   position: relative;
   display: grid;
-  gap: 4px;
-  padding: 10px 34px 10px 12px;
+  gap: var(--pl-space-1);
+  padding: 10px 34px 10px var(--pl-space-3);
   border-bottom: 1px solid var(--pl-color-border);
   min-width: 0;
 }
@@ -22,7 +22,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 
