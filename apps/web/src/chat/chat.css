@@ -57,9 +57,9 @@
 /* ── Assistant markdown code blocks ─────────────────────────────────────────────
    Polish for the DS streamdown code block inside chat:
    0. Whitespace (the load-bearing one) — streamdown puts `white-space: pre` + `overflow-x:
-      auto` on the code well via Tailwind utilities that are INERT in this build (preflight is
-      off and the streamdown dist scan is gone — see tailwind.config.cjs), and with preflight
-      off there's no `pre { white-space: pre }` reset to catch it either. The DS's
+      auto` on the code well via Tailwind utilities that are INERT in this build (Tailwind is no
+      longer part of the build, so streamdown's utility classes are never generated), and with
+      preflight off there's no `pre { white-space: pre }` reset to catch it either. The DS's
       [data-streamdown] schema also drifted: the code well is now `code-block-body` (the `<pre>`
       lives there), not the `code-block`/`code-block-header` our old polish targeted — so nothing
       re-asserted whitespace and multi-line fences collapsed onto one forever-scrolling line

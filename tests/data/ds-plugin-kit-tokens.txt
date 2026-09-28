@@ -47,6 +47,13 @@
 --pl-font-line-height-heading
 --pl-font-mono
 --pl-font-sans
+--pl-font-size-2xs
+--pl-font-size-3xs
+--pl-font-size-base
+--pl-font-size-lg
+--pl-font-size-sm
+--pl-font-size-xl
+--pl-font-size-xs
 --pl-font-weight-body
 --pl-font-weight-medium
 --pl-font-weight-semibold
