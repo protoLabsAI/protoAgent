@@ -44,7 +44,7 @@
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
-  padding: 16px 4px;
+  padding: var(--pl-space-4) var(--pl-space-1);
 }
 
 /* ── Settings shell: DS SideNav rail + content ───────────────────────────────
@@ -58,7 +58,7 @@
   display: flex;
   gap: 14px;
   /* Breathing room on the left so the sidenav + panel don't hug the rail edge. */
-  padding-left: 16px;
+  padding-left: var(--pl-space-4);
 }
 /* The rail column — fixed width (SideNav renders without `responsive`, so it stays a
    vertical tablist and never collapses to the <select>; see SettingsSurface). */
@@ -66,7 +66,7 @@
   flex: 0 0 200px;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 12px;
+  padding-right: var(--pl-space-3);
   border-right: 1px solid var(--pl-color-border);
 }
 /* The content column hosts the section's full .stage-panel; let it own its scroll.
@@ -88,7 +88,7 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     align-items: stretch;
-    padding: 16px 6px;
+    padding: var(--pl-space-4) 6px;
   }
   .settings-content .setting-control { width: 100%; }
   .settings-content .setting-input { max-width: none; }
@@ -125,7 +125,7 @@
 /* Collapsible field groups (DS Accordion, 0.29). Drop the default muted panel
    tint so field labels render at full contrast, and let the dirty-count badge sit
    inline in the trigger title. */
-.settings-groups { margin-bottom: 16px; }
+.settings-groups { margin-bottom: var(--pl-space-4); }
 .settings-groups .pl-accordion__panel { color: var(--pl-color-fg); padding-top: var(--pl-space-2); }
 .settings-group-head {
   display: inline-flex;
@@ -214,13 +214,13 @@
 .setting-inheritance {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: 5px 0 0;
 }
 /* "Saving overrides the Global default for this agent" — shown when a still-inherited
    box-shared field is edited in the Workspace view (PR4). */
 .setting-override-note {
-  margin: 4px 0 0;
+  margin: var(--pl-space-1) 0 0;
   font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   color: var(--pl-color-status-warning);
@@ -268,12 +268,12 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   flex-wrap: wrap;
 }
 .secrets-status-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .secrets-status-meta {
   font-size: var(--pl-font-size-xs);
@@ -292,7 +292,7 @@
   border-radius: 6px;
   color: var(--pl-color-fg-muted);
 }
-.plugin-settings-dialog .pl-tabs-wrap { margin-bottom: 12px; }
+.plugin-settings-dialog .pl-tabs-wrap { margin-bottom: var(--pl-space-3); }
 .plugin-configure-view { min-height: min(60vh, 560px); display: flex; }
 .plugin-configure-view > .plugin-view--embedded {
   flex: 1;
