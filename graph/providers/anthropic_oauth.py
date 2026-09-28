@@ -172,7 +172,23 @@ try:
 
         async def _astream(self, *args: Any, **kwargs: Any) -> Any:
             self._refresh_oauth_token()
-            async for chunk in super()._astream(*args, **kwargs):
+            # Enforce request_timeout on the stream ITSELF (#3699). ChatAnthropic's
+            # `max_retries` retries the request START, and an httpx read timeout only
+            # bounds a single socket read — neither bounds an SSE stream that stays open
+            # and silent, which is how a 262K-token lead-agent call hung >17 min under
+            # `request_timeout: 120`. The shared guard raises a retryable StreamStallTimeout
+            # on the time-to-first-token / inter-chunk idle deadline; a stall before any
+            # content reconnects within `max_retries`, then the turn fails with a clear
+            # error naming this provider/model. Imported lazily to keep this module's import
+            # off the default gateway path (and clear of any import cycle with graph.llm).
+            from graph.llm import _guarded_reconnecting_stream, _stream_timeout_s
+
+            async for chunk in _guarded_reconnecting_stream(
+                lambda: super(_OAuthChatAnthropic, self)._astream(*args, **kwargs),
+                timeout=_stream_timeout_s(self.default_request_timeout),
+                max_retries=self.max_retries or 0,
+                label=f"anthropic-oauth model {self.model!r}",
+            ):
                 yield chunk
 
     _IMPORT_ERROR: Exception | None = None
@@ -247,7 +263,11 @@ def build_anthropic_oauth_llm(
         # NOTE: we do NOT send `temperature`. The current Claude models (the 5 family and
         # newer) reject it ("`temperature` is deprecated for this model"), and it's not a
         # knob worth breaking every turn over — omit it and let the model default.
-        "timeout": config.request_timeout,
+        #
+        # ChatAnthropic's timeout field is `default_request_timeout` (`timeout` is only its
+        # alias); pass the canonical name so the configured request_timeout unambiguously
+        # reaches the client and the streaming guard in `_astream` can read it back (#3699).
+        "default_request_timeout": config.request_timeout,
         "max_retries": config.llm_max_retries,
         "streaming": True,
         "stream_usage": True,
