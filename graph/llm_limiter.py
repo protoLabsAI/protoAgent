@@ -186,8 +186,26 @@ class _Lane:
         self._reserve = max(0, int(interactive_reserve))
         if clock is not None:
             self._clock = clock
-        # A raised limit may free capacity for waiters already in the queue.
-        self._admit_waiters(self._clock())
+        now = self._clock()
+        if self._limit == 0:
+            # Limiter switched off at runtime (D2, the documented return to today's
+            # unlimited behaviour): the lane no longer bounds anything, so nobody must be
+            # left queued. New callers already pass straight through (the module-level
+            # acquire short-circuits at `_LIMIT == 0`); if the waiters already in line kept
+            # waiting they would sit out the full queue_timeout and fail GatewayQueueTimeout
+            # while everyone else skips the limiter. Admit them all at once.
+            self._drain_passthrough(now)
+        else:
+            # A raised limit may free capacity for waiters already in the queue.
+            self._admit_waiters(now)
+
+    def _drain_passthrough(self, now: float) -> None:
+        """Grant every queued waiter immediately. Used when the limit is 0 (the limiter is
+        disabled): there is no capacity to respect and nothing should stay queued, so this
+        bypasses the ``inflight >= limit`` gate in :meth:`_select` that would otherwise
+        strand them forever."""
+        for w in list(self._queue):
+            self._grant(w, now)
 
     @property
     def _reserve_clamped(self) -> int:

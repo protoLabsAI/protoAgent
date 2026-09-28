@@ -432,6 +432,41 @@ async def test_acquire_uses_contextvar_priority():
     assert llm_limiter._LANES["gw|m"]._inflight == 0
 
 
+async def test_reconfigure_to_zero_admits_queued_waiters():
+    """Switching the limiter off at runtime (configure(limit=0) — the documented return to
+    the unlimited behaviour) must release everyone already queued. Otherwise new callers
+    skip the limiter (module-level acquire short-circuits at _LIMIT == 0) while the queued
+    ones sit out the whole queue_timeout and fail GatewayQueueTimeout."""
+    clock = FakeClock()
+    llm_limiter.configure(limit=1, interactive_reserve=0, queue_timeout=1000.0, clock=clock)
+    lane = llm_limiter._get_or_create_lane("gw|m")
+
+    hold_acq, hold_rel = asyncio.Event(), asyncio.Event()
+    holder = await _spawn(lane, DEFAULT, hold_acq, hold_rel)
+    await hold_acq.wait()
+
+    # Two callers queue behind the single slot.
+    w1_acq, w1_rel = asyncio.Event(), asyncio.Event()
+    w2_acq, w2_rel = asyncio.Event(), asyncio.Event()
+    t1 = await _spawn(lane, DEFAULT, w1_acq, w1_rel)
+    t2 = await _spawn(lane, BULK, w2_acq, w2_rel)
+    await _yield()
+    assert lane._queue and not w1_acq.is_set() and not w2_acq.is_set()
+
+    # Turn the limiter off. The queued waiters must be admitted at once, not stranded.
+    llm_limiter.configure(limit=0)
+    await _yield()
+    assert w1_acq.is_set()
+    assert w2_acq.is_set()
+    assert lane._queue == []
+
+    hold_rel.set()
+    w1_rel.set()
+    w2_rel.set()
+    await asyncio.gather(holder, t1, t2)
+    assert lane._inflight == 0
+
+
 async def test_snapshot_enabled_reflects_config():
     clock = FakeClock()
     llm_limiter.configure(limit=0, clock=clock)
