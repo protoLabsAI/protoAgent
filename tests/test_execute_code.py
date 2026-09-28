@@ -139,10 +139,22 @@ async def test_malformed_frame_is_answered_not_dropped():
 
 
 @pytest.mark.asyncio
-async def test_output_truncation():
+async def test_output_truncation(tmp_path, monkeypatch):
+    # Overflow now spills the FULL stdout to a scratch file and returns the head
+    # plus a marker naming it (#3701); redirect the store to tmp so the test is
+    # self-contained. The spill-failure fallback path (legacy marker) and the full
+    # spill contract are covered in tests/test_execute_code_spill_3701.py.
+    def _fake_store(subdir="", *, plugin_id):
+        d = tmp_path / plugin_id / subdir
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    monkeypatch.setattr("graph.sdk.plugin_store", _fake_store)
     out = await run_code("print('x' * 100)", {}, truncate=20)
     assert out.startswith("x" * 20)
-    assert "truncated to 20 chars" in out
+    assert "of 100 chars" in out
+    spill = list((tmp_path / "execute_code" / "spill").glob("ec-*.txt"))
+    assert len(spill) == 1 and spill[0].read_text() == "x" * 100
 
 
 # --- tool-build wiring ------------------------------------------------------
