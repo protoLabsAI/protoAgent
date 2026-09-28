@@ -146,6 +146,11 @@ describe("no exact-scale px spacing literal in the chat-component/promptviewer C
     expect(chatComponent).toContain("gap: var(--pl-space-1) var(--pl-space-4)");
     expect(chatComponent).toContain("margin: var(--pl-space-2) 0");
     expect(promptViewer).toContain("padding: var(--pl-space-1) 0 var(--pl-space-1) var(--pl-space-2)");
+    // .prompt-viewer__text `padding: 12px` maps to the 12px token (--pl-space-3), NOT the 16px one
+    // (--pl-space-4). The sweep above only catches leftover raw px, so a WRONG-scale token would
+    // slip past it silently — this single-value pin (anchored to the block's `margin: 0`) is the
+    // check that keeps the 12px→3 mapping honest.
+    expect(promptViewer).toContain("margin: 0;\n  padding: var(--pl-space-3);");
     // r2 (half-steps unchanged): each spot-check is a mixed-shorthand value where the exact-scale
     // member tokenized and the off-scale member survived — one assertion covers both invariants.
     expect(chatComponent).toContain("padding: 10px var(--pl-space-3)");
