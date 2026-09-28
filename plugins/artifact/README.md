@@ -173,9 +173,15 @@ environment variable of the same knob overrides the UI for headless / ACP setups
 State (`history.json` plus the sidecar `blobs/`) lives in the instance's plugin store —
 `<instance_root>/artifact` (ADR 0004 / ADR 0065), so a box-scoped server (`PROTOAGENT_BOX_ROOT`)
 and every fleet member get their own copy. `ARTIFACT_DIR` is an env-only override of that directory
-(still `/<PROTOAGENT_INSTANCE>`-scoped when set). Legacy data under `~/.protoagent/artifact[/<inst>]`
-(from before instance scoping) is migrated into the new location automatically on first access — the
-`history.json` and its `blobs/` move together.
+(still `/<PROTOAGENT_INSTANCE>`-scoped when set). Legacy data from before instance scoping is
+migrated into the new location automatically on first access — the `history.json` and its `blobs/`
+move together. That migration is **narrow on purpose**: the legacy source is box-root-relative
+(`<box_root>/artifact[/<inst>]`), so it is adopted only into the *default* box-root-relative store —
+the shape where `PROTOAGENT_BOX_ROOT` derives from the home data dir and the old
+`~/.protoagent/artifact[/<inst>]` store is genuinely this instance's. When `PROTOAGENT_BOX_ROOT`
+points somewhere other than the home data dir (a box-scoped server), **nothing is migrated**: that
+server's box store starts empty and the operator's live `~/.protoagent/artifact` is left untouched,
+never reached into and moved away.
 
 ## Interactive artifacts (calling back to the agent)
 

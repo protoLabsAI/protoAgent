@@ -66,20 +66,43 @@ def _migrate_legacy_store(legacy: Path, new_dir: Path) -> None:
     """Move a legacy ``history.json`` AND its ``blobs/`` dir into ``new_dir`` (raising
     ``OSError`` if a move fails). Moving only the JSON breaks file-artifact downloads
     (``/artifact/{id}/blob`` resolves bytes from ``blobs/`` beside it), so the blobs travel
-    with it. ``blobs/`` moves FIRST so history.json is the commit marker: a move that dies
-    after the blobs land re-runs cleanly on the next access (blobs already there, JSON still
-    in legacy). Sibling instance subdirectories under a bare legacy dir are NOT touched."""
+    with it.
+
+    ``blobs/`` moves FIRST, but the two-step move is made to look ATOMIC to a fallback caller:
+    if the ``history.json`` move then raises, the blobs are rolled BACK into ``legacy`` before
+    the ``OSError`` propagates. Without that rollback ``_adopt_legacy_store`` would fall back to
+    a legacy dir the blobs had already left, and every file-artifact download would 404 while
+    the store kept serving ``history.json`` from there (the blobs live under whichever dir the
+    store resolves to). Sibling instance subdirectories under a bare legacy dir are NOT
+    touched."""
     new_dir.mkdir(parents=True, exist_ok=True)
     legacy_blobs = legacy / "blobs"
+    moved_blobs = False
     if legacy_blobs.is_dir():
         legacy_blobs.replace(new_dir / "blobs")
-    (legacy / "history.json").replace(new_dir / "history.json")
+        moved_blobs = True
+    try:
+        (legacy / "history.json").replace(new_dir / "history.json")
+    except OSError:
+        # history.json didn't make it — roll the blobs back so the legacy store we fall back to
+        # is left WHOLE (its history.json AND its blobs/), never stranded without its bytes.
+        if moved_blobs:
+            with contextlib.suppress(OSError):
+                (new_dir / "blobs").replace(legacy_blobs)
+        raise
     log.info("[artifact] migrated store %s -> %s", legacy, new_dir)
 
 
 def _adopt_legacy_store(new_dir: Path) -> Path:
     """First access with an empty ``new_dir``: adopt a pre-instance-scoping store into it,
     returning the directory the store should use.
+
+    The lock is taken FIRST — before the legacy dir is resolved or probed — so the migration
+    DECISION (every store-path read below) and the move both run under it, and two processes
+    can't race the migration. The one store-path read left unlocked is ``_store_dir``'s
+    ``new_dir/history.json`` fast path, and that is a one-way commit marker: the migration only
+    ever moves ``history.json`` INTO ``new_dir``, never back out, so reading it unlocked can't
+    misfire.
 
     SERIALISED (``_migration_lock``) — the bug this closes: two callers that both found
     ``new_dir`` empty both ran the move, and the loser's ``history.json`` ``replace`` raised
@@ -89,10 +112,10 @@ def _adopt_legacy_store(new_dir: Path) -> Path:
     silently orphaned the moment the winner's copy landed. It bit parallel tool calls and the
     ACP operator-MCP vs. main-process split alike. Now one caller does the move under the lock;
     every other re-checks under it and adopts ``new_dir``."""
-    legacy = _legacy_store_dir()
-    if legacy.resolve() == new_dir.resolve() or not (legacy / "history.json").is_file():
-        return new_dir
     with _migration_lock(new_dir / "history.json.lock"):
+        legacy = _legacy_store_dir()
+        if legacy.resolve() == new_dir.resolve() or not (legacy / "history.json").is_file():
+            return new_dir
         # Double-checked under the lock: a racing caller may have finished the move while we
         # waited — its history.json is the commit marker. Adopt it; never move an emptied dir.
         if (new_dir / "history.json").exists():
@@ -182,7 +205,12 @@ def _store_dir() -> Path:
         legacy.mkdir(parents=True, exist_ok=True)
         return legacy
     # Fast path — already migrated, or a store that never had legacy data. Skip the legacy
-    # probe and the lock on the hot path: every store access resolves this directory.
+    # probe and the lock on the hot path: every store access (incl. the lock-free async reads)
+    # resolves this directory, so it must NOT take the store lock here. This one read is safe
+    # unlocked because history.json is a one-way commit marker — the migration only ever moves
+    # it INTO new_dir, never back out (a failed history.json move rolls its blobs back and
+    # leaves it in legacy), so once it's here it stays. The migration decision and the move
+    # both run under the lock in _adopt_legacy_store.
     if (new_dir / "history.json").exists():
         return new_dir
     # Adopt a pre-instance-scoping store on first access rather than silently starting empty:
