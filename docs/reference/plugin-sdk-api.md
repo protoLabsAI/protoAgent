@@ -25,6 +25,8 @@ the module's own.
 
 **Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types)
 
+**Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_priority()`](#sdk-llm-priority)
+
 **Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")** — [`knowledge_add()`](#sdk-knowledge-add), [`knowledge_purge()`](#sdk-knowledge-purge), [`knowledge_search()`](#sdk-knowledge-search)
 
 **Goal-driven recurring loop (the OODA pattern)** — [`clear_watch()`](#sdk-clear-watch), [`create_watch()`](#sdk-create-watch), [`list_watches()`](#sdk-list-watches), [`run_in_session()`](#sdk-run-in-session), [`start_goal_loop()`](#sdk-start-goal-loop), [`stop_goal_loop()`](#sdk-stop-goal-loop), [`update_watch()`](#sdk-update-watch)
@@ -116,6 +118,43 @@ a one-shot classifier/summarizer). Distinct from `run_subagent`, which runs a
 full tool-using subagent. Uses the live config's model through the gateway; pass
 `model_name` to target a different model on the same gateway, `system` for a
 system instruction.
+
+## Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)
+
+### `sdk.llm_priority` {#sdk-llm-priority}
+
+```python
+sdk.llm_priority(cls: str) -> _LlmPriorityScope
+```
+
+Run a block of model calls under the [ADR 0115](/adr/0115-gateway-inflight-limiter) D6 priority class `cls` on the gateway
+in-flight limiter, restoring the previous class on exit.
+
+When a lane is saturated the limiter serves waiters by class — `interactive` (a chat
+turn an operator is watching) first, then `default` (A2A / background / scheduled
+turns), then `bulk` (wide fan-outs, sweeps, review-panel finders) — with a slot
+reserved for interactive callers. A plugin running a burst of non-urgent model work marks
+it `bulk` so it queues behind an operator's chat instead of racing it::
+
+    from graph import sdk
+
+    async with sdk.llm_priority("bulk"):
+        await asyncio.gather(*(run_finder(f) for f in finders))
+
+Usable as either `with` or `async with` — pick whichever the call site is. The class
+is carried in a `contextvars.ContextVar`, so any subagent / `asyncio` task spawned
+inside the block inherits it, and nested scopes restore the enclosing class on exit. When
+the limiter is off (`model.max_inflight: 0`, the default) the class is still set but
+costs nothing — acquisition is a pass-through.
+
+**Args:**
+
+- `cls` — one of `"interactive"` / `"default"` / `"bulk"`.
+
+**Raises:**
+
+- `ValueError` — if `cls` is not one of the three classes — the message names the valid ones.
+
 
 ## Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")
 

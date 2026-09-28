@@ -55,6 +55,27 @@ _TIMEOUT_GAP = (
 )
 
 
+def _bulk_priority_scope():
+    """Run a fan-out step under the ADR 0115 D6 ``bulk`` model in-flight class (#3760), so a
+    wide recipe fan-out queues behind interactive chat and ``default`` work on a saturated
+    gateway lane instead of racing them. The class is carried in the limiter's ContextVar, so
+    the step's subagent (and any task it spawns) inherits it.
+
+    Best-effort by design (ADR 0115 Consequences — untagged work is ``default``): when the
+    limiter module isn't importable (a host-free standalone test of just this engine, before
+    any ``graph`` package is on the path) this degrades to a no-op context manager, exactly
+    matching the limiter's own ``max_inflight: 0`` pass-through — the tagging never breaks a
+    workflow run."""
+    try:
+        from graph.llm_limiter import BULK, priority_scope
+
+        return priority_scope(BULK)
+    except Exception:  # noqa: BLE001 — tagging is best-effort; a missing limiter must not fail a run
+        import contextlib
+
+        return contextlib.nullcontext()
+
+
 def validate_recipe(recipe: dict, *, known_subagents: set[str] | None = None) -> list[str]:
     """Return a list of human-readable validation errors ([] = valid)."""
     errors: list[str] = []
@@ -310,11 +331,16 @@ async def execute_workflow(
             started = time.monotonic()
             try:
                 timeout = _step_timeout(step, inputs)
-                call = run_step(step["subagent"], prompt, sid)
-                if timeout is not None:
-                    out = await asyncio.wait_for(call, timeout)
-                else:
-                    out = await call
+                # ADR 0115 D6 (#3760): the step's subagent runs under `bulk`, scoped to just
+                # this step execution — a fan-out is exactly the wide, non-urgent load the
+                # limiter should queue behind interactive chat. `run_one` is its own task (via
+                # gather), so this class is isolated to it and inherited by the subagent.
+                with _bulk_priority_scope():
+                    call = run_step(step["subagent"], prompt, sid)
+                    if timeout is not None:
+                        out = await asyncio.wait_for(call, timeout)
+                    else:
+                        out = await call
                 return sid, str(out), False
             except (asyncio.TimeoutError, TimeoutError):
                 # Graceful degradation, NOT a failure: an opt-in per-step `timeout` caps a

@@ -2043,6 +2043,51 @@ def is_autonomous_origin(origin: object) -> bool:
     return str(origin or "").strip().lower() in _AUTONOMOUS_ORIGINS
 
 
+# ADR 0115 D6 — origins whose turns an operator is actively watching. These run under the
+# model in-flight limiter's `interactive` class (graph/llm_limiter.py), so they (and the
+# subagent tasks they spawn) jump the queue ahead of `bulk` fan-outs and hold the reserved
+# slot on a saturated lane. The console's own turns carry `api-chat` (the non-streaming
+# `/api/chat` route) or an empty origin (the streaming A2A path — a live operator is holding
+# the stream; see the empty-origin note on `_AUTONOMOUS_ORIGINS` above). Everything else stays
+# `default` (tagging is best-effort — the ADR tags nothing else): inbound `a2a` (the REMOTE
+# caller is watching, not us), the server-fired autonomous origins, and the programmatic
+# `v1` / `plugin` API surfaces.
+_INTERACTIVE_ORIGINS = frozenset({"", "local", "api-chat", "console"})
+
+
+def is_interactive_origin(origin: object) -> bool:
+    """Whether ``origin`` names an operator-watched chat/console turn (ADR 0115 D6 —
+    ``interactive`` on the model in-flight limiter). See ``_INTERACTIVE_ORIGINS``."""
+    return str(origin or "").strip().lower() in _INTERACTIVE_ORIGINS
+
+
+@contextlib.contextmanager
+def _interactive_turn_priority(origin: object):
+    """Run an operator-watched turn under the ADR 0115 D6 ``interactive`` model-limiter class,
+    so it and the subagent tasks it spawns queue ahead of ``bulk`` fan-outs on a saturated
+    lane. A no-op for every other origin, which stays ``default`` — A2A, background and
+    scheduled turns are deliberately left untagged (best-effort tagging; untagged is
+    ``default``).
+
+    Mirrors ``goal_turn``: the ContextVar reset can raise if this scope is torn down in a
+    different context than it was entered (an SSE consumer's early ``GeneratorExit`` closing
+    the streaming generator), and the var resets on context exit regardless, so the raise is
+    swallowed."""
+    if not is_interactive_origin(origin):
+        yield
+        return
+    from graph.llm_limiter import INTERACTIVE, reset_priority, set_priority
+
+    token = set_priority(INTERACTIVE)
+    try:
+        yield
+    finally:
+        try:
+            reset_priority(token)
+        except ValueError:
+            pass
+
+
 def _background_resume_attended(request_metadata: dict | None) -> bool:
     """Whether a ``background-resume`` nudge was stamped ATTENDED at push-resume time — a
     live operator was connected to the origin session when the manager fired it (#3110).
@@ -2902,10 +2947,15 @@ async def _chat_langgraph_stream_impl(
                     elif hold is not None:
                         yield ("input_required", _interrupt_payload(hold))
                         return
-                async for frame in _run_native_turn(
-                    message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
-                ):
-                    yield frame
+                # ADR 0115 D6 (#3760): a live operator turn (empty origin) runs under
+                # `interactive`; inbound `a2a` and the server-fired autonomous origins stay
+                # `default`. The class is set for the whole native turn — both loops inside
+                # _run_native_turn — so its subagent tasks inherit it.
+                with _interactive_turn_priority((request_metadata or {}).get("origin")):
+                    async for frame in _run_native_turn(
+                        message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
+                    ):
+                        yield frame
 
         except GeneratorExit:
             # Expected: A2A consumers break out of the SSE loop after
@@ -2955,16 +3005,19 @@ async def _chat_langgraph_stream_impl(
                     )
                     try:
                         async with _thread_lock(_tid):
-                            async for frame in _run_native_turn(
-                                "(The previous request overflowed the context window and the earlier "
-                                "history was compacted to a summary. Continue exactly where you left off.)",
-                                session_id,
-                                config,
-                                request_metadata=request_metadata,
-                                resume=False,
-                                images=None,
-                            ):
-                                yield frame
+                            # Same class as the initial turn (ADR 0115 D6) — the retry is the
+                            # same operator/A2A turn, just after a force-compact.
+                            with _interactive_turn_priority((request_metadata or {}).get("origin")):
+                                async for frame in _run_native_turn(
+                                    "(The previous request overflowed the context window and the earlier "
+                                    "history was compacted to a summary. Continue exactly where you left off.)",
+                                    session_id,
+                                    config,
+                                    request_metadata=request_metadata,
+                                    resume=False,
+                                    images=None,
+                                ):
+                                    yield frame
                         return
                     except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
                         log.exception(
@@ -3828,16 +3881,21 @@ async def _chat_langgraph(
     result: list[dict[str, Any]] = []
     state = "failed"
     try:
-        result = await _chat_langgraph_impl(
-            message,
-            session_id,
-            model=model,
-            incognito=incognito,
-            hitl_resume=hitl_resume,
-            images=images,
-            tool_fence=tool_fence,
-            _telemetry_sink=sink,
-        )
+        # ADR 0115 D6 (#3760): a console / operator turn runs under `interactive`; the OpenAI-
+        # compat (`v1`) and plugin surfaces stay `default`. Scoped to the turn here (the impl
+        # has a dozen return points, this wrapper has one) so the subagent tasks it spawns
+        # inherit the class and it resets when the awaited turn returns.
+        with _interactive_turn_priority(origin):
+            result = await _chat_langgraph_impl(
+                message,
+                session_id,
+                model=model,
+                incognito=incognito,
+                hitl_resume=hitl_resume,
+                images=images,
+                tool_fence=tool_fence,
+                _telemetry_sink=sink,
+            )
         # The impl catches its own exceptions and reports them as an assistant
         # bubble carrying a structured `error` (server.chat.turn_error), so the
         # error key — not an exception — is what distinguishes a failed turn.
