@@ -491,7 +491,13 @@ jobs:
     # @playwright/test version — a guard step below fails loudly on drift.
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
-    timeout-minutes: 10
+    # This single job runs BOTH the vitest unit suite (~2.5 min) and the build+Playwright
+    # E2E smoke (~6.5 min) back to back, so the job lands at ~9.5–10 min — right against a
+    # 10-min cap. It flaked as a `cancelled` timeout when a run drifted a few seconds over
+    # (a hard timeout is killed mid-step, not reported as a failure), and the margin only
+    # shrinks as the unit suite grows (each new guard adds vitest time). 15 min gives real
+    # headroom without masking a genuine hang — a broken test still errors in seconds.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
