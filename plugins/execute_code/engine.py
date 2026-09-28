@@ -55,6 +55,7 @@ import re
 import secrets as _secrets
 import sys
 import tempfile
+from pathlib import Path
 from typing import Annotated, Any
 
 from langgraph.prebuilt import InjectedState
@@ -259,6 +260,63 @@ def _resolve_child_interpreter() -> str | None:
     return str(exe) if exe is not None else None
 
 
+# --- stdout spill (#3701) ----------------------------------------------------
+# When a script's stdout overflows ``truncate``, the head is returned inline and
+# the FULL output is written to a scratch file under the instance's plugin store,
+# so an evidence sweep across a whole repo isn't forced to re-run with narrower
+# prints (the overflow used to be dropped). Bounded so a runaway script can't
+# fill the disk (per-file cap) or leave litter (TTL prune on every write); a
+# failed write is swallowed and falls back to the plain truncation marker — the
+# spill never fails the run.
+_SPILL_MAX_BYTES = 5 * 1024 * 1024  # per-file cap; past this the spill itself is truncated
+_SPILL_TTL_SECONDS = 24 * 60 * 60  # prune spill files older than this on each write
+
+
+def _prune_old_spills(spill_dir: Path, now: float) -> None:
+    """Delete spill files older than the TTL. Best-effort — a file that vanishes
+    or can't be stat'd between glob and unlink is skipped, never raised."""
+    cutoff = now - _SPILL_TTL_SECONDS
+    for old in spill_dir.glob("ec-*.txt"):
+        with contextlib.suppress(OSError):
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
+
+
+def _spill_stdout(full: str, truncate: int, *, session_id: str) -> str:
+    """Write ``full`` stdout to a per-session scratch file and return the
+    truncated head plus a marker naming the full size, the absolute spill path,
+    and how to read it. Raises on any failure so the caller can fall back to the
+    plain truncation marker — a broken/read-only/over-quota store never fails the run.
+    """
+    import time as _time
+
+    from graph.sdk import plugin_store
+
+    spill_dir = plugin_store(subdir="spill", plugin_id="execute_code")
+    _prune_old_spills(spill_dir, _time.time())
+
+    data = full.encode("utf-8", errors="replace")
+    capped = ""
+    if len(data) > _SPILL_MAX_BYTES:
+        data = data[:_SPILL_MAX_BYTES]
+        capped = f" (spill capped at {_SPILL_MAX_BYTES} bytes; the tail was dropped)"
+
+    # Per-session, per-run unique name. The session id is sanitised to a safe stem
+    # (it comes from InjectedState, but the store is on disk) and a random suffix
+    # keeps concurrent runs in one session from colliding.
+    sid = re.sub(r"[^A-Za-z0-9_-]", "", session_id or "")[:40] or "nosession"
+    path = spill_dir / f"ec-{sid}-{_secrets.token_hex(8)}.txt"
+    path.write_bytes(data)
+
+    return (
+        full[:truncate]
+        + f"\n\n…[output truncated: showing {truncate} of {len(full)} chars. "
+        + f"Full stdout written to {path}{capped}. "
+        + "Read it with read_file if that path is inside a managed project, otherwise with a "
+        + f'bounded read (e.g. execute_code: print(open(r"{path}").read(200000))).]'
+    )
+
+
 async def run_code(
     code: str,
     tool_map: dict,
@@ -375,7 +433,11 @@ async def run_code(
             out = "(script produced no stdout)"
 
         if len(out) > truncate:
-            out = out[:truncate] + f"\n\n…[truncated to {truncate} chars]"
+            try:
+                out = _spill_stdout(out, truncate, session_id=session_id)
+            except Exception:  # noqa: BLE001 — a broken store falls back, never fails the run
+                log.debug("[execute_code] stdout spill failed; using plain truncation", exc_info=True)
+                out = out[:truncate] + f"\n\n…[truncated to {truncate} chars]"
         return out
     finally:
         if proc is not None:
@@ -522,7 +584,9 @@ def build_execute_code_tool(
         f"The script runs in an isolated subprocess with a {timeout:.0f}s timeout "
         "and a scrubbed environment (no credentials), fresh each call (no state "
         "persists between runs). Only stdout is returned; write your result with "
-        "print(). Exceptions and a non-zero exit are reported back to you."
+        "print(). Output over the truncate limit is returned as a head plus a marker "
+        "naming a scratch file that holds the FULL stdout (read it if you need the rest). "
+        "Exceptions and a non-zero exit are reported back to you."
     )
 
     @tool("execute_code", description=description)
