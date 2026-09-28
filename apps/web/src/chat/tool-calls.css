@@ -78,7 +78,7 @@
 .reasoning-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.55;
   color: var(--pl-color-fg-muted);
   max-height: 340px;
@@ -112,7 +112,7 @@
 .work-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 0.85rem;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.5;
   color: var(--pl-color-fg-muted);
 }
@@ -143,7 +143,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   max-width: 280px;
 }
@@ -197,7 +197,7 @@
   padding: 1px 7px;
   width: auto;
   border-radius: 6px;
-  font-size: 0.72rem;
+  font-size: var(--pl-font-size-xs);
   font-weight: 500;
   line-height: 1.6;
   color: var(--pl-color-fg-subtle);
@@ -277,7 +277,7 @@
   background: var(--pl-color-bg);
   border-radius: 6px;
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-muted);
   white-space: pre-wrap;
@@ -294,7 +294,7 @@
   background: var(--pl-color-bg);
   border-radius: 6px;
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.5;
   color: var(--pl-color-fg-muted);
   white-space: pre-wrap;
@@ -319,14 +319,14 @@
 }
 .tool-kv-key {
   font-family: var(--pl-font-mono);
-  font-size: 0.74rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   word-break: break-word;
 }
 .tool-kv-val {
   margin: 0;
   min-width: 0;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg);
 }
 .tool-scalar {
@@ -340,7 +340,7 @@
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
-  font-size: 0.74rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-accent-fg);
 }
 .tool-null {
@@ -380,7 +380,7 @@
   background: color-mix(in srgb, var(--pl-color-status-error) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 28%, transparent);
   color: var(--pl-color-status-error);
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   /* Cap like .tool-text — a long error body (a failed command echoing its whole
      input) must scroll inside the card, not fill the pane (#1691). */
@@ -414,7 +414,7 @@
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
-  font-size: 0.74rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .tool-multimodal-note svg {
@@ -429,7 +429,7 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
 }
 .tool-wait-head {
   display: flex;
@@ -450,7 +450,7 @@
   overflow-wrap: anywhere;
 }
 .tool-wait-hint {
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 /* "· ~5 minutes" in the card header — same quiet treatment as the nested-tools count. */
@@ -465,7 +465,7 @@
   align-items: baseline;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 0.84rem;
+  font-size: var(--pl-font-size-sm);
 }
 .tool-calc code {
   font-family: var(--pl-font-mono);
@@ -487,11 +487,11 @@
 }
 .tool-time .tool-mono {
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg);
 }
 .tool-time-human {
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 
@@ -529,7 +529,7 @@
   border: 1px solid var(--pl-color-border);
 }
 .tool-result-snippet {
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-subtle);
 }
@@ -555,7 +555,7 @@
   gap: 5px;
   min-width: 0;
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   word-break: break-all;
 }
 .tool-fs-head svg {
