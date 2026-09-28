@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
+import { Count } from "@protolabsai/ui/primitives";
 
 import { onServerEvent } from "../lib/events";
 import { isPendingNowInboxPage } from "../lib/queries";
@@ -40,13 +41,13 @@ export function ActivityWidget() {
       icon={<Activity size={14} />}
       badge={
         unread || pendingNow ? (
-          <span
+          <Count
             data-testid="activity-badge"
             className={pendingNow ? "activity-badge--alert" : undefined}
             data-alert={pendingNow ? "now" : undefined}
           >
             {unread > 9 ? "9+" : unread || "!"}
-          </span>
+          </Count>
         ) : null
       }
       label={
