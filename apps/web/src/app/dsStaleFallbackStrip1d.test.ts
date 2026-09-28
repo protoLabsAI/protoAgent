@@ -92,10 +92,12 @@ describe("literal var(--pl-X, <fallback>) stripped from activity/identity/Identi
     expect(count(css, "var(--pl-font-mono, ui-monospace, monospace)")).toBe(0);
   });
 
-  it("IdentityPanel.tsx: soul textarea fontFamily is bare, fontSize (type-scale card 2b) untouched", () => {
+  it("IdentityPanel.tsx: soul textarea fontFamily is bare, fontSize migrated to the DS type scale", () => {
     const tsx = source("/agent/IdentityPanel.tsx");
     expect(tsx).toContain('fontFamily: "var(--pl-font-mono)"');
-    expect(tsx).toContain('fontSize: "13px"'); // owned by the type-scale card, must NOT be stripped
+    // fontSize was owned by the type-scale audit card, which mapped the 13px literal to the DS
+    // sm step; the stale-fallback strip still leaves it alone (this only pins the current value).
+    expect(tsx).toContain('fontSize: "var(--pl-font-size-sm)"');
     expect(count(tsx, 'var(--pl-font-mono, monospace)')).toBe(0);
   });
 

@@ -179,7 +179,7 @@
   margin-top: 10px;
 }
 .settings-inline-status {
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .setting-row {
@@ -200,13 +200,13 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 0.86rem;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
 }
 /* .setting-restart retired — the "restart" / "box-shared" markers are DS <Badge>s now. */
 .setting-desc {
   margin: 3px 0 0;
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-subtle);
 }
@@ -221,7 +221,7 @@
    box-shared field is edited in the Workspace view (PR4). */
 .setting-override-note {
   margin: 4px 0 0;
-  font-size: 0.74rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   color: var(--pl-color-status-warning);
 }
@@ -236,7 +236,7 @@
   align-items: center;
   gap: 7px;
   font-family: var(--pl-font-mono);
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
@@ -276,7 +276,7 @@
   gap: 8px;
 }
 .secrets-status-meta {
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .secrets-status-vars {
@@ -286,7 +286,7 @@
 }
 .secrets-status-vars code {
   font-family: var(--pl-font-mono);
-  font-size: 0.72rem;
+  font-size: var(--pl-font-size-xs);
   padding: 2px 6px;
   border: 1px solid var(--pl-color-border);
   border-radius: 6px;

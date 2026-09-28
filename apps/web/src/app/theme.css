@@ -1678,7 +1678,7 @@ textarea {
    rule (it pairs the setup wizard's link styling). */
 .settings-status {
   margin: 0 0 10px;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
 }
@@ -1687,7 +1687,7 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-accent-fg);
   text-decoration: none;
 }
@@ -1841,7 +1841,7 @@ textarea {
   align-items: flex-start;
   gap: 8px;
   padding: 14px;
-  font-size: 0.85rem;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-subtle);
 }
 .federated-loading { align-items: center; }
@@ -1850,7 +1850,7 @@ textarea {
 .federated-error-detail {
   margin: 4px 0 8px;
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   word-break: break-word;
 }
@@ -2084,12 +2084,12 @@ textarea {
 /* The update notice now renders in the DS Dialog (full modal) — the version in the
    title, and the release changelog as scrollable markdown in the body. */
 .update-notice-ver {
-  font-family: ui-monospace, monospace;
-  font-size: 0.85em;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-sm);
   opacity: 0.85;
 }
 .update-notice-cur {
-  font-size: 0.8em;
+  font-size: var(--pl-font-size-xs);
   opacity: 0.6;
 }
 .update-notice-notes {
