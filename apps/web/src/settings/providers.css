@@ -2,7 +2,7 @@
    provider type changes its status/actions, not its visual hierarchy. */
 .providers-panel > .muted {
   margin: 0 0 12px;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
 }
 .provider-list {
   display: grid;
@@ -27,7 +27,7 @@
   margin-right: 8px;
 }
 .provider-row__id {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   margin-right: 8px;
 }
@@ -37,7 +37,7 @@
   gap: 4px;
 }
 .provider-row__meta {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   margin-top: 4px;
   overflow-wrap: anywhere;
