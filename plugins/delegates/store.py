@@ -699,11 +699,19 @@ def delete_delegate(name: str, *, force: bool = False, repoint_to: str | None = 
     board loop would strand itself otherwise (#3692) — unless ``force`` (delete anyway)
     or ``repoint_to`` (rewrite every reference to another delegate in the same save)."""
     name = str(name).strip()
+    # Decide the repoint up front but DON'T save it yet — the removal below can still
+    # refuse (a host-shared entry on a member that can't write the host layer raises
+    # DelegateScopeError; an OSError on the layer write does too). Saving the repoint
+    # first would leave every reference permanently rewritten while the delegate stayed
+    # and the operator got a 403 — so the rewrite is deferred until AFTER the removal
+    # succeeds (#3692 review). The target is validated here (no writes), so an invalid
+    # ``repoint_to`` refuses without touching config either.
+    repoint_target: str | None = None
     if not force:
         refs = find_delegate_references(name)
         if refs:
             if repoint_to:
-                _apply_repoint(name, _validate_repoint_target(name, repoint_to))
+                repoint_target = _validate_repoint_target(name, repoint_to)
             else:
                 raise DelegateReferencedError(name, refs)
     if not _remove_from_layer(name, SCOPE_AGENT):
@@ -719,4 +727,7 @@ def delete_delegate(name: str, *, force: bool = False, repoint_to: str | None = 
             _prune_secrets(name, None, scope=SCOPE_AGENT)
             if can_write_host_layer():
                 _prune_secrets(name, None, scope=SCOPE_HOST)
+    # The delegate is gone — only now is it safe to rewrite the references that named it.
+    if repoint_target:
+        _apply_repoint(name, repoint_target)
     return read_delegates_raw()

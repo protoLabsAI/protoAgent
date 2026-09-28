@@ -615,6 +615,27 @@ def test_delete_repoint_to_unknown_delegate_is_rejected(client, fake_io):
     assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["fable"]
 
 
+def test_delete_repoint_refused_by_scope_leaves_references_untouched(client, fake_io, monkeypatch):
+    # #3692 review: a host-shared delegate a member can't delete must 403 WITHOUT having
+    # already rewritten its config references. The repoint save is deferred until after
+    # the removal succeeds, so a refusal leaves both the delegate and every reference
+    # exactly as they were — not silently repointed behind a 403.
+    monkeypatch.setattr(
+        store,
+        "read_host_delegates_raw",
+        lambda: [{"name": "fable", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}],
+    )
+    monkeypatch.setattr(store, "can_write_host_layer", lambda: False)
+    client.post("/api/delegates", json=_acp("opusx"))  # a valid (agent-layer) repoint target
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable", "opus": "fable"}}
+    r = client.request("DELETE", "/api/delegates/fable", params={"repoint_to": "opusx"})
+    assert r.status_code == 403
+    # references NOT rewritten to opusx despite repoint_to — the refusal touched nothing
+    assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "fable", "opus": "fable"}
+    # and the host-shared delegate is still on the bench
+    assert "fable" in [d["name"] for d in client.get("/api/delegates").json()["delegates"]]
+
+
 def test_rename_with_force_repoints_references_to_the_new_name(client, fake_io):
     # Bonus: a forced rename doesn't strand references — they follow to the new name.
     client.post("/api/delegates", json=_acp("fable"))
