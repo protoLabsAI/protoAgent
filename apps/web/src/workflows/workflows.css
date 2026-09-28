@@ -1,6 +1,6 @@
 /* Workflows surface --------------------------------------------------------- */
 .workflow-desc {
-  margin: 0 12px;
+  margin: 0 var(--pl-space-3);
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-sm);
 }
@@ -9,7 +9,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 4px 12px;
+  margin: var(--pl-space-1) var(--pl-space-3);
 }
 
 /* Workflow builder — "Outline & Focus": the workflow's shape as cards on the
@@ -19,8 +19,8 @@
 .workflow-builder {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 0 12px;
+  gap: var(--pl-space-3);
+  padding: 0 var(--pl-space-3);
   container-type: inline-size;
   container-name: builder;
 }
@@ -31,7 +31,7 @@
   z-index: 2;
   background: var(--pl-color-bg);
   border-top: 1px solid var(--pl-color-border);
-  padding: 8px 0;
+  padding: var(--pl-space-2) 0;
   margin-top: 0;
 }
 
@@ -79,7 +79,7 @@
   gap: 6px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 8px;
+  padding: var(--pl-space-2);
   min-width: 0;
 }
 
@@ -104,7 +104,7 @@
 .builder-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   padding: 10px;
@@ -122,7 +122,7 @@
 .builder-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .builder-row input,
@@ -133,7 +133,7 @@
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
   border-radius: 5px;
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   font: inherit;
 }
 
@@ -142,7 +142,7 @@
   flex-direction: column;
   gap: 6px;
   border-left: 2px solid var(--pl-color-border);
-  padding-left: 8px;
+  padding-left: var(--pl-space-2);
 }
 
 .builder-prompt {
@@ -161,8 +161,8 @@
 .workflow-step {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2) 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -187,11 +187,11 @@
 }
 
 .workflow-result {
-  margin: 8px 0 0;
+  margin: var(--pl-space-2) 0 0;
 }
 
 .workflow-result h2 {
-  margin: 8px 12px 4px;
+  margin: var(--pl-space-2) var(--pl-space-3) var(--pl-space-1);
   font-size: var(--pl-font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -199,19 +199,19 @@
 }
 
 .workflow-result details {
-  margin: 0 12px 12px;
+  margin: 0 var(--pl-space-3) var(--pl-space-3);
 }
 
 .workflow-result summary {
   cursor: pointer;
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-xs);
-  padding: 4px 0;
+  padding: var(--pl-space-1) 0;
 }
 
 .workflow-step-out strong {
   display: block;
-  margin: 6px 12px 2px;
+  margin: 6px var(--pl-space-3) 2px;
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
@@ -220,17 +220,17 @@
 .workflow-gates {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding-bottom: 8px;
+  gap: var(--pl-space-2);
+  margin: 0 0 var(--pl-space-2);
+  padding-bottom: var(--pl-space-2);
   border-bottom: 1px solid var(--pl-color-border);
 }
 
 .workflow-gates-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 4px 12px 0;
+  gap: var(--pl-space-2);
+  margin: var(--pl-space-1) var(--pl-space-3) 0;
 }
 
 .workflow-gates-head h2 {
@@ -256,7 +256,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin: 0 12px;
+  margin: 0 var(--pl-space-3);
   padding: 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -266,7 +266,7 @@
 .workflow-gate-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   font-size: var(--pl-font-size-sm);
 }
 
@@ -288,7 +288,7 @@
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
   border-radius: 5px;
-  padding: 8px;
+  padding: var(--pl-space-2);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
@@ -317,7 +317,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 4px 12px;
+  margin: var(--pl-space-1) var(--pl-space-3);
   padding: 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -349,8 +349,8 @@
 .lane-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
+  gap: var(--pl-space-1);
+  padding: 3px var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
   border-radius: 999px;
   font-family: var(--pl-font-mono);
@@ -388,17 +388,17 @@
 .run-timeline {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 8px 0 0;
-  padding-top: 8px;
+  gap: var(--pl-space-2);
+  margin: var(--pl-space-2) 0 0;
+  padding-top: var(--pl-space-2);
   border-top: 1px solid var(--pl-color-border);
 }
 
 .run-timeline-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 12px;
+  gap: var(--pl-space-2);
+  margin: 0 var(--pl-space-3);
   font-size: var(--pl-font-size-sm);
 }
 
@@ -416,7 +416,7 @@
 }
 
 .run-status {
-  padding: 1px 8px;
+  padding: 1px var(--pl-space-2);
   border-radius: 999px;
   font-size: var(--pl-font-size-2xs);
   font-weight: 600;
@@ -449,8 +449,8 @@
 .run-steps {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: 0 12px;
+  gap: var(--pl-space-1);
+  margin: 0 var(--pl-space-3);
 }
 
 .run-step {
@@ -462,7 +462,7 @@
 .run-step summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   padding: 7px 10px;
   font-size: var(--pl-font-size-sm);
   cursor: pointer;
@@ -526,7 +526,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 12px;
+  margin: 0 var(--pl-space-3);
   color: var(--pl-color-status-warning);
   font-size: var(--pl-font-size-xs);
 }
@@ -535,8 +535,8 @@
 .workflow-picker {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  margin: 0 0 4px;
+  gap: var(--pl-space-2);
+  margin: 0 0 var(--pl-space-1);
 }
 
 .workflow-picker .field {
@@ -545,13 +545,13 @@
 
 .workflow-picker-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--pl-space-1);
   padding-bottom: 2px;
 }
 
 /* Run history — collapsed list of past runs; a row opens it in the timeline. */
 .run-history {
-  margin: 8px 12px 12px;
+  margin: var(--pl-space-2) var(--pl-space-3) var(--pl-space-3);
 }
 
 .run-history summary {
@@ -561,7 +561,7 @@
   cursor: pointer;
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-xs);
-  padding: 4px 0;
+  padding: var(--pl-space-1) 0;
   list-style: none;
 }
 
@@ -615,11 +615,11 @@
 .builder-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 
 .builder-chip {
-  padding: 2px 8px;
+  padding: 2px var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
   border-radius: 999px;
   background: var(--pl-color-bg);
@@ -636,9 +636,9 @@
 
 .builder-errors {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
   align-items: flex-start;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
   border: 1px solid color-mix(in srgb, var(--pl-color-status-warning) 40%, transparent);
   border-radius: var(--pl-radius);
   color: var(--pl-color-status-warning);
@@ -652,7 +652,7 @@
 
 .builder-errors ul {
   margin: 0;
-  padding-left: 16px;
+  padding-left: var(--pl-space-4);
 }
 
 /* The DS DropdownSelect trigger defaults to width:100%; as a flex sibling it
@@ -702,7 +702,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 10px;
+  padding: var(--pl-space-1) 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: 999px;
   background: var(--pl-color-bg);
@@ -848,7 +848,7 @@
 }
 
 .builder-menu-label {
-  padding: 4px 10px 2px;
+  padding: var(--pl-space-1) 10px 2px;
   font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
