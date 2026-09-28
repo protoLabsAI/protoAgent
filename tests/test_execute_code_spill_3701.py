@@ -48,6 +48,35 @@ async def test_overflow_returns_marker_and_spill_holds_full_stdout(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_marker_recovery_read_returns_tail_not_head(tmp_path, monkeypatch):
+    # Regression for the review finding: the marker's suggested recovery read must
+    # return the part NOT already shown. A read from offset 0 would replay the same
+    # head AND re-spill (its own stdout overflows ``truncate`` too). The marker now
+    # directs a paged read starting at ``truncate`` — verify following it recovers
+    # the tail and does not create a second spill.
+    spill_dir = _redirect_store(monkeypatch, tmp_path / "store")
+    full = "A" * 100 + "B" * 100 + "C" * 100  # three distinct 100-char windows
+    truncate = 100
+    out = await run_code(f"print({full!r})", {}, truncate=truncate, session_id="rec")
+
+    # The marker pages from the head offset, not from the start.
+    assert f".read()[{truncate}:" in out  # slice STARTS past the head
+    assert ".read(200000)" not in out  # not the old head-replaying suggestion
+
+    path = next(iter(spill_dir.glob("ec-*.txt")))
+    # Follow the marker's own suggestion: read the next window at the same truncate.
+    recovered = await run_code(
+        f'print(open(r"{path}", encoding="utf-8", errors="replace").read()[{truncate}:{2 * truncate}])',
+        {},
+        truncate=truncate,
+    )
+    assert recovered == "B" * 100  # the tail window, not the "A"*100 head
+    assert not recovered.startswith("A")
+    assert "output truncated" not in recovered  # a full page didn't re-spill
+    assert len(list(spill_dir.glob("ec-*.txt"))) == 1  # no second spill file created
+
+
+@pytest.mark.asyncio
 async def test_under_cap_creates_no_spill_and_output_unchanged(tmp_path, monkeypatch):
     # r2: under the cap → no spill file, return value identical to before.
     calls = {"n": 0}

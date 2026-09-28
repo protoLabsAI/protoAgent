@@ -308,12 +308,24 @@ def _spill_stdout(full: str, truncate: int, *, session_id: str) -> str:
     path = spill_dir / f"ec-{sid}-{_secrets.token_hex(8)}.txt"
     path.write_bytes(data)
 
+    # The recovery read must return the part NOT shown, not the head again. A read
+    # that starts at 0 would replay full[:truncate] and re-spill (its own stdout
+    # overflows ``truncate`` too), so the marker directs a *paged* read that starts
+    # past the head and stays within one page — offset ``truncate`` to ``2*truncate``,
+    # then advance by ``truncate`` — so each follow-up returns fresh tail and never
+    # spills again. read_file only reaches the path when the store is a managed
+    # project; execute_code (a subprocess) can always open it.
+    next_end = 2 * truncate
     return (
         full[:truncate]
         + f"\n\n…[output truncated: showing {truncate} of {len(full)} chars. "
         + f"Full stdout written to {path}{capped}. "
-        + "Read it with read_file if that path is inside a managed project, otherwise with a "
-        + f'bounded read (e.g. execute_code: print(open(r"{path}").read(200000))).]'
+        + "To recover the part NOT shown, read_file can page it if that path is inside a "
+        + "managed project; otherwise use a bounded read that STARTS PAST THE HEAD (a read "
+        + "from the start just replays this same head and spills again) — e.g. execute_code: "
+        + f'print(open(r"{path}", encoding="utf-8", errors="replace").read()[{truncate}:{next_end}]) '
+        + f"returns the next {truncate} chars; advance both offsets by {truncate} to keep "
+        + "paging (each page stays within the truncate limit, so it won't spill again).]"
     )
 
 
