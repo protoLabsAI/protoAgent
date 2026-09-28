@@ -17,8 +17,8 @@
 .mshell-head {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 4px;
+  gap: var(--pl-space-1);
+  padding: 0 var(--pl-space-1);
   padding-top: env(safe-area-inset-top);
   min-height: calc(52px + env(safe-area-inset-top));
   flex: 0 0 auto;
@@ -51,9 +51,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   min-height: 44px;
-  padding: 0 4px;
+  padding: 0 var(--pl-space-1);
   border: none;
   background: none;
   color: var(--pl-color-fg);
@@ -169,7 +169,7 @@
 .session-sheet-head {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 8px;
+  margin-bottom: var(--pl-space-2);
 }
 .session-sheet-list {
   list-style: none;

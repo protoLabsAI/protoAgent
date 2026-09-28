@@ -1,12 +1,12 @@
 /* ── Delegates panel (ADR 0025) — Settings → Capabilities ──────────────────── */
-.delegates-section .subagent-row strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.delegates-section .subagent-row strong { display: flex; align-items: center; gap: var(--pl-space-2); flex-wrap: wrap; }
 /* .delegate-type-badge / .delegate-badge-warn / .delegate-badge-ok retired (#832) —
    now DS Badge (type) + StatusPill (unconfigured/secret-set). */
 /* Lives in a dialog now (DelegatesSection) — just the field grid; the dialog
    supplies the header, padding, and border chrome. */
 .delegate-form {
   display: grid;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 /* The delegate-type picker is the DS RadioCardGroup/RadioCard now (matches the
    archetype picker in NewAgentPanel) — the hand-rolled .delegate-type-tile* tiles
@@ -15,7 +15,7 @@
 /* .delegate-health* retired — the row health indicator is a DS <StatusDot> now. */
 
 /* Per-delegate env editor (#2114): key/value rows + a secret toggle + delete. */
-.delegate-envmap { display: grid; gap: 8px; }
+.delegate-envmap { display: grid; gap: var(--pl-space-2); }
 .delegate-env-rows { display: grid; gap: 6px; }
 .delegate-env-row {
   display: grid;
@@ -24,7 +24,7 @@
   align-items: center;
 }
 .delegate-env-add { display: flex; align-items: center; gap: 6px; }
-.delegate-env-remove { margin-top: 4px; }
+.delegate-env-remove { margin-top: var(--pl-space-1); }
 
 /* Advanced field group — fields the backend marks `advanced` collapse behind a chevron so
    the form asks for the handful of things that matter first. Mirrors the archetype
@@ -34,10 +34,10 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 4px;
+  margin-top: var(--pl-space-1);
   padding-top: 10px;
   border-top: 1px solid var(--pl-color-border);
 }
 
 /* ADR 0105: the "Share with fleet" switch sits with the name/description fields. */
-.delegate-share { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.delegate-share { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-3); }

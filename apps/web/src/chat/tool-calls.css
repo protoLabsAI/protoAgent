@@ -193,7 +193,7 @@
 .tool-cancel-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   padding: 1px 7px;
   width: auto;
   border-radius: 6px;
@@ -273,7 +273,7 @@
 /* Generic JSON-blob fallback box, scoped to the DS body slot. */
 .pl-toolcard__body pre {
   margin: 0;
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   background: var(--pl-color-bg);
   border-radius: 6px;
   font-family: var(--pl-font-mono);
@@ -290,7 +290,7 @@
    The shared surface for a scalar/text value is a padded, monospace-ish box. */
 .pl-toolcard__section .tool-text,
 .tool-fetch-body {
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   background: var(--pl-color-bg);
   border-radius: 6px;
   font-family: var(--pl-font-mono);
@@ -309,7 +309,7 @@
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .tool-kv-row {
   display: grid;
@@ -375,7 +375,7 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   border-radius: 6px;
   background: color-mix(in srgb, var(--pl-color-status-error) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 28%, transparent);
@@ -523,7 +523,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   background: var(--pl-color-bg);
   border-radius: 6px;
   border: 1px solid var(--pl-color-border);
