@@ -1,0 +1,1 @@
+- **ADR 0115: gateway in-flight limiter (#3760).** Proposed design for a bounded, priority-ordered per-lane in-flight limit on model calls, off by default.

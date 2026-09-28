@@ -927,6 +927,10 @@
           "title": "0113 — Agent pairing: remote fleet members get a paired, revocable token"
         },
         {
+          "path": "adr/0115-gateway-inflight-limiter.md",
+          "title": "0115 — Model calls share a bounded, priority-ordered in-flight lane per endpoint and model (off by default)"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
