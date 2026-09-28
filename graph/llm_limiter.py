@@ -58,16 +58,21 @@ _PRIORITY: contextvars.ContextVar[str] = contextvars.ContextVar("_llm_priority",
 # ── Metrics hook (ADR 0115 D8) ───────────────────────────────────────────────────
 # A LaneEvent carries everything C6 needs to update the four D8 signals without this
 # module importing observability: the kind, the lane/priority, the wait time (grants and
-# timeouts only), and the current gauges.
+# timeouts only), and the current gauges. `kind` is one of enqueued / acquired / released /
+# dequeued / timeout — every queue-depth AND in-flight transition emits, so the gauges a
+# listener maintains stay live (climb as waiters pile up, drain to 0 when the lane clears)
+# rather than only refreshing on a grant/release/timeout.
 LaneEvent = namedtuple("LaneEvent", ["kind", "lane", "priority", "wait_s", "inflight", "queued"])
 
 _listeners: list[Callable[[LaneEvent], None]] = []
 
 
 def add_listener(fn: Callable[[LaneEvent], None]) -> None:
-    """Register a hook called on every acquire/release/timeout. C6 uses this to feed
-    Prometheus. Listeners must not raise; a raising listener is logged and dropped from
-    that dispatch, never allowed to break a model call."""
+    """Register a hook called on every queue/slot transition — enqueue, acquire, release,
+    dequeue and timeout. C6 uses this to feed Prometheus, and refreshes the depth gauge on
+    the enqueue/dequeue events so a busy lane's backlog is visible and a drained lane reads
+    0. Listeners must not raise; a raising listener is logged and dropped from that dispatch,
+    never allowed to break a model call."""
     if fn not in _listeners:
         _listeners.append(fn)
 
@@ -280,11 +285,19 @@ class _Lane:
     def _enqueue(self, w: _Waiter, now: float) -> None:
         self._queue.append(w)
         self._update_saturation(now)
+        # A waiter joining the queue changes the depth even though no slot moved; emit so
+        # the D8 queue-depth gauge climbs with the backlog instead of sitting at its last
+        # acquire/release value while every slot is busy.
+        self._emit("enqueued", w.priority, 0.0)
 
     def _dequeue(self, w: _Waiter, now: float) -> None:
         with contextlib.suppress(ValueError):
             self._queue.remove(w)
         self._update_saturation(now)
+        # A cancelled or timed-out waiter leaving the queue also moves the depth with no
+        # slot transition; emit so the gauge drains (a fully cleared lane reads back to 0)
+        # rather than keeping the ghost counted until some unrelated event fires.
+        self._emit("dequeued", w.priority, 0.0)
 
     def _update_saturation(self, now: float) -> None:
         if self._queue:

@@ -32,6 +32,13 @@ _a2a_turn_latency = None
 _boot_phase_latency = None
 _plugin_lifecycle_latency = None
 _knowledge_op_latency = None
+# Gateway in-flight limiter signals (ADR 0115 D8). Fed by a graph.llm_limiter
+# listener registered in ``init`` — the limiter never imports observability, so the
+# coupling only goes this way (ADR 0115 D8, C6).
+_llm_inflight = None
+_llm_queue_depth = None
+_llm_queue_wait = None
+_llm_queue_timeouts = None
 
 # Per-turn knowledge-op accumulator (#2676). The A2A executor arms it at turn
 # start (``begin_knowledge_turn``); ``record_knowledge_op`` then folds each op's
@@ -57,6 +64,7 @@ def init():
     global _tools_deferred, _compactions, _overflow_recoveries, _prunings, _tool_calls, _tool_latency, _active_sessions
     global _a2a_turns, _a2a_turn_latency, _watch_fires, _watch_flapping, _boot_phase_latency
     global _plugin_lifecycle_latency, _knowledge_op_latency
+    global _llm_inflight, _llm_queue_depth, _llm_queue_wait, _llm_queue_timeouts
 
     try:
         from prometheus_client import Counter, Histogram, Gauge
@@ -187,7 +195,37 @@ def init():
             ["op"],
             buckets=[0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
         )
+        # Gateway in-flight limiter (ADR 0115 D8). The lane is `(base_url, model)`;
+        # operator-sized gateway connections, so a bounded label. `priority` is the
+        # closed interactive/default/bulk set. Fed by the limiter listener below.
+        _llm_inflight = Gauge(
+            f"{p}_llm_inflight",
+            "Model calls currently holding an in-flight slot, per lane (ADR 0115 D8)",
+            ["lane"],
+        )
+        _llm_queue_depth = Gauge(
+            f"{p}_llm_queue_depth",
+            "Model calls waiting for an in-flight slot, per lane and priority (ADR 0115 D8)",
+            ["lane", "priority"],
+        )
+        _llm_queue_wait = Histogram(
+            f"{p}_llm_queue_wait_seconds",
+            "Time a model call waited for an in-flight slot before it was granted or timed out (ADR 0115 D8)",
+            ["lane", "priority"],
+            buckets=[0.1, 0.5, 1, 5, 15, 30, 60, 120, 300],
+        )
+        _llm_queue_timeouts = Counter(
+            f"{p}_llm_queue_timeouts_total",
+            "Model calls that gave up waiting for an in-flight slot (GatewayQueueTimeout), per lane (ADR 0115 D8)",
+            ["lane"],
+        )
         _enabled = True
+        # Wire the limiter → metrics hook (ADR 0115 D8 / C6). Idempotent: add_listener
+        # dedupes, so a re-init after a hot-reload doesn't double-register. Import is
+        # lazy and one-directional — the limiter imports nothing from observability.
+        from graph import llm_limiter
+
+        llm_limiter.add_listener(record_lane_event)
         print(f"[metrics] Prometheus metrics initialized (prefix={p}_)")
     except ImportError:
         print("[metrics] prometheus-client not installed. Metrics disabled.")
@@ -223,6 +261,40 @@ def record_llm_call(
         _llm_cache_tokens.labels(model=model, kind="creation").inc(cache_creation)
     if cost_usd:
         _llm_cost.labels(model=model).inc(cost_usd)
+
+
+def record_lane_event(event) -> None:
+    """Update the four ADR 0115 D8 in-flight-limiter metrics from one limiter
+    ``LaneEvent``. Registered as a ``graph.llm_limiter`` listener by ``init`` — the
+    limiter never imports this module, so the dependency only points this way (C6).
+
+    Wait time and the timeout counter come straight off the event (its ``priority`` is
+    the waiter the event is about, so they fire only on ``acquired``/``timeout``). The
+    inflight gauge and the per-priority queue-depth gauge are refreshed from the limiter
+    snapshot on EVERY event kind — enqueue and dequeue included — because a ``LaneEvent``
+    only carries the lane's TOTAL queue length, not the interactive/default/bulk split the
+    gauge is labelled by. Refreshing on the enqueue/dequeue transitions (not just
+    grant/release/timeout) is what keeps the depth gauge honest: it climbs as waiters pile
+    up behind full slots and drains back to 0 when the last queued waiter is served or
+    cancelled, instead of sitting at a stale value until some other event fires. The
+    snapshot is memory-only, so this stays cheap enough to run on every transition. A
+    silent no-op when prometheus-client is absent, matching the rest of the module
+    (``_enabled`` stays False and the metrics stay ``None``)."""
+    if not _enabled or _llm_inflight is None:
+        return
+    if event.kind in ("acquired", "timeout"):
+        _llm_queue_wait.labels(lane=event.lane, priority=event.priority).observe(max(0.0, event.wait_s))
+    if event.kind == "timeout":
+        _llm_queue_timeouts.labels(lane=event.lane).inc()
+    # Refresh the gauges from the authoritative per-lane/per-priority snapshot so the
+    # depth breakdown is exact and a drained lane reads back to 0 (never a stale peak).
+    from graph import llm_limiter
+
+    for lane_snap in llm_limiter.snapshot().get("lanes", []):
+        name = lane_snap["lane"]
+        _llm_inflight.labels(lane=name).set(lane_snap["inflight"])
+        for priority, depth in lane_snap["queued_by_priority"].items():
+            _llm_queue_depth.labels(lane=name, priority=priority).set(depth)
 
 
 def record_tools_deferred(count: int):

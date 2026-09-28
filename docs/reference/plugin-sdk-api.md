@@ -25,7 +25,7 @@ the module's own.
 
 **Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types)
 
-**Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_priority()`](#sdk-llm-priority)
+**Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
 **Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")** — [`knowledge_add()`](#sdk-knowledge-add), [`knowledge_purge()`](#sdk-knowledge-purge), [`knowledge_search()`](#sdk-knowledge-search)
 
@@ -154,6 +154,27 @@ costs nothing — acquisition is a pass-through.
 **Raises:**
 
 - `ValueError` — if `cls` is not one of the three classes — the message names the valid ones.
+
+
+### `sdk.llm_lanes` {#sdk-llm-lanes}
+
+```python
+sdk.llm_lanes() -> dict
+```
+
+The [ADR 0115](/adr/0115-gateway-inflight-limiter) D8 gateway in-flight-limiter snapshot for this process, read straight
+out of memory (no HTTP, no DB).
+
+The same payload the operator console reads over `GET /api/telemetry/llm-lanes`, but
+a plugin running *inside* the agent process (pr-reviewer's review panels, say) reads it
+here without a round-trip. Use it to tell a lane that is *deliberately* queuing from a
+gateway that has gone slow: high `queued` / `wait_p90_s_5m` or `saturated: true`
+with slots full is local back-pressure this process is applying on purpose; retries or
+timeouts while slots are NOT saturated point at the gateway itself.
+
+**Returns:**
+
+`{"enabled": bool, "generated_at": iso, "lanes": [...]}`. `enabled` is false (and `lanes` empty) when the limiter is off (`model.max_inflight: 0`, the default). Each lane entry carries `lane`, `limit`, `reserve`, `inflight`, `queued`, `queued_by_priority` (interactive/default/bulk), `oldest_wait_s`, `wait_p50_s_5m` / `wait_p90_s_5m`, `queue_timeouts_5m` and `saturated` (`queued > 0` held continuously for 60 s or more).
 
 
 ## Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")
