@@ -161,7 +161,7 @@
   min-height: 30px; /* ~ one collapsed ToolCard head row */
 }
 .tool-spotlight > * {
-  animation: tool-spotlight-in var(--pl-motion-base, 160ms) var(--pl-motion-ease, ease) both;
+  animation: tool-spotlight-in var(--pl-motion-base) var(--pl-motion-ease) both;
 }
 @keyframes tool-spotlight-in {
   from {

@@ -118,7 +118,7 @@
   min-width: 0;
 }
 .code-ref-chip__path {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   overflow-wrap: anywhere;
 }
@@ -147,7 +147,7 @@
   margin-top: 2px;
 }
 .code-ref-inert__path {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
 }
 
 /* artifact-ref (#3617) — the artifact plugin's pointer at one artifact version; a sibling of
@@ -164,7 +164,7 @@
   overflow-wrap: anywhere;
 }
 .artifact-ref-chip__version {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
 .artifact-ref-chip__kind {

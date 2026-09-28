@@ -433,7 +433,7 @@
   padding-top: 6px;
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   color: var(--pl-color-fg-subtle);
-  font-family: var(--pl-font-sans, inherit);
+  font-family: var(--pl-font-sans);
   font-size: var(--pl-font-size-2xs);
   line-height: 1.4;
   white-space: normal;
@@ -695,7 +695,7 @@
 .composer-model-select:focus-visible {
   color: var(--pl-color-fg);
   border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-raised, rgba(255, 255, 255, 0.03));
+  background: var(--pl-color-bg-raised);
 }
 .composer-model-select:disabled {
   opacity: 0.6;

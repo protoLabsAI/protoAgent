@@ -37,7 +37,7 @@
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   background: var(--pl-color-bg-raised);
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   line-height: 1.55;
   white-space: pre-wrap;
