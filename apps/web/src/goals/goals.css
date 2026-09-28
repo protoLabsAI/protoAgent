@@ -42,13 +42,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .goal-row-meta {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.45;
   word-break: break-word;
 }
@@ -82,7 +82,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .goal-detail-head {
@@ -93,7 +93,7 @@
 }
 
 .goal-detail-condition {
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   line-height: 1.4;
   min-width: 0;
 }
@@ -113,7 +113,7 @@
 
 .goal-detail-facts dt {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -126,7 +126,7 @@
 
 .goal-detail-mono {
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .goal-detail-section {
@@ -139,7 +139,7 @@
 
 .goal-detail-section h4 {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--pl-color-fg-subtle);
@@ -169,7 +169,7 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   font-family: var(--pl-font-mono);
-  font-size: 11.5px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -179,7 +179,7 @@
 
 /* The plan is agent-authored markdown — keep it readable but compact in the drawer. */
 .goal-detail-plan {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.55;
 }
 
@@ -219,17 +219,17 @@
 
 .goal-timeline-iter {
   font-family: var(--pl-font-mono);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
 }
 
 .goal-timeline-time {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
 }
 
 .goal-timeline-reason {
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
   word-break: break-word;
 }
