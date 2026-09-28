@@ -43,10 +43,19 @@ log = logging.getLogger("protoagent.plugins.artifact")
 
 def _legacy_store_dir() -> Path:
     """Where the store's data lived before it was instance-scoped (ADR 0004 / ADR 0065).
-    Read-only, for the one-time migration and as the last-resort fallback. When
-    ``PROTOAGENT_INSTANCE`` is set it was appended as a subdir — the same shape the old
-    ``_store_path`` derived straight from ``~``."""
-    base = Path.home() / ".protoagent" / "artifact"
+    Read-only, for the one-time migration and as the last-resort fallback.
+
+    Rooted at the box root (``box_root()`` — ``PROTOAGENT_BOX_ROOT`` else the data home),
+    NOT the raw ``~``: the old loose ``~/.protoagent/artifact`` location IS
+    ``<box_root>/artifact`` on a default install (there ``box_root()`` derives from home),
+    and on a box-scoped server it stays INSIDE that server's box. Deriving it from
+    ``Path.home()`` instead would point a box-rooted server that shares the operator's HOME
+    at the operator's live store and migrate it away on first access — the very leak box
+    rooting exists to prevent. When ``PROTOAGENT_INSTANCE`` is set it was appended as a
+    subdir, the shape the pre-scoping store used."""
+    from infra.paths import box_root
+
+    base = box_root() / "artifact"
     inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
     if inst:
         base = base / inst

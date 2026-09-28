@@ -1871,15 +1871,22 @@ def _load_instance(monkeypatch):
     return mod
 
 
-def _pin_roots(monkeypatch, tmp_path, instance=None):
+def _pin_roots(monkeypatch, tmp_path, instance=None, box=None):
     """Point the box root and HOME at tmp and re-resolve instance paths, so the store
     stays inside tmp and the migration can NEVER touch the developer's real
-    ~/.protoagent/artifact (the conftest does not pin HOME)."""
+    ~/.protoagent/artifact (the conftest does not pin HOME).
+
+    ``box`` defaults to a scratch dir SEPARATE from HOME — a box-scoped server whose box is
+    NOT the operator's home (``PROTOAGENT_BOX_ROOT`` set to somewhere else). The legacy
+    source is box-root-relative, so in that shape the operator's real ~/.protoagent store is
+    invisible to the migration. Pass ``home/".protoagent"`` to model a DEFAULT install,
+    where the box root derives from the home and the legacy ~/.protoagent/artifact store is
+    genuinely this instance's to adopt."""
     from infra.paths import reset_instance_paths
 
     home = tmp_path / "home"
-    box = tmp_path / "box"
     home.mkdir(exist_ok=True)
+    box = box if box is not None else tmp_path / "box"
     monkeypatch.delenv("ARTIFACT_DIR", raising=False)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
@@ -1932,13 +1939,16 @@ def test_default_store_writes_to_the_instance_plugin_store_not_home(monkeypatch,
 
 
 def test_legacy_instance_store_is_migrated_history_and_blobs(monkeypatch, tmp_path):
-    """r2: a pre-instance-scoping <HOME>/.protoagent/artifact/onb store (history + a blob)
-    is moved wholesale on first access; the artifact lists and its blob resolves from the
-    new location, and the legacy files are gone."""
+    """r2: on a default install (box root == the home data dir), a pre-instance-scoping
+    <HOME>/.protoagent/artifact/onb store (history + a blob) is moved wholesale on first
+    access; the artifact lists and its blob resolves from the new location, and the legacy
+    files are gone."""
     import json
 
-    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
-    legacy = home / ".protoagent" / "artifact" / "onb"
+    # box == <HOME>/.protoagent models the default install, where box_root() derives from
+    # the home — so the legacy source IS <HOME>/.protoagent/artifact/onb.
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb", box=tmp_path / "home" / ".protoagent")
+    legacy = box / "artifact" / "onb"
     (legacy / "blobs" / "a-1").mkdir(parents=True)
     blob_name = "deadbeef01.txt"
     (legacy / "blobs" / "a-1" / blob_name).write_bytes(b"legacy-bytes")
@@ -1984,8 +1994,8 @@ def test_bare_legacy_store_migrates_and_leaves_sibling_instances(monkeypatch, tm
     migrates, but sibling instance subdirectories under it are left untouched."""
     import json
 
-    home, box = _pin_roots(monkeypatch, tmp_path, instance=None)
-    art_root = home / ".protoagent" / "artifact"
+    home, box = _pin_roots(monkeypatch, tmp_path, instance=None, box=tmp_path / "home" / ".protoagent")
+    art_root = box / "artifact"
     art_root.mkdir(parents=True)
     (art_root / "history.json").write_text(json.dumps(_legacy_store("bare")), encoding="utf-8")
     sibling = art_root / "roxy"  # a co-located instance's store — NOT ours to move
@@ -2006,11 +2016,11 @@ def test_no_migration_when_the_new_store_already_exists(monkeypatch, tmp_path):
     and legacy data stays where it is."""
     import json
 
-    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb", box=tmp_path / "home" / ".protoagent")
     new_dir = box / "onb" / "artifact"
     new_dir.mkdir(parents=True)
     (new_dir / "history.json").write_text(json.dumps(_legacy_store("new")), encoding="utf-8")
-    legacy = home / ".protoagent" / "artifact" / "onb"
+    legacy = box / "artifact" / "onb"
     legacy.mkdir(parents=True)
     (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
 
@@ -2035,6 +2045,33 @@ def test_path_resolution_failure_falls_back_to_the_legacy_path(monkeypatch, tmp_
     out = art.show_artifact.invoke({"kind": "html", "code": "<p>fallback</p>"})
     assert "Created" in out  # the tool call succeeded despite the failing resolver
 
-    legacy = home / ".protoagent" / "artifact" / "onb"
+    legacy = box / "artifact" / "onb"  # box-root-relative, so it stays inside the box
     assert (legacy / "history.json").is_file()
     assert str(art._store._store_path()).startswith(str(legacy))
+    assert not (home / ".protoagent").exists()  # never the operator's real-home shape
+
+
+def test_box_rooted_server_does_not_migrate_the_operators_home_store(monkeypatch, tmp_path):
+    """The blocking fix: a box-scoped server (PROTOAGENT_BOX_ROOT set to somewhere other than
+    the operator's home) must NOT reach into the operator's live ~/.protoagent/artifact and
+    move it into the box. The legacy source is box-root-relative, so the home store is
+    invisible to the migration: no move, the home store is left byte-for-byte intact, and the
+    box store is its own (here, empty)."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")  # box = <tmp>/box, NOT under home
+    operator = home / ".protoagent" / "artifact" / "onb"  # the operator's real, live store
+    operator.mkdir(parents=True)
+    (operator / "blobs" / "a-live").mkdir(parents=True)
+    (operator / "blobs" / "a-live" / "keep.txt").write_bytes(b"operator-bytes")
+    (operator / "history.json").write_text(json.dumps(_legacy_store("operator-live")), encoding="utf-8")
+
+    art = _load_instance(monkeypatch)
+    # the box server starts empty — it did NOT adopt the operator's history
+    assert art._read_store()["artifacts"] == []
+    # the operator's live store is untouched, right where it was
+    assert json.loads((operator / "history.json").read_text())["current"] == "operator-live"
+    assert (operator / "blobs" / "a-live" / "keep.txt").read_bytes() == b"operator-bytes"
+    # the store resolves inside the box, never the operator's home
+    assert str(art._store._store_dir()).startswith(str(box / "onb" / "artifact"))
+    assert not (box / "onb" / "artifact" / "history.json").exists()

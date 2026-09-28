@@ -5,9 +5,12 @@
   real home, and a default install with no instance stored them one level ABOVE the
   instance root. It now resolves through `sdk.plugin_store(plugin_id="artifact")` — the
   same seam the friction and notes plugins use — so the dev sandbox and every fleet member
-  get their own copy. A pre-scoping store under `~/.protoagent/artifact[/<inst>]` is
-  migrated on first access — both `history.json` AND its `blobs/` move together, so
-  file-artifact downloads keep resolving — while sibling instance subdirectories under a
-  bare legacy dir are left where they are. `ARTIFACT_DIR` is unchanged (still an env-only
-  override, still `/<PROTOAGENT_INSTANCE>`-scoped), and a path-resolution failure falls
-  back to the legacy path so a store access never fails over where its file lives.
+  get their own copy. A pre-scoping store under `<box_root>/artifact[/<inst>]` (i.e.
+  `~/.protoagent/artifact[/<inst>]` on a default install) is migrated on first access — both
+  `history.json` AND its `blobs/` move together, so file-artifact downloads keep resolving —
+  while sibling instance subdirectories under a bare legacy dir are left where they are. The
+  migration source is box-root-relative, NOT the raw home, so a box-scoped server that
+  shares the operator's `$HOME` never reaches into and moves the operator's live store.
+  `ARTIFACT_DIR` is unchanged (still an env-only override, still
+  `/<PROTOAGENT_INSTANCE>`-scoped), and a path-resolution failure falls back to the legacy
+  path so a store access never fails over where its file lives.
