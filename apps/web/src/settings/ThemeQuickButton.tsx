@@ -17,7 +17,7 @@ export function ThemeQuickButton() {
         <Palette size={16} />
       </Button>
       {open ? (
-        <Dialog open onClose={() => setOpen(false)} title="Appearance" width="min(720px, 94vw)" className="theme-quick-dialog">
+        <Dialog open onClose={() => setOpen(false)} title="Appearance" width="min(720px, 94vw)" padding="none" className="theme-quick-dialog">
           <ThemeSurface />
         </Dialog>
       ) : null}

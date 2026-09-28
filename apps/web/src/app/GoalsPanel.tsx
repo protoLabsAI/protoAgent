@@ -148,7 +148,7 @@ export function GoalCreateDialog({
   // failed fetch) falls through to goalFormPayload's core-type default.
   const { data: catalog } = useQuery({ ...verifiersQuery(), enabled: open });
   return (
-    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" className="goal-create-modal">
+    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" padding="none" className="goal-create-modal">
       <div data-testid="goal-create-dialog">
         <HitlForm
           payload={goalFormPayload(catalog)}

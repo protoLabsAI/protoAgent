@@ -77,7 +77,7 @@ export function SettingsOverlay({
     "Settings"
   );
   return (
-    <Dialog open onClose={onCloseGuarded} title={title} width="min(960px, 94vw)" className="settings-overlay">
+    <Dialog open onClose={onCloseGuarded} title={title} width="min(960px, 94vw)" padding="none" className="settings-overlay">
       <SettingsSurface initialSection={section} key={section || "_"} />
     </Dialog>
   );
