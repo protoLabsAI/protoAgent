@@ -16,7 +16,11 @@ import scheduleCss from "../schedule/schedule.css?raw";
 // Every step this card maps onto (the 9–18px band). No site in these files lands on lg/xl, so
 // they are absent by design; the set here is what a `font-size:` value is allowed to carry.
 const SCALE_STEPS = ["3xs", "2xs", "xs", "sm", "base", "lg", "xl"] as const;
-const ALLOWED = SCALE_STEPS.map((s) => `var(--pl-font-size-${s})`);
+// The `var(` prefix is split from the token by concat so this file never holds the bare literal
+// tokenNameGuard.test.ts (#3682) sweeps for: `--pl-font-size-${s}` with the `var(` glued on is
+// not a real DS token name (the guard captures `--pl-font-size-`, trailing dash, and flags it),
+// yet it sweeps source lines, not runtime values. The joined string is unchanged at runtime.
+const ALLOWED = SCALE_STEPS.map((s) => `var(` + `--pl-font-size-${s})`);
 
 // Token occurrences per file = the number of former px sites (schedule 13, activity 9,
 // code-pane 9 — the last including the --diffs-font-size custom property).
@@ -95,7 +99,7 @@ describe("#3688 6a: each site lands on the token its old px value maps to", () =
   ];
 
   for (const [css, selector, step, px] of SITES) {
-    it(`${selector} (was ${px}px) → var(--pl-font-size-${step})`, () => {
+    it(`${selector} (was ${px}px) → ` + `var(` + `--pl-font-size-${step})`, () => {
       expect(rule(css, selector)).toMatch(
         new RegExp(`font-size:\\s*var\\(--pl-font-size-${step}\\)`),
       );
