@@ -121,11 +121,20 @@ def _toolmap(cfg=None, **kw):
 # the timeout + reap paths.
 
 
+class _StdinSink(io.BytesIO):
+    """A writable stdin pipe stand-in whose bytes survive `close()` — _run's feeder thread
+    writes the script then closes the pipe, and the test still needs to read what arrived."""
+
+    def close(self):
+        pass  # keep the buffer readable via getvalue() after the run
+
+
 class _FakeProc:
     """Minimal Popen: BytesIO pipes + wait/kill, enough for _run's drain loop."""
 
     def __init__(self, argv, out=b"", err=b"", rc=0, timeout=False):
         self._argv = list(argv)
+        self.stdin = _StdinSink()
         self.stdout = io.BytesIO(out)
         self.stderr = io.BytesIO(err)
         self._rc = rc
@@ -918,8 +927,8 @@ async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(
     ("browser_fill", {"selector": "@e2", "text": "a -5% drop"}, ["fill", "@e2", "a -5% drop"]),
     ("browser_press", {"key": "-"}, ["press", "-"]),
     ("browser_press", {"key": "Control+a"}, ["press", "Control+a"]),
-    ("browser_eval", {"expression": "-1"}, ["eval", "-1"]),
-    ("browser_eval", {"expression": "(-1) + 2"}, ["eval", "(-1) + 2"]),
+    # browser_eval's dash-value pass-through is covered by the stdin tests below (the
+    # expression rides stdin now, not argv, so there is no argv tail to assert here).
 ])
 async def test_dash_values_the_cli_does_not_swallow_pass_through(monkeypatch, name, args, argv_tail):
     """Negative amounts (finance, merchantAgent), list bullets and the minus key — all of
@@ -943,6 +952,69 @@ async def test_a_refusal_says_how_to_do_it_anyway(monkeypatch, name, args, hint)
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))
     out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
     assert out.startswith("Error:") and hint in out
+
+
+# ── #3689: browser_eval sends the script over stdin, never as an argv item ─────────
+# A script as an argv item overruns Windows' 32,767-char command-line cap after quoting
+# (CreateProcess WinError 206) before the CLI runs — design-system-plugin's 32,439-char
+# SITE_PROBE_JS built a 33,429-char command line. The fix: `agent-browser eval --stdin`
+# with the script on stdin, always, no size threshold.
+
+
+async def test_eval_sends_the_script_over_stdin_not_argv(monkeypatch):
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="42", record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": "40 + 2"})
+    assert out == "42"
+    assert rec[-1] == ["ab", "eval", "--stdin"]           # the script is NOT an argv item…
+    assert procs[-1].stdin.getvalue() == b"40 + 2"        # …it arrives on stdin
+
+
+async def test_a_100k_eval_script_stays_under_the_windows_command_line_limit(monkeypatch):
+    """The bug shape, pinned: for a 100,000-char script the issued command line must stay
+    well under Windows' 32,767-char CreateProcess limit — which it can only do if the
+    script rides stdin, not argv."""
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok", record=rec, procs=procs))
+    script = "1;" + "a".ljust(100_000, "a")               # 100,002 non-flag-shaped chars
+    await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": script})
+    argv = rec[-1]
+    assert argv == ["ab", "eval", "--stdin"] and script not in argv    # never on the command line
+    assert len(subprocess.list2cmdline(argv)) < 32_767               # Windows CreateProcess cap
+    assert procs[-1].stdin.getvalue() == script.encode()             # delivered via stdin
+
+
+async def test_eval_dash_values_pass_the_guard_and_ride_stdin(monkeypatch):
+    """The dash-value pass-through for eval (`-1`, `(-1) + 2`) that used to be an argv-tail
+    assertion: still accepted by bad_operand, now delivered on stdin."""
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="-1", procs=procs))
+    t = _toolmap({"binary": "ab"})
+    for expr in ("-1", "(-1) + 2"):
+        out = await t["browser_eval"].ainvoke({"expression": expr})
+        assert not out.startswith("Error:"), out
+        assert procs[-1].stdin.getvalue() == expr.encode()
+
+
+async def test_the_capture_content_probe_uses_stdin(monkeypatch):
+    """The page-has-content probe capture runs on an about:blank page takes the same
+    Windows-safe path: `eval --stdin` with its JS on stdin, not in argv."""
+    seen = []
+
+    def _popen(argv, **kw):
+        if argv[1:3] == ["get", "url"]:
+            return _FakeProc(argv, out=b"about:blank")
+        p = _FakeProc(argv, out=b"0")            # eval → page empty → capture refused up front
+        if argv[1] == "eval":
+            seen.append((list(argv), p))
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "blank.pdf"})
+    assert out.startswith("Error:") and "blank" in out
+    [(argv, proc)] = seen
+    assert argv == ["ab", "eval", "--stdin"]
+    assert proc.stdin.getvalue() == tools._PAGE_HAS_CONTENT_JS.encode()
 
 
 def test_every_pdf_surface_says_the_output_is_us_letter():
