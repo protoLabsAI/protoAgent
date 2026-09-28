@@ -278,15 +278,18 @@ async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_su
         assert not modal.query(".hitl-field#field-notes")  # hidden until mode == safe
         modal.query_one("#in-mode", Select).value = "safe"
         assert await _until(pilot, lambda: bool(modal.query("#in-notes")))
-        modal.query_one("#in-notes", TextArea).focus()
-        # the field was JUST mounted by the showWhen re-render; keys pressed before focus
-        # actually lands go to the previously focused widget and are lost (the Windows
-        # flake: 'go slow' arrived as 'g')
-        assert await _until(pilot, lambda: modal.query_one("#in-notes", TextArea).has_focus)
-        await pilot.press(*"go slow")
-        # every keystroke must land before Back re-renders the step (the Windows flake
-        # was 'go slow' arriving as 'g' after a fixed 0.1 s pause)
-        assert await _until(pilot, lambda: modal.query_one("#in-notes", TextArea).text == "go slow")
+        # Fill the just-revealed conditional field by setting its value directly — the same
+        # way #in-mode is set above — instead of focusing it and typing. The showWhen
+        # re-render remounts #in-notes, and focus/keystrokes racing that remount is the
+        # Windows flake: focus never lands (assert on has_focus times out), or 'go slow'
+        # arrives as 'g' because the keys hit the previously focused widget. TextArea.text
+        # posts TextArea.Changed, so the modal records the answer exactly as a keypress
+        # would — the submitted JSON below proves the value flows through.
+        modal.query_one("#in-notes", TextArea).text = "go slow"
+        # Wait until the modal has RECORDED the answer, not just until the widget shows the
+        # text: setting .text posts a TextArea.Changed, and this pump drains it before we
+        # navigate Back, so the deferred re-render can't collide with step 1's fields.
+        assert await _until(pilot, lambda: modal.values.get("notes") == "go slow")
         await pilot.press("ctrl+left")
         assert await _until(pilot, lambda: modal.current == 0)
         assert modal.current == 0 and modal.query_one("#in-name", Input).value == "bob"  # answers survive Back
