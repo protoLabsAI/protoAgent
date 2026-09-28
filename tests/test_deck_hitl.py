@@ -280,12 +280,8 @@ async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_su
         modal.query_one("#in-mode", Select).value = "safe"
         await pilot.pause(0.3)
         assert modal.query("#field-notes")
-        # #in-notes is a conditional field just remounted by the mode=safe reveal; set its text
-        # directly (as the mode Select above is) so the change flows through TextArea.Changed →
-        # _set without racing keystrokes against the re-render that eats all but the first char.
-        notes = modal.query_one("#in-notes", TextArea)
-        notes.focus()
-        notes.text = "go slow"
+        modal.query_one("#in-notes", TextArea).focus()
+        await pilot.press(*"go slow")
         await pilot.pause(0.1)
         await pilot.press("ctrl+left")
         await pilot.pause(0.2)
