@@ -60,7 +60,7 @@
   padding: 0 10px 8px;
   border-top: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
 }
 
 /* Panel toggles are DS icon buttons carrying aria-pressed (true = panel shown).
@@ -121,7 +121,7 @@
 }
 .bg-jobs-empty {
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .bg-jobs-list {
   list-style: none;
@@ -150,11 +150,11 @@
   min-width: 0;
 }
 .bg-jobs-title {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.35;
 }
 .bg-jobs-sub {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
   text-transform: capitalize;
 }
@@ -163,7 +163,7 @@
   flex-wrap: wrap;
   gap: 4px 8px;
   margin-top: 3px;
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   font-family: var(--pl-font-mono);
 }
 .bg-jobs-tool.is-run {
@@ -191,7 +191,7 @@
 }
 .bg-jobs-result {
   padding: 4px 12px 12px 33px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   border-top: 1px solid var(--pl-color-border);
   /* A long report (research agents emit thousands of words) scrolls within the row
      so the whole thing is readable without the dialog growing unbounded. */
@@ -270,7 +270,7 @@
 .issue-row span {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .topbar-status {
@@ -326,7 +326,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--pl-font-mono);
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
 }
 
 .rail button:hover,
@@ -529,7 +529,7 @@ select:disabled {
   margin: 0 0 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
 }
@@ -564,7 +564,7 @@ select:disabled {
   width: 100%;
   resize: vertical;
   font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.5;
 }
 
@@ -656,10 +656,10 @@ select:disabled {
   gap: 8px;
 }
 .mcp-catalog-card-head strong {
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
 }
 .mcp-catalog-chip {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 1px 7px;
@@ -669,7 +669,7 @@ select:disabled {
   white-space: nowrap;
 }
 .mcp-catalog-tagline {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   margin: 0;
   flex: 1;
@@ -685,7 +685,7 @@ select:disabled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   text-decoration: none;
 }
@@ -700,7 +700,7 @@ select:disabled {
   border: 0;
   color: var(--pl-color-fg-muted);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   padding: 0;
   margin-bottom: 8px;
 }
@@ -717,7 +717,7 @@ select:disabled {
   flex-direction: column;
   gap: 4px;
   margin: 10px 0 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 
@@ -834,7 +834,7 @@ textarea {
   gap: 6px;
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .field.grow {
@@ -859,7 +859,7 @@ textarea {
 
 .field-hint {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   opacity: 0.75;
 }
 
@@ -903,7 +903,7 @@ textarea {
   gap: 10px;
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .batch-task-fields {
@@ -919,7 +919,7 @@ textarea {
   align-items: center;
   gap: 8px;
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .checkbox-field input {
@@ -944,7 +944,7 @@ textarea {
   padding: 10px;
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   white-space: pre-wrap;
 }
 
@@ -984,7 +984,7 @@ textarea {
    except .inbox-pri* below, which stay here since the completed-entry provenance badge
    renders them too (the unified feed's pending items reuse the same classes). */
 .inbox-pri {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-weight: 600;
@@ -1012,7 +1012,7 @@ textarea {
 .workflow-failed {
   margin: 0 12px;
   color: var(--pl-color-status-error);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .metric-grid {
@@ -1072,7 +1072,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 /* What the subagent DOES (#1660) — plain prose (not the mono tools line), clamped:
@@ -1080,7 +1080,7 @@ textarea {
 .subagent-row span.subagent-desc {
   color: var(--pl-color-fg);
   font-family: var(--pl-font-sans);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1167,7 +1167,7 @@ textarea {
   gap: 8px;
   padding: 28px 16px;
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .panel-error {
@@ -1193,12 +1193,12 @@ textarea {
 }
 
 .panel-error strong {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .panel-error span {
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   word-break: break-word;
 }
 
@@ -1234,7 +1234,7 @@ textarea {
   padding: 6px 10px;
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .issue-group-toggle {
@@ -1320,7 +1320,7 @@ textarea {
   min-width: 0;
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .issue-description-block summary {
@@ -1338,7 +1338,7 @@ textarea {
   margin-top: 6px;
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-sans);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -1414,7 +1414,7 @@ textarea {
 .setup-heading p {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .setup-icon {
@@ -1468,12 +1468,12 @@ textarea {
 .setup-intro {
   margin: 0;
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.55;
 }
 .setup-intro-foot {
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .toggle-row input {
@@ -1527,7 +1527,7 @@ textarea {
 .setup-hint {
   margin: 8px 0 0;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
 }
 
@@ -1538,7 +1538,7 @@ textarea {
   border: none;
   background: none;
   color: var(--pl-color-fg-muted);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   cursor: pointer;
   text-align: left;
 }
@@ -1551,7 +1551,7 @@ textarea {
    managed Python runtime and this host hasn't provisioned it. */
 .archetype-runtime-notice {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-warning);
 }
 .archetype-preview {
@@ -1579,13 +1579,13 @@ textarea {
 .archetype-preview-desc {
   margin: 4px 0 0;
   color: var(--pl-color-fg-muted);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
 }
 .archetype-preview-muted {
   margin: 4px 0 0;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .archetype-preview-skills {
   display: flex;
@@ -1598,7 +1598,7 @@ textarea {
   border-radius: 999px;
   padding: 1px 8px;
   font-family: var(--pl-font-mono);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
 }
 .archetype-preview-soul {
@@ -1607,7 +1607,7 @@ textarea {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
-  font-size: 11.5px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.5;
   white-space: pre-wrap;
   max-height: 260px;
@@ -1746,7 +1746,7 @@ textarea {
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   color: var(--pl-color-fg);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .playbook-search:focus { outline: none; border-color: var(--pl-color-border-strong); }
 .playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -1762,15 +1762,15 @@ textarea {
 .playbook-card:hover { border-color: var(--pl-color-border-strong); }
 .playbook-main { min-width: 0; }
 .playbook-title { display: flex; align-items: center; gap: 8px; }
-.playbook-title strong { font-size: 13.5px; }
+.playbook-title strong { font-size: var(--pl-font-size-base); }
 /* .playbook-badge / .pinned / .learned retired (#832) — pinned/learned/domain/
    finding-type tags are now DS <Badge> (info / success / neutral). */
-.playbook-desc { margin: 6px 0 0; font-size: 12.5px; color: var(--pl-color-fg-muted); }
+.playbook-desc { margin: 6px 0 0; font-size: var(--pl-font-size-sm); color: var(--pl-color-fg-muted); }
 .playbook-tools { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
-.playbook-tools code { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); }
+.playbook-tools code { font-size: var(--pl-font-size-2xs); padding: 1px 6px; border-radius: 4px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); }
 .playbook-meta {
   display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-  font-size: 11.5px; color: var(--pl-color-fg-subtle); white-space: nowrap;
+  font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1798,7 +1798,7 @@ textarea {
 .kb-group-delete { flex: none; }
 .kb-group-caret { flex: none; color: var(--pl-color-fg-subtle); transition: transform 0.12s ease; }
 .kb-group-title {
-  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  flex: 1; min-width: 0; font-size: var(--pl-font-size-sm); font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .kb-group-body { margin-left: 14px; }
@@ -1818,7 +1818,7 @@ textarea {
   border-radius: 8px;
   background: var(--pl-color-bg-inset);
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .knowledge-ingest-drop.is-drag {
@@ -1833,14 +1833,14 @@ textarea {
   text-decoration: underline;
   font-weight: 500;
 }
-.knowledge-ingest-note { color: var(--pl-color-fg-subtle); font-size: 12px; align-self: center; }
+.knowledge-ingest-note { color: var(--pl-color-fg-subtle); font-size: var(--pl-font-size-xs); align-self: center; }
 
 /* Ingest preview (dry-run gate, #1801) — shown in place of the drop-zone once a
    source is picked; Confirm ingests, Cancel returns to selection. */
 .knowledge-ingest-preview { display: flex; flex-direction: column; gap: 10px; }
 .knowledge-ingest-preview-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .knowledge-ingest-preview-source {
-  font-size: 12px; color: var(--pl-color-fg-subtle);
+  font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-subtle);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
 .knowledge-ingest-preview-snippet {
@@ -1848,7 +1848,7 @@ textarea {
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   background: var(--pl-color-bg-inset);
-  font-size: 12px; line-height: 1.5;
+  font-size: var(--pl-font-size-xs); line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;
   max-height: 220px; overflow-y: auto;
 }
@@ -1859,7 +1859,7 @@ textarea {
 .plugin-view { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .plugin-view-body { position: relative; flex: 1; min-height: 0; }
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--pl-color-bg); display: block; }
-.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--pl-color-fg-subtle); font-size: 13px; }
+.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--pl-color-fg-subtle); font-size: var(--pl-font-size-sm); }
 /* A plugin view hosted in a utility-widget DIALOG (vs the stage): give it a fixed height
    so the iframe has room to fill (the stage normally supplies that via its flex column). */
 .plugin-widget-dialog { display: flex; flex-direction: column; height: 70vh; height: 70dvh; min-height: 0; }
@@ -1911,7 +1911,7 @@ textarea {
   border: none;
   background: none;
   color: var(--pl-color-fg);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 600;
   cursor: pointer;
   text-align: left;
@@ -1962,7 +1962,7 @@ textarea {
 }
 .archetype-setup-help {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
   color: var(--pl-color-fg-muted);
 }
@@ -1980,7 +1980,7 @@ textarea {
   min-height: 160px;
   resize: vertical;
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .archetype-setup-advanced .pl-accordion__panel {
   padding-top: 4px;
@@ -2001,7 +2001,7 @@ textarea {
   margin-top: 4px;
 }
 .field-hint {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
 }
 
@@ -2122,7 +2122,7 @@ textarea {
   border: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-raised);
   color: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   cursor: pointer;
   box-shadow: var(--pl-shadow-popover);
 }
@@ -2154,7 +2154,7 @@ textarea {
 }
 .update-notice-empty {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   opacity: 0.7;
 }
 .update-notice-progress {
@@ -2178,13 +2178,13 @@ textarea {
 }
 .update-notice-pct {
   text-align: center;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   opacity: 0.7;
   font-variant-numeric: tabular-nums;
 }
 .update-notice-err {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
 }
 
@@ -2210,12 +2210,12 @@ textarea {
 }
 .setup-postinstall-info > span {
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-family: var(--pl-font-mono);
 }
 .setup-postinstall-error {
   color: var(--pl-color-status-error);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 /* Category filter overflow (#2319) — same DS segmented-Tabs gap as the plugin Discover
