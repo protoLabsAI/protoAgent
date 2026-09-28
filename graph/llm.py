@@ -5,6 +5,7 @@ so we use ChatOpenAI for everything.
 """
 
 import asyncio
+import contextlib
 import contextvars
 import hashlib
 import json
@@ -21,6 +22,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import Field
 
+from graph import llm_limiter
 from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider, resolve_model_route
 from graph.providers.identity import tag_model_provider
 
@@ -152,6 +154,11 @@ async def _stream_with_reconnect(
 
     A provider closing the stream at the top (the rate-limit case in #1728) emits nothing,
     so it still reconnects cleanly.
+
+    When ``make_stream`` holds a per-attempt resource — the ADR 0115 in-flight slot, which
+    :func:`_guarded_reconnecting_stream` acquires inside its factory's ``async with`` — that
+    resource is released as the failing attempt's generator unwinds, i.e. BEFORE the backoff
+    sleep below, and re-acquired when the next ``make_stream()`` opens the next attempt.
     """
     attempts = max(max_retries, 0) + 1
     delay = backoff
@@ -241,6 +248,24 @@ async def _guard_stream_timeout(
                 log.debug("[llm] stream close after timeout guard failed", exc_info=True)
 
 
+def _lane_slot(lane: str | None, *, arrival: float | None = None):
+    """The in-flight slot context for one model call/attempt (ADR 0115 C4, #3760).
+
+    ``lane is None`` — an un-laned caller (embeddings, a raw gateway httpx call, an ``acp:``
+    aux model, or a test driving the stream helpers directly) — is a bare pass-through.
+    Otherwise this defers to the process-wide limiter, which is ITSELF a pass-through while
+    ``model.max_inflight`` is 0 (the default), so the disabled limiter costs one branch.
+
+    The limit / queue-timeout / reserve are the limiter's current config, pushed from the
+    ``model.*`` keys on each :func:`create_llm` and read by the limiter at THIS acquisition —
+    so a hot reload only affects acquisitions made after it, and slots already held are never
+    revoked (ADR 0115 D2/D4). ``arrival`` lets a reconnect re-acquire while keeping aging
+    anchored to the start of the logical call (D5)."""
+    if lane is None:
+        return contextlib.nullcontext()
+    return llm_limiter.acquire(lane, arrival=arrival)
+
+
 def _guarded_reconnecting_stream(
     make_stream: Callable[[], AsyncIterator],
     *,
@@ -248,6 +273,7 @@ def _guarded_reconnecting_stream(
     max_retries: int,
     label: str,
     sleep: Callable = asyncio.sleep,
+    lane: str | None = None,
 ) -> AsyncIterator:
     """:func:`_stream_with_reconnect` wrapping each attempt in the per-chunk timeout guard (#3699).
 
@@ -255,11 +281,27 @@ def _guarded_reconnecting_stream(
     ``request_timeout`` on the stream itself the same way. A guard timeout before any
     content has streamed is retryable, so the reconnect loop restarts the call within
     ``max_retries`` and then re-raises the clear :class:`StreamStallTimeout`. ``timeout=None``
-    skips the guard entirely — exactly the prior reconnect-only behavior."""
+    skips the guard entirely — exactly the prior reconnect-only behavior.
 
-    def guarded() -> AsyncIterator:
-        stream = make_stream()
-        return _guard_stream_timeout(stream, timeout=timeout, label=label) if timeout else stream
+    ``lane`` (ADR 0115 C4) is the ``(base_url, model)`` in-flight lane. When set (and the
+    limiter is enabled), each attempt acquires one slot as the OUTERMOST wrapper — outside
+    ``_guard_stream_timeout`` and outside httpx's ``request_timeout`` — so neither the
+    per-chunk stall guard nor the request timeout starts until the slot is held (D4). The
+    slot is held until the stream is exhausted, raises, or the consumer closes/cancels it,
+    and released in the ``async with``'s exit; a :func:`_stream_with_reconnect` reconnect
+    therefore releases before its backoff sleep and re-acquires for the next attempt, with
+    the ORIGINAL arrival time so aging counts from the start of the logical call (D5)."""
+    # Captured once so every re-acquire across reconnects keeps the logical call's arrival.
+    arrival = time.monotonic()
+
+    async def guarded() -> AsyncIterator:
+        async with _lane_slot(lane, arrival=arrival):
+            stream = make_stream()
+            guarded_stream = (
+                _guard_stream_timeout(stream, timeout=timeout, label=label) if timeout else stream
+            )
+            async for chunk in guarded_stream:
+                yield chunk
 
     return _stream_with_reconnect(guarded, max_retries=max_retries, sleep=sleep)
 
@@ -592,6 +634,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             timeout=_stream_timeout_s(self.request_timeout),
             max_retries=self.max_retries or 0,
             label=self._stream_label(),
+            lane=self._lane_key(),
         ):
             if not state.get("streamed"):
                 # Read on the FIRST chunk: this request's body is built by then, and a model
@@ -605,6 +648,22 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             _record_calibration(measure, input_tokens)
         except Exception:  # noqa: BLE001 — bookkeeping must never fail a finished call
             log.debug("[llm] output-budget calibration skipped", exc_info=True)
+
+    async def _agenerate(self, *args, **kwargs):
+        """Non-streaming generation, holding one in-flight slot around the call (ADR 0115 D3).
+
+        A single ``super()._agenerate`` is one unit of backend work; the SDK's own request
+        retries happen inside it and stay inside the slot (D5). ``max_inflight`` 0 (the
+        default) makes :func:`_lane_slot` a pass-through, so this is unchanged when the
+        limiter is off. Codex inherits this through :class:`CodexChatOpenAI`."""
+        async with _lane_slot(self._lane_key()):
+            return await super()._agenerate(*args, **kwargs)
+
+    def _lane_key(self) -> str:
+        """The ADR 0115 in-flight lane: this endpoint + model, the same ``(base_url, model)``
+        shape as :meth:`_window_key`. Codex inherits it unchanged, so its lane is the codex
+        endpoint and model (D1)."""
+        return self._window_key()
 
     def _window_key(self) -> str:
         """Where a learned window applies: this endpoint + model (#3502)."""
@@ -839,6 +898,18 @@ def create_llm(
     for compaction / fallback / subagent slots). Pass ``reasoning_effort`` to override
     the config's effort for THIS build (the per-turn /effort chat command).
     """
+    # Push the per-process in-flight limiter config from `model.*` (ADR 0115 C4, #3760).
+    # This is the one place every chat-model build passes through, so it's where the
+    # self-contained limiter (which imports no config, by design) learns its budget. It
+    # applies to acquisitions made after it and never revokes a held slot (D2), and
+    # `max_inflight` 0 leaves the limiter a pure pass-through (today's behaviour). Callers
+    # that don't go through a lane — embeddings, raw gateway httpx calls, `acp:` aux models
+    # (D1) — never acquire regardless.
+    llm_limiter.configure(
+        limit=config.llm_max_inflight,
+        queue_timeout=config.llm_inflight_queue_timeout,
+        interactive_reserve=config.llm_inflight_interactive_reserve,
+    )
     # Explicit per-slot ACP override: an `acp:<agent>` model name (e.g. `aux_model: acp:claude`,
     # `goal.eval_model: acp:claude`, `compaction.model: acp:claude`, or a subagent's model) routes
     # THIS call through that ACP agent — regardless of the main runtime or whether a gateway is

@@ -155,6 +155,12 @@ try:
                     client.auth_token = token
             log.info("[anthropic-oauth] the access token rotated — refreshed the live client")
 
+        def _lane_key(self) -> str:
+            """The ADR 0115 in-flight lane for this client: ``anthropic-oauth|<model>`` (D1,
+            #3760) — the anthropic-oauth path talks to Anthropic directly, not the gateway,
+            so its lane is keyed by the provider and model, not a base URL."""
+            return f"anthropic-oauth|{self.model}"
+
         # The four request entry points. Overridden explicitly rather than hooked deeper so
         # that a langchain-anthropic rename fails loudly in test_anthropic_oauth, the same
         # contract `_client_params` above relies on.
@@ -168,7 +174,12 @@ try:
 
         async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
             self._refresh_oauth_token()
-            return await super()._agenerate(*args, **kwargs)
+            # Non-streaming generation holds one in-flight slot around the call (ADR 0115
+            # D3/D6, #3760). `max_inflight` 0 (the default) makes `_lane_slot` a pass-through.
+            from graph.llm import _lane_slot
+
+            async with _lane_slot(self._lane_key()):
+                return await super()._agenerate(*args, **kwargs)
 
         async def _astream(self, *args: Any, **kwargs: Any) -> Any:
             self._refresh_oauth_token()
@@ -179,8 +190,10 @@ try:
             # `request_timeout: 120`. The shared guard raises a retryable StreamStallTimeout
             # on the time-to-first-token / inter-chunk idle deadline; a stall before any
             # content reconnects within `max_retries`, then the turn fails with a clear
-            # error naming this provider/model. Imported lazily to keep this module's import
-            # off the default gateway path (and clear of any import cycle with graph.llm).
+            # error naming this provider/model. `lane` acquires one ADR 0115 in-flight slot
+            # per attempt, outside the guard so wait time never counts toward request_timeout
+            # (D4). Imported lazily to keep this module's import off the default gateway path
+            # (and clear of any import cycle with graph.llm).
             from graph.llm import _guarded_reconnecting_stream, _stream_timeout_s
 
             async for chunk in _guarded_reconnecting_stream(
@@ -188,6 +201,7 @@ try:
                 timeout=_stream_timeout_s(self.default_request_timeout),
                 max_retries=self.max_retries or 0,
                 label=f"anthropic-oauth model {self.model!r}",
+                lane=self._lane_key(),
             ):
                 yield chunk
 
