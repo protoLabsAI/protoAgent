@@ -255,6 +255,37 @@ async def _drain(stream):
         pass
 
 
+# ── the pass-through of _lane_slot must be an ASYNC context (its result is always consumed
+#    with `async with`): the un-laned caller AND a lane the call already holds. The sync
+#    contextlib.nullcontext only grew async support in 3.10, so it would TypeError under
+#    `async with` on older runtimes — this guards against reverting to it. ────────────────
+async def test_lane_slot_pass_through_is_async_usable():
+    llm_limiter.configure(limit=1, queue_timeout=30.0, interactive_reserve=0)
+    events: list = []
+    llm_limiter.add_listener(events.append)
+
+    # lane is None → un-laned caller (embeddings / raw httpx / acp:) → yields, no acquire.
+    none_cm = llm._lane_slot(None)
+    assert not isinstance(none_cm, contextlib.nullcontext)  # NOT the sync-only pass-through
+    assert hasattr(none_cm, "__aenter__") and hasattr(none_cm, "__aexit__")
+    async with none_cm:
+        pass
+
+    # a lane the logical call already holds (_HELD_LANES) → pass-through, reuse the outer slot.
+    token = llm._HELD_LANES.set(frozenset({"L"}))
+    try:
+        held_cm = llm._lane_slot("L", arrival=123.0)
+        assert not isinstance(held_cm, contextlib.nullcontext)
+        assert hasattr(held_cm, "__aenter__") and hasattr(held_cm, "__aexit__")
+        async with held_cm:
+            pass
+    finally:
+        llm._HELD_LANES.reset(token)
+
+    assert events == []  # neither pass-through touched the limiter
+    assert llm_limiter._LANES == {}  # and no lane was ever created
+
+
 # ── D3: the gateway client acquires on its (base_url, model) lane ─────────────────────
 async def test_gateway_astream_acquires_on_its_lane(monkeypatch):
     from langchain_openai import ChatOpenAI

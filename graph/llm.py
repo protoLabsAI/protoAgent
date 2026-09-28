@@ -264,13 +264,29 @@ _HELD_LANES: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
 )
 
 
+@contextlib.asynccontextmanager
+async def _null_async_slot() -> AsyncIterator[None]:
+    """An async no-op slot context — the pass-through :func:`_lane_slot` returns when there is
+    no lane to acquire.
+
+    It must be an ``async with``-able context: :func:`_lane_slot`'s result is always consumed
+    with ``async with`` (in :func:`_guarded_reconnecting_stream`'s per-attempt factory), and
+    :func:`llm_limiter.acquire` — the acquiring branch — is itself an ``@asynccontextmanager``.
+    The stdlib :func:`contextlib.nullcontext` is a SYNCHRONOUS context manager (its async
+    ``__aenter__``/``__aexit__`` only exist on Python 3.10+), so using it here would ``TypeError``
+    under ``async with`` on older runtimes; this genuine async no-op is unambiguous everywhere."""
+    yield
+
+
 def _lane_slot(lane: str | None, *, arrival: float | None = None):
     """The in-flight slot context for one streaming attempt (ADR 0115 C4, #3760).
 
     ``lane is None`` — an un-laned caller (embeddings, a raw gateway httpx call, an ``acp:``
     aux model, or a test driving the stream helpers directly) — is a bare pass-through, and
     so is a lane the current logical call ALREADY holds (:data:`_HELD_LANES`, set by
-    :func:`_held_lane_slot`): a single call never double-acquires one lane. Otherwise this
+    :func:`_held_lane_slot`): a single call never double-acquires one lane. Both cases return
+    :func:`_null_async_slot`, an ``async with``-able no-op — the caller always uses ``async
+    with`` (matching :func:`llm_limiter.acquire`, an ``@asynccontextmanager``). Otherwise this
     defers to the process-wide limiter, which is ITSELF a pass-through while
     ``model.max_inflight`` is 0 (the default), so the disabled limiter costs one branch.
 
@@ -285,7 +301,7 @@ def _lane_slot(lane: str | None, *, arrival: float | None = None):
     revoked (ADR 0115 D2/D4). ``arrival`` lets a reconnect re-acquire while keeping aging
     anchored to the start of the logical call (D5)."""
     if lane is None or lane in _HELD_LANES.get():
-        return contextlib.nullcontext()
+        return _null_async_slot()
     return llm_limiter.acquire(lane, arrival=arrival)
 
 
