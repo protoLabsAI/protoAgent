@@ -111,6 +111,31 @@ describe("UtilityWidget — the DS-Button pill (#3684)", () => {
     expect(document.querySelector('[data-testid="dialog-body"]')).not.toBeNull();
   });
 
+  // DS 0.63 card 3a (#3688): every content dialog opts into `padding="roomy"` so its body keeps
+  // its 24px padding once the app-wide `.pl-dialog__body` theme.css rule is deleted. The shared
+  // utility-pill dialog is the one every UtilityWidget consumer renders through.
+  it("gives the opened utility-pill dialog roomy body padding (#3688)", () => {
+    act(() =>
+      root.render(
+        h(UtilityWidget, {
+          testId: "util-widget-inbox",
+          label: "Inbox",
+          dialogTitle: "Inbox panel",
+          icon: h("span", null, "i"),
+          children: h("p", { "data-testid": "dialog-body" }, "panel contents"),
+        }),
+      ),
+    );
+    act(() => pill()!.click());
+    // The DS Dialog renders its body as `.pl-dialog__body`; `padding="roomy"` adds the `--roomy`
+    // modifier alongside it (`none` would add `--flush`, the default adds neither).
+    const body = document.querySelector(".pl-dialog__body");
+    expect(body).not.toBeNull();
+    expect(body!.classList.contains("pl-dialog__body--roomy")).toBe(true);
+    // The panel content still lives inside that roomy body.
+    expect(body!.querySelector('[data-testid="dialog-body"]')).not.toBeNull();
+  });
+
   it("forwards a right-click to onContextMenu (ADR 0036 context-menu wiring)", () => {
     let menus = 0;
     act(() =>

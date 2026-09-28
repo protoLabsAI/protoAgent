@@ -87,6 +87,7 @@ export function UtilityWidget({
       {open ? (
         <Dialog
           open
+          padding="roomy"
           onClose={() => {
             setOpen(false);
             setHeaderAction(null);

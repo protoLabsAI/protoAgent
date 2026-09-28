@@ -262,7 +262,7 @@ export function BackgroundJobs() {
         </Button>
       </Tooltip>
       {open ? (
-        <Dialog open onClose={() => setOpen(false)} title="Background agents" width="min(640px, 94vw)">
+        <Dialog open padding="roomy" onClose={() => setOpen(false)} title="Background agents" width="min(640px, 94vw)">
           {list.length === 0 ? (
             <p className="bg-jobs-empty">No background agents have run yet.</p>
           ) : (
