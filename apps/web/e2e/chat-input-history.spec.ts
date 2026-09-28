@@ -45,6 +45,14 @@ test("a recalled message is editable and resends the edited text", async ({ page
   // Recall, append, resend → the EDITED text is what's sent (and the newest history entry).
   await composer.press("ArrowUp");
   await expect(composer).toHaveValue("draft one");
+  // Recall parks the caret at end-of-text on the NEXT animation frame (readline behaviour;
+  // ChatSurface's recall() defers the selection move to rAF because the controlled value
+  // only lands after re-render). toHaveValue settles before that frame, so wait for the caret
+  // to reach the end before typing — otherwise the synthetic keystrokes race the rAF and land
+  // mid-string (" edited" inserted at caret 0 → "draft oneedited"), which no human hits.
+  await expect
+    .poll(() => composer.evaluate((el) => (el as HTMLTextAreaElement).selectionStart))
+    .toBe("draft one".length);
   await composer.type(" edited");
   await composer.press("Enter");
   await expect(page.locator(".pl-message--user").filter({ hasText: "draft one edited" })).toBeVisible();
