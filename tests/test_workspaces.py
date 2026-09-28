@@ -1703,8 +1703,12 @@ def _tracing_host(tmp_path, *, enabled: bool, inline_keys: bool = False):
     return host
 
 
-def test_a_new_agent_inherits_the_hosts_tracing(root, tmp_path):
+def test_a_new_agent_inherits_the_hosts_tracing(root, tmp_path, monkeypatch):
     """Before this, every new or rebuilt agent booted 'Langfuse not configured'."""
+    # resolve_credentials prefers LANGFUSE_* from the environment by design; a developer
+    # shell or CI runner exporting them would otherwise decide this test's answer.
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_URL"):
+        monkeypatch.delenv(var, raising=False)
     from graph.config import LangGraphConfig
     from observability.tracing import resolve_credentials
 
