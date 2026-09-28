@@ -5,7 +5,7 @@
   width: min(560px, 100%);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 .schedule-card .confirm-head { position: relative; }
 .schedule-close {
@@ -13,7 +13,7 @@
 }
 .schedule-modes {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--pl-space-1);
   padding: 3px;
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
@@ -35,7 +35,7 @@
 .schedule-repeat {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 .schedule-preview {
   margin: 0;
@@ -43,7 +43,7 @@
   color: var(--pl-color-fg-muted);
 }
 .schedule-preview code {
-  margin-left: 8px;
+  margin-left: var(--pl-space-2);
   padding: 1px 6px;
   border-radius: 4px;
   background: var(--pl-color-bg-raised);
@@ -87,7 +87,7 @@
 .schedule-detail-grid {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 8px 16px;
+  gap: var(--pl-space-2) var(--pl-space-4);
   margin: 0;
   font-size: var(--pl-font-size-sm);
 }
@@ -116,7 +116,7 @@
 .cal {
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
-  padding: 8px;
+  padding: var(--pl-space-2);
   background: var(--pl-color-bg-raised);
   user-select: none;
 }
@@ -145,13 +145,13 @@
 
 /* #2159 — the extracted when-to-run builder (shared by New + Edit) and its sticky,
    highlighted live-preview banner with an inline error line. */
-.schedule-builder { display: flex; flex-direction: column; gap: 12px; }
+.schedule-builder { display: flex; flex-direction: column; gap: var(--pl-space-3); }
 
 .schedule-preview-banner {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: 8px;
   background: var(--pl-color-bg-raised);
@@ -165,7 +165,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 6px;
+  gap: var(--pl-space-1) 6px;
 }
 .schedule-preview-banner .preview-cron {
   padding: 1px 6px;
@@ -184,7 +184,7 @@
   color: var(--pl-color-status-error);
 }
 
-.field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.field-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-2); }
 .hour-toggle {
   font-size: var(--pl-font-size-2xs); padding: 1px 7px; border-radius: 999px;
   border: 1px solid var(--pl-color-border); background: transparent; color: var(--pl-color-fg-subtle); cursor: pointer;
