@@ -148,7 +148,7 @@ function BrowseDialog({
   const chosen = kind === "dir" ? data?.path ?? null : selected;
 
   return (
-    <Dialog open onClose={onClose} title={kind === "file" ? "Choose a file" : "Choose a folder"} width={560}>
+    <Dialog open onClose={onClose} title={kind === "file" ? "Choose a file" : "Choose a folder"} width={560} padding="roomy">
       <div className="path-browser">
         {data?.roots?.length ? (
           <div className="path-browser-roots">
