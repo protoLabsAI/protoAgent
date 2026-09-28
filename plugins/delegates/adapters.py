@@ -488,6 +488,84 @@ def _a2a_progress_fingerprint(result: object) -> str:
     return json.dumps(_compact(observation), sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _status_message_text(result: object) -> str:
+    """The peer task's STATUS-message text (its progress narration), or ``""``.
+
+    Deliberately the status message ONLY — not ``_extract_text``, which also reads
+    artifacts: a still-working task's artifacts are partial output, and a stateless task
+    envelope carries text that is not an answer at all. When a poll deadline expires this is
+    the "last status message" the result carries back to the caller (#3700), so it must be
+    the peer's own account of where it is, nothing more.
+    """
+    if not isinstance(result, dict):
+        return ""
+    task = result.get("task", result)
+    status = task.get("status") if isinstance(task, dict) else None
+    message = status.get("message") if isinstance(status, dict) else None
+    parts = message.get("parts") if isinstance(message, dict) else None
+    if not isinstance(parts, list):
+        return ""
+    return " ".join(str(p.get("text") or "") for p in parts if isinstance(p, dict)).strip()
+
+
+def _still_running_message(
+    d: Delegate,
+    task_id: str,
+    state: object,
+    status_text: str,
+    *,
+    poll_timeout: float,
+    send_timeout: float | None = None,
+    auto_delivered: bool = False,
+) -> str:
+    """The message a delegation returns when its poll deadline expires with the peer STILL
+    working (#3700).
+
+    Never a bare failure, and never "retry": it names the peer task id, the last observed
+    state and status message, and says the work may still finish and can be resumed or
+    collected with that id. ``poll_timeout_s`` is per-delegate configurable — raising it is
+    the fix for a peer that legitimately runs longer than the no-progress bound, not
+    re-sending the work (which double-boards it on a peer still busy with the first task).
+
+    ``auto_delivered`` decides the ONE promise this message must not get wrong: whether
+    something is still polling the task behind it. It is ``True`` only when a collection is
+    left running after this message — a room address that stashed a pending handle for
+    ``late.collect`` to bring the answer back on its own. A detached background delegation
+    that has ALREADY exhausted its own ``late.collect_task`` window (or any caller with no
+    conversation to collect into) leaves NOTHING polling, so the message must not promise
+    auto-delivery — it points at ``resume_task_id`` to pick the finished reply up instead.
+    Promising "delivered automatically" when nothing collects is the #3700 lost-reply failure
+    re-told as a false reassurance.
+    """
+    status = " ".join(str(status_text or "").split())[:_A2A_ERROR_DETAIL_LIMIT]
+    last_status = f'; last status "{status}"' if status else ""
+    if send_timeout is not None:
+        head = f"delegate {d.name!r} still running after {send_timeout:g}s (this call's timeout)"
+        raise_hint = "raise this call's timeout"
+    else:
+        head = (
+            f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable progress "
+            "(its configurable poll_timeout_s)"
+        )
+        raise_hint = "raise this delegate's poll_timeout_s"
+    if auto_delivered:
+        delivery = (
+            "Its answer will be delivered automatically if it finishes; do NOT re-send this work "
+            f"(that double-boards it). To pick it up sooner, resume with delegate_to(..., "
+            f"resume_task_id={task_id!r})"
+        )
+    else:
+        delivery = (
+            "Nothing is polling it now, so its answer will NOT arrive on its own — pick it up with "
+            f"delegate_to(..., resume_task_id={task_id!r}) once it finishes; do NOT re-send this work "
+            "(that double-boards it on a peer still busy with the first task)"
+        )
+    return (
+        f"{head} — the peer may still be working on task {task_id} (state={state}{last_status}). "
+        f"{delivery}, or {raise_hint} for a job that legitimately runs this long."
+    )
+
+
 # The A2A protocol version(s) our delegate client can speak (it sends the
 # ``A2A-Version: 1.0`` header + the 1.0 SendMessage/GetTask dialect). Used to
 # pre-check a peer's advertised version and fail fast on a clear mismatch.
@@ -1348,6 +1426,9 @@ class A2aAdapter(Adapter):
             # to the pre-#3360 wire: a fresh context next time.
             _drop()
             if task_id and not _is_terminal(state):
+                # The last thing the peer told us about where it is — carried back to the
+                # caller so a deadline is never a bare failure (#3700).
+                last_status_text = _status_message_text(result)
                 # Retain the TASK for collection while continuity stays dropped (#3360b).
                 # The peer took the work and is still doing it; the room will not address
                 # this member again (``room_rounds._dropped``), but ``late.collect`` can poll
@@ -1355,6 +1436,11 @@ class A2aAdapter(Adapter):
                 # separate slot from the context, deliberately: restoring the contextId would
                 # queue the next address behind the very turn we just gave up on. No-op
                 # without a conversation key; never for a resume, which is the lead's.
+                #
+                # Whether it actually registered (a real conversation key, not a resume) is
+                # also the one thing the deadline message must not get wrong: only then is a
+                # collection left running for ``late.collect`` to deliver on its own (#3700).
+                left_pending_for_room = bool(d.conversation_key) and not resume_task_id
                 if not resume_task_id:
                     conversations.remember_pending(
                         d.conversation_key,
@@ -1365,17 +1451,58 @@ class A2aAdapter(Adapter):
                         credential=credential,
                         session_id=d.origin_session_id,
                     )
+                # A background (detached) delegation carries no conversation key, so the room's
+                # ``late.collect`` never runs for it — yet its caller isn't holding a turn open
+                # either, so it can afford to keep waiting. Reuse the same read-only GetTask poll
+                # (``late.collect_task``) here, up to the same bounded window, and deliver the
+                # peer's REAL reply as the job result if it finishes rather than losing it to a
+                # FAILED job with no task id to resume (#3700).
+                #
+                # ONLY when the no-progress ``poll_timeout`` tripped (``hard_deadline is None``):
+                # an explicit ``delegate_to(timeout=N)`` is the caller's HARD cap on how long to
+                # wait, and extending past it — by up to ``_COLLECT_MAX_S`` — would silently
+                # blow that cap. When the caller set N, the deadline stands at N.
+                if _DETACHED_DELEGATION.get() and hard_deadline is None:
+                    from . import late
+
+                    outcome, late_text, ext_state, ext_status = await late.collect_task(d, str(task_id))
+                    if outcome in (late.ANSWERED, late.PARKED) and late_text:
+                        return late_text
+                    if outcome == late.FAILED and _is_terminal(ext_state):
+                        # The task actually settled as a failure while we waited — surface the
+                        # peer's own diagnostic, not a "still running" note.
+                        raise DelegateError(f"delegate {d.name!r}: {late_text}")
+                    # Still unfinished after the extra window, which this path has now used up —
+                    # nothing polls the task after this, so the message must NOT promise
+                    # auto-delivery. Fall through carrying the freshest state/status observed.
+                    state = ext_state or state
+                    last_status_text = ext_status or last_status_text
+                # The deadline stands — but the result names the peer task id, the last state
+                # and status message, and how to resume/collect the work, and never says to
+                # retry (#3700). ``poll_timeout_s`` remains per-delegate configurable; the text
+                # says so. ``auto_delivered`` is the room case only: a detached delegation has
+                # exhausted its own poll above and left no conversation handle to collect into.
                 if hard_deadline is not None and time.monotonic() >= hard_deadline:
                     raise DelegateError(
-                        f"delegate {d.name!r} still running after {send_timeout:g}s (this call's "
-                        f"timeout) — the peer may still be working; raise the call's timeout for a "
-                        f"job this long (state={state})"
+                        _still_running_message(
+                            d,
+                            str(task_id),
+                            state,
+                            last_status_text,
+                            poll_timeout=poll_timeout,
+                            send_timeout=send_timeout,
+                            auto_delivered=left_pending_for_room,
+                        )
                     )
                 raise DelegateError(
-                    f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable "
-                    f"progress — the peer may still be working; raise its poll timeout if tasks go "
-                    f"that long without visible advancement "
-                    f"(state={state})"
+                    _still_running_message(
+                        d,
+                        str(task_id),
+                        state,
+                        last_status_text,
+                        poll_timeout=poll_timeout,
+                        auto_delivered=left_pending_for_room,
+                    )
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
 
