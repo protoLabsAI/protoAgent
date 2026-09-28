@@ -8,7 +8,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 4px;
+  padding: 10px var(--pl-space-1);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .fleet-row.active {
@@ -96,7 +96,7 @@
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 /* #2240 — the row name links to that agent's window. Styled as the row text rather than as
    a blue link: the list should still read as a list, so the affordance is the pointer + hover
@@ -128,7 +128,7 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .fleet-autostart-toggle {
   margin-right: 6px;
@@ -144,13 +144,13 @@
   font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin: 4px 0 8px;
+  margin: var(--pl-space-1) 0 var(--pl-space-2);
 }
 /* .fleet-error retired — the fleet manager + new-agent errors are DS <Alert status="error"> now. */
 .fleet-purge {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin-top: 10px;
   font-size: var(--pl-font-size-sm);
 }
@@ -164,22 +164,22 @@
 /* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
 .fleet-discover {
   margin-top: 14px;
-  padding-top: 12px;
+  padding-top: var(--pl-space-3);
   border-top: 1px solid var(--pl-color-border);
 }
 
 .fleet-discover-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .fleet-add-remote {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 10px 0 4px;
-  padding: 12px;
+  margin: 10px 0 var(--pl-space-1);
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -193,7 +193,7 @@
 .fleet-add-remote .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 
 .fleet-add-remote .field > span {
@@ -204,7 +204,7 @@
 .fleet-add-remote-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 /* Pair… / Re-pair dialog (ADR 0113). Same field rhythm as the add-by-URL form; the code
@@ -212,7 +212,7 @@
 .fleet-pair-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 .fleet-pair-form .setting-desc {
   margin: 0;
@@ -220,7 +220,7 @@
 .fleet-pair-form .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .fleet-pair-form .field > span {
   font-size: var(--pl-font-size-xs);
@@ -238,5 +238,5 @@
 
 /* D10 plaintext opt-in: the warning sentence, then its required checkbox. */
 .fleet-insecure p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--pl-space-2);
 }
