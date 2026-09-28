@@ -23,13 +23,13 @@
 @media (hover: none) {
   /* iOS Safari zooms the viewport on focus of any control under 16px. The DS covers
      its own `.pl-*` classes; these bare selectors catch everything else — theme-base.css
-     sets `body { font-size: 14px }` and the `button,input,textarea,select { font: inherit }`
-     reset propagates it into every native control the DS doesn't style. 16px is the
-     threshold, not a design choice. */
+     sets the body font-size to the base step, 14px, and the `button,input,textarea,select
+     { font: inherit }` reset propagates it into every native control the DS doesn't style.
+     The lg step resolves to exactly 16px, the zoom threshold — not a design choice. */
   input,
   textarea,
   select {
-    font-size: 16px;
+    font-size: var(--pl-font-size-lg);
   }
 
   /* Generic tap behaviour for console-owned controls and bare anchors/buttons (the DS

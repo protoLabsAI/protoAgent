@@ -57,7 +57,7 @@
   border: none;
   background: none;
   color: var(--pl-color-fg);
-  font-size: 15px;
+  font-size: var(--pl-font-size-lg);
   font-weight: 600;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
