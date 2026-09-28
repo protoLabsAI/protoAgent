@@ -361,7 +361,7 @@
   gap: 12px;
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   cursor: default;
@@ -413,12 +413,12 @@
 }
 .chat-usage-tip-label {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .chat-usage-tip-value {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-weight: 500;
   text-align: right;
 }
@@ -426,7 +426,7 @@
   display: block;
   color: var(--pl-color-fg-subtle);
   font-weight: 400;
-  font-size: 10.5px;
+  font-size: var(--pl-font-size-2xs);
 }
 .chat-usage-tip-note {
   margin: 3px 0 0;
@@ -434,7 +434,7 @@
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-sans, inherit);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.4;
   white-space: normal;
   max-width: 230px;
@@ -459,7 +459,7 @@
   gap: 4px;
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   border-radius: 4px;
@@ -682,7 +682,7 @@
   align-items: center;
   gap: 4px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   background: none;
   border: 1px solid transparent;
@@ -748,7 +748,7 @@
 }
 .slash-name {
   font-family: var(--pl-font-mono);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-accent-fg);
 }
 .slash-title {
@@ -759,7 +759,7 @@
 }
 .slash-kind {
   flex: 0 0 auto;
-  font-size: 9px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 1px 6px;
@@ -768,7 +768,7 @@
   color: var(--pl-color-fg-subtle);
 }
 .slash-desc {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -778,7 +778,7 @@
 /* Delete/clear dialog: the note that compaction may already have archived parts of the chat. */
 .chat-memory-note {
   margin: 12px 0 0;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
 /* The dialog's opt-in switches: harvest a summary first, or forget what the chat already
@@ -789,7 +789,7 @@
   align-items: center;
   gap: 8px;
   margin-top: 12px;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
@@ -816,7 +816,7 @@
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 /* Known-duplicate warning strip (#3413): a persistent inline notice above the composer when a
@@ -835,7 +835,7 @@
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-status-warning) 12%, var(--pl-color-bg-raised));
   color: var(--pl-color-fg-muted);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.4;
 }
 .composer-dup-risk-copy {
@@ -858,7 +858,7 @@
    Worth contributing back rather than each surface re-styling this (house rule). */
 .composer-model-lane {
   padding: 6px 10px 2px;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
