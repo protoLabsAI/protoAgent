@@ -8,7 +8,7 @@ import { resolveBinding } from "./resolve";
 // The focused scope chain: walk up from the event target collecting every `data-kb-scope`
 // (a panel/view marks its root, e.g. the chat stage = "chat"). A scoped binding fires only
 // when its scope is in this chain; a global binding (no scope) fires anywhere.
-function focusedScopes(target: EventTarget | null): Set<string> {
+export function focusedScopes(target: EventTarget | null): Set<string> {
   const scopes = new Set<string>();
   let el = target instanceof Element ? (target as HTMLElement) : null;
   while (el) {
@@ -19,18 +19,54 @@ function focusedScopes(target: EventTarget | null): Set<string> {
   return scopes;
 }
 
+// Which `data-kb-scope`s a keydown resolves against. A keydown's target is
+// `document.activeElement`, so when a real control holds focus we derive the chain straight
+// from `e.target` — the historical behavior, unchanged. But clicking the transcript, a
+// message, or whitespace leaves focus on `<body>` (and in WebKit even clicking a `<button>`
+// doesn't focus it), so the target is body/documentElement/window and `focusedScopes` sees
+// nothing — which used to drop every chat-scoped binding (#3677). In that case we fall back
+// to the last element the operator pointed at or focused, but only while it is still in the
+// document and not inside a region hidden with `hidden` / `aria-hidden="true"` (the chat
+// stage and `.chat-session-slot` both hide that way). We check those DOM markers, never
+// layout (`offsetParent`), so the result holds in jsdom.
+export function activeScopes(target: EventTarget | null, lastInteracted: Element | null): Set<string> {
+  if (target instanceof Element && target !== document.body && target !== document.documentElement) {
+    return focusedScopes(target);
+  }
+  if (lastInteracted && lastInteracted.isConnected && !lastInteracted.closest('[hidden], [aria-hidden="true"]')) {
+    return focusedScopes(lastInteracted);
+  }
+  return new Set<string>();
+}
+
 // The single global keydown host (ADR 0063). Mounted once (App). Resolves the pressed combo
 // against the registry — honoring the focused scope + the typing gate + user overrides — and
 // runs the most-specific match (a panel-scoped binding beats a global one for the same combo).
 export function useGlobalKeybindings(): void {
   useEffect(() => {
+    // The last element the operator pointed at or focused. A keydown whose target has fallen
+    // back to `<body>` (a click on the transcript, or a WebKit `<button>` click that never
+    // focuses) resolves its scope against this instead, so a chat-scoped shortcut still fires
+    // whenever the chat panel is the active region — not only while the composer holds focus
+    // (#3677). Interacting with an element outside every scope REPLACES this record, so the
+    // chain then correctly resolves to no scope.
+    let lastInteracted: Element | null = null;
+    const rememberInteraction = (e: Event) => {
+      if (!(e.target instanceof Element)) return;
+      // Focus falling back to <body>/<html> (clicking a non-focusable element while a form
+      // control was focused) is not an interaction: recording it would overwrite the
+      // pointerdown that just landed inside a scope and defeat the fallback.
+      if (e.type === "focusin" && (e.target === document.body || e.target === document.documentElement)) return;
+      lastInteracted = e.target;
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
       if (useKbIntents.getState().capturing) return; // settings is recording a new shortcut
       const combo = eventToCombo(e);
       if (!combo) return;
       const hit = resolveBinding(registeredKeybindings(), combo, {
-        scopes: focusedScopes(e.target),
+        scopes: activeScopes(e.target, lastInteracted),
         editable: isEditableTarget(e.target),
       });
       if (!hit) return;
@@ -42,7 +78,14 @@ export function useGlobalKeybindings(): void {
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // Capture phase so we record the interaction even when a nested handler stops propagation.
+    window.addEventListener("pointerdown", rememberInteraction, { capture: true });
+    window.addEventListener("focusin", rememberInteraction, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", rememberInteraction, { capture: true });
+      window.removeEventListener("focusin", rememberInteraction, { capture: true });
+    };
   }, []);
 }
 
