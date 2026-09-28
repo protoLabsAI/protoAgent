@@ -175,10 +175,13 @@ try:
         async def _agenerate(self, *args: Any, **kwargs: Any) -> Any:
             self._refresh_oauth_token()
             # Non-streaming generation holds one in-flight slot around the call (ADR 0115
-            # D3/D6, #3760). `max_inflight` 0 (the default) makes `_lane_slot` a pass-through.
-            from graph.llm import _lane_slot
+            # D3/D6, #3760). `_held_lane_slot` marks the lane held for the duration, so if
+            # `super()._agenerate` hands off to `self._astream` (which also wraps this lane)
+            # it reuses THIS slot instead of asking for a second one and deadlocking a
+            # `max_inflight: 1` lane. `max_inflight` 0 (the default) keeps it a pass-through.
+            from graph.llm import _held_lane_slot
 
-            async with _lane_slot(self._lane_key()):
+            async with _held_lane_slot(self._lane_key()):
                 return await super()._agenerate(*args, **kwargs)
 
         async def _astream(self, *args: Any, **kwargs: Any) -> Any:

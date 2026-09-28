@@ -303,6 +303,40 @@ async def test_agenerate_holds_a_slot(monkeypatch):
     assert events[0].lane == client._lane_key()
 
 
+# ── no double-acquire: a provider `_agenerate` that streams under the hood must reuse the
+#    ONE slot, never take a second on the same lane (that would deadlock max_inflight: 1) ──
+async def test_agenerate_delegating_to_astream_takes_one_slot(monkeypatch):
+    from langchain_openai import ChatOpenAI
+
+    # limit=1 so a genuine second acquire on the lane would BLOCK; a short queue timeout so a
+    # regression fails fast as GatewayQueueTimeout instead of hanging the suite.
+    llm_limiter.configure(limit=1, queue_timeout=0.5, interactive_reserve=0)
+    events: list = []
+    llm_limiter.add_listener(events.append)
+
+    # The pre-1.6 langchain_openai shape: BaseChatOpenAI._agenerate hands off to self._astream
+    # when streaming=True. self._astream is our _ReasoningChatOpenAI._astream (wraps the lane);
+    # its own super()._astream is the monkeypatched ChatOpenAI._astream below.
+    async def fake_upstream_agenerate(self, *a, **k):
+        return [c async for c in self._astream(*a, **k)][-1].message.content
+
+    async def fake_astream(self, *a, **k):
+        yield _Gen("streamed")
+
+    monkeypatch.setattr(ChatOpenAI, "_agenerate", fake_upstream_agenerate, raising=True)
+    monkeypatch.setattr(ChatOpenAI, "_astream", fake_astream, raising=True)
+
+    client = llm._ReasoningChatOpenAI(model="m", api_key="k", base_url="http://gw/v1")
+    # No deadlock and no GatewayQueueTimeout: the nested _astream acquire sees the lane already
+    # held (_HELD_LANES) and passes through, reusing the outer _agenerate slot.
+    result = await asyncio.wait_for(client._agenerate([]), 2.0)
+
+    assert result == "streamed"
+    assert [e.kind for e in events].count("acquired") == 1  # ONE slot, not two
+    assert [e.kind for e in events].count("released") == 1
+    assert llm_limiter._LANES[client._lane_key()].snapshot()["inflight"] == 0  # fully released
+
+
 # ── D7: codex is covered through inheritance, with NO edit to the codex client ─────────
 async def test_codex_subclass_acquires_through_inheritance(monkeypatch):
     from langchain_openai import ChatOpenAI
@@ -388,6 +422,38 @@ async def test_anthropic_oauth_agenerate_holds_a_slot(monkeypatch):
     assert await client._agenerate([]) == "R"
     assert [e.kind for e in events] == ["acquired", "released"]
     assert events[0].lane == "anthropic-oauth|claude-opus-5-5"
+
+
+async def test_anthropic_oauth_agenerate_delegating_to_astream_takes_one_slot(monkeypatch):
+    ao = _skip_without_anthropic()
+    from langchain_anthropic import ChatAnthropic
+
+    llm_limiter.configure(limit=1, queue_timeout=0.5, interactive_reserve=0)
+    events: list = []
+    llm_limiter.add_listener(events.append)
+
+    async def fake_upstream_agenerate(self, *a, **k):
+        return [c async for c in self._astream(*a, **k)][-1].message.content
+
+    async def fake_astream(self, *a, **k):
+        yield _Gen("cl")
+
+    monkeypatch.setattr(ChatAnthropic, "_agenerate", fake_upstream_agenerate, raising=True)
+    monkeypatch.setattr(ChatAnthropic, "_astream", fake_astream, raising=True)
+    monkeypatch.setattr(ao, "current_oauth_token", lambda **_k: "tok-abc")
+
+    client = ao._OAuthChatAnthropic(
+        model="claude-opus-5-5",
+        api_key="oauth-via-auth-token",
+        oauth_token="tok-abc",
+        default_request_timeout=100,
+        max_retries=0,
+    )
+    result = await asyncio.wait_for(client._agenerate([]), 2.0)  # no deadlock / queue timeout
+
+    assert result == "cl"
+    assert [e.kind for e in events].count("acquired") == 1  # ONE slot on anthropic-oauth|…
+    assert llm_limiter._LANES["anthropic-oauth|claude-opus-5-5"].snapshot()["inflight"] == 0
 
 
 # ── max_inflight: 0 is a pure pass-through: no lane, no events, no bookkeeping ─────────
