@@ -63,6 +63,9 @@ log = logging.getLogger("protoagent.tracing")
 
 _langfuse = None
 _enabled = False
+# (host, public_key, secret_key) of the project tracing was initialized against — the
+# OTLP relay forwards coder spans there with these (observability/otlp_relay.py).
+_export_target: tuple[str, str, str] | None = None
 
 # Where Langfuse is assumed to live when neither the environment nor the config
 # names a host — the bundled compose service. Kept as the default so an env-only
@@ -405,7 +408,7 @@ def init(config: Any = None) -> None:
     sharing one Langfuse project can be told apart. ``OTEL_SERVICE_NAME`` /
     ``OTEL_RESOURCE_ATTRIBUTES`` in the environment still win.
     """
-    global _langfuse, _enabled
+    global _langfuse, _enabled, _export_target
 
     if _enabled:
         return
@@ -434,6 +437,7 @@ def init(config: Any = None) -> None:
             client_kwargs["tracer_provider"] = provider
         _langfuse = Langfuse(**client_kwargs)
         _enabled = True
+        _export_target = (host.rstrip("/"), public_key, secret_key)
         service = _provider_service_name(provider)
         print(
             f"[tracing] Langfuse initialized from {source} -> {host}"
@@ -443,6 +447,19 @@ def init(config: Any = None) -> None:
         print("[tracing] langfuse not installed. Tracing disabled.")
     except Exception as e:
         print(f"[tracing] Langfuse init failed: {e}. Tracing disabled.")
+
+
+def otlp_export_target() -> tuple[str, str] | None:
+    """``(OTLP traces URL, Authorization header value)`` for the Langfuse project this
+    process traces to, or None when tracing is off. For the relay that forwards a coding
+    agent's native OTel spans (the agent's process never sees these credentials)."""
+    if not _enabled or _export_target is None:
+        return None
+    import base64
+
+    host, public_key, secret_key = _export_target
+    token = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+    return f"{host}/api/public/otel/v1/traces", f"Basic {token}"
 
 
 def is_enabled() -> bool:

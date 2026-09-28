@@ -63,6 +63,19 @@ restart, not a reload.
 - Each LangGraph run → a child span with tool calls + LLM calls nested beneath
 - Each subagent delegation → a nested span under the parent's
 - Each tool call → a `tool:<name>` observation with args + result preview + duration
+- Each ACP coding-agent run → an `acp:<delegate>` agent span with its brief, reply (or `[failed] <reason>`), plan, and one `tool:` span per coder tool call
+
+### Coding-agent model calls (Claude Code)
+
+A Claude Code coder (`claude-agent-acp`) calls its model itself, so no gateway or middleware sees those calls. While tracing is on, protoAgent spawns it with Claude Code's native OpenTelemetry tracing (beta), pointed at a **local relay** (`observability/otlp_relay.py`, `127.0.0.1` only) that forwards to your Langfuse project. The coder's own spans then nest under the run's `acp:` span: `claude_code.interaction` per turn, a `claude_code.llm_request` **generation per model call** (model, tokens, cost, time to first token, stop reason), and `claude_code.tool` spans.
+
+The relay does three things before anything reaches Langfuse:
+
+- **Strips account identity.** Claude Code stamps `user.email`, `organization.id` and account ids on every span and offers no switch for the email or org. The relay drops them, and redacts the remaining string attributes.
+- **Maps usage.** Claude Code's token attributes become `gen_ai.usage.*`, so Langfuse shows per-call usage and computes per-call cost. The run's agent-reported turn totals go in the `acp:` span's metadata (`reported_usage`, `reported_cost_usd`), not a second generation, so spend isn't counted twice. If no model-call span arrives for a turn within 45 seconds (an older Claude Code, an export Langfuse rejected), the relay records those totals as one `acp:<delegate>-model` generation instead, so the cost is never silently lost.
+- **Keeps turns apart.** A pooled coder process serves many turns but gets its trace context once, at spawn; the relay moves each later turn's spans into that turn's trace.
+
+The coder process never sees your Langfuse keys, only a per-process relay URL. Prompt and tool content stay off (Claude Code's `OTEL_LOG_*` flags are not set). To turn this off, set `PROTOAGENT_ACP_NATIVE_TRACING=0` in the agent's environment.
 
 ### Cross-agent trace propagation
 
