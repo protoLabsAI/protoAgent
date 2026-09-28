@@ -12,7 +12,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px 8px;
+  padding: var(--pl-space-3) 14px var(--pl-space-2);
 }
 .flr-feed__head h2 {
   margin: 0;
@@ -50,7 +50,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 14px 12px;
+  padding: 0 14px var(--pl-space-3);
 }
 .flr-feed__empty {
   padding: 20px 2px;
@@ -63,7 +63,7 @@
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 10px;
-  padding: 8px 0;
+  padding: var(--pl-space-2) 0;
 }
 .flr-feed__event + .flr-feed__event {
   border-top: 1px solid var(--pl-color-border);
