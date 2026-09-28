@@ -181,8 +181,8 @@
   margin: 10px 0 4px;
   padding: 12px;
   border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius, 8px);
-  background: var(--pl-color-bg-raised, transparent);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
 }
 
 .fleet-add-remote-title {
@@ -198,7 +198,7 @@
 
 .fleet-add-remote .field > span {
   font-size: var(--pl-font-size-xs);
-  color: var(--pl-color-fg-muted, inherit);
+  color: var(--pl-color-fg-muted);
 }
 
 .fleet-add-remote-actions {
@@ -224,10 +224,10 @@
 }
 .fleet-pair-form .field > span {
   font-size: var(--pl-font-size-xs);
-  color: var(--pl-color-fg-muted, inherit);
+  color: var(--pl-color-fg-muted);
 }
 .fleet-pair-form .fleet-pair-code {
-  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xl);
   letter-spacing: 0.12em;
   text-transform: uppercase;

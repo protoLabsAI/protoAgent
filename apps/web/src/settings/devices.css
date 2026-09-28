@@ -141,7 +141,7 @@
   gap: 10px;
 }
 .devices-code code {
-  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: 28px;
   font-weight: 600;
   letter-spacing: 0.12em;

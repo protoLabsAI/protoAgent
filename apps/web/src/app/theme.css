@@ -535,7 +535,7 @@ select:disabled {
 .mcp-json {
   width: 100%;
   resize: vertical;
-  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   line-height: 1.5;
 }
@@ -562,8 +562,8 @@ select:disabled {
    grid fill the space below the search/filter controls instead of capping the grid
    short and leaving dead space under it. The configure step keeps its content height. */
 .mcp-catalog-dialog--browse .pl-dialog {
-  height: min(82vh, calc(100vh - 2 * var(--pl-space-4, 16px)));
-  height: min(82dvh, calc(100dvh - 2 * var(--pl-space-4, 16px)));
+  height: min(82vh, calc(100vh - 2 * var(--pl-space-4)));
+  height: min(82dvh, calc(100dvh - 2 * var(--pl-space-4)));
 }
 .mcp-catalog-dialog--browse .pl-dialog__body {
   display: flex;
