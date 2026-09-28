@@ -77,6 +77,80 @@ def _migrate_legacy_store(legacy: Path, new_dir: Path) -> None:
     log.info("[artifact] migrated store %s -> %s", legacy, new_dir)
 
 
+def _adopt_legacy_store(new_dir: Path) -> Path:
+    """First access with an empty ``new_dir``: adopt a pre-instance-scoping store into it,
+    returning the directory the store should use.
+
+    SERIALISED (``_migration_lock``) — the bug this closes: two callers that both found
+    ``new_dir`` empty both ran the move, and the loser's ``history.json`` ``replace`` raised
+    ``FileNotFoundError`` (the winner had already moved it). Read as a failed migration, that
+    sent the loser back to the now-EMPTIED legacy dir, where it took a DIFFERENT lock file
+    (``_lock_path`` derives from ``_store_path`` derives from here) and wrote a ``history.json``
+    silently orphaned the moment the winner's copy landed. It bit parallel tool calls and the
+    ACP operator-MCP vs. main-process split alike. Now one caller does the move under the lock;
+    every other re-checks under it and adopts ``new_dir``."""
+    legacy = _legacy_store_dir()
+    if legacy.resolve() == new_dir.resolve() or not (legacy / "history.json").is_file():
+        return new_dir
+    with _migration_lock(new_dir / "history.json.lock"):
+        # Double-checked under the lock: a racing caller may have finished the move while we
+        # waited — its history.json is the commit marker. Adopt it; never move an emptied dir.
+        if (new_dir / "history.json").exists():
+            return new_dir
+        try:
+            _migrate_legacy_store(legacy, new_dir)
+        except OSError:
+            # Belt-and-braces for a degraded lock (an unlockable fs, or one held past the
+            # deadline so we ran without it): a caller may have committed the move under us.
+            # Adopt that rather than fall back to the legacy dir it just emptied.
+            if (new_dir / "history.json").exists():
+                return new_dir
+            log.warning(
+                "[artifact] could not migrate store %s -> %s; using the legacy directory",
+                legacy,
+                new_dir,
+                exc_info=True,
+            )
+            return legacy  # can't move it — keep using it where it is
+    return new_dir
+
+
+@contextlib.contextmanager
+def _migration_lock(lock_file: Path):
+    """Hold an exclusive lock for the one-time legacy adoption: this process's thread lock,
+    then a cross-process OS lock on ``lock_file``.
+
+    ``lock_file`` is passed in — the store's own sidecar in the RESOLVED ``new_dir``, a path
+    fixed by ``plugin_store`` — NOT re-derived through ``_store_path``/``_store_dir`` (that
+    would recurse straight back into adoption). It IS the file the store's write lock uses, so
+    an adoption and a store write exclude each other too.
+
+    Best-effort, and it NEVER raises: an unlockable filesystem, or a lock still held past the
+    deadline, drops us to the thread lock alone (or to no lock) — ``_adopt_legacy_store`` then
+    leans on its post-move re-check so a caller still adopts a completed migration rather than
+    diverging. Store access must not fail because of path resolution."""
+    deadline = time.monotonic() + max(0.0, _LOCK_TIMEOUT_S)
+    have_thread = _MUTATION_LOCK.acquire(timeout=max(0.0, _LOCK_TIMEOUT_S))
+    try:
+        fd = None
+        try:
+            fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+            _os_lock(fd, deadline)
+        except (_LockBusy, OSError):
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+                fd = None
+        try:
+            yield
+        finally:
+            if fd is not None:
+                _release_file_lock(fd)
+    finally:
+        if have_thread:
+            _MUTATION_LOCK.release()
+
+
 def _store_dir() -> Path:
     """The store's data directory, resolved at call time so instance scoping and
     ``ARTIFACT_DIR`` are honored live.
@@ -107,22 +181,13 @@ def _store_dir() -> Path:
         legacy = _legacy_store_dir()
         legacy.mkdir(parents=True, exist_ok=True)
         return legacy
-    # Adopt a pre-instance-scoping store on first access rather than silently starting
-    # empty: an operator who upgrades keeps their artifacts, not appears to have none.
-    if not (new_dir / "history.json").exists():
-        legacy = _legacy_store_dir()
-        if legacy.resolve() != new_dir.resolve() and (legacy / "history.json").is_file():
-            try:
-                _migrate_legacy_store(legacy, new_dir)
-            except OSError:
-                log.warning(
-                    "[artifact] could not migrate store %s -> %s; using the legacy directory",
-                    legacy,
-                    new_dir,
-                    exc_info=True,
-                )
-                return legacy  # can't move it — keep using it where it is
-    return new_dir
+    # Fast path — already migrated, or a store that never had legacy data. Skip the legacy
+    # probe and the lock on the hot path: every store access resolves this directory.
+    if (new_dir / "history.json").exists():
+        return new_dir
+    # Adopt a pre-instance-scoping store on first access rather than silently starting empty:
+    # an operator who upgrades keeps their artifacts, not appears to have none.
+    return _adopt_legacy_store(new_dir)
 
 
 def _store_path() -> Path:

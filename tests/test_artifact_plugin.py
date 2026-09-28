@@ -2075,3 +2075,104 @@ def test_box_rooted_server_does_not_migrate_the_operators_home_store(monkeypatch
     # the store resolves inside the box, never the operator's home
     assert str(art._store._store_dir()).startswith(str(box / "onb" / "artifact"))
     assert not (box / "onb" / "artifact" / "history.json").exists()
+
+
+class _NoLock:
+    """A no-op stand-in for ``_MUTATION_LOCK`` so two threads in ONE process are serialised
+    only by the cross-process OS file lock — the ACP condition, where the tool process and the
+    main process each have their own thread lock and only the file lock spans them."""
+
+    def acquire(self, timeout=-1):  # noqa: ARG002 — the RLock signature _migration_lock calls
+        return True
+
+    def release(self):
+        pass
+
+
+def test_migration_loser_adopts_the_new_dir_not_the_emptied_legacy(monkeypatch, tmp_path):
+    """The blocking review finding, at the unit level: when two callers race the one-time
+    adoption, the loser's ``replace`` raises ``FileNotFoundError`` because the winner already
+    moved history.json. That must NOT be read as a failed migration that sends the loser back to
+    the now-emptied legacy dir (a different lock file, an orphaned write) — the loser re-checks
+    and adopts new_dir."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb", box=tmp_path / "home" / ".protoagent")
+    legacy = box / "artifact" / "onb"
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
+
+    art = _load_instance(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True, exist_ok=True)  # plugin_store creates it
+
+    def racing_move(src, dst):
+        # The winner's move already landed history.json in new_dir before ours ran...
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "history.json").write_text(json.dumps(_legacy_store("winner")), encoding="utf-8")
+        # ...so our own replace of the now-gone legacy history.json raises, as the race does.
+        raise FileNotFoundError(str(src / "history.json"))
+
+    monkeypatch.setattr(art._store, "_migrate_legacy_store", racing_move)
+    resolved = art._store._adopt_legacy_store(new_dir)
+    assert resolved == new_dir  # NOT the emptied legacy dir
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["winner"]  # the winner's store
+    assert legacy.resolve() not in {p.resolve() for p in [art._store._store_dir()]}
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="msvcrt byte-range locks don't contend within one process; the cross-process suite covers Windows",
+)
+def test_concurrent_first_access_migration_never_diverges_to_legacy(monkeypatch, tmp_path):
+    """Two callers racing the one-time adoption both land on new_dir, with the legacy store moved
+    intact and nothing stranded. The in-process thread lock is neutralised so the cross-process
+    OS file lock is the SOLE serialiser — the ACP shape (operator-MCP vs. main, separate thread
+    locks). Without a lock the loser fell back to the emptied legacy dir and wrote an orphaned
+    history.json; here the loser waits on the file lock and adopts new_dir."""
+    import json
+    import threading
+    import time
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb", box=tmp_path / "home" / ".protoagent")
+    legacy = box / "artifact" / "onb"
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    (legacy / "blobs" / "a-1" / "b.txt").write_bytes(b"blob-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load_instance(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True, exist_ok=True)  # plugin_store creates it
+
+    monkeypatch.setattr(art._store, "_MUTATION_LOCK", _NoLock())
+    started, proceed = threading.Event(), threading.Event()
+    real_move = art._store._migrate_legacy_store
+
+    def gated_move(src, dst):
+        # The winner pauses mid-migration holding the OS lock, so the loser must wait on it.
+        started.set()
+        proceed.wait(5)
+        return real_move(src, dst)
+
+    monkeypatch.setattr(art._store, "_migrate_legacy_store", gated_move)
+
+    results: dict[str, Path] = {}
+
+    def call(name):
+        results[name] = art._store._store_dir()
+
+    a = threading.Thread(target=call, args=("a",))
+    a.start()
+    assert started.wait(5)  # the winner is inside the migration, holding the OS lock
+    b = threading.Thread(target=call, args=("b",))
+    b.start()
+    time.sleep(0.1)  # let the loser reach and block on the OS lock
+    proceed.set()
+    a.join(10)
+    b.join(10)
+
+    assert results["a"] == new_dir and results["b"] == new_dir  # neither diverged to legacy
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-1" / "b.txt").read_bytes() == b"blob-bytes"  # blobs travelled too
+    assert not (legacy / "history.json").exists()  # the winner's move landed, once
+    assert [x["id"] for x in art._read_store()["artifacts"]] == ["a-1"]  # a single intact store
