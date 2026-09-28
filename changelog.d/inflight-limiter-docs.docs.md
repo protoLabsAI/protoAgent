@@ -1,0 +1,1 @@
+- **Operator guide for the model in-flight limiter (#3760).** New how-to on sizing, priority classes, `GatewayQueueTimeout`, and reading the lane metrics (`local_queue` vs `gateway_degraded`), plus the three `model.*` config keys and `GET /api/telemetry/llm-lanes` in the references.

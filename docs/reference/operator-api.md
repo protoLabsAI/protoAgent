@@ -172,7 +172,29 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/telemetry/{summary,recent,export,insights}` | Cost/usage telemetry |
+| GET | `/api/telemetry/llm-lanes` | Model in-flight-limiter lane snapshot (ADR 0115) |
 | GET · PUT · DELETE | `/api/theme` | Read / set / clear the saved theme |
+
+`GET /api/telemetry/llm-lanes` (operator-tier, same auth as its neighbours) returns the
+per-lane state of the model in-flight limiter ([ADR 0115](../adr/0115-gateway-inflight-limiter.md),
+see [Operate the model in-flight limiter](../guides/model-concurrency.md)). It reads the
+per-process limiter snapshot **straight from memory** — no network or DB call — so it is
+cheap enough to poll every tick. When the limiter is off (`model.max_inflight: 0`, the
+default) it returns `{"enabled": false}`. When on:
+
+```json
+{"enabled": true, "generated_at": "2026-09-28T17:04:11+00:00",
+ "lanes": [{"lane": "https://gw/v1|protolabs/smart", "limit": 6, "reserve": 1,
+            "inflight": 6, "queued": 9,
+            "queued_by_priority": {"interactive": 0, "default": 2, "bulk": 7},
+            "oldest_wait_s": 212.4, "wait_p50_s_5m": 38.0, "wait_p90_s_5m": 171.0,
+            "queue_timeouts_5m": 2, "saturated": true}]}
+```
+
+One entry per lane this process has touched. `saturated` is true when `queued > 0` has
+held continuously for 60 s or more; the percentiles and `queue_timeouts_5m` cover a
+rolling 5-minute window. The same snapshot is available in-process to plugins via
+`sdk.llm_lanes()`.
 
 ## Diagnostics
 

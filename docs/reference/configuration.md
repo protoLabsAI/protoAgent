@@ -92,6 +92,9 @@ model:
 | `favorites` | `[]` | Pinned go-to models for the chat `/model` quick-switch — the inline picker offers these, in this order, instead of the gateway's full list. Manage (add/remove/reorder) in Settings ▸ Model ▸ Favorite models. Empty = `/model` shows every gateway model with a hint to pin favorites. |
 | `request_timeout` | `120.0` | Per-call gateway timeout (seconds) — bounds a hung/slow gateway so a turn fails cleanly. |
 | `max_retries` | `2` | Transient-retry cap on the LLM client (→ `llm_max_retries`). |
+| `max_inflight` | `0` | Cap on concurrent model calls per lane (resolved endpoint + model) in **this process**. `0` (default) disables the in-flight limiter entirely. Per-process, not box-wide — size the limits across your instances so they sum within the gateway's parallel capacity. [ADR 0115](../adr/0115-gateway-inflight-limiter.md); see [Operate the model in-flight limiter](../guides/model-concurrency.md). |
+| `inflight_queue_timeout` | `300` | Longest one caller may wait (seconds) for a free slot when the lane is saturated. **Separate from `request_timeout`** (which times the HTTP call once a slot is held); kept below the turn stall timeout so a queued turn fails with a queue error, not a stall. Only applies when `max_inflight` is non-zero. |
+| `inflight_interactive_reserve` | `1` | Slots reserved for `interactive` (operator-watched) callers, so a background fan-out can't take the operator's last slot. Clamped to `max_inflight − 1`, leaving non-interactive work at least one slot. Per-process like `max_inflight`; only applies when the limiter is on. |
 | `top_p` | _(unset)_ | Nucleus sampling. Standard OpenAI param; sent only when set. |
 | `presence_penalty` | _(unset)_ | Standard OpenAI param; sent only when set. |
 | `top_k` | `-1` | Top-k sampling. Rides `extra_body` (vLLM-style gateways). `-1`/negative = gateway default. |

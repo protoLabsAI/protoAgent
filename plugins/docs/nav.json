@@ -281,6 +281,10 @@
           "title": "Wire Langfuse + Prometheus"
         },
         {
+          "path": "guides/model-concurrency.md",
+          "title": "Operate the model in-flight limiter"
+        },
+        {
           "path": "guides/operating-a-fleet.md",
           "title": "Operating a fleet (health, rollout, triage, recovery)"
         }
