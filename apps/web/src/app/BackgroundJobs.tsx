@@ -391,7 +391,7 @@ function BgJobRow({
   // The row actions sit BESIDE the accordion trigger — never nested inside it (no
   // button-in-button): jump-to-chat is a ghost icon Button, stop/delete are danger.
   const actions = (
-    <div className="bg-jobs-actions" style={{ display: "flex", flex: "none", alignItems: "flex-start" }}>
+    <div style={{ display: "flex", flex: "none", alignItems: "flex-start" }}>
       {originIsOpenTab ? (
         <Button
           icon

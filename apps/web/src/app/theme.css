@@ -116,8 +116,8 @@
   right: 1px;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: var(--pl-color-accent, #7c8cff);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-accent);
 }
 .bg-jobs-empty {
   color: var(--pl-color-fg-muted);
@@ -134,70 +134,10 @@
   max-height: min(60dvh, 520px);
   overflow-y: auto;
 }
-.bg-jobs-row {
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 8px;
-  background: var(--pl-color-bg-raised, #16161b);
-}
-.bg-jobs-rowhead {
-  display: flex;
-  align-items: stretch;
-}
-.bg-jobs-rowmain {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 9px 11px;
-  border: 0;
-  background: transparent;
-  color: var(--pl-color-fg);
-  text-align: left;
-  cursor: pointer;
-}
-.bg-jobs-rowmain:disabled {
-  cursor: default;
-}
-.bg-jobs-rowmain:not(:disabled):hover {
-  background: var(--pl-color-bg-hover);
-}
-.bg-jobs-stop {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  border: 0;
-  border-left: 1px solid var(--pl-color-border, #2a2a31);
-  background: transparent;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.bg-jobs-stop:hover {
-  color: var(--pl-color-status-error, #e5484d);
-  background: var(--pl-color-bg-hover);
-}
 .bg-jobs-toolbar {
   display: flex;
   justify-content: flex-end;
   padding: 0 4px 8px;
-}
-.bg-jobs-clear {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  font-size: 12px;
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.bg-jobs-clear:hover {
-  color: var(--pl-color-status-error, #e5484d);
-  border-color: var(--pl-color-status-error, #e5484d);
 }
 .bg-jobs-icon {
   flex: none;
@@ -227,19 +167,19 @@
   font-family: var(--pl-font-mono);
 }
 .bg-jobs-tool.is-run {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
 }
 .bg-jobs-tool.is-done {
   color: var(--pl-color-fg-muted);
 }
 .bg-jobs-tool.is-err {
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 .bg-jobs-ok {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
 }
 .bg-jobs-fail {
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 /* Action row above a finished job's result — currently just Copy (#2352). Sits between
    the tool feed and the result so it can't scroll away inside .bg-jobs-result's own
@@ -252,7 +192,7 @@
 .bg-jobs-result {
   padding: 4px 12px 12px 33px;
   font-size: 13px;
-  border-top: 1px solid var(--pl-color-border, #2a2a31);
+  border-top: 1px solid var(--pl-color-border);
   /* A long report (research agents emit thousands of words) scrolls within the row
      so the whole thing is readable without the dialog growing unbounded. */
   max-height: 50vh;
@@ -260,14 +200,6 @@
   overscroll-behavior: contain;
 }
 
-/* Expanded row body: a live tool-by-tool feed (DS ToolCard) and/or the result. The wrapper
-   owns the single top separator; the nested result drops its own to avoid a double rule. */
-.bg-jobs-detail {
-  border-top: 1px solid var(--pl-color-border, #2a2a31);
-}
-.bg-jobs-detail .bg-jobs-result {
-  border-top: none;
-}
 .bg-jobs-feed {
   padding: 8px 12px 8px 33px;
   /* A chatty job (many tools) scrolls within the row rather than growing the dialog. */
@@ -277,7 +209,7 @@
 }
 /* Divider when a result is shown beneath the tool feed. */
 .bg-jobs-feed + .bg-jobs-resulthead {
-  border-top: 1px solid var(--pl-color-border, #2a2a31);
+  border-top: 1px solid var(--pl-color-border);
 }
 /* The action row sits directly above the result, so the result never draws its own rule
    when the row is present — that would double the separator. */
