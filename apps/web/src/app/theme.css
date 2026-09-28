@@ -77,7 +77,7 @@
 /* Undelivered priority-now page (#3351): tint the Feed pill's unread badge as an alert so a
    page whose automatic delivery failed reads as conspicuous before the operator opens the feed. */
 .activity-badge--alert {
-  color: var(--pl-color-status-error, #ff6b6b);
+  color: var(--pl-color-status-error);
   font-weight: 700;
 }
 
@@ -395,7 +395,7 @@
 .resize-handle:focus-visible::before,
 .resize-handle:active::before {
   width: 4px;
-  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 60%, transparent);
+  background: color-mix(in srgb, var(--pl-color-accent) 60%, transparent);
 }
 .resize-handle:focus-visible {
   outline: none;
@@ -811,7 +811,7 @@ select {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   /* token-bridged so inputs flip in light mode (was a hardcoded #0c0c0f dark). */
-  background: var(--pl-color-bg-inset, #0c0c0f);
+  background: var(--pl-color-bg-inset);
   color: var(--pl-color-fg);
   padding: 8px 10px;
 }
@@ -864,7 +864,7 @@ textarea {
 }
 
 .field-warn {
-  color: var(--pl-color-status-error, #d97706);
+  color: var(--pl-color-status-error);
   opacity: 1;
 }
 
@@ -994,15 +994,15 @@ textarea {
 }
 
 .inbox-pri-now {
-  background: var(--pl-color-status-error, #ff6b6b);
+  background: var(--pl-color-status-error);
 }
 
 .inbox-pri-next {
-  background: var(--pl-color-accent, #7c8cff);
+  background: var(--pl-color-accent);
 }
 
 .inbox-pri-later {
-  background: var(--pl-color-fg-subtle, #555);
+  background: var(--pl-color-fg-subtle);
 }
 
 /* Live event-stream indicator (ADR 0003) — retired with the standalone inbox surface (#3029). */
@@ -1011,7 +1011,7 @@ textarea {
    .workflow-failed below which is shared (TasksPanel renders it too). */
 .workflow-failed {
   margin: 0 12px;
-  color: var(--pl-color-status-error, #ff6b6b);
+  color: var(--pl-color-status-error);
   font-size: 13px;
 }
 
@@ -1037,7 +1037,7 @@ textarea {
 
 .metric svg {
   grid-row: span 2;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 .metric strong {
@@ -1386,7 +1386,7 @@ textarea {
 
 .setup-progress span.done,
 .setup-progress span.active {
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
 }
 
 .setup-progress span.active {
@@ -1422,9 +1422,9 @@ textarea {
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--brand-violet) 36%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl-color-accent) 36%, transparent);
   border-radius: var(--pl-radius);
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 .setup-summary,
@@ -1452,7 +1452,7 @@ textarea {
 }
 
 .status-line svg {
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 .toggle-row span,
@@ -1725,7 +1725,7 @@ textarea {
   align-items: center;
   gap: 4px;
   font-size: 0.8rem;
-  color: var(--brand-indigo-bright);
+  color: var(--pl-color-accent-fg);
   text-decoration: none;
 }
 .settings-help-link:hover,
@@ -1822,13 +1822,13 @@ textarea {
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .knowledge-ingest-drop.is-drag {
-  border-color: var(--pl-color-accent, #7c8cff);
+  border-color: var(--pl-color-accent);
   border-style: solid;
   background: var(--pl-color-bg-raised);
 }
 .knowledge-ingest-drop.is-busy { opacity: 0.6; pointer-events: none; }
 .knowledge-ingest-pick {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
   cursor: pointer;
   text-decoration: underline;
   font-weight: 500;
