@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 // #3685 part d1: the code viewer, activity feed and schedule builder stylesheets carried
-// `var(--pl-…, #hex)` fallbacks and legacy --brand-* aliases. main.tsx imports
+// `var(--pl-…, #hex)` fallbacks and legacy brand-* aliases. main.tsx imports
 // @protolabsai/design before any app CSS, so the --pl-* tokens always resolve — a hex
 // fallback could therefore only ever paint a dark-only wrong colour, never help — and the
-// --brand-* aliases are retired to real DS tokens (scheduler → --pl-color-chart-series2,
+// brand-* aliases are retired to real DS tokens (scheduler → --pl-color-chart-series2,
 // a2a → --pl-color-chart-series8, .cal-sel → --pl-color-accent / --pl-color-fg-on-accent).
 // This pins the drop for these three files ONLY: the wider DS-token migration is
 // incremental, so a repo-wide sweep would (correctly) still find fallbacks/aliases
@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 //
 // Source-level (Vite ?raw), not a rendered getComputedStyle assertion, and for the same
 // no-node-types reason, as statusTokenGuard.test.ts / phantomTokenRename.test.ts. The
-// forbidden literals are built by concat so this file never contains a bare --brand- or a
+// forbidden literals are built by concat so this file never contains a bare brand-* or a
 // bare hex-fallback token and can't flag itself.
 
 const CSS_SOURCES = import.meta.glob("../**/*.css", {
@@ -42,7 +42,7 @@ const FILES = [
 const HEX_FALLBACK = new RegExp("var\\(--pl-[a-z0-9-]+\\s*,\\s*#[0-9a-fA-F]");
 const BRAND = new RegExp("--" + "brand-");
 
-describe("#3685 d1: code-pane / activity / schedule drop hex fallbacks + --brand-* aliases", () => {
+describe("#3685 d1: code-pane / activity / schedule drop hex fallbacks + brand-* aliases", () => {
   it("no var(--pl-…, #hex) fallback remains in any of the three stylesheets", () => {
     for (const f of FILES) {
       const offenders = source(f)
@@ -54,9 +54,9 @@ describe("#3685 d1: code-pane / activity / schedule drop hex fallbacks + --brand
     }
   });
 
-  it("no --brand-* alias remains in any of the three stylesheets", () => {
+  it("no brand-* alias remains in any of the three stylesheets", () => {
     for (const f of FILES) {
-      expect(BRAND.test(source(f)), `--brand- alias left in ${f}`).toBe(false);
+      expect(BRAND.test(source(f)), `brand-* alias left in ${f}`).toBe(false);
     }
   });
 

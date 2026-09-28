@@ -168,3 +168,139 @@ describe("every var(--pl-*) in the console is defined by the installed DS (#3682
     expect(Object.keys(SOURCES)).not.toContain("./tokenNameGuard.test.ts");
   });
 });
+
+// ── #3685 (final): two tree-wide colour-hygiene sweeps ────────────────────────────────────────
+// Parts (a)–(d) stripped `var(--pl-…, #hex)` fallbacks and the legacy brand-* accent aliases
+// sheet-by-sheet, each pinned by its own per-file guard. This closes #3685 by (1) deleting the
+// last brand-* definitions from theme-base.css and (2) turning both file-scoped invariants into
+// tree-wide ones: either regression now fails here the moment it lands in a shipped surface.
+//
+// Both reuse the SOURCES ?raw glob above (compile-time, rooted at this file, no node:fs) and
+// report sorted `src/<path>:<line>` exactly as the phantom sweep does.
+const prettyPath = (file: string): string =>
+  file.replace(/^\.\.\//, "src/").replace(/^\.\//, "src/app/");
+
+// (a) NO HEX FALLBACK. main.tsx imports @protolabsai/design before any app CSS, so a --pl-* token
+// always resolves; a `var(--pl-name, #hex)` fallback can therefore only ever paint a wrong,
+// dark-only colour once the token exists (the exact failure #3682/#3685 chased out). `var(` is
+// escaped so this string is never itself a bare `var(--pl-…)`, and the hex class carries no real
+// digits, so the pattern holds no offending literal of its own.
+const HEX_FALLBACK_SRC = "var\\(\\s*--pl-[\\w-]+\\s*,\\s*#[0-9a-fA-F]{3,8}\\b";
+const hasHexFallback = (line: string): boolean => new RegExp(HEX_FALLBACK_SRC).test(line);
+
+// EXEMPT from the hex rule, and WHY (there is no allowlist of specific stragglers — these are
+// three principled categories):
+//  • ./app-crash.css — the last-resort crash screen must still render if the token stylesheet
+//    failed to load, so its fallbacks are load-bearing (also pinned by phantomTokenRename.test.ts).
+//  • ./theme-base.css — its only remaining hex fallbacks are the sanctioned --success/--warning/
+//    --error/--danger/--info status compat aliases (statusTokenGuard.test.ts pins them here); the
+//    DS owner's delete-the-fallbacks decision covered the brand-* block, not these. Per #3685
+//    (final) the whole file is exempt for the hex rule.
+//  • *.test.ts / *.test.tsx — absence-asserting guards (this file, phantomTokenRename,
+//    dsTokenFallbackStrip[B], chat-css-tokens, …) must spell the exact `var(--pl-…, #hex)` string
+//    to prove it is gone. Those are test fixtures — the one place the card sanctions hex literals.
+const hexExempt = (file: string): boolean =>
+  file === "./app-crash.css" || file === "./theme-base.css" || /\.test\.tsx?$/.test(file);
+
+function hexSweep(): string[] {
+  const hits: string[] = [];
+  for (const [file, raw] of Object.entries(SOURCES)) {
+    if (hexExempt(file)) continue;
+    stripComments(raw, file.endsWith(".css")).split("\n").forEach((line, i) => {
+      if (hasHexFallback(line)) hits.push(`${prettyPath(file)}:${i + 1}`);
+    });
+  }
+  return hits.sort();
+}
+
+// (b) NO brand-* alias. The legacy accent aliases (brand-violet/-light, brand-indigo/-bright,
+// brand-pink) are all re-pointed onto real DS tokens, and #3685 (final) deletes the last
+// definitions from theme-base.css, so the name is fully retired: nothing but this guard may name
+// it. The literal is assembled by concat so the guard holds no bare occurrence of its own, and —
+// unlike the hex rule — the scan runs over RAW text (comments included), mirroring the acceptance
+// grep for the retired prefix across apps/web/src: a stray mention even in prose is a straggler.
+// Only this guard file is exempt.
+const BRAND_LITERAL = "--" + "brand-";
+function brandSweep(): string[] {
+  const hits: string[] = [];
+  for (const [file, raw] of Object.entries(SOURCES)) {
+    if (file === "./tokenNameGuard.test.ts") continue; // the guard itself (also omitted by Vite)
+    raw.split("\n").forEach((line, i) => {
+      if (line.includes(BRAND_LITERAL)) hits.push(`${prettyPath(file)}:${i + 1}`);
+    });
+  }
+  return hits.sort();
+}
+
+describe("no var(--pl-…, #hex) fallback ships outside app-crash / theme-base status aliases (#3685)", () => {
+  it("sweeps the tree: shipped CSS/TS/TSX carries no hex fallback", () => {
+    expect(hexSweep()).toEqual([]);
+  });
+
+  it("flags a synthetic hex fallback and reports src/<path>:<line> (meta-guard, built by concat)", () => {
+    // The offending shapes, assembled so this file holds no bare `var(--pl-…, #hex)` literal.
+    expect(hasHexFallback("color: " + "var(" + "--pl-color-accent, #" + "7c8cff);")).toBe(true);
+    expect(
+      hasHexFallback("border: 1px solid " + "var(" + "--pl-color-border, #" + "2a2a31);"),
+    ).toBe(true);
+    // A bare token, a nested var() fallback and a font-family list all clear the rule.
+    expect(hasHexFallback("color: " + "var(" + "--pl-color-accent);")).toBe(false);
+    expect(
+      hasHexFallback("background: " + "var(" + "--pl-color-bg-inset, " + "var(" + "--pl-color-bg))"),
+    ).toBe(false);
+    expect(hasHexFallback("font-family: " + "var(" + "--pl-font-mono, ui-monospace, monospace)")).toBe(false);
+    // Prove the file:line shape a real hit would take over a two-line synthetic source.
+    const synthetic = [
+      "ok: " + "var(" + "--pl-color-fg);",
+      "bad: " + "var(" + "--pl-color-fg, #" + "ededed);",
+    ].join("\n");
+    const hits: string[] = [];
+    synthetic.split("\n").forEach((l, i) => {
+      if (hasHexFallback(l)) hits.push(`src/synthetic.css:${i + 1}`);
+    });
+    expect(hits).toEqual(["src/synthetic.css:2"]);
+  });
+
+  it("exempts app-crash / theme-base / test fixtures, but sweeps shipped surfaces — all present", () => {
+    expect(hexExempt("./app-crash.css")).toBe(true);
+    expect(hexExempt("./theme-base.css")).toBe(true);
+    expect(hexExempt("../chat/chat-css-tokens.test.ts")).toBe(true); // a test fixture
+    expect(hexExempt("../chat/chat.css")).toBe(false); // a shipped surface IS swept
+    expect(hexExempt("./ProtoLabsIcon.tsx")).toBe(false);
+    // The two whole-file exemptions must actually be in the swept tree (a glob typo would hide them).
+    expect(Object.keys(SOURCES)).toContain("./app-crash.css");
+    expect(Object.keys(SOURCES)).toContain("./theme-base.css");
+  });
+});
+
+describe("the retired brand-* accent aliases appear nowhere but this guard (#3685)", () => {
+  it("sweeps the tree: no brand alias definition or reference survives", () => {
+    expect(brandSweep()).toEqual([]);
+  });
+
+  it("flags a synthetic brand alias and reports src/<path>:<line> (meta-guard, built by concat)", () => {
+    const ref = "color: " + "var(" + "--" + "brand-violet);"; // a reference
+    const def = "  --" + "brand-pink: " + "var(--pl-color-accent);"; // a definition
+    expect(ref.includes(BRAND_LITERAL)).toBe(true);
+    expect(def.includes(BRAND_LITERAL)).toBe(true);
+    // A real DS token clears the rule.
+    expect(("color: " + "var(" + "--pl-color-accent);").includes(BRAND_LITERAL)).toBe(false);
+    const synthetic = [
+      "ok: " + "var(" + "--pl-color-accent);",
+      "bad: " + "var(" + "--" + "brand-indigo);",
+    ].join("\n");
+    const hits: string[] = [];
+    synthetic.split("\n").forEach((l, i) => {
+      if (l.includes(BRAND_LITERAL)) hits.push(`src/synthetic.css:${i + 1}`);
+    });
+    expect(hits).toEqual(["src/synthetic.css:2"]);
+  });
+
+  it("theme-base.css keeps its status compat aliases but defines no brand alias (last ones deleted)", () => {
+    const themeBase = SOURCES["./theme-base.css"];
+    expect(themeBase.includes(BRAND_LITERAL)).toBe(false);
+    // The sanctioned status aliases it still owns are untouched (statusTokenGuard.test.ts pins them).
+    expect(themeBase).toContain("--success: " + "var(--pl-color-status-success");
+    expect(themeBase).toContain("--info: " + "var(--pl-color-status-info");
+  });
+});
