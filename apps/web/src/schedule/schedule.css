@@ -127,7 +127,7 @@
   width: 26px; height: 26px; border-radius: 6px;
   border: 1px solid transparent; background: transparent; color: var(--pl-color-fg); cursor: pointer;
 }
-.cal-nav:hover { background: var(--pl-color-bg-hover, rgba(127,127,127,.14)); }
+.cal-nav:hover { background: var(--pl-color-bg-hover); }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
 .cal-dow { margin-bottom: 2px; }
 .cal-wd { text-align: center; font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); padding: 2px 0; }
@@ -137,7 +137,7 @@
   border: 1px solid transparent; border-radius: 6px;
   background: transparent; color: var(--pl-color-fg); font-size: var(--pl-font-size-xs); cursor: pointer;
 }
-.cal-day:hover { background: var(--pl-color-bg-hover, rgba(127,127,127,.14)); }
+.cal-day:hover { background: var(--pl-color-bg-hover); }
 .cal-out { color: var(--pl-color-fg-subtle); opacity: .55; }
 .cal-today { border-color: var(--pl-color-border); font-weight: 600; }
 .cal-sel { background: var(--pl-color-accent); color: var(--pl-color-fg-on-accent); border-color: transparent; }
