@@ -14,6 +14,7 @@ from deck.app import FleetDeck, RosterScreen
 from deck.feed import WorkFeedScreen
 from deck.talk import ConversationScreen
 from tests.test_deck_app import FakeBackend, _settle
+from tests.test_deck_talk import _until
 
 
 def ev(slug, topic, **data):
@@ -189,24 +190,19 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         rows = app.screen.query_one("#roster", DataTable)
         assert str(rows.get_row_at(1)[3]) == "idle"
         fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id="s", task_id="t", phase="tool_start", tool="run_command", tool_call_id="c1"))
-        await pilot.pause(0.7)
-        assert str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⟳ running"
+        assert await _until(pilot, lambda: str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⟳ running")
         fe.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t", context_id="s", state="TASK_STATE_COMPLETED", cost_usd=0.01))
-        await pilot.pause(0.7)
-        assert str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "idle"
+        assert await _until(pilot, lambda: str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "idle")
         assert "ago" in str(app.screen.query_one("#roster", DataTable).get_row_at(1)[8])
         # a park on the bus rings once, through the drain
         rings.clear()
         fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-1", task_id="t9", prompt="Merge?"))
-        await pilot.pause(0.7)
-        assert rings == [1] and str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⚑ needs you"
+        assert await _until(pilot, lambda: rings == [1] and str(app.screen.query_one("#roster", DataTable).get_row_at(1)[3]) == "⚑ needs you")
         # the status counts parked TURNS: a second session of the same member is a second turn
         fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id="chat-2", task_id="t10", prompt="Deploy?"))
-        await pilot.pause(0.7)
-        assert "⚑ 2 turns parked on a question (protoEngineer)" in str(app.screen.query_one("#status", Static).content)
+        assert await _until(pilot, lambda: "⚑ 2 turns parked on a question (protoEngineer)" in str(app.screen.query_one("#status", Static).content))
         fe.pending.append(ev("protoEngineer-ba4c", "turn.resumed", context_id="chat-2", task_id="t10"))
-        await pilot.pause(0.7)
-        assert "⚑ 1 turn parked" in str(app.screen.query_one("#status", Static).content)
+        assert await _until(pilot, lambda: "⚑ 1 turn parked" in str(app.screen.query_one("#status", Static).content))
         # a parked probe result from the poll: a session it saw parked rings; protoEngineer's
         # own park (a session the probe did not see) is untouched
         rings.clear()
@@ -237,21 +233,18 @@ async def test_work_feed_screen_lists_rows_filters_and_opens_the_member():
             ev("protoEngineer-ba4c", "chat.progress", session_id="chat-1", task_id="t", phase="tool_start", tool="run_command", tool_call_id="c1"),
             ev("old-1", "turn.usage", task_id="t2", context_id="chat-2", state="TASK_STATE_COMPLETED", cost_usd=0.2),
         ])
-        await pilot.pause(0.7)
+        assert await _until(pilot, lambda: len(app.activity.rows) >= 2)  # both bus rows landed
         await pilot.press("w")
-        await pilot.pause(0.7)
-        assert isinstance(app.screen, WorkFeedScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, WorkFeedScreen))
         table = app.screen.query_one("#feed", DataTable)
         assert table.row_count == 2
         assert [str(table.get_row_at(i)[1]) for i in range(2)] == ["protoEngineer", "old"]
         assert "sse ● 3 of 3 members" in str(app.screen.query_one("#feed-head", Static).content)
         await pilot.press("f")
         await pilot.press(*"old", "enter")
-        await pilot.pause(0.7)
-        assert app.screen.query_one("#feed", DataTable).row_count == 1
+        assert await _until(pilot, lambda: app.screen.query_one("#feed", DataTable).row_count == 1)
         await pilot.press("escape")  # clears the filter
-        await pilot.pause(0.7)
-        assert app.screen.query_one("#feed", DataTable).row_count == 2
+        assert await _until(pilot, lambda: app.screen.query_one("#feed", DataTable).row_count == 2)
         # enter on the protoEngineer row opens its conversation at that session
         app.screen.query_one("#feed", DataTable).move_cursor(row=0)
         await pilot.press("enter")

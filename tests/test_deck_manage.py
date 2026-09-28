@@ -410,12 +410,11 @@ async def test_authored_strings_render_as_text_not_markup():
         await _settle(app, pilot)
         assert _rows(app)[1] == "Coach [/]"
         fe.pending.append(ev("old-1", "chat.progress", session_id="s", task_id="t", phase="tool_end", tool="run_command", tool_call_id="c1", output="[red]boom[/] [/]"))
-        await pilot.pause(0.7)
+        assert await _until(pilot, lambda: len(app.activity.rows) >= 1)  # the bus row landed
         await pilot.press("w")
-        await pilot.pause(0.7)
         from deck.feed import WorkFeedScreen
 
-        assert isinstance(app.screen, WorkFeedScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, WorkFeedScreen))
         table = app.screen.query_one("#feed", DataTable)
         assert "[red]boom[/] [/]" in str(table.get_row_at(0)[4])
 
