@@ -417,34 +417,6 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
-/* A tabbed surface renders the DS Tabs + the .panel card as siblings in the AppShell
-   column (or the bottom dock). Style the tab strip as the card's TOP edge and drop the
-   panel's top border/radius, so the two read as ONE full-height card — its top aligns
-   with the non-tabbed panels. (Responsive Tabs wrap the strip in .pl-tabs-wrap and
-   collapse to a dropdown on narrow containers — match both as the direct child.) The
-   bottom dock (`.pl-appshell__bottom`) is a different wrapper than the side columns, so
-   it must be matched explicitly or its tab strip falls through to the shell's dark
-   ground instead of the panel surface. */
-.pl-appshell__col > .pl-tabs,
-.pl-appshell__col > .pl-tabs-wrap,
-.pl-appshell__bottom > .pl-tabs,
-.pl-appshell__bottom > .pl-tabs-wrap {
-  flex: 0 0 auto;
-  padding: 8px 12px 0;
-  border: 1px solid var(--pl-color-border);
-  border-bottom: none;
-  border-radius: var(--pl-radius) var(--pl-radius) 0 0;
-  background: var(--pl-color-bg-raised);
-}
-.pl-appshell__col > .pl-tabs + .panel,
-.pl-appshell__col > .pl-tabs-wrap + .panel,
-.pl-appshell__bottom > .pl-tabs + .panel,
-.pl-appshell__bottom > .pl-tabs-wrap + .panel {
-  border-top: none;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
-}
-
 /* Settings panel: header · category sub-nav · scrolling body (ADR 0020). The
    sub-nav is its own auto row so it doesn't land in the 1fr content row and
    overlap the fields. */

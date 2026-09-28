@@ -122,6 +122,51 @@ describe("pluginIdFromView — the namespace source", () => {
   });
 });
 
+// The tab strip fuses to the panel card via DS `<Tabs attached>` (DS 0.63 card 2) — the job
+// the local `.pl-appshell__col > .pl-tabs` override used to do before it was deleted. In a
+// rail/dock column the strip must carry it (`.pl-tabs--attached`, on the responsive
+// `.pl-tabs-wrap`); embedded Configure renders `plugin-view--embedded`, not a column card, so
+// it must NOT — otherwise it'd sprout a top border/radius the dialog never wanted.
+describe("PluginView — the tab strip attaches to the panel only in a column", () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  const tabbed = (): PluginViewType => ({
+    id: "main", label: "Boardy", path: "/api/plugins/boardy/main", key: "plugin:boardy:main",
+    tabs: [
+      { id: "a", label: "A", path: "/api/plugins/boardy/a" },
+      { id: "b", label: "B", path: "/api/plugins/boardy/b" },
+    ],
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("marks a multi-tab rail view's strip attached, and leaves embedded Configure detached", async () => {
+    await act(async () => {
+      root.render(h(PluginView, { view: tabbed() }));
+    });
+    expect(container.querySelectorAll(".pl-tab").length).toBeGreaterThan(1); // the strip rendered
+    expect(container.querySelector(".pl-tabs--attached")).not.toBeNull();
+
+    await act(async () => {
+      root.render(h(PluginView, { view: tabbed(), embedded: true }));
+    });
+    expect(container.querySelectorAll(".pl-tab").length).toBeGreaterThan(1); // still a multi-tab strip
+    expect(container.querySelector(".pl-tabs--attached")).toBeNull();
+  });
+});
+
 describe("PluginView — the protoagent:theme re-post carries updated values", () => {
   let container: HTMLElement;
   let root: Root;

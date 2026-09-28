@@ -597,7 +597,11 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
           single-/no-tab view (e.g. Notes) has nothing to switch, so we skip the strip;
           rendering it anyway showed an empty <select> on mobile (responsive Tabs). */}
       {tabs.length > 1 && (
-        <Tabs responsive active={activeTab} onSelect={setActiveTab}
+        // `attached` (DS 0.63) fuses the strip to the panel below as one card — the padding /
+        // top-only border / bg-raised the old `.pl-appshell__col > .pl-tabs` override used to
+        // supply. Only in rail/dock mode: embedded Configure renders `plugin-view--embedded`,
+        // not a column card, so it must NOT carry the attached edge.
+        <Tabs responsive attached={!embedded} active={activeTab} onSelect={setActiveTab}
               items={tabs.map((t) => ({ id: t.id, label: t.label }))} />
       )}
       <section className={embedded ? "plugin-view plugin-view--embedded" : "panel stage-panel plugin-view"}>
