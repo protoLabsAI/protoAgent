@@ -332,6 +332,71 @@ def _tracking_drift(checkout: Path) -> str:
     return f"It is {' and '.join(parts)} {upstream}; it was not fetched."
 
 
+_FETCH_TIMEOUT_S = 60
+
+
+def _refresh_checkout(checkout: Path) -> str:
+    """Fetch a REUSED ``checkout``'s upstream and fast-forward it — only when that can
+    never lose work (#3733). Opt-in (``refresh=true``); the default reuse path still
+    never touches the directory.
+
+    Refuses, naming the reason, rather than ever resetting or merging: tracked local
+    changes, no upstream, or local commits the upstream doesn't have (a fast-forward
+    is impossible and a merge/reset would be a judgement call for a human). Untracked
+    files are left alone — ``merge --ff-only`` itself refuses if one would be
+    overwritten. Returns one sentence to append to the reuse message."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    def _git(*argv: str, timeout: int = 10):
+        return subprocess.run(
+            ["git", *argv],
+            cwd=str(checkout),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+
+    try:
+        up = _git("rev-parse", "--abbrev-ref", "@{upstream}")
+        if up.returncode != 0 or not (up.stdout or "").strip():
+            return "Not refreshed — the current branch has no upstream tracking branch to fetch."
+        upstream = up.stdout.strip()
+        dirty = _git("status", "--porcelain", "--untracked-files=no")
+        if dirty.returncode != 0:
+            return "Not refreshed — it is not a readable git checkout."
+        if (dirty.stdout or "").strip():
+            return "Not refreshed — it has uncommitted changes to tracked files (left exactly as they are)."
+        remote = upstream.split("/", 1)[0]
+        fetched = _git("fetch", "--quiet", "--", remote, timeout=_FETCH_TIMEOUT_S)
+        if fetched.returncode != 0:
+            err = (fetched.stderr or "").strip() or f"exit code {fetched.returncode}"
+            return f"Not refreshed — git fetch {remote} failed: {_redact(err)}"
+        counts = _git("rev-list", "--left-right", "--count", f"{upstream}...HEAD")
+        fields = (counts.stdout or "").split()
+        if counts.returncode != 0 or len(fields) != 2 or not all(f.isdigit() for f in fields):
+            return f"Fetched {upstream}, but how far it moved could not be determined; not fast-forwarded."
+        behind, ahead = int(fields[0]), int(fields[1])
+        if ahead:
+            return (
+                f"Fetched, but not fast-forwarded — it has {ahead} local commit{'' if ahead == 1 else 's'} "
+                f"{upstream} doesn't ({behind} behind); reconciling that is left to you."
+            )
+        if not behind:
+            return f"Fetched — it is up to date with {upstream}."
+        ff = _git("merge", "--ff-only", "--quiet", upstream, timeout=_FETCH_TIMEOUT_S)
+        if ff.returncode != 0:
+            err = (ff.stderr or "").strip() or f"exit code {ff.returncode}"
+            return f"Fetched ({behind} behind {upstream}), but the fast-forward was refused: {_redact(err)}"
+        head = (_git("rev-parse", "--short", "HEAD").stdout or "").strip()
+        return f"Fetched and fast-forwarded {behind} commit{'' if behind == 1 else 's'} to {upstream} ({head})."
+    except subprocess.TimeoutExpired:
+        return "Not refreshed — git timed out (the remote may be unreachable)."
+    except Exception as exc:  # noqa: BLE001 — a tool must not raise into the turn
+        return f"Not refreshed — git could not run: {_redact(str(exc))}"
+
+
 def _same_path(a, b: Path) -> bool:
     """True when config entry path ``a`` names the same location as ``b``."""
     try:
@@ -776,6 +841,7 @@ def build_onboard_tools(config) -> list:
         name: str | None = None,
         write: bool | None = None,
         github_repo: str = "",
+        refresh: bool = False,
     ) -> str:
         """Clone a git repository and register it as a managed project you can work in.
 
@@ -797,6 +863,11 @@ def build_onboard_tools(config) -> list:
             write: Register read-write (``true``) or read-only (``false``).
                 Omit to use the operator's configured default.
             github_repo: Older name for ``repo`` — still accepted; prefer ``repo``.
+            refresh: For a checkout that is ALREADY on disk: ``git fetch`` its
+                upstream and fast-forward it. Only ever a fast-forward — refused
+                (with the reason) when it has uncommitted tracked changes, no
+                upstream, or local commits the upstream lacks. Use it before
+                reading or auditing a clone that may be stale.
 
         This is BOUNDED and will refuse rather than reach outside its bounds:
 
@@ -813,6 +884,8 @@ def build_onboard_tools(config) -> list:
           result reports how far the checkout has drifted from its tracking
           branch (e.g. "2 commits behind origin/main; it was not fetched"),
           read from local Git metadata only, or notes that it couldn't be told.
+          That count is only as fresh as the last fetch — pass ``refresh=true``
+          to fetch and fast-forward instead.
         - Already registered → success with a note; onboarding is idempotent.
 
         Onboarding being disabled means this tool isn't available at all; if you
@@ -911,8 +984,12 @@ def build_onboard_tools(config) -> list:
         # a read-only ahead/behind count that always states it was not fetched.
         # Only meaningful when there is a checkout on disk to compare.
         drift = ""
-        if reused_checkout:
+        if reused_checkout and refresh:
+            drift = " " + await asyncio.to_thread(_refresh_checkout, target)
+        elif reused_checkout:
             drift = " " + await asyncio.to_thread(_tracking_drift, target)
+            if "it was not fetched" in drift:
+                drift += " Pass refresh=true to fetch and fast-forward it."
 
         # (4) register — the shared read-merge-write path (see ``_register``).
         github = ref.github_slug
