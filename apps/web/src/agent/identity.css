@@ -34,7 +34,7 @@
   padding: 12px 18px;
   background: color-mix(in srgb, var(--pl-color-fg) 3%, transparent);
   color: var(--pl-color-fg);
-  font-family: var(--pl-font-sans, inherit);
+  font-family: var(--pl-font-sans);
   cursor: text;
 }
 .soul-preview > :first-child { margin-top: 0; }
@@ -139,7 +139,7 @@
   overflow: auto;
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-fg) 4%, transparent);
-  font-family: var(--pl-font-mono, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   line-height: 1.5;
   white-space: pre-wrap;

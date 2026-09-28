@@ -146,7 +146,7 @@
 .activity-origin-webhook   { color: var(--pl-color-status-warning); border-color: color-mix(in srgb, var(--pl-color-status-warning) 45%, var(--pl-color-border)); }
 .activity-origin-a2a       { color: var(--pl-color-chart-series8); border-color: color-mix(in srgb, var(--pl-color-chart-series8) 45%, var(--pl-color-border)); }
 .activity-origin-operator  { color: var(--pl-color-accent); border-color: color-mix(in srgb, var(--pl-color-accent) 45%, var(--pl-color-border)); }
-.activity-trigger { font-family: var(--pl-font-mono, ui-monospace, monospace); color: var(--pl-color-fg-muted); }
+.activity-trigger { font-family: var(--pl-font-mono); color: var(--pl-color-fg-muted); }
 .activity-time { margin-left: auto; color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted)); }
 
 /* Unified feed (#3029) ------------------------------------------------------
