@@ -149,6 +149,15 @@ def build_router():
 
     router = APIRouter()
 
+    def _mutation_http_error(e: Exception) -> HTTPException:
+        """One status mapping for a refused delete or rename (#3692): 409 while config
+        still names the delegate, 403 for a layer this agent can't write, 400 otherwise."""
+        if isinstance(e, store.DelegateReferencedError):
+            return HTTPException(409, str(e))
+        if isinstance(e, store.DelegateScopeError):  # a ValueError subclass — test it first
+            return HTTPException(403, str(e))
+        return HTTPException(400, str(e))
+
     @router.get("/api/delegate-types")
     async def _types():
         return {"types": delegate_types()}
@@ -231,16 +240,12 @@ def build_router():
                 # Off the loop; `expect="present"` re-checks under the lock that a concurrent
                 # delete hasn't removed it — an edit must not bring a deleted delegate back.
                 await asyncio.to_thread(partial(store.upsert_delegate, entry, expect="present"))
-        except store.DelegateReferencedError as e:
-            raise HTTPException(409, str(e))
         except store.DelegateNotFoundError as e:
             raise HTTPException(404, str(e))
         except store.DelegateConflictError as e:
             raise HTTPException(409, str(e))
-        except store.DelegateScopeError as e:  # subclass of ValueError — catch before it
-            raise HTTPException(403, str(e))
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+        except (store.DelegateReferencedError, ValueError) as e:
+            raise _mutation_http_error(e)
         ok, msg = await _reload()
         return {"ok": ok, "message": msg, **_list_payload()}
 
@@ -251,12 +256,8 @@ def build_router():
         # `repoint_to` rewrites every reference to another delegate in the same save.
         try:
             await asyncio.to_thread(partial(store.delete_delegate, name, force=force, repoint_to=repoint_to))
-        except store.DelegateReferencedError as e:
-            raise HTTPException(409, str(e))
-        except store.DelegateScopeError as e:  # subclass of ValueError — catch before it
-            raise HTTPException(403, str(e))
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+        except (store.DelegateReferencedError, ValueError) as e:
+            raise _mutation_http_error(e)
         ok, msg = await _reload()
         return {"ok": ok, "message": msg, **_list_payload()}
 

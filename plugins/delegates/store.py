@@ -706,14 +706,15 @@ def delete_delegate(name: str, *, force: bool = False, repoint_to: str | None = 
     # and the operator got a 403 — so the rewrite is deferred until AFTER the removal
     # succeeds (#3692 review). The target is validated here (no writes), so an invalid
     # ``repoint_to`` refuses without touching config either.
+    # ``repoint_to`` is honored with or without ``force`` — force only waives the refusal,
+    # it must never turn an explicit repoint into a delete that strands every reference.
     repoint_target: str | None = None
-    if not force:
+    if repoint_to:
+        repoint_target = _validate_repoint_target(name, repoint_to)
+    elif not force:
         refs = find_delegate_references(name)
         if refs:
-            if repoint_to:
-                repoint_target = _validate_repoint_target(name, repoint_to)
-            else:
-                raise DelegateReferencedError(name, refs)
+            raise DelegateReferencedError(name, refs)
     if not _remove_from_layer(name, SCOPE_AGENT):
         host_has = any(isinstance(e, dict) and e.get("name") == name for e in read_host_delegates_raw())
         if host_has:

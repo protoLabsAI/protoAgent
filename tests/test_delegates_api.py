@@ -644,3 +644,46 @@ def test_rename_with_force_repoints_references_to_the_new_name(client, fake_io):
     assert r.status_code == 200
     assert [d["name"] for d in r.json()["delegates"]] == ["fable2"]
     assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "fable2"}
+
+
+def test_force_with_repoint_still_rewrites_every_reference(client, fake_io):
+    # QA panel (#3736): `force` waives the refusal, it must not drop an explicit
+    # `repoint_to` — both together delete AND repoint, never strand the references.
+    client.post("/api/delegates", json=_acp("fable"))
+    client.post("/api/delegates", json=_acp("opusx"))
+    fake_io["doc"]["project_board"] = {"coders": {"reasoning": "fable", "opus": "fable"}}
+    r = client.request("DELETE", "/api/delegates/fable", params={"force": "true", "repoint_to": "opusx"})
+    assert r.status_code == 200
+    assert [d["name"] for d in r.json()["delegates"]] == ["opusx"]
+    assert fake_io["doc"]["project_board"]["coders"] == {"reasoning": "opusx", "opus": "opusx"}
+
+
+def test_force_with_unknown_repoint_target_is_still_rejected(client, fake_io):
+    client.post("/api/delegates", json=_acp("fable"))
+    fake_io["doc"]["project_board"] = {"coder": "fable"}
+    r = client.request("DELETE", "/api/delegates/fable", params={"force": "true", "repoint_to": "ghost"})
+    assert r.status_code == 400
+    assert [d["name"] for d in client.get("/api/delegates").json()["delegates"]] == ["fable"]
+    assert fake_io["doc"]["project_board"] == {"coder": "fable"}
+
+
+def test_rename_with_repoint_to_sends_references_to_the_third_delegate(client, fake_io):
+    # A rename's `repoint_to` overrides the new name as the reference target.
+    client.post("/api/delegates", json=_acp("fable"))
+    client.post("/api/delegates", json=_acp("opusx"))
+    fake_io["doc"]["project_board"] = {"coder": "fable", "coders": {"reasoning": "fable"}}
+    r = client.put("/api/delegates/fable", params={"repoint_to": "opusx"}, json=_acp("fable2"))
+    assert r.status_code == 200
+    assert sorted(d["name"] for d in r.json()["delegates"]) == ["fable2", "opusx"]
+    assert fake_io["doc"]["project_board"] == {"coder": "opusx", "coders": {"reasoning": "opusx"}}
+
+
+def test_rename_keeps_the_stored_secret_under_the_new_name(fake_io):
+    # _rekey_secrets: a renamed delegate keeps its credential — stored under the new name
+    # and overlaid back at load.
+    store.upsert_delegate({"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "api_key": "K"})
+    assert fake_io["secrets"]["delegate_secrets"]["opus.api_key"] == "K"
+    store.rename_delegate("opus", {"name": "opus2", "type": "openai", "url": "https://g/v1", "model": "m"})
+    assert fake_io["secrets"]["delegate_secrets"]["opus2.api_key"] == "K"
+    merged = {d["name"]: d for d in store.merged_delegates()}
+    assert set(merged) == {"opus2"} and merged["opus2"]["api_key"] == "K"
