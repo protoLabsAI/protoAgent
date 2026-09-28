@@ -94,6 +94,7 @@ export function McpCatalogDialog({
       onClose={close}
       title="Add a common MCP server"
       width="min(720px, 95vw)"
+      padding="roomy"
       className={`mcp-catalog-dialog${selected ? "" : " mcp-catalog-dialog--browse"}`}
     >
       {selected ? (

@@ -54,6 +54,7 @@ export function DocumentViewer() {
       open
       onClose={closeDocument}
       width="min(1100px, 96vw)"
+      padding="roomy"
       className="doc-viewer"
       title={
         <span className="doc-viewer__title">

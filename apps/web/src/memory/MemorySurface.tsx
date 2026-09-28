@@ -519,7 +519,7 @@ function InjectionDetailDialog({
   });
 
   return (
-    <Dialog open onClose={onClose} title="What this turn used" width="min(560px, 94vw)">
+    <Dialog open onClose={onClose} title="What this turn used" width="min(560px, 94vw)" padding="roomy">
       {/* Time + cost render immediately from the row we already have. */}
       <p className="memory-detail-meta">
         {ago(row.ts)} · ~{row.approx_tokens} tokens
