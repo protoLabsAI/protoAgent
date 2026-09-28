@@ -273,6 +273,7 @@ export function UpdateNotice() {
         open={open}
         onClose={() => setOpen(false)}
         width={680}
+        padding="roomy"
         title={
           <>
             Update available <span className="update-notice-ver">{update.version}</span>

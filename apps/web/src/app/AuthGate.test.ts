@@ -92,6 +92,23 @@ describe("DS Dialog dismissal contract", () => {
   });
 });
 
+// DS 0.63 card 3b: content dialogs opt into `padding="roomy"` so the body keeps its 24px
+// padding once the app-wide `.pl-dialog__body` rule is deleted by a later card. This pins the
+// DS contract the opt-in rides on — `"roomy"` adds the `--roomy` body modifier; omitting it
+// does not — so a content dialog missing the prop would be caught downstream.
+describe("DS Dialog padding contract (card 3b)", () => {
+  it('padding="roomy" adds the roomy body modifier', () => {
+    mount(h(Dialog, { open: true, title: "Roomy", padding: "roomy" }, "body"));
+    expect(inPortal(".pl-dialog__body--roomy")).not.toBeNull();
+  });
+
+  it("omitting padding leaves the DS-default body (no roomy modifier)", () => {
+    mount(h(Dialog, { open: true, title: "Default" }, "body"));
+    expect(inPortal(".pl-dialog__body")).not.toBeNull();
+    expect(inPortal(".pl-dialog__body--roomy")).toBeNull();
+  });
+});
+
 describe("AuthGate — blocking auth modal (#1921)", () => {
   beforeEach(() => notifyAuthRequired());
   afterEach(() => clearAuthRequired());
@@ -107,6 +124,11 @@ describe("AuthGate — blocking auth modal (#1921)", () => {
     expect(inPortal(".pl-dialog__close")).toBeNull();
     expect(buttonByText("Not now")).toBeUndefined();
     expect(buttonByText("Connect")).toBeDefined();
+  });
+
+  it("opts into roomy DS Dialog body padding (card 3b)", () => {
+    mountGate();
+    expect(inPortal(".pl-dialog__body--roomy")).not.toBeNull();
   });
 
   it("does not close on Escape or backdrop click — the auth state persists", () => {
