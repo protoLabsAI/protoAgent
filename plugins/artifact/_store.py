@@ -41,13 +41,83 @@ log = logging.getLogger("protoagent.plugins.artifact")
 # newer artifacts push them out, rather than evicting them on the very first write.
 
 
-def _store_path() -> Path:
-    base = Path(os.environ.get("ARTIFACT_DIR") or (Path.home() / ".protoagent" / "artifact"))
+def _legacy_store_dir() -> Path:
+    """Where the store's data lived before it was instance-scoped (ADR 0004 / ADR 0065).
+    Read-only, for the one-time migration and as the last-resort fallback. When
+    ``PROTOAGENT_INSTANCE`` is set it was appended as a subdir — the same shape the old
+    ``_store_path`` derived straight from ``~``."""
+    base = Path.home() / ".protoagent" / "artifact"
     inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
     if inst:
         base = base / inst
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "history.json"
+    return base
+
+
+def _migrate_legacy_store(legacy: Path, new_dir: Path) -> None:
+    """Move a legacy ``history.json`` AND its ``blobs/`` dir into ``new_dir`` (raising
+    ``OSError`` if a move fails). Moving only the JSON breaks file-artifact downloads
+    (``/artifact/{id}/blob`` resolves bytes from ``blobs/`` beside it), so the blobs travel
+    with it. ``blobs/`` moves FIRST so history.json is the commit marker: a move that dies
+    after the blobs land re-runs cleanly on the next access (blobs already there, JSON still
+    in legacy). Sibling instance subdirectories under a bare legacy dir are NOT touched."""
+    new_dir.mkdir(parents=True, exist_ok=True)
+    legacy_blobs = legacy / "blobs"
+    if legacy_blobs.is_dir():
+        legacy_blobs.replace(new_dir / "blobs")
+    (legacy / "history.json").replace(new_dir / "history.json")
+    log.info("[artifact] migrated store %s -> %s", legacy, new_dir)
+
+
+def _store_dir() -> Path:
+    """The store's data directory, resolved at call time so instance scoping and
+    ``ARTIFACT_DIR`` are honored live.
+
+    ``ARTIFACT_DIR`` overrides everything (env-only), keeping the historical
+    ``/<PROTOAGENT_INSTANCE>`` subdir that existing installs and tests depend on.
+    Otherwise it's this instance's own plugin store via ``graph.sdk.plugin_store`` — the
+    box-root-aware seam (ADR 0004 / ADR 0065), NOT a path re-derived from ``~``. The old
+    guess (``~/.protoagent/artifact[/<inst>]``) ignored ``PROTOAGENT_BOX_ROOT`` /
+    ``PROTOAGENT_HOME``: a scoped server wrote to the real home, and a default install with
+    no instance landed one level ABOVE the instance root (``~/.protoagent/default``).
+
+    A path-resolution failure falls back to the legacy directory rather than failing the
+    tool call — store access must never fail because of path resolution."""
+    override = os.environ.get("ARTIFACT_DIR")
+    if override:
+        base = Path(override)
+        inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+        if inst:
+            base = base / inst
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    try:
+        from graph.sdk import plugin_store
+
+        new_dir = plugin_store(plugin_id="artifact")
+    except Exception:  # noqa: BLE001 — a path-resolution failure must not fail the tool call
+        legacy = _legacy_store_dir()
+        legacy.mkdir(parents=True, exist_ok=True)
+        return legacy
+    # Adopt a pre-instance-scoping store on first access rather than silently starting
+    # empty: an operator who upgrades keeps their artifacts, not appears to have none.
+    if not (new_dir / "history.json").exists():
+        legacy = _legacy_store_dir()
+        if legacy.resolve() != new_dir.resolve() and (legacy / "history.json").is_file():
+            try:
+                _migrate_legacy_store(legacy, new_dir)
+            except OSError:
+                log.warning(
+                    "[artifact] could not migrate store %s -> %s; using the legacy directory",
+                    legacy,
+                    new_dir,
+                    exc_info=True,
+                )
+                return legacy  # can't move it — keep using it where it is
+    return new_dir
+
+
+def _store_path() -> Path:
+    return _store_dir() / "history.json"
 
 
 def _store_etag() -> str:

@@ -1845,3 +1845,196 @@ def test_parallel_pins_cannot_overshoot_the_cap(monkeypatch, tmp_path):
         th.join(timeout=10)
     assert sorted("Pinned artifact" in r for r in results) == [False, True], results
     assert len(art._store._pinned(art._read_store())) == 1
+
+
+# ── ADR 0004 / 0065: the default store lives in the instance plugin store ────────
+# With ARTIFACT_DIR unset the store used to be derived straight from ~ (ignoring
+# PROTOAGENT_BOX_ROOT / PROTOAGENT_HOME): a box-scoped server wrote to the real home,
+# and a default install landed one level ABOVE the instance root. It now resolves via
+# graph.sdk.plugin_store (box-root aware) and migrates legacy ~/.protoagent/artifact data.
+
+
+def _load_instance(monkeypatch):
+    """Fresh plugin package with ARTIFACT_DIR UNSET, so the store resolves through the
+    instance plugin store (graph.sdk.plugin_store) rather than the env override."""
+    monkeypatch.delenv("ARTIFACT_DIR", raising=False)
+    for k in [k for k in sys.modules if k.startswith("artifact_under_test")]:
+        del sys.modules[k]
+    spec = importlib.util.spec_from_file_location(
+        "artifact_under_test", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)]
+    )
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules["artifact_under_test"] = mod
+    spec.loader.exec_module(mod)
+    mod._render_status._RENDER_WAIT_MS = 0
+    return mod
+
+
+def _pin_roots(monkeypatch, tmp_path, instance=None):
+    """Point the box root and HOME at tmp and re-resolve instance paths, so the store
+    stays inside tmp and the migration can NEVER touch the developer's real
+    ~/.protoagent/artifact (the conftest does not pin HOME)."""
+    from infra.paths import reset_instance_paths
+
+    home = tmp_path / "home"
+    box = tmp_path / "box"
+    home.mkdir(exist_ok=True)
+    monkeypatch.delenv("ARTIFACT_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    if instance is None:
+        monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    else:
+        monkeypatch.setenv("PROTOAGENT_INSTANCE", instance)
+    reset_instance_paths()
+    return home, box
+
+
+def _legacy_store(art_id):
+    return {
+        "artifacts": [
+            {
+                "id": art_id,
+                "kind": "html",
+                "title": art_id,
+                "versions": [{"code": f"<p>{art_id}</p>", "ts": 1, "by": "agent"}],
+                "version_count": 1,
+                "created": 1,
+                "updated": 1,
+            }
+        ],
+        "current": art_id,
+    }
+
+
+def test_default_store_writes_to_the_instance_plugin_store_not_home(monkeypatch, tmp_path):
+    """r1: box-scoped + instanced, ARTIFACT_DIR unset — history.json and blobs land under
+    <box>/<inst>/artifact, and nothing is created under the real-home ~/.protoagent."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load_instance(monkeypatch)
+
+    art.show_artifact.invoke({"kind": "html", "code": "<p>hi</p>"})
+    src = tmp_path / "src.txt"
+    src.write_bytes(b"blobby")
+    out = art.save_file_artifact.invoke({"path": str(src)})
+    assert "Saved file artifact" in out
+
+    store_dir = box / "onb" / "artifact"
+    assert (store_dir / "history.json").is_file()
+    blobs = list((store_dir / "blobs").rglob("*.txt"))
+    assert blobs and blobs[0].read_bytes() == b"blobby"
+    assert json.loads((store_dir / "history.json").read_text())["artifacts"]  # real store, not empty
+    assert not (home / ".protoagent").exists()  # nothing leaked to the real-home shape
+
+
+def test_legacy_instance_store_is_migrated_history_and_blobs(monkeypatch, tmp_path):
+    """r2: a pre-instance-scoping <HOME>/.protoagent/artifact/onb store (history + a blob)
+    is moved wholesale on first access; the artifact lists and its blob resolves from the
+    new location, and the legacy files are gone."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = home / ".protoagent" / "artifact" / "onb"
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    blob_name = "deadbeef01.txt"
+    (legacy / "blobs" / "a-1" / blob_name).write_bytes(b"legacy-bytes")
+    store = {
+        "artifacts": [
+            {
+                "id": "a-1",
+                "kind": "file",
+                "title": "Doc",
+                "versions": [
+                    {
+                        "code": "preview",
+                        "ts": 1,
+                        "by": "agent",
+                        "file": {"mime": "text/plain", "filename": "d.txt", "size": 12, "thumb": ""},
+                        "blob": blob_name,
+                    }
+                ],
+                "version_count": 1,
+                "created": 1,
+                "updated": 1,
+            }
+        ],
+        "current": "a-1",
+    }
+    (legacy / "history.json").write_text(json.dumps(store), encoding="utf-8")
+
+    art = _load_instance(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]
+
+    new_dir = box / "onb" / "artifact"
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-1" / blob_name).read_bytes() == b"legacy-bytes"
+    # the blob resolves from the new location (the path the download route opens, _routes:56)
+    assert art._store._blob_path("a-1", blob_name).read_bytes() == b"legacy-bytes"
+    # legacy files are gone
+    assert not (legacy / "history.json").exists()
+    assert not (legacy / "blobs").exists()
+
+
+def test_bare_legacy_store_migrates_and_leaves_sibling_instances(monkeypatch, tmp_path):
+    """r3: with PROTOAGENT_INSTANCE unset the bare <HOME>/.protoagent/artifact store
+    migrates, but sibling instance subdirectories under it are left untouched."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance=None)
+    art_root = home / ".protoagent" / "artifact"
+    art_root.mkdir(parents=True)
+    (art_root / "history.json").write_text(json.dumps(_legacy_store("bare")), encoding="utf-8")
+    sibling = art_root / "roxy"  # a co-located instance's store — NOT ours to move
+    sibling.mkdir()
+    (sibling / "history.json").write_text(json.dumps(_legacy_store("roxy-art")), encoding="utf-8")
+
+    art = _load_instance(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["bare"]
+
+    new_dir = box / "default" / "artifact"  # no instance → "default"
+    assert (new_dir / "history.json").is_file()
+    assert not (art_root / "history.json").exists()  # the bare store moved
+    assert (sibling / "history.json").is_file()  # the sibling instance is left alone
+
+
+def test_no_migration_when_the_new_store_already_exists(monkeypatch, tmp_path):
+    """r4: if the instance store already has history.json it wins outright — no migration,
+    and legacy data stays where it is."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True)
+    (new_dir / "history.json").write_text(json.dumps(_legacy_store("new")), encoding="utf-8")
+    legacy = home / ".protoagent" / "artifact" / "onb"
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
+
+    art = _load_instance(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["new"]  # the new store wins
+    assert (legacy / "history.json").is_file()  # legacy untouched
+
+
+def test_path_resolution_failure_falls_back_to_the_legacy_path(monkeypatch, tmp_path):
+    """r6: a resolver that raises must not fail the tool call — the store falls back to the
+    legacy directory and keeps working."""
+    import graph.sdk
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+
+    def _boom(*a, **k):
+        raise RuntimeError("instance paths unavailable")
+
+    monkeypatch.setattr(graph.sdk, "plugin_store", _boom)
+
+    art = _load_instance(monkeypatch)
+    out = art.show_artifact.invoke({"kind": "html", "code": "<p>fallback</p>"})
+    assert "Created" in out  # the tool call succeeded despite the failing resolver
+
+    legacy = home / ".protoagent" / "artifact" / "onb"
+    assert (legacy / "history.json").is_file()
+    assert str(art._store._store_path()).startswith(str(legacy))

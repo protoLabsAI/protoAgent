@@ -170,8 +170,12 @@ environment variable of the same knob overrides the UI for headless / ACP setups
 | **Pinned artifacts** | `ARTIFACT_MAX_PINNED` | `10` | Max pinned artifacts; a pin past this is refused. `0` refuses all new pins. Lowering it (to `0` included) doesn't unpin anything: existing pins stay protected until unpinned. |
 | **Max artifact size (KB)** | `ARTIFACT_MAX_CODE_KB` | `512` | Max source size per version (a larger render is rejected). |
 
-`ARTIFACT_DIR` (`~/.protoagent/artifact`) is env-only — where state is stored (instance-scoped by
-`PROTOAGENT_INSTANCE`).
+State (`history.json` plus the sidecar `blobs/`) lives in the instance's plugin store —
+`<instance_root>/artifact` (ADR 0004 / ADR 0065), so a box-scoped server (`PROTOAGENT_BOX_ROOT`)
+and every fleet member get their own copy. `ARTIFACT_DIR` is an env-only override of that directory
+(still `/<PROTOAGENT_INSTANCE>`-scoped when set). Legacy data under `~/.protoagent/artifact[/<inst>]`
+(from before instance scoping) is migrated into the new location automatically on first access — the
+`history.json` and its `blobs/` move together.
 
 ## Interactive artifacts (calling back to the agent)
 
