@@ -89,8 +89,9 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
   });
 
   it("snaps each former half-pixel site to its nearest token px", () => {
-    // chat.css .chat-memory-note: 12.5px -> sm (13px).
-    expect(chatCss).toContain(".chat-memory-note {\n  margin: 12px 0 0;\n  font-size: var(--pl-font-size-sm);");
+    // chat.css .chat-memory-note: 12.5px -> sm (13px). The `margin: 12px 0 0` shorthand was
+    // tokenized to `var(--pl-space-3) 0 0` by the DS spacing audit (card 3c), so the pin tracks that.
+    expect(chatCss).toContain(".chat-memory-note {\n  margin: var(--pl-space-3) 0 0;\n  font-size: var(--pl-font-size-sm);");
     // chat.css .chat-usage-tip-sub: 10.5px -> 2xs (11px).
     expect(chatCss).toContain("font-weight: 400;\n  font-size: var(--pl-font-size-2xs);");
     // promptviewer.css .prompt-viewer__wire: 12.5px -> sm (13px).

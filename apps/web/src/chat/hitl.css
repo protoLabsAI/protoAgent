@@ -52,8 +52,8 @@
    composer's focus border follows via the theme-base.css bridge) — so the
    card tracks the workspace accent. Guarded by hitl-accent.test.ts. */
 .hitl-card {
-  margin: 0 12px 8px;
-  padding: 12px 14px;
+  margin: 0 var(--pl-space-3) var(--pl-space-2);
+  padding: var(--pl-space-3) 14px;
   border: 1px solid var(--pl-color-accent);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -90,7 +90,7 @@
 .hitl-step {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-step-title {
@@ -102,7 +102,7 @@
 .hitl-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   font-size: var(--pl-font-size-xs);
 }
 
@@ -113,7 +113,7 @@
 .hitl-field-bool {
   flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-field input,
@@ -124,7 +124,7 @@
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
   border-radius: 5px;
-  padding: 6px 8px;
+  padding: 6px var(--pl-space-2);
   font: inherit;
 }
 
@@ -139,7 +139,7 @@
 
 .hitl-detail {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   border-radius: 5px;
@@ -157,7 +157,7 @@
 .hitl-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 /* Wizard header + step indicator (multi-step request_user_input). */
@@ -165,13 +165,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 .hitl-stepper {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-step-count {
@@ -182,7 +182,7 @@
 
 .hitl-dots {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 
 .hitl-dot {
@@ -208,13 +208,13 @@
 .hitl-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-card-option {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--pl-space-2);
   text-align: left;
   padding: 10px;
   background: var(--pl-color-bg);
