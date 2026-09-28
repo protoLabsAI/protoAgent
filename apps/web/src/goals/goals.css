@@ -17,7 +17,7 @@
 
 /* The row is a button (opens the detail drawer) — hover/focus affordance. */
 .goal-row:hover {
-  background: var(--pl-color-bg-hover, rgba(127, 127, 127, 0.06));
+  background: var(--pl-color-bg-hover);
 }
 
 .goal-row:focus-visible {

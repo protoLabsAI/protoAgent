@@ -162,7 +162,7 @@
 }
 
 .memory-detail-snippet {
-  color: var(--pl-color-fg, inherit);
+  color: var(--pl-color-fg);
 }
 
 .memory-detail-gone {
