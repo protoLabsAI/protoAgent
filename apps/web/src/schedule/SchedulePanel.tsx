@@ -62,6 +62,7 @@ export function ScheduleModal({
   return (
     <Dialog
       open={open}
+      padding="roomy"
       onClose={onClose}
       title={<><CalendarClock size={16} /> New schedule</>}
       width="min(560px, 94vw)"
@@ -136,6 +137,7 @@ function ScheduleDetailDialog({
   return (
     <Dialog
       open={!!job}
+      padding="roomy"
       onClose={onClose}
       title={<><CalendarClock size={16} /> {editing ? "Edit schedule" : "Scheduled job"}</>}
       width="min(560px, 94vw)"
