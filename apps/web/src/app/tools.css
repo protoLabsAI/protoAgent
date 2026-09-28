@@ -62,8 +62,8 @@
 @keyframes tools-row-target-pulse {
   0%,
   25% {
-    background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 22%, transparent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pl-color-accent, #7c8cff) 45%, transparent);
+    background: color-mix(in srgb, var(--pl-color-accent) 22%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pl-color-accent) 45%, transparent);
   }
   100% {
     background: transparent;

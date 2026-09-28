@@ -66,7 +66,7 @@ export function ProtoLabsIcon({
       height={size}
       viewBox="0 0 256 256"
       className={className}
-      style={tone === "accent" ? { color: "var(--pl-color-accent, #9b87f2)" } : undefined}
+      style={tone === "accent" ? { color: "var(--pl-color-accent)" } : undefined}
       {...a11y}
     >
       {gradientStroke && (
@@ -82,8 +82,8 @@ export function ProtoLabsIcon({
           <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1="2" y1="4" x2="22" y2="20">
             {tone === "accent" ? (
               <>
-                <stop offset="0" style={{ stopColor: "color-mix(in srgb, var(--pl-color-accent, #9b87f2), #fff 22%)" }} />
-                <stop offset="1" style={{ stopColor: "color-mix(in srgb, var(--pl-color-accent, #7c3aed), #000 25%)" }} />
+                <stop offset="0" style={{ stopColor: "color-mix(in srgb, var(--pl-color-accent), #fff 22%)" }} />
+                <stop offset="1" style={{ stopColor: "color-mix(in srgb, var(--pl-color-accent), #000 25%)" }} />
               </>
             ) : (
               <>
