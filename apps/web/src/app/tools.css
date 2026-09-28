@@ -2,12 +2,12 @@
    DS Accordion sections by subsystem. Chrome (the accordion + source/count badges)
    comes from @protolabsai/ui; only the row layout lives here. */
 .tools-groups {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
 }
 .tools-group-head {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .tools-list {
   display: flex;
@@ -17,7 +17,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   padding: 7px 2px;
   border-bottom: 1px solid var(--pl-color-border);
 }
@@ -27,7 +27,7 @@
 .tools-row-main {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -75,7 +75,7 @@
 .tools-config-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: 0 0 6px;
 }
 
@@ -83,8 +83,8 @@
 .fs-projects {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 4px 0 12px;
+  gap: var(--pl-space-2);
+  margin: var(--pl-space-1) 0 var(--pl-space-3);
 }
 .fs-projects-row {
   display: flex;
@@ -103,7 +103,7 @@
 }
 .fs-projects-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 /* A saved root whose folder is gone gets skipped when the fs tools are built, and if it was
    the last one the whole toolset unbinds — so this sits ABOVE the folder list, loud enough
@@ -111,9 +111,9 @@
 .fs-projects-warning {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
   border-radius: 8px;
   color: var(--pl-color-status-warning);
   background: color-mix(in srgb, var(--pl-color-status-warning) 12%, transparent);
@@ -133,8 +133,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 2px 0 8px;
+  gap: var(--pl-space-2);
+  margin: 2px 0 var(--pl-space-2);
 }
 /* The group carries settings — a muted glyph on its header, next to the count. */
 .tools-group-cog {
