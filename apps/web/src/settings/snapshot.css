@@ -1,7 +1,7 @@
 /* Settings ▸ Agent ▸ Snapshot (ADR 0091). Reuses the settings panel rhythm; only the
    review sections are bespoke, because nothing else in Settings is a pre-download report. */
 .snapshot-lede {
-  margin: 0 0 16px;
+  margin: 0 0 var(--pl-space-4);
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   max-width: 62ch;
@@ -9,14 +9,14 @@
 .snapshot-loading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 0;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-3) 0;
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
 .snapshot-section {
   margin-bottom: 20px;
-  padding-bottom: 16px;
+  padding-bottom: var(--pl-space-4);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .snapshot-section:last-of-type {
@@ -26,7 +26,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 0 8px;
+  margin: 0 0 var(--pl-space-2);
   font-size: var(--pl-font-size-sm);
   font-weight: 600;
 }
@@ -37,7 +37,7 @@
 }
 .snapshot-hint,
 .snapshot-none {
-  margin: 0 0 8px;
+  margin: 0 0 var(--pl-space-2);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   max-width: 62ch;
@@ -48,7 +48,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .snapshot-row {
   display: flex;
@@ -74,8 +74,8 @@
   color: var(--pl-color-fg-muted);
 }
 .snapshot-caveat {
-  margin: 16px 0 0;
-  padding: 10px 12px;
+  margin: var(--pl-space-4) 0 0;
+  padding: 10px var(--pl-space-3);
   border-radius: 6px;
   background: var(--pl-color-bg-inset);
   font-size: var(--pl-font-size-xs);
@@ -87,12 +87,12 @@
 /* Source toggle at the top of New agent: an archetype or a snapshot. */
 .new-agent-source {
   display: flex;
-  gap: 4px;
-  margin-bottom: 16px;
+  gap: var(--pl-space-1);
+  margin-bottom: var(--pl-space-4);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .new-agent-source button {
-  padding: 8px 14px;
+  padding: var(--pl-space-2) 14px;
   border: 0;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -108,7 +108,7 @@
 .snapshot-import {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .snapshot-import-error {
   display: flex;
@@ -120,5 +120,5 @@
 .snapshot-import-actions {
   display: flex;
   justify-content: flex-end;
-  padding-top: 8px;
+  padding-top: var(--pl-space-2);
 }

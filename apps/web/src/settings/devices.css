@@ -5,7 +5,7 @@
 
 .devices-error {
   color: var(--pl-color-fg);
-  padding: 8px 10px;
+  padding: var(--pl-space-2) 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -13,7 +13,7 @@
 
 .devices-pair {
   display: flex;
-  gap: 16px;
+  gap: var(--pl-space-4);
   align-items: center;
   margin: 10px 0 14px;
   padding: 14px;
@@ -29,7 +29,7 @@
   flex: 0 0 auto;
   width: 168px;
   height: 168px;
-  padding: 8px;
+  padding: var(--pl-space-2);
   border-radius: 8px;
   background: #fff;
 }
@@ -42,7 +42,7 @@
 .devices-pair-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 .devices-pair-hint {
@@ -61,7 +61,7 @@
   gap: 6px;
 }
 .devices-host {
-  padding: 4px 8px;
+  padding: var(--pl-space-1) var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: none;
@@ -77,8 +77,8 @@
 .devices-loading {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 16px 4px;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-4) var(--pl-space-1);
   font-size: var(--pl-font-size-xs);
   opacity: 0.75;
 }
@@ -99,7 +99,7 @@
 .devices-notice {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: 10px 0 14px;
   padding: 14px;
   border: 1px solid var(--pl-color-border);
@@ -112,8 +112,8 @@
 .devices-token {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2) 10px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -145,7 +145,7 @@
   font-size: 28px;
   font-weight: 600;
   letter-spacing: 0.12em;
-  padding: 6px 12px;
+  padding: 6px var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -163,7 +163,7 @@
 .devices-agent-hosts li {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 .devices-agent-hosts code {
@@ -183,7 +183,7 @@
 .devices-list .subagent-row strong {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .devices-list .subagent-row .pl-badge--info {
   color: var(--pl-color-status-info);
