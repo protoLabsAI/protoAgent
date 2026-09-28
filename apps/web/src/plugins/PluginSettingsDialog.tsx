@@ -52,7 +52,7 @@ export function PluginSettingsDialog({
 
   if (!open) return null;
   return (
-    <Dialog open onClose={onClose} title={pluginName} width="min(760px, 95vw)" className="plugin-settings-dialog">
+    <Dialog open onClose={onClose} title={pluginName} width="min(760px, 95vw)" className="plugin-settings-dialog" padding="roomy">
       {needsConfig && needsConfig.length ? (
         <Alert status="warning" className="settings-banner">
           <strong>Finish setup to activate this plugin.</strong>{" "}
