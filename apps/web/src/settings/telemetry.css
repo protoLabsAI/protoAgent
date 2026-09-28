@@ -59,7 +59,7 @@
 .telemetry-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   font-variant-numeric: tabular-nums;
 }
 .telemetry-table th {
@@ -92,7 +92,7 @@
   align-items: center;
   gap: 5px;
   font-family: var(--pl-font-mono, monospace);
-  font-size: 11.5px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
 }
 .telemetry-table .trace-link {
@@ -124,7 +124,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .insight-row.ok { color: var(--pl-color-status-success); }
 .insight-row.warn { color: var(--pl-color-status-warning); }
@@ -132,7 +132,7 @@
   list-style: none;
   margin: 4px 0 0;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 .insight-flags li {
@@ -146,7 +146,7 @@
 .flag-model { min-width: 150px; }
 .flag-reason { color: var(--pl-color-status-warning); }
 .insight-note {
-  font-size: 11.5px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   margin: 2px 0 0;
 }

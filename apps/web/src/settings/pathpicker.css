@@ -36,7 +36,7 @@
   white-space: nowrap;
   direction: rtl; /* keep the DEEPEST segment visible when it overflows */
   text-align: left;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .path-browser-note {
@@ -44,7 +44,7 @@
   align-items: center;
   gap: 6px;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-warning);
 }
 .path-browser-list {
@@ -67,7 +67,7 @@
   background: transparent;
   color: var(--pl-color-fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -96,7 +96,7 @@
   margin: auto;
   padding: 12px;
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .path-browser-actions {
   display: flex;
@@ -112,7 +112,7 @@
   white-space: nowrap;
   direction: rtl;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .path-browser-buttons {
