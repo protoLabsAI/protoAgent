@@ -70,18 +70,33 @@ describe("DS type-scale 2a — rem/em font-sizes → DS tokens", () => {
   }
 });
 
-// Pin each migrated site by selector so a later re-map to the wrong step is caught. Values follow
-// the card mapping: 0.72–0.8rem → xs, 0.82–0.86rem → sm, 0.85em → sm, 0.8em → xs.
+// Pin EVERY migrated single-selector site by selector so a later re-map to the wrong step is
+// caught (the sweep above only proves no rem/em survives; these prove each landed on the right
+// step). Values follow the card mapping: 0.72–0.8rem → xs, 0.82–0.86rem → sm, 0.85em → sm,
+// 0.8em → xs. The only migrated site NOT listed is theme.css's `.federated-loading,
+// .federated-error` comma-list rule (0.85rem → sm), which the single-selector `rule()` helper
+// cannot isolate — the sweep test already covers it.
 describe("DS type-scale 2a — each migrated site reads the mapped step", () => {
   const SITES: Array<[css: string, file: string, selector: string, token: string, note: string]> = [
     [themeCss, "theme.css", ".settings-status", "xs", "0.8rem → xs"],
+    [themeCss, "theme.css", ".setup-link", "xs", "0.8rem → xs"],
+    [themeCss, "theme.css", ".federated-error-detail", "xs", "0.78rem → xs"],
     [themeCss, "theme.css", ".update-notice-cur", "xs", "0.8em → xs"],
     [settingsCss, "settings.css", ".settings-inline-status", "xs", "0.8rem → xs"],
+    [settingsCss, "settings.css", ".setting-label", "sm", "0.86rem → sm"],
     [settingsCss, "settings.css", ".setting-desc", "xs", "0.76rem → xs"],
     [settingsCss, "settings.css", ".setting-override-note", "xs", "0.74rem → xs"],
+    [settingsCss, "settings.css", ".setting-toggle", "xs", "0.8rem → xs"],
+    [settingsCss, "settings.css", ".secrets-status-meta", "xs", "0.8rem → xs"],
+    [settingsCss, "settings.css", ".secrets-status-vars code", "xs", "0.72rem → xs"],
     [memoryCss, "memory.css", ".memory-panel-hint", "sm", "0.82rem → sm"],
+    [memoryCss, "memory.css", ".memory-row-title code", "xs", "0.8rem → xs"],
     [memoryCss, "memory.css", ".memory-row-topic", "sm", "0.85rem → sm"],
     [memoryCss, "memory.css", ".memory-row-meta", "xs", "0.75rem → xs"],
+    [memoryCss, "memory.css", ".memory-session-pre", "sm", "0.82rem → sm"],
+    [memoryCss, "memory.css", ".memory-detail-meta", "xs", "0.78rem → xs"],
+    [memoryCss, "memory.css", ".memory-detail-group h4", "xs", "0.8rem → xs"],
+    [memoryCss, "memory.css", ".memory-detail-group li", "sm", "0.85rem → sm"],
     [memoryCss, "memory.css", ".memory-detail-source", "xs", "0.78rem → xs"],
   ];
 
