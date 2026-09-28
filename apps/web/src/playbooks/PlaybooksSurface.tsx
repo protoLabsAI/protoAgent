@@ -522,6 +522,7 @@ function PlaybooksBody() {
         title={editingId !== null ? "Edit skill" : "New skill"}
         width="min(640px, 94vw)"
         className="skill-dialog"
+        padding="roomy"
       >
         <SkillForm
           draft={draft}
