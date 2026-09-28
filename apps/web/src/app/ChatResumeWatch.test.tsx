@@ -48,7 +48,7 @@ const status = (sessionId: string) => chatStore.getSnapshot().sessionStatusMap[s
  *  because boot saw its server-fired turn live: the preview is still streaming. */
 function seedUnmountedServerTurn(taskId: string): string {
   const session = chatStore.createSession();
-  chatStore.updateMessages(session.id, [
+  chatStore.updateMessages(session.id, () => [
     { id: "u1", role: "user", content: "run the nightly report", status: "done" },
     { id: liveMessageId(taskId, session.id), role: "assistant", content: "Reading…", status: "streaming", taskId },
   ]);
@@ -80,7 +80,7 @@ describe("ChatResumeWatch and the session-status reconciler", () => {
 
   it("the tab becoming visible reconciles a session left streaming with nothing live", async () => {
     const session = chatStore.createSession();
-    chatStore.updateMessages(session.id, [
+    chatStore.updateMessages(session.id, () => [
       { id: "u1", role: "user", content: "summarize", status: "done" },
       { id: "a1", role: "assistant", content: "Done.", status: "done", taskId: "t1" },
     ]);

@@ -6,9 +6,9 @@ import type { ChatMessage } from "../lib/types";
 
 const mocks = vi.hoisted(() => {
   const sessions = [{ id: "s1", messages: [] as ChatMessage[] }];
-  const updateMessages = vi.fn((sessionId: string, messages: ChatMessage[]) => {
+  const updateMessages = vi.fn((sessionId: string, updater: (messages: ChatMessage[]) => ChatMessage[]) => {
     const session = sessions.find((s) => s.id === sessionId);
-    if (session) session.messages = messages;
+    if (session) session.messages = updater(session.messages);
   });
   return {
     handlers: new Map<string, (data: Record<string, unknown>) => void>(),

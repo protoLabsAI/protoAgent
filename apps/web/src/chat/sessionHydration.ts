@@ -223,6 +223,10 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const wanted = summaries.filter((summary) => {
     const session = local.get(summary.session_id);
+    // ADR 0114 D2: a session whose transcript hasn't been read (`pending`) or couldn't be
+    // (`failed`) is neither "locally empty" nor "needs repair" — hydration never persists
+    // over an unread record. (captureHydrationEligibility refuses it too.)
+    if (session && chatStore.loadState(session.id) !== "loaded") return false;
     if (session?.messages.length && !needsDurableHydration(session)) return false;
     const token = chatStore.captureHydrationEligibility(summary.session_id);
     if (!token) return false;

@@ -23,7 +23,7 @@
 // The only thing it writes is the status: it never touches the steering queue, so going
 // idle through it neither spends an interjection's re-check grace nor hands one back.
 
-import { chatStore } from "./chat-store";
+import { chatLoadBarrier, chatStore, sessionLoadState } from "./chat-store";
 
 const localTurns = new Map<string, number>();
 const reattaches = new Map<string, number>();
@@ -56,6 +56,10 @@ export function beginReattach(sessionId: string): () => void {
 export function reconcileSessionStatus(sessionId: string): boolean {
   const snap = chatStore.getSnapshot();
   if (snap.sessionStatusMap[sessionId] !== "streaming") return false;
+  // ADR 0114 D2: a `pending` transcript can't say whether its turn is over — wait for it
+  // to load (watchSessionLiveness reconciles it then). A `failed` one still reconciles:
+  // status only, so an unreadable session's composer can't stay locked for good.
+  if (sessionLoadState(snap, sessionId) === "pending") return false;
   if (reattaches.has(sessionId) || localTurns.has(sessionId)) return false;
   const session = snap.sessions.find((s) => s.id === sessionId);
   if (!session || session.messages.some((message) => message.status === "streaming")) return false;
@@ -71,8 +75,9 @@ export function reconcileAllSessionStatuses(): void {
   }
 }
 
-/** Reconcile every session when the tab becomes visible again. A backgrounded tab can miss
- *  the event that ended a turn, and this is its chance to catch up. Returns the unsubscribe. */
+/** Reconcile every session when the tab becomes visible again, and each session as its
+ *  transcript loads. A backgrounded tab can miss the event that ended a turn, and this is
+ *  its chance to catch up. Returns the unsubscribe. */
 export function watchSessionLiveness(): () => void {
   if (typeof document === "undefined") return () => {};
   const onVisible = () => {
@@ -80,5 +85,11 @@ export function watchSessionLiveness(): () => void {
     reconcileAllSessionStatuses();
   };
   document.addEventListener("visibilitychange", onVisible);
-  return () => document.removeEventListener("visibilitychange", onVisible);
+  // A session that was `pending` skipped every reconcile; its load is the event that can
+  // finally settle it.
+  const offLoaded = chatLoadBarrier.onLoaded((sessionId) => reconcileSessionStatus(sessionId));
+  return () => {
+    document.removeEventListener("visibilitychange", onVisible);
+    offLoaded();
+  };
 }

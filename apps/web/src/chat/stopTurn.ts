@@ -24,6 +24,8 @@ export function resolveStopTarget(messages: ChatMessage[], liveTaskId: string): 
  *  a re-attached turn has no owner in this slot, so its bubble (and any
  *  `running` tool cards) would spin forever. Partial content is kept. */
 export function finalizeStoppedMessages(messages: ChatMessage[]): ChatMessage[] {
+  // Nothing streaming → the input itself, so a Stop over a settled thread is a no-op edit.
+  if (!messages.some((m) => m.role === "assistant" && m.status === "streaming")) return messages;
   return messages.map((m) => {
     if (m.role !== "assistant" || m.status !== "streaming") return m;
     const toolCalls = m.toolCalls?.map((c) =>

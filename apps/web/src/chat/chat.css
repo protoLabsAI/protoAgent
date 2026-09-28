@@ -549,6 +549,26 @@
   display: none;
 }
 
+/* ADR 0114 D2 load barrier. A transcript still being read shows a light placeholder in
+   the messages row; one whose read failed keeps its row but stacks a notice above it. */
+.chat-transcript-loading {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+}
+.chat-load-failed-wrap {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.chat-load-failed {
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--pl-color-status-warning);
+  color: var(--pl-color-fg-muted);
+  font-size: 13px;
+}
+
 /* Literal user input inside the DS Message bubble — preserve newlines/wrapping
    (assistant markdown reflows on its own). */
 .chat-user-text {
