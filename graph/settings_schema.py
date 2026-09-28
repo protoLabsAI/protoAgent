@@ -236,6 +236,46 @@ FIELDS: list[Field] = [
         "off; max_iterations remains the runaway backstop.",
         minimum=0,
     ),
+    # ── In-flight limiter (ADR 0115 D2, #3760) ────────────────────────────────
+    # Per-lane caps on concurrent model calls made IN THIS PROCESS. Off by default,
+    # hot-reloadable, agent-scoped — a box-wide (host) default would silently hand
+    # each process N slots, so per-process sizing is the explicit contract.
+    Field(
+        "model.max_inflight",
+        "llm_max_inflight",
+        "Max in-flight model calls",
+        "number",
+        "Model & runtime",
+        "Cap on concurrent model calls per lane (resolved endpoint + model) in THIS "
+        "process. 0 (default) disables the limiter entirely. The budget is per-process, "
+        "not box-wide: size the limits across your instances so they sum within the "
+        "gateway's parallel capacity.",
+        minimum=0,
+    ),
+    Field(
+        "model.inflight_queue_timeout",
+        "llm_inflight_queue_timeout",
+        "In-flight queue timeout (s)",
+        "number",
+        "Model & runtime",
+        "Longest one caller may wait for a free slot when the lane is saturated. This "
+        "queue bound is SEPARATE from `request_timeout` (which times the HTTP call once a "
+        "slot is held), and is kept below the turn stall timeout so a queued turn fails "
+        "with a queue error rather than a stall. Only applies when max_inflight is non-zero.",
+        minimum=0,
+    ),
+    Field(
+        "model.inflight_interactive_reserve",
+        "llm_inflight_interactive_reserve",
+        "Interactive reserved slots",
+        "number",
+        "Model & runtime",
+        "Slots reserved for interactive (operator-watched) callers, so a background fan-out "
+        "can't take the operator's last slot. Clamped to max_inflight − 1 at use, leaving "
+        "non-interactive work at least one slot. Per-process like max_inflight; only applies "
+        "when the limiter is on.",
+        minimum=0,
+    ),
     # ── Favorite models (#1957) ──────────────────────────────────────────────
     Field(
         "model.favorites",
