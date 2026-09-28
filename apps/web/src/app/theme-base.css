@@ -41,7 +41,7 @@ body {
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   font-family: var(--pl-font-sans);
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   line-height: 1.45;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -75,7 +75,7 @@ p {
 
 h1,
 h2 {
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0;

@@ -33,11 +33,11 @@
 }
 .tools-name {
   font-family: var(--pl-font-mono);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
 }
 .tools-desc {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   min-width: 0;
 }
@@ -99,7 +99,7 @@
   align-items: center;
   gap: 6px;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .fs-projects-actions {
   display: flex;
@@ -118,7 +118,7 @@
   color: var(--pl-color-status-warning);
   background: color-mix(in srgb, var(--pl-color-status-warning) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-warning) 35%, transparent);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
 }
 .fs-projects-warning svg {
