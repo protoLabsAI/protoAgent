@@ -84,8 +84,9 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     expect(chatCss).toContain(".slash-kind {\n  flex: 0 0 auto;\n  font-size: var(--pl-font-size-3xs);"); // was 9px
     expect(hitlCss).toContain(".hitl-step-count {\n  font-size: var(--pl-font-size-2xs);"); // was 11px
     expect(promptviewerCss).toContain(".prompt-viewer__diff {\n  font-size: var(--pl-font-size-xs);"); // was 12px
-    // chat-component .chat-comp: 13px -> sm.
-    expect(chatComponentCss).toContain("padding: 10px 12px;\n  font-size: var(--pl-font-size-sm);"); // was 13px
+    // chat-component .chat-comp: 13px -> sm. (12px in the padding shorthand tokenized to
+    // var(--pl-space-3) by the DS spacing audit card 3c2; the 10px half-step survives.)
+    expect(chatComponentCss).toContain("padding: 10px var(--pl-space-3);\n  font-size: var(--pl-font-size-sm);"); // was 13px
   });
 
   it("snaps each former half-pixel site to its nearest token px", () => {
@@ -94,8 +95,9 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     expect(chatCss).toContain(".chat-memory-note {\n  margin: var(--pl-space-3) 0 0;\n  font-size: var(--pl-font-size-sm);");
     // chat.css .chat-usage-tip-sub: 10.5px -> 2xs (11px).
     expect(chatCss).toContain("font-weight: 400;\n  font-size: var(--pl-font-size-2xs);");
-    // promptviewer.css .prompt-viewer__wire: 12.5px -> sm (13px).
-    expect(promptviewerCss).toContain("padding: 8px 10px;\n  font-size: var(--pl-font-size-sm);");
+    // promptviewer.css .prompt-viewer__wire: 12.5px -> sm (13px). (8px in the padding shorthand
+    // tokenized to var(--pl-space-2) by the DS spacing audit card 3c2; the 10px half-step survives.)
+    expect(promptviewerCss).toContain("padding: var(--pl-space-2) 10px;\n  font-size: var(--pl-font-size-sm);");
   });
 
   it("leaves the HITL accent chain and the composer field outline suppression untouched", () => {
