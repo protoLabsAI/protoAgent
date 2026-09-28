@@ -257,6 +257,60 @@ async def test_record_lane_event_works_as_a_live_limiter_listener():
         llm_limiter.remove_listener(metrics.record_lane_event)
 
 
+async def test_queue_depth_gauge_tracks_enqueue_and_dequeue_live():
+    """The #3760 review regression: with ``record_lane_event`` wired as a live listener, the
+    queue-depth gauge must CLIMB as waiters join the queue behind full slots (the enqueue
+    event) and DRAIN to 0 when queued waiters are cancelled before a grant (the dequeue
+    event) — not stay pinned to its last acquire/release value while the backlog grows.
+    Drives real acquires through the listener and never calls ``record_lane_event`` by hand."""
+    if not (metrics.is_enabled() or _try_init()):
+        pytest.skip("prometheus-client not installed")
+    from prometheus_client import REGISTRY
+
+    p = metrics._prefix()
+    clock = FakeClock()
+    llm_limiter.add_listener(metrics.record_lane_event)  # register BEFORE any acquire fires
+    tasks: list[asyncio.Task] = []
+
+    def depth(priority: str):
+        return REGISTRY.get_sample_value(f"{p}_llm_queue_depth", {"lane": LANE, "priority": priority})
+
+    def _spawn(priority: str, ready: asyncio.Event) -> None:
+        async def _run():
+            async with llm_limiter.acquire(LANE, priority):
+                ready.set()
+                await asyncio.Event().wait()  # hold until cancelled
+
+        tasks.append(asyncio.create_task(_run()))
+
+    try:
+        llm_limiter.configure(limit=1, queue_timeout=10_000.0, interactive_reserve=0, clock=clock)
+
+        holder_ready = asyncio.Event()
+        _spawn("default", holder_ready)
+        await holder_ready.wait()  # the holder's grant refreshes every depth gauge from the snapshot
+        assert depth("bulk") == 0.0  # nothing queued yet — a clean baseline regardless of prior tests
+
+        # Two bulk waiters JOIN the queue behind the full slot. The gauge must climb off the
+        # enqueue events alone: no acquire/release/timeout has fired since the holder's grant.
+        for _ in range(2):
+            _spawn("bulk", asyncio.Event())
+        await _wait_until_queued(2)
+        assert depth("bulk") == 2.0
+
+        # Cancel the two queued (never-granted) waiters: the dequeue events must drain the
+        # gauge back to 0 rather than leaving the ghost backlog counted.
+        for t in tasks[1:]:
+            t.cancel()
+        await asyncio.gather(*tasks[1:], return_exceptions=True)
+        assert depth("bulk") == 0.0
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        llm_limiter.remove_listener(metrics.record_lane_event)
+
+
 def test_lane_metrics_are_a_noop_without_prometheus(monkeypatch):
     """Reproduce the prometheus-absent state (``_enabled`` False, handles None — exactly
     what ``init`` leaves when the import fails): the call must not raise and must not even

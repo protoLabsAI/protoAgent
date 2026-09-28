@@ -330,7 +330,7 @@ async def test_agenerate_holds_a_slot(monkeypatch):
     client = llm._ReasoningChatOpenAI(model="m", api_key="k", base_url="http://gw/v1")
     assert await client._agenerate([]) == "RESULT"
     assert inflight_during == [1]  # the slot was held during the call
-    assert [e.kind for e in events] == ["acquired", "released"]
+    assert [e.kind for e in events] == ["enqueued", "acquired", "released"]
     assert events[0].lane == client._lane_key()
 
 
@@ -451,7 +451,7 @@ async def test_anthropic_oauth_agenerate_holds_a_slot(monkeypatch):
         model="claude-opus-5-5", api_key="oauth-via-auth-token", oauth_token="tok-abc"
     )
     assert await client._agenerate([]) == "R"
-    assert [e.kind for e in events] == ["acquired", "released"]
+    assert [e.kind for e in events] == ["enqueued", "acquired", "released"]
     assert events[0].lane == "anthropic-oauth|claude-opus-5-5"
 
 

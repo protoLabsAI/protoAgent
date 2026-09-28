@@ -478,7 +478,7 @@ async def test_snapshot_enabled_reflects_config():
 
 
 # ── metrics hook ──────────────────────────────────────────────────────────────────
-async def test_listener_receives_acquire_and_release():
+async def test_listener_receives_enqueue_acquire_and_release():
     clock = FakeClock()
     llm_limiter.configure(limit=1, clock=clock)
     events: list[LaneEvent] = []
@@ -489,8 +489,51 @@ async def test_listener_receives_acquire_and_release():
     finally:
         llm_limiter.remove_listener(events.append)
     kinds = [e.kind for e in events]
-    assert kinds == ["acquired", "released"]
+    # The waiter is enqueued, immediately granted (a free slot), then released. The enqueue
+    # event is what keeps the queue-depth gauge live while slots are busy (#3760 review).
+    assert kinds == ["enqueued", "acquired", "released"]
     assert all(e.lane == "gw|m" and e.priority == INTERACTIVE for e in events)
+
+
+async def test_listener_sees_dequeue_when_a_queued_waiter_is_cancelled():
+    """A waiter that queues behind a full lane and is cancelled before its grant must emit a
+    ``dequeued`` event, so a listener's depth gauge drains rather than counting the ghost
+    forever (the #3760 review finding)."""
+    clock = FakeClock()
+    llm_limiter.configure(limit=1, queue_timeout=10_000.0, interactive_reserve=0, clock=clock)
+
+    holder_acquired = asyncio.Event()
+    holder_release = asyncio.Event()
+
+    async def _holder():
+        async with llm_limiter.acquire("gw|m", INTERACTIVE):
+            holder_acquired.set()
+            await holder_release.wait()
+
+    holder = asyncio.create_task(_holder())
+    await holder_acquired.wait()  # the holder owns the only slot
+
+    events: list[LaneEvent] = []
+    llm_limiter.add_listener(events.append)  # watch only the queued waiter's lifecycle
+
+    async def _waiter():
+        async with llm_limiter.acquire("gw|m", BULK):
+            pass
+
+    queued = asyncio.create_task(_waiter())
+    try:
+        while not any(e.kind == "enqueued" for e in events):
+            await asyncio.sleep(0)  # let the waiter reach the queue behind the full slot
+        queued.cancel()
+        await asyncio.gather(queued, return_exceptions=True)
+    finally:
+        llm_limiter.remove_listener(events.append)
+        holder_release.set()
+        await holder
+
+    kinds = [e.kind for e in events]
+    assert kinds == ["enqueued", "dequeued"]  # never granted, then drained on cancel
+    assert all(e.lane == "gw|m" and e.priority == BULK for e in events)
 
 
 def test_bad_listener_never_breaks_dispatch():

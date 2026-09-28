@@ -269,12 +269,17 @@ def record_lane_event(event) -> None:
     limiter never imports this module, so the dependency only points this way (C6).
 
     Wait time and the timeout counter come straight off the event (its ``priority`` is
-    the waiter the event is about). The inflight gauge and the per-priority queue-depth
-    gauge are refreshed from the limiter snapshot instead, because a ``LaneEvent`` only
-    carries the lane's TOTAL queue length, not the interactive/default/bulk split the
-    gauge is labelled by. The snapshot is memory-only, so this stays cheap enough to run
-    on every slot transition. A silent no-op when prometheus-client is absent, matching
-    the rest of the module (``_enabled`` stays False and the metrics stay ``None``)."""
+    the waiter the event is about, so they fire only on ``acquired``/``timeout``). The
+    inflight gauge and the per-priority queue-depth gauge are refreshed from the limiter
+    snapshot on EVERY event kind — enqueue and dequeue included — because a ``LaneEvent``
+    only carries the lane's TOTAL queue length, not the interactive/default/bulk split the
+    gauge is labelled by. Refreshing on the enqueue/dequeue transitions (not just
+    grant/release/timeout) is what keeps the depth gauge honest: it climbs as waiters pile
+    up behind full slots and drains back to 0 when the last queued waiter is served or
+    cancelled, instead of sitting at a stale value until some other event fires. The
+    snapshot is memory-only, so this stays cheap enough to run on every transition. A
+    silent no-op when prometheus-client is absent, matching the rest of the module
+    (``_enabled`` stays False and the metrics stay ``None``)."""
     if not _enabled or _llm_inflight is None:
         return
     if event.kind in ("acquired", "timeout"):
