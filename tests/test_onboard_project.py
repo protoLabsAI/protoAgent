@@ -921,3 +921,97 @@ async def test_local_disabled_means_absent(tmp_path):
     assert "register_local_project" not in {
         t.name for t in onboard_tools.build_onboard_tools(_cfg(tmp_path, onboarding_enabled=False))
     }
+
+
+# ── refresh=true on a reused checkout (#3733): fetch + fast-forward only ─────────
+
+
+def _origin_and_clone(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A bare origin, a clone in the onboarding root (``widget``), and a second clone
+    that pushes new commits to origin — all real git."""
+    origin = tmp_path / "src" / "widget.git"
+    origin.parent.mkdir()
+    _git("init", "-q", "--bare", "-b", "main", str(origin), cwd=tmp_path)
+    seed = tmp_path / "src" / "seed"
+    _git("clone", "-q", str(origin), str(seed), cwd=tmp_path)
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+        _git("config", k, v, cwd=seed)
+    (seed / "a.txt").write_text("one\n")
+    _git("add", "a.txt", cwd=seed)
+    _git("commit", "-q", "-m", "one", cwd=seed)
+    _git("push", "-q", "origin", "main", cwd=seed)
+    root = tmp_path / "root"
+    root.mkdir()
+    clone = root / "widget"
+    _git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+        _git("config", k, v, cwd=clone)
+    return origin, seed, clone
+
+
+def _push_commits(seed: Path, n: int) -> None:
+    for i in range(n):
+        (seed / f"n{i}.txt").write_text(f"{i}\n")
+        _git("add", ".", cwd=seed)
+        _git("commit", "-q", "-m", f"n{i}", cwd=seed)
+    _git("push", "-q", "origin", "main", cwd=seed)
+
+
+def _head(repo: Path) -> str:
+    import subprocess
+
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
+
+
+async def test_refresh_fetches_and_fast_forwards_a_stale_clone(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 2)
+    stale = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Fetched and fast-forwarded 2 commits to origin/main" in out
+    assert _head(clone) == _head(seed) != stale
+
+
+async def test_refresh_refuses_uncommitted_tracked_changes_and_leaves_them(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 1)
+    (clone / "a.txt").write_text("local edit\n")
+    before = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Not refreshed — it has uncommitted changes" in out
+    assert (clone / "a.txt").read_text() == "local edit\n" and _head(clone) == before
+
+
+async def test_refresh_never_merges_over_local_commits(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 1)
+    (clone / "local.txt").write_text("mine\n")
+    _git("add", "local.txt", cwd=clone)
+    _git("commit", "-q", "-m", "local", cwd=clone)
+    before = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "not fast-forwarded" in out and "1 local commit" in out and "1 behind" in out
+    assert _head(clone) == before
+
+
+async def test_refresh_up_to_date_after_fetch(tmp_path, applied):
+    _origin_and_clone(tmp_path)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Fetched — it is up to date with origin/main" in out
+
+
+async def test_default_reuse_stays_untouched_and_points_at_refresh(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 1)
+    before = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget"})
+    assert "it was not fetched" in out and "Pass refresh=true" in out
+    assert _head(clone) == before  # the default path still never fetches or moves HEAD
+
+
+async def test_refresh_without_upstream_is_refused(tmp_path, applied):
+    root = tmp_path / "root"
+    root.mkdir()
+    _repo(root / "widget", branch="main")
+    out = await _tool(_cfg(root)).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Not refreshed — the current branch has no upstream" in out
