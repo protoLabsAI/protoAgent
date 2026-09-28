@@ -11,9 +11,11 @@ import { describe, expect, it } from "vitest";
 // Source-level (Vite ?raw), same rationale as phantomTokenRename.test.ts: the DS token resolves
 // to nothing at runtime under this harness, so a rendered getComputedStyle test would only ever
 // observe the (now absent) fallback. The strip IS the change, so the source text is what we pin.
-// Globs are compile-time and rooted at this file (src/app), so a file move is matched by suffix.
+// Globs are compile-time and rooted at this file (src/app). Scope the pattern to exactly the three
+// files this card owns so the eager ?raw import loads only them (not the whole src tree); a move
+// within src is still matched by suffix in source() below.
 
-const SOURCES = import.meta.glob("../**/*.{css,tsx}", {
+const SOURCES = import.meta.glob("../**/{theme.css,tools.css,ProtoLabsIcon.tsx}", {
   query: "?raw",
   import: "default",
   eager: true,
