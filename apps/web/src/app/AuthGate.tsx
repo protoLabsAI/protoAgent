@@ -44,6 +44,7 @@ export function AuthGate() {
       open
       title="Authentication required"
       width={420}
+      padding="roomy"
       className="auth-dialog"
       footer={
         <Button type="button" disabled={!token.trim()} onClick={connect}>
