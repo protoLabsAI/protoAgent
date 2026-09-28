@@ -1,3 +1,4 @@
+import { Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -146,7 +147,7 @@ function InlineGate({ record }: { record: WorkflowRunRecord }) {
       </div>
       {paused ? (
         editing ? (
-          <textarea
+          <Textarea
             className="workflow-gate-edit"
             value={draft}
             rows={6}

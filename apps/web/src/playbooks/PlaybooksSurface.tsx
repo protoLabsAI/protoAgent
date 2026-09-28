@@ -1,4 +1,4 @@
-import { Input, Textarea } from "@protolabsai/ui/forms";
+import { Checkbox, Input, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -35,9 +35,9 @@ type Draft = {
   userOnly: boolean;
   slash: string;
 };
-const EMPTY_DRAFT: Draft = { name: "", description: "", body: "", tools: "", userFacing: false, userOnly: false, slash: "" };
+export const EMPTY_DRAFT: Draft = { name: "", description: "", body: "", tools: "", userFacing: false, userOnly: false, slash: "" };
 
-function SkillForm({
+export function SkillForm({
   draft,
   setDraft,
   onSave,
@@ -84,16 +84,17 @@ function SkillForm({
         aria-label="skill tools"
       />
       <div className="knowledge-chunk-form-row">
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={draft.userFacing}
-            // Unchecking the slash trigger also clears "user only" (it requires a slash).
-            onChange={(e) => setDraft({ ...draft, userFacing: e.target.checked, userOnly: e.target.checked && draft.userOnly })}
-            aria-label="invokable as a slash command"
-          />
-          Invokable as a <code>/slash</code> command
-        </label>
+        <Checkbox
+          checked={draft.userFacing}
+          // Unchecking the slash trigger also clears "user only" (it requires a slash).
+          onCheckedChange={(v: boolean) => setDraft({ ...draft, userFacing: v, userOnly: v && draft.userOnly })}
+          aria-label="invokable as a slash command"
+          label={
+            <>
+              Invokable as a <code>/slash</code> command
+            </>
+          }
+        />
         {draft.userFacing ? (
           <Input
             type="text"
@@ -107,15 +108,16 @@ function SkillForm({
       </div>
       {draft.userFacing ? (
         <div className="knowledge-chunk-form-row">
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={draft.userOnly}
-              onChange={(e) => setDraft({ ...draft, userOnly: e.target.checked })}
-              aria-label="hide from the agent — operator slash command only"
-            />
-            Hide from the agent — operator <code>/slash</code> command only
-          </label>
+          <Checkbox
+            checked={draft.userOnly}
+            onCheckedChange={(v: boolean) => setDraft({ ...draft, userOnly: v })}
+            aria-label="hide from the agent — operator slash command only"
+            label={
+              <>
+                Hide from the agent — operator <code>/slash</code> command only
+              </>
+            }
+          />
         </div>
       ) : null}
       <div className="knowledge-chunk-form-row">
