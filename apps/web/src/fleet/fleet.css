@@ -120,7 +120,7 @@
 }
 /* .fleet-active-tag retired (#832) — now DS <Badge status="info">. */
 .fleet-meta {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
 }
@@ -132,7 +132,7 @@
 }
 .fleet-autostart-toggle {
   margin-right: 6px;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 /* .fleet-empty retired (#832) — the manager + discover empty states now render
@@ -141,7 +141,7 @@
   color: var(--pl-color-fg-subtle);
 }
 .fleet-section-label {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 4px 0 8px;
@@ -152,7 +152,7 @@
   align-items: center;
   gap: 8px;
   margin-top: 10px;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .fleet-purge input {
   width: auto;
@@ -186,7 +186,7 @@
 }
 
 .fleet-add-remote-title {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 600;
 }
 
@@ -197,7 +197,7 @@
 }
 
 .fleet-add-remote .field > span {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted, inherit);
 }
 
@@ -223,12 +223,12 @@
   gap: 4px;
 }
 .fleet-pair-form .field > span {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted, inherit);
 }
 .fleet-pair-form .fleet-pair-code {
   font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 18px;
+  font-size: var(--pl-font-size-xl);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
