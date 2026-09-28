@@ -46,7 +46,7 @@
   gap: 6px;
   min-width: 0;
   font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .code-pane__project,
 .code-pane__sep {
@@ -90,14 +90,14 @@
   border-radius: 4px;
   background: var(--pl-color-bg-subtle);
   color: var(--pl-color-fg);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
 }
 .code-pane__notice {
   flex: none;
   margin: 6px 10px 0;
   color: var(--pl-color-status-warning);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .code-pane__body {
   flex: 1 1 auto;
@@ -117,7 +117,7 @@
   gap: 6px;
   padding: 16px 12px;
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .code-pane__status--denied {
   color: var(--pl-color-status-warning);
@@ -126,7 +126,7 @@
 .code-pane__view {
   display: block;
   --diffs-font-family: var(--pl-font-mono, ui-monospace, monospace);
-  --diffs-font-size: 12px;
+  --diffs-font-size: var(--pl-font-size-xs);
   --diffs-bg-selection-override: color-mix(in srgb, var(--pl-color-accent) 22%, transparent);
   --diffs-bg-selection-number-override: color-mix(in srgb, var(--pl-color-accent) 34%, transparent);
 }
@@ -148,7 +148,7 @@
   background: none;
   color: var(--pl-color-fg-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   cursor: pointer;
 }
 .code-pane__recent-toggle:hover {
@@ -174,7 +174,7 @@
   background: none;
   color: var(--pl-color-fg);
   font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   text-align: left;
   cursor: pointer;
 }
@@ -217,7 +217,7 @@
   background: none;
   color: var(--pl-color-fg);
   font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   text-align: left;
   cursor: pointer;
 }
@@ -292,7 +292,7 @@
   flex: none;
   margin: 6px 10px 0;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .code-pane__subnote code {
   font-family: var(--pl-font-mono, ui-monospace, monospace);

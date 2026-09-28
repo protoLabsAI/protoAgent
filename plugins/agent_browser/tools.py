@@ -185,13 +185,20 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                 f"point the plugin's `binary` setting at the native agent-browser binary, or put "
                 f"node on PATH. The console's setup banner says so too.")
 
-    def _run(*args: str) -> str:
+    def _run(*args: str, stdin: str | None = None) -> str:
         """Run `agent-browser <args>` and return stdout, or a readable error.
 
         Uses Popen with one drain thread per pipe (concurrent, so a full stderr can't
         deadlock stdout) enforcing an aggregate byte cap owned here. On overflow the child
         is killed and a bounded diagnostic is returned; on timeout the child is terminated.
         Either way the child is reaped — no zombies.
+
+        `stdin`, when given, is fed to the child on its standard input — the path
+        `browser_eval` takes so the JS goes to `agent-browser eval --stdin` rather than
+        into argv, where a script over ~24K chars overruns Windows' 32,767-char
+        command-line limit and CreateProcess rejects it before it runs (#3689). A feeder
+        thread does the write so a script larger than the OS pipe buffer can't deadlock
+        against the concurrent output drains.
         """
         # PATH > pinned path > the fetched CLI; on first use with none, the pinned download.
         exe = preflight.cli_for_run(binary, autofetch=autofetch,
@@ -199,7 +206,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         try:
             # Its own session: its pid becomes a process-group id, so a timeout can kill
             # everything it started (see _kill_tree). Ignored on Windows.
-            proc = subprocess.Popen([exe, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = subprocess.Popen([exe, *args],
+                                    stdin=subprocess.PIPE if stdin is not None else None,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)
         except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
@@ -247,6 +256,23 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         for t in drains:
             t.start()
 
+        feeder = None
+        if stdin is not None:
+            def _feed() -> None:
+                # The drains are already reading stdout/stderr, so a child that streams
+                # output while it consumes a large script can't wedge this write.
+                try:
+                    proc.stdin.write(stdin.encode("utf-8"))
+                except (OSError, ValueError):
+                    pass  # child closed its end / exited early — its exit code carries the story
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+            feeder = threading.Thread(target=_feed, daemon=True)
+            feeder.start()
+
         timed_out = False
         try:
             proc.wait(timeout=timeout)
@@ -266,6 +292,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # read, so the snapshot below is its full output.
         for t in drains:
             t.join(timeout=_JOIN_TIMEOUT_S)
+        if feeder is not None:
+            feeder.join(timeout=_JOIN_TIMEOUT_S)  # the write is done once the child exits
         if any(t.is_alive() for t in drains):
             log.warning("[agent_browser] `agent-browser %s` exited but something it started "
                         "kept its output open; returning what it wrote", " ".join(args[:2]))
@@ -288,8 +316,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         _recheck(failed=False)  # a clean run is evidence the setup works — clear any banner
         return out or "(ok)"
 
-    async def _ab(*args: str) -> str:
-        return await asyncio.to_thread(_run, *args)
+    async def _ab(*args: str, stdin: str | None = None) -> str:
+        return await asyncio.to_thread(_run, *args, stdin=stdin)
 
     _bad_operand = bad_operand  # runtime.bad_operand — shared with the panel's /nav route
 
@@ -332,7 +360,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if current.startswith("Error:"):
             return current
         if (current.splitlines() or [""])[0].strip() == "about:blank":
-            has = await _ab("eval", _PAGE_HAS_CONTENT_JS)
+            has = await _ab("eval", "--stdin", stdin=_PAGE_HAS_CONTENT_JS)
             if (has.splitlines() or [""])[0].strip() != "1":
                 return ("Error: the page is blank (about:blank, with nothing on it), so there is "
                         "nothing to capture. Open a page with browser_open first. If you have HTML "
@@ -468,7 +496,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         Use sparingly — prefer snapshot + the action tools. An expression that starts with
         a dash and a letter (`-a`) must be wrapped, `(-a)`, or the CLI reads it as an
         option; `-1` is fine."""
-        return _bad_operand(expression=expression) or await _ab("eval", expression)
+        # The script goes to `agent-browser eval --stdin` on stdin, never into argv: a large
+        # script (design-system-plugin's ~32K SITE_PROBE_JS) would otherwise overrun
+        # Windows' 32,767-char command-line limit and fail before running (#3689).
+        return _bad_operand(expression=expression) or await _ab("eval", "--stdin", stdin=expression)
 
     # ── capture + session ─────────────────────────────────────────────────────
     @tool

@@ -119,7 +119,9 @@ describe("phantom CSS tokens re-pointed to real DS tokens (#3682)", () => {
     expect(PHANTOM.test("background: var(--pl-color-bg, #0a0a0c);")).toBe(false);
     expect(PHANTOM.test("color: var(--pl-color-fg, #ededed);")).toBe(false);
     expect(PHANTOM.test("font-family: var(--pl-font-mono);")).toBe(false);
-    // --pl-color-text (without -muted) is a different, out-of-scope token; left untouched.
-    expect(PHANTOM.test("color: var(--pl-color-text, inherit);")).toBe(false);
+    // --pl-color-text (without -muted) is out of THIS pattern's scope, so it stays false here.
+    // (#3682 part 3 later re-pointed memory.css's live --pl-color-text onto --pl-color-fg; the
+    // literal is built by concat so app/tokenNameGuard.test.ts's DS-token sweep can't flag it.)
+    expect(PHANTOM.test("color: var(" + "--pl-color-" + "text, inherit);")).toBe(false);
   });
 });

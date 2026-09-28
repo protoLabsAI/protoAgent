@@ -31,25 +31,25 @@
   gap: 1px;
 }
 .plugin-market-link .muted {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 /* Plugins panel (ADR 0027) — install from a git URL, under Settings → Plugins. */
 .plugin-install-form { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
 /* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input). */
 .plugin-install-form input { flex: 1; min-width: 220px; }
-.plugin-install-status { font-size: 12px; color: var(--pl-color-fg-muted); margin: 4px 0 10px; }
+.plugin-install-status { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: 4px 0 10px; }
 /* .plugin-sync-banner retired — the locked-but-missing notice is a DS <Alert status="warning"> now. */
 .plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .plugin-row-main { flex: 1; min-width: 0; }
 .plugin-row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.plugin-ver { font-size: 11px; color: var(--pl-color-fg-subtle); }
+.plugin-ver { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); }
 /* .plugin-state* retired — enabled / not-enabled / missing / local are DS <Badge>s now. */
-.plugin-desc { font-size: 12px; color: var(--pl-color-fg-muted); margin: 4px 0; }
-.plugin-meta { font-size: 11px; color: var(--pl-color-fg-subtle); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
-.plugin-review { font-size: 11px; color: var(--pl-color-fg-subtle); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.plugin-desc { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: 4px 0; }
+.plugin-meta { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); margin: 2px 0; overflow: hidden; text-overflow: ellipsis; }
+.plugin-review { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .plugin-review .warn { color: var(--pl-color-status-warning); display: inline-flex; align-items: center; gap: 3px; }
-.plugin-enable-hint { font-size: 11px; color: var(--pl-color-fg-muted); margin: 6px 0 0; }
+.plugin-enable-hint { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-muted); margin: 6px 0 0; }
 .btn-icon.danger:hover { color: var(--pl-color-status-error); }
 .plugin-restart-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--pl-color-border); }
 .plugin-restart-row > span { margin: 0; }
@@ -63,13 +63,13 @@
 .plugin-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
 .plugin-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--pl-color-border); border-radius: 9px; background: var(--pl-color-bg-raised); }
 .plugin-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.plugin-card-head strong { font-size: 14px; }
-.plugin-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); white-space: nowrap; }
-.plugin-card-tagline { font-size: 12px; color: var(--pl-color-fg-muted); margin: 0; flex: 1; }
+.plugin-card-head strong { font-size: var(--pl-font-size-base); }
+.plugin-chip { font-size: var(--pl-font-size-3xs); text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); white-space: nowrap; }
+.plugin-card-tagline { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: 0; flex: 1; }
 /* Why a bundled plugin is on when the operator didn't turn it on (another plugin enables it). */
-.plugin-card-why { font-size: 11px; color: var(--pl-color-fg-muted); margin: 0; font-style: italic; }
+.plugin-card-why { font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-muted); margin: 0; font-style: italic; }
 .plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.plugin-card-link { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--pl-color-fg-subtle); text-decoration: none; }
+.plugin-card-link { display: inline-flex; align-items: center; gap: 4px; font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); text-decoration: none; }
 .plugin-card-link:hover { color: var(--pl-color-fg-muted); }
 .plugin-card-adds { display: flex; flex-wrap: wrap; gap: 4px; }
 .plugin-card-links { display: inline-flex; align-items: center; gap: 10px; }
@@ -85,7 +85,7 @@
    above the members table. */
 .plugin-bundles-strip { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; }
 .plugin-bundle-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--pl-color-border); border-radius: 8px; background: var(--pl-color-bg-raised); }
-.plugin-bundle-name { font-size: 13px; font-weight: 600; margin-right: auto; }
+.plugin-bundle-name { font-size: var(--pl-font-size-sm); font-weight: 600; margin-right: auto; }
 
 .plugin-table-wrap { overflow-x: auto; }
 .plugin-table { width: 100%; }
@@ -102,7 +102,7 @@
 /* Chips live in an inner flex wrapper — flexing the <td> itself would knock it out
    of table-cell layout. */
 .plugin-status-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.plugin-cell-contrib { font-size: 12px; color: var(--pl-color-fg-muted); white-space: nowrap; }
+.plugin-cell-contrib { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); white-space: nowrap; }
 /* Name · version · badge on one baseline-aligned line with real breathing room
    (the old layout jammed the version + badge straight against the name). */
 .plugin-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
@@ -110,7 +110,7 @@
 /* #2248 — the manifest description, under the row name. Clamped to two lines so a
    verbose manifest can't stretch every row; the full text rides the title attribute. */
 .plugin-row-desc {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   margin: 3px 0 0;
   display: -webkit-box;
