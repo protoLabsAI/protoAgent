@@ -175,13 +175,14 @@ State (`history.json` plus the sidecar `blobs/`) lives in the instance's plugin 
 and every fleet member get their own copy. `ARTIFACT_DIR` is an env-only override of that directory
 (still `/<PROTOAGENT_INSTANCE>`-scoped when set). Legacy data from before instance scoping is
 migrated into the new location automatically on first access — the `history.json` and its `blobs/`
-move together. That migration is **narrow on purpose**: the legacy source is box-root-relative
-(`<box_root>/artifact[/<inst>]`), so it is adopted only into the *default* box-root-relative store —
-the shape where `PROTOAGENT_BOX_ROOT` derives from the home data dir and the old
-`~/.protoagent/artifact[/<inst>]` store is genuinely this instance's. When `PROTOAGENT_BOX_ROOT`
-points somewhere other than the home data dir (a box-scoped server), **nothing is migrated**: that
-server's box store starts empty and the operator's live `~/.protoagent/artifact` is left untouched,
-never reached into and moved away.
+move together (moving only the JSON would break file-artifact downloads). The migration source is
+the store's OLD location, `~/.protoagent/artifact[/<PROTOAGENT_INSTANCE>]` — HOME-relative, exactly
+where the pre-scoping code wrote it, **independent of `PROTOAGENT_BOX_ROOT` / `PROTOAGENT_HOME`**.
+That matters because the desktop and containers point the box root at their own directory (Tauri's
+config dir; `/sandbox`) while the old store was still written under HOME: reading the legacy source
+from HOME is what keeps a desktop or container upgrade from silently losing its history and pins.
+Sibling instance subdirectories under a bare legacy dir are left where they are, and if the new
+location already has a `history.json` it wins outright — no migration.
 
 ## Interactive artifacts (calling back to the agent)
 
