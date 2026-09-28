@@ -30,7 +30,7 @@ import time as _time
 import httpx
 import pytest
 
-from plugins.delegates import late
+from plugins.delegates import conversations, late
 from plugins.delegates.adapters import (
     _DETACHED_DELEGATION,
     A2aAdapter,
@@ -230,6 +230,30 @@ def test_explicit_timeout_deadline_also_carries_the_task_id_and_no_retry(patched
     assert state["methods"].count("GetTask") >= 1
 
 
+def test_room_address_deadline_promises_auto_delivery_because_it_leaves_a_handle(patched):
+    """The other side of the promise: a ROOM address (a real conversation key, not detached)
+    stashes a pending handle so ``late.collect`` brings the answer back on its own. THAT
+    message may say the answer will be delivered automatically — because here something
+    genuinely is still polling the task (r2)."""
+    _clock(patched, step=0.3)
+    _install_peer(patched, send=_working(msg="deep in it"), gets=_script([_working(msg="deep in it")]))
+    d = _parse(poll_timeout_s=1)
+    d.conversation_key = "thread-1"
+
+    try:
+        with pytest.raises(DelegateError) as ei:
+            asyncio.run(A.dispatch(d, "room member turn"))
+    finally:
+        conversations.reset()
+
+    msg = str(ei.value)
+    assert "delivered automatically" in msg  # a collection IS left running for this one
+    assert "will NOT arrive on its own" not in msg
+    assert "task t1" in msg
+    assert "resume_task_id='t1'" in msg
+    assert "retry" not in msg.lower()
+
+
 # ── r3: a background delegation delivers a late completion as its result ────────
 
 
@@ -271,7 +295,12 @@ def test_background_delegation_delivers_a_late_park_with_a_resume_handle(patched
 def test_background_delegation_that_never_finishes_reports_the_task_id_not_retry(patched, monkeypatch):
     """When the peer is STILL working after the bounded extra window, the background job fails
     — but with the actionable, task-id-bearing message, never a bare failure and never
-    "retry" (r3 / r2)."""
+    "retry" (r3 / r2).
+
+    And, having used up its OWN poll window, it must NOT promise the answer will arrive on its
+    own: a detached delegation leaves no conversation handle for ``late.collect``, so nothing
+    polls the task after this — promising auto-delivery here would re-tell the #3700 lost-reply
+    failure as a false reassurance."""
     _clock(patched, step=1.0)
     monkeypatch.setattr(late, "_COLLECT_MAX_S", 2.0)  # a tiny extra window for the test
     _install_peer(patched, send=_working(msg="phase 2 of 9"), gets=_script([_working(msg="phase 2 of 9")]))
@@ -285,6 +314,37 @@ def test_background_delegation_that_never_finishes_reports_the_task_id_not_retry
     assert "state=TASK_STATE_WORKING" in msg
     assert "resume_task_id='t1'" in msg
     assert "retry" not in msg.lower()
+    # No FALSE promise: nothing is polling it now, so it will not arrive on its own.
+    assert "delivered automatically" not in msg
+    assert "will NOT arrive on its own" in msg
+
+
+def test_background_delegation_with_explicit_timeout_does_not_poll_past_it(patched, monkeypatch):
+    """A background ``delegate_to(timeout=N)`` is the caller's HARD cap. The detached late
+    extension must NOT run past it — extending an explicit N by up to ``_COLLECT_MAX_S`` would
+    silently blow the cap — and the deadline message must name the caller's timeout, not the
+    no-progress ``poll_timeout_s``, since that is the bound that actually tripped."""
+    _clock(patched, step=0.5)  # small enough to poll a few times before the 3s cap
+    # Would-be trap: a huge extra window and an "answer" that only ever appears well past N.
+    # If the extension ran, it would collect this and the call would wrongly succeed.
+    monkeypatch.setattr(late, "_COLLECT_MAX_S", 10_000.0)
+    state = _install_peer(
+        patched,
+        send=_working(msg="phase 0"),
+        gets=lambda n: _completed("smuggled-in late answer") if n > 50 else _working(msg=f"phase {n + 1}"),
+    )
+
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(_detached(lambda: A.dispatch(_parse(poll_timeout_s=300), "capped background job", timeout=3)))
+
+    msg = str(ei.value)
+    assert "this call's timeout" in msg  # the explicit cap, not poll_timeout_s, is what tripped
+    assert "without observable progress" not in msg
+    assert "task t1" in msg
+    assert "resume_task_id='t1'" in msg
+    assert "retry" not in msg.lower()
+    # The extension never ran, so the late "answer" (n > 50) was never polled for.
+    assert state["methods"].count("GetTask") <= 20
 
 
 def test_background_delegation_surfaces_a_late_peer_failure_diagnostic(patched):

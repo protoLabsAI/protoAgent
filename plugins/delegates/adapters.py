@@ -516,18 +516,26 @@ def _still_running_message(
     *,
     poll_timeout: float,
     send_timeout: float | None = None,
+    auto_delivered: bool = False,
 ) -> str:
     """The message a delegation returns when its poll deadline expires with the peer STILL
     working (#3700).
 
     Never a bare failure, and never "retry": it names the peer task id, the last observed
     state and status message, and says the work may still finish and can be resumed or
-    collected with that id. A background delegation delivers a late completion automatically
-    (``late.collect_task``); a foreground caller resumes with
-    ``delegate_to(..., resume_task_id=<id>)``. ``poll_timeout_s`` is per-delegate
-    configurable — raising it is the fix for a peer that legitimately runs longer than the
-    no-progress bound, not re-sending the work (which double-boards it on a peer still busy
-    with the first task).
+    collected with that id. ``poll_timeout_s`` is per-delegate configurable — raising it is
+    the fix for a peer that legitimately runs longer than the no-progress bound, not
+    re-sending the work (which double-boards it on a peer still busy with the first task).
+
+    ``auto_delivered`` decides the ONE promise this message must not get wrong: whether
+    something is still polling the task behind it. It is ``True`` only when a collection is
+    left running after this message — a room address that stashed a pending handle for
+    ``late.collect`` to bring the answer back on its own. A detached background delegation
+    that has ALREADY exhausted its own ``late.collect_task`` window (or any caller with no
+    conversation to collect into) leaves NOTHING polling, so the message must not promise
+    auto-delivery — it points at ``resume_task_id`` to pick the finished reply up instead.
+    Promising "delivered automatically" when nothing collects is the #3700 lost-reply failure
+    re-told as a false reassurance.
     """
     status = " ".join(str(status_text or "").split())[:_A2A_ERROR_DETAIL_LIMIT]
     last_status = f'; last status "{status}"' if status else ""
@@ -540,11 +548,21 @@ def _still_running_message(
             "(its configurable poll_timeout_s)"
         )
         raise_hint = "raise this delegate's poll_timeout_s"
+    if auto_delivered:
+        delivery = (
+            "Its answer will be delivered automatically if it finishes; do NOT re-send this work "
+            f"(that double-boards it). To pick it up sooner, resume with delegate_to(..., "
+            f"resume_task_id={task_id!r})"
+        )
+    else:
+        delivery = (
+            "Nothing is polling it now, so its answer will NOT arrive on its own — pick it up with "
+            f"delegate_to(..., resume_task_id={task_id!r}) once it finishes; do NOT re-send this work "
+            "(that double-boards it on a peer still busy with the first task)"
+        )
     return (
         f"{head} — the peer may still be working on task {task_id} (state={state}{last_status}). "
-        f"Its answer will be delivered automatically if it finishes; do NOT re-send this work "
-        f"(that double-boards it). To pick it up, resume with delegate_to(..., "
-        f"resume_task_id={task_id!r}), or {raise_hint} for a job that legitimately runs this long."
+        f"{delivery}, or {raise_hint} for a job that legitimately runs this long."
     )
 
 
@@ -1418,6 +1436,11 @@ class A2aAdapter(Adapter):
                 # separate slot from the context, deliberately: restoring the contextId would
                 # queue the next address behind the very turn we just gave up on. No-op
                 # without a conversation key; never for a resume, which is the lead's.
+                #
+                # Whether it actually registered (a real conversation key, not a resume) is
+                # also the one thing the deadline message must not get wrong: only then is a
+                # collection left running for ``late.collect`` to deliver on its own (#3700).
+                left_pending_for_room = bool(d.conversation_key) and not resume_task_id
                 if not resume_task_id:
                     conversations.remember_pending(
                         d.conversation_key,
@@ -1434,7 +1457,12 @@ class A2aAdapter(Adapter):
                 # (``late.collect_task``) here, up to the same bounded window, and deliver the
                 # peer's REAL reply as the job result if it finishes rather than losing it to a
                 # FAILED job with no task id to resume (#3700).
-                if _DETACHED_DELEGATION.get():
+                #
+                # ONLY when the no-progress ``poll_timeout`` tripped (``hard_deadline is None``):
+                # an explicit ``delegate_to(timeout=N)`` is the caller's HARD cap on how long to
+                # wait, and extending past it — by up to ``_COLLECT_MAX_S`` — would silently
+                # blow that cap. When the caller set N, the deadline stands at N.
+                if _DETACHED_DELEGATION.get() and hard_deadline is None:
                     from . import late
 
                     outcome, late_text, ext_state, ext_status = await late.collect_task(d, str(task_id))
@@ -1444,22 +1472,37 @@ class A2aAdapter(Adapter):
                         # The task actually settled as a failure while we waited — surface the
                         # peer's own diagnostic, not a "still running" note.
                         raise DelegateError(f"delegate {d.name!r}: {late_text}")
-                    # Still unfinished after the extra window: fall through to the actionable
-                    # message below, carrying the freshest state/status the poll observed.
+                    # Still unfinished after the extra window, which this path has now used up —
+                    # nothing polls the task after this, so the message must NOT promise
+                    # auto-delivery. Fall through carrying the freshest state/status observed.
                     state = ext_state or state
                     last_status_text = ext_status or last_status_text
                 # The deadline stands — but the result names the peer task id, the last state
                 # and status message, and how to resume/collect the work, and never says to
                 # retry (#3700). ``poll_timeout_s`` remains per-delegate configurable; the text
-                # says so.
+                # says so. ``auto_delivered`` is the room case only: a detached delegation has
+                # exhausted its own poll above and left no conversation handle to collect into.
                 if hard_deadline is not None and time.monotonic() >= hard_deadline:
                     raise DelegateError(
                         _still_running_message(
-                            d, str(task_id), state, last_status_text, poll_timeout=poll_timeout, send_timeout=send_timeout
+                            d,
+                            str(task_id),
+                            state,
+                            last_status_text,
+                            poll_timeout=poll_timeout,
+                            send_timeout=send_timeout,
+                            auto_delivered=left_pending_for_room,
                         )
                     )
                 raise DelegateError(
-                    _still_running_message(d, str(task_id), state, last_status_text, poll_timeout=poll_timeout)
+                    _still_running_message(
+                        d,
+                        str(task_id),
+                        state,
+                        last_status_text,
+                        poll_timeout=poll_timeout,
+                        auto_delivered=left_pending_for_room,
+                    )
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
 
