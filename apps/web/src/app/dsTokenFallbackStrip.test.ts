@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 // #3685 (d2): the pinned @protolabsai/design tokens are always loaded — main.tsx imports the
 // DS before any app CSS — so a `var(--pl-…, #hex)` fallback can only ever paint the wrong,
-// dark-only colour. The DS owner chose to DELETE them, and to retire the legacy --brand-*
+// dark-only colour. The DS owner chose to DELETE them, and to retire the legacy brand-*
 // aliases onto real DS tokens. This pins the strip across the four touched sheets so a hex
-// fallback or a --brand- reference can't creep back into them.
+// fallback or a brand-* reference can't creep back into them.
 //
 // Source-level (Vite ?raw), same rationale as phantomTokenRename.test.ts: the DS ships from a
 // private registry and isn't in node_modules here, so the real token resolves to nothing at
@@ -52,20 +52,20 @@ function fallbackOffenders(suffix: string): string[] {
     .filter((hit): hit is string => hit !== null);
 }
 
-describe("DS token fallbacks + --brand- aliases stripped from settings/* and memory.css (#3685 d2)", () => {
+describe("DS token fallbacks + brand-* aliases stripped from settings/* and memory.css (#3685 d2)", () => {
   it("no var(--pl-…, #hex) fallback remains in any touched sheet", () => {
     for (const suffix of TOUCHED) {
       expect(fallbackOffenders(suffix), `hex fallback still present in ${suffix}`).toEqual([]);
     }
   });
 
-  it("no legacy --brand-* reference remains in any touched sheet", () => {
+  it("no legacy brand-* reference remains in any touched sheet", () => {
     for (const suffix of TOUCHED) {
       expect(source(suffix).includes(BRAND), `${BRAND} still referenced in ${suffix}`).toBe(false);
     }
   });
 
-  it("the path-picker selection tint mixes the DS accent, not a --brand- alias", () => {
+  it("the path-picker selection tint mixes the DS accent, not a brand-* alias", () => {
     expect(source("/settings/pathpicker.css")).toContain(
       "color-mix(in srgb, var(--pl-color-accent) 22%, transparent)",
     );

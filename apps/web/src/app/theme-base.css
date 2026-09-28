@@ -6,17 +6,6 @@
    in theme.css until it's carved (#832). */
 
 :root {
-  /* Track the themed DS accent (--pl-color-accent) so accent chrome — settings focus
-     rings, the dirty-edit marker, selected cards, group titles — moves with the active
-     theme (incl. per-agent ThemePanel themes) instead of a frozen purple. The old hex
-     stays as the pre-token fallback. */
-  --brand-violet: var(--pl-color-accent, #7c3aed);
-  --brand-violet-light: var(--pl-color-accent, #a78bfa);
-  --brand-indigo: #6366f1;
-  --brand-indigo-bright: #818cf8;
-  /* sister-agent (a2a) accent — the only non-semantic origin tint in the activity feed */
-  --brand-pink: #f472b6;
-
   /* The legacy --bg/--fg/--border/--accent/--font/--radius alias families are RETIRED
      (#2233): every reference in apps/web now uses the canonical --pl-* tokens directly
      (imported in main.tsx), so the bridge no longer defines them. Only the status-tone

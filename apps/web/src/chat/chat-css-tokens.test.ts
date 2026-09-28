@@ -10,7 +10,7 @@ import toolCallsCss from "./tool-calls.css?raw";
 
 // #3685 part c2 — DS tokens are always loaded (main.tsx imports @protolabsai/design before any
 // CSS), so a `var(--pl-…, #hex)` fallback can only ever paint a wrong, dark-only colour once the
-// token exists; the DS owner deleted them. The legacy `--brand-*` aliases are retired to DS
+// token exists; the DS owner deleted them. The legacy `brand-*` aliases are retired to DS
 // tokens too: tool-call accent TEXT reads --pl-color-accent-fg (readable on the card body in
 // light mode, unlike the mid-tone --pl-color-accent), and the prompt-viewer bars/borders read
 // --pl-color-accent. This guard locks all three files against a lazy re-introduction of either.
@@ -36,7 +36,7 @@ function rule(css: string, selector: string): string {
   return match![0];
 }
 
-describe("#3685 c2 — no var(--pl-…, #hex) fallbacks, no --brand-* aliases, no stray hex", () => {
+describe("#3685 c2 — no var(--pl-…, #hex) fallbacks, no brand-* aliases, no stray hex", () => {
   for (const [name, css] of Object.entries(FILES)) {
     it(`${name} is loaded as raw text (the guard is not silently blind)`, () => {
       expect(css.length).toBeGreaterThan(0);
@@ -46,8 +46,8 @@ describe("#3685 c2 — no var(--pl-…, #hex) fallbacks, no --brand-* aliases, n
       expect(css).not.toMatch(HEX_FALLBACK);
     });
 
-    it(`${name} has no --brand-* alias`, () => {
-      expect(css).not.toContain("--brand-");
+    it(`${name} has no brand-* alias`, () => {
+      expect(css).not.toContain("--" + "brand-");
     });
 
     it(`${name} carries no colour hex literal outside comments`, () => {
@@ -144,9 +144,9 @@ describe("promptviewer.css bars/borders read bare --pl-color-accent", () => {
     });
   }
 
-  it("the projected fill drops its old var(--brand-violet) fallback", () => {
+  it("the projected fill drops its old brand-violet var() fallback", () => {
     expect(rule(promptViewerCss, ".prompt-viewer__budget-fill--projected")).not.toContain(
-      "--brand-violet",
+      "--" + "brand-violet",
     );
   });
 });

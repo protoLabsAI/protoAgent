@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 // #3685 (part b): the pinned @protolabsai/design tokens are always loaded — main.tsx imports
 // the DS before any app CSS — so a `var(--pl-…, #hex)` fallback can only ever paint the wrong,
-// dark-only colour. The DS owner chose to DELETE them, and to retire the legacy --brand-*
+// dark-only colour. The DS owner chose to DELETE them, and to retire the legacy brand-*
 // aliases onto real DS tokens (text → --pl-color-accent-fg, fill/border → --pl-color-accent).
-// This pins the strip across the three sheets this card owns so a hex fallback or a --brand-
+// This pins the strip across the three sheets this card owns so a hex fallback or a brand-*
 // reference can't creep back into them. Sibling dsTokenFallbackStrip.test.ts (part d2) guards
 // settings/* + memory.css the same way.
 //
@@ -51,26 +51,26 @@ function fallbackOffenders(suffix: string): string[] {
     .filter((hit): hit is string => hit !== null);
 }
 
-describe("DS token fallbacks + --brand- aliases stripped from theme.css, tools.css, ProtoLabsIcon.tsx (#3685 b)", () => {
+describe("DS token fallbacks + brand-* aliases stripped from theme.css, tools.css, ProtoLabsIcon.tsx (#3685 b)", () => {
   it("no var(--pl-…, #hex) fallback remains in any touched file", () => {
     for (const suffix of TOUCHED) {
       expect(fallbackOffenders(suffix), `hex fallback still present in ${suffix}`).toEqual([]);
     }
   });
 
-  it("no legacy --brand-* reference remains in theme.css", () => {
+  it("no legacy brand-* reference remains in theme.css", () => {
     expect(source("/theme.css").includes(BRAND), `${BRAND} still referenced in theme.css`).toBe(false);
   });
 
-  it("theme.css: retired --brand- fill/border sites now mix the bare DS accent", () => {
+  it("theme.css: retired brand-* fill/border sites now mix the bare DS accent", () => {
     const css = source("/theme.css");
     expect(css).toContain("background: var(--pl-color-accent);"); // .setup-progress span.done/.active
     expect(css).toContain("color-mix(in srgb, var(--pl-color-accent) 36%, transparent)"); // .setup-icon border
   });
 
-  it("theme.css: retired --brand- text sites read the AA accent-text token", () => {
-    // .metric svg, .setup-icon, .status-line svg (was --brand-violet-light) + .settings-help-link/
-    // .setup-link (was --brand-indigo-bright) — all link/icon TEXT, readable on light and dark.
+  it("theme.css: retired brand-* text sites read the AA accent-text token", () => {
+    // .metric svg, .setup-icon, .status-line svg (was brand-violet-light) + .settings-help-link/
+    // .setup-link (was brand-indigo-bright) — all link/icon TEXT, readable on light and dark.
     expect(count(source("/theme.css"), "color: var(--pl-color-accent-fg);")).toBe(4);
   });
 
