@@ -16,15 +16,20 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent / "plugins" / "artifact"
 
 
-def _load(monkeypatch, tmp_path):
-    """Fresh package bound to a temp ARTIFACT_DIR so history is isolated per test.
+def _load(monkeypatch, tmp_path=None):
+    """Fresh package. With ``tmp_path`` given, bind ARTIFACT_DIR to it so history is isolated
+    per test (the common case). With ``tmp_path`` omitted — the instance-store tests, which
+    call ``_pin_roots`` first — leave ARTIFACT_DIR unset and PROTOAGENT_INSTANCE as the caller
+    set it, so the store resolves through the instance plugin store (graph.sdk.plugin_store)
+    rather than the env override.
 
     Loaded as a PACKAGE (submodule_search_locations, the way the host loader does)
     so the plugin's relative imports resolve. Prior runs' submodules are evicted
     from sys.modules first — a cached ``artifact_under_test._tools`` would carry
     mutable module state (nudge counters, poll stamps) across tests."""
-    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
-    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    if tmp_path is not None:
+        monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
     for k in [k for k in sys.modules if k.startswith("artifact_under_test")]:
         del sys.modules[k]
     spec = importlib.util.spec_from_file_location(
@@ -1845,3 +1850,453 @@ def test_parallel_pins_cannot_overshoot_the_cap(monkeypatch, tmp_path):
         th.join(timeout=10)
     assert sorted("Pinned artifact" in r for r in results) == [False, True], results
     assert len(art._store._pinned(art._read_store())) == 1
+
+
+# ── ADR 0004 / 0065: the default store lives in the instance plugin store ────────
+# With ARTIFACT_DIR unset the store used to be derived straight from ~ (ignoring
+# PROTOAGENT_BOX_ROOT / PROTOAGENT_HOME): a box-scoped server wrote to the real home,
+# and a default install landed one level ABOVE the instance root. It now resolves via
+# graph.sdk.plugin_store (box-root aware) and migrates legacy ~/.protoagent/artifact data.
+
+
+def _pin_roots(monkeypatch, tmp_path, instance=None):
+    """Point the box root and HOME at SEPARATE dirs under tmp and re-resolve instance paths,
+    so the store stays inside tmp and the migration can NEVER touch the developer's real
+    ~/.protoagent/artifact (the conftest does not pin HOME).
+
+    The box root (``<tmp>/box``) is deliberately separate from HOME — the general shape, and
+    the one the desktop and containers use (``PROTOAGENT_BOX_ROOT`` / ``PROTOAGENT_HOME`` point
+    at the Tauri config dir or ``/sandbox``, NOT ``~``). The legacy store the migration reads
+    is HOME-relative (``<HOME>/.protoagent/artifact[/<inst>]``), exactly where the pre-scoping
+    code wrote it, independent of the box root — so these tests create it under HOME and watch
+    it get adopted into the box-rooted instance store even though the two roots differ."""
+    from infra.paths import reset_instance_paths
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    box = tmp_path / "box"
+    monkeypatch.delenv("ARTIFACT_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    if instance is None:
+        monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    else:
+        monkeypatch.setenv("PROTOAGENT_INSTANCE", instance)
+    reset_instance_paths()
+    return home, box
+
+
+def _legacy_dir(home, instance=None):
+    """The pre-scoping store's OLD location — ``<HOME>/.protoagent/artifact[/<inst>]`` — the
+    HOME-relative path the migration reads, whatever the box root is."""
+    base = home / ".protoagent" / "artifact"
+    return base / instance if instance else base
+
+
+def _legacy_store(art_id):
+    return {
+        "artifacts": [
+            {
+                "id": art_id,
+                "kind": "html",
+                "title": art_id,
+                "versions": [{"code": f"<p>{art_id}</p>", "ts": 1, "by": "agent"}],
+                "version_count": 1,
+                "created": 1,
+                "updated": 1,
+            }
+        ],
+        "current": art_id,
+    }
+
+
+def test_default_store_writes_to_the_instance_plugin_store_not_home(monkeypatch, tmp_path):
+    """r1: box-scoped + instanced, ARTIFACT_DIR unset — history.json and blobs land under
+    <box>/<inst>/artifact, and nothing is created under the real-home ~/.protoagent."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+
+    art.show_artifact.invoke({"kind": "html", "code": "<p>hi</p>"})
+    src = tmp_path / "src.txt"
+    src.write_bytes(b"blobby")
+    out = art.save_file_artifact.invoke({"path": str(src)})
+    assert "Saved file artifact" in out
+
+    store_dir = box / "onb" / "artifact"
+    assert (store_dir / "history.json").is_file()
+    blobs = list((store_dir / "blobs").rglob("*.txt"))
+    assert blobs and blobs[0].read_bytes() == b"blobby"
+    assert json.loads((store_dir / "history.json").read_text())["artifacts"]  # real store, not empty
+    assert not (home / ".protoagent").exists()  # nothing leaked to the real-home shape
+
+
+def test_legacy_instance_store_is_migrated_history_and_blobs(monkeypatch, tmp_path):
+    """r2: a pre-instance-scoping <HOME>/.protoagent/artifact/onb store (history + a blob) is
+    moved wholesale into the instance plugin store on first access; the artifact lists and its
+    blob resolves from the new location, and the legacy files are gone. The legacy source is
+    HOME-relative, so it is found even here where the box root points elsewhere."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    blob_name = "deadbeef01.txt"
+    (legacy / "blobs" / "a-1" / blob_name).write_bytes(b"legacy-bytes")
+    store = {
+        "artifacts": [
+            {
+                "id": "a-1",
+                "kind": "file",
+                "title": "Doc",
+                "versions": [
+                    {
+                        "code": "preview",
+                        "ts": 1,
+                        "by": "agent",
+                        "file": {"mime": "text/plain", "filename": "d.txt", "size": 12, "thumb": ""},
+                        "blob": blob_name,
+                    }
+                ],
+                "version_count": 1,
+                "created": 1,
+                "updated": 1,
+            }
+        ],
+        "current": "a-1",
+    }
+    (legacy / "history.json").write_text(json.dumps(store), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]
+
+    new_dir = box / "onb" / "artifact"
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-1" / blob_name).read_bytes() == b"legacy-bytes"
+    # the blob resolves from the new location (the path the download route opens, _routes:56)
+    assert art._store._blob_path("a-1", blob_name).read_bytes() == b"legacy-bytes"
+    # legacy files are gone
+    assert not (legacy / "history.json").exists()
+    assert not (legacy / "blobs").exists()
+
+
+def test_bare_legacy_store_migrates_and_leaves_sibling_instances(monkeypatch, tmp_path):
+    """r3: with PROTOAGENT_INSTANCE unset the bare <HOME>/.protoagent/artifact store
+    migrates, but sibling instance subdirectories under it are left untouched."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance=None)
+    art_root = _legacy_dir(home)
+    art_root.mkdir(parents=True)
+    (art_root / "history.json").write_text(json.dumps(_legacy_store("bare")), encoding="utf-8")
+    sibling = art_root / "roxy"  # a co-located instance's store — NOT ours to move
+    sibling.mkdir()
+    (sibling / "history.json").write_text(json.dumps(_legacy_store("roxy-art")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["bare"]
+
+    new_dir = box / "default" / "artifact"  # no instance → "default"
+    assert (new_dir / "history.json").is_file()
+    assert not (art_root / "history.json").exists()  # the bare store moved
+    assert (sibling / "history.json").is_file()  # the sibling instance is left alone
+
+
+def test_no_migration_when_the_new_store_already_exists(monkeypatch, tmp_path):
+    """r4: if the instance store already has history.json it wins outright — no migration,
+    and legacy data stays where it is."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True)
+    (new_dir / "history.json").write_text(json.dumps(_legacy_store("new")), encoding="utf-8")
+    legacy = _legacy_dir(home, "onb")
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["new"]  # the new store wins
+    assert (legacy / "history.json").is_file()  # legacy untouched
+
+
+def test_path_resolution_failure_falls_back_to_the_legacy_path(monkeypatch, tmp_path):
+    """r6: a resolver that raises must not fail the tool call — the store falls back to the
+    legacy directory and keeps working."""
+    import graph.sdk
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+
+    def _boom(*a, **k):
+        raise RuntimeError("instance paths unavailable")
+
+    monkeypatch.setattr(graph.sdk, "plugin_store", _boom)
+
+    art = _load(monkeypatch)
+    out = art.show_artifact.invoke({"kind": "html", "code": "<p>fallback</p>"})
+    assert "Created" in out  # the tool call succeeded despite the failing resolver
+
+    legacy = _legacy_dir(home, "onb")  # the OLD HOME-relative location — where the fallback lands
+    assert (legacy / "history.json").is_file()
+    assert str(art._store._store_path()).startswith(str(legacy))
+    assert not (box / "onb" / "artifact" / "history.json").exists()  # never the plugin-store shape
+
+
+def test_box_root_elsewhere_still_migrates_the_home_store(monkeypatch, tmp_path):
+    """The blocking fix: on the desktop and in containers the box root points at its OWN dir
+    (Tauri's config dir; /sandbox), NOT ~/.protoagent — yet the old code still wrote the store
+    under Path.home()/.protoagent/artifact. So the legacy source is HOME-relative: a box root
+    that differs from HOME must still find and adopt that store, or artifact history and pins
+    silently vanish from the panel on upgrade. The earlier attempt keyed the legacy path off
+    box_root(), which missed the real store on exactly these installs."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")  # box = <tmp>/box, NOT under home
+    legacy = _legacy_dir(home, "onb")  # where the old sidecar actually wrote — under HOME
+    (legacy / "blobs" / "a-live").mkdir(parents=True)
+    (legacy / "blobs" / "a-live" / "keep.txt").write_bytes(b"home-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("home-live")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    # the home store is adopted into the box store — history is preserved, not lost
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["home-live"]
+    new_dir = box / "onb" / "artifact"
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-live" / "keep.txt").read_bytes() == b"home-bytes"
+    # the blob resolves from the new location (the path the download route opens)
+    assert art._store._blob_path("a-live", "keep.txt").read_bytes() == b"home-bytes"
+    # the store resolves inside the box, and the legacy home store is emptied (moved, not copied)
+    assert str(art._store._store_dir()).startswith(str(new_dir))
+    assert not (legacy / "history.json").exists()
+    assert not (legacy / "blobs").exists()
+
+
+def test_history_move_failure_rolls_blobs_back_to_the_legacy_dir(monkeypatch, tmp_path):
+    """The blocking data-integrity finding: if ``blobs/`` moves but the ``history.json`` move
+    then raises, the blobs must be rolled BACK into the legacy dir before the fallback — so the
+    legacy store the resolver keeps using is left WHOLE. Otherwise the store serves history.json
+    from legacy while the blobs have already left it, and every file-artifact download 404s."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    (legacy / "blobs" / "a-1" / "b.txt").write_bytes(b"legacy-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+
+    # Fail ONLY the second move — the history.json one (its source basename is "history.json").
+    # The blobs move and the roll-back move both go through the real replace.
+    real_replace = Path.replace
+
+    def replace(self, target):
+        if self.name == "history.json":
+            raise OSError("history.json is not moveable")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+
+    resolved = art._store._store_dir()
+
+    # the resolver fell back to the legacy dir…
+    assert resolved.resolve() == legacy.resolve()
+    # …left whole: BOTH its history.json and its blobs/<id>/<file> are still there
+    assert (legacy / "history.json").is_file()
+    assert (legacy / "blobs" / "a-1" / "b.txt").read_bytes() == b"legacy-bytes"
+    # and nothing was stranded in the new dir
+    assert not (new_dir / "history.json").exists()
+    assert not (new_dir / "blobs").exists()
+    # the store resolves to legacy and the blob is still resolvable from there
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]
+    assert art._store._blob_path("a-1", "b.txt").read_bytes() == b"legacy-bytes"
+
+
+class _NoLock:
+    """A no-op stand-in for ``_MUTATION_LOCK`` so two threads in ONE process are serialised
+    only by the cross-process OS file lock — the ACP condition, where the tool process and the
+    main process each have their own thread lock and only the file lock spans them."""
+
+    def acquire(self, timeout=-1):  # noqa: ARG002 — the RLock signature _migration_lock calls
+        return True
+
+    def release(self):
+        pass
+
+
+def test_migration_loser_adopts_the_new_dir_not_the_emptied_legacy(monkeypatch, tmp_path):
+    """The blocking review finding, at the unit level: when two callers race the one-time
+    adoption, the loser's ``replace`` raises ``FileNotFoundError`` because the winner already
+    moved history.json. That must NOT be read as a failed migration that sends the loser back to
+    the now-emptied legacy dir (a different lock file, an orphaned write) — the loser re-checks
+    and adopts new_dir."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True, exist_ok=True)  # plugin_store creates it
+
+    def racing_move(src, dst):
+        # The winner's move already landed history.json in new_dir before ours ran...
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "history.json").write_text(json.dumps(_legacy_store("winner")), encoding="utf-8")
+        # ...so our own replace of the now-gone legacy history.json raises, as the race does.
+        raise FileNotFoundError(str(src / "history.json"))
+
+    monkeypatch.setattr(art._store, "_migrate_legacy_store", racing_move)
+    resolved = art._store._adopt_legacy_store(new_dir)
+    assert resolved == new_dir  # NOT the emptied legacy dir
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["winner"]  # the winner's store
+    assert legacy.resolve() not in {p.resolve() for p in [art._store._store_dir()]}
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="msvcrt byte-range locks don't contend within one process; the cross-process suite covers Windows",
+)
+def test_concurrent_first_access_migration_never_diverges_to_legacy(monkeypatch, tmp_path):
+    """Two callers racing the one-time adoption both land on new_dir, with the legacy store moved
+    intact and nothing stranded. The in-process thread lock is neutralised so the cross-process
+    OS file lock is the SOLE serialiser — the ACP shape (operator-MCP vs. main, separate thread
+    locks). Without a lock the loser fell back to the emptied legacy dir and wrote an orphaned
+    history.json; here the loser waits on the file lock and adopts new_dir."""
+    import json
+    import threading
+    import time
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    (legacy / "blobs" / "a-1" / "b.txt").write_bytes(b"blob-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True, exist_ok=True)  # plugin_store creates it
+
+    monkeypatch.setattr(art._store, "_MUTATION_LOCK", _NoLock())
+    started, proceed = threading.Event(), threading.Event()
+    real_move = art._store._migrate_legacy_store
+
+    def gated_move(src, dst):
+        # The winner pauses mid-migration holding the OS lock, so the loser must wait on it.
+        started.set()
+        proceed.wait(5)
+        return real_move(src, dst)
+
+    monkeypatch.setattr(art._store, "_migrate_legacy_store", gated_move)
+
+    results: dict[str, Path] = {}
+
+    def call(name):
+        results[name] = art._store._store_dir()
+
+    a = threading.Thread(target=call, args=("a",))
+    a.start()
+    assert started.wait(5)  # the winner is inside the migration, holding the OS lock
+    b = threading.Thread(target=call, args=("b",))
+    b.start()
+    time.sleep(0.1)  # let the loser reach and block on the OS lock
+    proceed.set()
+    a.join(10)
+    b.join(10)
+
+    assert results["a"] == new_dir and results["b"] == new_dir  # neither diverged to legacy
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-1" / "b.txt").read_bytes() == b"blob-bytes"  # blobs travelled too
+    assert not (legacy / "history.json").exists()  # the winner's move landed, once
+    assert [x["id"] for x in art._read_store()["artifacts"]] == ["a-1"]  # a single intact store
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="msvcrt byte-range locks don't contend within one process; the reentrancy is POSIX-flock-specific",
+)
+def test_migration_lock_is_reentrant_with_the_store_write_lock(monkeypatch, tmp_path):
+    """The blocking finding: an adoption triggered from INSIDE a serialized write must NOT
+    re-open the store's own flock. On POSIX flock is per-open-file-description, so a second
+    LOCK_EX on the same file from this same process conflicts with the one the write already
+    holds — without the _FILE_LOCK_DEPTH reentrancy guard the nested acquire polls to the
+    _LOCK_TIMEOUT_S deadline (60s in prod) and then runs unlocked. We drop the timeout so a
+    regression FAILS FAST here instead of merely running ~60s slower."""
+    import time
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+    monkeypatch.setattr(art._store, "_LOCK_TIMEOUT_S", 2.0)
+
+    art._store._store_dir()  # resolve + cache the dir so _lock_path() is stable
+    lock_file = art._store._lock_path()
+
+    start = time.monotonic()
+    with art._store._store_lock():  # takes the real flock; _FILE_LOCK_DEPTH -> 1
+        with art._store._migration_lock(lock_file):  # same file — must skip, not re-flock
+            pass
+    # << _LOCK_TIMEOUT_S (2.0s): the guard returns at once. Without it the inner acquire would
+    # self-conflict and poll to the 2.0s deadline.
+    assert time.monotonic() - start < 1.0
+
+
+def _record_os_lock(monkeypatch, art):
+    """Record every _os_lock call so a test can assert a code path took no store OS lock."""
+    calls: list[int] = []
+    real = art._store._os_lock
+
+    def rec(fd, deadline):
+        calls.append(1)
+        return real(fd, deadline)
+
+    monkeypatch.setattr(art._store, "_os_lock", rec)
+    return calls
+
+
+def test_reads_on_a_fresh_store_take_no_store_lock(monkeypatch, tmp_path):
+    """The major finding, case (a): on a fresh/empty store (nothing to adopt) resolving the
+    store dir takes NO lock — so the lock-free read path (the async /history and /current
+    polls) never waits behind a writer while resolving the path."""
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+    calls = _record_os_lock(monkeypatch, art)
+
+    assert art._read_store()["artifacts"] == []  # a pure read, exactly what /history does
+    assert calls == []  # the read path took no store OS lock at all
+
+
+def test_reads_after_a_failed_migration_take_no_store_lock(monkeypatch, tmp_path):
+    """The major finding, case (b): once an adoption that can't move falls back to legacy, the
+    resolution is CACHED — later reads don't re-attempt the migration under the lock on every
+    poll. Without the cache each /history / /current poll would take _MUTATION_LOCK and poll the
+    flock on the event-loop thread for as long as a writer held it."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+
+    # First access: the one-time adoption. Make the history.json move fail so it falls back to
+    # legacy and caches it (blobs absent here, so no roll-back is involved).
+    real_replace = Path.replace
+
+    def failing_replace(self, target):
+        if self.name == "history.json":
+            raise OSError("history.json is not moveable")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    assert art._store._store_dir().resolve() == legacy.resolve()  # fell back and cached legacy
+    monkeypatch.setattr(Path, "replace", real_replace)
+
+    calls = _record_os_lock(monkeypatch, art)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]  # still served, from legacy
+    assert calls == []  # the cached fallback means a later read never re-takes the store lock

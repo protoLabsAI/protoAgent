@@ -41,13 +41,221 @@ log = logging.getLogger("protoagent.plugins.artifact")
 # newer artifacts push them out, rather than evicting them on the very first write.
 
 
-def _store_path() -> Path:
-    base = Path(os.environ.get("ARTIFACT_DIR") or (Path.home() / ".protoagent" / "artifact"))
+def _legacy_store_dir() -> Path:
+    """Where the store's data lived before it was instance-scoped (ADR 0004 / ADR 0065).
+    Read-only, for the one-time migration and as the last-resort fallback.
+
+    This is the OLD ``_store_path()`` location VERBATIM: ``~/.protoagent/artifact``
+    (``Path.home()``, NOT ``box_root()`` / ``PROTOAGENT_HOME``), with ``PROTOAGENT_INSTANCE``
+    appended when set — the shape the pre-scoping store wrote to unconditionally. Read the
+    legacy data from where it was actually written, which is HOME, not the box root: the
+    desktop sidecar and containers point ``PROTOAGENT_BOX_ROOT`` / ``PROTOAGENT_HOME`` at
+    their own directory (Tauri's config dir; ``/sandbox``) yet the old code still wrote the
+    store under ``Path.home()/.protoagent/artifact``. Deriving the legacy source from
+    ``box_root()`` instead would miss that store on every desktop install and in every
+    container — box root and home differ there — and the panel would silently lose all its
+    history and pins on upgrade."""
+    base = Path.home() / ".protoagent" / "artifact"
     inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
     if inst:
         base = base / inst
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "history.json"
+    return base
+
+
+def _migrate_legacy_store(legacy: Path, new_dir: Path) -> None:
+    """Move a legacy ``history.json`` AND its ``blobs/`` dir into ``new_dir`` (raising
+    ``OSError`` if a move fails). Moving only the JSON breaks file-artifact downloads
+    (``/artifact/{id}/blob`` resolves bytes from ``blobs/`` beside it), so the blobs travel
+    with it.
+
+    ``blobs/`` moves FIRST, but the two-step move is made to look ATOMIC to a fallback caller:
+    if the ``history.json`` move then raises, the blobs are rolled BACK into ``legacy`` before
+    the ``OSError`` propagates. Without that rollback ``_adopt_legacy_store`` would fall back to
+    a legacy dir the blobs had already left, and every file-artifact download would 404 while
+    the store kept serving ``history.json`` from there (the blobs live under whichever dir the
+    store resolves to). Sibling instance subdirectories under a bare legacy dir are NOT
+    touched."""
+    new_dir.mkdir(parents=True, exist_ok=True)
+    legacy_blobs = legacy / "blobs"
+    moved_blobs = False
+    if legacy_blobs.is_dir():
+        legacy_blobs.replace(new_dir / "blobs")
+        moved_blobs = True
+    try:
+        (legacy / "history.json").replace(new_dir / "history.json")
+    except OSError:
+        # history.json didn't make it — roll the blobs back so the legacy store we fall back to
+        # is left WHOLE (its history.json AND its blobs/), never stranded without its bytes.
+        if moved_blobs:
+            with contextlib.suppress(OSError):
+                (new_dir / "blobs").replace(legacy_blobs)
+        raise
+    log.info("[artifact] migrated store %s -> %s", legacy, new_dir)
+
+
+def _adopt_legacy_store(new_dir: Path) -> Path:
+    """First access with an empty ``new_dir``: adopt a pre-instance-scoping store into it,
+    returning the directory the store should use.
+
+    LOCK-FREE PRE-CHECK first: when there is nothing to adopt — no legacy store, or it already
+    resolves to ``new_dir`` — return ``new_dir`` WITHOUT taking any lock. A fresh/empty store is
+    the overwhelmingly common shape, and the async ``/history`` and ``/current`` polls resolve
+    the store dir on this same path; making them wait on (or even open) the store lock here
+    would break the module's rule that a read never blocks on a writer. Only a store that
+    genuinely HAS legacy data to move reaches the lock below. The pre-check is unauthoritative
+    — two callers may both pass it — but the actual move is still serialised and double-checked,
+    so a race can't orphan data.
+
+    SERIALISED (``_migration_lock``) — the bug this closes: two callers that both found
+    ``new_dir`` empty both ran the move, and the loser's ``history.json`` ``replace`` raised
+    ``FileNotFoundError`` (the winner had already moved it). Read as a failed migration, that
+    sent the loser back to the now-EMPTIED legacy dir, where it took a DIFFERENT lock file
+    (``_lock_path`` derives from ``_store_path`` derives from here) and wrote a ``history.json``
+    silently orphaned the moment the winner's copy landed. It bit parallel tool calls and the
+    ACP operator-MCP vs. main-process split alike. Now one caller does the move under the lock;
+    every other re-checks under it and adopts ``new_dir``. ``_store_dir`` caches the result, so
+    this runs at most once per process — a store that falls back to legacy (a move that can't
+    complete) is NOT re-probed under the lock on every later read."""
+    legacy = _legacy_store_dir()
+    if legacy.resolve() == new_dir.resolve() or not (legacy / "history.json").is_file():
+        return new_dir  # nothing to adopt — no move, so no lock (keeps reads off the store lock)
+    with _migration_lock(new_dir / "history.json.lock"):
+        # Double-checked under the lock: a racing caller may have finished the move while we
+        # waited — its history.json is the commit marker. Adopt it; never move an emptied dir.
+        if (new_dir / "history.json").exists():
+            return new_dir
+        if not (legacy / "history.json").is_file():
+            # A racer moved it after our pre-check but left new_dir empty (a partial/rolled-back
+            # move on its side) — there's nothing left to move, so adopt new_dir rather than a
+            # legacy dir that no longer holds the store.
+            return new_dir
+        try:
+            _migrate_legacy_store(legacy, new_dir)
+        except OSError:
+            # Belt-and-braces for a degraded lock (an unlockable fs, or one held past the
+            # deadline so we ran without it): a caller may have committed the move under us.
+            # Adopt that rather than fall back to the legacy dir it just emptied.
+            if (new_dir / "history.json").exists():
+                return new_dir
+            log.warning(
+                "[artifact] could not migrate store %s -> %s; using the legacy directory",
+                legacy,
+                new_dir,
+                exc_info=True,
+            )
+            return legacy  # can't move it — keep using it where it is
+    return new_dir
+
+
+@contextlib.contextmanager
+def _migration_lock(lock_file: Path):
+    """Hold an exclusive lock for the one-time legacy adoption: this process's thread lock,
+    then a cross-process OS lock on ``lock_file``.
+
+    ``lock_file`` is passed in — the store's own sidecar in the RESOLVED ``new_dir``, a path
+    fixed by ``plugin_store`` — NOT re-derived through ``_store_path``/``_store_dir`` (that
+    would recurse straight back into adoption). It IS the file the store's write lock uses, so
+    an adoption and a store write exclude each other too.
+
+    REENTRANT with ``_store_lock``: when this process ALREADY holds the store file lock
+    (``_FILE_LOCK_DEPTH > 0`` — an adoption triggered from inside a ``serialized`` write, before
+    ``new_dir`` has been written), it does NOT open a second fd on the sidecar. On POSIX
+    ``flock`` is per-open-file-description, so a second ``LOCK_EX`` on the same file from this
+    same process conflicts with the one the write already holds: without this guard the nested
+    acquire would poll to the ``_LOCK_TIMEOUT_S`` deadline (60s in prod) and then swallow
+    ``_LockBusy`` and run unlocked — a per-lookup stall on the first write of every fresh store.
+    The outer ``_store_lock`` already gives exclusion, so re-taking it is both needless and
+    harmful. ``_FILE_LOCK_DEPTH`` is read (never incremented) under ``_MUTATION_LOCK``, which is
+    an RLock with a single holder, so it reflects THIS thread's holds — a migration never nests
+    a ``_store_lock``, and incrementing it would make a concurrent adopter in another process
+    (which shares no memory but which the in-process cross-process test models) skip its lock.
+
+    Best-effort, and it NEVER raises: an unlockable filesystem, or a lock still held past the
+    deadline, drops us to the thread lock alone (or to no lock) — ``_adopt_legacy_store`` then
+    leans on its post-move re-check so a caller still adopts a completed migration rather than
+    diverging. Store access must not fail because of path resolution."""
+    deadline = time.monotonic() + max(0.0, _LOCK_TIMEOUT_S)
+    have_thread = _MUTATION_LOCK.acquire(timeout=max(0.0, _LOCK_TIMEOUT_S))
+    try:
+        fd = None
+        # Only take the cross-process lock when this process doesn't already hold the store
+        # file lock (a migration from inside a serialized write) — a second flock on the same
+        # file would conflict with our own. See the reentrancy note above.
+        if have_thread and _FILE_LOCK_DEPTH == 0:
+            try:
+                fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+                _os_lock(fd, deadline)
+            except (_LockBusy, OSError):
+                if fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                    fd = None
+        try:
+            yield
+        finally:
+            if fd is not None:
+                _release_file_lock(fd)
+    finally:
+        if have_thread:
+            _MUTATION_LOCK.release()
+
+
+# The resolved (non-override) store dir, cached after the first resolution. The one-time legacy
+# adoption then runs AT MOST ONCE per process: every later _store_path() — including the
+# lock-free async reads (/history, /current) — returns this without re-probing legacy or taking
+# any lock. That is what keeps a read off the store lock, and what stops a store that fell back
+# to legacy (a move that can't complete) from re-attempting the migration on every poll. Reset
+# per module load, which is how the tests isolate; ARTIFACT_DIR is re-read live and never cached.
+_resolved_store_dir: Path | None = None
+
+
+def _store_dir() -> Path:
+    """The store's data directory.
+
+    ``ARTIFACT_DIR`` overrides everything (env-only, re-read live), keeping the historical
+    ``/<PROTOAGENT_INSTANCE>`` subdir that existing installs and tests depend on. Otherwise it's
+    this instance's own plugin store via ``graph.sdk.plugin_store`` — the box-root-aware seam
+    (ADR 0004 / ADR 0065), NOT a path re-derived from ``~``. The old guess
+    (``~/.protoagent/artifact[/<inst>]``) ignored ``PROTOAGENT_BOX_ROOT`` / ``PROTOAGENT_HOME``:
+    a scoped server wrote to the real home, and a default install with no instance landed one
+    level ABOVE the instance root (``~/.protoagent/default``). The resolved non-override dir is
+    cached (``_resolved_store_dir``) so the legacy adoption runs at most once — see that global.
+
+    A path-resolution failure falls back to the legacy directory rather than failing the
+    tool call — store access must never fail because of path resolution."""
+    override = os.environ.get("ARTIFACT_DIR")
+    if override:
+        base = Path(override)
+        inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+        if inst:
+            base = base / inst
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    global _resolved_store_dir
+    if _resolved_store_dir is not None:
+        return _resolved_store_dir
+    try:
+        from graph.sdk import plugin_store
+
+        new_dir = plugin_store(plugin_id="artifact")
+    except Exception:  # noqa: BLE001 — a path-resolution failure must not fail the tool call
+        legacy = _legacy_store_dir()
+        legacy.mkdir(parents=True, exist_ok=True)
+        _resolved_store_dir = legacy
+        return legacy
+    # Fast path — already migrated, or a store that never had legacy data. history.json is a
+    # one-way commit marker: the migration only ever moves it INTO new_dir, never back out (a
+    # failed history.json move rolls its blobs back and leaves it in legacy), so once it's here
+    # it stays. Adopt a pre-instance-scoping store on first access otherwise, rather than
+    # silently starting empty: an operator who upgrades keeps their artifacts. The adoption is
+    # lock-free unless there is genuinely legacy data to move (see _adopt_legacy_store).
+    resolved = new_dir if (new_dir / "history.json").exists() else _adopt_legacy_store(new_dir)
+    _resolved_store_dir = resolved
+    return resolved
+
+
+def _store_path() -> Path:
+    return _store_dir() / "history.json"
 
 
 def _store_etag() -> str:
