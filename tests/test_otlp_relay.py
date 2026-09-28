@@ -208,6 +208,9 @@ async def test_with_native_spans_the_turn_usage_is_metadata_not_a_second_generat
 
     monkeypatch.setattr(AcpClient, "_native_tracing_env", pretend_native)
     monkeypatch.setattr(AcpClient, "_drop_relay", lambda self: None)
+    handed: list = []
+    monkeypatch.setattr(otlp_relay, "end_turn", lambda *a, **k: handed.append(a))
+    monkeypatch.setattr("plugins.coding_agent.acp_client._current_span_ids", lambda: ("a" * 32, "b" * 16))
 
     import json as _json
 
@@ -236,6 +239,169 @@ async def test_with_native_spans_the_turn_usage_is_metadata_not_a_second_generat
         await client.close()
 
     fake.start_observation.assert_not_called()  # no turn-level generation
+    (token, span_id, _end, fallback) = handed[0]  # …handed to the relay as a fallback instead
+    assert token == "tok" and span_id == "b" * 16
+    assert fallback["usage"]["total"] == 12 and fallback["cost_usd"] == pytest.approx(0.3)
     md = span.update.call_args.kwargs["metadata"]
     assert md["native_tracing"] is True
     assert md["reported_cost_usd"] == pytest.approx(0.3) and md["reported_usage"]["totalTokens"] == 12
+
+
+def test_a_second_run_in_the_same_trace_goes_under_its_own_span():
+    """Two delegate_to calls to one pooled coder inside one orchestrator turn share a
+    trace id; run 2's spans still belong under run 2's span."""
+    client = otlp_relay._Client(bytes.fromhex(SPAWN_TRACE), bytes.fromhex(SPAWN_SPAN))
+    client.turns = [
+        otlp_relay._Turn(100, bytes.fromhex(SPAWN_TRACE), bytes.fromhex(SPAWN_SPAN)),
+        otlp_relay._Turn(500, bytes.fromhex(SPAWN_TRACE), bytes.fromhex(TURN2_SPAN)),
+    ]
+    req = _request({"name": "run2.interaction", "start": 550})
+    otlp_relay.rewrite(req, client)
+    span = req.resource_spans[0].scope_spans[0].spans[0]
+    assert span.trace_id.hex() == SPAWN_TRACE and span.parent_span_id.hex() == TURN2_SPAN
+
+
+def test_identity_and_secrets_are_stripped_at_every_level():
+    secret = "sk-" + "Q" * 40
+    req = _request({"name": f"tool {secret}", "attrs": {"list": "x"}})
+    rs = req.resource_spans[0]
+    ss = rs.scope_spans[0]
+    ss.scope.attributes.extend([_kv("user.email", "me@example.com")])
+    sp = ss.spans[0]
+    sp.status.message = f"failed with {secret}"
+    ev = sp.events.add()
+    ev.name = "tool.output"
+    ev.attributes.extend([_kv("user.email", "me@example.com"), _kv("output", secret)])
+    ln = sp.links.add()
+    ln.attributes.extend([_kv("organization.id", "org-1")])
+    arr = sp.attributes.add()
+    arr.key = "items"
+    arr.value.array_value.values.add().string_value = secret
+    kv = sp.attributes.add()
+    kv.key = "nested"
+    kv.value.kvlist_value.values.extend([_kv("cmd", secret)])
+    user = sp.attributes.add()  # an identity key nested as user → {email: …}
+    user.key = "user"
+    user.value.kvlist_value.values.extend([_kv("email", "me@example.com")])
+
+    otlp_relay.rewrite(req, None)
+    dumped = str(req)
+    assert "me@example.com" not in dumped and "org-1" not in dumped and "Q" * 40 not in dumped
+
+
+def test_a_caller_without_a_token_gets_nothing_before_the_body_is_read(tracing_on):
+    import http.client
+
+    token, port = otlp_relay.register(SPAWN_TRACE, SPAWN_SPAN)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        # Claims a huge body but never sends it: without the token check first this would
+        # sit in rfile.read() until the socket timeout.
+        conn.putrequest("POST", "/not-a-token/v1/traces")
+        conn.putheader("Content-Length", "8000000")
+        conn.endheaders()
+        assert conn.getresponse().status == 404
+        conn.close()
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("POST", f"/{token}/v1/traces", body=b"x", headers={"Content-Length": "abc"})
+        assert conn.getresponse().status == 400
+    finally:
+        otlp_relay.unregister(token)
+
+
+def test_a_gzip_export_is_accepted(tracing_on, monkeypatch):
+    import gzip
+    import http.client
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: MagicMock(status_code=200, content=b""))
+    token, port = otlp_relay.register(SPAWN_TRACE, SPAWN_SPAN)
+    try:
+        body = gzip.compress(_request({"name": "claude_code.interaction"}).SerializeToString())
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("POST", f"/{token}/v1/traces", body=body, headers={"Content-Encoding": "gzip"})
+        assert conn.getresponse().status == 200
+    finally:
+        otlp_relay.unregister(token)
+
+
+def test_a_delegate_with_its_own_telemetry_config_is_left_alone(tracing_on):
+    client = _client("/usr/local/bin/claude-agent-acp", env={"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318"})
+    with _in_span():
+        assert client._native_tracing_env() == {}
+
+
+# ─── the fallback: agent-reported totals only when no native spans arrived ─────────────
+
+
+def _turn_client(token_turn_span: str = SPAWN_SPAN):
+    token, _ = otlp_relay.register(SPAWN_TRACE, SPAWN_SPAN)
+    otlp_relay.begin_turn(token, SPAWN_TRACE, SPAWN_SPAN, 100)
+    return token
+
+
+def test_delivered_model_calls_are_counted_per_turn(tracing_on, monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: MagicMock(status_code=200, content=b""))
+    token = _turn_client()
+    try:
+        otlp_relay.handle(token, _request({"name": "claude_code.interaction", "start": 150}).SerializeToString())
+        body = _request({"name": "claude_code.llm_request", "start": 160, "attrs": {"input_tokens": "3"}})
+        otlp_relay.handle(token, body.SerializeToString())
+        assert otlp_relay._clients[token].turns[0].model_calls == 1
+    finally:
+        otlp_relay.unregister(token)
+
+
+def test_the_fallback_is_recorded_when_no_native_span_arrived(tracing_on, monkeypatch):
+    import httpx
+
+    posted = []
+    monkeypatch.setattr(httpx, "post", lambda url, content, **k: posted.append(content) or MagicMock(status_code=200))
+    token = _turn_client()
+    try:
+        fallback = {
+            "name": "acp:opus-model",
+            "service": "x",
+            "model": "opus",
+            "usage": {"input": 5, "total": 9},
+            "cost_usd": 0.2,
+        }
+        otlp_relay.end_turn(token, SPAWN_SPAN, 900, fallback, grace=0.05)
+        threading.Event().wait(0.3)
+    finally:
+        otlp_relay.unregister(token)
+
+    (body,) = posted
+    req = ExportTraceServiceRequest()
+    req.ParseFromString(body)
+    span = req.resource_spans[0].scope_spans[0].spans[0]
+    attrs = _attrs(span)
+    assert span.trace_id.hex() == SPAWN_TRACE and span.parent_span_id.hex() == SPAWN_SPAN
+    assert span.name == "acp:opus-model" and attrs["langfuse.observation.type"] == "generation"
+    assert attrs["langfuse.observation.model.name"] == "opus"
+    assert '"total": 9' in attrs["langfuse.observation.usage_details"]
+    assert '"total": 0.2' in attrs["langfuse.observation.cost_details"]
+
+
+def test_no_fallback_when_the_native_spans_arrived(tracing_on, monkeypatch):
+    import httpx
+
+    posted = []
+    monkeypatch.setattr(
+        httpx, "post", lambda url, content, **k: posted.append(content) or MagicMock(status_code=200, content=b"")
+    )
+    token = _turn_client()
+    try:
+        body = _request({"name": "claude_code.llm_request", "start": 160, "attrs": {"output_tokens": "4"}})
+        otlp_relay.handle(token, body.SerializeToString())
+        posted.clear()  # that was the forwarded span itself
+        otlp_relay.end_turn(
+            token, SPAWN_SPAN, 900, {"model": "opus", "usage": {"total": 9}, "cost_usd": 0.2}, grace=0.05
+        )
+        threading.Event().wait(0.3)
+    finally:
+        otlp_relay.unregister(token)
+    assert posted == []

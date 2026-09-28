@@ -761,13 +761,18 @@ class AcpClient:
         joined under the CURRENT span (this run's ``acp:`` span), or {} when off.
 
         The relay strips account identity and maps usage before anything reaches
-        Langfuse, and this process keeps the credentials: the agent only ever sees a
+        Langfuse, and forwards with this process's credentials: the agent exports to a
         127.0.0.1 URL with a per-process token.
         """
         self._drop_relay()  # a respawn gets a fresh registration under the new span
         enabled = self.native_tracing
         if enabled is None:
-            enabled = self._uses_claude_code() and os.environ.get("PROTOAGENT_ACP_NATIVE_TRACING", "1") != "0"
+            # Auto: Claude Code agents only, unless opted out, and never over a delegate
+            # that configures its own telemetry (this would overwrite its OTEL_* pipeline).
+            own = any(k.startswith("OTEL_") or k == "CLAUDE_CODE_ENABLE_TELEMETRY" for k in (self.env or {}))
+            enabled = (
+                self._uses_claude_code() and not own and os.environ.get("PROTOAGENT_ACP_NATIVE_TRACING", "1") != "0"
+            )
         if not enabled:
             return {}
         ids = _current_span_ids()
@@ -788,9 +793,13 @@ class AcpClient:
             "OTEL_METRICS_EXPORTER": "none",
             "OTEL_LOGS_EXPORTER": "none",
             "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+            "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "none",
+            # Export within a second rather than the SDK's 5s default: the relay's first
+            # delivery is what lets later runs drop their turn-level generation.
+            "OTEL_BSP_SCHEDULE_DELAY": "1000",
             "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": f"http://127.0.0.1:{port}/{token}/v1/traces",
-            # Signal-specific, so an inherited OTEL_EXPORTER_OTLP_HEADERS (the host's own
-            # exporter credentials) never rides along to the relay.
+            # The relay authenticates by the URL token; headers are ignored there (an
+            # inherited OTEL_EXPORTER_OTLP_HEADERS still only ever reaches 127.0.0.1).
             "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-protoagent-relay=1",
             "OTEL_METRICS_INCLUDE_ACCOUNT_UUID": "false",
             "OTEL_METRICS_INCLUDE_SESSION_ID": "false",
@@ -1615,6 +1624,7 @@ class AcpClient:
         cost_usd: float | None = None
         thoughts, plan = "", None
         native = False
+        relay_token: str | None = None
         failure: BaseException | None = None
         from graph.middleware.redaction import redact as _redact
         from observability import tracing
@@ -1680,7 +1690,8 @@ class AcpClient:
                     tool_calls = self._turn_tool_calls
                     session_id = self._turn_session_id or ""
                     usage, cost_usd = self._turn_usage, self._turn_cost_usd
-                    native = self._relay_token is not None
+                    relay_token = self._relay_token
+                    native = relay_token is not None
                     thoughts, plan = self._turn_thoughts, self._turn_plan
                     self._end_open_tool_spans()
                     self._turn_span = None
@@ -1706,6 +1717,10 @@ class AcpClient:
                 io = tracing.io_allowed()
                 if (usage or cost_usd) and not native:
                     self._trace_generation(usage, cost_usd, started, session_id)
+                elif (usage or cost_usd) and relay_token is not None:
+                    # Native spans carry per-call generations; the relay records these
+                    # agent-reported totals only if none of them arrive for this turn.
+                    self._relay_fallback(relay_token, usage, cost_usd)
                 output = reply
                 if state != "completed":
                     # A failed run has no reply, so without this its trace had no output
@@ -1774,6 +1789,32 @@ class AcpClient:
             # Captured while the turn lock was held: by now a queued turn may have reset it.
             session_id=session_id,
             metadata={"usage_source": "reported by the coding agent", "cost_basis": "API-equivalent"},
+        )
+
+    def _relay_fallback(self, token: str, usage: dict | None, cost_usd: float | None) -> None:
+        ids = _current_span_ids()  # still this run's acp: span
+        if ids is None:
+            return
+        from observability import otlp_relay
+
+        u = usage or {}
+        otlp_relay.end_turn(
+            token,
+            ids[1],
+            time.time_ns(),
+            {
+                "name": f"acp:{self.name}-model",
+                "service": f"{os.environ.get('AGENT_NAME', 'protoagent')}-acp-{self.name}",
+                "model": self._model_id or f"acp:{self.name}",
+                "usage": {
+                    "input": u.get("inputTokens"),
+                    "output": u.get("outputTokens"),
+                    "cache_read_input_tokens": u.get("cachedReadTokens"),
+                    "cache_creation_input_tokens": u.get("cachedWriteTokens"),
+                    "total": u.get("totalTokens"),
+                },
+                "cost_usd": cost_usd,
+            },
         )
 
     def _failure_reason(self, failure: BaseException | None, stop_reason: str | None) -> str:

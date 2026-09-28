@@ -15,9 +15,9 @@ straight to Langfuse has three problems this relay exists to fix:
   carry the FIRST turn's trace id. The client registers each turn's window; spans are
   moved into the turn whose window their start time falls in.
 
-It also keeps the Langfuse key out of the coding agent's environment: the agent exports to
-``http://127.0.0.1:<port>/<token>/v1/traces``, the token is per client, and only this
-process holds the credentials it forwards with.
+The agent exports to ``http://127.0.0.1:<port>/<token>/v1/traces`` with a per-client
+token, so it needs no Langfuse credentials of its own to do so (a deployment that exports
+``LANGFUSE_*`` into this process's environment still passes those down to every child).
 
 The server starts lazily, on 127.0.0.1 only, on the first ``register()``.
 """
@@ -25,6 +25,7 @@ The server starts lazily, on 127.0.0.1 only, on the first ``register()``.
 from __future__ import annotations
 
 import bisect
+import json
 import logging
 import secrets
 import threading
@@ -46,6 +47,9 @@ USAGE_ATTRIBUTES = {
     "cache_creation_tokens": "gen_ai.usage.cache_creation_input_tokens",
 }
 _MAX_BODY_BYTES = 8 * 1024 * 1024
+#: How long after a turn ends the relay waits for its model-call spans before recording the
+#: agent-reported fallback instead (Claude Code exports ~5s after a turn; this is generous).
+FALLBACK_GRACE_S = 45.0
 
 
 @dataclass
@@ -53,6 +57,8 @@ class _Turn:
     start_ns: int
     trace_id: bytes
     span_id: bytes
+    #: Model-call spans delivered to Langfuse for this turn.
+    model_calls: int = 0
 
 
 @dataclass
@@ -133,51 +139,87 @@ def unregister(token: str, *, delay: float = 0.0) -> None:
         _clients.pop(token, None)
 
 
-def rewrite(request: Any, client: _Client | None) -> int:
+def rewrite(request: Any, client: _Client | None) -> dict[bytes, int]:
     """Rewrite an ``ExportTraceServiceRequest`` in place: drop identity attributes, map
-    usage, redact string attributes, and re-parent later turns' spans. Returns the
-    number of spans."""
+    usage, redact every string (attribute values at every level, span names, status and
+    event messages), and re-parent later turns' spans. Returns the model-call spans
+    (ones carrying usage) per turn, keyed by the turn's span id."""
     from graph.middleware.redaction import redact
 
-    spans = 0
+    model_calls: dict[bytes, int] = {}
     for resource_spans in request.resource_spans:
         _filter_attributes(resource_spans.resource.attributes, redact)
         for scope_spans in resource_spans.scope_spans:
+            _filter_attributes(scope_spans.scope.attributes, redact)
             for span in scope_spans.spans:
-                spans += 1
-                _filter_attributes(span.attributes, redact)
+                if _filter_attributes(span.attributes, redact) and client is not None:
+                    turn = client.turn_for(span.start_time_unix_nano)
+                    if turn is not None:
+                        model_calls[turn.span_id] = model_calls.get(turn.span_id, 0) + 1
+                span.name = redact(span.name)
+                if span.status.message:
+                    span.status.message = redact(span.status.message)
+                for event in span.events:
+                    event.name = redact(event.name)
+                    _filter_attributes(event.attributes, redact)
+                for link in span.links:
+                    _filter_attributes(link.attributes, redact)
                 if client is not None:
                     _reparent(span, client)
-    return spans
+    return model_calls
 
 
-def _filter_attributes(attributes: Any, redact: Any) -> None:
-    keep = []
+def _filter_attributes(attributes: Any, redact: Any, prefix: str = "") -> bool:
+    """Drop identity keys, map usage keys, redact strings (nested ones too). ``prefix`` is
+    the dotted path of an enclosing kvlist, so ``user`` → ``{email: …}`` is caught as
+    ``user.email``. True when a usage attribute was present (a model call)."""
+    keep, usage = [], False
     for attr in attributes:
-        if attr.key in DROP_ATTRIBUTES:
+        path = f"{prefix}{attr.key}"
+        if path in DROP_ATTRIBUTES:
             continue
         if attr.key in USAGE_ATTRIBUTES:
+            usage = True
             attr.key = USAGE_ATTRIBUTES[attr.key]
             if attr.value.HasField("string_value") and attr.value.string_value.isdigit():
                 attr.value.int_value = int(attr.value.string_value)
-        elif attr.value.HasField("string_value"):
+        else:
             # Content is off unless the operator opted in (OTEL_LOG_*); this is the backstop.
-            attr.value.string_value = redact(attr.value.string_value)
+            _redact_value(attr.value, redact, f"{path}.")
         keep.append(attr)
     del attributes[:]
     attributes.extend(keep)
+    return usage
+
+
+def _redact_value(value: Any, redact: Any, prefix: str = "") -> None:
+    if value.HasField("string_value"):
+        value.string_value = redact(value.string_value)
+    elif value.HasField("array_value"):
+        for item in value.array_value.values:
+            _redact_value(item, redact, prefix)
+    elif value.HasField("kvlist_value"):
+        _filter_attributes(value.kvlist_value.values, redact, prefix)
 
 
 def _reparent(span: Any, client: _Client) -> None:
-    """Move a span that carries the spawn trace into the turn it actually belongs to."""
+    """Move a span that carries the spawn context into the turn it actually belongs to.
+
+    Keyed on the turn's SPAN, not its trace: two runs of one pooled coder inside the same
+    orchestrator turn share a trace id, and run 2 still belongs under run 2's span."""
     if span.trace_id != client.spawn_trace_id:
         return
     turn = client.turn_for(span.start_time_unix_nano)
-    if turn is None or turn.trace_id == client.spawn_trace_id:
-        return  # the first turn, or no turn registered: it already has the right trace
+    if turn is None or turn.span_id == client.spawn_span_id:
+        return  # the spawning turn, or no turn registered: already right
     span.trace_id = turn.trace_id
     if span.parent_span_id == client.spawn_span_id:
         span.parent_span_id = turn.span_id  # the interaction root: under this turn's span
+
+
+def client_known(token: str) -> bool:
+    with _lock:
+        return token in _clients
 
 
 def handle(token: str, body: bytes) -> tuple[int, bytes]:
@@ -188,7 +230,10 @@ def handle(token: str, body: bytes) -> tuple[int, bytes]:
 
     with _lock:
         client = _clients.get(token)
-    if client is None:
+        # A snapshot: the rewrite runs OUTSIDE the lock, so a large export's redaction
+        # never stalls begin_turn() / register() on the event loop.
+        snapshot = None if client is None else _Client(client.spawn_trace_id, client.spawn_span_id, list(client.turns))
+    if snapshot is None:
         return 404, b""
     target = tracing.otlp_export_target()
     if target is None:
@@ -198,8 +243,7 @@ def handle(token: str, body: bytes) -> tuple[int, bytes]:
         request.ParseFromString(body)
     except Exception:  # noqa: BLE001 — a malformed export
         return 400, b""
-    with _lock:
-        rewrite(request, client)
+    model_calls = rewrite(request, snapshot)
     url, auth = target
     try:
         import httpx
@@ -214,29 +258,141 @@ def handle(token: str, body: bytes) -> tuple[int, bytes]:
             },
             timeout=15.0,
         )
-        return resp.status_code, resp.content
     except Exception:  # noqa: BLE001 — Langfuse unreachable: tell the exporter to retry later
         log.debug("[otlp-relay] forward failed", exc_info=True)
         return 503, b""
+    if 200 <= resp.status_code < 300 and model_calls:
+        with _lock:
+            for turn in client.turns:  # the live turns, not the snapshot
+                turn.model_calls += model_calls.get(turn.span_id, 0)
+    return resp.status_code, resp.content
+
+
+def end_turn(token: str, span_id: str, end_ns: int, fallback: dict | None, *, grace: float = FALLBACK_GRACE_S) -> None:
+    """A turn ended. ``fallback`` is the agent-reported ``{name, service, model, usage,
+    cost_usd}`` for it: if no model-call span for the turn has reached Langfuse after
+    ``grace`` seconds (an older Claude Code, a sampler turned off, an export Langfuse
+    rejected), the relay records it as one generation under the turn's span instead.
+
+    Deciding this here rather than when the turn ends is the point: Claude Code exports a
+    turn's spans a few seconds AFTER it, so at turn end nothing can tell whether they will
+    come, and guessing either way double-counts the cost or silently drops it."""
+    if not fallback:
+        return
+    with _lock:
+        client = _clients.get(token)
+        turn = None
+        if client is not None:
+            raw = bytes.fromhex(span_id)
+            turn = next((t for t in client.turns if t.span_id == raw), None)
+    if turn is None:
+        return
+    timer = threading.Timer(grace, _emit_fallback_if_needed, args=(turn, end_ns, fallback))
+    timer.daemon = True
+    timer.start()
+
+
+def _emit_fallback_if_needed(turn: _Turn, end_ns: int, fallback: dict) -> None:
+    from observability import tracing
+
+    with _lock:
+        delivered = turn.model_calls
+    target = tracing.otlp_export_target()
+    if delivered or target is None:
+        return
+    try:
+        import httpx
+
+        url, auth = target
+        httpx.post(
+            url,
+            content=_fallback_request(turn, end_ns, fallback).SerializeToString(),
+            headers={
+                "Content-Type": "application/x-protobuf",
+                "Authorization": auth,
+                "User-Agent": "protoagent-otlp-relay",
+            },
+            timeout=15.0,
+        )
+    except Exception:  # noqa: BLE001 — best-effort, like the rest of tracing
+        log.debug("[otlp-relay] fallback generation failed", exc_info=True)
+
+
+def _fallback_request(turn: _Turn, end_ns: int, fallback: dict) -> Any:
+    """One OTLP generation span, under the turn's span, carrying the agent-reported totals."""
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+    from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
+
+    def kv(key: str, value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return KeyValue(key=key, value=AnyValue(string_value=str(value)))
+        return KeyValue(key=key, value=AnyValue(int_value=value))
+
+    usage = {k: int(v) for k, v in (fallback.get("usage") or {}).items() if v}
+    attrs = [
+        kv("langfuse.observation.type", "generation"),
+        kv("langfuse.observation.model.name", fallback.get("model") or ""),
+        kv("langfuse.observation.usage_details", json.dumps(usage)),
+        kv("langfuse.observation.metadata.usage_source", "reported by the coding agent (no native spans arrived)"),
+    ]
+    if fallback.get("cost_usd"):
+        attrs.append(kv("langfuse.observation.cost_details", json.dumps({"total": float(fallback["cost_usd"])})))
+    request = ExportTraceServiceRequest()
+    rs = request.resource_spans.add()
+    rs.resource.attributes.extend([kv("service.name", fallback.get("service") or "protoagent")])
+    ss = rs.scope_spans.add()
+    ss.scope.name = "protoagent.otlp-relay"
+    span = ss.spans.add()
+    span.trace_id = turn.trace_id
+    span.span_id = secrets.token_bytes(8)
+    span.parent_span_id = turn.span_id
+    span.name = fallback.get("name") or "coder-model"
+    span.start_time_unix_nano = turn.start_ns
+    span.end_time_unix_nano = max(end_ns, turn.start_ns)
+    span.attributes.extend(attrs)
+    return request
 
 
 class _Handler(BaseHTTPRequestHandler):
-    def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's naming
-        parts = self.path.strip("/").split("/")
-        if len(parts) != 3 or parts[1:] != ["v1", "traces"]:
-            self.send_response(404)
-            self.end_headers()
-            return
-        length = int(self.headers.get("content-length") or 0)
-        if length <= 0 or length > _MAX_BODY_BYTES:
-            self.send_response(413 if length > _MAX_BODY_BYTES else 400)
-            self.end_headers()
-            return
-        status, payload = handle(parts[0], self.rfile.read(length))
+    # A socket timeout, so an idle or slow connection can't pin a thread indefinitely.
+    timeout = 10
+
+    def _reply(self, status: int, payload: bytes = b"") -> None:
         self.send_response(status)
         self.send_header("Content-Type", "application/x-protobuf")
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        if payload:
+            self.wfile.write(payload)
+
+    def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's naming
+        parts = self.path.strip("/").split("/")
+        # Token first, before reading a byte of body: a caller without one gets nothing.
+        if len(parts) != 3 or parts[1:] != ["v1", "traces"] or not client_known(parts[0]):
+            self._reply(404)
+            return
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            self._reply(400)
+            return
+        if length <= 0 or length > _MAX_BODY_BYTES:
+            self._reply(413 if length > _MAX_BODY_BYTES else 411)
+            return
+        body = self.rfile.read(length)
+        if (self.headers.get("content-encoding") or "").lower() == "gzip":
+            import gzip
+
+            try:
+                body = gzip.decompress(body)
+            except OSError:
+                self._reply(400)
+                return
+            if len(body) > _MAX_BODY_BYTES:
+                self._reply(413)
+                return
+        status, payload = handle(parts[0], body)
+        self._reply(status, payload)
 
     def log_message(self, *_args: Any) -> None:
         pass
