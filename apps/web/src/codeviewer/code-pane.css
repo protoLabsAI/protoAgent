@@ -45,7 +45,7 @@
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
 .code-pane__project,
@@ -125,7 +125,7 @@
 /* pierre's host element: hand it the console's mono face and an accent-tinted range. */
 .code-pane__view {
   display: block;
-  --diffs-font-family: var(--pl-font-mono, ui-monospace, monospace);
+  --diffs-font-family: var(--pl-font-mono);
   --diffs-font-size: var(--pl-font-size-xs);
   --diffs-bg-selection-override: color-mix(in srgb, var(--pl-color-accent) 22%, transparent);
   --diffs-bg-selection-number-override: color-mix(in srgb, var(--pl-color-accent) 34%, transparent);
@@ -173,7 +173,7 @@
   border-radius: 4px;
   background: none;
   color: var(--pl-color-fg);
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   text-align: left;
   cursor: pointer;
@@ -216,7 +216,7 @@
   border-radius: 4px;
   background: none;
   color: var(--pl-color-fg);
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   text-align: left;
   cursor: pointer;
@@ -295,7 +295,7 @@
   font-size: var(--pl-font-size-xs);
 }
 .code-pane__subnote code {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
   color: var(--pl-color-fg-muted);
 }
 .code-pane__file-old {
