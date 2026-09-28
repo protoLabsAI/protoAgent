@@ -687,6 +687,7 @@ export function KnowledgeStore() {
             onClose={() => setIngesting(false)}
             title={<><FileUp size={16} /> Add a source</>}
             width="min(680px, 94vw)"
+            padding="roomy"
           >
             <IngestForm
               onDone={invalidate}
@@ -702,6 +703,7 @@ export function KnowledgeStore() {
             onClose={() => { setAdding(false); setDraft(EMPTY_DRAFT); }}
             title={<><Plus size={16} /> Add a knowledge entry</>}
             width="min(680px, 94vw)"
+            padding="roomy"
           >
             <ChunkForm
               draft={draft}
