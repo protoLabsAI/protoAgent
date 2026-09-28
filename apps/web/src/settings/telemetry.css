@@ -91,7 +91,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-family: var(--pl-font-mono, monospace);
+  font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
 }

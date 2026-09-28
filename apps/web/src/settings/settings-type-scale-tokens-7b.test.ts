@@ -88,7 +88,7 @@ describe("Settings type scale → DS tokens (#3688 part 7b)", () => {
     // telemetry .telemetry-table: 12.5px -> sm (13px).
     expect(telemetryCss).toContain("border-collapse: collapse;\n  font-size: var(--pl-font-size-sm);");
     // telemetry .trace-link/.trace-copy: 11.5px -> 2xs (11px).
-    expect(telemetryCss).toContain("font-family: var(--pl-font-mono, monospace);\n  font-size: var(--pl-font-size-2xs);");
+    expect(telemetryCss).toContain("font-family: var(--pl-font-mono);\n  font-size: var(--pl-font-size-2xs);");
     // telemetry .insight-note: 11.5px -> 2xs (11px).
     expect(telemetryCss).toContain(".insight-note {\n  font-size: var(--pl-font-size-2xs);");
     // providers .providers-panel > .muted: 12.5px -> sm (13px).
