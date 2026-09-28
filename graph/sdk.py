@@ -164,6 +164,85 @@ async def complete(prompt: str, *, system: str | None = None, model_name: str | 
     return content if isinstance(content, str) else str(content)
 
 
+# ── model in-flight priority (the plugin↔limiter channel, ADR 0115 D6) ──────────────────
+# The gateway in-flight limiter (graph/llm_limiter.py) serves queued model calls by class —
+# `interactive` (a chat turn an operator is watching) ahead of `default` ahead of `bulk`
+# (wide fan-outs, sweeps, review-panel finders) — reading the class from a ContextVar at
+# slot acquisition. Core tags the obvious callers (`server/chat.py` → interactive chat turns,
+# `plugins/workflows/engine.py` → recipe fan-outs); `llm_priority` is the seam a plugin uses
+# to mark its own burst of model work, e.g. pr-reviewer marking its review panels `bulk` so
+# they queue behind an operator's chat on a saturated lane.
+
+# Reuse the priority ContextVar helpers from the host-free limiter module, so `llm_priority`
+# writes the SAME class the limiter reads at acquisition (the constants stay one definition).
+from graph.llm_limiter import PRIORITIES as _LLM_PRIORITIES  # noqa: E402
+from graph.llm_limiter import reset_priority as _reset_llm_priority  # noqa: E402
+from graph.llm_limiter import set_priority as _set_llm_priority  # noqa: E402
+
+
+class _LlmPriorityScope:
+    """The scope object :func:`llm_priority` returns. One implementation backs both ``with``
+    and ``async with`` — entering/leaving the class is synchronous either way — so a plugin
+    uses whichever form its call site is. Restores the enclosing class on exit via the
+    ContextVar token, so scopes nest cleanly."""
+
+    __slots__ = ("_priority", "_token")
+
+    def __init__(self, priority: str) -> None:
+        self._priority = priority
+        self._token = None
+
+    def __enter__(self) -> str:
+        self._token = _set_llm_priority(self._priority)
+        return self._priority
+
+    def __exit__(self, *_exc: object) -> bool:
+        if self._token is not None:
+            _reset_llm_priority(self._token)
+            self._token = None
+        return False
+
+    async def __aenter__(self) -> str:
+        return self.__enter__()
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return self.__exit__(*_exc)
+
+
+def llm_priority(cls: str) -> _LlmPriorityScope:
+    """Run a block of model calls under the ADR 0115 D6 priority class ``cls`` on the gateway
+    in-flight limiter, restoring the previous class on exit.
+
+    When a lane is saturated the limiter serves waiters by class — ``interactive`` (a chat
+    turn an operator is watching) first, then ``default`` (A2A / background / scheduled
+    turns), then ``bulk`` (wide fan-outs, sweeps, review-panel finders) — with a slot
+    reserved for interactive callers. A plugin running a burst of non-urgent model work marks
+    it ``bulk`` so it queues behind an operator's chat instead of racing it::
+
+        from graph import sdk
+
+        async with sdk.llm_priority("bulk"):
+            await asyncio.gather(*(run_finder(f) for f in finders))
+
+    Usable as either ``with`` or ``async with`` — pick whichever the call site is. The class
+    is carried in a ``contextvars.ContextVar``, so any subagent / ``asyncio`` task spawned
+    inside the block inherits it, and nested scopes restore the enclosing class on exit. When
+    the limiter is off (``model.max_inflight: 0``, the default) the class is still set but
+    costs nothing — acquisition is a pass-through.
+
+    Args:
+        cls: one of ``"interactive"`` / ``"default"`` / ``"bulk"``.
+
+    Raises:
+        ValueError: if ``cls`` is not one of the three classes — the message names the valid
+            ones.
+    """
+    cls = str(cls or "").strip()
+    if cls not in _LLM_PRIORITIES:
+        raise ValueError(f"unknown llm priority {cls!r}; expected one of {', '.join(_LLM_PRIORITIES)}")
+    return _LlmPriorityScope(cls)
+
+
 # ── knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge") ──
 # The consumption SDK exposed run_subagent/complete but not the knowledge store, so a
 # plugin couldn't ground its work in (or contribute to) what the agent knows. These
