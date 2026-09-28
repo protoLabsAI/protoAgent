@@ -55,7 +55,7 @@
 .flr-feed__empty {
   padding: 20px 2px;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.5;
 }
 
@@ -80,7 +80,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 650;
   color: var(--pl-color-fg);
 }
@@ -106,7 +106,7 @@
 }
 .flr-feed__text {
   margin: 2px 0 0;
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.4;
   color: var(--pl-color-fg-muted);
 }

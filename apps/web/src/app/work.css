@@ -86,7 +86,7 @@
   margin: 4px 0 0;
   padding: 0 12px;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .work-card-body {
@@ -109,7 +109,7 @@
 .work-row-title {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -118,7 +118,7 @@
   flex: none;
   margin-left: auto;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -135,5 +135,5 @@
   padding: 14px 12px 16px;
 }
 .work-card-blank .pl-empty__desc {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
