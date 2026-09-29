@@ -42,6 +42,7 @@ async def run_command(
     stdin: str | None = None,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    base_env: dict[str, str] | None = None,
 ) -> ShellResult:
     """Run ``argv`` as an async subprocess, returning a ``ShellResult``.
 
@@ -49,9 +50,11 @@ async def run_command(
     come back as ``error`` / ``timed_out`` so callers can return a clean tool
     string. ``env`` is merged over the current environment — the frozen-bundle-scrubbed
     one (:func:`infra.proc.child_env`), since a command can start something that
-    outlives this server (``zed .``, a daemon).
+    outlives this server (``zed .``, a daemon). ``base_env`` REPLACES that base (a caller
+    that already scrubbed it — the agent-facing ``run_command``, see
+    :func:`infra.proc.scrub_agent_env`); ``env`` still merges on top.
     """
-    merged_env = child_env()
+    merged_env = dict(base_env) if base_env is not None else child_env()
     if env is not None:
         merged_env.update(env)
 
