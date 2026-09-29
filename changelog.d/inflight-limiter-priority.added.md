@@ -1,1 +1,0 @@
-- **Priority classes for the model in-flight limiter (#3760).** Operator chat and console turns now run under the ADR 0115 `interactive` class and recipe fan-out steps under `bulk`, while A2A, background and scheduled turns stay `default`; `sdk.llm_priority(cls)` lets a plugin tag its own block of model calls (pr-reviewer marks its review panels `bulk`).

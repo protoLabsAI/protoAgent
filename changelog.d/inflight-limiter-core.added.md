@@ -1,1 +1,0 @@
-- **Per-lane in-flight limiter core for model calls (#3760).** New `graph/llm_limiter.py` implements the pure ADR 0115 mechanism — a bounded, priority-ordered (`interactive` > `default` > `bulk`, with per-minute aging and an interactive reserve) wait queue per `(base_url, model)` lane, a `GatewayQueueTimeout`, and a D8 snapshot — off by default and wired in by later cards.
