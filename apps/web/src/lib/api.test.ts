@@ -282,6 +282,23 @@ describe("drainSseBuffer", () => {
     expect(frames).toEqual([{ v: 3 }]);
   });
 
+  it("skips a malformed frame and keeps draining the rest of the buffer", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { frames, rest } = drain(`data: {"a":1}\n\ndata: {not json\n\ndata: {"b":2}\n\n`);
+    expect(frames).toEqual([{ a: 1 }, { b: 2 }]);
+    expect(rest).toBe("");
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("still propagates an error thrown by the frame handler", () => {
+    expect(() =>
+      drainSseBuffer(`data: {"a":1}\n\n`, () => {
+        throw new Error("handler boom");
+      }),
+    ).toThrow("handler boom");
+  });
+
   it("parses multiple frames from one buffer", () => {
     const { frames } = drain(`data: {"a":1}\r\n\r\ndata: {"b":2}\n\n`);
     expect(frames).toEqual([{ a: 1 }, { b: 2 }]);

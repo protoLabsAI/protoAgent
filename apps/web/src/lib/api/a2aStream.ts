@@ -381,7 +381,18 @@ export function drainSseBuffer(buffer: string, onFrame: (frame: A2AFrame) => voi
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).trim())
       .join("\n");
-    if (data) onFrame(JSON.parse(data) as A2AFrame);
+    if (!data) continue;
+    // A malformed frame is skipped, not thrown: throwing here abandoned every valid
+    // frame still in the buffer and failed the whole turn over one bad event. Only
+    // the parse is guarded — an error thrown by `onFrame` still propagates.
+    let frame: A2AFrame;
+    try {
+      frame = JSON.parse(data) as A2AFrame;
+    } catch (err) {
+      console.warn("[a2a] skipping malformed SSE frame", err);
+      continue;
+    }
+    onFrame(frame);
   }
   return buffer;
 }
