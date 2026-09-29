@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-// DS audit (rule off-scale-length), spacing card 3a: the regression guard that keeps the
-// two surfaces this card tokenized on the DS spacing scale. The DS ships a fixed spacing
-// scale — `--pl-space-{1,2,3,4,6}` (4/8/12/16/24px) — and this card moved every EXACT-scale
-// px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
-// tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
-// chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/6/10/14/22/28/33px, …) are intentionally LEFT as literals — they wait on the DS
-// gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not spacing).
+// DS audit (rule off-scale-length), spacing card 3a — step 3 of protoContent#525/#547: the
+// regression guard that keeps the two surfaces this card tokenized on the DS spacing + radius
+// scales. The DS spacing scale is now the fuller `--pl-space-{0_5,1,1_5,2,2_5,3,4,5,6,8,12}`
+// (2/4/6/8/10/12/16/20/24/32/48px): the half-steps shipped in @protolabsai/design 0.11.0 when
+// protoContent#547 landed, so this step tokenized BOTH the exact-scale values AND the half-steps
+// (2/6/10px exact; 3/5/7/9/14px snapped to their nearest step) in every spacing declaration
+// (padding*, margin*, gap, row-gap, column-gap), and migrated every radius px onto the #525
+// radius scale (--pl-radius / -md / -lg / -pill). A raw scale-or-half-step px that comes back is
+// a site that no longer tracks the operator's chosen density (tokens can be rescaled at the DS
+// root; a hardcoded px cannot). The sweep below still flags ONLY the five EXACT-scale values
+// (4/8/12/16/24px) in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not
+// spacing) — that is the drift class it was built for; the half-step migration this step
+// performed is asserted by the r2 block + the dedicated half-step scan, and the radius migration
+// by its own scan. Off-grid survivors (18/22/28/33/60px) have no DS token and stay literal.
 //
 // Two deliberate carve-outs, both in theme.css, and both covered by the same rule: a spacing
 // value that reads an `env(safe-area-inset*)` is exempt. One is the auth-overlay / model-sheet's
@@ -53,8 +58,10 @@ const SPACING_PROP =
 const SPACING_DECL_SRC = "(?:^|[;{}\\s])(" + SPACING_PROP + ")\\s*:\\s*([^;{}]*)";
 // An EXACT-scale px length inside a value: 4/8/12/16/24 only. The lookbehind clears negatives
 // (`-4px`), larger numbers (`14px`, `114px`), and decimals (`1.4px`); requiring `px` right
-// after the digits clears `4.5px`. Half-steps (2/6/10/14/22/28/33px) never match — they are not
-// in the alternation. Built from a string so this file has no bare `4px`/`8px`/… of its own.
+// after the digits clears `4.5px`. This matcher stays scoped to the exact-scale five — the
+// half-steps (2/6/10/14px) this step also migrated are checked by the dedicated half-step scan
+// further down, and off-grid survivors (22/28/33px) have no DS token, so neither class is in
+// this alternation. Built from a string so this file has no bare `4px`/`8px`/… of its own.
 const SCALE_PX_SRC = "(?<![\\w.-])(4|8|12|16|24)px\\b";
 
 // A device-safe-area value (`max(env(safe-area-inset-bottom), 12px)`, `calc(8px + env(…))`): the
@@ -134,7 +141,9 @@ describe("no exact-scale px spacing literal in the app/theme + docviewer CSS (DS
   });
 
   it("the matcher leaves half-steps, negatives, tokens, and non-spacing props alone", () => {
-    // Half-steps and off-scale values wait on protoContent#547 — never flagged.
+    // The exact-scale sweep matcher stays scoped to 4/8/12/16/24, so half-steps (now migrated
+    // by this step) and off-grid survivors alike are never flagged by IT — the half-step
+    // migration is covered by the dedicated half-step scan below.
     for (const half of ["2", "6", "10", "14", "22", "28", "33"]) {
       expect(spacingHits("  padding: " + half + "px;")).toEqual([]);
     }
@@ -188,17 +197,27 @@ describe("no exact-scale px spacing literal in the app/theme + docviewer CSS (DS
     expect(CSS_SOURCES["../docviewer/docviewer.css"]).toContain("padding: var(--pl-space-2) 0");
   });
 
-  it("r2 — proves the half-steps this card preserved are still present as literals", () => {
-    // Mixed-shorthand values where the exact-scale member tokenized and the off-scale member
-    // survived — one assertion covers both invariants.
+  it("r2 — proves this step tokenized the half-steps (protoContent#547 landed), off-grid survivors stay literal", () => {
+    // The mixed-shorthand rows keep their off-grid siblings (33/28/22px have no DS token, so they
+    // stay literal) beside their already-tokenized members — one assertion per row.
     expect(CSS_SOURCES["./theme.css"]).toContain(
       "padding: var(--pl-space-1) var(--pl-space-3) var(--pl-space-3) 33px",
     );
     expect(CSS_SOURCES["./theme.css"]).toContain("padding: 28px var(--pl-space-4)");
-    expect(CSS_SOURCES["./theme.css"]).toContain("padding: var(--pl-space-3) 14px");
     expect(CSS_SOURCES["./theme.css"]).toContain("margin: 22px 0 var(--pl-space-2)");
-    // A standalone half-step elsewhere in an owned file is untouched.
-    expect(CSS_SOURCES["../docviewer/docviewer.css"]).toContain("gap: 2px");
+    // The 14px this test used to pin now snaps to the --pl-space-3 step (the .playbook-card /
+    // .knowledge-ingest-drop paddings both collapse to a uniform var(--pl-space-3) pair).
+    expect(CSS_SOURCES["./theme.css"]).toContain("padding: var(--pl-space-3) var(--pl-space-3)");
+    expect(CSS_SOURCES["./theme.css"]).not.toContain("padding: var(--pl-space-3) 14px");
+    // Representative half-step migrations: 6px→1_5, 10px→2_5, and a negative −2px/−4px→calc().
+    expect(CSS_SOURCES["./theme.css"]).toContain("gap: var(--pl-space-1_5)");
+    expect(CSS_SOURCES["./theme.css"]).toContain("padding: var(--pl-space-2_5)");
+    expect(CSS_SOURCES["./theme.css"]).toContain(
+      "margin: calc(-1 * var(--pl-space-0_5)) calc(-1 * var(--pl-space-1))",
+    );
+    // The docviewer standalone half-step (was `gap: 2px`) is now the 0_5 token.
+    expect(CSS_SOURCES["../docviewer/docviewer.css"]).toContain("gap: var(--pl-space-0_5)");
+    expect(CSS_SOURCES["../docviewer/docviewer.css"]).not.toContain("gap: 2px");
   });
 
   it("r3 — proves the streamdown menu shadow reads a DS token, and the auth scrim stays a theme-independent near-black", () => {
@@ -218,5 +237,47 @@ describe("no exact-scale px spacing literal in the app/theme + docviewer CSS (DS
     expect(CSS_SOURCES["./theme.css"]).not.toContain(
       ".pl-overlay:has(.auth-dialog) {\n  background: var(--pl-color-bg);\n}",
     );
+  });
+
+  it("no surviving half-step px (2/3/5/6/7/9/10/14) on a spacing prop — protoContent#547 landed", () => {
+    // The complement of the exact-scale sweep: once #547 shipped the half-step tokens, a raw
+    // 2/3/5/6/7/9/10/14px in a spacing declaration is drift just like an exact-scale one. This
+    // scan is independent of the exact-scale matcher above (which stays scoped to 4/8/12/16/24)
+    // and asserts this step left none behind. Built from a string so this file holds no bare
+    // half-step px of its own; env(safe-area-inset*) values are exempt, same as the sweep.
+    const HALF_PX = "(?<![\\w.-])(2|3|5|6|7|9|10|14)px\\b";
+    const hits: string[] = [];
+    for (const file of OWNED) {
+      stripComments(CSS_SOURCES[file] ?? "")
+        .split("\n")
+        .forEach((lineText, i) => {
+          for (const m of lineText.matchAll(new RegExp(SPACING_DECL_SRC, "gi"))) {
+            const decl = `${m[1]}: ${m[2].trim()}`;
+            if (SAFE_AREA_INSET.test(decl)) continue;
+            if (new RegExp(HALF_PX).test(m[2])) hits.push(`${pretty(file)}:${i + 1} ${decl}`);
+          }
+        });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it("radius — every border-radius px literal now reads a DS radius token (protoContent#525)", () => {
+    // The radius half of this step: after protoContent#525 shipped the radius scale (--pl-radius
+    // / -md / -lg / -xl / -pill in @protolabsai/design 0.11.0), no border-radius (or per-corner
+    // longhand) should carry a raw px. Mirrors the acceptance grep; comments are stripped first.
+    const RADIUS_PX = /radius:\s*[^;{}]*\b\d+px/;
+    const hits: string[] = [];
+    for (const file of OWNED) {
+      stripComments(CSS_SOURCES[file] ?? "")
+        .split("\n")
+        .forEach((lineText, i) => {
+          if (RADIUS_PX.test(lineText)) hits.push(`${pretty(file)}:${i + 1} ${lineText.trim()}`);
+        });
+    }
+    expect(hits).toEqual([]);
+    // …and the migrated radii read the right tokens: 6px→md, 8/9px→lg, 999px→pill.
+    expect(CSS_SOURCES["./theme.css"]).toContain("border-radius: var(--pl-radius-md)");
+    expect(CSS_SOURCES["./theme.css"]).toContain("border-radius: var(--pl-radius-lg)");
+    expect(CSS_SOURCES["./theme.css"]).toContain("border-radius: var(--pl-radius-pill)");
   });
 });
