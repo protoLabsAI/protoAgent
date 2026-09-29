@@ -571,6 +571,18 @@ def _handler_for(kind: str, name: str) -> Callable[..., _Frames] | None:
     return _EVENT_HANDLERS.get(kind)
 
 
+def _fence_update(fence) -> dict:
+    """``Command`` kwargs that stamp a per-turn tool fence (#1639/#2972) on a RESUME pass.
+
+    A fresh pass stamps ``subagent_fence`` in its input dict; a ``Command(resume=…)`` has no
+    input dict, so the fence rides the command's state update instead — every pass of a
+    fenced turn carries it. Unfenced → no update: a resume continues the parked turn, which
+    keeps the fence it was stamped with (a resume never clears one)."""
+    if not fence:
+        return {}
+    return {"update": {"subagent_fence": [str(t) for t in fence]}}
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -609,7 +621,7 @@ async def _run_turn_stream(
         yield ("room_reply", reply)
 
     graph_input = (
-        Command(resume=await _chat()._resume_payload(config, resume_value))
+        Command(resume=await _chat()._resume_payload(config, resume_value), **_fence_update(subagent_fence))
         if resume_value is not None
         # Prepend any completed background-job notifications (ADR 0050) so the model
         # learns of detached work that finished since this session last ran a turn.
