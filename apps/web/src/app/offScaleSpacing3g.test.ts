@@ -172,7 +172,14 @@ describe("no exact-scale px spacing literal in the goals/tools/settings/keybindi
     expect(CSS_SOURCES["./tools.css"]).toContain("padding: var(--pl-space-2) 10px");
     // Standalone half-steps elsewhere in the owned files are untouched.
     expect(CSS_SOURCES["../goals/goals.css"]).toContain("gap: 6px");
-    expect(CSS_SOURCES["../settings/settings.css"]).toContain("gap: 14px");
+    // settings.css's `gap: 14px` half-steps are no longer literals: the DS gap scale landed
+    // (protoContent#547) with the -1_5/-2_5 half-step tokens plus the exact -4/-6/…, so the
+    // radius+spacing card (protoContent#525/#547 step 3) snapped all three `gap: 14px` sites
+    // (.quick-setting-body, .settings-shell, .settings-group-actions) to var(--pl-space-4) —
+    // 14→16, the settings surface's dominant --pl-space-4 rhythm (padding-left, setting-row).
+    expect(CSS_SOURCES["../settings/settings.css"]).toContain("gap: var(--pl-space-4)");
+    // keybindings.css's `gap: 18px` (.kb-panel) is still an uncovered off-scale value — the DS
+    // gap scale has no 18px step — so it stays a literal.
     expect(CSS_SOURCES["../settings/keybindings.css"]).toContain("gap: 18px");
   });
 });

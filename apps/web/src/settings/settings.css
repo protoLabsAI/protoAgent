@@ -4,7 +4,7 @@
    now; only the stage spacing lives here. Left in theme.css: .settings-status
    (also rendered by SchedulePanel) and the .settings-help-link rule. */
 .settings-banner {
-  margin-bottom: 10px;
+  margin-bottom: var(--pl-space-2_5);
 }
 /* QuickSetting dialog (ADR 0048) — contextual settings shortcut. Reuses the
    .setting-row chrome; the dialog just stacks the rows with breathing room. */
@@ -21,7 +21,7 @@
 .quick-setting-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-4);
 }
 /* Chip trigger (summaryKey) — e.g. the model alias on the chat composer. Truncate
    so a long alias can't blow out its host row. */
@@ -42,7 +42,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   padding: var(--pl-space-4) var(--pl-space-1);
 }
 
@@ -55,7 +55,7 @@
   flex: 1 1 0;
   min-height: 0;
   display: flex;
-  gap: 14px;
+  gap: var(--pl-space-4);
   /* Breathing room on the left so the sidenav + panel don't hug the rail edge. */
   padding-left: var(--pl-space-4);
 }
@@ -85,9 +85,9 @@
 @container settings-content (max-width: 560px) {
   .settings-content .setting-row {
     grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
+    gap: var(--pl-space-2_5);
     align-items: stretch;
-    padding: var(--pl-space-4) 6px;
+    padding: var(--pl-space-4) var(--pl-space-1_5);
   }
   .settings-content .setting-control { width: 100%; }
   .settings-content .setting-input { max-width: none; }
@@ -101,7 +101,7 @@
 @media (max-width: 767px) {
   .settings-shell {
     flex-direction: column;
-    gap: 10px;
+    gap: var(--pl-space-2_5);
     padding-left: 0;
   }
   .settings-shell > .pl-sidenav-wrap {
@@ -109,7 +109,7 @@
     width: 100%;
     overflow: visible;
     padding-right: 0;
-    padding-bottom: 10px;
+    padding-bottom: var(--pl-space-2_5);
     border-right: none;
     border-bottom: 1px solid var(--pl-color-border);
   }
@@ -129,7 +129,7 @@
 .settings-group-head {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 
 /* The one-stop-shop Settings overlay + the theme quick dialog (ADR 0048) embed a
@@ -174,8 +174,8 @@
 .settings-group-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-top: 10px;
+  gap: var(--pl-space-4);
+  margin-top: var(--pl-space-2_5);
 }
 .settings-inline-status {
   font-size: var(--pl-font-size-xs);
@@ -186,25 +186,25 @@
   grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
   gap: 28px;
   align-items: center;
-  padding: 26px 6px;
+  padding: 26px var(--pl-space-1_5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .setting-row.dirty {
   /* subtle marker that this field has unsaved edits */
   box-shadow: inset 2px 0 0 var(--pl-color-accent);
-  padding-left: 10px;
+  padding-left: var(--pl-space-2_5);
 }
 .setting-meta { min-width: 0; }
 .setting-label {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-2);
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
 }
 /* .setting-restart retired — the "restart" / "box-shared" markers are DS <Badge>s now. */
 .setting-desc {
-  margin: 3px 0 0;
+  margin: var(--pl-space-1) 0 0;
   font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-subtle);
@@ -214,7 +214,7 @@
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
-  margin: 5px 0 0;
+  margin: var(--pl-space-1) 0 0;
 }
 /* "Saving overrides the Global default for this agent" — shown when a still-inherited
    box-shared field is edited in the Workspace view (PR4). */
@@ -233,7 +233,7 @@
 .setting-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-2);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
@@ -246,7 +246,7 @@
 .settings-overlay-title {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .settings-scope-badge {
   display: inline-flex;
@@ -258,10 +258,10 @@
 .secrets-status {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   border-top: 1px solid var(--pl-color-border);
-  padding-top: 14px;
-  margin-top: 6px;
+  padding-top: var(--pl-space-4);
+  margin-top: var(--pl-space-1_5);
 }
 .secrets-status-head {
   display: flex;
@@ -281,14 +281,14 @@
 .secrets-status-vars {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .secrets-status-vars code {
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
-  padding: 2px 6px;
+  padding: var(--pl-space-0_5) var(--pl-space-1_5);
   border: 1px solid var(--pl-color-border);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   color: var(--pl-color-fg-muted);
 }
 .plugin-settings-dialog .pl-tabs-wrap { margin-bottom: var(--pl-space-3); }
