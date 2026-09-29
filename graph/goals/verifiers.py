@@ -135,7 +135,7 @@ def _tail(text: str, cap: int = _EVIDENCE_CAP) -> str:
 
 
 async def _verify_command(spec: dict, ctx: VerifyContext) -> VerifyResult:
-    from tools.shell import run_command
+    from tools.shell import cmd_command_line, run_command
 
     command = spec.get("command")
     if not command:
@@ -145,8 +145,10 @@ async def _verify_command(spec: dict, ctx: VerifyContext) -> VerifyResult:
     # POSIX keeps bash exactly as always (user verifiers may rely on bashisms).
     # Windows has no bash on PATH — or worse, the WSL stub — so use the native
     # shell there (#2412 phase 5; same contract as tools/fs_tools run_command).
+    # The cmd line is a verbatim string: an argv list re-quotes embedded `"` (#3802).
+    argv: list[str] | str
     if os.name == "nt":
-        argv = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
+        argv = cmd_command_line(command)
     else:
         argv = ["bash", "-c", command]
     res = await run_command(argv, timeout=timeout, cwd=cwd)

@@ -606,17 +606,13 @@ _ENV_PROBE_NAMES = ("A2A_AUTH_TOKEN", "AGENT_NAME", "PROTOAGENT_HOME", "OPENAI_A
 
 
 def _probe(t, project_dir) -> dict:
-    """Print the probe vars from a script file (`<python> envprobe.py`) — an inline `-c "…"`
-    doesn't survive Windows cmd quoting."""
+    """Print the probe vars from a script file (`"<python>" envprobe.py`)."""
     import sys
 
     (project_dir / "envprobe.py").write_text(
         "import os\n" + "".join(f"print({n!r}, os.environ.get({n!r}, '<unset>'))\n" for n in _ENV_PROBE_NAMES)
     )
-    # Quote the interpreter only when it needs it: Windows run_command hands the line to cmd
-    # with quotes escaped, so a quoted path there reads as the literal `\"C:\...\"`.
-    exe = f'"{sys.executable}"' if " " in sys.executable else sys.executable
-    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": f"{exe} envprobe.py"}))
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": f'"{sys.executable}" envprobe.py'}))
     seen = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
     assert set(_ENV_PROBE_NAMES) <= set(seen), out  # the probe ran and printed every name
     return seen
@@ -945,9 +941,30 @@ def test_shell_argv_default_grammars():
     assert argv == ["/bin/sh", "-c", "echo hi"]
     assert runner == "/bin/sh -c"
     argv, runner = _platform_shell_argv("dir", windows=True)
-    assert argv[0].lower().endswith("cmd.exe")
-    assert argv[1:] == ["/d", "/s", "/c", "dir"]
-    assert "cmd.exe" in runner.lower()
+    # cmd.exe gets a finished command-line STRING, not a list (#3802).
+    assert isinstance(argv, str)
+    assert argv.lower().split(" /d ", 1)[0].strip('"').endswith("cmd.exe")
+    assert argv.endswith(' /d /s /c "dir"')
+    assert "cmd.exe" in runner.lower() and runner.endswith("/d /s /c")
+
+
+def test_cmd_command_line_hands_cmd_the_command_verbatim():
+    """#3802: a quoted path used to reach cmd as `\\"C:\\...\\"` (list2cmdline's MSVCRT
+    escaping). The built line wraps the command in ONE outer quote pair — which `/s` strips —
+    and leaves every quote inside it exactly as typed."""
+    from tools.shell import cmd_command_line
+
+    comspec = r"C:\Windows\system32\cmd.exe"
+    command = r'"C:\Program Files\Tool\tool.exe" --version & echo "a b"'
+    line = cmd_command_line(command, comspec)
+    assert line == comspec + ' /d /s /c "' + command + '"'
+    assert '\\"' not in line  # no backslash-escaped quotes anywhere
+    # What cmd /s /c runs: the text between the first and the last quote after /c.
+    after = line.split(" /c ", 1)[1]
+    assert after[0] == '"' and after[-1] == '"' and after[1:-1] == command
+    # A COMSPEC under a spaced path is itself quoted so CreateProcess finds it.
+    spaced = cmd_command_line("ver", r"C:\Program Files\cmd\cmd.exe")
+    assert spaced == r'"C:\Program Files\cmd\cmd.exe" /d /s /c "ver"'
 
 
 def test_shell_argv_powershell_is_encoded_and_unicode_safe():

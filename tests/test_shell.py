@@ -50,6 +50,66 @@ async def test_stdin_and_env_merge(monkeypatch):
     assert res2.stdout == "merged"
 
 
+@pytest.mark.asyncio
+async def test_raw_command_line_is_windows_only():
+    """A ``str`` argv is a Windows command line (#3802); elsewhere it is refused, not run."""
+    if os.name == "nt":
+        pytest.skip("POSIX-only guard")
+    res = await run_command("echo hi")
+    assert not res.ok and "Windows-only" in (res.error or "")
+
+
+@pytest.mark.asyncio
+async def test_spawn_command_line_yields_a_normal_process():
+    """The raw-command-line spawn builds the same transport + ``Process`` as
+    ``create_subprocess_exec``. A bare program path is a valid command line on every
+    platform, so the plumbing (pipes, communicate, returncode) is exercised off Windows too."""
+    import asyncio
+
+    from tools.shell import _spawn_command_line
+
+    proc = await _spawn_command_line(
+        sys.executable,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, _ = await proc.communicate(b"print(6 * 7)\n")
+    assert proc.returncode == 0
+    assert out.decode().strip() == "42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe quoting is Windows-only")
+async def test_cmd_runs_a_quoted_interpreter_path(tmp_path):
+    """#3802: `"C:\\...\\py.exe" -c "print(42)"` under cmd.exe. The spaced directory forces
+    the quotes to matter; before the fix cmd saw `\\"C:\\...\\"` and failed to find it."""
+    import shutil
+
+    from tools.shell import cmd_command_line
+
+    spaced = tmp_path / "dir with space"
+    spaced.mkdir()
+    exe = spaced / os.path.basename(sys.executable)
+    shutil.copy2(sys.executable, exe)
+    # Make the copy runnable: its DLLs beside it, and either the venv's pyvenv.cfg (a venv
+    # python.exe is a launcher that finds its base via that file) or PYTHONHOME (a base
+    # install's python.exe locates the stdlib relative to itself, which the copy can't).
+    base = os.path.dirname(sys.executable)
+    for name in os.listdir(base):
+        if name.lower().endswith(".dll"):
+            shutil.copy2(os.path.join(base, name), spaced / name)
+    env = {}
+    cfg = os.path.join(sys.prefix, "pyvenv.cfg")
+    if sys.prefix != sys.base_prefix and os.path.exists(cfg):
+        shutil.copy2(cfg, spaced / "pyvenv.cfg")
+    else:
+        env["PYTHONHOME"] = sys.base_prefix
+    res = await run_command(cmd_command_line(f'"{exe}" -c "print(42)"'), timeout=60, env=env)
+    assert res.ok, (res.returncode, res.stdout, res.stderr, res.error)
+    assert res.stdout == "42"
+
+
 def _windows_pid_is_running(pid: int) -> bool:
     synchronize = 0x00100000
     wait_timeout = 0x00000102

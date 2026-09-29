@@ -43,6 +43,7 @@ from infra.proc import child_env, detached_kwargs, scrub_agent_env
 from tools.fs_view import split_lines
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 from tools.session import _session_id_from
+from tools.shell import cmd_command_line
 from tools.shell import run_command as _shell_run
 
 log = logging.getLogger("protoagent.fs")
@@ -199,8 +200,14 @@ def _encoded_powershell(command: str) -> str:
     return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
 
 
-def _platform_shell_argv(command: str, shell: str = "default", *, windows: bool | None = None) -> tuple[list[str], str]:
+def _platform_shell_argv(
+    command: str, shell: str = "default", *, windows: bool | None = None
+) -> tuple[list[str] | str, str]:
     """Resolve ``(argv, runner)`` for ``command`` under an explicit shell grammar.
+
+    ``argv`` is a list, except for cmd.exe: there it is the finished command-line STRING
+    (:func:`tools.shell.cmd_command_line`), because an argv list gets re-quoted in a way
+    cmd.exe can't read and a quoted path in ``command`` breaks (#3802).
 
     ``runner`` is the human-readable executable+wrapper chain. It goes into the
     approval dialog so the operator sees what will actually execute (#2518) —
@@ -218,7 +225,7 @@ def _platform_shell_argv(command: str, shell: str = "default", *, windows: bool 
         if not windows:
             raise ValueError("shell='cmd' is Windows-only — use 'sh' or 'powershell'.")
         comspec = os.environ.get("COMSPEC", "cmd.exe")
-        return [comspec, "/d", "/s", "/c", command], f"{comspec} /d /s /c"
+        return cmd_command_line(command, comspec), f"{comspec} /d /s /c"
     if shell == "sh":
         if windows:
             raise ValueError("shell='sh' is not available on Windows — use 'cmd' or 'powershell'.")
