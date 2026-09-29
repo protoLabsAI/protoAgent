@@ -68,6 +68,7 @@ def test_re_exports_are_the_same_objects():
         assert not hasattr(chat, name), name  # lifted closures have one home
 
 
+@pytest.mark.platform_sensitive
 def test_the_turn_sync_module_imports_without_server_chat():
     """No import-time edge back into ``server.chat`` (it is reached at call time only)."""
     subprocess.run([sys.executable, "-c", "import server.turn_sync"], check=True, cwd=str(_REPO))
