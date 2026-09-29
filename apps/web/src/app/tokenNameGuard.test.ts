@@ -41,14 +41,14 @@ const EXEMPT = new Set<string>([
 // A `--pl-*` custom-property DECLARATION (`--pl-name:`), used to read what a stylesheet
 // defines. It cannot match a var() read: `var(--pl-x)` / `var(--pl-x, …)` have `)` or `,`
 // after the name, never the `:` this requires.
-const DECL = /(--pl-[a-z0-9-]+)\s*:/g;
+const DECL = /(--pl-[a-z0-9_-]+)\s*:/g;
 const declaredIn = (text: string): string[] => [...text.matchAll(DECL)].map((m) => m[1]);
 
 // The DEFINED set — every --pl-* the installed design system declares. Derived from the
 // installed packages, never hand-copied. Four live sources, unioned:
 //   1. PL_TOKEN_VARS — @protolabsai/design's tokens.json, flattened by PluginView exactly the
-//      way the DS build emits tokens.css. This is the load-bearing source at test time (~74
-//      names on design ^0.10.0).
+//      way the DS build emits tokens.css. This is the load-bearing source at test time (~85
+//      names on design ^0.11.0).
 //   2/3. @protolabsai/ui's plugin-kit.css and @protolabsai/design's tokens.css, parsed for
 //      their `--pl-*:` declarations. Vitest stubs node_modules CSS imports to "" (the
 //      `css.include` anchor deliberately covers only apps/web/src, to keep DS *component* CSS
@@ -75,7 +75,7 @@ for (const [file, text] of Object.entries(SOURCES)) {
 // Built from a RegExp *string*, with `var(` split from `--pl-` at every use site, so this
 // file's own source never contains a bare `var(--pl-…)` the sweep (or a copy of it) could trip
 // on — belt-and-suspenders on top of the self-exemption above.
-const VAR_REF = "var\\(\\s*(--pl-[a-z0-9-]+)";
+const VAR_REF = "var\\(\\s*(--pl-[a-z0-9_-]+)";
 const refsIn = (line: string): string[] =>
   [...line.matchAll(new RegExp(VAR_REF, "g"))].map((m) => m[1]);
 
@@ -111,9 +111,24 @@ describe("every var(--pl-*) in the console is defined by the installed DS (#3682
     expect(defined.size).toBeGreaterThan(40);
     expect(PL_TOKEN_VARS.length).toBeGreaterThan(40);
     // Spot-check well-known names that only appear if the derivation actually ran.
-    for (const n of ["--pl-color-fg", "--pl-color-accent", "--pl-color-status-error", "--pl-radius"]) {
+    for (const n of [
+      "--pl-color-fg",
+      "--pl-color-accent",
+      "--pl-color-status-error",
+      "--pl-radius",
+      "--pl-radius-md",
+      "--pl-radius-pill",
+      "--pl-space-0_5",
+      "--pl-space-1_5",
+      "--pl-space-2_5",
+    ]) {
       expect(defined.has(n)).toBe(true);
     }
+  });
+
+  it("VAR_REF captures underscore token names whole (meta-guard, built by concat)", () => {
+    // `var(--pl-space-0_5)` must be captured as "--pl-space-0_5", not truncated to "--pl-space-0".
+    expect(refsIn("gap: " + "var(" + "--pl-space-0_5);")).toEqual(["--pl-space-0_5"]);
   });
 
   it("sweeps the tree: no var(--pl-…) references a token the DS does not define", () => {
@@ -347,7 +362,7 @@ function matchParen(text: string, openIdx: number): number {
 // source carries no bare literal of its own. A nested var() that itself trails a literal (or more
 // values) is NOT entirely one var() read, so it fails here — and the inner var() is caught on its
 // own by the scan below anyway.
-const NESTED_HEAD = new RegExp("^var\\(\\s*" + "--pl-" + "[a-z0-9-]+");
+const NESTED_HEAD = new RegExp("^var\\(\\s*" + "--pl-" + "[a-z0-9_-]+");
 function isNestedTokenFallback(fallback: string): boolean {
   const t = fallback.trim();
   if (!NESTED_HEAD.test(t)) return false;
