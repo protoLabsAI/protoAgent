@@ -171,7 +171,7 @@ def _short(s: str, cap: int = 34) -> str:
 
 def _token_for(raw: dict) -> str:
     auth = raw.get("auth") or {}
-    # Mirrors adapters._secret's resolution (stored/overlaid value first, env var
+    # Mirrors delegates.base._secret's resolution (stored/overlaid value first, env var
     # fallback) — the SAME order dispatch uses. The chart's claim is "can delegate
     # to", so the crawl must authenticate exactly the way delegate_to would; if the
     # stored token is stale while the env holds the rotated one, dispatch is broken

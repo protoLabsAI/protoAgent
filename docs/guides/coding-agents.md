@@ -395,7 +395,7 @@ PR step's failure instead of a URL.
 
 ```
 delegate_to(target="proto", query=…)
-  → AcpAdapter.dispatch (plugins/delegates/adapters.py)
+  → AcpAdapter.dispatch (plugins/delegates/acp_adapter.py)
       → AcpClient (plugins/coding_agent/acp_client.py)
           → spawn `command args` in workdir, JSON-RPC 2.0 over its stdio:
             initialize → session/load(saved id) or session/new(cwd) → session/prompt(query)

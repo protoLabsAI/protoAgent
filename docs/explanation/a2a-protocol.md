@@ -52,7 +52,7 @@ If you are porting a consumer from 0.3, these are the breakages, in the order yo
 | `DeleteTaskPushNotificationConfig` | `tasks/pushNotificationConfig/delete` |
 | `GetExtendedAgentCard` | `agent/getAuthenticatedExtendedCard` |
 
-**2. The `A2A-Version: 1.0` request header is load-bearing.** An `a2a-sdk` ≥1.0 receiver reads a *missing* header as "this client speaks 0.3", and a 1.0-only handler then rejects the call with **`-32009 VERSION_NOT_SUPPORTED`** ("A2A version '0.3' is not supported by this handler. Expected version '1.0'."). Outbound, the template stamps the header in `plugins/delegates/adapters.py::A2aAdapter._rpc`.
+**2. The `A2A-Version: 1.0` request header is load-bearing.** An `a2a-sdk` ≥1.0 receiver reads a *missing* header as "this client speaks 0.3", and a 1.0-only handler then rejects the call with **`-32009 VERSION_NOT_SUPPORTED`** ("A2A version '0.3' is not supported by this handler. Expected version '1.0'."). Outbound, the template stamps the header in `plugins/delegates/a2a.py::A2aAdapter._rpc`.
 
 The gate's **position in the pipeline** is what makes this confusing to debug, so it's worth stating exactly. The dispatcher (`a2a/server/routes/jsonrpc_dispatcher.py`) resolves in this order:
 

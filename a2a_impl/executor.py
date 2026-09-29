@@ -298,7 +298,7 @@ def _hitl_prompt(payload: Any) -> str:
     that don't parse the hitl-v1 DataPart.
 
     That set includes every DELEGATE CALLER: a peer that parks bubbles the pause back
-    to whoever called it (``plugins/delegates/adapters.py``), and the caller reads the
+    to whoever called it (``plugins/delegates/a2a.py``), and the caller reads the
     TEXT part — it has no hitl-v1 parser. So this string is the whole question as far
     as an agent chain is concerned, and it has to be answerable on its own.
 

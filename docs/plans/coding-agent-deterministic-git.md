@@ -33,7 +33,7 @@ the top documented failure mode.
 1. **`code_with` no longer exists.** ADR 0025 retired it; `plugins/coding_agent/` is now a
    plain ACP client *library* (no manifest, no tool). The live surface is
    **`delegate_to(target, query, background=False)`** (`plugins/delegates/__init__.py:33`)
-   dispatching through **`AcpAdapter`** (`plugins/delegates/adapters.py:471-674`). The git
+   dispatching through **`AcpAdapter`** (`plugins/delegates/acp_adapter.py`). The git
    lifecycle attaches there: new `Delegate` fields + `FieldSpec`s on the acp adapter, plus a
    runtime arg on `delegate_to` — **not** a resurrected `code_with` config section.
 2. **The branch-prefix prompt-injection band-aid is in roxy's fork**
@@ -141,7 +141,7 @@ framework:  isolation guard: HEAD != <base> or refuse (stranded_on_base — call
   `.git/info/exclude` seeded by the harness with `.proto/` and friends), matching current
   protoMaker. Plus a harness-side pre-commit secret/scratch scan (research req.).
 - **Config surface:** new acp-delegate fields via `FieldSpec` + `Delegate` +
-  `AcpAdapter.parse()` (`plugins/delegates/adapters.py`), mirroring `timeout_s`:
+  `AcpAdapter.parse()` (`plugins/delegates/acp_adapter.py`), mirroring `timeout_s`:
   `manage_git: bool = false` (old behavior stays default for non-worktree setups),
   `base_branch: str = "main"`, `branch_prefix: str = ""` (empty → delegate name).
 - **Push/PR auth:** reuse `tools/gh_cli.py::run_gh` (injects `GH_TOKEN`/`GITHUB_TOKEN`) and
@@ -253,8 +253,8 @@ The deterministic git harness is a **general** protoAgent capability → land it
 | --- | --- |
 | `delegate_to` tool (gains `item_id`) | `plugins/delegates/__init__.py:33-75` |
 | Background delegation path (claim must sit inside dispatch, before the semaphore) | `plugins/delegates/__init__.py:78-125`, `background/manager.py:158-216` |
-| `AcpAdapter` config schema / parse / dispatch / teardown | `plugins/delegates/adapters.py:471-674` |
-| `Delegate` dataclass (new fields) | `plugins/delegates/adapters.py:58-88` |
+| `AcpAdapter` config schema / parse / dispatch / teardown | `plugins/delegates/acp_adapter.py` |
+| `Delegate` dataclass (new fields) | `plugins/delegates/base.py` |
 | ACP client library (harness lives beside it) | `plugins/coding_agent/__init__.py`, `acp_client.py` |
 | Subprocess wrapper to build on | `tools/shell.py:38-98` |
 | `gh` runner (token injection) | `tools/gh_cli.py:28-66` |

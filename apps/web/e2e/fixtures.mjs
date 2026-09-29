@@ -1834,7 +1834,7 @@ export const MEMORY_INJECTION_DETAILS = {
 // type carries the shared `env` (envmap) editor field (#2114) — the per-delegate env
 // map + env_remove list + per-row secret toggle.
 // Mirrors the real schema: the backend marks the env editor `advanced`, so it renders
-// inside the collapsible group rather than inline (see plugins/delegates/adapters.py).
+// inside the collapsible group rather than inline (see plugins/delegates/base.py).
 const ENV_FIELD = {
   key: "env", label: "Environment", kind: "envmap", required: false,
   help: "Extra environment variables. Values are verbatim (no ${VAR} expansion) and merge over the inherited env after the removals below.",
