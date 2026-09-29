@@ -944,6 +944,11 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                         model=_model,
                         reasoning_effort=_effort,
                         incognito=_incognito,
+                        # Every pass of a fenced turn is fenced — a continuation too. A
+                        # fresh-context goal runs on a new thread with no checkpointed
+                        # state to inherit, so the fence is stamped here explicitly, as
+                        # the non-streaming driver stamps ``_state_extra`` on its own.
+                        subagent_fence=_fence,
                     )
                 ) as _cont_frames:
                     async for kind, payload in _cont_frames:
@@ -1719,7 +1724,14 @@ async def _chat_langgraph_impl(
                     if hold is _turn_control._HITL_RESUME:
                         from langgraph.types import Command
 
-                        graph_input = Command(resume=await _resume_payload(config, turn_message))
+                        # A resume carries no fresh input, so the fence rides the
+                        # Command's state update: a fenced caller's answer never resumes
+                        # a pass with a wider toolset. Unfenced, the parked turn keeps
+                        # its own (a resume continues that turn; it does not clear it).
+                        graph_input = Command(
+                            resume=await _resume_payload(config, turn_message),
+                            **_turn_stream._fence_update(tool_fence),
+                        )
                     else:
                         # Kickoff injection (#1910) — shared with the streaming driver
                         # (server/goal_loop.py); this branch is never a HITL resume.
