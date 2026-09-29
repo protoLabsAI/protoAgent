@@ -7,7 +7,7 @@ of them) short-circuits the LLM turn: this module parses the addressed cast
 fall-through) and composes the answer plus the note frame no bubble carries
 (``_covered_by_a_bubble`` / ``_room_note`` / ``_with_room_notes``).
 
-**The call site stays in ``server.chat``**: ``_pre_turn_dispatch`` takes the per-thread
+**The call site is in ``server.chat_dispatch``** (#3861): ``_pre_turn_dispatch`` takes the per-thread
 lock and calls ``_chat_rooms._at_delegate_exchange`` through this module at call time,
 so a test patch HERE intercepts it.
 

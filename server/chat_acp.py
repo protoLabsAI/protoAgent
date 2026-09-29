@@ -11,7 +11,7 @@ LangGraph loop. This module owns:
   yields) and ``_acp_turn_collected`` (the non-streaming shape);
 * ``acp_sessions_snapshot`` — the read-only view behind ``GET /api/acp/sessions``.
 
-**The ACP switch itself stays in ``server.chat``**: ``_pre_turn_dispatch`` sets
+**The ACP switch itself is in ``server.chat_dispatch``** (#3861): ``_pre_turn_dispatch`` sets
 ``pre.acp`` from ``is_acp_runtime`` as the last link of the shared pre-turn chain, and
 both drivers call into this module through the module object (``_chat_acp.<name>``) at
 call time, so a patch HERE intercepts them.
