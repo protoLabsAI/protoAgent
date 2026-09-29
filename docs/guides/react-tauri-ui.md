@@ -205,7 +205,7 @@ is the click target, results render as plain text exactly as before if the prefe
 Off, the project is unknown, or the roots haven't loaded.
 
 > **Desktop app:** WKWebView/WebView2 can't load `zed://` themselves, so the Tauri shell
-> (`apps/desktop/src-tauri/src/lib.rs`) hands these links to the OS through
+> (`apps/desktop/src-tauri/src/navigation.rs`) hands these links to the OS through
 > `tauri-plugin-opener` — on both the same-window navigation path (`serve_navigation`)
 > and the new-window path (`route_new_window`). It is a strict allowlist: only
 > `zed://file/…`, `vscode://file/…` and `cursor://file/…` pass (`is_editor_link`); every
@@ -222,7 +222,7 @@ Off, the project is unknown, or the roots haven't loaded.
 
 `apps/desktop/` wraps the console as a Tauri v2 binary. `apps/desktop/sidecar/build_sidecar.py`
 PyInstaller-freezes the headless server (`binaries/protoagent-server-<triple>`), and
-`src-tauri/src/lib.rs` spawns it via `externalBin` with `--ui console` on port `7870`. The
+`src-tauri/src/sidecar.rs` spawns it via `externalBin` with `--ui console` on port `7870`. The
 frozen build bundles the `plugins/` tree and `--collect-all`s `tools`/`websockets`/`mcp`
 (plugins load by file path, which PyInstaller's scan misses; a runtime-installed comms
 plugin, ADR 0058, can only import what's bundled). Signed macOS DMG / Linux AppImage+deb /

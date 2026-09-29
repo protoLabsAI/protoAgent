@@ -408,7 +408,7 @@ These are the failures that actually recur — read them before you edit.
   is a glyph joined to the name it opens — adjacent ("⌘K clear") or across a short
   connective ("⌘⇧K / Ctrl-Shift-K **for** the command palette") — so a *historical*
   mention stays legal. Chords the desktop shell owns are read from
-  `apps/desktop/src-tauri/src/lib.rs` and never judged against the in-app binding: the
+  `apps/desktop/src-tauri/src/hotkeys.rs` and never judged against the in-app binding: the
   ⌥Space launcher *is* the palette, and CI must not "correct" that sentence. The third
   check reads command **names**: `press ⌘⇧K → <command>` has to name something
   `usePaletteRegistry.ts` still registers — #1769 folded **Toggle Fleet Agent** into the

@@ -194,7 +194,7 @@ def _resolve_operator_project_root() -> str:
 def _install_parent_death_watchdog() -> None:
     """Exit if the launcher process (``PROTOAGENT_PARENT_PID``) goes away.
 
-    Set by the desktop's Tauri shell (apps/desktop/src-tauri/src/lib.rs) when it
+    Set by the desktop's Tauri shell (apps/desktop/src-tauri/src/sidecar.rs) when it
     spawns this server as a sidecar. A PyInstaller onefile runs as a bootloader
     + re-exec'd child, so the shell killing the tracked bootloader on exit can
     leave this process orphaned and holding its port. Polling the launcher PID
