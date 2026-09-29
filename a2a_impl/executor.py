@@ -125,6 +125,7 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
         iterator = stream.__aiter__()
         while True:
             try:
+                # On a wedged ACP runtime, TurnStalled can surface up to _ACP_CANCEL_SETTLE_S later.
                 item = await asyncio.wait_for(iterator.__anext__(), seconds)
             except StopAsyncIteration:
                 return
