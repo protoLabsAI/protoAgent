@@ -2,7 +2,7 @@
 
 Extracted from ``server/chat.py`` (#3884, epic #3804 slice 3). The streaming driver
 (``_run_native_turn``) and the non-streaming driver (``_chat_langgraph_impl``'s
-``_native_turn``) each carried their own copy of this logic, and the copies drifted
+``_native_turn``, now in ``server/turn_sync.py``, #3917) each carried their own copy of this logic, and the copies drifted
 (#3872: the non-streaming auto-answer resumed with a bare value, not keyed by interrupt id).
 
 The two drivers differ in SHAPE — the streaming one yields frames while a graph pass runs,

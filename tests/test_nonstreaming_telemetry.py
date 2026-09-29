@@ -161,6 +161,7 @@ async def test_the_wrapper_bills_a_turn_that_raised(wired, monkeypatch):
     bills what it spent before it died — the expensive failures are exactly the
     ones worth seeing."""
     chat_mod = _chat_module()
+    import server.turn_sync as turn_sync  # the impl's owner (#3917)
 
     cb = _FakeUsageCallback({"m": {"input_tokens": 500, "output_tokens": 20}}, llm_calls=1)
 
@@ -168,7 +169,7 @@ async def test_the_wrapper_bills_a_turn_that_raised(wired, monkeypatch):
         kw["_telemetry_sink"]["usage_cb"] = cb
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setattr(chat_mod, "_chat_langgraph_impl", _boom)
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", _boom)
     with pytest.raises(RuntimeError):
         await chat_mod._chat_langgraph("hi", "sess-boom", origin="v1")
 
@@ -182,6 +183,7 @@ async def test_the_wrapper_reads_the_error_key_not_an_exception(wired, monkeypat
     carrying a structured `error`, so that key — not a raise — is what marks a
     turn failed."""
     chat_mod = _chat_module()
+    import server.turn_sync as turn_sync  # the impl's owner (#3917)
 
     cb = _FakeUsageCallback({"m": {"input_tokens": 7, "output_tokens": 2}})
 
@@ -189,7 +191,7 @@ async def test_the_wrapper_reads_the_error_key_not_an_exception(wired, monkeypat
         kw["_telemetry_sink"]["usage_cb"] = cb
         return [{"role": "assistant", "content": "**Error:** nope", "error": {"type": "server_error"}}]
 
-    monkeypatch.setattr(chat_mod, "_chat_langgraph_impl", _soft_fail)
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", _soft_fail)
     await chat_mod._chat_langgraph("hi", "sess-soft", origin="api-chat")
 
     assert wired.recent()[0]["state"] == "failed"

@@ -1,7 +1,7 @@
 """The shared pre-turn dispatch chain — extracted from ``server/chat.py`` (#3861).
 
-Both turn drivers in ``server.chat`` — the streaming ``_chat_langgraph_stream_impl``
-(A2A / console) and the non-streaming ``_chat_langgraph_impl`` (``chat()``:
+Both turn drivers — the streaming ``_chat_langgraph_stream_impl`` in ``server.chat``
+(A2A / console) and the non-streaming ``_chat_langgraph_impl`` in ``server.turn_sync`` (``chat()``:
 OpenAI-compat /v1, /api/chat, plugin surfaces) — run ONE chain before the turn
 (#3805): @-mention → /goal → /lifecycle → plugin command → workflow → subagent →
 skill (rewrite, falls through) → unknown /command → ACP switch. A fenced turn

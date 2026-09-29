@@ -514,7 +514,7 @@ class AcpClient:
         # terminal hook records — so a row from here would double it. On the
         # NON-streaming driver (``/v1/chat/completions``, ``/api/chat``, the ADR 0018
         # ``HOST.invoke()`` seam) that turn is booked NOWHERE: the ACP branch of
-        # ``server.chat._chat_langgraph_impl`` returns before the usage callback exists,
+        # ``server.turn_sync._chat_langgraph_impl`` returns before the usage callback exists,
         # so ``_record_local_turn``'s sink is empty and it bails. That blind spot
         # predates #3015 and survives it — recording it from here would file a CHAT turn
         # under a ``coder:`` key and count it as coder work, which is a worse answer than

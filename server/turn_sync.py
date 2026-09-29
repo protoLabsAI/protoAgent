@@ -1,0 +1,405 @@
+"""The non-streaming turn driver — extracted from ``server/chat.py`` (#3917, epic #3804).
+
+``_chat_langgraph_impl`` is the driver behind ``chat()`` (OpenAI-compat ``/v1``,
+``/api/chat``, plugin ``HOST.invoke()``): the shared pre-turn dispatch, the ACP switch,
+one native graph turn (``_native_turn``), the goal drive, and the context-overflow
+compact-and-retry. ``_native_turn`` and ``_last_ai`` used to be closures inside it; they
+are module-level here, with every value they closed over passed explicitly. The helper
+only it used moved with it: ``_trace_reply_output``. Symmetric with
+``server/turn_stream.py`` (#3874) for the streaming loop.
+
+The telemetry / idle-beacon wrapper ``_chat_langgraph`` stays in ``server.chat`` (``chat()``
+calls it by bare name and many tests patch it there) and **reaches the impl through this
+module at call time** (``_turn_sync._chat_langgraph_impl``), so a test's patch here is
+what runs.
+
+**Collaborators that stay in ``server.chat``** — ``this_turn_messages``,
+``_last_tool_text``, the HITL interrupt/resume readers (``_interrupt_payload`` /
+``_resume_payload`` / ``_pending_interrupt_value``), ``_vision_human_message``, the
+failure handling (``_overflow_compacted`` / ``_fail_turn`` / ``turn_error`` /
+``_OVERFLOW_RETRY_PROMPT``) and ``_set_trace_output`` — are read through ``server.chat``
+at CALL time (``_chat().<name>``), never bound at import: a patch on ``server.chat`` still
+lands, and ``import server.turn_sync`` has no import-time edge back into it. Turn control,
+dispatch, ACP, goal loop, telemetry and the fence update are reached through their owning
+modules (``_turn_control.<name>`` etc.), as they were in ``server.chat``.
+
+``server.chat`` re-exports ``_chat_langgraph_impl`` and ``_trace_reply_output`` so
+``server.chat.<name>`` keeps resolving. Patch these names HERE, not on ``server.chat``: a
+re-export is a copy of the binding, so a ``setattr`` there intercepts nothing
+(``tests/test_turn_sync_seam.py`` guards it).
+"""
+
+import contextlib
+import importlib
+import logging
+from typing import Any
+
+from graph.middleware.redaction import redact as _redact
+from graph.output_format import extract_output
+from runtime.state import STATE
+from server import chat_acp as _chat_acp
+from server import chat_dispatch as _chat_dispatch
+from server import goal_loop as _goal_loop
+from server import turn_control as _turn_control
+from server import turn_stream as _turn_stream
+from server import turn_telemetry as _turn_telemetry
+
+# Same logger as server.chat, so the moved log lines keep their channel.
+log = logging.getLogger("protoagent.server")
+
+
+def _chat():
+    """``server.chat`` the MODULE, resolved at call time — by path, because ``server``
+    re-exports the ``chat`` FUNCTION under the submodule's name."""
+    return importlib.import_module("server.chat")
+
+
+def _trace_reply_output(reply: Any) -> None:
+    """The non-streaming driver's counterpart of ``_trace_terminal_output``: record the
+    reply it returns (the last assistant message's content) as the trace output. Its
+    ``@delegate`` and slash-command short-circuits, HITL parks and error bubbles return
+    without a tool-call-free model reply, so without this their ``chat`` traces had
+    input and no output (#3695). Called inside the ``trace_session`` scope.
+    """
+    if not isinstance(reply, list):
+        return
+    for msg in reversed(reply):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            content = msg.get("content")
+            _chat()._set_trace_output(content if isinstance(content, str) else str(content or ""))
+            return
+
+
+def _last_ai(result) -> str:
+    """The last assistant text of THIS turn (was a closure in ``_chat_langgraph_impl``)."""
+    from langchain_core.messages import AIMessage
+
+    # Bounded to THIS turn (#2300). An unbounded reverse scan over the
+    # accumulated conversation returns the PREVIOUS turn's answer whenever
+    # this one produced no assistant message — which is exactly what a turn
+    # whose stream dies after its first chunk looks like.
+    for msg in reversed(_chat().this_turn_messages(result)):
+        if isinstance(msg, AIMessage) and msg.content:
+            # `.text` flattens Responses-API content blocks (openai-codex,
+            # ADR 0097) to a string; a plain string passes through unchanged.
+            return msg.content if isinstance(msg.content, str) else msg.text
+    return ""
+
+
+async def _native_turn(
+    turn_message: str,
+    turn_images: list[tuple[str, str]] | None,
+    *,
+    session_id: str,
+    config: dict,
+    usage_cb: Any,
+    state_extra: dict[str, Any],
+    tool_fence: list[str] | None,
+    hitl_resume: bool,
+    incognito: bool,
+    overflow_retry: bool = False,
+) -> list[dict[str, Any]]:
+    """One native turn on this session's thread, as the reply list. Run once
+    for the operator's message and, after a context-overflow compaction, once
+    more for the recovery prompt (#3805).
+
+    Was a closure inside ``_chat_langgraph_impl`` (#3917); everything it closed over is
+    now an explicit keyword: ``session_id`` / ``config`` / ``usage_cb`` /
+    ``state_extra`` (the impl's ``_state_extra``) / ``tool_fence`` / ``hitl_resume`` /
+    ``incognito``. ``_last_ai`` is module-level; ``goal_turn`` and ``HumanMessage`` are
+    imported here (the impl imported them at its top).
+    """
+    from langchain_core.messages import HumanMessage
+
+    from graph.goals.goal_turn import goal_turn
+
+    # When a goal is already active, the whole turn is goal-driven —
+    # suppress cross-session prior_sessions on the initial turn too.
+    _goal_state = _goal_loop.active_goal(session_id)
+    goal_active = _goal_state is not None
+    # Sharing the streaming thread means sharing its serialization contract:
+    # every other writer to `a2a:{sid}` (the streaming turn driver,
+    # compact_session, rewind_session) holds the per-thread lock — an
+    # unlocked graph turn here could lost-update a concurrent one (e.g. the
+    # desktop /api/chat fallback racing a console /compact on the same tab).
+    async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
+        # HITL hold (#1560) — same contract as the streaming path: while the
+        # thread is parked at a form/question/approval interrupt, hold a fresh
+        # operator message (it folds in right after the form response) and echo
+        # the pending ask; the marked answer resumes the graph properly.
+        # The overflow retry skips it, as the streaming retry does: its message
+        # is the recovery prompt, not an operator message to hold.
+        hold = (
+            None
+            if overflow_retry
+            else await _turn_control._hold_if_hitl_pending(
+                turn_message,
+                session_id,
+                config,
+                request_metadata=({"hitl_resume": True} if hitl_resume else None),
+            )
+        )
+        if hold is not None and hold is not _turn_control._HITL_RESUME:
+            payload = _chat()._interrupt_payload(hold)
+            question = (
+                payload.get("question") or payload.get("title") or "The agent needs input to continue."
+            )
+            return [
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"🙋 **Input needed first:** {question}\n\n"
+                        "_(Your message is queued — the agent gets it right after you answer.)_"
+                    ),
+                }
+            ]
+        if hold is _turn_control._HITL_RESUME:
+            from langgraph.types import Command
+
+            # A resume carries no fresh input, so the fence rides the
+            # Command's state update: a fenced caller's answer never resumes
+            # a pass with a wider toolset. Unfenced, the parked turn keeps
+            # its own (a resume continues that turn; it does not clear it).
+            graph_input = Command(
+                resume=await _chat()._resume_payload(config, turn_message),
+                **_turn_stream._fence_update(tool_fence),
+            )
+        else:
+            # Kickoff injection (#1910) — shared with the streaming driver
+            # (server/goal_loop.py); this branch is never a HITL resume.
+            _msg = _goal_loop.kickoff_message(_goal_state, turn_message, resume=False)
+            graph_input = {
+                # Vision parts ride the user message when the model supports
+                # them (#1943) — same gating as the streaming path.
+                "messages": [
+                    _chat()._vision_human_message(_msg, turn_images, session_id=session_id, incognito=incognito)
+                ],
+                "session_id": session_id,
+                **state_extra,
+            }
+        with goal_turn(goal_active):
+            result = await STATE.graph.ainvoke(graph_input, config=config)
+            # Headless-first parity (#1911), the shared policy (server/goal_loop.py): a
+            # goal-driven turn is autonomous, so if it parks on a HITL interrupt there's
+            # no operator here to answer — resume (keyed by interrupt id, #3872) with the
+            # no-operator sentinel and re-run, bounded, then clear. This surface carries
+            # no request metadata, so only a goal makes it autonomous; non-goal turns
+            # are untouched (they still echo the ask below).
+            result = await _goal_loop.HitlAutoAnswer(goal_active).settle(
+                config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=config)
+            )
+    raw = _last_ai(result)
+    response = extract_output(raw)
+
+    # Robustness parity with the streaming path (bd-2qy): a turn can end
+    # with no assistant text — at an ask_human interrupt, after a `wait`
+    # yield, or on a scratch-only turn. Returning "" gives /api/chat +
+    # OpenAI-compat callers a silent empty 200; surface something useful.
+    if not response:
+        interrupt_val = await _chat()._pending_interrupt_value(config)
+        if interrupt_val is not None:
+            # ask_human / HITL — the graph paused for input. There's no
+            # task to park on this non-streaming surface, so echo the
+            # prompt; the caller answers with a follow-up message, which
+            # continues the thread (the checkpointer kept the history).
+            payload = _chat()._interrupt_payload(interrupt_val)
+            question = (
+                payload.get("question") or payload.get("title") or "The agent needs input to continue."
+            )
+            return [
+                {
+                    "role": "assistant",
+                    "content": f"🙋 **Input needed:** {question}",
+                    "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
+                }
+            ]
+
+    # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
+    # to the last tool result so the caller gets a signal, not a blank.
+    # Both lookups are scoped to THIS turn, so reaching the final string means
+    # the turn genuinely produced nothing — most likely it died mid-stream. Say
+    # that plainly: the whole point of #2300 is that a caller must be able to
+    # tell "no answer" from "an answer", and the previous wording read like a
+    # deliberate quiet turn rather than a failure worth retrying.
+    no_reply = ""
+    if not response:
+        response = _chat()._last_tool_text(result)
+    if not response:
+        no_reply = response = (
+            "**Error:** the turn produced no reply — it may have stalled or been "
+            "interrupted. Nothing was returned for this request; retry it. "
+            "(This is not the previous turn's answer.)"
+        )
+
+    # Goal mode (shared drive, server/goal_loop.py): verify after the agent
+    # stops; run each continuation it asks for. No status surface here — the
+    # verifier notes are skipped and only the terminal note reaches the reply.
+    drive = _goal_loop.GoalDrive(session_id, config, response)
+    async with contextlib.aclosing(drive.steps()) as _goal_steps:
+        async for step in _goal_steps:
+            if isinstance(step, _goal_loop.GoalNote):
+                continue
+            # Lock the BASE thread (mirrors the streaming driver, which holds it
+            # across the whole goal loop): same-session iterations write `config`'s
+            # thread directly; fresh-context ones still exclude compact/rewind/
+            # streaming turns keyed on the base id.
+            async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
+                with goal_turn():
+                    result = await STATE.graph.ainvoke(
+                        {
+                            "messages": [HumanMessage(content=step.message)],
+                            "session_id": session_id,
+                            **state_extra,
+                        },
+                        # Fresh-context iterations get a scoped config without the
+                        # turn's callbacks — re-attach usage_cb so their tokens count.
+                        config={**step.config, "callbacks": [usage_cb]},
+                    )
+            step.text = extract_output(_last_ai(result))
+    response = drive.text
+
+    reply = {"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}
+    # A turn that produced nothing is a FAILED turn, not an answer that happens to
+    # start with "**Error:**" (#3873): carry the structured `error` like every other
+    # failure return, so telemetry counts it failed and /v1 answers an error status.
+    # Unless a goal continuation replaced the text with a real reply.
+    if no_reply and response.startswith(no_reply):
+        reply["error"] = _chat().turn_error(None, "the turn produced no reply — it may have stalled or been interrupted; retry it")
+    return [reply]
+
+
+async def _chat_langgraph_impl(
+    message: str,
+    session_id: str,
+    *,
+    model: str | None = None,
+    incognito: bool = False,
+    hitl_resume: bool = False,
+    images: list[tuple[str, str]] | None = None,
+    tool_fence: list[str] | None = None,
+    _telemetry_sink: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Non-streaming LangGraph entry — used by the console + OpenAI-compat.
+
+    ``_telemetry_sink`` (private, set by the ``_chat_langgraph`` wrapper) receives
+    this turn's usage callback so the wrapper can write the telemetry row from its
+    single exit point rather than at each of this function's many returns (#3000).
+    """
+    from observability import tracing
+    # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
+    # Incognito is stamped explicitly every turn (the channel persists in the
+    # checkpointer — an omitted key would inherit the previous turn's value).
+    _state_extra = {"model": model} if (model or "").strip() else {}
+    _state_extra["incognito"] = bool(incognito)
+    # The tool fence (#2972) is stamped every turn for the same reason: a fenced
+    # turn on a session must not leave the NEXT (unfenced) turn on that session
+    # fenced — and an unfenced turn must not inherit a fence. Empty list = no
+    # fence (SubagentFenceMiddleware treats falsy as "untouched").
+    _state_extra["subagent_fence"] = [str(t) for t in tool_fence] if tool_fence else []
+
+    from graph.config_io import soul_revision
+
+    def _traced(reply):
+        # Every return inside the trace scope goes through here, so the trace's output
+        # is what the caller got on every path — not only a final model reply (#3695).
+        _trace_reply_output(reply)
+        return reply
+
+    async with tracing.trace_session(
+        session_id=session_id,
+        name="chat",
+        metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": _redact(message[:100])})},
+        input=_redact(message),
+        incognito=bool(incognito),
+    ):
+        # Set only once the NATIVE turn is about to run — the overflow recovery below
+        # compacts + retries that thread (same contract as the streaming driver, #3805).
+        native_tid: str | None = None
+        try:
+            # The pre-turn dispatch chain is SHARED with the streaming driver (#3805) —
+            # see _pre_turn_dispatch. This surface can't render the intermediate frames
+            # (work cards, room replies, a /goal SET ack — that one is folded into the
+            # turn's terminal goal note), so only the terminal frame becomes the reply.
+            # No request_metadata on this driver — the thread resolves from the session
+            # id alone, as it does everywhere else in this function.
+            pre = _chat_dispatch._PreTurn(message, fenced=bool(tool_fence), fence=list(tool_fence or []))
+            last_frame: tuple | None = None
+            async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
+                async for frame in _pre_frames:
+                    last_frame = frame
+            if pre.handled:
+                return _traced(_chat_dispatch._short_circuit_reply(last_frame))
+            message = pre.message
+
+            # Non-native runtime (ADR 0033) — the switch itself is shared (see
+            # _pre_turn_dispatch). Without it, an acp:* config silently ran this surface
+            # (OpenAI-compat /v1, the desktop /api/chat fallback, internal self-prompts)
+            # on the native loop — which a gateway-less ACP-only setup (e.g. the Hermes
+            # preset) can't serve at all.
+            if pre.acp:
+                return _traced(await _chat_acp._acp_turn_collected(session_id, message))
+
+            # Same thread-id resolution as the streaming path (ADR 0069 D4): the
+            # non-streaming turns used to key `chat:{session_id}` apart from the
+            # streaming `a2a:{session_id}` ones, so the SAME session reached via
+            # both APIs split into two histories. Old `chat:*` checkpoints orphan
+            # once on upgrade — non-streaming chat is short-lived, so harmless.
+            # Aggregate token usage across every model call this turn — the initial invoke,
+            # each goal continuation, and any nested subagents (LangChain propagates config
+            # callbacks into nested ainvokes). Read back at the end and attached to the
+            # returned assistant dict; /api/chat ignores the extra key, the /v1 OpenAI-compat
+            # handler reads it for `usage` (ADR 0075 D4). Mirrors the streaming path's
+            # per-call usage accounting, which sums `on_chat_model_end` events for the turn.
+            usage_cb = _turn_telemetry.make_usage_callback()
+            if _telemetry_sink is not None:
+                # Handed over as soon as it exists, not at the end: the wrapper reads
+                # it from a `finally`, so a turn that raises still bills what it spent
+                # before it died.
+                _telemetry_sink["usage_cb"] = usage_cb
+            config = {
+                "configurable": {"thread_id": _turn_control._resolve_thread_id(None, session_id)},
+                "callbacks": [usage_cb],
+                "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200),
+            }
+
+            native_tid = config["configurable"]["thread_id"]
+            return _traced(
+                await _native_turn(
+                    message,
+                    images,
+                    session_id=session_id,
+                    config=config,
+                    usage_cb=usage_cb,
+                    state_extra=_state_extra,
+                    tool_fence=tool_fence,
+                    hitl_resume=hitl_resume,
+                    incognito=incognito,
+                )
+            )
+        except Exception as e:
+            # Context overflow (#2783, ADR 0101 D4) — the recovery the streaming driver
+            # always had and this one lacked (#3805): force-compact the thread once and
+            # retry a single time; a second failure surfaces honestly below.
+            if await _chat()._overflow_compacted(e, native_tid, session_id):
+                try:
+                    return _traced(
+                        await _native_turn(
+                            _chat()._OVERFLOW_RETRY_PROMPT,
+                            None,
+                            session_id=session_id,
+                            config=config,
+                            usage_cb=usage_cb,
+                            state_extra=_state_extra,
+                            tool_fence=tool_fence,
+                            hitl_resume=hitl_resume,
+                            incognito=incognito,
+                            overflow_retry=True,
+                        )
+                    )
+                except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
+                    log.exception("[chat] overflow retry failed for session=%s: %s", session_id, retry_exc)
+                    e = retry_exc
+            msg = await _chat()._fail_turn(e, session_id, tag="chat", thread_id=native_tid)
+            return _traced([{"role": "assistant", "content": f"**Error:** {msg}", "error": _chat().turn_error(e, msg)}])
+        finally:
+            tracing.flush()

@@ -39,7 +39,7 @@ is the fallback, not the default). The rest of this page is the mechanism behind
 4. **Not met** → the agent records its running plan with the `update_goal_plan` tool, then the controller re-invokes it on the same thread (history preserved) with a continuation prompt that includes the verifier's reason + evidence and the current plan.
 5. This repeats until met, the **iteration budget** (`goal.max_iterations`) is spent (`exhausted`), the verifier returns the **same evidence too many times** (`goal.no_progress_limit` → `unachievable`), or the agent itself calls the `abandon_goal` tool with a reason (`unachievable`).
 
-The loop wraps graph invocation in `server/chat.py` (both the A2A streaming path and the non-streaming chat path); the graph itself is unchanged.
+The loop wraps graph invocation in `server/goal_loop.py`, shared by both turn drivers (the A2A streaming path in `server/chat.py` and the non-streaming chat path in `server/turn_sync.py`); the graph itself is unchanged.
 
 **Yield instead of spin (ADR 0079).** If the agent's next step waits on async or delegated work — a build, a peer agent, CI, a review — it doesn't have to burn iterations polling. It hands off to a [watch](/guides/watches) or a [schedule](/guides/scheduler) and ends the turn; the drive **pauses** (the goal stays `active`, iterations untouched) and **resumes automatically** when the trigger fires (`⏸ goal paused — handed off to a watch/schedule`). This is what lets a long, delegated goal span time instead of exhausting its budget waiting. Goals, tasks, watches, and schedules compose into one OODA loop over the agent's durable working-state — see [ADR 0079](/adr/0079-autonomous-operating-model).
 
