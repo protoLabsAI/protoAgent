@@ -19,7 +19,8 @@ THIS module's globals, and the drift gate's ``_last_soul_drift_check`` lives onl
 here (deliberately not re-exported: a rebound float copy on ``agent_init`` would
 silently decouple). The one exception is plugin auto-update's reload, which calls
 ``server.agent_init._apply_settings_changes`` through the module at call time — the
-settings-apply path is agent_init's, and so are the patches that fake it.
+settings-apply path is defined in ``server.settings_apply`` (#3848) but its patch seam
+stays agent_init's, and so are the patches that fake it.
 """
 
 import asyncio

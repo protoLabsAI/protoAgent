@@ -354,8 +354,8 @@ def _populate_plugin_host() -> None:
         HOST.subscribe = _event_bus.subscribe
         HOST.on = _event_bus.subscribe_handler  # ADR 0039 — in-process topic subscriptions
         HOST.config = lambda: STATE.graph_config
-        # Through the module at call time: the settings-apply path (and the patches that
-        # fake it) live on agent_init.
+        # Through the module at call time: the settings-apply path's patch seam (and the
+        # patches that fake it) live on agent_init (defined in settings_apply, #3848).
         HOST.apply_settings = lambda patch: _agent_init()._apply_settings_changes(config=patch)
     except Exception:  # noqa: BLE001
         log.exception("[plugins] failed to populate plugin host")

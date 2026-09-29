@@ -741,7 +741,9 @@ def test_projects_config_write_validates_end_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
     monkeypatch.setattr(cio, "secrets_yaml_path", lambda: tmp_path / "secrets.yaml")
     monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (True, "reloaded"))
-    monkeypatch.setattr(ai, "_sync_autostart_with_config", lambda *_a, **_k: None)
+    import server.settings_apply as sa  # the moved apply path's collaborator lives there (#3848)
+
+    monkeypatch.setattr(sa, "_sync_autostart_with_config", lambda *_a, **_k: None)
 
     entry = {"name": "grad-uate", "path": str(tmp_path), "write": True, "github": "o/r"}
     ok, msgs = ai._apply_settings_changes(config={"projects": [entry]})
