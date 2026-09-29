@@ -50,7 +50,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `model.fallback` | `fallback_index`, `fallback_model`, `primary_error` | `graph/agent.py` |
 | `persona.drift_detected` | `baseline_id`, `baseline_saved_at`, `rationale`, `score`, `signals`, `threshold` | `server/maintenance_loops.py` |
 | `persona.untooled_action_detected` | `count`, `findings`, `soul_revision`, `trigger` | `server/maintenance_loops.py` |
-| `plugin.changed` | `scope` | `server/agent_init.py` |
+| `plugin.changed` | `scope` | `server/settings_apply.py` |
 | `plugin.updated` | `by`, `id`, `reloaded`, `resolved_sha`, `version` | `server/maintenance_loops.py` |
 | `scheduler.completed` | _(varies)_ | `server/a2a.py` |
 | `scheduler.fired` | `job_id`, `prompt`, `schedule` | `scheduler/local.py` |

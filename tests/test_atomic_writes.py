@@ -121,7 +121,10 @@ def test_apply_settings_changes_serialized(monkeypatch):
     # Patch the reload + autostart sync; with config/soul None this makes
     # _apply_settings_changes a pure (locked) reload.
     monkeypatch.setattr(agent_init, "_reload_langgraph_agent", fake_reload)
-    monkeypatch.setattr(agent_init, "_sync_autostart_with_config", lambda c: "")
+    # The autostart sync is a settings_apply collaborator (#3848): patch it THERE.
+    from server import settings_apply
+
+    monkeypatch.setattr(settings_apply, "_sync_autostart_with_config", lambda c: "")
 
     threads = [threading.Thread(target=agent_init._apply_settings_changes) for _ in range(4)]
     for t in threads:

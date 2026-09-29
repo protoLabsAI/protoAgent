@@ -7,8 +7,8 @@ settings edits. Extracted from ``server._main`` (ADR 0023 phase 3) into a
 
 Config-changing routes offload to a worker thread (#497): applying settings
 recompiles the graph, which would otherwise freeze the event loop. The apply /
-finish-setup logic lives in ``server.agent_init``; these handlers are the thin
-HTTP layer over it.
+finish-setup logic lives in ``server.settings_apply`` (#3848; imported through its
+``server.agent_init`` re-export); these handlers are the thin HTTP layer over it.
 """
 
 from __future__ import annotations

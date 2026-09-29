@@ -34,7 +34,9 @@ def isolated_config(monkeypatch, tmp_path: Path):
 
 @pytest.fixture
 def bus_events(monkeypatch):
-    import server.agent_init as ai
+    # _event_bus / _sync_autostart_with_config are collaborators of the moved
+    # _apply_settings_changes: they resolve in server.settings_apply (#3848).
+    import server.settings_apply as sa
 
     events: list[tuple[str, dict]] = []
 
@@ -42,8 +44,8 @@ def bus_events(monkeypatch):
         def publish(self, topic, data=None, **kw):
             events.append((topic, data))
 
-    monkeypatch.setattr(ai, "_event_bus", _Bus())
-    monkeypatch.setattr(ai, "_sync_autostart_with_config", lambda *_a, **_k: None)
+    monkeypatch.setattr(sa, "_event_bus", _Bus())
+    monkeypatch.setattr(sa, "_sync_autostart_with_config", lambda *_a, **_k: None)
     return events
 
 
