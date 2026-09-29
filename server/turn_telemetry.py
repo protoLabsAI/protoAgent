@@ -240,7 +240,7 @@ def record_turn(
 def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, started: float) -> None:
     """Write the telemetry row for one non-streaming turn (#3000). Best-effort.
 
-    ``sink`` is populated by ``_chat_langgraph_impl`` with the turn's usage
+    ``sink`` is populated by ``_chat_langgraph_impl`` (``server/turn_sync.py``) with the turn's usage
     callback. It stays empty when the turn short-circuited before reaching the
     graph — a `/help` command, an unknown slash command, "setup not complete", a
     HITL hold. Those spend nothing, so they get no row: a telemetry surface that
