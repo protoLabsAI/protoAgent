@@ -606,7 +606,7 @@ def register_operator_routes(
     # --- Mentions ------------------------------------------------------------
     # The composer's `@` autocomplete — who the operator can address directly (#3042).
     # Served from the SAME resolver the chat dispatcher routes with (``graph.mentions``,
-    # which `_parse_at_delegate` also reads), so the roster offered can't drift from the
+    # which `server.chat_rooms._parse_at_delegate` also reads), so the roster offered can't drift from the
     # roster reached. Not gated on `chat_commands`: `@` addressing is independent of `/`
     # commands, and the roster is live config (delegates hot-reload), so it's read per
     # request.

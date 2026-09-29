@@ -20,7 +20,7 @@ operator (`@`) and the orchestrator (``delegate_to``) choose participants. The d
 keeps that property by construction, because the speaker set it returns is always a
 subset of the set the operator addressed, in the order the operator wrote it.
 
-Which makes the whole host side of a room this, and nothing else — ``server/chat.py``
+Which makes the whole host side of a room this, and nothing else — ``server/chat_rooms.py``
 runs exactly this loop, and a second host (a console room view, a headless driver) is
 the same handful of lines::
 
@@ -163,7 +163,7 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
 
     Deliberately blind to ``error_kind``, including the "still running after Ns — the
     peer may still be working" timeout, even though the outcome carries the class and
-    ``server/chat.py`` reads it for a different decision. Re-dispatching a
+    ``server/chat_rooms.py`` reads it for a different decision. Re-dispatching a
     still-working peer cannot rejoin its work: the room passes no resume handle, so a
     retry is a SECOND ``SendMessage`` task on a peer already busy with the first, waiting
     the same ``poll_timeout_s`` again and still returning nothing. The

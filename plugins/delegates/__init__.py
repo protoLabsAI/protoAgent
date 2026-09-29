@@ -351,7 +351,7 @@ async def _dispatch_into_room(
         # resolved conversation key (#3362). `dispatch_into_room` reaches `registry.dispatch`
         # through host-free `graph/mention_op`, which can't carry a new argument, so the
         # session rides a ContextVar the registry reads. Same session that scopes a later
-        # session-DELETE cleanup — the `@` path binds it identically in `server.chat`.
+        # session-DELETE cleanup — the `@` path binds it identically in `server.chat_rooms`.
         from .projects import project_scope
 
         # The project scope rides a ContextVar across host-free `graph/mention_op` for the

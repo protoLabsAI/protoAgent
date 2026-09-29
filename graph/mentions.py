@@ -4,14 +4,14 @@ The twin of ``graph.slash_commands``, for the other addressing sigil. ``/`` pick
 *command*; ``@`` picks a *participant* — one named delegate the operator is addressing
 directly, short-circuiting the lead agent's routing judgment (#3042).
 
-The dispatcher (``server.chat``) and the console composer both need to agree on what an
+The dispatcher (``server.chat_rooms``) and the console composer both need to agree on what an
 ``@<token>`` reaches. ``slash_commands`` exists because encoding that twice is how a
 shipped command became silently unreachable; the same reasoning applies here, and more
 sharply — a composer that autocompletes a name the dispatcher won't route sends the
 operator's message to the wrong participant.
 
 It lives in ``graph/`` for the same reason its twin does: ``operator_api`` must not
-import ``server`` (import-linter contract), so shared logic can't live in ``server.chat``.
+import ``server`` (import-linter contract), so shared logic can't live in ``server.chat_rooms``.
 Both layers may import ``graph``. Depends only on ``runtime.state``.
 
 **One roster, not a second namespace.** ``@`` resolves against the delegate registry —
