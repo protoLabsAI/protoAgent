@@ -739,6 +739,8 @@ from types import SimpleNamespace  # noqa: E402 — section-local
 from graph.config import LangGraphConfig  # noqa: E402
 from graph.llm import create_llm  # noqa: E402
 
+pytestmark = pytest.mark.platform_sensitive
+
 KEY = "sk-" + "livekey" + "q" * 24
 LEGACY_PINNED = {"model": {"provider": "openai", "name": "protolabs/reasoning", "api_base": "https://src.example/v1"}}
 

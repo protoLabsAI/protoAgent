@@ -76,6 +76,7 @@ def test_re_exports_are_the_same_objects():
         assert getattr(chat, name) is getattr(chat_dispatch, name), name
 
 
+@pytest.mark.platform_sensitive
 def test_the_dispatch_module_imports_without_server_chat():
     """No import-time edge back into ``server.chat`` (it is reached at call time only)."""
     import subprocess

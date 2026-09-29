@@ -25,6 +25,9 @@ import time
 
 
 from infra.paths import atomic_write
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 # ── 1. atomic_write ──────────────────────────────────────────────────────────
 

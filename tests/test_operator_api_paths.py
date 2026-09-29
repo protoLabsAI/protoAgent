@@ -64,6 +64,7 @@ def test_dotdot_traversal_cannot_escape_allowed_root(tmp_path) -> None:
         resolve_project_path(escape, [str(allowed)])
 
 
+@pytest.mark.platform_sensitive
 def test_symlink_cannot_escape_allowed_root(tmp_path) -> None:
     allowed = tmp_path / "allowed"
     outside = tmp_path / "outside"

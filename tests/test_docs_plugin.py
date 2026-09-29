@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+import pytest
 
 
 def _load_docs():
@@ -247,6 +248,7 @@ def _custom_tree(root: Path) -> None:
     (root / "runbooks" / "escape.md").symlink_to(outside)
 
 
+@pytest.mark.platform_sensitive
 def test_custom_root_serves_any_md_tree(tmp_path) -> None:
     mod = _load_docs()
     corpus = sys.modules["docs_plugin_under_test.corpus"]

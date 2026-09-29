@@ -77,6 +77,7 @@ def test_re_exports_are_the_same_objects():
     assert server._run_turn_stream is turn_stream._run_turn_stream
 
 
+@pytest.mark.platform_sensitive
 def test_the_turn_stream_module_imports_without_server_chat():
     """No import-time edge back into ``server.chat`` (it is reached at call time only)."""
     subprocess.run([sys.executable, "-c", "import server.turn_stream"], check=True, cwd=str(_REPO))

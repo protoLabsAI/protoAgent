@@ -15,6 +15,8 @@ import pytest
 from plugins.execute_code import engine
 from plugins.execute_code.engine import run_code
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _redirect_store(monkeypatch, root):
     """Point ``graph.sdk.plugin_store`` at ``root`` (created lazily), mirroring its

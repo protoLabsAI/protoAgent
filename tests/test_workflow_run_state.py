@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import plugins.workflows as wf
 from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, STATUS_SEEDED, WorkflowRunStore
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 RECIPE = {
     "name": "demo",

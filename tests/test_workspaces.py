@@ -10,6 +10,8 @@ import yaml
 from graph.workspaces import manager
 from tests.privacy_asserts import assert_owner_only
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def root(tmp_path, monkeypatch):

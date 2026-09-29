@@ -18,6 +18,8 @@ from runtime.acp_runtime import (
 )
 from runtime.context import AssembledContext
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _cfg(**kw):
     base = dict(agent_runtime="acp:codex", operator_mcp_tools=["task_list"], acp_agents={})

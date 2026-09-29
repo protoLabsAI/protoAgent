@@ -15,6 +15,8 @@ from graph.goals.controller import GoalController
 from graph.goals.store import GoalStore, _safe_name
 from graph.goals.types import GoalState, VerifyResult
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _ctrl(tmp_path, **overrides):
     return GoalController(LangGraphConfig(**overrides), GoalStore(tmp_path))

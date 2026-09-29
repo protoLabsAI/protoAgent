@@ -18,6 +18,8 @@ import pytest
 from tools.fs_tools import build_fs_tools
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 
+pytestmark = pytest.mark.platform_sensitive
+
 posix_only = pytest.mark.skipif(os.name == "nt", reason="auto-approve applies to the POSIX /bin/sh grammar only")
 
 STARTER = [

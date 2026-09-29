@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.platform_sensitive
+
 ROOT = Path(__file__).resolve().parent.parent / "plugins" / "artifact"
 _PKG = "artifact_proc_under_test"
 _HOLD_S = 1.0  # how long a process sits in its read-modify-write window waiting for the other to read

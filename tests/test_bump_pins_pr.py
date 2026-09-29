@@ -26,10 +26,13 @@ from tests.bashpath import real_bash
 SCRIPT = Path(__file__).parent.parent / "examples" / "bundles" / "template" / "scripts" / "bump_pins_pr.sh"
 FAKE_GH_DIR = Path(__file__).parent / "fixtures" / "fake_gh"
 
-pytestmark = pytest.mark.skipif(
-    real_bash() is None or shutil.which("git") is None,
-    reason="bump_pins_pr.sh is a bash+git+gh script — nothing to exercise without bash and git",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        real_bash() is None or shutil.which("git") is None,
+        reason="bump_pins_pr.sh is a bash+git+gh script — nothing to exercise without bash and git",
+    ),
+    pytest.mark.platform_sensitive,
+]
 
 
 def _git(repo: Path, *args: str) -> None:

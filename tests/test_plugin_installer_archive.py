@@ -11,6 +11,8 @@ import pytest
 
 from graph.plugins import installer
 
+pytestmark = pytest.mark.platform_sensitive
+
 _SHA = "a" * 40
 
 

@@ -20,6 +20,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _reset_denylist():

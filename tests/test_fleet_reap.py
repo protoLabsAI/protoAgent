@@ -18,6 +18,8 @@ import pytest
 
 from graph.fleet import supervisor
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _spawn_sleeper() -> subprocess.Popen:
     # A real child of THIS (pytest) process, so it becomes a zombie when killed until reaped.

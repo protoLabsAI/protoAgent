@@ -9,6 +9,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operator_api.memory_routes import register_memory_routes
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 
 def _client(monkeypatch, tmp_path, *, knowledge=None):

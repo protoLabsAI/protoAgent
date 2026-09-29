@@ -9,6 +9,8 @@ import pytest
 
 from security import egress
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _reset():

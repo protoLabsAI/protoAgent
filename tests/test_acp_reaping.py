@@ -26,6 +26,8 @@ import pytest
 from infra.proc import group_kwargs, pid_alive
 from plugins.coding_agent.acp_client import AcpClient
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _alive(pid: int) -> bool:
     """True if ``pid`` is a live (non-zombie) process — portable (ADR 0098)."""

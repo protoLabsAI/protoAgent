@@ -31,6 +31,8 @@ from plugins.coding_agent.acp_client import (
     _version_sort_key,
 )
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def test_short_tool_name_peels_inline_args_and_mcp_source():
     # A verbose MCP tool title → a compact card label (args + source go to the body).

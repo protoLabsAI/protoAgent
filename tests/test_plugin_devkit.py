@@ -10,6 +10,7 @@ from pathlib import Path
 from graph.config import LangGraphConfig
 from graph.plugins import loader as plugin_loader
 from graph.plugins.loader import load_plugins
+import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -431,6 +432,7 @@ def test_loader_records_traceback(monkeypatch, tmp_path):
     assert "ValueError" in tb and "kapow" in tb and len(tb) <= 2000
 
 
+@pytest.mark.platform_sensitive
 def test_scaffold_git_init_makes_a_repo_from_birth(tmp_path):
     """git_init=True (ADR 0096 D6): the scaffold is a git repo with an initial commit."""
     import subprocess

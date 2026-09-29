@@ -7,6 +7,9 @@ import types
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 
 def _client():

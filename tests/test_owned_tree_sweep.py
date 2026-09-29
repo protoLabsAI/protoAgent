@@ -32,7 +32,10 @@ from infra.proc import group_kwargs, pid_alive, sweep_orphaned_trees, track_tree
 
 REPO = Path(__file__).resolve().parent.parent
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX process groups; Windows is ADR 0098's documented gap")
+pytestmark = [
+    pytest.mark.skipif(os.name == "nt", reason="POSIX process groups; Windows is ADR 0098's documented gap"),
+    pytest.mark.platform_sensitive,
+]
 
 
 @pytest.fixture

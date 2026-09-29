@@ -16,6 +16,8 @@ from infra import python_runtime as pr
 from infra.paths import reset_instance_paths
 from runtime import python_install as pi
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def box(tmp_path, monkeypatch):

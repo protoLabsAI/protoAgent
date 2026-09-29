@@ -13,6 +13,8 @@ import pytest
 
 from graph.fleet import service_token as st
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch, tmp_path):

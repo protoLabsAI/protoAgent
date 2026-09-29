@@ -11,6 +11,8 @@ import pytest
 
 from graph.plugins import wheel_installer as wi
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def box(tmp_path, monkeypatch):

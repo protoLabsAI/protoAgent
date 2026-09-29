@@ -15,6 +15,8 @@ import pytest
 
 from infra.memory_guard import EXIT_CODE, MemoryCeiling, read_rss_bytes
 
+pytestmark = pytest.mark.platform_sensitive
+
 _MB = 1024 * 1024
 
 

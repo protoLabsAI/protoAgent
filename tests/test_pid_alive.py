@@ -16,6 +16,8 @@ import pytest
 
 from infra import paths
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 # ── POSIX semantics ───────────────────────────────────────────────────────────────
 def test_posix_running_process_is_alive():

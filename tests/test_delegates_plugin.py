@@ -868,6 +868,8 @@ async def test_acp_teardown_evicts_every_conversation_for_the_workdir_scoped_cli
 
 import plugins.delegates.health as H  # noqa: E402
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 async def test_health_probe_all_populates_and_prunes(monkeypatch):
     H._HEALTH.clear()

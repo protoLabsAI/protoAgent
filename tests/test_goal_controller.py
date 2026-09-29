@@ -6,6 +6,8 @@ from graph.config import LangGraphConfig
 from graph.goals.controller import GoalController
 from graph.goals.store import GoalStore
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _ctrl(tmp_path, **overrides):
     cfg = LangGraphConfig(**overrides)

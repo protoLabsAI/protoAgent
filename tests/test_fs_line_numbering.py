@@ -22,6 +22,8 @@ from runtime.state import STATE
 from tools.fs_tools import build_fs_tools
 from tools.fs_view import split_lines
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _unwired_host_config(monkeypatch):

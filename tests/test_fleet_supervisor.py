@@ -12,6 +12,8 @@ from infra.proc import kill_tree
 
 from graph.fleet import supervisor
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _free_port() -> int:
     with socket.socket() as s:

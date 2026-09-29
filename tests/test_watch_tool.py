@@ -16,6 +16,8 @@ from graph.watches.store import WatchStore
 from runtime.state import STATE
 from tools.lg_tools import _build_watch_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _tools(monkeypatch, tmp_path):
     """The four watch tools, wired to a throwaway store with one plugin verifier known."""

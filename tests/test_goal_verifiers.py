@@ -339,6 +339,8 @@ def test_registry_auto_namespaces_and_guards():
 
 from graph.goals.verifiers import VerifierInvoker  # noqa: E402
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def test_bare_ctx_carries_no_invoker():
     # The pre-#1641 ctx shape is frozen contract: a bare context still builds,

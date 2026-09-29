@@ -21,10 +21,13 @@ from tests.bashpath import real_bash
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "changelog_gate.sh"
 
-pytestmark = pytest.mark.skipif(
-    real_bash() is None or shutil.which("git") is None,
-    reason="changelog gate is a bash+git script — nothing to exercise without them",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        real_bash() is None or shutil.which("git") is None,
+        reason="changelog gate is a bash+git script — nothing to exercise without them",
+    ),
+    pytest.mark.platform_sensitive,
+]
 
 
 def _git(repo: Path, *args: str) -> None:

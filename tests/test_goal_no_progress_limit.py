@@ -10,6 +10,8 @@ from graph.goals.store import GoalStore
 from graph.goals.types import VerifyResult
 from graph.goals.verifiers import set_plugin_verifiers
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _ctrl(tmp_path):
     return GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
