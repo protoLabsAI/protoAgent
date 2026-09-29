@@ -79,6 +79,7 @@ def test_no_test_patches_goal_loop_names_on_server_chat():
     assert not stale, "patch these on server.goal_loop (#3884): " + ", ".join(stale)
 
 
+@pytest.mark.platform_sensitive
 def test_goal_loop_imports_without_server_chat():
     subprocess.run([sys.executable, "-c", "import server.goal_loop"], check=True, cwd=str(_REPO))
     tree = ast.parse(Path(goal_loop.__file__).read_text(encoding="utf-8"))
