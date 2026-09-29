@@ -1836,7 +1836,7 @@ class AcpClient:
         an agent turn, and per-turn telemetry is written from a turn's terminal hook — so
         it structurally could not see them. The live PM recorded $2,809 across 331 turns,
         all of it its own reasoning, while the coders that actually wrote the PRs
-        contributed zero rows. Both dispatch paths (``plugins.delegates.adapters``, and
+        contributed zero rows. Both dispatch paths (``plugins.delegates.acp_adapter``, and
         the project board's tapped seam, which deliberately bypasses that adapter) funnel
         through ``prompt()``, which is why the instrumentation lives here and not one
         layer up where half the callers would miss it — and why ``record_runs`` exists to
@@ -2035,7 +2035,7 @@ class AcpClient:
 
         The OUTCOME question, as against ``dead_end()``'s retry question. They differ on
         ``max_tokens``: the coder hit its output-token limit mid-generation, so the reply
-        is truncated — ``plugins.delegates.adapters`` stamps that on it and the caller
+        is truncated — ``plugins.delegates.acp_adapter`` stamps that on it and the caller
         re-dispatches — while a bigger tier or a narrower query is still worth trying.
         A run that ends that way is a failed run and a retryable one at the same time,
         so "did it succeed" cannot be answered by asking "should we retry" (#3015).
