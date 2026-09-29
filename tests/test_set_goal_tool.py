@@ -24,8 +24,10 @@ def test_get_all_tools_gates_set_goal_on_goal_enabled(monkeypatch):
     assert "set_goal" in on and "set_goal" not in off
 
 
-def test_get_all_tools_no_goal_tools_without_verifiers():
+def test_get_all_tools_no_goal_tools_without_verifiers(monkeypatch):
     # goal_enabled=True but no plugin verifiers registered → tools absent (no-op trap).
+    # Say so explicitly rather than rely on the registry's starting state.
+    _register_verifiers(monkeypatch)
     names = {t.name for t in get_all_tools(goal_enabled=True)}
     assert not ({"set_goal", "update_goal_plan", "abandon_goal"} & names)
 

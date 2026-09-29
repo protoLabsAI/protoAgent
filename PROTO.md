@@ -104,7 +104,7 @@ when your change touches those surfaces. The full breakdown:
 | Lint | `ruff check .` (pinned `ruff==0.15.10`) |
 | Import contracts | `lint-imports` (pinned `import-linter==2.11`) |
 | Attribution in sync | `python scripts/gen_attribution.py --check` (regenerate with `uv sync && uv run python scripts/gen_attribution.py` after a dep bump) |
-| Python tests | `python -m pytest tests/ -q` |
+| Python tests | `python -m pytest tests/ -q` — CI adds `-n auto` (`pytest-xdist==3.8.0`), so tests must not depend on file order or leak process-global state (reset it in `tests/conftest.py`) |
 | Lean-image smoke | `python scripts/live_smoke.py` |
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
 | Web e2e | `npm run test:e2e --workspace @protoagent/web` (Playwright/chromium) |
