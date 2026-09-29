@@ -26,23 +26,15 @@
   background: var(--pl-color-bg-raised, var(--pl-color-bg));
 }
 
-.mshell-head-btn {
+/* The three header actions are DS `Button variant="ghost" size="md" icon` now — the DS owns
+   their border/background/tap-highlight/active state. This is only the empty centring spacer
+   that balances the back chevron, so it keeps the button footprint but none of the chrome. */
+.mshell-head-spacer {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
   /* 44px hard minimum — the HIG target. The audit that motivated this shell found the
      old composer send button at 30x30. */
   min-width: 44px;
   min-height: 44px;
-  border: none;
-  background: none;
-  color: var(--pl-color-fg);
-  border-radius: var(--pl-radius);
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-.mshell-head-btn:active {
-  opacity: 0.55;
 }
 
 .mshell-title {
