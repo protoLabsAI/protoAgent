@@ -2199,8 +2199,13 @@ async def _chat_langgraph_stream_impl(
                     # refcount above only guards eviction. Same per-thread lock the native
                     # turns hold, so compact/rewind on this thread are excluded too.
                     async with _turn_control._thread_lock(_acp_tid):
-                        async for frame in _chat_acp._acp_drive_turn(rt, message):
-                            yield frame
+                        # aclosing: `async for` alone does not close the inner generator
+                        # when THIS one is abandoned at its yield — it would be finalized
+                        # later by GC, after the release below. Closing it here stops the
+                        # turn first (#3837).
+                        async with contextlib.aclosing(_chat_acp._acp_drive_turn(rt, message)) as _acp_frames:
+                            async for frame in _acp_frames:
+                                yield frame
                 finally:
                     await _chat_acp._acp_release(_acp_tid)
                 return

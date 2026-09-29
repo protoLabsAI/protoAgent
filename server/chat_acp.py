@@ -150,6 +150,38 @@ async def acp_sessions_snapshot() -> list[dict[str, Any]]:
         ]
 
 
+# How long an abandoned turn gets to settle after its driver is cancelled (#3837). The
+# cancel path is local: `AcpClient._prompt_locked` fences the agent's stream (sync), writes
+# one `session/cancel` notification to the agent's stdin, and releases its turn lock — it
+# does NOT wait for the agent's `stopReason: "cancelled"` (the fence makes the next prompt
+# respawn instead of inheriting the old stream). So settling normally takes milliseconds;
+# the bound exists only for a wedged stdin pipe (an agent that stopped reading) or a
+# runtime that swallows the cancel, and must stay short because the caller's
+# `_acp_release` — and the per-thread lock the next turn waits on — sit behind it.
+_ACP_CANCEL_SETTLE_S = 10.0
+
+
+async def _stop_abandoned_driver(driver: asyncio.Task, rt) -> None:
+    """Cancel an abandoned turn's driver task and wait (bounded) for it to stop, so the
+    caller's release happens only after the turn has actually ended. Never raises for the
+    driver's own outcome; a cancel of the CALLER while waiting propagates as usual."""
+    driver.cancel()
+    done, _ = await asyncio.wait({driver}, timeout=_ACP_CANCEL_SETTLE_S)
+    if not done:
+        log.warning(
+            "[acp-runtime] abandoned turn on %s did not stop within %.0fs of cancel — releasing anyway",
+            getattr(rt, "agent", "?"),
+            _ACP_CANCEL_SETTLE_S,
+        )
+        return
+    if driver.cancelled():
+        log.info("[acp-runtime] abandoned turn on %s cancelled (consumer went away)", getattr(rt, "agent", "?"))
+    elif driver.exception() is not None:
+        # Finished (with an error) before the cancel landed; retrieve it so asyncio
+        # doesn't log "exception was never retrieved" — nobody is left to show it to.
+        log.debug("[acp-runtime] abandoned turn ended with: %r", driver.exception())
+
+
 async def _acp_drive_turn(rt, message: str):
     """Drive one ACP turn over ``rt``, yielding the normalized frames (text /
     tool_start / tool_end, then usage + done, or an error) in arrival order. Extracted
@@ -197,13 +229,25 @@ async def _acp_drive_turn(rt, message: str):
 
     driver = asyncio.create_task(_drive())
     tool_calls = 0  # tool_start frames actually delivered to the caller (post-retry)
-    while True:
-        frame = await frame_q.get()
-        if frame is _ACP_DONE:
-            break
-        if frame[0] == "tool_start" and not frame[1].get("refine"):
-            tool_calls += 1
-        yield frame  # (kind, payload) — already normalized
+    finished = False
+    try:
+        while True:
+            frame = await frame_q.get()
+            if frame is _ACP_DONE:
+                finished = True
+                break
+            if frame[0] == "tool_start" and not frame[1].get("refine"):
+                tool_calls += 1
+            yield frame  # (kind, payload) — already normalized
+    finally:
+        # The consumer walked away mid-turn (#3837): client disconnect / tab close / A2A
+        # cancel land here as GeneratorExit or CancelledError at the `yield` or the
+        # `get()`. Stop the turn BEFORE this generator finishes — the caller releases the
+        # runtime (`_acp_release`) right after, and an orphaned driver would keep the
+        # external agent working on a runtime marked idle (evictable, and the next turn
+        # would queue behind a prompt nobody reads).
+        if not finished:
+            await _stop_abandoned_driver(driver, rt)
     try:
         answer = await driver
     except Exception as exc:  # noqa: BLE001 — surface as a turn error, don't 500
