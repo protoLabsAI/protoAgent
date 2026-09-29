@@ -94,7 +94,7 @@ export function ComposerModelSelect() {
     <Menu
       className="composer-model-menu"
       trigger={
-        <button type="button" className="composer-model-select" aria-label="Model for this chat">
+        <button /* ds-audit-ignore hand-rolled-control — composite row/trigger, protoContent#551 */ type="button" className="composer-model-select" aria-label="Model for this chat">
           {bareModel(effectiveModel, knownLanes)}
         </button>
       }
