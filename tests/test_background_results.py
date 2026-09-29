@@ -643,7 +643,7 @@ class TestReportIndexing:
 class TestWorkJobTerminalResume:
     """``spawn_work`` (``knowledge_ingest``'s background path, ``delegate_to``) settles
     through ``BackgroundManager._run_work`` -> its ``on_terminal`` hook
-    (``server.agent_init._on_work_terminal``) -- a DIFFERENT completion path than the
+    (``server.stores._on_work_terminal``) -- a DIFFERENT completion path than the
     A2A terminal hook covered by ``TestTerminalHookResume`` (that one only fires for
     ``spawn`` subagent-TURN jobs). Before #1840, ``_on_work_terminal`` only ever fired
     the Activity-thread idle-wake, never the ADR 0070 D1 push-resume into the ORIGIN

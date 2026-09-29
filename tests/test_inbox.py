@@ -997,6 +997,7 @@ async def test_startup_recovery_excludes_next_and_later(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_startup_recovery_lifecycle_schedules_once_on_running_loop(monkeypatch):
     import server.agent_init as agent_init
+    import server.stores as stores
     import runtime.state as rs
 
     called = asyncio.Event()
@@ -1006,8 +1007,8 @@ async def test_startup_recovery_lifecycle_schedules_once_on_running_loop(monkeyp
         results.append({"claimed": 1, "accepted": 1, "failed": 0})
         called.set()
 
-    monkeypatch.setattr(agent_init, "_INBOX_NOW_RECOVERY_STARTED", False)
-    monkeypatch.setattr(agent_init, "recover_pending_now_inbox_items", _recover)
+    monkeypatch.setattr(stores, "_INBOX_NOW_RECOVERY_STARTED", False)
+    monkeypatch.setattr(stores, "recover_pending_now_inbox_items", _recover)
     monkeypatch.setattr(rs.STATE, "inbox_store", object(), raising=False)
     monkeypatch.setattr(rs.STATE, "inbox_now_delivery", lambda _item: True, raising=False)
     monkeypatch.setattr(rs.STATE, "main_loop", asyncio.get_running_loop(), raising=False)
@@ -1023,13 +1024,14 @@ async def test_startup_recovery_lifecycle_schedules_once_on_running_loop(monkeyp
 @pytest.mark.asyncio
 async def test_startup_recovery_lifecycle_waits_for_delivery_hook(monkeypatch):
     import server.agent_init as agent_init
+    import server.stores as stores
     import runtime.state as rs
 
     async def _recover():
         raise AssertionError("recovery must not start before accepted delivery is registered")
 
-    monkeypatch.setattr(agent_init, "_INBOX_NOW_RECOVERY_STARTED", False)
-    monkeypatch.setattr(agent_init, "recover_pending_now_inbox_items", _recover)
+    monkeypatch.setattr(stores, "_INBOX_NOW_RECOVERY_STARTED", False)
+    monkeypatch.setattr(stores, "recover_pending_now_inbox_items", _recover)
     monkeypatch.setattr(rs.STATE, "inbox_store", object(), raising=False)
     monkeypatch.setattr(rs.STATE, "inbox_now_delivery", None, raising=False)
     monkeypatch.setattr(rs.STATE, "main_loop", asyncio.get_running_loop(), raising=False)
@@ -1037,21 +1039,22 @@ async def test_startup_recovery_lifecycle_waits_for_delivery_hook(monkeypatch):
     agent_init._start_inbox_now_recovery_once()
     await asyncio.sleep(0)
 
-    assert agent_init._INBOX_NOW_RECOVERY_STARTED is False
+    assert stores._INBOX_NOW_RECOVERY_STARTED is False
 
 
 def test_startup_recovery_lifecycle_no_loop_keeps_recovery_eligible(monkeypatch):
     import server.agent_init as agent_init
+    import server.stores as stores
     import runtime.state as rs
 
-    monkeypatch.setattr(agent_init, "_INBOX_NOW_RECOVERY_STARTED", False)
+    monkeypatch.setattr(stores, "_INBOX_NOW_RECOVERY_STARTED", False)
     monkeypatch.setattr(rs.STATE, "inbox_store", object(), raising=False)
     monkeypatch.setattr(rs.STATE, "inbox_now_delivery", lambda _item: True, raising=False)
     monkeypatch.setattr(rs.STATE, "main_loop", None, raising=False)
 
     agent_init._start_inbox_now_recovery_once()
 
-    assert agent_init._INBOX_NOW_RECOVERY_STARTED is False
+    assert stores._INBOX_NOW_RECOVERY_STARTED is False
 
 
 # ── badge dedup: inbox.item fires only for items that land in the queue (#1375) ──
