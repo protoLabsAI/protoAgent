@@ -243,8 +243,8 @@ export function ChatSessionSlot({
   // the newest). Refs, not state — they change alongside a setDraft, no separate re-render.
   const histIndexRef = useRef<number | null>(null);
   const histStashRef = useRef<string>("");
-  // A queued steer/interjection joins the same recall ring as a send, and detaches from
-  // history nav (useSteerQueue calls this at the point the inline code did).
+  // Every submission — a send, a queued steer/interjection — joins the recall ring and
+  // detaches from history nav (useSteerQueue calls this at the point the inline code did).
   function recordSubmitted(text: string) {
     pushInputHistory(text);
     histIndexRef.current = null;
@@ -661,9 +661,7 @@ export function ChatSessionSlot({
     }
     if (!canSend) return;
     const text = draft.trim();
-    pushInputHistory(text); // record for ↑/↓ recall, then reset nav to the newest
-    histIndexRef.current = null;
-    histStashRef.current = "";
+    recordSubmitted(text); // record for ↑/↓ recall, then reset nav to the newest
     setDraft("");
     // The slash popover tracks the TEXTAREA's live token via keyup/click/focus
     // refreshes — a mouse click on Send fires none of those, so the stale menu
