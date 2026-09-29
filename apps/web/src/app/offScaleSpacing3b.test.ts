@@ -142,11 +142,19 @@ describe("no exact-scale px spacing literal in the workflows/plugins/pathpicker 
     expect(offendersIn("../settings/plugins.css", commented)).toEqual([]);
   });
 
-  it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): each spot-check is a mixed-shorthand value where the exact-scale
-    // member tokenized and the off-scale member survived — one assertion covers both invariants.
-    expect(CSS_SOURCES["../workflows/workflows.css"]).toContain("padding: 6px var(--pl-space-2)");
-    expect(CSS_SOURCES["../workflows/workflows.css"]).toContain("padding: var(--pl-space-2) 10px");
+  it("pins the workflows half-steps now tokenized, and the ones the sibling cards still owe", () => {
+    // protoContent#547 shipped the DS spacing half-steps in @protolabsai/design 0.11.0, so the
+    // radius+spacing step-3 card moved the workflows off-scale spacing onto --pl-space-{0_5,1_5,2_5}.
+    // These two were mixed-shorthand values whose half-step member is now a token too; re-pinned to
+    // the fully tokenized strings so a regression that reintroduces a raw 6px/10px here is caught.
+    // plugins.css / pathpicker.css are tokenized by later sibling cards, so their half-step literals
+    // are still expected to survive for now (this card left them alone).
+    expect(CSS_SOURCES["../workflows/workflows.css"]).toContain(
+      "padding: var(--pl-space-1_5) var(--pl-space-2)",
+    );
+    expect(CSS_SOURCES["../workflows/workflows.css"]).toContain(
+      "padding: var(--pl-space-2) var(--pl-space-2_5)",
+    );
     expect(CSS_SOURCES["../settings/plugins.css"]).toContain("padding: 10px var(--pl-space-3)");
     expect(CSS_SOURCES["../settings/pathpicker.css"]).toContain("padding: 6px var(--pl-space-2)");
   });

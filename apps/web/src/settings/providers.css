@@ -6,7 +6,7 @@
 }
 .provider-list {
   display: grid;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   margin-bottom: var(--pl-space-2);
 }
 .provider-row {
@@ -50,7 +50,7 @@
 }
 .provider-row [data-testid="oauth-account-card"],
 .provider-row .pl-callout {
-  margin-top: 10px;
+  margin-top: var(--pl-space-2_5);
 }
 .provider-dialog__form {
   display: grid;
