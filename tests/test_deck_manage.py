@@ -10,21 +10,10 @@ from textual.widgets import Button, Checkbox, DataTable, Input, Select, Static
 from deck import hub as deckhub
 from deck.app import FleetDeck, RosterScreen
 from deck.manage import DeleteModal, NewAgentModal, RemoteModal, RenameModal
-from tests.test_deck_app import FakeBackend, _settle
+from tests.test_deck_app import FakeBackend, _settle, _until
 
 
-async def _until(pilot, cond, timeout=4.0):
-    import time
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if cond():
-            return True
-        await pilot.pause(0.05)
-    return cond()
-
-
-async def _ready_to_type(pilot, app, timeout=4.0):
+async def _ready_to_type(pilot, app, timeout=10.0):
     """Wait until the pushed modal has actually focused its first field.
 
     A modal focuses that field in ``on_mount``, which runs AFTER the screen is pushed, so
@@ -55,18 +44,18 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         assert await _until(pilot, lambda: modal.query_one("#archetype", Select).value == "basic"), modal.query_one("#archetype", Select).value
         assert [a["id"] for a in modal.archetypes] == ["basic", "pm"]
         await pilot.press("ctrl+s")  # no name yet: refused, stays open
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "name is required" in str(modal.query_one("#hint", Static).content))
         assert isinstance(app.screen, NewAgentModal) and "name is required" in str(modal.query_one("#hint", Static).content)
         modal.query_one("#name", Input).focus()
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"sc out", "ctrl+s")  # the hub's charset rule, checked before the round trip
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "letters, digits" in str(modal.query_one("#hint", Static).content))
         assert isinstance(app.screen, NewAgentModal) and "letters, digits" in str(modal.query_one("#hint", Static).content)
         modal.query_one("#name", Input).value = ""
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"scout")
         modal.query_one("#archetype", Select).value = "pm"
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "installs https://github.com/x/pm-archetype" in str(modal.query_one("#archetype-note", Static).content))
         assert "installs https://github.com/x/pm-archetype" in str(modal.query_one("#archetype-note", Static).content)
         modal.query_one("#start", Checkbox).value = False
         modal.query_one("#port", Input).value = "7911"
@@ -81,10 +70,11 @@ async def test_new_member_from_an_archetype_posts_the_consoles_body():
         app.screen.query_one("#name", Input).focus()
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"host", "enter")
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "reserved" in str(app.screen.query_one("#hint", Static).content))
         assert isinstance(app.screen, NewAgentModal) and "reserved" in str(app.screen.query_one("#hint", Static).content)
         await pilot.press("escape")
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
+        await _settle(app, pilot)  # negative: the cancel created nothing
         assert isinstance(app.screen, RosterScreen) and len([c for c in be.calls if c[0] == "create"]) == 1
 
 
@@ -97,7 +87,8 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         await pilot.press("j", "R")  # protoEngineer
         assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
         await pilot.press("enter")  # unchanged
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
+        await _settle(app, pilot)  # negative: no rename worker ran
         assert isinstance(app.screen, RosterScreen) and not any(c[0] == "rename" for c in be.calls)
         await pilot.press("R")
         assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
@@ -105,7 +96,7 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         inp.value = ""
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"Engineer Prime", "enter")  # a space: the hub would 400 — refused here, typing kept
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "letters, digits" in str(app.screen.query_one("#hint", Static).content))
         assert isinstance(app.screen, RenameModal) and "letters, digits" in str(app.screen.query_one("#hint", Static).content)
         assert app.screen.query_one("#name", Input).value == "Engineer Prime"
         app.screen.query_one("#name", Input).value = ""
@@ -116,10 +107,9 @@ async def test_rename_is_display_only_and_a_same_name_is_a_no_op():
         assert "engineer-prime" in _rows(app)
         # the hub's own name is not for the deck to change: the key is hidden and inert
         app.screen.query_one("#roster", DataTable).move_cursor(row=0)
-        await pilot.pause(0.1)
-        assert app.screen.check_action("rename", ()) is False and app.screen.check_action("delete", ()) is False
+        assert await _until(pilot, lambda: app.screen.check_action("rename", ()) is False and app.screen.check_action("delete", ()) is False)
         await pilot.press("R")
-        await pilot.pause(0.1)
+        await _settle(app, pilot)  # negative: no modal is pushed
         assert isinstance(app.screen, RosterScreen)
 
 
@@ -137,11 +127,10 @@ async def test_delete_needs_the_typed_name_purge_is_separate_and_a_409_is_retrya
         assert modal.query_one("#submit", Button).disabled
         assert await _ready_to_type(pilot, app)
         await pilot.press(*"Cind", "enter")  # not the name yet
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "exactly" in str(modal.query_one("#hint", Static).content))
         assert isinstance(app.screen, DeleteModal) and "exactly" in str(modal.query_one("#hint", Static).content)
         await pilot.press("i")
-        await pilot.pause(0.1)
-        assert not modal.query_one("#submit", Button).disabled
+        assert await _until(pilot, lambda: not modal.query_one("#submit", Button).disabled)
         modal.query_one("#purge", Checkbox).value = True
         await pilot.press("enter")
         await _settle(app, pilot)
@@ -196,7 +185,7 @@ async def test_remotes_add_edit_and_remove_with_the_token_sent_once():
         app.screen.query_one("#clear", Checkbox).value = True
         app.screen.query_one("#token", Input).value = "new"
         await pilot.press("enter")
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "not both" in str(app.screen.query_one("#hint", Static).content))
         assert isinstance(app.screen, RemoteModal) and "not both" in str(app.screen.query_one("#hint", Static).content)
         app.screen.query_one("#token", Input).value = ""
         await pilot.press("enter")
@@ -204,10 +193,9 @@ async def test_remotes_add_edit_and_remove_with_the_token_sent_once():
         assert ("remote_update", "r-bo", {"token": ""}) in be.calls
         # edit on a LOCAL member: the key is hidden and inert; remove a remote = unregister, typed confirm
         app.screen.query_one("#roster", DataTable).move_cursor(row=1)
-        await pilot.pause(0.1)
-        assert app.screen.check_action("edit_remote", ()) is False
+        assert await _until(pilot, lambda: app.screen.check_action("edit_remote", ()) is False)
         await pilot.press("e")
-        await pilot.pause(0.1)
+        await _settle(app, pilot)  # negative: no modal is pushed
         assert isinstance(app.screen, RosterScreen)
         app.screen.query_one("#roster", DataTable).move_cursor(row=rows.index("bo"))
         await pilot.press("d")
@@ -233,7 +221,7 @@ async def test_roster_order_moves_persist_a_complete_permutation():
         assert _rows(app)[1:3] == ["old", "protoEngineer"]
         app.screen.query_one("#roster", DataTable).move_cursor(row=0)
         await pilot.press("K")  # the host cannot move above the top: nothing sent
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: no order-write worker ran
         assert len([c for c in be.calls if c[0] == "set_order"]) == 1
         # two quick presses move TWICE (the second computes from the optimistic order)
         app.screen.query_one("#roster", DataTable).move_cursor(row=2)  # protoEngineer, now third
@@ -246,11 +234,10 @@ async def test_roster_order_moves_persist_a_complete_permutation():
         assert _rows(app)[-1] == "protoEngineer"
         # under a filter the keys are hidden and inert: a move would swap with a hidden neighbour
         app.screen._set_filter("proto")
-        await pilot.pause(0.2)
-        assert app.screen.check_action("move_down", ()) is False and app.screen.check_action("move_up", ()) is False
+        assert await _until(pilot, lambda: app.screen.check_action("move_down", ()) is False and app.screen.check_action("move_up", ()) is False)
         n = len(orders)
         await pilot.press("J")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: no order-write worker ran
         assert len([c for c in be.calls if c[0] == "set_order"]) == n
 
 
@@ -264,7 +251,7 @@ async def test_offline_refuses_every_manage_key_and_the_footer_shows_the_warm_ca
             assert app.screen.check_action(action, ()) is False, action  # hidden and inert offline
         for key in ("n", "R", "d", "a", "e", "J"):
             await pilot.press(key)
-            await pilot.pause(0.1)
+            await _settle(app, pilot)  # negative: no modal, no worker
             assert isinstance(app.screen, RosterScreen), key
         assert not [c for c in be.calls if c[0] in ("create", "rename", "remove", "remote_add", "remote_update", "remote_remove", "set_order")]
         assert "warm cap" not in str(app.screen.query_one("#status", Static).content)
@@ -284,13 +271,13 @@ async def test_the_footer_shows_each_manage_key_only_where_it_applies():
         scr = app.screen
         table = scr.query_one("#roster", DataTable)
         table.move_cursor(row=0)  # host
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: table.cursor_row == 0 and scr.check_action("rename", ()) is False)
         assert {a: scr.check_action(a, ()) for a in ("new_member", "add_remote", "rename", "delete", "edit_remote", "move_down")} == {"new_member": True, "add_remote": True, "rename": False, "delete": False, "edit_remote": False, "move_down": True}
         table.move_cursor(row=1)  # a local member
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: table.cursor_row == 1 and scr.check_action("rename", ()) is True)
         assert (scr.check_action("rename", ()), scr.check_action("delete", ()), scr.check_action("edit_remote", ())) == (True, True, False)
         table.move_cursor(row=4)  # the remote
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: table.cursor_row == 4 and scr.check_action("edit_remote", ()) is True)
         assert (scr.check_action("rename", ()), scr.check_action("delete", ()), scr.check_action("edit_remote", ())) == (True, True, True)
 
 
@@ -305,17 +292,17 @@ async def test_every_manage_modal_holds_inside_the_decks_80x24_floor():
         for key, kind in (("n", NewAgentModal), ("a", RemoteModal), ("R", RenameModal), ("d", DeleteModal)):
             if kind is not NewAgentModal and kind is not RemoteModal:
                 app.screen.query_one("#roster", DataTable).move_cursor(row=1)
-                await pilot.pause(0.1)
+                assert await _until(pilot, lambda: app.screen.query_one("#roster", DataTable).cursor_row == 1)
             await pilot.press(key)
             assert await _until(pilot, lambda: isinstance(app.screen, kind)), key
             modal = app.screen
-            await pilot.pause(0.2)
             box = modal.query_one(".manage-box")
             submit, hint = modal.query_one("#submit", Button), modal.query_one("#hint", Static)
+            # laid out (an unlaid region is all zeros and would pass the bounds below vacuously)
+            assert await _until(pilot, lambda: box.region.height > 0 and submit.region.height > 0), key
             assert box.region.height <= 24 and submit.region.y + submit.region.height <= 24 and 0 <= hint.region.y < 24, (kind.__name__, box.region, submit.region, hint.region)
             await pilot.press("escape")
-            await pilot.pause(0.1)
-            assert isinstance(app.screen, RosterScreen)
+            assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen)), key
 
 
 # ── round-2 review reproducers ──
@@ -335,7 +322,7 @@ async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
         assert await _until(pilot, lambda: isinstance(app.screen, DeleteModal))
         modal = app.screen
         modal.query_one("#confirm", Input).value = "Cindi"
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: modal._matches())
         modal._submit()
         modal._submit()  # the queued duplicate
         modal.action_cancel()  # and a cancel racing in behind
@@ -356,7 +343,7 @@ async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
                 assert await _until(pilot, lambda: modal.query_one("#archetype", Select).value == "basic"), key
             assert await _ready_to_type(pilot, app), key
             fill(modal)
-            await pilot.pause(0.1)
+            await pilot.pause()  # let the fields' Changed messages land (submit reads the widgets)
             (modal.action_submit if hasattr(modal, "action_submit") else modal._submit)()
             (modal.action_submit if hasattr(modal, "action_submit") else modal._submit)()
             await _settle(app, pilot)
@@ -366,11 +353,12 @@ async def test_a_duplicate_submit_never_pops_the_roster_and_mutates_once():
         q = QuestionModal("x", {"question": "?"}, draft="yes")
         got: list = []
         app.push_screen(q, got.append)
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: app.screen is q and q.is_mounted)
         q._send()
         q._send()
         q.action_close()
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: got and isinstance(app.screen, RosterScreen))
+        await pilot.pause(0.1)  # negative: no second result lands behind the first
         assert got == ["yes"] and isinstance(app.screen, RosterScreen)
 
 
@@ -383,7 +371,7 @@ async def test_renaming_a_remote_goes_through_its_own_record():
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         app.screen.query_one("#roster", DataTable).move_cursor(row=4)  # ava, remote
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: app.screen.query_one("#roster", DataTable).cursor_row == 4)
         assert app.screen.check_action("rename", ()) is True
         await pilot.press("R")
         assert await _until(pilot, lambda: isinstance(app.screen, RenameModal))
@@ -427,11 +415,12 @@ async def test_a_stale_order_write_never_commits_after_a_newer_one():
     import threading
 
     be = FakeBackend()
-    gate = threading.Event()
+    gate, first_out = threading.Event(), threading.Event()
     real = be.set_order
 
     def slow_first(ids):
         if not gate.is_set():
+            first_out.set()
             gate.wait(5)  # the FIRST write is held on the wire while the operator keeps pressing
         return real(ids)
 
@@ -440,9 +429,9 @@ async def test_a_stale_order_write_never_commits_after_a_newer_one():
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("j", "J")  # protoEngineer one down: write #1, held
-        await pilot.pause(0.2)
+        assert await _until(pilot, first_out.is_set)
         await pilot.press("J")  # and one more: write #2, queued behind #1
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: app._order_seq == 2)  # numbered on the UI thread before #1 is released
         gate.set()
         await _settle(app, pilot)
         orders = [c[1] for c in be.calls if c[0] == "set_order"]

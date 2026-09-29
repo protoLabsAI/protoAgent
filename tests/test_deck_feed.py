@@ -13,8 +13,7 @@ from deck import feed
 from deck.app import FleetDeck, RosterScreen
 from deck.feed import WorkFeedScreen
 from deck.talk import ConversationScreen
-from tests.test_deck_app import FakeBackend, _settle
-from tests.test_deck_talk import _until
+from tests.test_deck_app import FakeBackend, _settle, _until
 
 
 def ev(slug, topic, **data):
@@ -210,13 +209,18 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         snap.parked = {"old-1": {"chat-9": ("waiting on you", "t9")}}
         snap.parked_at = time.monotonic()
         app._apply(snap)
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: rings == [1] and "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content))
         assert rings == [1]
-        assert "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content)
         snap.parked = {"old-1": {"chat-9": ("", "t9")}, "protoEngineer-ba4c": {"chat-1": ("", "t9")}}  # both seen clean
+        # A clearing probe must have been READ strictly after the parks it clears: one read
+        # in the same clock tick is stale by design (Activity.unpark: `park.since >= probed_at`).
+        # Windows' monotonic clock ticks every ~16 ms, so without a pause between the two
+        # probes they can share a tick — wait for the clock to pass the newest park.
+        newest = max(p.since for st in app.activity.state.values() for p in st.parked.values())
+        assert await _until(pilot, lambda: time.monotonic() > newest)
         snap.parked_at = time.monotonic()
         app._apply(snap)
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: "parked" not in str(app.screen.query_one("#status", Static).content))
         assert "parked" not in str(app.screen.query_one("#status", Static).content)
         await pilot.press("q")
     assert fe.closed
@@ -251,11 +255,9 @@ async def test_work_feed_screen_lists_rows_filters_and_opens_the_member():
         await _settle(app, pilot)
         assert isinstance(app.screen, ConversationScreen) and app.screen.convo.session_id == "chat-1"
         await pilot.press("escape")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, WorkFeedScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, WorkFeedScreen))
         await pilot.press("escape")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, RosterScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
 
 
 @pytest.mark.asyncio
@@ -266,5 +268,5 @@ async def test_offline_has_no_feed():
         await _settle(app, pilot)
         assert app.events is None
         await pilot.press("w")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: no feed screen is pushed
         assert isinstance(app.screen, RosterScreen)
