@@ -17,7 +17,7 @@
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-fg-subtle);
 }
 
@@ -127,8 +127,8 @@
 .chat-session-slot .pl-markdown [data-streamdown="code-block"] > div:has([data-streamdown="code-block-copy-button"]) {
   margin-top: 0;
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: var(--pl-space-1_5);
+  right: var(--pl-space-1_5);
   z-index: 1;
 }
 
@@ -171,10 +171,10 @@
   align-items: center;
   gap: var(--pl-space-2);
   max-width: 100%;
-  padding: 5px 6px 5px var(--pl-space-3);
+  padding: var(--pl-space-1) var(--pl-space-1_5) var(--pl-space-1) var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   box-shadow: var(--pl-shadow-card);
 }
 .chat-report-chip > svg {
@@ -200,10 +200,10 @@
   flex-direction: column;
   gap: var(--pl-space-2);
   max-width: 100%;
-  padding: 10px var(--pl-space-3);
+  padding: var(--pl-space-2_5) var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
-  border-radius: 12px;
+  border-radius: var(--pl-radius-lg);
   box-shadow: var(--pl-shadow-card);
 }
 .chat-scheduled-card--failed {
@@ -264,7 +264,7 @@
    by-product, not a first-class reply. */
 .chat-server-result-card {
   border: 1px solid var(--pl-color-border);
-  border-radius: 10px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-inset, var(--pl-color-bg-raised));
   overflow: hidden;
 }
@@ -277,7 +277,7 @@
   align-items: center;
   gap: var(--pl-space-2);
   width: 100%;
-  padding: 7px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   border: none;
   background: none;
   color: var(--pl-color-fg-muted);
@@ -323,7 +323,7 @@
 /* Expanded body — the FULL markdown answer + tool cards, no truncation. A hairline separates
    it from the summary; the CONTENT reads at full foreground strength (only the chrome is muted). */
 .chat-server-result-body {
-  padding: 10px var(--pl-space-3) var(--pl-space-3);
+  padding: var(--pl-space-2_5) var(--pl-space-3) var(--pl-space-3);
   border-top: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg);
   font-size: var(--pl-font-size-base);
@@ -358,8 +358,8 @@
   display: inline-block;
   width: 42px;
   height: 4px;
-  margin-left: 2px;
-  border-radius: 2px;
+  margin-left: var(--pl-space-0_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-border);
   overflow: hidden;
   vertical-align: middle;
@@ -367,7 +367,7 @@
 .chat-usage-bar-fill {
   display: block;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-fg-subtle);
 }
 .chat-usage-bar-fill[data-warn="true"] {
@@ -378,7 +378,7 @@
 .chat-usage-tip {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1);
   min-width: 190px;
   font-family: var(--pl-font-mono);
   font-variant-numeric: tabular-nums;
@@ -408,8 +408,8 @@
   font-size: var(--pl-font-size-2xs);
 }
 .chat-usage-tip-note {
-  margin: 3px 0 0;
-  padding-top: 6px;
+  margin: var(--pl-space-0_5) 0 0;
+  padding-top: var(--pl-space-1_5);
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-sans);
@@ -427,7 +427,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--pl-space-3);
-  margin-top: 7px;
+  margin-top: var(--pl-space-1_5);
 }
 /* Sent-time chip (#3458): the full local sent date-and-time lives in the DS Tooltip on hover or
    focus. Same muted monospace tone and size as the usage stats so the row reads as one strip of
@@ -441,7 +441,7 @@
   font-size: var(--pl-font-size-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   cursor: default;
 }
 .chat-sent-time svg {
@@ -558,7 +558,7 @@
 .chat-user-text.chat-slash-cmd {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   font-family: var(--pl-font-mono);
   font-size: 0.9em;
 }
@@ -570,7 +570,7 @@
   justify-content: center;
   width: 1.2em;
   height: 1.2em;
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-accent);
   color: var(--pl-color-fg-on-accent);
   font-weight: 600;
@@ -645,7 +645,7 @@
    adds no phantom text row — it signals "still generating" through the gaps (between tool
    calls, long tool runs, large tool-call args) without competing with the content above. */
 .chat-streaming-indicator {
-  margin-top: 6px;
+  margin-top: var(--pl-space-1_5);
   line-height: 0;
   opacity: 0.45;
 }
@@ -665,8 +665,8 @@
   color: var(--pl-color-fg-muted);
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 2px 6px;
+  border-radius: var(--pl-radius-md);
+  padding: var(--pl-space-0_5) var(--pl-space-1_5);
   cursor: pointer;
   max-width: 180px;
 }
@@ -696,9 +696,9 @@
 }
 .slash-menu {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% + 6px);
+  left: var(--pl-space-3);
+  right: var(--pl-space-3);
+  bottom: calc(100% + var(--pl-space-1_5));
   z-index: 20;
   max-height: 240px;
   overflow-y: auto;
@@ -710,7 +710,7 @@
 .slash-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   width: 100%;
   text-align: left;
   padding: var(--pl-space-2) var(--pl-space-3);
@@ -733,7 +733,7 @@
 .slash-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
 }
 .slash-kind {
@@ -741,8 +741,8 @@
   font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 999px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius-pill);
   border: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg-subtle);
 }
@@ -790,7 +790,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--pl-space-3);
-  padding: 10px 14px;
+  padding: var(--pl-space-2_5) var(--pl-space-3);
   border: 1px dashed var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -827,7 +827,7 @@
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 
 /* Provider heading inside the composer's model menu. Rows under it are bare model
@@ -836,7 +836,7 @@
    DS gap: @protolabsai/ui/menu exports MenuItem + MenuSeparator but no section label.
    Worth contributing back rather than each surface re-styling this (house rule). */
 .composer-model-lane {
-  padding: 6px 10px 2px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5) var(--pl-space-0_5);
   font-size: var(--pl-font-size-2xs);
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -852,8 +852,8 @@
 .chat-author {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--pl-space-1_5);
+  margin-bottom: var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
 .chat-author > svg {
@@ -873,26 +873,26 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 0 2px 6px;
+  gap: var(--pl-space-1_5);
+  padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
 .chat-roster > svg {
   flex: 0 0 auto;
-  margin-right: 2px;
+  margin-right: var(--pl-space-0_5);
 }
 .chat-roster-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
-  padding: 2px 6px 2px var(--pl-space-2);
+  padding: var(--pl-space-0_5) var(--pl-space-1_5) var(--pl-space-0_5) var(--pl-space-2);
   font: inherit;
   font-size: var(--pl-font-size-xs);
   font-weight: 600;
   color: var(--pl-color-fg-muted);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   cursor: pointer;
 }
 .chat-roster-chip:hover,
@@ -925,11 +925,11 @@
   align-items: center;
   gap: var(--pl-space-2);
   min-width: 0;
-  padding: 5px 10px;
+  padding: var(--pl-space-1) var(--pl-space-2_5);
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
 }
 .chat-delegation-icon {
   flex: 0 0 auto;
@@ -942,10 +942,10 @@
 }
 .chat-delegation-kind {
   flex: 0 0 auto;
-  padding: 0 6px;
+  padding: 0 var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
 }
 .chat-delegation-summary {
   flex: 1 1 auto;
@@ -967,12 +967,12 @@
   color: var(--pl-color-status-error);
 }
 .chat-delegation-error {
-  margin: var(--pl-space-1) 0 0 2px;
+  margin: var(--pl-space-1) 0 0 var(--pl-space-0_5);
   font-size: var(--pl-font-size-xs);
 }
 .chat-delegation-brief {
-  margin: 6px 0 0 var(--pl-space-3);
-  padding-left: 10px;
+  margin: var(--pl-space-1_5) 0 0 var(--pl-space-3);
+  padding-left: var(--pl-space-2_5);
   font-size: var(--pl-font-size-sm);
   border-left: 2px solid var(--pl-color-border);
 }
@@ -984,7 +984,7 @@
   align-items: center;
   gap: var(--pl-space-2);
   min-width: 0;
-  padding: 0 2px 6px;
+  padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
@@ -997,7 +997,7 @@
 
 /* One activity cue per server-fired turn: its label rides the message's own spinner. */
 .chat-streaming-label {
-  margin-left: 6px;
+  margin-left: var(--pl-space-1_5);
   font-size: var(--pl-font-size-sm);
   font-style: italic;
   color: var(--pl-color-fg-muted);
