@@ -239,14 +239,17 @@ jobs:
         # so `uv sync` brings it and tests/test_ingestion_docx.py gates, never skips.)
         run: |
           uv sync --frozen --python 3.12
-          uv pip install pytest pytest-asyncio
+          uv pip install pytest pytest-asyncio pytest-xdist==3.8.0
       - name: Run tests
         # Kept as a bare pytest call (not `python scripts/gate.py`) so lint and
         # tests stay separate jobs with parallel execution and clear failure
         # attribution — the no-flag gate script runs this same suite locally.
+        # `-n auto`: one worker per vCPU (4 on ubuntu-latest). Serially the suite
+        # took ~7 min here; per-test state that leaked only by file order (the
+        # goal-verifier registry) is isolated in tests/conftest.py.
         run: |
           . .venv/bin/activate
-          python -m pytest tests/ -q
+          python -m pytest tests/ -q -n auto
 
   windows-scope:
     name: Classify CI test scope

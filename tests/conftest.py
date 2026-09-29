@@ -130,6 +130,21 @@ def _isolate_host_config(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_goal_verifier_registry(monkeypatch):
+    """Snapshot/restore the process-global plugin goal-verifier registry.
+
+    Any test that runs plugin wiring calls ``set_plugin_verifiers``, which REBINDS the
+    module globals — and nothing rebinds them back. Serially that leak was invisible
+    only because of file order; under pytest-xdist a later test on the same worker
+    (e.g. "no verifiers registered → set_goal absent") saw a stranger's verifiers.
+    monkeypatch restores the original bindings at teardown."""
+    from graph.goals import verifiers
+
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", verifiers._PLUGIN_VERIFIERS)
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIER_META", verifiers._PLUGIN_VERIFIER_META)
+
+
+@pytest.fixture(autouse=True)
 def _trust_testclient_host(monkeypatch):
     """Trust Starlette ``TestClient``'s ``Host: testserver`` in the open-mode Host allowlist.
 
