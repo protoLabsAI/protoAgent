@@ -45,10 +45,4 @@ describe("success-toned system notes follow the workspace accent, other tones st
   it("danger note keeps its semantic colour (the #2197 distinction is load-bearing)", () => {
     expect(note("danger")).toMatch(/border-left-color:\s*var\(--pl-color-status-error\)/);
   });
-
-  it("keeps every chat.css comment free of the glued `*` `/` minifier trap", () => {
-    // Mirror scripts/check-css-comments.mjs: a `*/` glued to identifier chars closes a
-    // comment early and silently drops downstream rules from the minified bundle.
-    expect(chatCss).not.toMatch(/[A-Za-z0-9_.-]\*\/[A-Za-z0-9_.-]/);
-  });
 });

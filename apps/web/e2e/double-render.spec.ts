@@ -45,6 +45,23 @@ async function persistedAnswerCount(page: Page): Promise<number> {
   );
 }
 
+/** The persisted store has caught up with a SETTLED turn: `text` is in it and no bubble is
+ *  still `streaming`. Polled in place of a fixed sleep "for the debounced persist" — the
+ *  store is written by a trailing timer after the terminal frame, so this is the condition
+ *  that sleep was standing in for, and a duplicate the terminal frame drew is in it by then. */
+async function persistedSettled(page: Page, text: string): Promise<boolean> {
+  return page.evaluate(
+    ([key, needle]) => {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return false;
+      const state = JSON.parse(raw) as { sessions: { messages: { content: string; status?: string }[] }[] };
+      const all = state.sessions.flatMap((s) => s.messages);
+      return all.some((m) => m.content.includes(needle)) && !all.some((m) => m.status === "streaming");
+    },
+    [STORAGE_KEY, text] as const,
+  );
+}
+
 /** Boot the sender, run one quick turn so the session persists, then boot the
  *  sibling — which loads the SAME persisted currentSessionId, exactly like the
  *  issue's two boots ~1s apart. Both tabs now view one shared session. */
@@ -247,7 +264,7 @@ test("an @-addressed delegate's answer renders once, under its author's byline",
   await composer.press("Enter");
 
   await expect(page.getByText(MENTION_ANSWER).first()).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700); // the debounced persist
+  await expect.poll(() => persistedSettled(page, MENTION_ANSWER)).toBe(true);
 
   const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
   expect(rendered.split(MENTION_ANSWER).length - 1, "answer copies on screen").toBe(1);
@@ -308,7 +325,7 @@ test("a truncated catch-up: the reply once, and the room's note once", async ({ 
   await composer.press("Enter");
 
   await expect(page.getByText(MENTION_ROOM_NOTE).first()).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700);
+  await expect.poll(() => persistedSettled(page, MENTION_ROOM_NOTE)).toBe(true);
 
   const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
   expect(rendered.split(MENTION_ANSWER).length - 1, "answer copies on screen").toBe(1);
@@ -334,7 +351,7 @@ test("an addressed turn with nothing claimed still renders its answer", async ({
   await composer.press("Enter");
 
   await expect(page.getByText(MENTION_FAILURE_LINE).first()).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700);
+  await expect.poll(() => persistedSettled(page, MENTION_FAILURE_LINE)).toBe(true);
   const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
   expect(rendered.split(MENTION_FAILURE_LINE).length - 1, "failure line copies on screen").toBe(1);
   // …and it is attributed to the member the operator addressed: the byline-only frame
@@ -365,7 +382,7 @@ test("a lead-addressed reply claiming the answer cannot suppress the lead's answ
   await composer.fill("FORKCLAIM fix the parser");
   await composer.press("Enter");
   await expect(page.getByText(DELEGATE_REPLY).first()).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700);
+  await expect.poll(() => persistedSettled(page, LEAD_ANSWER)).toBe(true);
   const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
   expect(rendered.split(DELEGATE_REPLY).length - 1, "delegate reply copies").toBe(1);
   expect(rendered.split(LEAD_ANSWER).length - 1, "the LEAD's own answer must survive").toBe(1);

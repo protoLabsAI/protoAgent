@@ -22,7 +22,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 //     visible during exactly the window this race lives in.
 // Both leave a window whose width is machine speed; under a parallel suite the click lands
 // inside it. Measured on the pre-fix tree: 13/30 failures at `--workers=5`, 3/30 at
-// `--workers=1` (`e2e/tool-nesting-explicit.spec.ts`).
+// `--workers=1` (`e2e/nesting.spec.ts`, the NESTLATE case).
 //
 // `.tool-spotlight` is the exact marker, because it is rendered by BOTH live branches
 // (`streaming` in `ToolCalls`, and `WorkBlock`'s spotlight slot, which is itself gated on
