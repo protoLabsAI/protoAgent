@@ -90,7 +90,7 @@ stay at their locked SHAs forever.
 
 **The update button skips SHA-pinned plugins — by design.**
 `check_plugin_update` treats `requested_ref` matching `_SHA_RE` as **pinned** and
-returns immediately with `behind: False` (`installer.py::check_plugin_update`). Intent:
+returns immediately with `behind: False` (`graph/plugins/updates.py::check_plugin_update`, re-exported from `installer`). Intent:
 "pinned = intentional, never auto-updates" (`docs/guides/plugin-registry.md`, pin
 lifecycle section). The trap: a *bundle* can pin you there without you choosing it.
 

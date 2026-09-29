@@ -25,7 +25,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -269,13 +268,14 @@ _ALLOWED_SCHEMES = ("https://", "http://", "git://", "ssh://", "git@", "file://"
 # `git ls-remote` network safety (check_updates): a bounded timeout so a slow/dead
 # remote can't hang the UI poll, and a small module-level TTL cache keyed by
 # (source_url, ref) so repeated polls don't ls-remote the same source every call.
+# The caches + the ls-remote/check code live in graph/plugins/updates.py (#3823);
+# these knobs stay HERE because tests patch them on this module.
 _LSREMOTE_TIMEOUT_S = 5.0
 _LSREMOTE_TTL_S = 300.0  # ~5 min
 # A git clone of a slow/large remote is bounded so it can't hang an install thread
 # indefinitely (the operator install/update routes offload to a thread, so this
 # caps the worst case rather than wedging a pool worker forever).
 _CLONE_TIMEOUT_S = 600.0
-_lsremote_cache: dict[tuple[str, str], tuple[float, str]] = {}
 
 
 class InstallError(RuntimeError):
@@ -2342,48 +2342,6 @@ def list_installed() -> list[dict]:
     return out
 
 
-def _ls_remote_sha(source_url: str, ref: str) -> str:
-    """Latest remote commit SHA for ``ref`` (or the default branch / HEAD when
-    ``ref`` is empty) at ``source_url``, via ``git ls-remote``. TTL-cached per
-    (source_url, ref) and bounded by a short timeout so the UI poll can't hang.
-
-    Raises ``InstallError`` (git failure) or ``subprocess.TimeoutExpired`` — both
-    treated as a non-fatal per-plugin error by ``check_updates``."""
-    key = (source_url, ref or "")
-    now = time.monotonic()
-    hit = _lsremote_cache.get(key)
-    if hit is not None and (now - hit[0]) < _LSREMOTE_TTL_S:
-        return hit[1]
-
-    # `git ls-remote <url> <ref>` prints "<sha>\t<refname>" lines; with no ref it
-    # lists everything and we take HEAD. We always pass an explicit refspec when we
-    # have one (branch/tag), else "HEAD". For an ANNOTATED tag the bare refspec
-    # returns the tag-object SHA — never equal to the lock's commit SHA, so a naive
-    # compare reports a permanent false "behind" (ADR 0049). Ask for the peeled
-    # `<ref>^{}` too and prefer it; branches/HEAD/lightweight tags simply don't
-    # match the peeled refspec and fall back to the bare line.
-    refspecs = [ref, ref + "^{}"] if ref else ["HEAD"]
-    # Authenticate the update-check for a PRIVATE github repo (#1805 parity — that fix covered
-    # the clone/install path; a plain `git ls-remote` of a private repo still failed auth here,
-    # surfacing as "check failed" in the plugins panel). Scoped/off-argv/off-disk via GIT_CONFIG_*.
-    _auth = _git_auth_env(source_url)
-    out = _git(
-        "ls-remote", source_url, *refspecs, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None
-    )
-    sha = peeled = ""
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 2 or not parts[0].strip():
-            continue
-        if parts[1].strip().endswith("^{}"):
-            peeled = peeled or parts[0].strip()
-        else:
-            sha = sha or parts[0].strip()
-    sha = peeled or sha
-    _lsremote_cache[key] = (now, sha)
-    return sha
-
-
 # A release tag per the ADR 0049 pin lifecycle — `v1.2.3` / `1.2.3`. Prereleases and
 # anything fancier deliberately don't match (they fall back to the moving-ref compare).
 _SEMVER_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
@@ -2426,127 +2384,6 @@ def is_release_tag(ref: str) -> bool:
     return _semver_key(ref) is not None
 
 
-# `git ls-remote --tags` cache — same TTL/timeout regime as _lsremote_cache, its own
-# dict because the value is a {tag: sha} map, not a single sha.
-_lstags_cache: dict[str, tuple[float, dict[str, str]]] = {}
-
-
-def _ls_remote_tags(source_url: str) -> dict[str, str]:
-    """``{tag: commit_sha}`` for every tag at ``source_url`` (TTL-cached, one
-    timeout-bounded ``ls-remote --tags``). An annotated tag lists twice — the bare
-    ref (tag-object SHA) and the peeled ``<ref>^{}`` (commit SHA); the peeled one
-    wins, mirroring _ls_remote_sha's compare semantics (ADR 0049)."""
-    now = time.monotonic()
-    hit = _lstags_cache.get(source_url)
-    if hit is not None and (now - hit[0]) < _LSREMOTE_TTL_S:
-        return hit[1]
-    _auth = _git_auth_env(source_url)  # authenticate the update-check for a private github repo (#1805 parity)
-    out = _git(
-        "ls-remote", "--tags", source_url, timeout=_LSREMOTE_TIMEOUT_S, env={**os.environ, **_auth} if _auth else None
-    )
-    tags: dict[str, str] = {}
-    for line in out.splitlines():
-        parts = line.split("\t")
-        if len(parts) != 2 or not parts[0].strip():
-            continue
-        sha, ref = parts[0].strip(), parts[1].strip()
-        if not ref.startswith("refs/tags/"):
-            continue
-        name = ref[len("refs/tags/") :]
-        if name.endswith("^{}"):
-            tags[name[:-3]] = sha  # peeled commit — overwrite the tag-object sha
-        else:
-            tags.setdefault(name, sha)
-    _lstags_cache[source_url] = (now, tags)
-    return tags
-
-
-def check_plugin_update(entry: dict) -> dict:
-    """Update status for one ``plugins.lock`` entry. A *pinned* plugin (its
-    ``requested_ref`` is a full/abbrev commit SHA per ``_SHA_RE``) never
-    auto-updates — we skip the network call entirely. A RELEASE-TAG ref
-    (``vX.Y.Z``) is immutable, so "behind" there means a NEWER semver tag exists
-    on the remote (reported as ``latest_ref`` — the pin-lifecycle signal, ADR
-    0049) — with a moved-tag compare as the fallback. Any other ref compares the
-    stored ``resolved_sha`` against the latest remote SHA. Any network/timeout/
-    lookup failure is reported in ``error`` (non-fatal)."""
-    pid = entry.get("id", "")
-    source_url = entry.get("source_url", "")
-    requested_ref = entry.get("requested_ref", "") or ""
-    current_sha = entry.get("resolved_sha", "") or ""
-
-    pinned = bool(_SHA_RE.match(requested_ref))
-    result = {
-        "id": pid,
-        "source_url": source_url,
-        "requested_ref": requested_ref,
-        "current_sha": current_sha,
-        "latest_sha": None,
-        "latest_ref": None,
-        "behind": False,
-        "pinned": pinned,
-        "error": None,
-    }
-    # Superseded by a bundled copy: the installed copy is ignored, so "behind" would
-    # offer an update that can't apply — report it, skip the network.
-    bundled = bundled_superseding(str(pid), str(source_url))
-    if bundled is not None:
-        result["superseded"] = True  # the bundled version rides the inventory row, not here
-        return result
-    if pinned or not source_url:
-        if not source_url:
-            result["error"] = "no source_url recorded — cannot check for updates"
-        return result
-
-    tag_key = _semver_key(requested_ref)
-    try:
-        if tag_key is not None:
-            tags = _ls_remote_tags(source_url)
-            newest_key, newest = tag_key, None
-            for name, sha in tags.items():
-                k = _semver_key(name)
-                if k is not None and k > newest_key:
-                    newest_key, newest = k, (name, sha)
-            if newest is not None:
-                result["latest_ref"], result["latest_sha"] = newest
-                result["behind"] = True
-                return result
-            # No newer release — fall through to the moved-tag compare: the SAME
-            # tag re-pointed at a different commit still counts as behind.
-            latest = tags.get(requested_ref, "")
-        else:
-            latest = _ls_remote_sha(source_url, requested_ref)
-    except subprocess.TimeoutExpired:
-        result["error"] = f"ls-remote timed out after {_LSREMOTE_TIMEOUT_S:.0f}s"
-        return result
-    except InstallError as exc:
-        result["error"] = str(exc)
-        return result
-    except Exception as exc:  # noqa: BLE001 — update check must never be fatal
-        result["error"] = str(exc)
-        return result
-
-    if not latest:
-        result["error"] = "could not resolve a remote SHA for the ref"
-        return result
-    result["latest_sha"] = latest
-    # current_sha is a full 40-char SHA from the lock; ls-remote returns full SHAs
-    # too, so a plain (case-insensitive) inequality is the behind signal.
-    result["behind"] = bool(current_sha) and latest.lower() != current_sha.lower()
-    return result
-
-
-def check_updates() -> list[dict]:
-    """Per-plugin update status for every locked plugin (see ``check_plugin_update``).
-    Pinned-to-SHA plugins skip the network; the rest ls-remote their ref (TTL-cached,
-    timeout-bounded) and report ``behind``. Network errors are non-fatal per entry.
-
-    One row per id (``_lock_rows_by_id``), like every other reader: a lock that lists an
-    id twice used to yield two update rows for one plugin — and the row the loader does
-    NOT use could report an update the operator can't apply."""
-    return [check_plugin_update(e) for e in _lock_rows_by_id().values()]
-
-
 # ── Bundle-level lifecycle (ADR 0049 D4, #2718) ────────────────────────────────
 # A bundle was first-class at install and never again: `check_updates`/`sync` read
 # lock["plugins"] only, and uninstall had no bundle notion — so a published archetype repo's
@@ -2557,15 +2394,6 @@ def check_updates() -> list[dict]:
 def bundle_entry(bundle_id: str) -> dict | None:
     """The ``lock["bundles"]`` row for ``bundle_id`` (None when not installed)."""
     return next((b for b in _read_lock().get("bundles") or [] if b.get("id") == bundle_id), None)
-
-
-def check_bundle_updates() -> list[dict]:
-    """Bundle-level update status. A bundle lock row carries the same
-    ``{id, source_url, requested_ref, resolved_sha}`` shape as a plugin row, so each
-    rides ``check_plugin_update`` unchanged — ``behind`` means the bundle REPO moved
-    (its member pins may have moved with it; ``ops.plugins.update_bundle``
-    re-resolves them). Same pinned/release-tag/TTL semantics as plugins."""
-    return [check_plugin_update(b) for b in _read_lock().get("bundles") or []]
 
 
 def _bundle_ownership(bundle_id: str) -> tuple[dict | None, set[str], dict[str, str]]:
@@ -2585,19 +2413,6 @@ def _bundle_ownership(bundle_id: str) -> tuple[dict | None, set[str], dict[str, 
 
 def _exclusively_owned(pid: str, bundle_id: str, listed_elsewhere: set[str], by_of: dict[str, str]) -> bool:
     return pid not in listed_elsewhere and by_of.get(pid, "") == f"bundle:{bundle_id}"
-
-
-def exclusive_bundle_members(bundle_id: str) -> list[str]:
-    """The bundle's members owned ONLY by it: still carrying this bundle's ``by``
-    provenance in ``lock["plugins"]`` and not listed by any other bundle row. These
-    are what ``uninstall_bundle`` removes — a member another bundle lists, or one the
-    operator re-installed directly since (its ``by`` moved), stays."""
-    row, listed_elsewhere, by_of = _bundle_ownership(bundle_id)
-    if row is None:
-        return []
-    return [
-        str(pid) for pid in row.get("plugins") or [] if _exclusively_owned(str(pid), bundle_id, listed_elsewhere, by_of)
-    ]
 
 
 def orphaned_bundle_members(bundle_id: str, before_members: list[str]) -> list[str]:
@@ -2729,3 +2544,20 @@ def sync(*, allow: list[str] | None = None) -> list[dict]:
         except InstallError as exc:
             results.append({"id": pid, "status": "failed", "error": str(exc)})
     return results
+
+
+# ── Update checks (split out, #3823) ───────────────────────────────────────────
+# Re-exported so ``installer.check_plugin_update`` etc. keep resolving — and so this
+# module's own bare-name callers (``_install_bundle``) go through THIS namespace, where a
+# ``monkeypatch.setattr(installer, "check_plugin_update", ...)`` lands. The moved code
+# reaches its collaborators through ``installer`` at call time. Imported last: updates.py
+# imports installer lazily, so there is no cycle either way.
+from graph.plugins.updates import (  # noqa: E402, F401 — re-exports
+    _ls_remote_sha,
+    _ls_remote_tags,
+    _lsremote_cache,
+    _lstags_cache,
+    check_bundle_updates,
+    check_plugin_update,
+    check_updates,
+)
