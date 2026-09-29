@@ -42,6 +42,33 @@ def test_view_page_is_self_contained_and_kit_backed():
     assert "/api/plugins/orgchart/topology" in page
 
 
+def test_action_buttons_use_the_ds_plugin_kit_classes():
+    """protoContent#551 (card 5): ACTION buttons must be the DS button. This view is plain
+    HTML backed by the kit's CSS, so Refresh and panel-Close carry `pl-btn` classes — the
+    ds_audit hand-rolled-control rule flags a raw styled <button>, not these."""
+    from plugins.orgchart.view import _VIEW_PAGE
+
+    page = _VIEW_PAGE.read_text(encoding="utf-8")
+
+    # Refresh: sized DS button, type=button, id + title preserved so the click handler binds.
+    assert '<button class="pl-btn pl-btn--sm" type="button" id="refresh"' in page
+    assert 'title="Drop caches and re-crawl the fleet"' in page
+
+    # Panel close: ghost icon DS button, type=button, aria-label, id + title preserved.
+    assert (
+        '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" '
+        'id="panel-close" title="Close" aria-label="Close"' in page
+    )
+
+    # The hand-rolled control styling is gone — only the close-button float layout may stay,
+    # and no local button rule reintroduces a literal colour/size.
+    assert "button.refresh" not in page
+    assert ".panel .close" not in page
+
+    # The script still binds both controls by id (behaviour unchanged).
+    assert '$("refresh")' in page and '$("panel-close")' in page
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
