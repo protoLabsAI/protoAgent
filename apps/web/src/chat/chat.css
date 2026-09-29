@@ -191,27 +191,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Dismiss ✕ — removes the chip from THIS transcript only (jobId persisted in
-   localStorage); the report stays retrievable in the Background agents panel. */
-.chat-report-dismiss {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 999px;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.chat-report-dismiss:hover {
-  color: var(--pl-color-fg);
-  background: var(--pl-color-bg-hover);
-}
-
 /* Scheduled-task RESULT card (#2990) — the first fire of a schedule, delivered back to the
    chat that created it. A full card (not the one-line report chip): calendar/clock head,
    summary body, and a "View full result" action. Recurring re-fires use .chat-report-chip
@@ -987,21 +966,6 @@
 .chat-delegation-error {
   color: var(--pl-color-status-error);
 }
-.chat-delegation-toggle {
-  flex: 0 0 auto;
-  padding: 0;
-  font: inherit;
-  font-size: var(--pl-font-size-xs);
-  color: var(--pl-color-fg-subtle);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.chat-delegation-toggle:hover,
-.chat-delegation-toggle:focus-visible {
-  color: var(--pl-color-fg);
-  text-decoration: underline;
-}
 .chat-delegation-error {
   margin: var(--pl-space-1) 0 0 2px;
   font-size: var(--pl-font-size-xs);
@@ -1029,20 +993,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.chat-bgwork-open {
-  flex: 0 0 auto;
-  padding: 0;
-  font: inherit;
-  color: var(--pl-color-fg-subtle);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.chat-bgwork-open:hover,
-.chat-bgwork-open:focus-visible {
-  color: var(--pl-color-fg);
-  text-decoration: underline;
 }
 
 /* One activity cue per server-fired turn: its label rides the message's own spinner. */
