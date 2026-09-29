@@ -372,7 +372,7 @@ These are the failures that actually recur — read them before you edit.
   straight into the tracked config at the dotted key, and `required: true` is a hard
   gate (create → 400, host install → refuses to activate). So the first segment of a
   key must be a *plugin* section (`project_board.repo`, `github.default_repo`) —
-  `CONFIG_INPUT_RESERVED_SECTIONS` in `graph/plugins/installer.py` rejects `model`,
+  `CONFIG_INPUT_RESERVED_SECTIONS` in `graph/plugins/bundles.py` rejects `model`,
   `plugins`, `projects`, `onboarding`, `delegates`, `egress`, … at install. Don't
   "fix" a failing bundle by adding its section to that set; give the plugin its own.
   Related seam: a plugin that is enabled but can't work (missing binary, no coder, CLI

@@ -95,7 +95,7 @@ returns immediately with `behind: False` (`graph/plugins/updates.py::check_plugi
 lifecycle section). The trap: a *bundle* can pin you there without you choosing it.
 
 **Bundles pin their sub-plugins through that same path, and there's no
-bundle-level re-pin.** `installer.py::_install_bundle` installs each member with the
+bundle-level re-pin.** `bundles.py::_install_bundle` installs each member with the
 manifest's `ref` straight through → each sub-plugin gets a normal `plugins.lock`
 entry with `requested_ref = <bundle's pin>`. An archetype repo is fetched at HEAD on
 agent-create (`manager.create(bundle=…)`) **but its sub-plugin refs come from
