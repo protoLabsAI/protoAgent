@@ -16,12 +16,12 @@ LangGraph loop. This module owns:
 both drivers call into this module through the module object (``_chat_acp.<name>``) at
 call time, so a patch HERE intercepts them.
 
-**The turn driver's collaborators stay in ``server.chat``.** The per-thread lock
-(``_thread_lock`` — its ``_THREAD_LOCKS`` registry has exactly one home) and the
-thread-id resolver (``_resolve_thread_id``) are reached through :func:`_chat` at CALL
-time, never bound at import — a test's patch on ``server.chat`` is what runs, and
-``import server.chat_acp`` works standalone with no import-time edge back into
-``server.chat``.
+**The turn driver's collaborators live in ``server.turn_control``** (#3847). The
+per-thread lock (``_thread_lock`` — its ``_THREAD_LOCKS`` registry has exactly one home)
+and the thread-id resolver (``_resolve_thread_id``) are reached through that module
+(``_turn_control.<name>``) at CALL time, never bound at import — a test's patch on
+``server.turn_control`` is what runs, and ``import server.chat_acp`` works standalone
+with no import-time edge back into ``server.chat``.
 
 ``server.chat`` re-exports every name here so ``from server.chat import
 acp_sessions_snapshot`` keeps resolving. Patch (and mutate) these names HERE, not on
@@ -32,27 +32,17 @@ intercepts nothing (``tests/test_chat_acp_seam.py`` enforces that).
 from __future__ import annotations
 
 import asyncio
-import importlib
 import logging
 import time
-from types import ModuleType
 from typing import Any
 
 from runtime.state import STATE
+from server import turn_control as _turn_control
 
 # Same logger as server.chat, so the moved log lines keep their channel.
 log = logging.getLogger("protoagent.server")
 
 __all__ = ["acp_sessions_snapshot"]
-
-
-def _chat() -> ModuleType:
-    """``server.chat``, resolved at call time — see the module docstring.
-
-    ``importlib`` rather than ``from server import chat``: the ``server`` package
-    re-exports the ``chat`` FUNCTION under that name, shadowing the submodule.
-    """
-    return importlib.import_module("server.chat")
 
 
 # One ACP runtime per thread (the ACP session is stateful — the coding agent holds
@@ -262,12 +252,12 @@ async def _acp_turn_collected(session_id: str, message: str) -> list[dict[str, A
     """The non-streaming shape of the ACP runtime switch: drive the turn, collect the
     frames, and return the single assistant message the non-streaming callers expect.
     ``usage`` is translated to the OpenAI shape the /v1 handler sums (ADR 0075 D4)."""
-    tid = _chat()._resolve_thread_id(None, session_id)
+    tid = _turn_control._resolve_thread_id(None, session_id)
     rt = await _acp_acquire(tid)
     answer, usage, error = "", None, None
     try:
         # Same serialization as the streaming switch: one prompt per ACP session.
-        async with _chat()._thread_lock(tid):
+        async with _turn_control._thread_lock(tid):
             async for kind, payload in _acp_drive_turn(rt, message):
                 if kind == "done":
                     answer = payload or answer

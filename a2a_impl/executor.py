@@ -413,7 +413,7 @@ class ProtoAgentExecutor(AgentExecutor):
         # SERVER fired (scheduler, watch, background-resume…) rather than one an operator
         # sent: its prompt is machine text that was never a chat bubble, so the durable
         # transcript keeps none (``_transcript_opening``). Injected by server.py
-        # (``server.chat.is_autonomous_origin``) — the executor cannot import server.
+        # (``server.turn_control.is_autonomous_origin``) — the executor cannot import server.
         self._server_fired_origin = server_fired_origin
 
     def _server_fired(self, origin: str) -> bool:

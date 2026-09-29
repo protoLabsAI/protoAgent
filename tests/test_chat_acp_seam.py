@@ -10,7 +10,8 @@ scans the suite so a stale target fails loudly: every patch, and every touch of 
 mutable registry state, goes to ``server.chat_acp`` — its one home.
 
 The other direction is pinned too: the moved non-streaming turn reaches
-``server.chat``'s ``_thread_lock`` / ``_resolve_thread_id`` at CALL time, and both
+``server.turn_control``'s ``_thread_lock`` / ``_resolve_thread_id`` (their owner since
+#3847) at CALL time, and both
 drivers (streaming + non-streaming) call the ACP helpers through the ``chat_acp``
 module, so a patch there lands.
 """
@@ -131,14 +132,14 @@ def test_server_package_binds_the_real_snapshot():
     assert server.acp_sessions_snapshot is chat_acp.acp_sessions_snapshot
 
 
-def test_collected_turn_calls_the_thread_collaborators_through_server_chat(monkeypatch):
-    """A patch of ``server.chat._resolve_thread_id`` / ``_thread_lock`` must reach the moved
-    ``_acp_turn_collected`` — it resolves them at call time, not at import."""
+def test_collected_turn_calls_the_thread_collaborators_through_turn_control(monkeypatch):
+    """A patch of ``server.turn_control._resolve_thread_id`` / ``_thread_lock`` (their owner,
+    #3847) must reach the moved ``_acp_turn_collected`` — it resolves them at call time."""
     import asyncio
 
-    chat = _chat()
+    turn_control = importlib.import_module("server.turn_control")
     seen: dict[str, list] = {"resolve": [], "lock": [], "acquire": []}
-    real_lock = chat._thread_lock
+    real_lock = turn_control._thread_lock
 
     def _resolve(md, sid):
         seen["resolve"].append(sid)
@@ -158,8 +159,8 @@ def test_collected_turn_calls_the_thread_collaborators_through_server_chat(monke
     async def _drive(rt, message):
         yield ("done", "ok")
 
-    monkeypatch.setattr(chat, "_resolve_thread_id", _resolve)
-    monkeypatch.setattr(chat, "_thread_lock", _lock)
+    monkeypatch.setattr(turn_control, "_resolve_thread_id", _resolve)
+    monkeypatch.setattr(turn_control, "_thread_lock", _lock)
     monkeypatch.setattr(chat_acp, "_acp_acquire", _acquire)
     monkeypatch.setattr(chat_acp, "_acp_release", _release)
     monkeypatch.setattr(chat_acp, "_acp_drive_turn", _drive)

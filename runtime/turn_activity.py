@@ -1,6 +1,6 @@
 """Which chat sessions have a turn running RIGHT NOW — the per-session busy signal.
 
-``server/chat.py``'s idle beacon (#1720) already brackets every turn driver (the A2A /
+``server/turn_control.py``'s idle beacon (#1720) already brackets every turn driver (the A2A /
 console stream and the non-streaming ``/api/chat`` / ``/v1`` path) with
 ``_turn_started()`` / ``_turn_ended()``, but only as a process-wide COUNT. The Zed shim
 needs the per-session answer — "is the console mid-turn on this chat?" — so it can hold

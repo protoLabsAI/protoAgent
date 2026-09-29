@@ -519,7 +519,7 @@ class BackgroundManager:
         origin-session turn, not a background job — queuing the briefing behind
         the very jobs it reports on would deadlock a full fan-out. A mid-turn
         origin session is safe: the A2A server serializes turns per thread_id
-        (``server/chat.py:_thread_lock``), so the nudge queues and runs after the
+        (``server/turn_control.py:_thread_lock``), so the nudge queues and runs after the
         in-flight turn. Never raises; returns whether the nudge was delivered.
         On failure nothing is lost — ``notified`` is untouched, so the report
         still drains on the session's next manual turn."""

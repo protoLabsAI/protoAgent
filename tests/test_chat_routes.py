@@ -578,14 +578,14 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
 
     from graph import steering
 
-    chat_mod = importlib.import_module("server.chat")
+    turn_control = importlib.import_module("server.turn_control")
     steering._QUEUES.clear()
-    chat_mod._LIVE_SERVER_TURNS.clear()
-    chat_mod._ATTENDED_SESSIONS.clear()
+    turn_control._LIVE_SERVER_TURNS.clear()
+    turn_control._ATTENDED_SESSIONS.clear()
     c = _client(monkeypatch)
-    chat_mod.mark_session_attended("s1")
+    turn_control.mark_session_attended("s1")
     try:
-        chat_mod.register_live_server_turn("s1", "task-1", origin="scheduler", trigger="job-1")
+        turn_control.register_live_server_turn("s1", "task-1", origin="scheduler", trigger="job-1")
         posted = c.post(
             "/api/chat/sessions/s1/server-turns/task-1/interject",
             json={"id": "m1", "text": "change course"},
@@ -606,7 +606,7 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
         assert wrong == {"ok": False, "reason": "not_live", "pending": 0}
         assert steering.pending("s2") == 0
 
-        chat_mod.finish_live_server_turn("s1", "task-1")
+        turn_control.finish_live_server_turn("s1", "task-1")
         stale = c.post(
             "/api/chat/sessions/s1/server-turns/task-1/interject",
             json={"id": "m3", "text": "too late"},
@@ -614,8 +614,8 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
         assert stale == {"ok": False, "reason": "not_live", "pending": 0}
     finally:
         steering._QUEUES.clear()
-        chat_mod._LIVE_SERVER_TURNS.clear()
-        chat_mod._ATTENDED_SESSIONS.clear()
+        turn_control._LIVE_SERVER_TURNS.clear()
+        turn_control._ATTENDED_SESSIONS.clear()
 
 
 def test_delegation_list_and_cancel_roundtrip(monkeypatch):

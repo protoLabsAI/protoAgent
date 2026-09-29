@@ -624,16 +624,16 @@ class TestResumeAttendance:
         # the ``server.chat`` attribute in server/__init__.py.)
         import importlib
 
-        chat_mod = importlib.import_module("server.chat")
+        turn_control = importlib.import_module("server.turn_control")
 
-        chat_mod._ATTENDED_SESSIONS.clear()
-        mgr = _manager(tmp_path)  # attended_check=None → lazy server.chat.is_session_attended
+        turn_control._ATTENDED_SESSIONS.clear()
+        mgr = _manager(tmp_path)  # attended_check=None → lazy server.chat.is_session_attended (owned by server.turn_control)
         assert mgr._session_attended("sess-live") is False
-        assert chat_mod.mark_session_attended("sess-live") is True
+        assert turn_control.mark_session_attended("sess-live") is True
         try:
             assert mgr._session_attended("sess-live") is True
         finally:
-            chat_mod.release_session_attended("sess-live")
+            turn_control.release_session_attended("sess-live")
         assert mgr._session_attended("sess-live") is False  # released → unattended again
 
 
@@ -1146,10 +1146,10 @@ class TestChatProgress:
     def test_turn_started_publishes_control_payload_for_attended_server_turn(self, monkeypatch):
         import importlib
 
-        chat_mod = importlib.import_module("server.chat")
-        chat_mod._LIVE_SERVER_TURNS.clear()
-        chat_mod._ATTENDED_SESSIONS.clear()
-        chat_mod.mark_session_attended("chat-7")
+        turn_control = importlib.import_module("server.turn_control")
+        turn_control._LIVE_SERVER_TURNS.clear()
+        turn_control._ATTENDED_SESSIONS.clear()
+        turn_control.mark_session_attended("chat-7")
         try:
             a2a, published = self._capture(monkeypatch)
             a2a._a2a_progress(
@@ -1177,8 +1177,8 @@ class TestChatProgress:
                 )
             ]
         finally:
-            chat_mod._LIVE_SERVER_TURNS.clear()
-            chat_mod._ATTENDED_SESSIONS.clear()
+            turn_control._LIVE_SERVER_TURNS.clear()
+            turn_control._ATTENDED_SESSIONS.clear()
 
     def test_consumed_interjection_is_republished_with_its_control(self, monkeypatch):
         """The steer-consumed boundary is the console's only acknowledgement that an
@@ -1187,10 +1187,10 @@ class TestChatProgress:
         the live control contract, unretained like every other progress frame."""
         import importlib
 
-        chat_mod = importlib.import_module("server.chat")
-        chat_mod._LIVE_SERVER_TURNS.clear()
-        chat_mod._ATTENDED_SESSIONS.clear()
-        chat_mod.mark_session_attended("chat-7")
+        turn_control = importlib.import_module("server.turn_control")
+        turn_control._LIVE_SERVER_TURNS.clear()
+        turn_control._ATTENDED_SESSIONS.clear()
+        turn_control.mark_session_attended("chat-7")
         try:
             a2a, published = self._capture(monkeypatch)
             a2a._a2a_progress(
@@ -1217,8 +1217,8 @@ class TestChatProgress:
             assert data["items"] == [{"id": "msg-1", "text": words}]
             assert data["control"]["task_id"] == "t" and data["control"]["operator_controllable"] is True
         finally:
-            chat_mod._LIVE_SERVER_TURNS.clear()
-            chat_mod._ATTENDED_SESSIONS.clear()
+            turn_control._LIVE_SERVER_TURNS.clear()
+            turn_control._ATTENDED_SESSIONS.clear()
 
     def test_consumed_marker_without_usable_items_is_not_published(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)
