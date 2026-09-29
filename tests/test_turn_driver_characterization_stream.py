@@ -46,7 +46,7 @@ turn_control = importlib.import_module("server.turn_control")
 
 # Modules whose ``time`` the deterministic clock replaces. A refactor that moves the
 # event loop into a new module adds that module here.
-_CLOCK_MODULES = ("server.chat",)
+_CLOCK_MODULES = ("server.chat", "server.turn_stream")
 
 _OVERFLOW = "Error code: 400 - This model's maximum context length is 128000 tokens."
 _EMPTY = "_(The agent ended the turn without a textual reply.)_"

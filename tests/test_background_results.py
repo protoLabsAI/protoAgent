@@ -392,7 +392,7 @@ class TestResumeTurnIsAutonomous:
         turn_control = importlib.import_module("server.turn_control")
         monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
         fake = _HitlTurnStream()
-        monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+        monkeypatch.setattr(importlib.import_module("server.turn_stream"), "_run_turn_stream", fake)
 
         frames = [
             frame
@@ -419,7 +419,7 @@ class TestResumeTurnIsAutonomous:
         chat_mod = importlib.import_module("server.chat")
         monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
         fake = _HitlTurnStream()
-        monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+        monkeypatch.setattr(importlib.import_module("server.turn_stream"), "_run_turn_stream", fake)
 
         frames = [
             frame

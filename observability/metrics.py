@@ -246,7 +246,7 @@ def record_llm_call(
     cost_usd: float = 0.0,
 ):
     """Record one LLM call (ADR 0006 Slice 1). Wired from the per-call seam in
-    ``server._run_turn_stream`` — previously defined but never called."""
+    ``server.turn_stream._run_turn_stream`` — previously defined but never called."""
     if not _enabled:
         return
     _llm_calls.labels(model=model, finish_reason=finish_reason).inc()

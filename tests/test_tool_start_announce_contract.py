@@ -1,4 +1,4 @@
-"""server/chat.py's `_run_turn_stream` legitimately yields `tool_start` TWICE per real
+"""server/turn_stream.py's `_run_turn_stream` legitimately yields `tool_start` TWICE per real
 tool call for a streaming model: once early (the model's first streamed tool-call
 token — empty args, so the console shows "running" immediately) and once more at
 `on_chat_model_end` (the SAME tool_call id, now with full args, filling the card in).

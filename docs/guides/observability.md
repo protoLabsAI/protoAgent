@@ -59,7 +59,7 @@ restart, not a reload.
 
 ### What gets traced
 
-- Each A2A task → a root span named `a2a-stream` (the name to filter on in Langfuse — it is set at `server/chat.py::_run_turn_stream` and pinned by `tests/test_tracing.py`)
+- Each A2A task → a root span named `a2a-stream` (the name to filter on in Langfuse — it is set at `server/chat.py::_chat_langgraph_stream_impl` and pinned by `tests/test_tracing.py`)
 - Each LangGraph run → a child span with tool calls + LLM calls nested beneath
 - Each subagent delegation → a nested span under the parent's
 - Each tool call → a `tool:<name>` observation with args + result preview + duration
@@ -121,7 +121,7 @@ my_agent_tool_calls_total{tool_name="web_search",success="True"} 17
 my_agent_active_sessions 3
 ```
 
-The LLM series (`*_llm_calls_total`, `*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cache_tokens_total`, `*_llm_cost_usd_total`) are emitted per LLM call from `server._run_turn_stream` (ADR 0006); cache + cost are best-effort and depend on the gateway surfacing prompt-cache token details. Tool series come from `AuditMiddleware`.
+The LLM series (`*_llm_calls_total`, `*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cache_tokens_total`, `*_llm_cost_usd_total`) are emitted per LLM call from `server/turn_stream.py::_run_turn_stream` (ADR 0006); cache + cost are best-effort and depend on the gateway surfacing prompt-cache token details. Tool series come from `AuditMiddleware`.
 
 Example Prometheus scrape config:
 

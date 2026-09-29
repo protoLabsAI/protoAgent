@@ -780,7 +780,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     # frames matches the terminal text, so the executor adding a break
                     # the stream never had would collapse it. Paragraph breaks between
                     # model calls are the producer's to make, inside the delta itself
-                    # (server.chat._run_turn_stream).
+                    # (server.turn_stream._run_turn_stream).
                     accumulated += payload
                     _text_buf += payload
                     if _should_flush(_text_buf, _text_flushed_at):
