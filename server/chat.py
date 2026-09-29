@@ -6,6 +6,10 @@ non-streaming ``chat`` (the console + OpenAI-compat) and streaming
 ``_run_turn_stream`` event loop, tool-preview/interrupt shaping, and slash-command
 parsing + execution for workflows and subagents.
 
+The out-of-turn session gestures (``/compact``, export, publish, ``/btw``, rewind,
+fork) live in ``server/chat_session_ops.py`` and the non-streaming usage/telemetry
+helpers in ``server/turn_telemetry.py`` (#3810); both are re-exported below.
+
 It depends only on neutral modules (``runtime.state``, ``graph.output_format``)
 plus function-local imports — nothing from ``server/__init__``, so there is no
 import cycle. ``server/__init__.py`` re-exports every public name so
@@ -28,6 +32,39 @@ from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
+from server import turn_telemetry as _turn_telemetry
+
+# Session ops (/compact, export, publish, /btw, rewind, fork) moved to
+# server/chat_session_ops.py and the non-streaming usage/telemetry helpers to
+# server/turn_telemetry.py (#3810). Re-exported so ``from server.chat import …`` and
+# operator_api.chat_routes keep resolving. These are COPIES of the bindings: patch the
+# defining module, never these names (tests/test_chat_session_ops_seam.py guards it).
+from server.chat_session_ops import (  # noqa: F401 — re-export
+    _artifact_resolver,
+    _build_bundle,
+    _compaction_message,
+    _export_message,
+    _fork_message,
+    _publish_message,
+    _publish_preview_message,
+    _rewind_message,
+    aside_session,
+    compact_session,
+    export_session,
+    forget_delegate_conversations,
+    forget_delegate_conversations_for_session,
+    fork_session,
+    publish_preview,
+    publish_session,
+    revoke_published_link,
+    rewind_session,
+)
+from server.turn_telemetry import (  # noqa: F401 — re-export under the historical private names
+    make_usage_callback as _make_usage_callback,
+    record_local_turn as _record_local_turn,
+    sum_usage as _sum_usage,
+    telemetry_usage as _telemetry_usage,
+)
 
 log = logging.getLogger("protoagent.server")
 
@@ -2944,6 +2981,63 @@ async def _overflow_compacted(exc: BaseException, thread_id: str | None, session
     return bool(is_context_overflow_error(exc)) and await _force_compact_for_overflow(thread_id, session_id)
 
 
+async def _force_compact_for_overflow(thread_id: str, session_id: str) -> bool:
+    """Emergency thread shrink after a context-window overflow (#2783, ADR 0101 D4).
+
+    Runs ``compact_thread`` in safety-valve mode (``force=True`` — archive
+    best-effort, stub summary on summarizer failure; see compaction_op) under
+    the per-thread lock. Returns whether the thread actually shrank — a refusal
+    (e.g. the thread is already tiny, so overflow must have another cause)
+    means retrying would hit the same wall, and the caller surfaces the
+    original error instead.
+    """
+    if STATE.graph is None or STATE.checkpointer is None:
+        return False
+    try:
+        from graph.compaction_op import compact_thread
+
+        async with _thread_lock(thread_id):
+            result = await compact_thread(
+                STATE.graph,
+                STATE.checkpointer,
+                STATE.knowledge_store,
+                STATE.graph_config,
+                thread_id,
+                session_id,
+                force=True,
+                # Tighter than the configured keep: the window is ALREADY blown, so
+                # the retry needs real headroom, not a gentle trim.
+                keep_recent=min(10, int(getattr(STATE.graph_config, "compaction_keep_messages", 20) or 20)),
+            )
+        # `too_short` is a benign no-op (refused=False, removed=0) — but for THIS
+        # caller a thread that didn't shrink means the retry hits the same wall,
+        # so recovery requires actual removal, not merely non-refusal.
+        ok = not result.get("refused") and int(result.get("removed") or 0) > 0
+        if ok:
+            log.warning(
+                "[a2a-stream] overflow recovery compacted thread %s: removed %s message(s), archived=%s",
+                thread_id,
+                result.get("removed"),
+                result.get("archived"),
+            )
+            try:
+                from observability import metrics
+
+                metrics.record_overflow_recovery()
+            except Exception:  # noqa: BLE001 — telemetry must never break recovery
+                pass
+        else:
+            log.warning(
+                "[a2a-stream] overflow recovery could not shrink thread %s (%s) — surfacing the original error",
+                thread_id,
+                result.get("reason"),
+            )
+        return ok
+    except Exception:  # noqa: BLE001 — recovery must never mask the original error
+        log.exception("[a2a-stream] overflow recovery itself failed for thread %s", thread_id)
+        return False
+
+
 async def _fail_turn(exc: BaseException, session_id: str, *, tag: str) -> str:
     """Log, record (#2593) and describe a failed turn — ONE classifier for both drivers,
     so the two surfaces leave the SAME transcript and the same log shape. Returns the
@@ -3149,741 +3243,6 @@ async def _chat_langgraph_stream_impl(
             tracing.flush()
 
 
-def _compaction_message(result: dict) -> str:
-    """Human-readable status line for a compaction result — surfaced as the
-    system-note in the chat thread (and returned to non-UI callers)."""
-    reason = result.get("reason") or ""
-    if reason == "too_short":
-        return f"Nothing to compact — this conversation is already short ({result.get('kept', 0)} messages)."
-    if reason == "no_store":
-        return (
-            "Compaction skipped — no searchable knowledge store is configured, so the raw history "
-            "couldn't be archived. Nothing was changed (your full context is intact)."
-        )
-    if reason == "incognito":
-        return (
-            "Compaction skipped — this chat is incognito, so its history is never archived to memory, "
-            "and /compact doesn't remove history it hasn't archived. Nothing was changed."
-        )
-    if reason in ("empty", "empty_archive", "archive_error"):
-        return "Compaction skipped — the conversation couldn't be archived, so nothing was changed."
-    if reason in ("no_summary", "summary_error"):
-        return (
-            f"Archived {result.get('archived_chunks', 0)} chunk(s) to searchable memory, but the summary "
-            "couldn't be generated — kept your full context rather than compacting it."
-        )
-    if reason == "no_checkpointer":
-        return "Compaction unavailable — no conversation checkpoint to compact."
-    removed, kept = result.get("removed", 0), result.get("kept", 0)
-    return (
-        f"Compacted this conversation — archived {removed} older message(s) to searchable memory and kept the "
-        f"last {kept}. The agent now carries a summary of the earlier messages plus the recent ones, at a "
-        f"fraction of the token cost; the full raw history stays searchable via memory recall."
-    )
-
-
-async def _force_compact_for_overflow(thread_id: str, session_id: str) -> bool:
-    """Emergency thread shrink after a context-window overflow (#2783, ADR 0101 D4).
-
-    Runs ``compact_thread`` in safety-valve mode (``force=True`` — archive
-    best-effort, stub summary on summarizer failure; see compaction_op) under
-    the per-thread lock. Returns whether the thread actually shrank — a refusal
-    (e.g. the thread is already tiny, so overflow must have another cause)
-    means retrying would hit the same wall, and the caller surfaces the
-    original error instead.
-    """
-    if STATE.graph is None or STATE.checkpointer is None:
-        return False
-    try:
-        from graph.compaction_op import compact_thread
-
-        async with _thread_lock(thread_id):
-            result = await compact_thread(
-                STATE.graph,
-                STATE.checkpointer,
-                STATE.knowledge_store,
-                STATE.graph_config,
-                thread_id,
-                session_id,
-                force=True,
-                # Tighter than the configured keep: the window is ALREADY blown, so
-                # the retry needs real headroom, not a gentle trim.
-                keep_recent=min(10, int(getattr(STATE.graph_config, "compaction_keep_messages", 20) or 20)),
-            )
-        # `too_short` is a benign no-op (refused=False, removed=0) — but for THIS
-        # caller a thread that didn't shrink means the retry hits the same wall,
-        # so recovery requires actual removal, not merely non-refusal.
-        ok = not result.get("refused") and int(result.get("removed") or 0) > 0
-        if ok:
-            log.warning(
-                "[a2a-stream] overflow recovery compacted thread %s: removed %s message(s), archived=%s",
-                thread_id,
-                result.get("removed"),
-                result.get("archived"),
-            )
-            try:
-                from observability import metrics
-
-                metrics.record_overflow_recovery()
-            except Exception:  # noqa: BLE001 — telemetry must never break recovery
-                pass
-        else:
-            log.warning(
-                "[a2a-stream] overflow recovery could not shrink thread %s (%s) — surfacing the original error",
-                thread_id,
-                result.get("reason"),
-            )
-        return ok
-    except Exception:  # noqa: BLE001 — recovery must never mask the original error
-        log.exception("[a2a-stream] overflow recovery itself failed for thread %s", thread_id)
-        return False
-
-
-async def compact_session(session_id: str, *, request_metadata: dict | None = None) -> dict:
-    """Compact a chat session's live context (the ``/compact`` gesture, #1527).
-
-    Resolves the session's checkpointer ``thread_id`` (the A2A ``a2a:<session_id>``
-    thread — the one the live streaming turns write to) and runs
-    ``compact_thread`` under the per-thread lock, so a compaction can never race a
-    live streaming turn on the same thread (mirrors the turn driver). Returns the
-    ``compact_thread`` result dict plus a human-readable ``message``.
-    """
-    base = {"summary": "", "archived_chunks": 0, "kept": 0, "removed": 0, "archived": False, "refused": True}
-    if STATE.graph is None:
-        return {**base, "reason": "setup", "message": "Setup required — finish the setup wizard first."}
-
-    from graph.compaction_op import compact_thread
-
-    tid = _resolve_thread_id(request_metadata, session_id)
-    async with _thread_lock(tid):
-        result = await compact_thread(
-            STATE.graph,
-            STATE.checkpointer,
-            STATE.knowledge_store,
-            STATE.graph_config,
-            tid,
-            session_id,
-        )
-    return {**result, "message": _compaction_message(result)}
-
-
-def _export_message(result: dict) -> str:
-    """Human-readable status line for an export result (surfaced to non-UI callers /
-    logs). Names the redactions when there were any — the operator is meant to review
-    before sharing, so a silent scrub would be the wrong default."""
-    reason = result.get("reason") or ""
-    if reason == "no_checkpointer":
-        return "Export unavailable — no conversation checkpoint to export."
-    if reason == "empty_thread":
-        return "Nothing to export — this conversation has no messages yet."
-    redactions = result.get("redactions") or []
-    note = (
-        f" Redacted before export: {', '.join(redactions)} — read it through before sharing."
-        if redactions
-        else ""
-    )
-    return f"Exported {result.get('message_count', 0)} message(s) as Markdown.{note}"
-
-
-async def export_session(
-    session_id: str,
-    *,
-    title: str | None = None,
-    request_metadata: dict | None = None,
-) -> dict:
-    """Export a chat session's conversation as Markdown (the "share this thread"
-    gesture, #2158 P1).
-
-    Resolves the session's checkpointer ``thread_id`` exactly as ``compact_session`` /
-    ``rewind_session`` do, then runs ``export_thread``. The per-thread lock is held even
-    though this is a **pure read**: it guarantees a consistent snapshot, so an export can
-    never capture a half-written turn (an ``AIMessage`` whose answering ``ToolMessage``\\s
-    haven't landed yet). Returns the ``export_thread`` result plus a human-readable
-    ``message``.
-    """
-    if STATE.graph is None:
-        return {
-            "found": False,
-            "markdown": "",
-            "message_count": 0,
-            "redactions": [],
-            "reason": "setup",
-            "message": "Setup required — finish the setup wizard first.",
-        }
-
-    from graph.export_op import export_thread
-
-    tid = _resolve_thread_id(request_metadata, session_id)
-    async with _thread_lock(tid):
-        result = await export_thread(STATE.graph, STATE.checkpointer, tid, title=title)
-    return {**result, "message": _export_message(result)}
-
-
-def _artifact_resolver():
-    """``plugins.artifact.resolve_for_bundle``, imported defensively — the artifact
-    plugin is in-tree and on by default but still a plugin an operator can disable.
-    ``None`` degrades ``chat_bundle.build_bundle`` to unavailable artifact parts rather
-    than an ``ImportError`` (ADR 0099 D3)."""
-    try:
-        from plugins.artifact import resolve_for_bundle
-
-        return resolve_for_bundle
-    except ImportError:
-        return None
-
-
-async def _build_bundle(session_id: str, *, title: str | None, request_metadata: dict | None):
-    """Shared by ``publish_preview`` and ``publish_session`` — the exact same bundle a
-    preview shows is what gets published; there is no second build path."""
-    tid = _resolve_thread_id(request_metadata, session_id)
-    async with _thread_lock(tid):
-        from graph.chat_bundle import export_bundle
-
-        return await export_bundle(
-            STATE.graph, STATE.checkpointer, tid, title=title, artifact_resolver=_artifact_resolver()
-        )
-
-
-def _publish_preview_message(result: dict) -> str:
-    reason = result.get("reason") or ""
-    if reason == "no_checkpointer":
-        return "Nothing to preview — no conversation checkpoint yet."
-    if reason == "empty_thread":
-        return "Nothing to publish — this conversation has no messages yet."
-    redactions = result.get("redactions") or []
-    note = f" {len(redactions)} secret pattern(s) would be redacted." if redactions else ""
-    return f"{result.get('message_count', 0)} message(s) ready to review.{note}"
-
-
-async def publish_preview(
-    session_id: str,
-    *,
-    title: str | None = None,
-    request_metadata: dict | None = None,
-) -> dict:
-    """Build the structured chat-bundle for the pre-publish review (#2682) — **read-only,
-    never sends anything anywhere**. The operator reviews this before deciding to publish;
-    ``publish_session`` rebuilds fresh from the live thread rather than trusting this
-    snapshot, so a stale preview can never diverge from what actually gets published.
-
-    Returns ``{found, manifest, message_count, redactions, reason, message}``.
-    """
-    if STATE.graph is None:
-        return {
-            "found": False,
-            "manifest": None,
-            "message_count": 0,
-            "redactions": [],
-            "reason": "setup",
-            "message": "Setup required — finish the setup wizard first.",
-        }
-    result = await _build_bundle(session_id, title=title, request_metadata=request_metadata)
-    return {**result, "message": _publish_preview_message(result)}
-
-
-def _publish_message(outcome: dict) -> str:
-    if outcome.get("published"):
-        return f"Published — {outcome.get('public_url')}"
-    reason = outcome.get("reason") or "internal"
-    if reason == "not_configured":
-        return "Hosted publishing isn't configured on this instance yet."
-    if reason in ("no_checkpointer", "empty_thread"):
-        return "Nothing to publish — this conversation has no messages yet."
-    return f"Publish failed ({reason}) — {outcome.get('error') or 'see server logs'}."
-
-
-async def publish_session(
-    session_id: str,
-    *,
-    title: str | None = None,
-    request_metadata: dict | None = None,
-) -> dict:
-    """Publish a chat thread to the hosted viewer (#2179 P2, #2683).
-
-    Builds the bundle **server-side, fresh** — never accepts a client-supplied bundle,
-    the same trust boundary ``export_session`` already draws, now with a public network
-    hop behind it. Returns
-    ``{published, public_url, revoke_token, expires_at, redactions, artifact_notes,
-    reason, message}``; ``published`` is ``False`` with a ``reason`` (``not_configured``
-    when ``publish.endpoint_url`` is unset — the honest default until #2685's hosted
-    service exists — or an ``infra.publish.PublishErrorKind`` value) rather than raising.
-    """
-    if STATE.graph is None:
-        outcome = {"published": False, "reason": "setup"}
-        return {**outcome, "message": "Setup required — finish the setup wizard first."}
-
-    result = await _build_bundle(session_id, title=title, request_metadata=request_metadata)
-    if not result["found"]:
-        outcome = {"published": False, "reason": result["reason"]}
-        return {**outcome, "message": _publish_message(outcome)}
-
-    from graph.chat_bundle import build_bundle_zip
-    from infra.publish import publish_bundle
-
-    bundle = build_bundle_zip(result["manifest"], result["redactions"])
-    cfg = STATE.graph_config
-    publish_result = publish_bundle(
-        bundle.data,
-        endpoint_url=getattr(cfg, "publish_endpoint_url", "") or "",
-        timeout_seconds=getattr(cfg, "publish_timeout_seconds", 15.0) or 15.0,
-    )
-    if not publish_result.ok:
-        outcome = {
-            "published": False,
-            "reason": publish_result.error_kind.value if publish_result.error_kind else "internal",
-            "error": publish_result.error,
-        }
-        return {**outcome, "message": _publish_message(outcome)}
-
-    # Record it LOCALLY so it can be listed/revoked later (#2684) — best-effort: the
-    # bundle is already live on the hosted service at this point, so a local disk hiccup
-    # must not make a successful publish read back as a failure. It just means this
-    # instance loses its own memory of the link (still revocable by hand, if the operator
-    # kept the URL/token some other way).
-    link_id = None
-    from infra.publish import record_publish
-
-    try:
-        link_id = record_publish(
-            thread_id=result["manifest"]["thread_id"],
-            title=result["manifest"]["title"],
-            public_url=publish_result.public_url,
-            revoke_token=publish_result.revoke_token or "",
-            expires_at=publish_result.expires_at,
-        ).id
-    except OSError:
-        log.warning("[publish] could not record published link locally", exc_info=True)
-
-    outcome = {
-        "published": True,
-        "link_id": link_id,
-        "public_url": publish_result.public_url,
-        "revoke_token": publish_result.revoke_token,
-        "expires_at": publish_result.expires_at,
-        "redactions": result["redactions"],
-        "artifact_notes": bundle.artifact_notes,
-    }
-    return {**outcome, "message": _publish_message(outcome)}
-
-
-async def revoke_published_link(link_id: str) -> dict:
-    """Un-share a previously published thread (#2684).
-
-    Looks up the link's stored revoke_token and presents it to the hosted service —
-    marks it revoked LOCALLY only once that call confirms, never before (a local-only
-    revoke would tell the operator a link is dead while it's still live). Returns
-    ``{ok, error?, reason?}``.
-    """
-    from infra.publish import get_link, mark_revoked, revoke_bundle
-
-    link = get_link(link_id)
-    if link is None:
-        return {"ok": False, "reason": "not_found", "error": "unknown published link"}
-    if link.revoked_at is not None:
-        return {"ok": True}  # idempotent — already revoked, nothing to do
-
-    cfg = STATE.graph_config
-    result = revoke_bundle(
-        link.revoke_token,
-        endpoint_url=getattr(cfg, "publish_revoke_endpoint_url", "") or "",
-        timeout_seconds=getattr(cfg, "publish_timeout_seconds", 15.0) or 15.0,
-    )
-    if not result.ok:
-        return {
-            "ok": False,
-            "reason": result.error_kind.value if result.error_kind else "internal",
-            "error": result.error,
-        }
-    mark_revoked(link_id)
-    return {"ok": True}
-
-
-async def aside_session(
-    session_id: str,
-    question: str,
-    *,
-    request_metadata: dict | None = None,
-) -> dict:
-    """`/btw` — answer a side question about the session's context WITHOUT changing it
-    (the incognito side turn, #2180).
-
-    Resolves the session's checkpointer ``thread_id`` and runs ``run_aside``, which reads
-    that thread's messages and runs an incognito turn on a fresh EPHEMERAL thread — so the
-    main thread's checkpoint is never written. Returns ``{found, answer, reason, message}``.
-
-    Deliberately does NOT hold the per-thread lock across the turn: the aside never writes
-    the main thread (nothing to guard), and a side chat is meant to run *alongside* the main
-    conversation — locking would block the very thread it's supposed to sit beside."""
-    if STATE.graph is None:
-        return {"found": False, "answer": "", "reason": "setup", "message": "Setup required — finish the setup wizard first."}
-
-    from graph.aside_op import run_aside
-
-    tid = _resolve_thread_id(request_metadata, session_id)
-    result = await run_aside(
-        STATE.graph,
-        STATE.checkpointer,
-        tid,
-        question,
-        session_id=session_id,
-        db_path=getattr(STATE, "checkpoint_path", None),
-    )
-    reason = result.get("reason")
-    msg = {
-        "no_checkpointer": "No conversation yet — start chatting, then ask a side question.",
-        "empty_question": "Ask a question after /btw, e.g. `/btw what did we decide about the schema?`",
-    }.get(reason or "", "")
-    return {**result, "message": msg}
-
-
-def forget_delegate_conversations(*thread_ids: str) -> int:
-    """Drop the transport continuity delegates hold for these checkpointer threads (#3360).
-
-    A room hands an ``a2a`` participant this thread id as its ``conversation_key``, and the
-    delegates plugin remembers the A2A ``contextId`` the peer assigned it — so the peer
-    keeps a conversation of its own, keyed to this thread. That pointer has to die with the
-    thread's history, or a gesture whose whole point is that something is GONE leaves the
-    peer still holding it and answering from it:
-
-    * **rewind** — destructive by design; before continuity existed it was total, because
-      the participant remembered nothing. Keep it total.
-    * **delete** — the same promise the attachment / prompt-snapshot / session-summary
-      purges beside it already make ("its history will be removed").
-    * **fork** (destination) — a new thread id that need not be an unused one.
-
-    Compaction is deliberately NOT here: it summarizes to save this side's window and
-    claims nothing was unsaid, and the peer manages its own context.
-
-    Reached through ``STATE.delegate_registry`` — the roster the plugin publishes on
-    runtime state and the ``@``-dispatch above already reads — so core keeps its
-    duck-typed distance from ``plugins/``. ``hasattr``-guarded for a fork pinned to an
-    older delegates plugin, and swallowing, because a cleanup must never fail the gesture.
-    Returns how many contexts were dropped (0 when nothing is wired).
-    """
-    reg = getattr(STATE, "delegate_registry", None)
-    if reg is None or not hasattr(reg, "forget_conversation"):
-        return 0
-    dropped = 0
-    # De-duplicated: a caller passes every id that could name this conversation (both
-    # retired prefixes, plus whatever a custom resolver answers) and they routinely
-    # coincide — dropping the same one twice would double-count and re-log.
-    for tid in dict.fromkeys(t for t in thread_ids if t):
-        try:
-            dropped += int(reg.forget_conversation(tid) or 0)
-        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
-            log.warning("[chat] delegate-continuity cleanup failed for %s: %s", tid, exc)
-    return dropped
-
-
-def forget_delegate_conversations_for_session(*session_ids: str) -> int:
-    """Drop delegate transport continuity recorded as ORIGINATING from these chat sessions
-    (#3362).
-
-    The origin-scoped companion to ``forget_delegate_conversations``: that seam drops by
-    the resolved thread KEY a room dispatched under (the id rewind/fork already hold, because
-    they resolve it); this one drops by the chat SESSION a context was recorded against. A
-    custom thread-id resolver (ADR 0029 §D4 / #571) can map a session to any key and the map
-    is one-way, so a caller that knows only the session id — a DELETE route carries no request
-    metadata to re-resolve — can still reach every context that session minted, without a
-    prefix/substring guess at which keys belong to it.
-
-    Reached through ``STATE.delegate_registry`` and ``hasattr``-guarded, exactly like its
-    sibling, so a fork pinned to an older delegates plugin degrades to 'dropped nothing'; it
-    swallows because a cleanup must never fail the gesture it cleans up after. No route calls
-    it yet — this is the plumbing a following slice wires into the delete path.
-    """
-    reg = getattr(STATE, "delegate_registry", None)
-    if reg is None or not hasattr(reg, "forget_conversations_for_session"):
-        return 0
-    dropped = 0
-    for sid in dict.fromkeys(s for s in session_ids if s):
-        try:
-            dropped += int(reg.forget_conversations_for_session(sid) or 0)
-        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
-            log.warning("[chat] delegate-continuity session cleanup failed for %s: %s", sid, exc)
-    return dropped
-
-
-def _rewind_message(result: dict) -> str:
-    """Human-readable status line for a rewind result (surfaced to non-UI callers /
-    logs; the console just truncates its own thread on success)."""
-    reason = result.get("reason") or ""
-    if reason == "not_found":
-        return "Couldn't rewind — that message is no longer in the agent's live context."
-    if reason == "no_checkpointer":
-        return "Rewind unavailable — no conversation checkpoint to rewind."
-    if reason == "noop":
-        return "Nothing to rewind — that's already the last message."
-    return f"Rewound the conversation — discarded {result.get('removed', 0)} later message(s)."
-
-
-async def rewind_session(
-    session_id: str,
-    *,
-    message_id: str | None = None,
-    index: int | None = None,
-    content: str | None = None,
-    occurrence: int | None = None,
-    before: bool = False,
-    request_metadata: dict | None = None,
-) -> dict:
-    """Rewind a chat session's live context to a target message (the "Rewind to
-    here" gesture, #1535): discard everything after it and rewrite the LangGraph
-    checkpoint in place.
-
-    Resolves the session's checkpointer ``thread_id`` (the A2A ``a2a:<session_id>``
-    thread the live streaming turns write to) and runs ``rewind_thread`` under the
-    per-thread lock, so a rewind can never race a live streaming turn on the same
-    thread (mirrors ``compact_session``). The checkpoint is the agent's REAL
-    context, so a client-only truncate would leave it intact — the rewrite here is
-    what actually rolls the agent's memory back. Returns the ``rewind_thread``
-    result dict plus a human-readable ``message``.
-    """
-    base = {"found": False, "kept": 0, "removed": 0}
-    if STATE.graph is None:
-        return {**base, "reason": "setup", "message": "Setup required — finish the setup wizard first."}
-
-    from graph.rewind_op import rewind_thread
-
-    tid = _resolve_thread_id(request_metadata, session_id)
-    async with _thread_lock(tid):
-        result = await rewind_thread(
-            STATE.graph,
-            STATE.checkpointer,
-            tid,
-            target_index=index,
-            target_id=message_id,
-            target_content=content,
-            occurrence=occurrence,
-            before=before,
-        )
-        if result.get("found") and result.get("removed"):
-            # Only when messages were actually discarded: a "that's already the last
-            # message" rewind erased nothing, so throwing away a participant's continuity
-            # would be a pure loss with no leak to close.
-            #
-            # INSIDE the lock, with the rewrite: outside it, a concurrent `@` dispatch can
-            # take the thread between the two and either re-learn a context for the thread
-            # this forget is about to clear, or learn one just after it — which is the leak
-            # this call exists to close, reopened by a race.
-            forget_delegate_conversations(tid)
-    return {**result, "message": _rewind_message(result)}
-
-
-async def fork_session(
-    session_id: str,
-    new_session_id: str,
-    *,
-    message_id: str | None = None,
-    index: int | None = None,
-    content: str | None = None,
-    occurrence: int | None = None,
-    request_metadata: dict | None = None,
-) -> dict:
-    """Fork a chat session at a target message (#2803): copy the checkpoint
-    prefix through the target onto ``new_session_id``'s thread, leaving the
-    source untouched — so the forked tab's agent actually REMEMBERS the branch
-    point instead of starting amnesiac behind a seeded-looking transcript.
-
-    Both thread locks are taken in sorted order (never a lock cycle), so the
-    fork can't race a live turn on either thread.
-    """
-    base = {"found": False, "kept": 0, "discarded": 0}
-    if STATE.graph is None:
-        return {**base, "reason": "setup", "message": "Setup required — finish the setup wizard first."}
-    if not (new_session_id or "").strip():
-        return {**base, "reason": "no_target", "message": "Fork needs the new session's id."}
-
-    from graph.rewind_op import fork_thread
-
-    src_tid = _resolve_thread_id(request_metadata, session_id)
-    dst_tid = _resolve_thread_id(None, new_session_id)
-    if src_tid == dst_tid:
-        return {**base, "reason": "same_thread", "message": "A fork must target a different session."}
-    first, second = sorted((src_tid, dst_tid))
-    async with _thread_lock(first):
-        async with _thread_lock(second):
-            result = await fork_thread(
-                STATE.graph,
-                STATE.checkpointer,
-                src_tid,
-                dst_tid,
-                target_index=index,
-                target_id=message_id,
-                target_content=content,
-                occurrence=occurrence,
-            )
-            if result.get("found"):
-                # The destination thread's history is now the source's prefix, so any peer
-                # continuity a PREVIOUS occupant of this id left behind points at a
-                # conversation that has nothing to do with it. Both retired prefixes, so a
-                # destination that previously served non-streaming turns (`chat:`) does not
-                # keep the pointer the delete route would have dropped. The fork does not
-                # inherit the source's context either — that falls out of keying on the
-                # thread id, and it must not change: two threads writing into one peer
-                # conversation would splice two divergent rooms together on the peer's side.
-                # Inside the destination's lock, for the same reason the rewind is.
-                forget_delegate_conversations(dst_tid, f"chat:{new_session_id}")
-    return {**result, "message": _fork_message(result)}
-
-
-def _fork_message(result: dict) -> str:
-    """Human-readable status line for a fork result — honest about the failure
-    modes, because the console falls back to a display-only seed and must SAY so."""
-    if result.get("found"):
-        return f"Forked with {result.get('kept', 0)} message(s) of real context."
-    reason = result.get("reason") or ""
-    if reason in ("no_checkpointer", "empty_thread"):
-        return (
-            "No server history to fork — this branch starts fresh (the transcript "
-            "below is a display copy the agent can't see)."
-        )
-    if reason == "target_exists":
-        return "That session already has history — fork into a fresh tab instead."
-    if reason == "empty_prefix":
-        return "Nothing forkable before that point — the branch starts fresh."
-    if reason == "not_found":
-        return (
-            "Couldn't locate that message in the server history — the branch starts "
-            "fresh (display copy only)."
-        )
-    return "Fork unavailable — the branch starts fresh (display copy only)."
-
-
-def _record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, started: float) -> None:
-    """Write the telemetry row for one non-streaming turn (#3000). Best-effort.
-
-    ``sink`` is populated by ``_chat_langgraph_impl`` with the turn's usage
-    callback. It stays empty when the turn short-circuited before reaching the
-    graph — a `/help` command, an unknown slash command, "setup not complete", a
-    HITL hold. Those spend nothing, so they get no row: a telemetry surface that
-    counts control-plane replies as turns is worse than one that doesn't.
-    """
-    try:
-        usage_cb = sink.get("usage_cb")
-        if usage_cb is None:
-            return
-        per_model = getattr(usage_cb, "usage_metadata", None) or {}
-        models, usage, cost = _telemetry_usage(per_model)
-        if not models and not usage["input_tokens"] and not usage["output_tokens"]:
-            return  # reached the graph but made no model call (an ACP turn, a tool-only short-circuit)
-
-        from observability import tracing
-        from server.turn_telemetry import local_task_id, record_turn
-
-        record_turn(
-            task_id=local_task_id(origin),
-            session_id=session_id,
-            state=state,
-            models=models,
-            usage=usage,
-            cost_usd=cost,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            llm_calls=int(getattr(usage_cb, "llm_calls", 0) or 0),
-            tool_calls=int(getattr(usage_cb, "tool_calls", 0) or 0),
-            trace_id=tracing.current_trace_id() or "",
-            # No per-call breakdown on this path: LangChain's usage callback
-            # aggregates PER MODEL across the turn, so the peak single-call prompt
-            # size (context fill) and per-tool durations aren't recoverable from it.
-            # Left at their empty values rather than filled with a plausible-looking
-            # number derived from the wrong thing.
-            context_tokens=0,
-            tool_durations=None,
-            # See record_turn: the fleet roster's running count pairs a +1 on
-            # turn.started with a -1 on the terminal turn.usage, and this driver
-            # emits no turn.started.
-            publish_usage_event=False,
-        )
-    except Exception:  # noqa: BLE001 — telemetry must never break a turn
-        log.debug("[telemetry] failed to record a non-streaming turn", exc_info=True)
-
-
-def _make_usage_callback():
-    """LangChain's per-model usage collector, plus the call counts a telemetry row
-    needs (#3000).
-
-    Subclassed rather than attached as a SECOND handler on purpose: the goal
-    continuation re-attaches this object explicitly by name
-    (``callbacks: [usage_cb]``), so a separate counter handler would have to be
-    remembered there too — and the one that got forgotten would undercount
-    silently. One object, one attachment site to keep right.
-    """
-    from langchain_core.callbacks import UsageMetadataCallbackHandler
-
-    class _TurnUsageCallback(UsageMetadataCallbackHandler):
-        def __init__(self) -> None:
-            super().__init__()
-            self.llm_calls = 0
-            self.tool_calls = 0
-
-        def on_llm_end(self, *args, **kwargs):
-            # The base does the real work here (folding usage_metadata per model),
-            # so forward whatever we were handed, unexamined.
-            self.llm_calls += 1
-            return super().on_llm_end(*args, **kwargs)
-
-        def on_tool_end(self, *args, **kwargs):
-            # Deliberately does NOT call super(). The base's `on_tool_end` is an
-            # empty stub whose signature requires a keyword-only `run_id`, so
-            # delegating buys nothing and couples a telemetry counter to a
-            # signature that can raise inside a live turn's callback path.
-            self.tool_calls += 1
-            return None
-
-    return _TurnUsageCallback()
-
-
-def _telemetry_usage(per_model: dict[str, Any]) -> tuple[list[str], dict[str, int], float]:
-    """Fold LangChain's per-model ``usage_metadata`` into the telemetry-row shape:
-    ``(models, summed usage, cost_usd)`` (#3000).
-
-    Distinct from :func:`_sum_usage`, which produces the OpenAI wire shape and drops
-    the cache fields. Cost is summed PER MODEL rather than computed once on the
-    totals — a turn that routed across a pinned subagent and the lead bills each at
-    its own rate, and collapsing them first would price the whole turn at whichever
-    model happened to be listed.
-    """
-    from observability import pricing
-
-    models = list(per_model or {})
-    totals = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-    }
-    cost = 0.0
-    for model, u in (per_model or {}).items():
-        u = u or {}
-        details = u.get("input_token_details") or {}
-        one = {
-            "input_tokens": int(u.get("input_tokens", 0) or 0),
-            "output_tokens": int(u.get("output_tokens", 0) or 0),
-            "cache_read_input_tokens": int(details.get("cache_read", 0) or 0),
-            "cache_creation_input_tokens": int(details.get("cache_creation", 0) or 0),
-        }
-        for k, v in one.items():
-            totals[k] += v
-        cost += pricing.cost_usd(model, one)
-    return models, totals, round(cost, 6)
-
-
-def _sum_usage(per_model: dict[str, Any]) -> dict[str, int]:
-    """Fold LangChain's per-model ``usage_metadata`` (``{input,output,total}_tokens``) into
-    the OpenAI ``usage`` shape, summed across every model call in the turn — the lead model
-    plus any aux/fallback/subagent calls. Powers the /v1 OpenAI-compat ``usage`` field
-    (ADR 0075 D4); ``/api/chat`` ignores the extra key. ``total`` falls back to
-    prompt+completion for gateways that omit it."""
-    prompt = sum(int((u or {}).get("input_tokens", 0) or 0) for u in per_model.values())
-    completion = sum(int((u or {}).get("output_tokens", 0) or 0) for u in per_model.values())
-    total = sum(int((u or {}).get("total_tokens", 0) or 0) for u in per_model.values())
-    return {
-        "prompt_tokens": prompt,
-        "completion_tokens": completion,
-        "total_tokens": total or (prompt + completion),
-    }
-
-
 # OpenAI-shaped `error.type` per upstream HTTP status. Anything unmapped — including
 # 5xx and "no status at all" (a bug in our own code) — is a server_error.
 _ERROR_TYPE_BY_STATUS = {
@@ -4014,7 +3373,7 @@ async def _chat_langgraph(
         return result
     finally:
         _turn_ended(session_id)
-        _record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
+        _turn_telemetry.record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
 
 
 async def _chat_langgraph_impl(
@@ -4103,7 +3462,7 @@ async def _chat_langgraph_impl(
             # returned assistant dict; /api/chat ignores the extra key, the /v1 OpenAI-compat
             # handler reads it for `usage` (ADR 0075 D4). Mirrors the streaming path's
             # per-call usage accounting, which sums `on_chat_model_end` events for the turn.
-            usage_cb = _make_usage_callback()
+            usage_cb = _turn_telemetry.make_usage_callback()
             if _telemetry_sink is not None:
                 # Handed over as soon as it exists, not at the end: the wrapper reads
                 # it from a `finally`, so a turn that raises still bills what it spent
@@ -4241,7 +3600,7 @@ async def _chat_langgraph_impl(
                             {
                                 "role": "assistant",
                                 "content": f"🙋 **Input needed:** {question}",
-                                "usage": _sum_usage(usage_cb.usage_metadata),
+                                "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
                             }
                         ]
 
@@ -4304,7 +3663,7 @@ async def _chat_langgraph_impl(
                     if note:
                         response = f"{response}\n\n---\n{note}"
 
-                return [{"role": "assistant", "content": response, "usage": _sum_usage(usage_cb.usage_metadata)}]
+                return [{"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}]
 
             native_tid = config["configurable"]["thread_id"]
             return _traced(await _native_turn(message, images))
