@@ -6,10 +6,12 @@ import { describe, expect, it } from "vitest";
 // spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those tokens. A raw
 // exact-scale px that comes back is a site that no longer tracks the operator's chosen density
 // (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale half-steps
-// (2/6/7/9/10px, …) are intentionally LEFT as literals — they wait on the DS gap protoContent#547
-// — so this guard flags ONLY the five exact-scale values, and only when they sit in a spacing
-// declaration (a `left: 8px` / `border-radius: 4px` is not spacing). (chat.css and hitl.css are
-// the sibling card, 3c.)
+// (2/6/7/9/10px, …) were originally LEFT as literals — they waited on the DS gap protoContent#547
+// — and have since been tokenized onto the new `--pl-space-{0_5,1_5,2_5}` half-step tokens by the
+// radius/spacing card (protoContent#525/#547 step 3); the positive assertions at the foot of this
+// file pin that migration. This guard's SWEEP still flags ONLY the five exact-scale values, and
+// only when they sit in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not
+// spacing). (chat.css and hitl.css are the sibling card, 3c.)
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as offScaleSpacing3c.test.ts /
 // tokenNameGuard.test.ts: this tsconfig has no node types and under jsdom `import.meta.url` is an
@@ -112,7 +114,10 @@ describe("no exact-scale px spacing literal in the chat-component/promptviewer C
   });
 
   it("the matcher leaves half-steps, negatives, tokens, and non-spacing props alone", () => {
-    // Half-steps and off-scale values wait on protoContent#547 — never flagged.
+    // Half-steps and off-scale values are outside this matcher's exact-scale scope — never flagged.
+    // (In the two owned files they are now tokenized onto --pl-space-{0_5,1_5,2_5} by
+    // protoContent#525/#547 step 3; the sweep intentionally still targets only the exact scale, and
+    // the foot-of-file assertions pin the half-step→token mapping instead.)
     for (const half of ["2", "6", "7", "9", "10"]) {
       expect(spacingHits("  padding: " + half + "px;")).toEqual([]);
     }
@@ -139,10 +144,10 @@ describe("no exact-scale px spacing literal in the chat-component/promptviewer C
     expect(offendersIn("../chat/promptviewer.css", commented)).toEqual([]);
   });
 
-  it("proves the tokenized sites and the half-steps this card preserved are both present", () => {
+  it("proves the exact-scale tokenized sites and the newly tokenized half-steps are both present", () => {
     const chatComponent = CSS_SOURCES["../chat/chat-component.css"] ?? "";
     const promptViewer = CSS_SOURCES["../chat/promptviewer.css"] ?? "";
-    // r1 (exact-scale tokenized): a mixed-shorthand where the exact-scale member tokenized.
+    // r1 (exact-scale tokenized, card 3c2): a mixed-shorthand where the exact-scale member tokenized.
     expect(chatComponent).toContain("gap: var(--pl-space-1) var(--pl-space-4)");
     expect(chatComponent).toContain("margin: var(--pl-space-2) 0");
     expect(promptViewer).toContain("padding: var(--pl-space-1) 0 var(--pl-space-1) var(--pl-space-2)");
@@ -151,11 +156,13 @@ describe("no exact-scale px spacing literal in the chat-component/promptviewer C
     // slip past it silently — this single-value pin (anchored to the block's `margin: 0`) is the
     // check that keeps the 12px→3 mapping honest.
     expect(promptViewer).toContain("margin: 0;\n  padding: var(--pl-space-3);");
-    // r2 (half-steps unchanged): each spot-check is a mixed-shorthand value where the exact-scale
-    // member tokenized and the off-scale member survived — one assertion covers both invariants.
-    expect(chatComponent).toContain("padding: 10px var(--pl-space-3)");
-    expect(chatComponent).toContain("padding: 7px 10px");
-    expect(promptViewer).toContain("padding: var(--pl-space-2) 10px");
-    expect(promptViewer).toContain("gap: 10px");
+    // r2 (half-steps tokenized by protoContent#525/#547 step 3): the former 10px half-step now reads
+    // --pl-space-2_5 and the 7px→--pl-space-2 snap rides the same code-ref-chip shorthand. As with
+    // the r1 pins, the exact-scale sweep can't catch a WRONG-scale half-step token, so these
+    // shorthand pins are the check that keeps the half-step mapping honest (10→2_5, 7→2).
+    expect(chatComponent).toContain("padding: var(--pl-space-2_5) var(--pl-space-3)");
+    expect(chatComponent).toContain("padding: var(--pl-space-2) var(--pl-space-2_5)");
+    expect(promptViewer).toContain("padding: var(--pl-space-2) var(--pl-space-2_5)");
+    expect(promptViewer).toContain("gap: var(--pl-space-2_5)");
   });
 });
