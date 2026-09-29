@@ -43,6 +43,7 @@ from tests._turn_driver_fakes import (
 
 chat_mod = importlib.import_module("server.chat")
 turn_control = importlib.import_module("server.turn_control")
+turn_stream_mod = importlib.import_module("server.turn_stream")
 
 # Modules whose ``time`` the deterministic clock replaces. A refactor that moves the
 # event loop into a new module adds that module here.
@@ -1011,6 +1012,82 @@ async def test_consumer_closing_early_is_silent(env):
     # the per-thread lock released before aclose() returns — no GC/finalizer involved.
     assert env.trace.flushes == 1
     assert not turn_control._thread_lock("a2a:s-close").locked()
+
+
+@pytest.fixture
+def turn_streams(monkeypatch):
+    """Wrap ``turn_stream._run_turn_stream`` (chat.py calls it through the module) so a test
+    can see each graph turn's event loop EXIT — its frame unwound, however it ended."""
+    import contextlib
+    import types
+
+    real = turn_stream_mod._run_turn_stream
+    rec = types.SimpleNamespace(started=0, exited=0)
+
+    async def _spy(*args, **kwargs):
+        rec.started += 1
+        try:
+            async with contextlib.aclosing(real(*args, **kwargs)) as frames:
+                async for frame in frames:
+                    yield frame
+        finally:
+            rec.exited += 1
+
+    monkeypatch.setattr(turn_stream_mod, "_run_turn_stream", _spy)
+    return rec
+
+
+@pytest.mark.asyncio
+async def test_early_close_closes_the_inner_turn_generators_before_aclose_returns(env, monkeypatch, turn_streams):
+    """#3877: every async-generator hop on the streaming path is closed inside the outer
+    close — the native turn's ``goal_turn`` scope is reset and its event loop has exited by
+    the time ``aclose()`` returns, with no GC/finalizer involved."""
+    from graph.goals.goal_turn import in_goal_turn
+
+    monkeypatch.setattr(env.state, "goal_controller", FakeGoals([("done", "met")]), raising=False)
+    env.install(streams=[[text("r1", "one"), text("r1", "two")]])
+
+    agen = chat_mod._chat_langgraph_stream("hello", "s-close-inner")
+    first = await agen.__anext__()
+    assert first == ("text", "one")
+    assert in_goal_turn()  # mid-turn: the native turn's goal_turn scope is open
+    await agen.aclose()
+
+    assert turn_streams.started == 1
+    assert turn_streams.exited == 1  # _run_native_turn → _run_turn_stream hop closed
+    assert not in_goal_turn()  # impl → _run_native_turn hop closed: goal_turn's finally ran
+
+
+@pytest.mark.asyncio
+async def test_early_close_during_a_goal_continuation_closes_it(env, monkeypatch, turn_streams):
+    from graph.goals.goal_turn import in_goal_turn
+
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    env.install(streams=[[text("r1", "draft")], [text("r2", "better"), text("r2", " still")]])
+
+    agen = chat_mod._chat_langgraph_stream("ship it", "s-close-goal")
+    seen = [await agen.__anext__() for _ in range(3)]
+    assert seen[-1] == ("text", "better")  # inside the continuation turn
+    await agen.aclose()
+
+    assert turn_streams.started == 2
+    assert turn_streams.exited == 2  # the continuation's _run_turn_stream hop closed
+    assert not in_goal_turn()
+
+
+@pytest.mark.asyncio
+async def test_early_close_during_the_overflow_retry_closes_it(env, compaction, turn_streams):
+    env.install(streams=[[Raise(ValueError(_OVERFLOW))], [text("r1", "recovered"), text("r1", " more")]])
+
+    agen = chat_mod._chat_langgraph_stream("big ask", "s-close-ovf")
+    seen = [await agen.__anext__() for _ in range(2)]
+    assert seen == [("tool_start", chat_mod._OVERFLOW_NOTICE), ("text", "recovered")]
+    await agen.aclose()
+
+    assert turn_streams.started == 2
+    assert turn_streams.exited == 2  # the retry's _run_native_turn hop closed
+    assert not turn_control._thread_lock("a2a:s-close-ovf").locked()
 
 
 @pytest.mark.asyncio
