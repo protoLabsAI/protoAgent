@@ -869,41 +869,46 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
         while True:
             _autoanswer_pending = False
             _autonomous_giveup = False
-            async for kind, payload in _turn_stream._run_turn_stream(
-                message,
-                session_id,
-                config,
-                resume_value=_resume_value,
-                images=images,
-                model=_model,
-                reasoning_effort=_effort,
-                incognito=_incognito,
-                subagent_fence=_fence,
-            ):
-                if kind == "__raw__":
-                    accumulated_raw = payload
-                elif kind == "input_required":
-                    if not _autonomous:
-                        # Operator/a2a turn: surface it and park the turn; the A2A runner sets
-                        # the task input-required and the caller resumes via message/send on the
-                        # same taskId. (A human — local or at the remote a2a caller — can answer.)
-                        yield (kind, payload)
-                        paused = True
-                    elif _auto_answers < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
-                        # No human can answer — auto-answer this interrupt and re-run the turn so
-                        # it completes, rather than parking an (un-sweepable) input-required task.
-                        # The graph is checkpointed at the interrupt; the resume below feeds the
-                        # sentinel as ask_human / request_user_input's return value.
-                        _autoanswer_pending = True
+            # aclosing (#3877): a bare `async for` leaves the inner generator unclosed when
+            # this one is closed early — its cleanup would run at GC, not before aclose() returns.
+            async with contextlib.aclosing(
+                _turn_stream._run_turn_stream(
+                    message,
+                    session_id,
+                    config,
+                    resume_value=_resume_value,
+                    images=images,
+                    model=_model,
+                    reasoning_effort=_effort,
+                    incognito=_incognito,
+                    subagent_fence=_fence,
+                )
+            ) as _turn_frames:
+                async for kind, payload in _turn_frames:
+                    if kind == "__raw__":
+                        accumulated_raw = payload
+                    elif kind == "input_required":
+                        if not _autonomous:
+                            # Operator/a2a turn: surface it and park the turn; the A2A runner sets
+                            # the task input-required and the caller resumes via message/send on the
+                            # same taskId. (A human — local or at the remote a2a caller — can answer.)
+                            yield (kind, payload)
+                            paused = True
+                        elif _auto_answers < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
+                            # No human can answer — auto-answer this interrupt and re-run the turn so
+                            # it completes, rather than parking an (un-sweepable) input-required task.
+                            # The graph is checkpointed at the interrupt; the resume below feeds the
+                            # sentinel as ask_human / request_user_input's return value.
+                            _autoanswer_pending = True
+                        else:
+                            # Still asking after the auto-answer budget is spent: an autonomous turn
+                            # must NEVER park, so give up on the pause and force the turn to a
+                            # terminal state. The stray interrupt is cleared after the loop.
+                            _autonomous_giveup = True
                     else:
-                        # Still asking after the auto-answer budget is spent: an autonomous turn
-                        # must NEVER park, so give up on the pause and force the turn to a
-                        # terminal state. The stray interrupt is cleared after the loop.
-                        _autonomous_giveup = True
-                else:
-                    if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
-                        last_tool_out = str(payload["output"])
-                    yield (kind, payload)
+                        if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
+                            last_tool_out = str(payload["output"])
+                        yield (kind, payload)
             if _autoanswer_pending:
                 # Resume past the interrupt with the no-operator sentinel and run another pass;
                 # images belong only to the first (fresh) pass, so drop them on resume.
@@ -951,13 +956,21 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
 
             cont_raw = ""
             with goal_turn():
-                async for kind, payload in _turn_stream._run_turn_stream(
-                    decision.message, session_id, cont_config, model=_model, reasoning_effort=_effort, incognito=_incognito
-                ):
-                    if kind == "__raw__":
-                        cont_raw = payload
-                    else:
-                        yield (kind, payload)
+                async with contextlib.aclosing(
+                    _turn_stream._run_turn_stream(
+                        decision.message,
+                        session_id,
+                        cont_config,
+                        model=_model,
+                        reasoning_effort=_effort,
+                        incognito=_incognito,
+                    )
+                ) as _cont_frames:
+                    async for kind, payload in _cont_frames:
+                        if kind == "__raw__":
+                            cont_raw = payload
+                        else:
+                            yield (kind, payload)
             cont_text = extract_output(cont_raw)
             if cont_text:
                 final_text = cont_text
@@ -1383,10 +1396,16 @@ async def _chat_langgraph_stream_impl(
                 # `default`. The class is set for the whole native turn — both loops inside
                 # _run_native_turn — so its subagent tasks inherit it.
                 with _turn_control._interactive_turn_priority((request_metadata or {}).get("origin")):
-                    async for frame in _run_native_turn(
-                        message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
-                    ):
-                        yield frame
+                    # aclosing (#3877): close the native turn inside this generator's own
+                    # close, so its cleanup (goal_turn scope, the inner event loop) runs
+                    # before aclose() returns rather than at GC.
+                    async with contextlib.aclosing(
+                        _run_native_turn(
+                            message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
+                        )
+                    ) as _native_frames:
+                        async for frame in _native_frames:
+                            yield frame
 
         except GeneratorExit:
             # Expected: A2A consumers break out of the SSE loop after
@@ -1408,15 +1427,18 @@ async def _chat_langgraph_stream_impl(
                         # Same class as the initial turn (ADR 0115 D6) — the retry is the
                         # same operator/A2A turn, just after a force-compact.
                         with _turn_control._interactive_turn_priority((request_metadata or {}).get("origin")):
-                            async for frame in _run_native_turn(
-                                _OVERFLOW_RETRY_PROMPT,
-                                session_id,
-                                config,
-                                request_metadata=request_metadata,
-                                resume=False,
-                                images=None,
-                            ):
-                                yield frame
+                            async with contextlib.aclosing(
+                                _run_native_turn(
+                                    _OVERFLOW_RETRY_PROMPT,
+                                    session_id,
+                                    config,
+                                    request_metadata=request_metadata,
+                                    resume=False,
+                                    images=None,
+                                )
+                            ) as _retry_frames:
+                                async for frame in _retry_frames:
+                                    yield frame
                     return
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
                     log.exception("[a2a-stream] overflow retry failed for session=%s: %s", session_id, retry_exc)
