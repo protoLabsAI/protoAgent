@@ -11,6 +11,13 @@ import { expect, test } from "@playwright/test";
 //   • typed query  -> the FULL corpus, every surface included, ranked, UNCAPPED.
 // Both halves matter: dumping the surfaces at the root would fix the search and flood the
 // open palette, which is the trade the split exists to avoid.
+//
+// Scope: this file keeps what needs the REAL registry and a real browser — root membership,
+// the surface a row opens, the per-group quota against the groups this console actually
+// registers, and the utility-bar entry point. Ranking, dedupe, header contiguity, keyword
+// hits, the uncapped query path, frecency writes (typed and browsed) and the
+// aria-activedescendant contract are pinned against fixture registries in
+// src/app/palette/rootView.test.ts.
 
 const PANEL = ".pl-cmdk__panel";
 const ROW = ".pl-cmdk-commands__item";
@@ -54,8 +61,8 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // exactly one row, and Commands registers `Open…` first. That is the right row to guarantee
   // — it is the doorway to every surface, where `Settings` is one destination among the 22
   // that follow it, and both are one keystroke away once you type. What must never regress is
-  // that the group is REPRESENTED; which member leads it is registration order, asserted in
-  // the group-header case below.
+  // that the group is REPRESENTED; which member leads it is registration order, pinned in
+  // rootView.test.ts ("renders the survivors in REGISTRATION order").
   //
   // Matched on the row's LABEL span, not on the option's accessible name: the Settings row
   // advertises its shortcut now (#3295 gave it `keybinding: "settings.open"`), and an
@@ -71,39 +78,6 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   ).toBeVisible();
 });
 
-test("the active row is announced — aria-activedescendant, not just a highlight", async ({ page }) => {
-  const input = await openPalette(page);
-  // Focus never leaves the input (arrows move a class, not focus), so this pointer is the
-  // ONLY thing that tells a screen reader which row is live. The DS's own view ships the
-  // combobox role without it, which is silence from the first ArrowDown onward.
-  //
-  // Read BOTH values inside one `expect.poll` evaluation and let it retry. Two separate
-  // `getAttribute` round trips can straddle a provider read settling: the signature changes,
-  // the selection recomputes, and the two reads disagree about a state that was never
-  // actually inconsistent. Polling one combined read asserts the invariant instead of racing it.
-  const pair = () =>
-    page.evaluate((panel) => {
-      const input = document.querySelector(`${panel} .pl-cmdk-commands__input`);
-      const row = document.querySelector(`${panel} [data-sel="true"]`);
-      return {
-        active: input?.getAttribute("aria-activedescendant") ?? null,
-        selected: row?.getAttribute("id") ?? null,
-      };
-    }, PANEL);
-
-  await expect.poll(pair).toEqual(expect.objectContaining({ active: expect.any(String) }));
-  await expect.poll(async () => {
-    const { active, selected } = await pair();
-    return active === selected && active !== null;
-  }).toBe(true);
-
-  await input.press("ArrowDown");
-  await expect.poll(async () => {
-    const { active, selected } = await pair();
-    return active === selected && active !== null;
-  }).toBe(true);
-});
-
 test("typing 'memory' finds the Memory surface — the defect this view exists to fix", async ({ page }) => {
   const input = await openPalette(page);
   await input.fill("memory");
@@ -112,36 +86,6 @@ test("typing 'memory' finds the Memory surface — the defect this view exists t
   await row.click();
   // It really navigates — a findable row that doesn't open the surface is no fix at all.
   await expect(page.getByTestId("memory-surface")).toBeVisible();
-});
-
-test("running a command teaches the empty list — it leads with recents next time", async ({ page }) => {
-  const input = await openPalette(page);
-  await input.fill("knowledge");
-  await page.getByRole("option", { name: "Knowledge", exact: true }).click();
-  await expect(page.locator(PANEL)).toHaveCount(0);
-
-  // Reopen: the surface just used leads the list, under the Recent header. Nothing recorded
-  // command usage at all before this PR, so this is the write side as much as the read.
-  await openPalette(page);
-  const first = page.locator(`${PANEL} ${ROW}`).first();
-  await expect(first).toContainText("Knowledge");
-  await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`).first()).toHaveText("Recent");
-});
-
-test("BROWSING teaches the empty list too — not just typing", async ({ page }) => {
-  // `Open ▸` is a DS `commandsView`; the root view's single `run()` — where the frecency
-  // write lives — does not reach inside another view. So the palette learned from typing and
-  // learned nothing from the path this guide sends operators down ("the built-in surfaces
-  // live one hop in, behind Open…"): the only thing recorded was `Open…` itself, and the
-  // surface the operator actually opened never became a recent.
-  await openPalette(page);
-  await page.getByRole("option", { name: "Open…" }).click();
-  await page.getByRole("option", { name: "Knowledge", exact: true }).click();
-  await expect(page.locator(PANEL)).toHaveCount(0);
-
-  await openPalette(page);
-  await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`).first()).toHaveText("Recent");
-  await expect(page.getByRole("option", { name: "Knowledge", exact: true })).toBeVisible();
 });
 
 test("the empty list keeps every group, even once recents have taken most of it", async ({ page }) => {
@@ -199,58 +143,6 @@ test("the empty list keeps every group, even once recents have taken most of it"
   // typing its name. `Settings` and the deep links are a keystroke away, and this list holds
   // all of them on a first run (the assertion at the top of this file).
   await expect(page.getByRole("option", { name: "Open…" })).toBeVisible();
-});
-
-test("ranking: a label match leads, and keyword-only rows stay listed under it", async ({ page }) => {
-  const input = await openPalette(page);
-  await input.fill("chat");
-  // Three rows match "chat": the Chat SURFACE by label, and both agent rows by keyword.
-  // The surface leads (exact label beats an incidental keyword hit) — before ranking, order
-  // was registration order, so whichever happened to be registered first won.
-  await expect(page.locator(`${PANEL} ${ROW}`).first()).toContainText("Chat");
-  await expect(page.getByRole("option", { name: "Fleet Room" })).toBeVisible();
-
-  // A prefix match sorts under an exact one, and both sort above metadata matches.
-  await input.fill("settings");
-  await expect(page.locator(`${PANEL} ${ROW}`).first()).toHaveText(/^Settings/);
-  await expect(page.getByRole("option", { name: "Settings: Fleet" })).toBeVisible();
-});
-
-test("the ranked list renders no group header twice", async ({ page }) => {
-  // Headers are a CONTIGUITY marker, which equals grouping only in registration order.
-  // Ranking sorts across groups, so the DS's inherited rule re-emitted the same header at
-  // every transition — 8 headers over 16 rows on this console, "Commands" three times.
-  const input = await openPalette(page);
-  const groups = page.locator(`${PANEL} .pl-cmdk-commands__group`);
-  await expect(groups.first()).toBeVisible(); // the untyped list IS grouped, and keeps them
-  for (const q of ["s", "o", "t"]) {
-    await input.fill(q);
-    await expect(page.locator(`${PANEL} .pl-cmdk-commands__item`).first()).toBeVisible();
-    expect(await groups.count()).toBe(0);
-  }
-});
-
-test("a keyword-only hit still surfaces — ranking reorders, it never filters", async ({ page }) => {
-  const input = await openPalette(page);
-  // "box" appears in NO label — only on the Box deep-links' keywords. A label-first
-  // ranking that dropped keyword matches would lose these rows entirely (and would red
-  // fleet.spec.ts, where every member name rides the Fleet Room command's keywords).
-  await input.fill("box");
-  await expect(page.getByRole("option", { name: "Settings: Fleet" })).toBeVisible();
-  await expect(page.getByRole("option", { name: "Settings: Telemetry" })).toBeVisible();
-
-  await input.fill("ava"); // a live fleet member's name, carried as a keyword
-  await expect(page.getByRole("option", { name: "Fleet Room" })).toBeVisible();
-});
-
-test("the query path is UNCAPPED — the cap belongs to the empty list alone", async ({ page }) => {
-  const input = await openPalette(page);
-  const rows = page.locator(`${PANEL} ${ROW}`);
-  const rootCount = await rows.count();
-  // "e" matches nearly everything; the corpus (root commands + every surface) is larger
-  // than the empty-list cap, so a cap on the query path would be visible right here.
-  await input.fill("e");
-  expect(await rows.count()).toBeGreaterThan(rootCount);
 });
 
 // ── The visible way in (ADR 0057 findings 03/04) ──────────────────────────────────────

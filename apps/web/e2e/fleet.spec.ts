@@ -6,17 +6,15 @@ import { ARCHETYPES } from "./fixtures.mjs";
 import { routeSnapshot } from "./routeSnapshot";
 
 // Fleet manager + archetype picker (Settings → Agents, ADR 0042). Drives the live
-// control-plane endpoints (mocked): list, create from an archetype, stop. The mock
-// FLEET is shared module state, so run serially + assert by presence (not exact counts).
-
-test.describe.configure({ mode: "serial" });
+// control-plane endpoints (mocked): list, create from an archetype, stop. Assert by
+// presence (not exact counts).
 
 // This spec MUTATES the mock fleet (create / stop / rename / add-remote). Claim a
 // private fleet scope (the mock keys state on x-e2e-fleet) and reset it to baseline
-// before every test — including serial-group retries — so a write can never leak
-// into the next test, a retry, or another spec. The scope is keyed on the parallel
-// worker so even concurrent runners (repeat-each, if mode:serial is ever lifted)
-// stay isolated from each other.
+// before every test — including retries — so a write can never leak into the next
+// test, a retry, or another spec. The scope is keyed on the parallel worker (unique
+// among the workers running at once, and a worker runs one test at a time), which is
+// what lets these tests run fully parallel instead of as one serial group.
 const fleetScope = (testInfo) => `fleet-spec-${testInfo.parallelIndex}`;
 
 test.beforeEach(async ({ page }, testInfo) => {

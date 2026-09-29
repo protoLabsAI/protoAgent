@@ -40,8 +40,12 @@ test("one widget: badge from both events → pending inbox + completed activity"
   await expect(pending.getByText("new signup: acme.co")).toBeVisible();
 
   // It stays gone across the live `inbox.item` refetch cycle (the dismissed-id set
-  // survives the refetch even though GET /api/inbox still returns the row).
-  await page.waitForTimeout(700);
+  // survives the refetch even though GET /api/inbox still returns the row). Wait out TWO
+  // refetches (the mock bus pushes `inbox.item` every 500ms): the second one starting means
+  // the first one's answer has been rendered.
+  for (let i = 0; i < 2; i++) {
+    await page.waitForResponse((r) => new URL(r.url()).pathname === "/api/inbox" && r.request().method() === "GET");
+  }
   await expect(pending.getByText("build failed on main")).toHaveCount(0);
 
   // --- Completed section (below): the provenance timeline with markdown + badges. ---

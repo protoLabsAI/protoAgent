@@ -70,10 +70,4 @@ describe("HITL card accents follow the workspace accent override (#2153)", () =>
     const legacyPrefix = "--brand" + "-";
     expect(hitlCss).not.toContain(legacyPrefix);
   });
-
-  it("keeps every touched CSS comment free of the glued `*` `/` minifier trap", () => {
-    // Mirror scripts/check-css-comments.mjs: a `*/` glued to identifier chars closes a
-    // comment early and silently drops downstream rules from the minified bundle.
-    expect(hitlCss).not.toMatch(/[A-Za-z0-9_.-]\*\/[A-Za-z0-9_.-]/);
-  });
 });
