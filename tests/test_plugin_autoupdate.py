@@ -199,64 +199,74 @@ def _chat_mod():
     return importlib.import_module("server.chat")
 
 
+def _turn_control_mod():
+    # The idle beacon's ONE home (#3847) — ``server.chat`` does not re-export the rebound
+    # ``_ACTIVE_TURNS`` / ``_LAST_TURN_MONOTONIC`` ints, and patches go here.
+    import server.turn_control as turn_control
+
+    return turn_control
+
+
 def test_server_is_idle_reads_beacon(monkeypatch):
-    chat_mod = _chat_mod()
-    monkeypatch.setattr(chat_mod, "active_turns", lambda: 0)
-    monkeypatch.setattr(chat_mod, "seconds_since_last_turn", lambda: agent_init._AUTOUPDATE_IDLE_QUIET_S + 1)
+    tc = _turn_control_mod()
+    monkeypatch.setattr(tc, "active_turns", lambda: 0)
+    monkeypatch.setattr(tc, "seconds_since_last_turn", lambda: agent_init._AUTOUPDATE_IDLE_QUIET_S + 1)
     assert agent_init._server_is_idle() is True
     # Recent activity (within the quiet window) → not idle.
-    monkeypatch.setattr(chat_mod, "seconds_since_last_turn", lambda: 1.0)
+    monkeypatch.setattr(tc, "seconds_since_last_turn", lambda: 1.0)
     assert agent_init._server_is_idle() is False
 
 
 def test_server_is_idle_defers_during_long_turn(monkeypatch):
     """A turn in flight is never idle — even long past the quiet window. This is the
     mid-turn-reload bug a start-only timestamp had: a >quiet turn read as idle."""
-    chat_mod = _chat_mod()
-    monkeypatch.setattr(chat_mod, "active_turns", lambda: 1)
-    monkeypatch.setattr(chat_mod, "seconds_since_last_turn", lambda: agent_init._AUTOUPDATE_IDLE_QUIET_S + 9999)
+    tc = _turn_control_mod()
+    monkeypatch.setattr(tc, "active_turns", lambda: 1)
+    monkeypatch.setattr(tc, "seconds_since_last_turn", lambda: agent_init._AUTOUPDATE_IDLE_QUIET_S + 9999)
     assert agent_init._server_is_idle() is False
 
 
 def test_beacon_counts_active_turns(monkeypatch):
-    chat_mod = _chat_mod()
-    monkeypatch.setattr(chat_mod, "_ACTIVE_TURNS", 0)
-    monkeypatch.setattr(chat_mod, "_LAST_TURN_MONOTONIC", 0.0)
-    assert chat_mod.active_turns() == 0
-    assert chat_mod.seconds_since_last_turn() == float("inf")  # no turn yet
+    tc = _turn_control_mod()
+    monkeypatch.setattr(tc, "_ACTIVE_TURNS", 0)
+    monkeypatch.setattr(tc, "_LAST_TURN_MONOTONIC", 0.0)
+    assert tc.active_turns() == 0
+    assert tc.seconds_since_last_turn() == float("inf")  # no turn yet
 
-    chat_mod._turn_started()
-    assert chat_mod.active_turns() == 1
-    assert chat_mod.seconds_since_last_turn() < 5.0  # boundary stamped
+    tc._turn_started()
+    assert tc.active_turns() == 1
+    assert tc.seconds_since_last_turn() < 5.0  # boundary stamped
 
-    chat_mod._turn_ended()
-    assert chat_mod.active_turns() == 0
-    chat_mod._turn_ended()  # never underflows on an extra end
-    assert chat_mod.active_turns() == 0
+    tc._turn_ended()
+    assert tc.active_turns() == 0
+    tc._turn_ended()  # never underflows on an extra end
+    assert tc.active_turns() == 0
 
 
 async def test_stream_wrapper_brackets_active_turns(monkeypatch):
     """The wrapper marks a turn in flight for the whole generator and clears it on
     exhaustion — so `active_turns()` is 1 mid-turn, 0 after."""
     chat_mod = _chat_mod()
-    monkeypatch.setattr(chat_mod, "_ACTIVE_TURNS", 0)
+    tc = _turn_control_mod()
+    monkeypatch.setattr(tc, "_ACTIVE_TURNS", 0)
     seen = []
 
     async def fake_impl(message, session_id, **kw):
-        seen.append(chat_mod.active_turns())
+        seen.append(tc.active_turns())
         yield ("done", "ok")
 
     monkeypatch.setattr(chat_mod, "_chat_langgraph_stream_impl", fake_impl)
     out = [ev async for ev in chat_mod._chat_langgraph_stream("hi", "s1")]
     assert out == [("done", "ok")]
     assert seen == [1]  # in flight during the turn
-    assert chat_mod.active_turns() == 0  # decremented after exhaustion
+    assert tc.active_turns() == 0  # decremented after exhaustion
 
 
 async def test_stream_wrapper_decrements_on_early_close(monkeypatch):
     """Consumer bailing early (aclose) still balances the count via the finally."""
     chat_mod = _chat_mod()
-    monkeypatch.setattr(chat_mod, "_ACTIVE_TURNS", 0)
+    tc = _turn_control_mod()
+    monkeypatch.setattr(tc, "_ACTIVE_TURNS", 0)
 
     async def fake_impl(message, session_id, **kw):
         yield ("a", "1")
@@ -265,6 +275,6 @@ async def test_stream_wrapper_decrements_on_early_close(monkeypatch):
     monkeypatch.setattr(chat_mod, "_chat_langgraph_stream_impl", fake_impl)
     gen = chat_mod._chat_langgraph_stream("hi", "s1")
     assert await gen.__anext__() == ("a", "1")
-    assert chat_mod.active_turns() == 1
+    assert tc.active_turns() == 1
     await gen.aclose()  # consumer stops mid-stream
-    assert chat_mod.active_turns() == 0
+    assert tc.active_turns() == 0

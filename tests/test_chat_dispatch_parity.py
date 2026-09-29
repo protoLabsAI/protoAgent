@@ -23,6 +23,8 @@ from graph.config import LangGraphConfig
 chat_mod = importlib.import_module("server.chat")
 # The room exchange lives in server.chat_rooms (#3838) — patch it there.
 rooms_mod = importlib.import_module("server.chat_rooms")
+# The HITL hold lives in server.turn_control (#3847) — patch it there.
+turn_control = importlib.import_module("server.turn_control")
 
 _OVERFLOW = "Error code: 400 - This model's maximum context length is 128000 tokens."
 
@@ -65,7 +67,7 @@ def graph(monkeypatch):
         async def _no_hold(*a, **k):
             return None
 
-        monkeypatch.setattr(chat_mod, "_hold_if_hitl_pending", _no_hold)
+        monkeypatch.setattr(turn_control, "_hold_if_hitl_pending", _no_hold)
         return g
 
     return _install

@@ -11,10 +11,11 @@ fall-through) and composes the answer plus the note frame no bubble carries
 lock and calls ``_chat_rooms._at_delegate_exchange`` through this module at call time,
 so a test patch HERE intercepts it.
 
-**The exchange's collaborator stays in ``server.chat``.** The thread-id resolver
-(``_resolve_thread_id``) is reached through :func:`_chat` at CALL time, never bound at
-import — a test's patch on ``server.chat`` is what runs, and ``import server.chat_rooms``
-works standalone with no import-time edge back into ``server.chat``.
+**The exchange's collaborator lives in ``server.turn_control``** (#3847). The
+thread-id resolver (``_resolve_thread_id``) is reached through that module
+(``_turn_control._resolve_thread_id``) at CALL time, never bound at import — a test's
+patch on ``server.turn_control`` is what runs, and ``import server.chat_rooms`` works
+standalone with no import-time edge back into ``server.chat``.
 
 ``server.chat`` re-exports every name here so ``from server.chat import
 _at_delegate_reply`` keeps resolving. Patch these names HERE, not on ``server.chat``: a
@@ -25,9 +26,7 @@ re-export is a copy of the binding, so a ``setattr`` there intercepts nothing
 from __future__ import annotations
 
 import contextlib
-import importlib
 import logging
-from types import ModuleType
 
 # Parsing + resolution live in ``graph.mentions`` (see the section comment below).
 from graph.mentions import (
@@ -35,18 +34,10 @@ from graph.mentions import (
     parse_mention as _leading_at_token,
 )
 from runtime.state import STATE
+from server import turn_control as _turn_control
 
 # Same logger as server.chat, so the moved log lines keep their channel.
 log = logging.getLogger("protoagent.server")
-
-
-def _chat() -> ModuleType:
-    """``server.chat``, resolved at call time — see the module docstring.
-
-    ``importlib`` rather than ``from server import chat``: the ``server`` package
-    re-exports the ``chat`` FUNCTION under that name, shadowing the submodule.
-    """
-    return importlib.import_module("server.chat")
 
 
 # ── @-delegate dispatch (S1) ─────────────────────────────────────────────────
@@ -183,7 +174,7 @@ async def _at_delegate_exchange(
     max_rounds = round_cap(cfg)
     caps = catchup_caps(cfg)
 
-    tid = _chat()._resolve_thread_id(request_metadata, session_id)
+    tid = _turn_control._resolve_thread_id(request_metadata, session_id)
     # `rounds` is the whole state the driver needs — one list per round, in order. The
     # flat `outcomes` the caller wants is derived from it at the end rather than kept in
     # parallel, so there is only one place a round can be recorded.

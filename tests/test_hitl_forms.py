@@ -69,6 +69,7 @@ from runtime.state import STATE
 # `server.chat` the attribute is shadowed by the re-exported `chat` function in
 # server/__init__.py, so resolve the actual submodule from sys.modules.
 chat_mod = importlib.import_module("server.chat")
+turn_control = importlib.import_module("server.turn_control")
 
 
 class _FakeTurnStream:
@@ -116,7 +117,7 @@ async def test_autonomous_turn_auto_answers_hitl(monkeypatch):
     assert ("done", "Proceeding with staging.") in frames  # it ran to completion
     # The interrupt was resumed with the no-operator sentinel (first pass is the fresh input).
     assert fake.resume_values[0] is None
-    assert chat_mod._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
+    assert turn_control._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
 
 
 @pytest.mark.asyncio
@@ -181,8 +182,8 @@ async def test_autonomous_turn_force_completes_after_cap(monkeypatch):
     assert kinds[-1] == "done"  # forced to a terminal state
     # cap auto-answers (each resumed with the sentinel) + 1 fresh pass + 1 give-up pass.
     assert fake.resume_values[0] is None
-    assert fake.resume_values.count(chat_mod._AUTONOMOUS_HITL_SENTINEL) == chat_mod._MAX_AUTONOMOUS_AUTOANSWERS
-    assert len(fake.resume_values) == chat_mod._MAX_AUTONOMOUS_AUTOANSWERS + 1
+    assert fake.resume_values.count(turn_control._AUTONOMOUS_HITL_SENTINEL) == turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    assert len(fake.resume_values) == turn_control._MAX_AUTONOMOUS_AUTOANSWERS + 1
     assert len(cleared) == 1  # the stray interrupt was cleared exactly once
 
 
@@ -244,61 +245,61 @@ async def test_multiple_pending_interrupts_return_first_with_id(monkeypatch):
 @pytest.fixture(autouse=True)
 def _clean_attendance():
     """Every test starts and ends with an empty attendance registry (module-global)."""
-    chat_mod._ATTENDED_SESSIONS.clear()
+    turn_control._ATTENDED_SESSIONS.clear()
     yield
-    chat_mod._ATTENDED_SESSIONS.clear()
+    turn_control._ATTENDED_SESSIONS.clear()
 
 
 class TestAttendanceRegistry:
     def test_mark_release_refcounts(self):
-        assert chat_mod.mark_session_attended("s") is True
-        assert chat_mod.mark_session_attended("s") is True  # second tab on the same session
-        assert chat_mod.is_session_attended("s") is True
-        chat_mod.release_session_attended("s")
-        assert chat_mod.is_session_attended("s") is True  # one connection remains
-        chat_mod.release_session_attended("s")
-        assert chat_mod.is_session_attended("s") is False  # last one gone → unattended
+        assert turn_control.mark_session_attended("s") is True
+        assert turn_control.mark_session_attended("s") is True  # second tab on the same session
+        assert turn_control.is_session_attended("s") is True
+        turn_control.release_session_attended("s")
+        assert turn_control.is_session_attended("s") is True  # one connection remains
+        turn_control.release_session_attended("s")
+        assert turn_control.is_session_attended("s") is False  # last one gone → unattended
 
     def test_release_is_idempotent_and_never_raises(self):
-        chat_mod.release_session_attended("never-registered")  # no error, no negative refcount
-        assert chat_mod.is_session_attended("never-registered") is False
+        turn_control.release_session_attended("never-registered")  # no error, no negative refcount
+        assert turn_control.is_session_attended("never-registered") is False
 
     def test_blank_session_fails_closed(self):
-        assert chat_mod.mark_session_attended("") is False
-        assert chat_mod.mark_session_attended("   ") is False
-        assert chat_mod.is_session_attended("") is False
-        assert chat_mod.is_session_attended(None) is False
+        assert turn_control.mark_session_attended("") is False
+        assert turn_control.mark_session_attended("   ") is False
+        assert turn_control.is_session_attended("") is False
+        assert turn_control.is_session_attended(None) is False
 
     def test_registry_is_bounded(self, monkeypatch):
-        monkeypatch.setattr(chat_mod, "_ATTENDED_SESSIONS_MAX", 2)
-        assert chat_mod.mark_session_attended("a") is True
-        assert chat_mod.mark_session_attended("b") is True
+        monkeypatch.setattr(turn_control, "_ATTENDED_SESSIONS_MAX", 2)
+        assert turn_control.mark_session_attended("a") is True
+        assert turn_control.mark_session_attended("b") is True
         # a NEW session past the cap is dropped (fail-closed), not grown unbounded
-        assert chat_mod.mark_session_attended("c") is False
-        assert chat_mod.is_session_attended("c") is False
+        assert turn_control.mark_session_attended("c") is False
+        assert turn_control.is_session_attended("c") is False
         # …but an already-registered session can still add connections (no new key)
-        assert chat_mod.mark_session_attended("a") is True
+        assert turn_control.mark_session_attended("a") is True
 
 
 class TestAttendanceStream:
     async def test_stream_registers_then_releases_on_close(self):
-        agen = chat_mod.attendance_stream("sess-live", keepalive_s=0.01)
+        agen = turn_control.attendance_stream("sess-live", keepalive_s=0.01)
         first = await agen.__anext__()
         assert first == ": attending\n\n"
-        assert chat_mod.is_session_attended("sess-live") is True
+        assert turn_control.is_session_attended("sess-live") is True
         await agen.aclose()  # tab close / navigation / dropped socket
-        assert chat_mod.is_session_attended("sess-live") is False  # cleaned up in finally
+        assert turn_control.is_session_attended("sess-live") is False  # cleaned up in finally
 
     async def test_stream_releases_on_disconnect_probe(self):
         async def _disconnected():
             return True
 
-        agen = chat_mod.attendance_stream("sess-live", keepalive_s=100, is_disconnected=_disconnected)
+        agen = turn_control.attendance_stream("sess-live", keepalive_s=100, is_disconnected=_disconnected)
         assert await agen.__anext__() == ": attending\n\n"
-        assert chat_mod.is_session_attended("sess-live") is True
+        assert turn_control.is_session_attended("sess-live") is True
         with pytest.raises(StopAsyncIteration):
             await agen.__anext__()  # disconnect probe True → loop exits, finally runs
-        assert chat_mod.is_session_attended("sess-live") is False
+        assert turn_control.is_session_attended("sess-live") is False
 
 
 class TestAttendedResumeDecision:
@@ -306,31 +307,31 @@ class TestAttendedResumeDecision:
     every other autonomous origin is unconditional, and ``unattended: true`` always wins."""
 
     def test_attended_background_resume_is_not_autonomous(self):
-        assert chat_mod._is_autonomous({"origin": "background-resume", "attended": True}) is False
-        assert chat_mod._is_autonomous({"origin": "delegate-result", "attended": True}) is False
+        assert turn_control._is_autonomous({"origin": "background-resume", "attended": True}) is False
+        assert turn_control._is_autonomous({"origin": "delegate-result", "attended": True}) is False
 
     def test_unattended_background_resume_is_autonomous(self):
-        assert chat_mod._is_autonomous({"origin": "background-resume", "attended": False}) is True
-        assert chat_mod._is_autonomous({"origin": "delegate-result", "attended": False}) is True
+        assert turn_control._is_autonomous({"origin": "background-resume", "attended": False}) is True
+        assert turn_control._is_autonomous({"origin": "delegate-result", "attended": False}) is True
 
     def test_unstamped_background_resume_fails_closed_to_autonomous(self):
-        assert chat_mod._is_autonomous({"origin": "background-resume"}) is True
-        assert chat_mod._is_autonomous({"origin": "delegate-result"}) is True
+        assert turn_control._is_autonomous({"origin": "background-resume"}) is True
+        assert turn_control._is_autonomous({"origin": "delegate-result"}) is True
 
     def test_attended_flag_does_not_leak_to_other_origins(self):
         # r3 — scheduler/watch/inbox/webhook/background stay autonomous regardless of any
         # stray attended flag (only result-delivery origins consult it).
         for origin in ("scheduler", "watch", "inbox", "webhook", "background"):
-            assert chat_mod._is_autonomous({"origin": origin, "attended": True}) is True
+            assert turn_control._is_autonomous({"origin": origin, "attended": True}) is True
 
     def test_explicit_unattended_overrides_attendance(self):
         assert (
-            chat_mod._is_autonomous({"origin": "background-resume", "attended": True, "unattended": True})
+            turn_control._is_autonomous({"origin": "background-resume", "attended": True, "unattended": True})
             is True
         )
 
     def test_operator_turn_still_not_autonomous(self):
-        assert chat_mod._is_autonomous({}) is False
+        assert turn_control._is_autonomous({}) is False
 
 
 class _FormHitlStream:

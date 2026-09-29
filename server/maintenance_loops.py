@@ -555,11 +555,11 @@ _AUTOUPDATE_IDLE_QUIET_S = 300.0  # "idle" = no chat turn started in this window
 
 def _server_is_idle() -> bool:
     """True when no chat turn is in flight AND none finished within the quiet window
-    (the ``when: idle`` gate). Reads the beacon ``server.chat`` maintains around
-    every turn; if that import fails we conservatively report NOT idle so we never
-    reload mid-turn."""
+    (the ``when: idle`` gate). Reads the beacon ``server.turn_control`` maintains
+    around every turn; if that import fails we conservatively report NOT idle so we
+    never reload mid-turn."""
     try:
-        from server.chat import active_turns, seconds_since_last_turn
+        from server.turn_control import active_turns, seconds_since_last_turn
 
         return active_turns() == 0 and seconds_since_last_turn() >= _AUTOUPDATE_IDLE_QUIET_S
     except Exception:

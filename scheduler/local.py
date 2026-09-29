@@ -1011,7 +1011,7 @@ class LocalScheduler:
         # had no idea WHY it was awake (a cron sweep? a watch trip? a wait resume?). Prepend a
         # one-line "why you're awake" header and point it at <working_state> so it orients before
         # acting, and set a distinct `watch` origin so a watch reaction is no longer masquerading
-        # as an ordinary scheduler fire (server._AUTONOMOUS_ORIGINS recognizes both).
+        # as an ordinary scheduler fire (server.turn_control._AUTONOMOUS_ORIGINS recognizes both).
         if is_watch:
             wake_header = "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]"
         elif is_wait:

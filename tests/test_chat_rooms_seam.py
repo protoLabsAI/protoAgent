@@ -8,8 +8,8 @@ of it there intercepts nothing: ``_pre_turn_dispatch`` calls the exchange throug
 each other by bare name inside ``chat_rooms``. This scans the suite so a stale target
 fails loudly: every patch goes to ``server.chat_rooms`` — the names' one home.
 
-The other direction is pinned too: the moved exchange reaches ``server.chat``'s
-``_resolve_thread_id`` at CALL time, so a patch there lands.
+The other direction is pinned too: the moved exchange reaches ``server.turn_control``'s
+``_resolve_thread_id`` (its owner since #3847) at CALL time, so a patch there lands.
 """
 
 from __future__ import annotations
@@ -138,12 +138,12 @@ def wired(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_exchange_resolves_the_thread_through_server_chat(wired, monkeypatch):
-    """A patch of ``server.chat._resolve_thread_id`` must reach the moved
-    ``_at_delegate_exchange`` — it resolves it at call time, not at import."""
+async def test_exchange_resolves_the_thread_through_turn_control(wired, monkeypatch):
+    """A patch of ``server.turn_control._resolve_thread_id`` (its owner, #3847) must reach
+    the moved ``_at_delegate_exchange`` — it resolves it at call time, not at import."""
     import graph.mention_op as mention_op
 
-    chat = _chat()
+    turn_control = importlib.import_module("server.turn_control")
     seen: dict[str, list] = {"resolve": [], "tid": []}
 
     def _resolve(md, sid):
@@ -154,7 +154,7 @@ async def test_exchange_resolves_the_thread_through_server_chat(wired, monkeypat
         seen["tid"].append(tid)
         return {"author": name, "ok": True, "reply": "hi"}
 
-    monkeypatch.setattr(chat, "_resolve_thread_id", _resolve)
+    monkeypatch.setattr(turn_control, "_resolve_thread_id", _resolve)
     monkeypatch.setattr(mention_op, "run_mention", _run_mention)
 
     reply, _outcomes = await chat_rooms._at_delegate_exchange("@proto hello", "s-seam")

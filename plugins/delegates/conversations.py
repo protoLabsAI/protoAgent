@@ -245,7 +245,7 @@ def forget_one(conversation_key: str, delegate: str, url: str, credential: str =
 
     * **The peer PARKED** on a HITL interrupt (``input_required``). Its thread now holds a
       pending interrupt, and a protoAgent peer holds a *fresh* message on such a thread in
-      its steering queue and re-yields the same interrupt (``server.chat._hold_if_hitl_pending``
+      its steering queue and re-yields the same interrupt (``server.turn_control._hold_if_hitl_pending``
       — origin ``a2a`` is deliberately not autonomous). So a later ``@member`` sent into
       that context is never answered: it parks a second task with the identical question,
       and the round after that a third. Only the lead's ``delegate_to(..., resume_task_id=…)``

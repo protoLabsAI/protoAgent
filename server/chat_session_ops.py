@@ -5,13 +5,14 @@ thread *between* turns rather than driving one: ``/compact``, export, publish
 (preview / publish / revoke), the ``/btw`` aside, rewind, fork, and the delegate
 transport-continuity cleanup those destructive gestures share.
 
-**The turn driver's collaborators stay in ``server.chat``.** The per-thread lock
-(``_thread_lock`` — its ``_THREAD_LOCKS`` registry is module-level state with exactly
-one home) and the thread-id resolver (``_resolve_thread_id``) are reached through
-:func:`_chat` at CALL time, never bound at import. Two reasons: a ``server.chat``
-attribute patched by a test is what these gestures actually call, and there is no
-import-time edge back into ``server.chat``, so ``import server.chat_session_ops``
-works standalone and ``server.chat`` can re-export every name here at its tail.
+**The turn driver's collaborators live in ``server.turn_control``** (#3847). The
+per-thread lock (``_thread_lock`` — its ``_THREAD_LOCKS`` registry is module-level state
+with exactly one home) and the thread-id resolver (``_resolve_thread_id``) are reached
+through that module (``_turn_control.<name>``) at CALL time, never bound at import. Two
+reasons: a ``server.turn_control`` attribute patched by a test is what these gestures
+actually call, and there is no import-time edge back into ``server.chat``, so
+``import server.chat_session_ops`` works standalone and ``server.chat`` can re-export
+every name here.
 
 ``_force_compact_for_overflow`` is deliberately NOT here: it is the streaming /
 non-streaming turn drivers' overflow recovery (its only caller is
@@ -27,11 +28,10 @@ so patching it on ``server.chat`` intercepts nothing
 
 from __future__ import annotations
 
-import importlib
 import logging
-from types import ModuleType
 
 from runtime.state import STATE
+from server import turn_control as _turn_control
 
 # Same logger as server.chat, so the moved warnings keep their channel.
 log = logging.getLogger("protoagent.server")
@@ -48,15 +48,6 @@ __all__ = [
     "revoke_published_link",
     "rewind_session",
 ]
-
-
-def _chat() -> ModuleType:
-    """``server.chat``, resolved at call time — see the module docstring.
-
-    ``importlib`` rather than ``from server import chat``: the ``server`` package
-    re-exports the ``chat`` FUNCTION under that name, shadowing the submodule.
-    """
-    return importlib.import_module("server.chat")
 
 
 def _compaction_message(result: dict) -> str:
@@ -107,8 +98,8 @@ async def compact_session(session_id: str, *, request_metadata: dict | None = No
 
     from graph.compaction_op import compact_thread
 
-    tid = _chat()._resolve_thread_id(request_metadata, session_id)
-    async with _chat()._thread_lock(tid):
+    tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+    async with _turn_control._thread_lock(tid):
         result = await compact_thread(
             STATE.graph,
             STATE.checkpointer,
@@ -166,8 +157,8 @@ async def export_session(
 
     from graph.export_op import export_thread
 
-    tid = _chat()._resolve_thread_id(request_metadata, session_id)
-    async with _chat()._thread_lock(tid):
+    tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+    async with _turn_control._thread_lock(tid):
         result = await export_thread(STATE.graph, STATE.checkpointer, tid, title=title)
     return {**result, "message": _export_message(result)}
 
@@ -188,8 +179,8 @@ def _artifact_resolver():
 async def _build_bundle(session_id: str, *, title: str | None, request_metadata: dict | None):
     """Shared by ``publish_preview`` and ``publish_session`` — the exact same bundle a
     preview shows is what gets published; there is no second build path."""
-    tid = _chat()._resolve_thread_id(request_metadata, session_id)
-    async with _chat()._thread_lock(tid):
+    tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+    async with _turn_control._thread_lock(tid):
         from graph.chat_bundle import export_bundle
 
         return await export_bundle(
@@ -372,7 +363,7 @@ async def aside_session(
 
     from graph.aside_op import run_aside
 
-    tid = _chat()._resolve_thread_id(request_metadata, session_id)
+    tid = _turn_control._resolve_thread_id(request_metadata, session_id)
     result = await run_aside(
         STATE.graph,
         STATE.checkpointer,
@@ -498,8 +489,8 @@ async def rewind_session(
 
     from graph.rewind_op import rewind_thread
 
-    tid = _chat()._resolve_thread_id(request_metadata, session_id)
-    async with _chat()._thread_lock(tid):
+    tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+    async with _turn_control._thread_lock(tid):
         result = await rewind_thread(
             STATE.graph,
             STATE.checkpointer,
@@ -549,13 +540,13 @@ async def fork_session(
 
     from graph.rewind_op import fork_thread
 
-    src_tid = _chat()._resolve_thread_id(request_metadata, session_id)
-    dst_tid = _chat()._resolve_thread_id(None, new_session_id)
+    src_tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+    dst_tid = _turn_control._resolve_thread_id(None, new_session_id)
     if src_tid == dst_tid:
         return {**base, "reason": "same_thread", "message": "A fork must target a different session."}
     first, second = sorted((src_tid, dst_tid))
-    async with _chat()._thread_lock(first):
-        async with _chat()._thread_lock(second):
+    async with _turn_control._thread_lock(first):
+        async with _turn_control._thread_lock(second):
             result = await fork_thread(
                 STATE.graph,
                 STATE.checkpointer,

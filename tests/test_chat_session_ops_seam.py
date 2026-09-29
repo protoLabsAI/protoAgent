@@ -10,8 +10,9 @@ against the real function. This scans the suite so a stale target fails loudly.
 (A patch on ``operator_api.chat_routes`` — ``cr.compact_session`` etc. — is fine: the
 routes call their own module-level binding, and that is what those tests patch.)
 
-The other direction is pinned too: the moved gestures reach ``server.chat``'s
-``_thread_lock`` / ``_resolve_thread_id`` at CALL time, so a patch there still lands.
+The other direction is pinned too: the moved gestures reach ``server.turn_control``'s
+``_thread_lock`` / ``_resolve_thread_id`` (their owner since #3847) at CALL time, so a
+patch there still lands.
 """
 
 from __future__ import annotations
@@ -136,14 +137,15 @@ def test_the_route_module_binds_the_real_session_ops():
         assert getattr(cr, name) is getattr(session_ops, name), name
 
 
-def test_moved_gestures_call_the_thread_collaborators_through_server_chat(monkeypatch):
-    """A patch of ``server.chat._resolve_thread_id`` / ``_thread_lock`` must reach the moved
-    code — it resolves them at call time rather than binding them at import."""
+def test_moved_gestures_call_the_thread_collaborators_through_turn_control(monkeypatch):
+    """A patch of ``server.turn_control._resolve_thread_id`` / ``_thread_lock`` (their owner,
+    #3847) must reach the moved code — it resolves them at call time rather than binding
+    them at import."""
     import runtime.state as rs
 
-    chat = _chat()
+    turn_control = importlib.import_module("server.turn_control")
     seen: dict[str, list] = {"resolve": [], "lock": []}
-    real_lock = chat._thread_lock
+    real_lock = turn_control._thread_lock
 
     def _resolve(md, sid):
         seen["resolve"].append(sid)
@@ -158,8 +160,8 @@ def test_moved_gestures_call_the_thread_collaborators_through_server_chat(monkey
 
     import graph.compaction_op as compaction_op
 
-    monkeypatch.setattr(chat, "_resolve_thread_id", _resolve)
-    monkeypatch.setattr(chat, "_thread_lock", _lock)
+    monkeypatch.setattr(turn_control, "_resolve_thread_id", _resolve)
+    monkeypatch.setattr(turn_control, "_thread_lock", _lock)
     monkeypatch.setattr(compaction_op, "compact_thread", _fake_compact)
     monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
 
