@@ -304,7 +304,9 @@ async def test_continuation_includes_contract(tmp_path):
     c.set_goal_operator(
         "s",
         "ship it",
-        {"type": "command", "command": "pytest -q"},
+        # evaluate() really runs a command verifier — never point it at the suite: `pytest -q`
+        # here re-ran the whole suite from the repo root until the 120s verify timeout.
+        {"type": "command", "command": "exit 1"},
         outcome="suite green on main",
         constraints=["no new network calls"],
         boundaries=["graph/goals/"],
@@ -317,7 +319,7 @@ async def test_continuation_includes_contract(tmp_path):
     assert "NOT yet met" in msg
     # ...and the contract directive is appended.
     assert "DONE only when the verifier passes" in msg
-    assert "pytest -q" in msg  # verifier summary
+    assert "exit 1" in msg  # verifier summary
     assert "suite green on main" in msg
     assert "no new network calls" in msg
     assert "graph/goals/" in msg
