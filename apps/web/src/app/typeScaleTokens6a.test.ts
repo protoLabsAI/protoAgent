@@ -22,11 +22,12 @@ const SCALE_STEPS = ["3xs", "2xs", "xs", "sm", "base", "lg", "xl"] as const;
 // yet it sweeps source lines, not runtime values. The joined string is unchanged at runtime.
 const ALLOWED = SCALE_STEPS.map((s) => `var(` + `--pl-font-size-${s})`);
 
-// Token occurrences per file = the number of former px sites (schedule 13, activity 9,
-// code-pane 9 — the last including the --diffs-font-size custom property).
+// Token occurrences per file = the number of former px sites (schedule 12, activity 9,
+// code-pane 9 — the last including the --diffs-font-size custom property). Schedule dropped
+// from 13 when the `.hour-toggle` rule (its lone 2xs) became a DS Button (#551).
 const FILES: Record<string, { css: string; tokens: number }> = {
   "codeviewer/code-pane.css": { css: codePaneCss, tokens: 9 },
-  "schedule/schedule.css": { css: scheduleCss, tokens: 13 },
+  "schedule/schedule.css": { css: scheduleCss, tokens: 12 },
   "activity/activity.css": { css: activityCss, tokens: 9 },
 };
 
@@ -91,7 +92,6 @@ describe("#3688 6a: each site lands on the token its old px value maps to", () =
     [scheduleCss, ".cal-title", "sm", "13"],
     [scheduleCss, ".cal-wd", "2xs", "11"],
     [scheduleCss, ".cal-day", "xs", "12"],
-    [scheduleCss, ".hour-toggle", "2xs", "11"],
     [activityCss, ".activity-role", "3xs", "10"],
     [activityCss, ".activity-content", "base", "14"],
     [activityCss, ".activity-stimulus", "xs", "12"],

@@ -185,10 +185,5 @@
 }
 
 .field-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-2); }
-.hour-toggle {
-  font-size: var(--pl-font-size-2xs); padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--pl-color-border); background: transparent; color: var(--pl-color-fg-subtle); cursor: pointer;
-}
-.hour-toggle:hover { color: var(--pl-color-fg); border-color: var(--pl-color-fg-subtle); }
 .time-12h { display: flex; gap: 6px; }
 .time-12h > * { flex: 1; }
