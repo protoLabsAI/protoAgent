@@ -6,6 +6,7 @@ cancelling one delegation, and attendance following the open session."""
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from textual.widgets import Button, Input, Markdown, Select, Static, TextArea, Tree
@@ -16,9 +17,9 @@ from deck.app import FleetDeck
 from deck.feed import Activity
 from deck.hitl import ApprovalModal, FormModal, QuestionModal
 from deck.talk import ConversationScreen
-from tests.test_deck_app import _settle
+from tests.test_deck_app import _settle, _until
 from tests.test_deck_feed import FakeEvents, ev
-from tests.test_deck_talk import FakeA2A, TalkBackend, _open_talk, _send, _until, canned_frames, status
+from tests.test_deck_talk import FakeA2A, TalkBackend, _open_talk, _send, canned_frames, status
 
 # ── the form rules (apps/web/src/chat/hitl-form.ts) ───────────────────────────
 
@@ -101,13 +102,38 @@ class Parking(FakeA2A):
         yield park_frame(context_id, self.hitl)
 
 
-async def _type(app, pilot, text, wait=0.3):
-    """Type and send WITHOUT settling — for messages that land while a stream hangs."""
+async def _type(app, pilot, text, until=None):
+    """Type and send WITHOUT settling — for messages that land while a stream hangs. Waits
+    until the composer took the message (it clears on submit) and, if given, `until()`."""
     comp = app.screen.query_one("#composer", Input)
     comp.focus()
     comp.value = text
     await pilot.press("enter")
-    await pilot.pause(wait)
+    assert await _until(pilot, lambda: comp.value == ""), f"the composer never took {text!r}"
+    if until is not None:
+        assert await _until(pilot, until)
+
+
+async def _quiet(app, pilot) -> None:
+    """The barrier before asserting something did NOT happen while a stream deliberately
+    hangs (where `_settle` would wait on the stream): every other worker has finished and
+    the UI loop applied its results, so an action a key wrongly started has had its effect."""
+    assert await _until(pilot, lambda: all(w.is_finished for w in app.workers if w.group != "talk-stream"))
+    await pilot.pause()
+
+
+async def _drained(app, pilot, fe) -> None:
+    """The bus is drained on a 0.5 s timer: wait until it took every pending event, then
+    for whatever the events started — the barrier before asserting an event changed nothing."""
+    assert await _until(pilot, lambda: not fe.pending)
+    await _quiet(app, pilot)
+
+
+def _stalled(ex) -> bool:
+    """The live exchange has been silent past the (test-shrunk) stall threshold."""
+    from deck import talk as talkmod
+
+    return ex is not None and bool(ex.turn.task_id) and time.monotonic() - max(ex.turn.last_frame_at, ex.started_at) >= talkmod.STALL_IDLE_S
 
 
 def _resume_call(fake: FakeA2A, *, hidden: bool = False) -> dict:
@@ -135,8 +161,7 @@ async def test_approval_modal_resumes_the_parked_task_silently():
         assert app.activity.turn_cell("protoEngineer-ba4c") == "⚑ needs you"
         # enter on the empty composer opens the modal (not the composer text — it is empty)
         await pilot.press("enter")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, ApprovalModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
         assert "rm -rf build" in app.screen.query(".hitl-detail Static").first().render().plain
         await pilot.press("a")
         await _settle(app, pilot)
@@ -159,13 +184,13 @@ async def test_deny_and_escape_in_the_approval_modal():
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "delete it")
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, ApprovalModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
         await pilot.press("escape")  # leaves it parked
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: isinstance(app.screen, ConversationScreen))
+        await _settle(app, pilot)  # negative: escape resumes nothing
         assert isinstance(app.screen, ConversationScreen) and app.screen.convo.parked is not None and len(fake.sent) == 1
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
         await pilot.press("d")
         await _settle(app, pilot)
         assert _resume_call(fake, hidden=True)["text"] == "denied"
@@ -196,12 +221,11 @@ async def test_an_approval_with_its_own_choices_answers_with_the_chosen_value():
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "explore munda")
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, ApprovalModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
         labels = [str(b.label) for b in app.screen.query(Button)]
         assert labels[:3] == ["Allow read-only", "Allow read-write", "Deny"] and "Approve (a)" not in labels
         await pilot.press("a")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: a resume would be a stream worker, which settle waits for
         assert isinstance(app.screen, ApprovalModal) and len(fake.sent) == 1  # nothing sent
         await pilot.click("#opt-1")
         await _settle(app, pilot)
@@ -237,8 +261,7 @@ async def test_question_modal_carries_the_draft_and_ctrl_d_dismisses_with_the_se
         comp = app.screen.query_one("#composer", Input)
         comp.value = "mai"
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, QuestionModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, QuestionModal))
         assert app.screen.query_one("#answer", Input).value == "mai"
         await pilot.press("ctrl+d")
         await _settle(app, pilot)
@@ -266,7 +289,7 @@ async def test_form_wizard_gates_required_fields_reveals_conditional_ones_and_su
         assert modal.query_one("#next").disabled  # name is required and empty
         assert modal.query_one("#in-count", Input).value == "2"  # the default is an answer
         await pilot.press("ctrl+right")  # blocked while required is missing
-        await pilot.pause(0.1)
+        await pilot.pause()  # negative: the key is handled synchronously; one more loop turn for anything it posted
         assert modal.current == 0
         modal.query_one("#in-name", Input).focus()
         assert await _until(pilot, lambda: modal.query_one("#in-name", Input).has_focus)
@@ -313,8 +336,7 @@ async def test_a_plugin_form_is_redeemed_on_the_submit_route_and_a_returned_form
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "post the update")
         await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
-        assert isinstance(app.screen, FormModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, FormModal))
         app.screen.query_one("#in-text", Input).focus()
         await pilot.press(*"hello", "ctrl+s")
         assert await _until(pilot, lambda: any(c[0] == "submit_form" for c in be.calls))
@@ -323,8 +345,9 @@ async def test_a_plugin_form_is_redeemed_on_the_submit_route_and_a_returned_form
         # the wizard's next step opened by itself, carrying the new callback id
         assert await _until(pilot, lambda: isinstance(app.screen, FormModal) and app.screen.hitl.get("plugin_callback_id") == "cb2")
         be.form_result = {"reply": "posted"}
-        app.screen.query_one("#in-channel", Select).value = "y"
-        await pilot.pause(0.2)
+        modal = app.screen
+        modal.query_one("#in-channel", Select).value = "y"
+        assert await _until(pilot, lambda: modal.values.get("channel") == "y")
         await pilot.press("ctrl+s")
         assert await _until(pilot, lambda: any(c[0] == "submit_form" and c[2] == "cb2" for c in be.calls))
         await _settle(app, pilot)
@@ -391,9 +414,12 @@ async def test_a_folded_in_steer_settles_on_its_frame_and_a_park_keeps_the_rest_
         await _type(app, pilot, "faster")
         await _type(app, pilot, "and quieter")
         assert await _until(pilot, lambda: app.screen.convo.parked is not None)
-        await pilot.pause(0.4)  # the turn-end reconcile
-        bubbles = [b.render().plain for b in app.screen.query(".steer-msg")]
-        assert len(bubbles) == 2 and "folded in" in bubbles[0] and "queued" in bubbles[1]
+        await _settle(app, pilot)  # the turn-end reconcile (the parking stream has ended: nothing hangs)
+
+        def bubbles():
+            return [b.render().plain for b in app.screen.query(".steer-msg")]
+
+        assert await _until(pilot, lambda: len(bubbles()) == 2 and "folded in" in bubbles()[0] and "queued" in bubbles()[1]), bubbles()
         assert len(fake.sent) == 1  # a parked turn keeps the unread steer for after the answer
 
 
@@ -420,7 +446,7 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
             f["result"]["statusUpdate"]["taskId"] = "t7"
         # the scheduler's own turn.started names only the session (no task id) — nothing to attach to yet
         fe.pending.append(ev("protoEngineer-ba4c", "turn.started", session_id=sid, origin="scheduler", trigger="daily-report"))
-        await pilot.pause(0.7)
+        await _drained(app, pilot, fe)  # negative: the event was consumed and attached nothing
         assert fake.subscribed == [] and app.screen.convo.live is None
         # the chat.progress `turn_started` frame carries the task id and the control block: attach
         fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="turn_started", control={"operator_controllable": False, "origin": "scheduler", "trigger": "daily-report"}))
@@ -435,7 +461,7 @@ async def test_a_server_fired_turn_on_the_bus_is_attached_and_takes_interjection
         comp = app.screen.query_one("#composer", Input)
         comp.value = "look at #12 too"
         await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _quiet(app, pilot)  # negative: no interject worker ran
         assert comp.value == "look at #12 too" and not any(c[0] == "interject" for c in be.calls)
         # the bus says the operator may interject (attended session) → the composer interjects
         fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_start", tool="read_board", tool_call_id="c1", control={"operator_controllable": True, "origin": "scheduler"}))
@@ -521,22 +547,22 @@ async def test_ctrl_x_on_a_running_task_card_cancels_that_delegation_only():
         assert await _until(pilot, lambda: len(app.screen.query_one("#work-tree", Tree).root.children) == 1)
         # ctrl+x in the composer is the composer's cut — nothing happens to the delegation
         await pilot.press("ctrl+x")
-        await pilot.pause(0.1)
+        await _quiet(app, pilot)  # negative: no delegation-cancel worker ran
         assert not any(c[0] == "delegation_cancel" for c in be.calls)
         await pilot.press("tab")  # → work tree; nothing selected yet, but exactly one task runs
-        await pilot.pause(0.1)
         tree = app.screen.query_one("#work-tree", Tree)
+        assert await _until(pilot, lambda: tree.has_focus)
         assert tree.has_focus and tree.cursor_node is None
         await pilot.press("ctrl+x")
         assert await _until(pilot, lambda: ("delegation_cancel", sid, "d1") in be.calls)
         assert not fake.cancelled  # the TURN was not cancelled
         # with the cursor on a NON-task card (the nested run_command) nothing is cancelled
         await pilot.press("down", "down")
-        await pilot.pause(0.1)
-        assert tree.cursor_node is not None and tree.cursor_node.data.name == "run_command"
+        assert await _until(pilot, lambda: tree.cursor_node is not None and tree.cursor_node.data.name == "run_command")
+        await _quiet(app, pilot)  # the first cancel's worker is done before we count calls
         n = len(be.calls)
         await pilot.press("ctrl+x")
-        await pilot.pause(0.2)
+        await _quiet(app, pilot)  # negative: no delegation-cancel worker ran
         assert len([c for c in be.calls if c[0] == "delegation_cancel"]) == 1 and len(be.calls) == n
         await pilot.press("escape")
         await _settle(app, pilot)
@@ -555,7 +581,7 @@ async def test_attendance_follows_the_open_session_and_is_released_on_leave():
         attends = [c for c in be.calls if c[0] == "attend"]
         assert len(attends) == 1 and attends[0][1] == sid and not attends[0][2].closed
         await pilot.press("ctrl+n")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: len([c for c in be.calls if c[0] == "attend"]) == 2)
         attends = [c for c in be.calls if c[0] == "attend"]
         assert len(attends) == 2 and attends[0][2].closed and attends[1][1] == app.screen.convo.session_id and not attends[1][2].closed
         await pilot.press("escape")
@@ -570,7 +596,7 @@ async def test_offline_conversation_cannot_be_opened_so_nothing_to_act_on():
     async with app.run_test(size=(120, 30)) as pilot:
         await _settle(app, pilot)
         await pilot.press("j", "enter")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: nothing opened, no attend worker ran
         assert not isinstance(app.screen, ConversationScreen)
         assert not any(c[0] == "attend" for c in be.calls)
 
@@ -628,17 +654,16 @@ async def test_the_decks_own_park_on_the_bus_does_not_reload_the_session_under_t
         old = convo_screen.convo.parked
         reads = len(be.turn_reads)
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, ApprovalModal)
+        assert await _until(pilot, lambda: isinstance(app.screen, ApprovalModal))
         fe.pending.append(ev("protoEngineer-ba4c", "turn.input_required", context_id=sid, task_id="t1", prompt="Approve?"))
-        await pilot.pause(0.8)
+        await _drained(app, pilot, fe)  # negative: the event was consumed and started no reload
         assert convo_screen.convo.parked is old and len(be.turn_reads) == reads  # known park: no reload
         await pilot.press("a")
         assert await _until(pilot, lambda: len(fake.sent) == 2)
         assert await _until(pilot, lambda: convo_screen.convo.live is None and convo_screen.convo.parked is None)
         assert "idle" in str(convo_screen.query_one("#talk-status", Static).content)
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: no modal, no resume worker
         assert isinstance(app.screen, ConversationScreen) and len(fake.sent) == 2  # nothing to answer twice
         # a park we did NOT watch happen (another client's turn in this session) still reloads
         be._turns[sid].append({"task_id": "t2", "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"role": "ROLE_AGENT", "parts": [{"text": "Which?"}]}}, "history": [{"role": "ROLE_USER", "parts": [{"text": "from the console"}]}], "artifacts": []})
@@ -669,12 +694,13 @@ async def test_a_stall_finalize_finishes_once_and_resends_an_unread_steer_once(m
         assert await _until(pilot, lambda: any(c[0] == "steer" for c in be.calls))
         st_id = [c[2] for c in be.calls if c[0] == "steer"][0]
         be.pending_steers = [{"id": st_id, "text": "later"}]
-        await pilot.pause(0.3)
+        # the steer's POST has returned and the stream has been silent past the stall threshold
+        assert await _until(pilot, lambda: scr.convo.steers and scr.convo.steers[0].queued and _stalled(scr.convo.live))
         fake.block_after = None
         scr._check_stall()
-        await _settle(app, pilot)
-        await pilot.pause(0.8)
-        await _settle(app, pilot)
+        await _settle(app, pilot)  # the probe, the unwinding reader, the reconcile and its re-send are all workers
+        assert await _until(pilot, lambda: len(fake.sent) == 2 and len(scr.convo.exchanges) == 2)
+        await _settle(app, pilot)  # …and anything a duplicate finish would have started
         assert [s["text"] for s in fake.sent] == ["go", "later"]
         assert sum(1 for c in be.calls if c[0] == "steer_pending") == 1
         assert finishes.count("") >= 1 and len(scr.convo.exchanges) == 2
@@ -702,10 +728,10 @@ async def test_a_stall_finalize_marks_the_turn_done_before_waking_the_reader(mon
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
-        await _type(app, pilot, "go", wait=0.4)
+        await _type(app, pilot, "go", until=lambda: _stalled(app.screen.convo.live))
         app.screen._check_stall()
-        await _settle(app, pilot)
-        await pilot.pause(0.5)
+        await _settle(app, pilot)  # the probe and the reader are workers
+        assert await _until(pilot, lambda: app.screen.convo.exchanges[-1].turn.done and app.screen.convo.exchanges[-1].finished)
         ex = app.screen.convo.exchanges[-1]
         assert ex.turn.done and not ex.error and "✗" not in str(app.screen.query(".turn-meta").first().content)
 
@@ -738,11 +764,11 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
         fake.hang = False
         await pilot.press("escape")
         assert await _until(pilot, lambda: app.screen.convo.live is None)
+        old_sid = app.screen.convo.session_id
         await pilot.press("ctrl+n")  # the session switches while the reconcile's roundtrip is still out…
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: app.screen.convo.session_id != old_sid)
         roundtrip.set()  # …and only now does it return
-        await pilot.pause(0.5)
-        await _settle(app, pilot)
+        await _settle(app, pilot)  # negative: the reconcile worker (and any re-send it started) has finished
         assert len(fake.sent) == 1  # nothing re-sent into the new session
     # …and an answer typed inside the roundtrip: the stale reconcile is dropped; the resumed
     # turn folds the held steer in (the server's queue drains at its next model call)
@@ -772,14 +798,13 @@ async def test_a_reconcile_that_lands_after_a_session_switch_or_an_answer_sends_
     app2 = FleetDeck(be2, poll_s=0)
     async with app2.run_test(size=(120, 36)) as pilot:
         await _open_talk(be2, pilot, app2)
-        await _type(app2, pilot, "go", wait=0.1)
-        await _type(app2, pilot, "faster", wait=0.1)  # queued into the running turn, which then parks
+        await _type(app2, pilot, "go")
+        await _type(app2, pilot, "faster")  # queued into the running turn, which then parks
         assert await _until(pilot, lambda: app2.screen.convo.parked is not None)
-        await _type(app2, pilot, "yes", wait=0.1)  # answers while reconcile #1's roundtrip is still out
+        await _type(app2, pilot, "yes")  # answers while reconcile #1's roundtrip is still out
         assert await _until(pilot, lambda: any(s["metadata"] for s in fake2.sent))  # the resume went out…
         answered_evt.set()  # …and only now does reconcile #1 return (stale) and reconcile #2 run
-        await pilot.pause(1.0)
-        await _settle(app2, pilot)
+        await _settle(app2, pilot)  # both reconciles and the resumed stream are workers
         assert [s["text"] for s in fake2.sent] == ["go", "yes"]  # "faster" was never re-sent as a turn of its own
         assert [st.consumed for st in app2.screen.convo.steers] == [True]  # reconcile #2 found it folded in
 
@@ -796,14 +821,14 @@ async def test_a_form_field_that_reveals_a_sibling_keeps_focus_and_the_caret():
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "go")
         await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: isinstance(app.screen, FormModal) and getattr(app.screen.focused, "id", None) == "in-name")
         modal = app.screen
         assert isinstance(modal, FormModal) and getattr(modal.focused, "id", None) == "in-name"
         await pilot.press("b")
-        await pilot.pause(0.3)
-        assert getattr(modal.focused, "id", None) == "in-name" and modal.query("#field-tag")
+        # the sibling is revealed AND focus is back on the field (a dropped focus never returns)
+        assert await _until(pilot, lambda: bool(modal.query("#field-tag")) and getattr(modal.focused, "id", None) == "in-name")
         await pilot.press(*"ob")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: modal.values.get("name") == "bob")
         assert modal.query_one("#in-name", Input).value == "bob" and modal.values["name"] == "bob"
         await pilot.press("ctrl+s")
         await _settle(app, pilot)
@@ -837,7 +862,8 @@ async def test_an_attached_server_turn_is_not_reported_twice_to_the_feed_and_a_r
         fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_start", tool="read_board", tool_call_id="c1", control={"origin": "scheduler"}))
         fe.pending.append(ev("protoEngineer-ba4c", "chat.progress", session_id=sid, task_id="t7", phase="tool_end", tool="read_board", tool_call_id="c1", output="ok", control={"origin": "scheduler"}))
         assert await _until(pilot, lambda: app.screen.convo.latest is not None and app.screen.convo.latest.turn.done)
-        await pilot.pause(0.3)
+        await _drained(app, pilot, fe)  # negative: every bus row landed, none doubled the attached turn's
+        await _settle(app, pilot)
         assert [(r.glyph, r.label) for r in app.activity.rows if r.tool_id == "c1"] == [("⟳", "read_board"), ("✓", "read_board")]
     # a turn in flight when the session opens: the durable copy is replaced by the snapshot, not doubled
     sid2 = "chat-1700000000000-abc"
@@ -903,10 +929,11 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
         assert "Three PRs are open." in str(app.screen.query(Markdown).first().source)
         await pilot.press("ctrl+z")  # a re-render must not re-park the roster
         fe.pending.append(ev("protoEngineer-ba4c", "turn.usage", task_id="t1", context_id=sid, state="TASK_STATE_COMPLETED"))
-        await pilot.pause(0.8)
+        await _drained(app, pilot, fe)  # negative: consumed without re-parking or ringing
+        await _settle(app, pilot)
         assert app.activity.turn_cell("protoEngineer-ba4c") == "idle" and rings == []
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: no modal, no resume worker
         assert isinstance(app.screen, ConversationScreen) and len(fake.sent) == 1  # nothing to answer, nothing sent
     # …and a park that ENDED elsewhere (terminal usage / finished) shows how it ended
     fake2 = Parking({"question": "Merge?"})
@@ -934,8 +961,7 @@ async def test_a_park_answered_elsewhere_follows_the_bus_instead_of_sending_a_st
         await _send(app3, pilot, "pick")
         convo_screen = app3.screen
         await pilot.press("ctrl+r")
-        await pilot.pause(0.2)
-        assert isinstance(app3.screen, QuestionModal)
+        assert await _until(pilot, lambda: isinstance(app3.screen, QuestionModal))
         await pilot.press(*"main")
         be3._turns[sid] = [{"task_id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "history": [], "artifacts": [{"parts": [{"text": "took develop"}]}]}]
         fe3.pending.append(ev("protoEngineer-ba4c", "turn.finished", session_id=sid, task_id="t1", ok=True))
@@ -980,37 +1006,42 @@ async def test_a_server_turn_the_bus_showed_continues_its_in_flight_durable_row(
 async def test_a_plugin_form_cannot_be_reopened_while_its_submit_is_in_flight():
     """Blocker: re-opening the form during the submit roundtrip lost the second set of
     answers and sent them to the A2A task as a hitl_resume carrying a dict repr."""
-    import time as _t
+    import threading
 
     fake = Parking({"kind": "form", "title": "Post?", "plugin_callback_id": "cb1", "steps": [{"schema": {"properties": {"text": {"type": "string"}}, "required": ["text"]}}]})
     be = TalkBackend(a2a_client=fake)
     orig = be.submit_form
+    # The submit roundtrip is held open until the test releases it (a fixed 0.9 s sleep made
+    # every step below race the clock); bounded so a failed test can't strand the worker.
+    release = threading.Event()
 
     def slow_submit(agent, sid, cb, answers):
-        _t.sleep(0.9)
+        release.wait(timeout=10)
         return orig(agent, sid, cb, answers)
 
     be.submit_form = slow_submit  # type: ignore[method-assign]
     app = FleetDeck(be, poll_s=0)
-    async with app.run_test(size=(120, 40)) as pilot:
-        await _open_talk(be, pilot, app)
-        await _send(app, pilot, "post the update")
-        await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
-        assert isinstance(app.screen, FormModal)
-        app.screen.query_one("#in-text", Input).focus()
-        await pilot.press(*"hello", "ctrl+s")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, ConversationScreen) and "submitting the form" in str(app.screen.query_one("#talk-status", Static).content)
-        await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
-        assert isinstance(app.screen, ConversationScreen)  # refused while in flight
-        await pilot.press("enter")
-        await pilot.pause(0.3)
-        assert isinstance(app.screen, ConversationScreen)
-        assert await _until(pilot, lambda: app.screen.convo.parked is None, timeout=3)
-        assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
-        assert len([c for c in be.calls if c[0] == "submit_form"]) == 1 and len(fake.sent) == 1
+    try:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await _open_talk(be, pilot, app)
+            await _send(app, pilot, "post the update")
+            await pilot.press("ctrl+r")
+            assert await _until(pilot, lambda: isinstance(app.screen, FormModal))
+            app.screen.query_one("#in-text", Input).focus()
+            await pilot.press(*"hello", "ctrl+s")
+            assert await _until(pilot, lambda: isinstance(app.screen, ConversationScreen) and "submitting the form" in str(app.screen.query_one("#talk-status", Static).content))
+            await pilot.press("ctrl+r")
+            await pilot.pause(0.1)  # negative: no modal is pushed (the refusal is synchronous)
+            assert isinstance(app.screen, ConversationScreen)  # refused while in flight
+            await pilot.press("enter")
+            await pilot.pause(0.1)  # negative, as above
+            assert isinstance(app.screen, ConversationScreen)
+            release.set()
+            assert await _until(pilot, lambda: app.screen.convo.parked is None)
+            assert "idle" in str(app.screen.query_one("#talk-status", Static).content)
+            assert len([c for c in be.calls if c[0] == "submit_form"]) == 1 and len(fake.sent) == 1
+    finally:
+        release.set()
 
 
 
@@ -1026,7 +1057,7 @@ async def test_form_keys_that_are_not_valid_widget_ids_still_render_and_round_tr
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "go")
         await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: isinstance(app.screen, FormModal))
         modal = app.screen
         assert isinstance(modal, FormModal) and len(modal.query(".hitl-field")) == 4
         assert modal.query_one("#in-user_name", Input) and modal.query_one("#in-f_1st", Input)
@@ -1035,7 +1066,7 @@ async def test_form_keys_that_are_not_valid_widget_ids_still_render_and_round_tr
         modal.query_one("#in-f_1st", Input).focus()
         await pilot.press("z")
         modal.query_one("#in-x_y", Select).value = "q"
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: modal.values.get("x:y") == "q")
         await pilot.press("ctrl+s")
         await _settle(app, pilot)
         assert json.loads(_resume_call(fake)["text"]) == {"user.name": "kj", "1st": "z", "x:y": "q"}
@@ -1067,8 +1098,8 @@ async def test_a_steer_whose_enqueue_is_in_flight_when_the_turn_ends_is_not_mark
     try:
         async with app.run_test(size=(120, 36)) as pilot:
             await _open_talk(be, pilot, app)
-            await _type(app, pilot, "go", wait=0.2)
-            await _type(app, pilot, "later", wait=0.1)
+            await _type(app, pilot, "go")
+            await _type(app, pilot, "later")
             assert await _until(pilot, post_out.is_set)  # its POST is out, held until released
             assert "sending" in app.screen.query(".steer-msg").first().render().plain
             fake.hang = False
@@ -1095,8 +1126,8 @@ async def test_a_second_reconcile_landing_for_the_same_steer_does_not_resend_it(
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
-        await _type(app, pilot, "go", wait=0.2)
-        await _type(app, pilot, "later", wait=0.1)
+        await _type(app, pilot, "go")
+        await _type(app, pilot, "later")
         screen = app.screen
         assert await _until(pilot, lambda: screen.convo.steers and screen.convo.steers[0].queued)
         st, first = screen.convo.steers[0], screen.convo.live
@@ -1105,7 +1136,7 @@ async def test_a_second_reconcile_landing_for_the_same_steer_does_not_resend_it(
         assert await _until(pilot, lambda: len(fake.sent) == 2 and screen.convo.live is None)
         assert fake.sent[1]["text"] == "later"
         screen._reconcile_landed(screen.convo, first, first.generation, [st], {st.id})  # the late duplicate
-        await pilot.pause(0.3)
+        await _settle(app, pilot)  # negative: a re-send would be a stream worker, which settle waits for
         assert len(fake.sent) == 2 and screen.convo.live is None
 
 
@@ -1121,7 +1152,7 @@ async def test_a_plugin_form_with_no_fields_is_redeemed_as_an_empty_form():
         await _open_talk(be, pilot, app)
         await _send(app, pilot, "confirm")
         await pilot.press("ctrl+r")
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: isinstance(app.screen, FormModal))
         assert isinstance(app.screen, FormModal) and not app.screen.query(".hitl-field")
         assert not app.screen.query_one("#submit", Button).disabled
         await pilot.press("ctrl+s")

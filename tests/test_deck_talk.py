@@ -14,7 +14,7 @@ from deck import a2a
 from deck import data as deckdata
 from deck.app import DetailScreen, FleetDeck, RosterScreen
 from deck.talk import ConversationScreen, PagerScreen, SessionPicker
-from tests.test_deck_app import ROSTER, FakeBackend, _settle
+from tests.test_deck_app import ROSTER, FakeBackend, _settle, _until
 
 TOOL = a2a.TOOL_CALL_EXT_URI
 COST = a2a.COST_EXT_URI
@@ -162,18 +162,6 @@ async def _open_talk(be, pilot, app):
     assert isinstance(app.screen, ConversationScreen)
 
 
-async def _until(pilot, cond, timeout=4.0):
-    """Poll the UI loop until `cond()` holds (a fixed pause races the worker threads)."""
-    import time
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if cond():
-            return True
-        await pilot.pause(0.05)
-    return cond()
-
-
 async def _send(app, pilot, text):
     comp = app.screen.query_one("#composer", Input)
     comp.focus()
@@ -222,8 +210,7 @@ async def test_esc_cancels_a_running_turn_then_backs_out():
         await pilot.press("escape")
         assert await _until(pilot, lambda: fake.cancelled == ["t1"] and app.screen.convo.live is None)
         await pilot.press("escape")
-        await pilot.pause()
-        assert isinstance(app.screen, RosterScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
 
 
 @pytest.mark.asyncio
@@ -238,7 +225,7 @@ async def test_a_second_message_while_working_steers_the_turn_not_a_new_one():
         comp = app.screen.query_one("#composer", Input)
         comp.value = "one"
         await pilot.press("enter")
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: app.screen.convo.live is not None)
         comp.value = "two"
         await pilot.press("enter")
         assert await _until(pilot, lambda: any(c[0] == "steer" for c in be.calls))
@@ -281,12 +268,10 @@ async def test_session_picker_replays_durable_turns_with_tool_cards():
         tree.focus()
         tree.select_node(tree.root.children[0])
         await pilot.press("enter")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, PagerScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, PagerScreen))
         assert "1 replied" in str(app.screen.query(".pager-block")[1].content)
         await pilot.press("escape")
-        await pilot.pause()
-        assert isinstance(app.screen, ConversationScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, ConversationScreen))
         # ctrl+n → a fresh session
         await pilot.press("ctrl+n")
         await _settle(app, pilot)
@@ -302,8 +287,7 @@ async def test_reasoning_fold_toggles_the_thinking_text():
         await _send(app, pilot, "hi")
         assert "▸ thinking" in str(app.screen.query(".turn-meta").first().content)
         await pilot.press("ctrl+z")
-        await pilot.pause(0.2)
-        assert "▾ thinking" in str(app.screen.query(".turn-meta").first().content)
+        assert await _until(pilot, lambda: "▾ thinking" in str(app.screen.query(".turn-meta").first().content))
 
 
 @pytest.mark.asyncio
@@ -313,20 +297,20 @@ async def test_talk_refuses_offline_and_stopped_members():
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("j", "enter")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: nothing opened (settle drains any worker the key started)
         assert isinstance(app.screen, RosterScreen)
     be = TalkBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("j", "j", "j", "enter")  # Cindi, stopped
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative, as above
         assert isinstance(app.screen, RosterScreen)
         await pilot.press("i")  # detail still opens, and `c` from there is refused too
         await _settle(app, pilot)
         assert isinstance(app.screen, DetailScreen)
         await pilot.press("c")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative, as above
         assert isinstance(app.screen, DetailScreen)
 
 
@@ -387,7 +371,8 @@ async def test_a_member_that_sends_nothing_is_aborted_after_the_window(monkeypat
         comp = app.screen.query_one("#composer", Input)
         comp.value = "go"
         await pilot.press("enter")
-        await pilot.pause(0.4)
+        # the reader is out (a client to abort), no Task frame came, and the window elapsed
+        assert await _until(pilot, lambda: (ex := app.screen.convo.live) is not None and ex.client is not None and not ex.turn.task_id and time.monotonic() - max(ex.turn.last_frame_at, ex.started_at) >= talkmod.STALL_IDLE_S)
         app.screen._check_stall()
         await _settle(app, pilot)
         ex = app.screen.convo.exchanges[-1]
@@ -487,18 +472,19 @@ async def test_a_session_load_never_orphans_a_live_turn():
         sid = app.screen.convo.session_id
         be.turns_delay[sid] = 0.6
         app.screen.load_session(sid)
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: app.screen._loading())
         comp = app.screen.query_one("#composer", Input)
         comp.value = "too early"
         await pilot.press("enter")
+        # negative: kept short and fixed — settling here would wait on the hanging stream a
+        # wrongly-accepted send starts (the refusal itself is synchronous)
         await pilot.pause(0.1)
         assert fake.sent == []
         await _settle(app, pilot)
         # a load that lands while a turn streams is dropped, not applied
         comp.value = "one"
         await pilot.press("enter")
-        await pilot.pause(0.3)
-        assert app.screen.convo.live is not None
+        assert await _until(pilot, lambda: app.screen.convo.live is not None)
         app.screen._apply_session("chat-other", [], None)
         assert app.screen.convo.live is not None and app.screen.convo.session_id == sid
         assert "⟳" in str(app.screen.query_one("#talk-status", Static).content)
@@ -513,11 +499,16 @@ async def test_a_stale_session_load_is_ignored():
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(120, 36)) as pilot:
         await _open_talk(be, pilot, app)
-        app.screen.load_session("chat-A")
-        await pilot.pause(0.05)
-        app.screen.load_session("chat-B")
+        scr = app.screen
+        landed: list[str] = []
+        orig_apply = scr._apply_session
+        scr._apply_session = lambda sid, exs, seq=None: (landed.append(sid), orig_apply(sid, exs, seq))  # type: ignore[method-assign]
+        scr.load_session("chat-A")
+        assert await _until(pilot, lambda: "chat-A" in be.turn_reads)  # A's read is out before B starts
+        scr.load_session("chat-B")
         await _settle(app, pilot)
-        await pilot.pause(0.6)
+        # the superseded load's thread outlives its (cancelled) worker: wait for it to land
+        assert await _until(pilot, lambda: "chat-A" in landed)
         await _settle(app, pilot)
         assert app.screen.convo.session_id == "chat-B"  # A landed later but was superseded
 

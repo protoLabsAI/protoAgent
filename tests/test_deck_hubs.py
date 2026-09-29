@@ -16,7 +16,7 @@ from deck import hub as deckhub
 from deck import hubs
 from deck.app import FleetDeck, RosterScreen
 from deck.hubs import HubRow, HubTreeScreen
-from tests.test_deck_app import FakeBackend, _settle
+from tests.test_deck_app import FakeBackend, _settle, _until
 
 
 def _hub_root(base: Path, name: str, *, members: int = 0, running_pids: list[int] | None = None, remotes: int = 0, server_pid: dict | None = None) -> Path:
@@ -243,7 +243,7 @@ async def test_h_opens_the_tree_enter_attaches_and_u_brings_a_hub_up(monkeypatch
 
         assert app.screen.check_action("attach", ()) is True and "bring_up" not in footer_keys()
         table.move_cursor(row=1)
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: "bring_up" in footer_keys())
         assert "bring_up" in footer_keys() and app.screen.check_action("attach", ()) is False
         # u on the stopped hub: the launcher runs for its root, the port answers, the deck attaches
         await pilot.press("u")
@@ -273,8 +273,7 @@ async def test_the_tree_opens_first_with_start_on_hubs_and_bring_up_needs_a_laun
         assert isinstance(app.screen, HubTreeScreen) and isinstance(app.screen_stack[1], RosterScreen)
         assert app.screen.check_action("bring_up", ()) is False  # no launcher (the deck was not started by the CLI)
         await pilot.press("escape")
-        await pilot.pause(0.1)
-        assert isinstance(app.screen, RosterScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
 
 
 def test_a_listener_found_by_port_is_folded_into_the_root_it_runs_from_and_members_are_dropped(box, monkeypatch):
@@ -355,11 +354,13 @@ async def test_a_rediscover_during_a_bring_up_keeps_the_starting_row_and_a_timeo
         await pilot.press("H")
         await _settle(app, pilot)
         await pilot.press("u")
-        await pilot.pause(0.3)
         table = app.screen.query_one("#hubs", DataTable)
+        assert await _until(pilot, lambda: str(table.get_row_at(0)[2]) == "starting")
         assert str(table.get_row_at(0)[2]) == "starting" and app.screen.check_action("refresh", ()) is False
         app.discover_hubs()  # a rediscover lands while the launcher is still out
-        await pilot.pause(0.5)
+        # the rediscover has landed (settling would wait on the launcher the gate holds)
+        assert await _until(pilot, lambda: not any(w.group == "hubs" and not w.is_finished for w in app.workers))
+        await pilot.pause()
         assert str(app.screen.query_one("#hubs", DataTable).get_row_at(0)[2]) == "starting"  # the in-flight row survives
         assert app.screen.check_action("bring_up", ()) is False  # no second launch offered
         gate.set()
@@ -388,12 +389,12 @@ async def test_reopening_the_tree_mid_discovery_still_says_working(monkeypatch):
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("H")
-        await pilot.pause(0.4)
-        assert isinstance(app.screen, HubTreeScreen) and "working" in str(app.screen.query_one("#hubs-head", Static).content)
+        assert await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen) and "working" in str(app.screen.query_one("#hubs-head", Static).content))
         await pilot.press("escape")
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
         await pilot.press("H")
-        await pilot.pause(0.3)
+        # the discovery is still held by the gate, so a correct head says so from its first render
+        assert await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen) and "working" in str(app.screen.query_one("#hubs-head", Static).content))
         assert "working" in str(app.screen.query_one("#hubs-head", Static).content)  # re-opened: still discovering
         gate.set()
         await _settle(app, pilot)
@@ -494,10 +495,11 @@ async def test_a_poll_of_the_hub_the_deck_just_left_never_paints_the_new_roster(
 
     from deck import data as deckdata
 
-    gate = threading.Event()
+    gate, polling = threading.Event(), threading.Event()
 
     class SlowOld(FakeBackend):
         def snapshot(self):
+            polling.set()
             gate.wait(5)
             time.sleep(0.05)
             return super().snapshot()
@@ -505,14 +507,18 @@ async def test_a_poll_of_the_hub_the_deck_just_left_never_paints_the_new_roster(
     old = SlowOld()
     new = FakeBackend(roster=[{"name": "newhub", "id": "newhub", "port": 7872, "pid": 9, "running": True, "host": True, "version": "0.165.0"}, {"name": "nm", "id": "nm-1", "port": 7901, "pid": 10, "running": True, "version": "0.165.0"}])
     app = FleetDeck(old, poll_s=0)
+    landed: list = []  # the backend each poll result was FOR, as it reaches the UI thread
+    orig_apply = app._apply
+    app._apply = lambda snap, backend=None: (landed.append(backend), orig_apply(snap, backend))  # type: ignore[method-assign]
     async with app.run_test(size=(120, 36)) as pilot:
-        await pilot.pause(0.3)  # the first poll is out, blocked on the gate
+        assert await _until(pilot, polling.is_set)  # the first poll is out, blocked on the gate
         row = HubRow(name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer")
         app._switch_backend(new, row)  # attach while the old poll is still out
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: any(b is new for b in landed))  # the new hub's poll painted first
         gate.set()
         await _settle(app, pilot)
-        await pilot.pause(0.3)
+        # the old poll's thread outlives its cancelled worker: wait for its result to land
+        assert await _until(pilot, lambda: any(b is old for b in landed))
         table = app.screen.query_one("#roster", DataTable)
         names = [str(table.get_row_at(i)[1]) for i in range(table.row_count)]
         assert names == ["newhub", "nm"], names  # never protoEngineer/old/Cindi from the hub we left
@@ -575,8 +581,10 @@ async def test_member_detail_open_while_an_attach_lands_does_not_kill_the_deck(m
             super().__init__()
             self.gate = threading.Event()
             self.raised = threading.Event()
+            self.entered = threading.Event()
 
         def detail(self, agent):
+            self.entered.set()
             self.gate.wait(5)
             if self.closed:
                 self.raised.set()
@@ -593,11 +601,13 @@ async def test_member_detail_open_while_an_attach_lands_does_not_kill_the_deck(m
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
         await pilot.press("i")
-        await pilot.pause(0.3)  # the detail worker is out, blocked on the gate
+        assert await _until(pilot, old.entered.is_set)  # the detail worker is out, blocked on the gate
         row = HubRow(name="newhub", root=None, url="http://127.0.0.1:7872", port=7872, presence="running", source="peer")
         app._switch_backend(new, row)  # the attach lands: closes `old` under that worker
-        for _ in range(20):
-            await pilot.pause(0.05)
+        assert await _until(pilot, old.raised.is_set)
+        # negative: the raise must not take the deck down. The popped screen's worker is
+        # cancelled, so there is no completion to wait on — give the exception a moment.
+        await pilot.pause(0.2)
         assert old.raised.is_set() and isinstance(app.screen, RosterScreen) and app._exception is None
         await _settle(app, pilot)
         table = app.screen.query_one("#roster", DataTable)
@@ -622,8 +632,11 @@ async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
         def close(self):
             closed.append(self.url)
 
+    connecting: list[str] = []
+
     def gated_connect(*, candidates, token=None, insecure_http=False):
         url = candidates[0].url
+        connecting.append(url[-4:])
         gates[url[-4:]].wait(5)
         return deckhub.Connection(client=_Client(url), candidate=candidates[0], card={}, roster=[{"name": f"hub{url[-4:]}", "id": f"hub{url[-4:]}", "host": True, "running": True, "port": int(url[-4:])}])
 
@@ -647,14 +660,16 @@ async def test_the_last_attach_the_operator_chose_wins(monkeypatch):
         await _settle(app, pilot)
         app.notify = lambda msg, **kw: notes.append(msg)
         app.attach_hub(a)  # slow
-        await pilot.pause(0.1)
+        assert await _until(pilot, lambda: "7871" in connecting)  # A's connect is on the wire
         app.attach_hub(b)  # the operator gave up on A
         gates["7872"].set()
-        await pilot.pause(0.5)
+        assert await _until(pilot, lambda: getattr(getattr(app.backend, "conn", None), "client", None) is not None and app.backend.conn.client.url.endswith(":7872"))
         assert app.backend.conn.client.url.endswith(":7872")
         gates["7871"].set()  # A's connect returns late
         await _settle(app, pilot)
-        await pilot.pause(0.3)
+        # A's thread outlives its cancelled worker; its late landing closes A's client
+        assert await _until(pilot, lambda: "http://127.0.0.1:7871" in closed)
+        await _settle(app, pilot)
         assert app.backend.conn.client.url.endswith(":7872"), notes  # B, the last choice, is the deck's hub
         assert "http://127.0.0.1:7871" in closed and "http://127.0.0.1:7872" not in closed
         assert [n for n in notes if n.startswith("attached to")] == ["attached to B (http://127.0.0.1:7872)"]
@@ -672,8 +687,7 @@ async def test_offline_deck_tree_lists_disk_and_probes_nothing(monkeypatch):
     app = FleetDeck(FakeBackend(mode="offline"), poll_s=0, peers=None, launcher=lambda row: None, start_on_hubs=True, offline=True)
     async with app.run_test(size=(120, 36)) as pilot:
         await _settle(app, pilot)
-        await pilot.pause(0.3)
-        assert isinstance(app.screen, HubTreeScreen) and not app.screen.busy
+        assert await _until(pilot, lambda: isinstance(app.screen, HubTreeScreen) and not app.screen.busy)
         assert [(r.name, r.presence) for r in app.hub_rows] == [("studio", "running")]  # what disk says, unprobed
     assert probed == []
 
@@ -726,14 +740,18 @@ async def test_a_superseded_discovery_never_paints_over_the_newer_one(monkeypatc
     monkeypatch.setattr("deck.app._probe_hub", lambda row, **kw: row)
     monkeypatch.setattr("deck.app._instance_roots", lambda: [])
     app = FleetDeck(FakeBackend(), poll_s=0, peers=lambda: [], start_on_hubs=True)
+    shown: list[tuple[int, bool]] = []  # (generation, busy) of every discovery result reaching the UI thread
+    orig_show = app._show_discovery
+    app._show_discovery = lambda gen, rows, busy: (shown.append((gen, busy)), orig_show(gen, rows, busy))  # type: ignore[method-assign]
     async with app.run_test(size=(120, 36)) as pilot:
-        await pilot.pause(0.3)  # discovery #1 is out, blocked
+        assert await _until(pilot, lambda: calls == [1])  # discovery #1 is out, blocked
         app.discover_hubs()  # …the operator presses r: discovery #2
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: [r.name for r in app.hub_rows] == ["fresh-peer"])
         assert [r.name for r in app.hub_rows] == ["fresh-peer"]
         gate.set()  # #1 lands late
         await _settle(app, pilot)
-        await pilot.pause(0.3)
+        # #1's thread outlives its cancelled worker: wait for its final result to land
+        assert await _until(pilot, lambda: (1, False) in shown)
         assert [r.name for r in app.hub_rows] == ["fresh-peer"] and not app.screen.busy
 
 @pytest.mark.asyncio

@@ -193,6 +193,31 @@ async def _settle(app: FleetDeck, pilot) -> None:
     await pilot.pause()
 
 
+async def _until(pilot, cond, timeout=10.0):
+    """Poll the UI loop until `cond()` holds; returns the final `cond()`.
+
+    The shared positive wait for every deck test: it returns the moment the condition is
+    true, so the generous deadline costs nothing on a fast box and keeps a starved Windows
+    runner from flaking. A fixed pause is kept only where a test asserts something did NOT
+    happen."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        await pilot.pause(0.02)
+    return cond()
+
+
+def _prompt_ready(app: FleetDeck) -> bool:
+    """A pushed prompt focuses its Input in on_mount, AFTER the push: keys sent before that
+    land on nothing (see test_deck_manage's `_ready_to_type`)."""
+    from textual.widgets import Input
+
+    return isinstance(getattr(app.screen, "focused", None), Input)
+
+
 def _rows(app: FleetDeck) -> list[list[str]]:
     table = app.screen.query_one("#roster", DataTable)
     out = []
@@ -248,7 +273,7 @@ async def test_lifecycle_keys_route_to_the_backend_and_refuse_host_and_remote():
         await pilot.press("j")
         await pilot.press("x")
         await pilot.press("s")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: a refused key starts no worker (settle drains any that it did)
         assert be.calls[-1] == ("start", "Cindi")
         # restart = stop then start on an ONLINE member (protoEngineer was stopped above,
         # so `r` is disabled there — restart `old` instead)
@@ -259,7 +284,7 @@ async def test_lifecycle_keys_route_to_the_backend_and_refuse_host_and_remote():
         # ...and on the stopped protoEngineer, r does nothing
         await pilot.press("k")
         await pilot.press("r")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: nothing to restart
         assert be.calls[-1] == ("start", "old")
 
 
@@ -286,11 +311,9 @@ async def test_detail_screen_renders_runtime_logs_sessions_and_telemetry():
         log_head = str(app.screen.query_one("#log-head", Static).content)
         assert "● following" in log_head and "2 shown · window 2" in log_head
         await pilot.press("l")
-        await pilot.pause(0.1)
-        assert "○ paused" in str(app.screen.query_one("#log-head", Static).content)
+        assert await _until(pilot, lambda: "○ paused" in str(app.screen.query_one("#log-head", Static).content))
         await pilot.press("escape")
-        await pilot.pause(0.2)
-        assert isinstance(app.screen, RosterScreen)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
 
 
 @pytest.mark.asyncio
@@ -298,31 +321,29 @@ async def test_filter_narrows_the_roster_and_escape_clears_it():
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         await pilot.press("slash")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: _prompt_ready(app))
         await pilot.press(*"coach")
         await pilot.press("enter")
-        await pilot.pause(0.3)
-        assert [r[1] for r in _rows(app)] == []  # nothing matches "coach" in this roster
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen) and _rows(app) == [])  # nothing matches "coach" in this roster
         await pilot.press("slash")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: _prompt_ready(app))
         await pilot.press(*(["backspace"] * 5))  # the prompt reopens with the previous filter
         await pilot.press(*"stopped")
         await pilot.press("enter")
-        await pilot.pause(0.3)
-        assert [r[1] for r in _rows(app)] == ["Cindi"]
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen) and [r[1] for r in _rows(app)] == ["Cindi"])
         assert "filter: 'stopped'" in str(app.screen.query_one("#status", Static).content)
         # Esc INSIDE the prompt cancels and keeps the active filter (review MEDIUM-4)
         await pilot.press("slash")
-        await pilot.pause(0.2)
+        assert await _until(pilot, lambda: _prompt_ready(app))
         await pilot.press("escape")
-        await pilot.pause(0.3)
+        assert await _until(pilot, lambda: isinstance(app.screen, RosterScreen))
+        await _settle(app, pilot)
         assert [r[1] for r in _rows(app)] == ["Cindi"]
         # Esc on the roster clears it
         await pilot.press("escape")
-        await pilot.pause(0.3)
-        assert len(_rows(app)) == 5
+        assert await _until(pilot, lambda: len(_rows(app)) == 5)
 
 
 @pytest.mark.asyncio
@@ -330,18 +351,16 @@ async def test_offline_mode_is_badged_and_hides_hub_only_keys():
     be = FakeBackend(mode="offline", roster=[{"name": "alpha", "id": "alpha-1", "port": 7901, "pid": None, "running": False}])
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
-        status = str(app.screen.query_one("#status", Static).content)
-        assert "offline: only start/stop are available" in status
+        assert await _until(pilot, lambda: "offline: only start/stop are available" in str(app.screen.query_one("#status", Static).content))
         assert app.screen.check_action("detail", ()) is False
         assert app.screen.check_action("logs", ()) is False
         assert app.screen.check_action("start", ()) is True
         assert app.screen.check_action("stop", ()) is False
         await pilot.press("enter")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)  # negative: no screen is pushed (settle drains any worker the key started)
         assert isinstance(app.screen, RosterScreen)  # enter does nothing offline
         await pilot.press("i")
-        await pilot.pause(0.2)
+        await _settle(app, pilot)
         assert isinstance(app.screen, RosterScreen)  # nor does detail
 
 
@@ -360,9 +379,9 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
     be.detail = detail  # type: ignore[assignment]
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         await pilot.press("j", "i")
-        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert isinstance(app.screen, DetailScreen)
         log = app.screen.query_one("#log", RichLog)
         assert len(log.lines) == 5
@@ -371,7 +390,7 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
             window.append({"ts": f"2026-09-12T09:00:{n['next']:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {n['next']}"})
             n["next"] += 1
         app.screen.refresh_detail()
-        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert len(log.lines) == 8
         assert "line 7" in str(log.lines[-1])
         # a burst larger than the window rotates the anchor out → the window is re-rendered whole
@@ -379,7 +398,7 @@ async def test_log_tail_follows_a_rotating_ring_by_identity():
             window.append({"ts": f"2026-09-12T09:00:{n['next']:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {n['next']}"})
             n["next"] += 1
         app.screen.refresh_detail()
-        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert len(log.lines) == 5 and "line 16" in str(log.lines[-1])
         assert "5 shown · window 5" in str(app.screen.query_one("#log-head", Static).content)
 
@@ -532,12 +551,12 @@ async def test_detail_head_and_keys_follow_the_current_roster_row():
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         await pilot.press("j", "i")  # protoEngineer, online
-        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert app.screen.check_action("stop", ()) is True
         await pilot.press("x")
-        await pilot.pause(0.6)
+        await _settle(app, pilot)
         assert be.calls == [("stop", "protoEngineer")]
         assert "stopped" in str(app.screen.query_one("#detail-head", Static).content)
         assert app.screen.check_action("stop", ()) is False
@@ -548,9 +567,9 @@ async def test_narrow_terminal_stacks_the_detail_panes():
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(80, 24)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         await pilot.press("j", "i")
-        await pilot.pause(0.5)
+        await _settle(app, pilot)
         assert app.screen.query_one("#detail-body").has_class("narrow")
 
 
@@ -559,10 +578,10 @@ async def test_failed_poll_keeps_the_last_roster_and_says_so():
     be = FakeBackend()
     app = FleetDeck(be, poll_s=0)
     async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause(0.3)
+        await _settle(app, pilot)
         assert len(_rows(app)) == 5
         be.snapshot = lambda: deckdata.Snapshot(mode="live", label="x", error="http://127.0.0.1:7870 did not answer (ReadTimeout)")  # type: ignore[assignment]
         app.poll()
-        await pilot.pause(0.4)
+        assert await _until(pilot, lambda: "last poll failed" in str(app.screen.query_one("#status", Static).content))
         assert len(_rows(app)) == 5
         assert "last poll failed" in str(app.screen.query_one("#status", Static).content)
