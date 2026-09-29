@@ -36,14 +36,14 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--pl-space-2);
-  padding: 6px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   flex: none;
   border-bottom: 1px solid var(--pl-color-border);
 }
 .code-pane__where {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
@@ -62,8 +62,8 @@
 }
 .code-pane__range {
   flex: none;
-  padding: 0 5px;
-  border-radius: 4px;
+  padding: 0 var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-subtle);
   color: var(--pl-color-fg-muted);
 }
@@ -79,15 +79,15 @@
 .code-pane__actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   flex: none;
 }
 .code-pane__note {
   flex: none;
-  margin: var(--pl-space-2) 10px 0;
-  padding: 7px 10px;
+  margin: var(--pl-space-2) var(--pl-space-2_5) 0;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   border-left: 3px solid var(--pl-color-accent);
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-subtle);
   color: var(--pl-color-fg);
   font-size: var(--pl-font-size-sm);
@@ -95,7 +95,7 @@
 }
 .code-pane__notice {
   flex: none;
-  margin: 6px 10px 0;
+  margin: var(--pl-space-1_5) var(--pl-space-2_5) 0;
   color: var(--pl-color-status-warning);
   font-size: var(--pl-font-size-xs);
 }
@@ -114,7 +114,7 @@
 .code-pane__status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   padding: var(--pl-space-4) var(--pl-space-3);
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-sm);
@@ -135,15 +135,15 @@
 .code-pane__recent {
   flex: none;
   border-top: 1px solid var(--pl-color-border);
-  padding: var(--pl-space-1) 6px;
+  padding: var(--pl-space-1) var(--pl-space-1_5);
   max-height: 40%;
   overflow: auto;
 }
 .code-pane__recent-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: var(--pl-space-1) 6px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-1) var(--pl-space-1_5);
   border: 0;
   background: none;
   color: var(--pl-color-fg-muted);
@@ -168,9 +168,9 @@
   justify-content: space-between;
   gap: var(--pl-space-2);
   width: 100%;
-  padding: var(--pl-space-1) 6px;
+  padding: var(--pl-space-1) var(--pl-space-1_5);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   background: none;
   color: var(--pl-color-fg);
   font-family: var(--pl-font-mono);
@@ -198,7 +198,7 @@
   flex: none;
   list-style: none;
   margin: 0;
-  padding: var(--pl-space-1) 6px;
+  padding: var(--pl-space-1) var(--pl-space-1_5);
   max-height: 35%;
   overflow: auto;
   border-bottom: 1px solid var(--pl-color-border);
@@ -211,9 +211,9 @@
   align-items: center;
   gap: var(--pl-space-2);
   width: 100%;
-  padding: var(--pl-space-1) 6px;
+  padding: var(--pl-space-1) var(--pl-space-1_5);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   background: none;
   color: var(--pl-color-fg);
   font-family: var(--pl-font-mono);
@@ -240,7 +240,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--pl-space-1);
   color: var(--pl-color-fg-muted);
 }
 .code-pane__status-letter {
@@ -281,7 +281,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
 .code-pane__pager > span {
@@ -290,7 +290,7 @@
 /* A quiet line under the header — cut long lines, a rename's old name. */
 .code-pane__subnote {
   flex: none;
-  margin: 6px 10px 0;
+  margin: var(--pl-space-1_5) var(--pl-space-2_5) 0;
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-xs);
 }

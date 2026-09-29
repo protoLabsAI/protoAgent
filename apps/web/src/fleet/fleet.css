@@ -7,8 +7,8 @@
 .fleet-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px var(--pl-space-1);
+  gap: var(--pl-space-2_5);
+  padding: var(--pl-space-2_5) var(--pl-space-1);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .fleet-row.active {
@@ -42,8 +42,8 @@
   /* It is a <button> now (focusable — the keyboard reorder path), so strip the UA chrome. The
      padding/negative-margin pair grows the HIT box around a 14px glyph without widening the
      cell: it is the row's smallest control and the only one you have to grab. */
-  padding: 6px 2px;
-  margin: -6px -2px;
+  padding: var(--pl-space-1_5) var(--pl-space-0_5);
+  margin: calc(-1 * var(--pl-space-1_5)) calc(-1 * var(--pl-space-0_5));
   border: 0;
   background: none;
   color: var(--pl-color-fg-subtle);
@@ -60,7 +60,7 @@
 .fleet-drag-handle:focus-visible {
   outline: 2px solid var(--pl-color-focus);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--pl-radius);
   color: var(--pl-color-fg);
 }
 /* A reorder save in flight blocks the drag + key paths — dim it and drop the grab cursor so it
@@ -90,7 +90,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 .fleet-name {
   font-weight: 600;
@@ -131,7 +131,7 @@
   gap: var(--pl-space-1);
 }
 .fleet-autostart-toggle {
-  margin-right: 6px;
+  margin-right: var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
@@ -151,7 +151,7 @@
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
-  margin-top: 10px;
+  margin-top: var(--pl-space-2_5);
   font-size: var(--pl-font-size-sm);
 }
 .fleet-purge input {
@@ -163,7 +163,7 @@
 
 /* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
 .fleet-discover {
-  margin-top: 14px;
+  margin-top: var(--pl-space-3);
   padding-top: var(--pl-space-3);
   border-top: 1px solid var(--pl-color-border);
 }
@@ -177,8 +177,8 @@
 .fleet-add-remote {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 10px 0 var(--pl-space-1);
+  gap: var(--pl-space-2_5);
+  margin: var(--pl-space-2_5) 0 var(--pl-space-1);
   padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
