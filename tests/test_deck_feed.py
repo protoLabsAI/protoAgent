@@ -212,6 +212,12 @@ async def test_roster_turn_column_follows_the_bus_and_the_bell_rings_on_a_park()
         assert await _until(pilot, lambda: rings == [1] and "⚑ 2 turns parked" in str(app.screen.query_one("#status", Static).content))
         assert rings == [1]
         snap.parked = {"old-1": {"chat-9": ("", "t9")}, "protoEngineer-ba4c": {"chat-1": ("", "t9")}}  # both seen clean
+        # A clearing probe must have been READ strictly after the parks it clears: one read
+        # in the same clock tick is stale by design (Activity.unpark: `park.since >= probed_at`).
+        # Windows' monotonic clock ticks every ~16 ms, so without a pause between the two
+        # probes they can share a tick — wait for the clock to pass the newest park.
+        newest = max(p.since for st in app.activity.state.values() for p in st.parked.values())
+        assert await _until(pilot, lambda: time.monotonic() > newest)
         snap.parked_at = time.monotonic()
         app._apply(snap)
         assert await _until(pilot, lambda: "parked" not in str(app.screen.query_one("#status", Static).content))
