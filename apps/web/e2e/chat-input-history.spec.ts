@@ -46,7 +46,7 @@ test("a recalled message is editable and resends the edited text", async ({ page
   await composer.press("ArrowUp");
   await expect(composer).toHaveValue("draft one");
   // Recall parks the caret at end-of-text on the NEXT animation frame (readline behaviour;
-  // ChatSurface's recall() defers the selection move to rAF because the controlled value
+  // ChatSessionSlot's recall() defers the selection move to rAF because the controlled value
   // only lands after re-render). toHaveValue settles before that frame, so wait for the caret
   // to reach the end before typing — otherwise the synthetic keystrokes race the rAF and land
   // mid-string (" edited" inserted at caret 0 → "draft oneedited"), which no human hits.

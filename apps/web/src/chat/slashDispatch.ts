@@ -54,7 +54,7 @@
 //     ordinary text, which is a visible outcome. From OUTSIDE there is no draft to fall
 //     through to, so the same false is a silent no-op.
 //   • `/goal` and `/watch` return TRUE and answer through `ctx.noteToThread` — which is
-//     itself a no-op without a session (ChatSurface's `noteToThread` bails on `!session`).
+//     itself a no-op without a session (ChatSessionSlot's `noteToThread` bails on `!session`).
 //     So true is NOT proof that anything was shown; do not treat it as the safe subset.
 //   • only `/new` (open a tab) does something real with no session.
 // The rule for a caller is therefore the simple one, not a 13-command allowlist: with
@@ -93,7 +93,7 @@
 // write has nowhere to go. Hence `prefillDraft` rides the same registration rather than a
 // second parallel seam.
 
-/** The visible chat slot's dispatcher. Registered per render (see ChatSurface), so treat
+/** The visible chat slot's dispatcher. Registered per render (see ChatSessionSlot), so treat
  *  the object identity as per-render — only the guarded unregister compares it. */
 export type SlashDispatchTarget = {
   /** Run one client command. `raw` is the command WITHOUT its leading slash, e.g.

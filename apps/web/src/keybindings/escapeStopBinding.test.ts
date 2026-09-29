@@ -2,7 +2,7 @@
 // Claude.ai/ChatGPT convention). These pin the `chat.stop` registration (default Escape,
 // chat-scoped, live while typing in the composer — so it appears in Settings ▸ Keyboard
 // under Chat and is rebindable) and that its `run` goes through the escapeStop seam the
-// visible ChatSurface slot publishes its behavior on. The slash-menu / HITL Escape paths
+// visible ChatSessionSlot publishes its behavior on. The slash-menu / HITL Escape paths
 // preventDefault in their own React handlers and the keydown host skips defaultPrevented
 // events, so they win without ever reaching this binding.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";

@@ -3,7 +3,7 @@
 // A background push-resume (ADR 0070), scheduled fire or watch reaction runs by
 // self-POSTing into a session, so the browser never streams it. The bus republishes its
 // frames as `chat.progress` and ServerTurnWatch folds them into a live preview bubble
-// (#2361). That preview is `streaming` with a `taskId` — exactly the shape ChatSurface's
+// (#2361). That preview is `streaming` with a `taskId` — exactly the shape ChatSessionSlot's
 // reattach effect looks for — and since #3178 the effect re-runs on `reattachKey`, so the
 // preview's FIRST frame triggered a resubscribe to the SAME still-running task. From then
 // on the resubscribe stream and the bus both wrote every chunk into one bubble: the

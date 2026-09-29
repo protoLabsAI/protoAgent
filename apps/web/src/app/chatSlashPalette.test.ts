@@ -39,7 +39,7 @@ const nav = vi.fn<(intent: NavIntent) => void>();
 const dispatch = vi.fn<(raw: string) => boolean>(() => true);
 const prefill = vi.fn<(text: string) => void>();
 
-/** Stand in for the visible chat slot's registration (ChatSurface publishes this per render). */
+/** Stand in for the visible chat slot's registration (ChatSessionSlot publishes this per render). */
 function slot(over: Partial<SlashDispatchTarget> = {}) {
   const off = registerSlashDispatcher({
     run: dispatch,

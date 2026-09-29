@@ -2,7 +2,7 @@ import { parseFsArgs, readRange, SEARCH_HIT } from "../chat/fsToolRenderers";
 import type { CodeRef } from "./store";
 
 // Follow mode (ADR 0112): which file (and lines) a COMPLETED fs tool call touched, so the
-// pane can move there. Pure — the live stream handler (ChatSurface onToolCall) calls it and
+// pane can move there. Pure — the live stream handler (ChatSessionSlot onToolCall) calls it and
 // hands the result to `followCode`, which owns the opt-in, the pin and the throttle.
 
 export const FOLLOW_TOOLS = new Set(["read_file", "search_files", "edit_file", "write_file"]);

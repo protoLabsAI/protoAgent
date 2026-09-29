@@ -31,7 +31,7 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
   });
 
   it("/compact is untagged — generally available since #2785 (ADR 0101 D5)", () => {
-    // Registration is unconditional; the HOST (ChatSurface) hides + skips dispatch of a
+    // Registration is unconditional; the HOST (ChatSessionSlot) hides + skips dispatch of a
     // flag-tagged command while its flag is off. /publish keeps a tag, so the gating
     // contract still has a live subject; /compact shed its expired dev flag.
     expect(findSlashCommand("compact")!.flag).toBeUndefined();

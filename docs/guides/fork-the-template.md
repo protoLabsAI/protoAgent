@@ -69,7 +69,7 @@ seam as the backend (ADR 0061): drop a `src/ext/<name>.tsx` that calls `register
 (a rail panel), `registerSlashCommand` (a client-side `/<name>`), `registerComposerAction`
 (a composer button), `registerPaletteCommand` (a command-palette command), or
 `createUISlice` (its own persisted UI state) — no edit to `App.tsx` / `ChatSurface.tsx` /
-`uiStore.ts`, so upstream pulls stay conflict-free. (Untrusted UI still goes through sandboxed
+`ChatSessionSlot.tsx` / `uiStore.ts`, so upstream pulls stay conflict-free. (Untrusted UI still goes through sandboxed
 plugin iframe views — see [Building a plugin view](/guides/building-react-plugin-views).)
 
 ## 3. Configure subagents (optional)

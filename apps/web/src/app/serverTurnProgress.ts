@@ -12,7 +12,7 @@
 // preview that `chat.resumed` then replaces with the authoritative final answer.
 //
 // It carries `taskId` and a stable `id` deliberately, not just for the replace: those are
-// what ChatSurface's self-heal keys on. If the turn dies without a terminal event, the
+// what ChatSessionSlot's self-heal keys on. If the turn dies without a terminal event, the
 // preview would otherwise sit at `streaming` forever — instead the next mount reconciles it
 // against the durable task via `tasks/get` and settles it. A live view that can strand a
 // bubble is worse than no live view, so this failure mode is covered by construction.
@@ -165,7 +165,7 @@ export function applyProgressFrame(messages: ChatMessage[], frame: ProgressFrame
     // The operator's interjection, settled at the boundary the agent read it: the preview
     // is cut there exactly like a browser-owned stream cuts its own bubble, so what the
     // agent said before stays above the message and what it says next streams below.
-    // The transcript is the one record of "settled" — ChatSurface drops a queued bubble
+    // The transcript is the one record of "settled" — ChatSessionSlot drops a queued bubble
     // the moment its id appears here. The frozen half's id is derived, not minted, so the
     // reducer stays pure (one split per steer id; a repeat is a no-op by id).
     const liveId = liveMessageId(frame.taskId, frame.session);

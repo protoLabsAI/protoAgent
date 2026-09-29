@@ -166,7 +166,7 @@ registerSlashCommand({
 
 registerSlashCommand({
   name: "prompt",
-  // NB: the slash menu filters on name OR description (ChatSurface) — keep every
+  // NB: the slash menu filters on name OR description (ChatSessionSlot) — keep every
   // other command's NAME out of this text, or typing that command surfaces /prompt
   // above it and Enter runs the wrong one (the /model e2e caught exactly this).
   description: "Show the exact system prompt behind this session's latest reply — never saved",

@@ -8,7 +8,7 @@
 // module header, and e2e/palette-chat-tabs.spec.ts). Running a row must never be able to
 // leave the chat surface pointing at a session that no longer exists: `chatStore.switchSession`
 // does not validate its argument, so a stale id sets `currentSessionId` to nothing, pushes a
-// phantom into `activeSessions`, and ChatSurface's `useSession` mounts a DEAD SLOT — and rows
+// phantom into `activeSessions`, and ChatSessionSlot's `useSession` mounts a DEAD SLOT — and rows
 // are built before the operator hits Enter, so that window is real. The rows must be FINDABLE
 // by what an operator actually types, asserted through the palette's own matcher rather than
 // against a keywords array: a correct row nobody can search for is a feature nobody has. And

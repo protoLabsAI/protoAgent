@@ -1,7 +1,7 @@
 // #2968 — Escape-to-stop behavior (the Claude.ai/ChatGPT convention). These pin the
 // per-press decision — streaming + queued steers peels the NEWEST steer (LIFO, one per
 // press), streaming with none stops the turn, idle is a strict no-op — and the imperative
-// seam ChatSurface publishes its handler on (last-write-wins + guarded unregister, so the
+// seam ChatSessionSlot publishes its handler on (last-write-wins + guarded unregister, so the
 // per-render re-registration and slot-swap cleanup ordering can't strand or drop a handler).
 import { describe, expect, it, vi } from "vitest";
 

@@ -1004,7 +1004,7 @@ export type ContextWindow = {
 
 /** Emphasis tone for a local SYSTEM NOTE (a role-"system" message without a `report`) —
  *  e.g. a slash-command confirmation, a status line, or a warning. The reusable seam for
- *  posting non-agent, in-thread notices is `ChatSurface.noteToThread(text, { tone })`,
+ *  posting non-agent, in-thread notices is `ChatSessionSlot.noteToThread(text, { tone })`,
  *  exposed to forks via the slash + composer registries. Add a tone here + a matching
  *  `.chat-note--<tone>` rule in chat.css; nothing else needs to change. */
 export type SystemNoteTone = "info" | "warning" | "danger" | "success";

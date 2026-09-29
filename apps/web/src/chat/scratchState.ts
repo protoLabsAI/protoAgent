@@ -53,7 +53,7 @@ export function loadSteers(sessionId: string): QueuedSteer[] {
       ? parsed
           .filter((s) => s && typeof s.id === "string" && typeof s.text === "string")
           // An interjection keeps the server turn it was sent to, so a reload can still
-          // tell whether that turn is over (ChatSurface's server-turn reconcile).
+          // tell whether that turn is over (ChatSessionSlot's server-turn reconcile).
           .map((s) => ({
             id: s.id,
             text: s.text,

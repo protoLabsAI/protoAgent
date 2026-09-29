@@ -51,7 +51,7 @@ it("changes the reattach dependency when hydration fills an already-mounted empt
 });
 
 /** A session whose last assistant message is stuck `streaming` — the exact
- *  shape the ChatSurface reattach effect hands to reattachTurn. */
+ *  shape the ChatSessionSlot reattach effect hands to reattachTurn. */
 function seedStuckSession(): string {
   const session = chatStore.createSession();
   chatStore.updateMessages(session.id, [
@@ -260,7 +260,7 @@ describe("reattach key skips participant rows", () => {
     const messagesOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages;
 
     // The slot: its reattach effect is keyed on reattachKeyForMessages and cancels the
-    // reattach whenever that key changes (ChatSurface's `[sessionId, reattachKey]` deps).
+    // reattach whenever that key changes (ChatSessionSlot's `[sessionId, reattachKey]` deps).
     const cancel = reattachTurn(session.id, liveId, TASK_ID);
     cancels.push(cancel);
     let key = reattachKeyForMessages(messagesOf());
@@ -484,7 +484,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     await settle();
     expect(sessionStatus(sessionId)).toBe("streaming");
 
-    // Stop (ChatSurface.stop): settle every streaming bubble and go idle. The slot's key goes
+    // Stop (ChatSessionSlot.stop): settle every streaming bubble and go idle. The slot's key goes
     // "" and it cancels the reattach.
     chatStore.updateMessages(sessionId, finalizeStoppedMessages(messagesOf(sessionId)));
     chatStore.setSessionStatus(sessionId, "idle");

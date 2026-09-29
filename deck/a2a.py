@@ -64,7 +64,7 @@ STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
 # with the operator's answer.
 _TERMINAL_RE = re.compile(r"completed|failed|canceled|cancelled|rejected", re.I)
 # The console's sentinel for dismissing a parked question without answering it
-# (apps/web/src/chat/ChatSurface.tsx::dismissHitl): the task must not stay parked forever.
+# (apps/web/src/chat/ChatSessionSlot.tsx::dismissHitl): the task must not stay parked forever.
 DISMISS_SENTINEL = (
     "[dismissed] The operator dismissed this request without providing input. Continue "
     "without it — proceed using your best judgment, or stop and explain what you need."
