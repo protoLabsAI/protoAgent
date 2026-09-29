@@ -66,7 +66,7 @@ def test_setup_status_and_reset(monkeypatch):
 
 
 def test_post_config_offloads_to_apply(monkeypatch):
-    import operator_api.config_routes as cr
+    import server.agent_init as agent_init
 
     captured = {}
 
@@ -74,7 +74,7 @@ def test_post_config_offloads_to_apply(monkeypatch):
         captured["config"], captured["soul"] = config, soul
         return True, ["reloaded"]
 
-    monkeypatch.setattr(cr, "_apply_settings_changes", _apply)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", _apply)
     resp = _client().post("/api/config", json={"config": {"a": 1}, "soul": "S"}).json()
     assert resp == {"ok": True, "messages": ["reloaded"]}
     assert captured == {"config": {"a": 1}, "soul": "S"}
@@ -97,7 +97,7 @@ def test_save_settings_rejects_invalid(monkeypatch):
 
 def test_save_settings_threads_layer(monkeypatch):
     """POST /api/settings passes the chosen cascade layer to _apply_settings_changes."""
-    import operator_api.config_routes as cr
+    import server.agent_init as agent_init
 
     monkeypatch.setitem(
         sys.modules,
@@ -115,7 +115,7 @@ def test_save_settings_threads_layer(monkeypatch):
         captured["config"], captured["layer"] = config, layer
         return True, ["host config saved"]
 
-    monkeypatch.setattr(cr, "_apply_settings_changes", _apply)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", _apply)
     resp = _client().post("/api/settings", json={"updates": {"model.name": "m"}, "layer": "host"}).json()
     assert resp["ok"] is True
     assert captured["layer"] == "host"
@@ -124,7 +124,7 @@ def test_save_settings_threads_layer(monkeypatch):
 
 def test_save_settings_defaults_to_agent_layer(monkeypatch):
     """No layer in the body ⇒ the agent leaf (today's behavior)."""
-    import operator_api.config_routes as cr
+    import server.agent_init as agent_init
 
     monkeypatch.setitem(
         sys.modules,
@@ -142,7 +142,7 @@ def test_save_settings_defaults_to_agent_layer(monkeypatch):
         captured["layer"] = layer
         return True, ["config saved"]
 
-    monkeypatch.setattr(cr, "_apply_settings_changes", _apply)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", _apply)
     _client().post("/api/settings", json={"updates": {"x": 1}})
     assert captured["layer"] == "agent"
 
@@ -348,9 +348,9 @@ def test_soul_history_restore_reapplies_through_the_save_path(monkeypatch):
         calls["soul"] = soul
         return True, ["SOUL saved (1 path)"]
 
-    import operator_api.config_routes as cr
+    import server.agent_init as agent_init
 
-    monkeypatch.setattr(cr, "_apply_settings_changes", _fake_apply)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", _fake_apply)
     body = _client().post("/api/config/soul/history/v1/restore").json()
     assert body["ok"] is True and body["restored"] == "v1"
     # Restore re-saves the archived text through the tested save+reload path (which snapshots
@@ -375,9 +375,9 @@ def test_soul_history_restore_current_version_is_a_noop(monkeypatch):
         applied["called"] = True
         return True, []
 
-    import operator_api.config_routes as cr
+    import server.agent_init as agent_init
 
-    monkeypatch.setattr(cr, "_apply_settings_changes", _fake_apply)
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", _fake_apply)
     body = _client().post("/api/config/soul/history/v1/restore").json()
     assert body["ok"] is True and "already the current persona" in body["messages"]
     assert applied["called"] is False  # no recompile for a no-op restore

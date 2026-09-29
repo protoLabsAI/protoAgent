@@ -18,6 +18,7 @@ import builtins
 from pathlib import Path
 
 from graph.plugins import bundles, installer
+from tests._seam_scan import stale_patches
 
 _BUNDLES_SRC = Path(bundles.__file__).read_text(encoding="utf-8")
 _MOVED = (
@@ -41,7 +42,6 @@ _MOVED = (
 # Module-level constants/data the moved code may read by bare name (their one home is
 # bundles.py; nothing patches them). Every moved FUNCTION is reached via ``_inst()``.
 _BARE_OK = {"BUNDLE_FILENAME", "CONFIG_INPUT_TYPES", "CONFIG_INPUT_RESERVED_SECTIONS", "_CONFIG_INPUT_KEY_RE", "_ARCHETYPE_KEYS"}
-_TESTS = Path(__file__).resolve().parent
 
 
 def test_bundles_never_from_imports_installer_names():
@@ -82,28 +82,7 @@ def test_installer_re_exports_are_the_same_objects():
 
 def test_no_test_patches_a_moved_name_on_bundles():
     """``installer`` is the patch point; a patch on ``bundles`` intercepts nothing."""
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                aliases |= {a.asname or a.name for a in node.names if a.name == "graph.plugins.bundles"}
-            elif isinstance(node, ast.ImportFrom) and node.module == "graph.plugins":
-                aliases |= {a.asname or a.name for a in node.names if a.name == "bundles"}
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                if first.value.startswith("graph.plugins.bundles."):
-                    stale.append(f"{path.name}:{node.lineno} {first.value}")
-            elif isinstance(first, ast.Name) and first.id in aliases:
-                stale.append(f"{path.name}:{node.lineno} {first.id}.{getattr(node.args[1], 'value', '?')}")
+    stale = stale_patches("graph.plugins.bundles", None)
     assert not stale, "patch these on graph.plugins.installer instead: " + "; ".join(stale)
 
 

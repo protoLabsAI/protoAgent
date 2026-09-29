@@ -79,12 +79,14 @@ from server.chat_rooms import (  # noqa: F401 — re-export
 
 # Turn control (thread locks, the thread-id resolver, origin classification, attendance,
 # the server-turn control plane, the HITL hold and the idle beacon) moved to
-# server/turn_control.py (#3847). The drivers below call the helpers tests patch
-# (``_thread_lock``, ``_resolve_thread_id``, ``_hold_if_hitl_pending``) through the module
-# (``_turn_control.<name>``) so a patch there intercepts; these re-exports are COPIES of the
-# bindings — patch/mutate server.turn_control, never these names. The rebound idle-beacon
-# ints (``_ACTIVE_TURNS`` / ``_LAST_TURN_MONOTONIC``) are deliberately NOT re-exported: a
-# copy of a rebound int is stale (tests/test_turn_control_seam.py guards all of it).
+# server/turn_control.py (#3847). The drivers below reach every turn-control name they
+# use (the locks / resolver / HITL hold, the autonomy classifier + auto-answer cap and
+# sentinel, the idle beacon, the priority scope, the HITL-resume marker) through the
+# module (``_turn_control.<name>``, #3856) so a patch there intercepts; these re-exports
+# are kept for external importers but are COPIES of the bindings — patch/mutate
+# server.turn_control, never these names. The rebound idle-beacon ints (``_ACTIVE_TURNS`` /
+# ``_LAST_TURN_MONOTONIC``) are deliberately NOT re-exported: a copy of a rebound int is
+# stale (tests/test_turn_control_seam.py guards all of it).
 from server import turn_control as _turn_control
 from server.turn_control import (  # noqa: F401 — re-export
     _ATTENDANCE_CONDITIONAL_ORIGINS,
@@ -1377,7 +1379,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # self-drive, so it must take the no-deadlock path and never park on a HITL interrupt even
     # over plain (undeclared) A2A — otherwise the first "what goal?" ask parks the task and the
     # drive loop below never runs (the #1910 deadlock). Non-goal turns are unchanged.
-    _autonomous = _is_autonomous(request_metadata) or goal_active
+    _autonomous = _turn_control._is_autonomous(request_metadata) or goal_active
     _resume_value = (message if resume else None)
     _auto_answers = 0
     with goal_turn(goal_active):
@@ -1404,7 +1406,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                         # same taskId. (A human — local or at the remote a2a caller — can answer.)
                         yield (kind, payload)
                         paused = True
-                    elif _auto_answers < _MAX_AUTONOMOUS_AUTOANSWERS:
+                    elif _auto_answers < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
                         # No human can answer — auto-answer this interrupt and re-run the turn so
                         # it completes, rather than parking an (un-sweepable) input-required task.
                         # The graph is checkpointed at the interrupt; the resume below feeds the
@@ -1423,7 +1425,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                 # Resume past the interrupt with the no-operator sentinel and run another pass;
                 # images belong only to the first (fresh) pass, so drop them on resume.
                 _auto_answers += 1
-                _resume_value = _AUTONOMOUS_HITL_SENTINEL
+                _resume_value = _turn_control._AUTONOMOUS_HITL_SENTINEL
                 images = None
                 continue
             if _autonomous_giveup:
@@ -1548,7 +1550,7 @@ async def _chat_langgraph_stream(
     """Idle-beacon wrapper (#1720): mark a turn in flight for the whole generator
     lifetime — including early ``aclose()`` and errors — then delegate. Keeps the
     public name/signature so every caller (A2A executor, console) is unchanged."""
-    _turn_started(session_id)
+    _turn_control._turn_started(session_id)
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
         async for _ev in _chat_langgraph_stream_impl(
@@ -1562,7 +1564,7 @@ async def _chat_langgraph_stream(
             _trace_terminal_output(_ev)
             yield _ev
     finally:
-        _turn_ended(session_id)
+        _turn_control._turn_ended(session_id)
 
 
 def _trace_terminal_output(ev: tuple) -> None:
@@ -2237,7 +2239,7 @@ async def _chat_langgraph_stream_impl(
                     hold = await _turn_control._hold_if_hitl_pending(
                         message, session_id, config, request_metadata=request_metadata
                     )
-                    if hold is _HITL_RESUME:
+                    if hold is _turn_control._HITL_RESUME:
                         resume = True
                     elif hold is not None:
                         yield ("input_required", _interrupt_payload(hold))
@@ -2246,7 +2248,7 @@ async def _chat_langgraph_stream_impl(
                 # `interactive`; inbound `a2a` and the server-fired autonomous origins stay
                 # `default`. The class is set for the whole native turn — both loops inside
                 # _run_native_turn — so its subagent tasks inherit it.
-                with _interactive_turn_priority((request_metadata or {}).get("origin")):
+                with _turn_control._interactive_turn_priority((request_metadata or {}).get("origin")):
                     async for frame in _run_native_turn(
                         message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
                     ):
@@ -2271,7 +2273,7 @@ async def _chat_langgraph_stream_impl(
                     async with _turn_control._thread_lock(_tid):
                         # Same class as the initial turn (ADR 0115 D6) — the retry is the
                         # same operator/A2A turn, just after a force-compact.
-                        with _interactive_turn_priority((request_metadata or {}).get("origin")):
+                        with _turn_control._interactive_turn_priority((request_metadata or {}).get("origin")):
                             async for frame in _run_native_turn(
                                 _OVERFLOW_RETRY_PROMPT,
                                 session_id,
@@ -2393,7 +2395,7 @@ async def _chat_langgraph(
     to describe the agent. The row is written HERE rather than inside the impl
     because the impl has a dozen return points; the wrapper has exactly one exit.
     """
-    _turn_started(session_id)
+    _turn_control._turn_started(session_id)
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     started = time.monotonic()
     sink: dict[str, Any] = {}
@@ -2404,7 +2406,7 @@ async def _chat_langgraph(
         # compat (`v1`) and plugin surfaces stay `default`. Scoped to the turn here (the impl
         # has a dozen return points, this wrapper has one) so the subagent tasks it spawns
         # inherit the class and it resets when the awaited turn returns.
-        with _interactive_turn_priority(origin):
+        with _turn_control._interactive_turn_priority(origin):
             result = await _chat_langgraph_impl(
                 message,
                 session_id,
@@ -2421,7 +2423,7 @@ async def _chat_langgraph(
         state = "failed" if any(isinstance(m, dict) and m.get("error") for m in result) else "completed"
         return result
     finally:
-        _turn_ended(session_id)
+        _turn_control._turn_ended(session_id)
         _turn_telemetry.record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
 
 
@@ -2572,7 +2574,7 @@ async def _chat_langgraph_impl(
                             request_metadata=({"hitl_resume": True} if hitl_resume else None),
                         )
                     )
-                    if hold is not None and hold is not _HITL_RESUME:
+                    if hold is not None and hold is not _turn_control._HITL_RESUME:
                         payload = _interrupt_payload(hold)
                         question = (
                             payload.get("question") or payload.get("title") or "The agent needs input to continue."
@@ -2586,7 +2588,7 @@ async def _chat_langgraph_impl(
                                 ),
                             }
                         ]
-                    if hold is _HITL_RESUME:
+                    if hold is _turn_control._HITL_RESUME:
                         from langgraph.types import Command
 
                         graph_input = Command(resume=await _resume_payload(config, turn_message))
@@ -2616,12 +2618,12 @@ async def _chat_langgraph_impl(
                             from langgraph.types import Command
 
                             _auto = 0
-                            while _auto < _MAX_AUTONOMOUS_AUTOANSWERS:
+                            while _auto < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
                                 if await _pending_interrupt_value(config) is None:
                                     break
                                 _auto += 1
                                 result = await STATE.graph.ainvoke(
-                                    Command(resume=_AUTONOMOUS_HITL_SENTINEL), config=config
+                                    Command(resume=_turn_control._AUTONOMOUS_HITL_SENTINEL), config=config
                                 )
                             if await _pending_interrupt_value(config) is not None:
                                 # Budget spent, still parked → clear the dangling interrupt so the

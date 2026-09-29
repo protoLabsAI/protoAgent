@@ -24,7 +24,8 @@ telemetry / metrics / ledger store builders and the inbox now-recovery worker li
 ``CONFIG_WRITE_LOCK`` decorator and the console Settings + setup-wizard callbacks live in
 ``server/settings_apply.py`` (#3848), also re-exported here — ``_apply_settings_changes``
 is still PATCHED here: every caller (operator_api, the devkit plugin, maintenance_loops,
-plugin_wiring, the plugin host, ``save_all``) resolves it through this module at call time.
+plugin_wiring, the plugin host, ``save_all``) resolves it through this module at call time
+(``server/__init__``'s re-export is a name no caller reads — never patch it there).
 """
 
 import logging

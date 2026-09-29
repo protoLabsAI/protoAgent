@@ -16,11 +16,11 @@ This scans the suite so a stale target fails loudly instead of passing against t
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import graph.config as config
 import graph.config_load as config_load
+from tests._seam_scan import stale_patches
 
 # Patched on graph.config — the ONLY module whose binding the live callers read.
 _PATCH_ON_CONFIG = {"_load_host_layer", "_resolve_plugin_config"}
@@ -67,49 +67,10 @@ _RE_EXPORTED = (
     "_load_host_layer",
 )
 
-_TESTS = Path(__file__).resolve().parent
-
-
-def _module_aliases(tree: ast.AST, dotted: str) -> set[str]:
-    pkg, _, leaf = dotted.rpartition(".")
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname for a in node.names if a.name == dotted and a.asname}
-        elif isinstance(node, ast.ImportFrom) and node.module == pkg:
-            aliases |= {a.asname or a.name for a in node.names if a.name == leaf}
-    return aliases
-
 
 def test_no_test_patches_a_moved_name_on_the_wrong_module():
     wrong_module = {"graph.config": _PATCH_ON_CONFIG_LOAD, "graph.config_load": _PATCH_ON_CONFIG}
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        if path.name == Path(__file__).name:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = {mod: _module_aliases(tree, mod) for mod in wrong_module}
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch"}:
-                continue
-            first = node.args[0]
-            for mod, dead in wrong_module.items():
-                if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                    owner, _, attr = first.value.rpartition(".")
-                    if owner == mod and attr in dead:
-                        stale.append(f"{path.name}:{node.lineno} {first.value}")
-                elif (
-                    isinstance(first, ast.Name)
-                    and first.id in aliases[mod]
-                    and len(node.args) > 1
-                    and isinstance(node.args[1], ast.Constant)
-                    and node.args[1].value in dead
-                ):
-                    stale.append(f"{path.name}:{node.lineno} {mod}.{node.args[1].value}")
+    stale = [hit for mod, dead in wrong_module.items() for hit in stale_patches(mod, dead, exclude=[Path(__file__)])]
     assert not stale, "these patches cannot intercept the live caller (#3840): " + ", ".join(stale)
 
 

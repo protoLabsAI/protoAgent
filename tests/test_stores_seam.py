@@ -11,12 +11,11 @@ a stale target fails loudly.
 
 from __future__ import annotations
 
-import ast
 import asyncio
-from pathlib import Path
 
 import server.agent_init as agent_init
 import server.stores as stores
+from tests._seam_scan import stale_patches
 
 # Names whose only live binding (as a callee / read) is in stores. Deliberately absent:
 # the ``_build_*`` builders and ``_start_inbox_now_recovery_once`` — agent_init's boot /
@@ -49,44 +48,9 @@ _RE_EXPORTED = (_MOVED_COLLABORATORS - {"_INBOX_NOW_RECOVERY_STARTED"}) | {
     "_start_inbox_now_recovery_once",
 }
 
-_TESTS = Path(__file__).resolve().parent
-
-
-def _agent_init_aliases(tree: ast.AST) -> set[str]:
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname or a.name for a in node.names if a.name == "server.agent_init"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "server":
-            aliases |= {a.asname or a.name for a in node.names if a.name == "agent_init"}
-    return aliases
-
 
 def test_no_test_patches_a_moved_collaborator_on_agent_init():
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = _agent_init_aliases(tree)
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                target = first.value
-                if target.startswith("server.agent_init.") and target.rsplit(".", 1)[1] in _MOVED_COLLABORATORS:
-                    stale.append(f"{path.name}:{node.lineno} {target}")
-            elif (
-                isinstance(first, ast.Name)
-                and first.id in aliases
-                and len(node.args) > 1
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _MOVED_COLLABORATORS
-            ):
-                stale.append(f"{path.name}:{node.lineno} {first.id}.{node.args[1].value}")
+    stale = stale_patches("server.agent_init", _MOVED_COLLABORATORS)
     assert not stale, "patch these on server.stores, not agent_init (#3829): " + ", ".join(stale)
 
 
