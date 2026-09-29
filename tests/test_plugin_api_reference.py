@@ -15,6 +15,7 @@ symbol reaches the docs, so growing the API surface without documenting it is a 
 
 from __future__ import annotations
 
+import copy
 import difflib
 import importlib.util
 from pathlib import Path
@@ -35,7 +36,20 @@ def _generator():
 
 @pytest.fixture(scope="module")
 def gen():
-    return _generator()
+    mod = _generator()
+    # `_scan_topics` rescans the whole repo source (~0.6s) and four tests here need it —
+    # including `page_events` inside the staleness check. Scan once per module; hand every
+    # caller a deep copy so no test (or page builder) can mutate another's view of it.
+    scan = mod._scan_topics
+    cache: list[dict] = []
+
+    def _scan_topics_once() -> dict[str, dict]:
+        if not cache:
+            cache.append(scan())
+        return copy.deepcopy(cache[0])
+
+    mod._scan_topics = _scan_topics_once
+    return mod
 
 
 _DIFF_LINES = 40

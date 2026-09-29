@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._git_templates import copy_repo
 from tests.bashpath import real_bash
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "changelog_gate.sh"
@@ -30,10 +31,12 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def _pr_repo(tmp_path: Path) -> Path:
+@pytest.fixture(scope="module")
+def pr_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A repo with CHANGELOG.md on main and a `feature` branch checked out —
-    the shape the gate sees in CI (base ref resolvable, PR head at HEAD)."""
-    repo = tmp_path / "repo"
+    the shape the gate sees in CI (base ref resolvable, PR head at HEAD).
+    Built ONCE per module (~7 git spawns); each test copies it via ``_pr_repo``."""
+    repo = tmp_path_factory.mktemp("changelog-gate-template") / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "gate@test")
@@ -44,6 +47,11 @@ def _pr_repo(tmp_path: Path) -> Path:
     _git(repo, "commit", "-qm", "seed")
     _git(repo, "checkout", "-qb", "feature")
     return repo
+
+
+def _pr_repo(template: Path, tmp_path: Path) -> Path:
+    """This test's private copy of the ``pr_template`` repo."""
+    return copy_repo(template, tmp_path / "repo")
 
 
 def _run_gate(
@@ -71,8 +79,8 @@ def _run_gate(
     )
 
 
-def test_fails_without_changelog_change_and_says_how_to_fix(tmp_path: Path) -> None:
-    repo = _pr_repo(tmp_path)
+def test_fails_without_changelog_change_and_says_how_to_fix(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "code only")
 
@@ -84,11 +92,11 @@ def test_fails_without_changelog_change_and_says_how_to_fix(tmp_path: Path) -> N
     assert "skip-changelog" in result.stdout
 
 
-def test_editing_changelog_directly_no_longer_satisfies_the_gate(tmp_path: Path) -> None:
+def test_editing_changelog_directly_no_longer_satisfies_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """#2322: an entry written under [Unreleased] is exactly the shared-anchor conflict
     fragments exist to remove, so it must not green a PR. The transitional acceptance was
     retired once the PR queue drained to zero — nothing was grandfathered."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n\n### Added\n- a thing\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "with entry")
 
@@ -98,10 +106,10 @@ def test_editing_changelog_directly_no_longer_satisfies_the_gate(tmp_path: Path)
     assert "changelog.d/" in result.stdout
 
 
-def test_a_changelog_edit_alongside_a_fragment_is_fine(tmp_path: Path) -> None:
+def test_a_changelog_edit_alongside_a_fragment_is_fine(pr_template: Path, tmp_path: Path) -> None:
     """Touching CHANGELOG.md isn't forbidden — fixing a typo in an old released section
     is legitimate. It just doesn't substitute for the fragment."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n", encoding="utf-8")
     (repo / "changelog.d").mkdir(exist_ok=True)
     (repo / "changelog.d" / "42.fixed.md").write_text("- **a thing (#42).** why\n", encoding="utf-8")
@@ -111,10 +119,10 @@ def test_a_changelog_edit_alongside_a_fragment_is_fine(tmp_path: Path) -> None:
     assert _run_gate(repo).returncode == 0
 
 
-def test_changelog_change_on_base_after_fork_does_not_count(tmp_path: Path) -> None:
+def test_changelog_change_on_base_after_fork_does_not_count(pr_template: Path, tmp_path: Path) -> None:
     """merge-base diff: someone ELSE's entry landing on main must not green a
     PR that added nothing itself."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "code only")
     _git(repo, "checkout", "-q", "main")
@@ -127,10 +135,10 @@ def test_changelog_change_on_base_after_fork_does_not_count(tmp_path: Path) -> N
     assert _run_gate(repo).returncode == 1
 
 
-def test_skip_changelog_label_skips_the_gate(tmp_path: Path) -> None:
+def test_skip_changelog_label_skips_the_gate(pr_template: Path, tmp_path: Path) -> None:
     if shutil.which("jq") is None:
         pytest.skip("label check reads the event payload via jq")
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "code only")
 
@@ -138,10 +146,10 @@ def test_skip_changelog_label_skips_the_gate(tmp_path: Path) -> None:
     assert _run_gate(repo, event=event, event_dir=tmp_path).returncode == 0
 
 
-def test_other_labels_do_not_skip_the_gate(tmp_path: Path) -> None:
+def test_other_labels_do_not_skip_the_gate(pr_template: Path, tmp_path: Path) -> None:
     if shutil.which("jq") is None:
         pytest.skip("label check reads the event payload via jq")
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "code only")
 
@@ -149,16 +157,16 @@ def test_other_labels_do_not_skip_the_gate(tmp_path: Path) -> None:
     assert _run_gate(repo, event=event, event_dir=tmp_path).returncode == 1
 
 
-def test_release_branch_skips_the_gate(tmp_path: Path) -> None:
-    repo = _pr_repo(tmp_path)
+def test_release_branch_skips_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "code only")
 
     assert _run_gate(repo, head_ref="release/v0.112.0").returncode == 0
 
 
-def test_dependabot_skips_the_gate(tmp_path: Path) -> None:
-    repo = _pr_repo(tmp_path)
+def test_dependabot_skips_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "code only")
 
@@ -256,9 +264,9 @@ def test_checks_yml_does_not_retrigger_on_label_changes() -> None:
     assert "labeled" not in triggers
 
 
-def test_passes_when_pr_adds_a_changelog_fragment(tmp_path: Path) -> None:
+def test_passes_when_pr_adds_a_changelog_fragment(pr_template: Path, tmp_path: Path) -> None:
     """The path #2322 introduces: a new file per PR, so two PRs in flight can't conflict."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "changelog.d").mkdir(exist_ok=True)
     (repo / "changelog.d" / "2286.fixed.md").write_text(
         "- **fleet stop lied (#2286).** it reported a stop it never achieved\n", encoding="utf-8"
@@ -272,9 +280,9 @@ def test_passes_when_pr_adds_a_changelog_fragment(tmp_path: Path) -> None:
     assert "fragment" in result.stdout
 
 
-def test_the_fragments_readme_alone_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+def test_the_fragments_readme_alone_does_not_satisfy_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """Touching the docs file must not count as writing an entry."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     (repo / "changelog.d").mkdir(exist_ok=True)
     (repo / "changelog.d" / "README.md").write_text("# docs edit\n", encoding="utf-8")
     _git(repo, "add", "-A")
@@ -295,11 +303,11 @@ def _add_fragment(repo: Path, name: str, body: str) -> None:
     _git(repo, "commit", "-qm", f"add {name}")
 
 
-def test_fragment_without_a_top_level_bullet_fails_the_gate(tmp_path: Path) -> None:
+def test_fragment_without_a_top_level_bullet_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """The real PR #2597 shape: a well-written fragment missing its leading '- '. It
     collates into [Unreleased] fine and then contributes NOTHING to the release notes,
     because scaffold derives entries from top-level bullets only. Green CI, silent loss."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(
         repo,
         "2555.added.md",
@@ -313,12 +321,12 @@ def test_fragment_without_a_top_level_bullet_fails_the_gate(tmp_path: Path) -> N
     assert "2555.added.md" in result.stdout + result.stderr  # names the offending file
 
 
-def test_fragment_whose_ref_sits_outside_the_bold_lead_fails_the_gate(tmp_path: Path) -> None:
+def test_fragment_whose_ref_sits_outside_the_bold_lead_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """#3291, the same loss a size smaller: `scaffold` keeps only the **bold** lead, so a
     ref trailing the paragraph is dropped and the marketing bullet ships naming nothing.
     The fragment parses, collates and rolls perfectly, so nothing downstream complains —
     and by then the filename that held the number is gone."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(repo, "3291.added.md", "- **Every Settings section is a deep-link.** Why. (#3291)\n")
 
     result = _run_gate(repo)
@@ -328,8 +336,8 @@ def test_fragment_whose_ref_sits_outside_the_bold_lead_fails_the_gate(tmp_path: 
     assert "3291.added.md" in out and "#N" in out
 
 
-def test_well_formed_fragment_still_passes(tmp_path: Path) -> None:
-    repo = _pr_repo(tmp_path)
+def test_well_formed_fragment_still_passes(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(repo, "2600.fixed.md", "- **A real entry (#2600).** With a body that wraps\n  onto a second line.\n")
 
     result = _run_gate(repo)
@@ -338,10 +346,10 @@ def test_well_formed_fragment_still_passes(tmp_path: Path) -> None:
     assert "ok: changelog.d/ fragment added" in result.stdout
 
 
-def test_unknown_kind_fails_the_gate(tmp_path: Path) -> None:
+def test_unknown_kind_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """`collate` already rejects this loudly at release time — catching it in the PR moves
     the error to the person who can fix it in one keystroke."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(repo, "2600.improved.md", "- **Something (#2600).** Body.\n")
 
     result = _run_gate(repo)
@@ -350,8 +358,8 @@ def test_unknown_kind_fails_the_gate(tmp_path: Path) -> None:
     assert "unknown kind" in result.stdout + result.stderr
 
 
-def test_empty_fragment_fails_the_gate(tmp_path: Path) -> None:
-    repo = _pr_repo(tmp_path)
+def test_empty_fragment_fails_the_gate(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(repo, "2600.fixed.md", "\n\n")
 
     result = _run_gate(repo)
@@ -359,11 +367,11 @@ def test_empty_fragment_fails_the_gate(tmp_path: Path) -> None:
     assert result.returncode == 1
 
 
-def test_deleting_someone_elses_fragment_does_not_satisfy_the_gate(tmp_path: Path) -> None:
+def test_deleting_someone_elses_fragment_does_not_satisfy_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """A deletion isn't 'this PR documented itself' — and the path no longer exists to
     lint. Only the release branch legitimately removes fragments, and it has its own
     escape hatch."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(repo, "2599.fixed.md", "- **Prior entry (#2599).** Body.\n")
     _git(repo, "checkout", "-q", "main")
     _git(repo, "merge", "-q", "feature")
@@ -376,13 +384,13 @@ def test_deleting_someone_elses_fragment_does_not_satisfy_the_gate(tmp_path: Pat
     assert result.returncode == 1
 
 
-def test_prepare_release_branch_skips_the_gate(tmp_path: Path) -> None:
+def test_prepare_release_branch_skips_the_gate(pr_template: Path, tmp_path: Path) -> None:
     """The branch prepare-release.yml actually creates is `prepare-release/vX.Y.Z`, which
     `release/*` does not match. It went unnoticed because a release PR DELETES every
     fragment and the old check counted any changed changelog.d path — so those PRs passed
     by accident, not by the escape hatch. #2600 stopped counting deletions and the accident
     stopped covering, breaking the v0.134.0 release PR."""
-    repo = _pr_repo(tmp_path)
+    repo = _pr_repo(pr_template, tmp_path)
     _add_fragment(repo, "2600.fixed.md", "- **An entry (#2600).** Body.\n")
     _git(repo, "checkout", "-q", "main")
     _git(repo, "merge", "-q", "feature")
@@ -397,8 +405,8 @@ def test_prepare_release_branch_skips_the_gate(tmp_path: Path) -> None:
     assert "release branch" in result.stdout
 
 
-def test_plain_release_branch_still_skips(tmp_path: Path) -> None:
-    repo = _pr_repo(tmp_path)
+def test_plain_release_branch_still_skips(pr_template: Path, tmp_path: Path) -> None:
+    repo = _pr_repo(pr_template, tmp_path)
     _git(repo, "checkout", "-qb", "release/v1.2.3")
     (repo / "code.py").write_text("x = 3\n", encoding="utf-8")
     _git(repo, "commit", "-aqm", "release prep")

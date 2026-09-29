@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._git_templates import copy_clone_with_origin
 from tests.bashpath import real_bash
 
 SCRIPT = Path(__file__).parent.parent / "examples" / "bundles" / "template" / "scripts" / "bump_pins_pr.sh"
@@ -35,14 +36,16 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    """A work clone with a local bare origin, one pushed commit on main, and an
-    UNSTAGED tracked-file change — the shape the real workflow sees: `check_bundle_updates.py`
-    already rewrote the manifest in place, and `git commit -am` is about to pick it up."""
-    origin = tmp_path / "origin.git"
-    work = tmp_path / "work"
-    _git(tmp_path, "init", "-q", "--bare", str(origin))
+@pytest.fixture(scope="module")
+def repo_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Built ONCE per module (~9 git spawns): ``<root>/{origin.git, work}`` — a work clone
+    with a local bare origin, one pushed commit on main, and an UNSTAGED tracked-file
+    change — the shape the real workflow sees: `check_bundle_updates.py` already rewrote
+    the manifest in place, and `git commit -am` is about to pick it up."""
+    root = tmp_path_factory.mktemp("bump-pins-template")
+    origin = root / "origin.git"
+    work = root / "work"
+    _git(root, "init", "-q", "--bare", str(origin))
     subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True, capture_output=True)
     _git(work, "config", "user.email", "bot@test")
     _git(work, "config", "user.name", "bot")
@@ -60,7 +63,13 @@ def repo(tmp_path: Path) -> Path:
     _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
     # The pin bump itself — what `check_bundle_updates.py` would have rewritten.
     (work / "protoagent.bundle.yaml").write_text("members:\n  - name: x\n    ref: v2\n", encoding="utf-8")
-    return work
+    return root
+
+
+@pytest.fixture
+def repo(repo_template: Path, tmp_path: Path) -> Path:
+    """This test's private copy of ``repo_template`` (clone re-pointed at its own origin)."""
+    return copy_clone_with_origin(repo_template, tmp_path)
 
 
 @pytest.fixture
@@ -161,11 +170,13 @@ def test_open_or_update_force_pushes_the_stable_branch(repo: Path, gh_state: Pat
 
 
 # ── flag-approval ────────────────────────────────────────────────────────────
+# cmd_flag_approval only talks to `gh` (faked) — it never runs git, so these tests
+# run the script in a plain tmp_path instead of paying for the origin+clone fixture.
 
 
-def test_flag_approval_passes_quietly_when_the_run_actually_started(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_passes_quietly_when_the_run_actually_started(tmp_path: Path, gh_state: Path) -> None:
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",
@@ -179,9 +190,9 @@ def test_flag_approval_passes_quietly_when_the_run_actually_started(repo: Path, 
     assert not any(c.startswith(("label create", "pr edit", "pr comment")) for c in calls)
 
 
-def test_flag_approval_labels_and_comments_on_action_required(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_labels_and_comments_on_action_required(tmp_path: Path, gh_state: Path) -> None:
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",
@@ -198,11 +209,11 @@ def test_flag_approval_labels_and_comments_on_action_required(repo: Path, gh_sta
     assert "needs a maintainer to approve" in result.stdout
 
 
-def test_flag_approval_does_not_double_comment(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_does_not_double_comment(tmp_path: Path, gh_state: Path) -> None:
     # pr_view_comment_count=1 → a prior run already left the comment; this run must still
     # label (idempotent, harmless) but NOT re-comment (the whole point of the dedup check).
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",
@@ -217,9 +228,9 @@ def test_flag_approval_does_not_double_comment(repo: Path, gh_state: Path) -> No
     assert not any(c.startswith("pr comment") for c in calls)
 
 
-def test_flag_approval_fails_when_the_run_never_shows_up(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_fails_when_the_run_never_shows_up(tmp_path: Path, gh_state: Path) -> None:
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",
@@ -234,12 +245,12 @@ def test_flag_approval_fails_when_the_run_never_shows_up(repo: Path, gh_state: P
     assert any(c.startswith("pr comment") for c in calls)
 
 
-def test_flag_approval_filters_run_list_on_the_exact_commit_sha(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_filters_run_list_on_the_exact_commit_sha(tmp_path: Path, gh_state: Path) -> None:
     # The fake doesn't parse --commit itself (it just returns the scripted response
     # regardless of args), but this pins the CALL SHAPE: a regression that drops the
     # --commit filter (the #2645 fix for a stale-run false-positive) breaks this assertion.
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",
@@ -253,9 +264,9 @@ def test_flag_approval_filters_run_list_on_the_exact_commit_sha(repo: Path, gh_s
     assert any("--branch bump-pins" in c for c in calls)
 
 
-def test_flag_approval_defaults_to_verify_bundle_workflow(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_defaults_to_verify_bundle_workflow(tmp_path: Path, gh_state: Path) -> None:
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",
@@ -268,12 +279,12 @@ def test_flag_approval_defaults_to_verify_bundle_workflow(repo: Path, gh_state: 
     assert any("--workflow verify-bundle.yml" in c for c in calls)
 
 
-def test_flag_approval_respects_a_different_workflow_filename(repo: Path, gh_state: Path) -> None:
+def test_flag_approval_respects_a_different_workflow_filename(tmp_path: Path, gh_state: Path) -> None:
     # product-stack's pin-bump job lives in ci.yml, not verify-bundle.yml (#2669) — the
     # poll must search the workflow THIS repo actually runs, or it always reports the
     # "run never showed up" false-negative regardless of what actually happened.
     result = _run(
-        repo,
+        tmp_path,
         gh_state,
         "flag-approval",
         "9",

@@ -255,34 +255,29 @@ def test_frozen_satisfied_optional_dep_no_warning(env, monkeypatch):
     assert "warnings" not in summary  # nothing missing → nothing to warn about
 
 
-def test_install_deps_frozen_missing_optional_warns_not_refuses(env, monkeypatch, caplog):
+@pytest.mark.parametrize(
+    "requires_pip,expected",
+    [
+        # hard + missing optional: only the satisfied hard dep comes back
+        (f"httpx>=0.27, {_SOFT_MISSING}", ["httpx>=0.27"]),
+        # hard + satisfied optional + missing optional: both satisfied tiers kept (#2162)
+        (f"httpx>=0.27, {{pkg: websockets>=12, optional: true}}, {_SOFT_MISSING}", ["httpx>=0.27", "websockets>=12"]),
+        # optional-ONLY manifest (no hard deps): the satisfied optional is kept (#2162)
+        (f"{{pkg: websockets>=12, optional: true}}, {_SOFT_MISSING}", ["websockets>=12"]),
+    ],
+    ids=["hard+missing-optional", "hard+optionals", "optional-only"],
+)
+def test_install_deps_frozen_missing_optional_degrades_keeping_satisfied_deps(
+    env, monkeypatch, caplog, requires_pip, expected
+):
+    """#1953/#2162: with no install target available and only OPTIONAL deps missing, the
+    frozen degrade path warns instead of refusing and drops ONLY the missing optionals —
+    hard deps AND already-satisfied optionals stay in the return, and the warning still
+    NAMES the missing dep (#1953 contract)."""
     import logging as _logging
 
     monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
-    monkeypatch.setattr(
-        installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip=f"httpx>=0.27, {_SOFT_MISSING}"))
-    )
-    installer.install("https://github.com/acme/demo_ext")
-    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
-    with caplog.at_level(_logging.WARNING):
-        deps = installer.install_deps("demo_ext")  # no raise
-    assert deps == ["httpx>=0.27"]  # only the satisfied deps
-    assert "definitely_not_real_xyz" in caplog.text
-
-
-def test_install_deps_frozen_optional_only_manifest_keeps_satisfied_optionals(env, monkeypatch, caplog):
-    """#2162: an optional-ONLY manifest (no hard deps) hitting the no-target degrade
-    path must return the satisfied optionals, dropping just the missing ones."""
-    import logging as _logging
-
-    monkeypatch.setattr(installer, "_resolve_sha_github", lambda o, r, ref: _SHA)
-    monkeypatch.setattr(
-        installer,
-        "_http_get",
-        lambda url, **kw: _Resp(
-            content=_tarball(requires_pip=f"{{pkg: websockets>=12, optional: true}}, {_SOFT_MISSING}")
-        ),
-    )
+    monkeypatch.setattr(installer, "_http_get", lambda url, **kw: _Resp(content=_tarball(requires_pip=requires_pip)))
     installer.install("https://github.com/acme/demo_ext")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
@@ -294,5 +289,5 @@ def test_install_deps_frozen_optional_only_manifest_keeps_satisfied_optionals(en
     monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _refuse)
     with caplog.at_level(_logging.WARNING):
         deps = installer.install_deps("demo_ext")  # no raise: nothing hard is missing
-    assert deps == ["websockets>=12"]  # satisfied optional kept; only the missing one dropped
+    assert deps == expected
     assert "optional dep(s) definitely_not_real_xyz aren't in the desktop runtime" in caplog.text
