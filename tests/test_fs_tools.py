@@ -606,15 +606,17 @@ _ENV_PROBE_NAMES = ("A2A_AUTH_TOKEN", "AGENT_NAME", "PROTOAGENT_HOME", "OPENAI_A
 
 
 def _probe(t, project_dir) -> dict:
-    """Print the probe vars from a script file — `"<python>" probe.py`, one quoted pair, so
-    Windows `cmd /c` doesn't strip quotes from an inline `-c "…"` (it drops the outer pair
-    when a line starts with a quote and has more than two)."""
+    """Print the probe vars from a script file (`<python> envprobe.py`) — an inline `-c "…"`
+    doesn't survive Windows cmd quoting."""
     import sys
 
     (project_dir / "envprobe.py").write_text(
         "import os\n" + "".join(f"print({n!r}, os.environ.get({n!r}, '<unset>'))\n" for n in _ENV_PROBE_NAMES)
     )
-    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": f'"{sys.executable}" envprobe.py'}))
+    # Quote the interpreter only when it needs it: Windows run_command hands the line to cmd
+    # with quotes escaped, so a quoted path there reads as the literal `\"C:\...\"`.
+    exe = f'"{sys.executable}"' if " " in sys.executable else sys.executable
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": f"{exe} envprobe.py"}))
     seen = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
     assert set(_ENV_PROBE_NAMES) <= set(seen), out  # the probe ran and printed every name
     return seen
