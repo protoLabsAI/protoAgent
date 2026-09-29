@@ -87,7 +87,8 @@ Built by default; drop the whole group with `middleware.knowledge: false`. See
 ### Scheduling — bound when a scheduler backend exists
 
 Built by default; drop with `middleware.scheduler: false` (or `SCHEDULER_DISABLED=1`). See
-[Schedule future work](/guides/scheduler).
+[Schedule future work](/guides/scheduler). Defined in `tools/scheduler_tools.py`
+(`_build_scheduler_tools`).
 
 | Tool | What it does |
 |---|---|
@@ -99,6 +100,7 @@ Built by default; drop with `middleware.scheduler: false` (or `SCHEDULER_DISABLE
 ### Tasks — bound when a `TaskStore` exists
 
 Built by default. The agent's in-process planning board, mirrored to the console Tasks panel.
+Defined in `tools/scheduler_tools.py` (`_build_task_tools`).
 
 | Tool | What it does |
 |---|---|
@@ -119,7 +121,7 @@ Built by default (absent only if the store fails to open).
 
 `goal.enabled` defaults to **true**, but the three goal tools also need a registered plugin
 verifier — with none, only `list_verifiers` binds. See [Goal mode](/guides/goal-mode) and
-[ADR 0028](/adr/0028-plugin-goal-verifiers).
+[ADR 0028](/adr/0028-plugin-goal-verifiers). Defined in `tools/goal_tools.py`.
 
 | Tool | What it does |
 |---|---|
@@ -132,7 +134,8 @@ verifier — with none, only `list_verifiers` binds. See [Goal mode](/guides/goa
 
 An independent axis from goals — a watch is verifier-only and moved by an external process.
 Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) and
-[ADR 0067](/adr/0067-standalone-watch-primitive).
+[ADR 0067](/adr/0067-standalone-watch-primitive). Defined in `tools/scheduler_tools.py`
+(`_build_watch_tools`).
 
 | Tool | What it does |
 |---|---|

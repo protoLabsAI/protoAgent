@@ -1,6 +1,6 @@
 """End the turn after the agent calls the ``wait`` tool.
 
-The ``wait`` tool (tools/lg_tools.py) schedules a one-shot resume and is meant to
+The ``wait`` tool (tools/scheduler_tools.py) schedules a one-shot resume and is meant to
 *yield* — the agent should stop here and be re-triggered later by the scheduler,
 instead of busy-polling a status tool (which burns the whole recursion budget in
 one turn). LangChain's ``create_agent`` has no built-in "a tool ended the turn"

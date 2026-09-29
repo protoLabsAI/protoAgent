@@ -518,7 +518,7 @@ def test_no_skill_backticks_an_unknown_tool_name():
 
 def test_the_watch_args_the_drop_folder_skill_names_are_real_create_watch_params():
     """drop-folder walks the operator through create_watch by parameter name."""
-    source = (REPO / "tools" / "lg_tools.py").read_text(encoding="utf-8")
+    source = (REPO / "tools" / "scheduler_tools.py").read_text(encoding="utf-8")  # #3830 moved it
     tree = ast.parse(source)
     fn = next(
         node
