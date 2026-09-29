@@ -6,9 +6,12 @@ import { describe, expect, it } from "vitest";
 // px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
 // chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/6/10/11/14/28px, …) are intentionally LEFT as literals — they wait on the DS
-// gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `inset: -4px` is not spacing).
+// half-steps (2/6/10/11/14/28px, …) are NOT swept by this exact-scale guard: the fleet-room /
+// fleet-activity half-steps have since moved onto the DS half-step scale under protoContent#547
+// (step 3), while work.css / app-drawer.css still await the sibling #547 card — either way that
+// half-step migration is pinned below, not swept here. So this guard flags ONLY the five
+// exact-scale values, and only when they sit in a spacing declaration (a `left: 8px` /
+// `inset: -4px` is not spacing).
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as fontSizeGuard.test.ts /
 // tokenNameGuard.test.ts: this tsconfig has no node types and under jsdom `import.meta.url`
@@ -110,7 +113,8 @@ describe("no exact-scale px spacing literal in the fleet/work/drawer CSS (DS aud
   });
 
   it("the matcher leaves half-steps, negatives, tokens, and non-spacing props alone", () => {
-    // Half-steps and off-scale values wait on protoContent#547 — never flagged.
+    // Half-steps / off-scale values are never flagged by this exact-scale matcher — the #547
+    // half-step migration is pinned separately below, not this guard's concern.
     for (const half of ["2", "6", "10", "11", "14", "28"]) {
       expect(spacingHits("  padding: " + half + "px;")).toEqual([]);
     }
@@ -134,10 +138,15 @@ describe("no exact-scale px spacing literal in the fleet/work/drawer CSS (DS aud
     expect(offendersIn("./work.css", commented)).toEqual([]);
   });
 
-  it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): spot-check a known off-scale literal survived in each file.
+  it("pins the #547 half-step migration: fleet CSS tokenized, sibling files still literal", () => {
+    // r2, step 3 (protoContent#547): the fleet-room / fleet-activity half-steps now read DS
+    // half-step tokens — pin a representative migrated declaration in each (was `padding: 10px …`
+    // in fleet-room, `padding: 20px 2px` in fleet-activity).
+    expect(CSS_SOURCES["./fleet-room.css"]).toContain("padding: var(--pl-space-2_5) var(--pl-space-3)");
+    expect(CSS_SOURCES["./fleet-activity.css"]).toContain("padding: var(--pl-space-5) var(--pl-space-0_5)");
+    // Genuinely off-scale values (uncovered by the DS scale, e.g. 28px) stay literals by design.
     expect(CSS_SOURCES["./fleet-room.css"]).toContain("padding: 28px var(--pl-space-3)");
-    expect(CSS_SOURCES["./fleet-activity.css"]).toContain("padding: 20px 2px");
+    // work.css / app-drawer.css belong to the sibling card; their half-steps still wait on #547.
     expect(CSS_SOURCES["./work.css"]).toContain("gap: 7px");
     expect(CSS_SOURCES["./app-drawer.css"]).toContain("padding: 9px 10px");
   });
