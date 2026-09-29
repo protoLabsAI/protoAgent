@@ -99,9 +99,9 @@ export function McpCatalogDialog({
     >
       {selected ? (
         <div className="mcp-catalog-configure">
-          <button type="button" className="mcp-catalog-back" onClick={back}>
+          <Button type="button" variant="ghost" size="sm" onClick={back}>
             <ArrowLeft size={14} /> All servers
-          </button>
+          </Button>
           <div className="mcp-catalog-config-head">
             <strong>{selected.name}</strong>
             {selected.requires ? <span className="mcp-catalog-chip">needs {selected.requires}</span> : null}

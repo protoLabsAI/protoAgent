@@ -655,21 +655,6 @@ select:disabled {
 .mcp-catalog-docs:hover {
   color: var(--pl-color-fg-muted);
 }
-.mcp-catalog-back {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--pl-space-1);
-  background: none;
-  border: 0;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-  font-size: var(--pl-font-size-xs);
-  padding: 0;
-  margin-bottom: var(--pl-space-2);
-}
-.mcp-catalog-back:hover {
-  color: var(--pl-color-fg);
-}
 .mcp-catalog-config-head {
   display: flex;
   align-items: center;
