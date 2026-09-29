@@ -167,10 +167,22 @@ async def test_a_turn_with_no_reply_never_returns_the_previous_answer(env):
 
     out = await chat_mod.chat("hi", "s1")
 
-    assert out == [{"role": "assistant", "content": _NO_REPLY, "usage": _usage(0, 0)}]
-    # ODDITY: the reply SAYS "**Error:**" but carries no structured `error` key, so the
-    # telemetry row counts it as a completed turn (and /v1 answers it as a 200).
-    assert env.rows[0]["state"] == "completed"
+    # A no-reply turn is a FAILED turn (#3873): it carries the structured `error` every other
+    # failure return does, so the telemetry row counts it failed (and /v1 answers an error).
+    assert out == [
+        {
+            "role": "assistant",
+            "content": _NO_REPLY,
+            "usage": _usage(0, 0),
+            "error": {
+                "message": "the turn produced no reply — it may have stalled or been interrupted; retry it",
+                "type": "server_error",
+                "upstream_status": None,
+                "exception": None,
+            },
+        }
+    ]
+    assert env.rows[0]["state"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -355,6 +367,27 @@ async def test_goal_turn_auto_answers_a_hitl_park(env, monkeypatch):
     # Keyed by interrupt id, like the streaming driver (#3872 — was a bare resume value).
     assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
     assert g.updates == []
+
+
+@pytest.mark.asyncio
+async def test_goal_turn_keeps_the_pre_interrupt_text_when_the_resumed_pass_says_nothing(env, monkeypatch):
+    """#3873 / #3891 F3, the non-streaming side: the text of a pass that parked at an
+    auto-answered interrupt is part of THIS turn's messages (a resume adds no Human turn),
+    so the reply's last-AI-message rule keeps it when the resumed pass adds no text — the
+    same answer the streaming driver's `done` now carries (it used to drop it)."""
+    monkeypatch.setattr(env.state, "goal_controller", FakeGoals([("done", "met")]), raising=False)
+    g = env.install(
+        [
+            Invoke(turn_result(AIMessage(content="asking")), steps=[set_interrupt("which env?")]),
+            turn_result(AIMessage(content="asking"), AIMessage(content="")),
+        ]
+    )
+
+    out = await chat_mod.chat("go", "s1")
+
+    assert out[0]["content"] == "asking\n\n---\nmet"
+    assert "error" not in out[0]
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
 
 
 class _StrictResumeGraph(ScriptedGraph):
@@ -611,3 +644,33 @@ async def test_force_compact_without_a_graph_is_a_no_op(env, monkeypatch):
     monkeypatch.setattr(env.state, "graph", None, raising=False)
 
     assert await chat_mod._force_compact_for_overflow("a2a:s1", "s1") is False
+
+
+# ── /v1 route: a no-reply turn is an HTTP error, like every other failed turn ──
+
+
+def test_v1_answers_a_no_reply_turn_with_an_error_status_not_a_200(env, monkeypatch):
+    """#3873 at the route: the REAL driver behind ``/v1/chat/completions`` (only the graph
+    is fake). A turn that produced no reply used to answer 200 with the ``**Error:**`` text
+    as the completion; it now takes the same ``_v1_error_response`` path as a turn that
+    raised with no upstream status — a 500 ``server_error``, nothing that looks like an
+    answer."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import operator_api.chat_routes as cr
+
+    env.install([turn_result()])
+    monkeypatch.setattr(cr, "agent_name", lambda: "protoagent")
+    app = FastAPI()
+    cr.register_chat_routes(app, ui="none")
+
+    r = TestClient(app).post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "go"}]})
+
+    assert r.status_code == 500
+    body = r.json()
+    assert "choices" not in body
+    assert body["error"]["type"] == "server_error"
+    assert body["error"]["upstream_status"] is None
+    assert "produced no reply" in body["error"]["message"]
+    assert env.rows[0]["state"] == "failed" and env.rows[0]["origin"] == "v1"

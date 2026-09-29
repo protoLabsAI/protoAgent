@@ -859,10 +859,17 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     # with the no-operator sentinel and runs another pass, up to a cap, then gives up.
     _auto = _goal_loop.HitlAutoAnswer(_goal_loop.is_autonomous_turn(request_metadata, goal_active=goal_active))
     _resume_value = (message if resume else None)
+    # Text streamed by passes that ended at an auto-answered (or given-up) interrupt: those
+    # passes yield `input_required` instead of `__raw__`, so without this their text reached
+    # the live stream but never the terminal `done` (#3873). Built from the forwarded `text`
+    # frames, which are exactly the pass's accumulated raw text — so `done` stays the SAME
+    # string the live stream carried.
+    _carried = ""
     with goal_turn(goal_active):
         while True:
             _autoanswer_pending = False
             _autonomous_giveup = False
+            _pass_text = ""
             # aclosing (#3877): a bare `async for` leaves the inner generator unclosed when
             # this one is closed early — its cleanup would run at GC, not before aclose() returns.
             async with contextlib.aclosing(
@@ -880,7 +887,15 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
             ) as _turn_frames:
                 async for kind, payload in _turn_frames:
                     if kind == "__raw__":
-                        accumulated_raw = payload
+                        accumulated_raw = (_carried + _pass_text) if _carried else payload
+                    elif kind == "text" and _carried:
+                        # A resumed pass's text opens a new paragraph after the carried text,
+                        # as a new model call's text does within one pass (turn_stream) — on
+                        # the live delta itself, so the stream and `done` stay one string.
+                        if not _pass_text and _carried.strip():
+                            payload = _turn_stream._paragraph_break(_carried, payload) + payload
+                        _pass_text += payload
+                        yield (kind, payload)
                     elif kind == "input_required":
                         _verdict = _auto.on_interrupt()
                         if _verdict == _goal_loop.PARK:
@@ -901,9 +916,16 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                             # terminal state. The stray interrupt is cleared after the loop.
                             _autonomous_giveup = True
                     else:
+                        if kind == "text":
+                            _pass_text += payload
                         if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
                             last_tool_out = str(payload["output"])
                         yield (kind, payload)
+            if _autoanswer_pending or _autonomous_giveup:
+                # This pass ended at an interrupt, not `__raw__`: keep its text for `done`.
+                _carried += _pass_text
+            if _autonomous_giveup and _carried:
+                accumulated_raw = _carried
             if _autoanswer_pending:
                 # Resume past the interrupt with the no-operator sentinel and run another pass;
                 # images belong only to the first (fresh) pass, so drop them on resume. The
@@ -1484,7 +1506,7 @@ async def record_failed_turn(session_id: str, text: str) -> bool:
         return False
 
 
-def turn_error(exc: BaseException, message: str | None = None) -> dict[str, Any]:
+def turn_error(exc: BaseException | None, message: str | None = None) -> dict[str, Any]:
     """Machine-readable companion to the ``**Error:** …`` bubble a failed turn returns.
 
     A turn that raises is reported as assistant *content*, which is right for a chat UI
@@ -1497,10 +1519,11 @@ def turn_error(exc: BaseException, message: str | None = None) -> dict[str, Any]
     a real HTTP error. The content string is unchanged, so nothing that reads it moves.
     """
     return {
-        "message": message or str(exc),
+        "message": message or str(exc or "the turn failed"),
         "type": _ERROR_TYPE_BY_STATUS.get(_upstream_status(exc), "server_error"),
         "upstream_status": _upstream_status(exc),
-        "exception": type(exc).__name__,
+        # None for a failure with no exception behind it (a turn that produced no reply, #3873).
+        "exception": type(exc).__name__ if exc is not None else None,
     }
 
 
@@ -1777,8 +1800,11 @@ async def _chat_langgraph_impl(
                 # that plainly: the whole point of #2300 is that a caller must be able to
                 # tell "no answer" from "an answer", and the previous wording read like a
                 # deliberate quiet turn rather than a failure worth retrying.
+                no_reply = ""
                 if not response:
-                    response = _last_tool_text(result) or (
+                    response = _last_tool_text(result)
+                if not response:
+                    no_reply = response = (
                         "**Error:** the turn produced no reply — it may have stalled or been "
                         "interrupted. Nothing was returned for this request; retry it. "
                         "(This is not the previous turn's answer.)"
@@ -1811,7 +1837,14 @@ async def _chat_langgraph_impl(
                         step.text = extract_output(_last_ai(result))
                 response = drive.text
 
-                return [{"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}]
+                reply = {"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}
+                # A turn that produced nothing is a FAILED turn, not an answer that happens to
+                # start with "**Error:**" (#3873): carry the structured `error` like every other
+                # failure return, so telemetry counts it failed and /v1 answers an error status.
+                # Unless a goal continuation replaced the text with a real reply.
+                if no_reply and response.startswith(no_reply):
+                    reply["error"] = turn_error(None, "the turn produced no reply — it may have stalled or been interrupted; retry it")
+                return [reply]
 
             native_tid = config["configurable"]["thread_id"]
             return _traced(await _native_turn(message, images))
