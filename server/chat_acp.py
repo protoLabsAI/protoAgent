@@ -161,6 +161,19 @@ async def acp_sessions_snapshot() -> list[dict[str, Any]]:
 _ACP_CANCEL_SETTLE_S = 10.0
 
 
+def _late_outcome_logger(agent: str):
+    """A done-callback for a driver dropped past the settle bound: retrieve its outcome."""
+
+    def _retrieve(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()  # retrieving it is the point — see the caller
+        if exc is not None:
+            log.debug("[acp-runtime] abandoned turn on %s finished late with: %r", agent, exc)
+
+    return _retrieve
+
+
 async def _stop_abandoned_driver(driver: asyncio.Task, rt) -> None:
     """Cancel an abandoned turn's driver task and wait (bounded) for it to stop, so the
     caller's release happens only after the turn has actually ended. Never raises for the
@@ -169,10 +182,13 @@ async def _stop_abandoned_driver(driver: asyncio.Task, rt) -> None:
     done, _ = await asyncio.wait({driver}, timeout=_ACP_CANCEL_SETTLE_S)
     if not done:
         log.warning(
-            "[acp-runtime] abandoned turn on %s did not stop within %.0fs of cancel — releasing anyway",
+            "[acp-runtime] abandoned turn on %s did not stop within %gs of cancel — releasing anyway",
             getattr(rt, "agent", "?"),
             _ACP_CANCEL_SETTLE_S,
         )
+        # Nobody awaits the dropped driver now: retrieve its eventual outcome, or a late
+        # failure surfaces only as asyncio's "Task exception was never retrieved" at GC.
+        driver.add_done_callback(_late_outcome_logger(getattr(rt, "agent", "?")))
         return
     if driver.cancelled():
         log.info("[acp-runtime] abandoned turn on %s cancelled (consumer went away)", getattr(rt, "agent", "?"))

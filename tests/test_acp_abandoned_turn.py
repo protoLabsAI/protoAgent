@@ -72,10 +72,16 @@ async def test_cancelling_the_consumer_mid_stream_stops_the_driver():
     """(b) Cancel the consuming task while it waits for the next frame."""
     rt = _HangingRuntime()
     got: list = []
+    at_release: list[bool] = []
 
     async def consume():
-        async for frame in chat_acp._acp_drive_turn(rt, "m"):
-            got.append(frame)
+        try:
+            async for frame in chat_acp._acp_drive_turn(rt, "m"):
+                got.append(frame)
+        finally:
+            # Where a caller releases the runtime: the driver must be done at THIS moment,
+            # not merely a few loop turns later when `await consumer` returns.
+            at_release.append(_driver_stopped(rt))
 
     consumer = asyncio.create_task(consume())
     await rt.started.wait()
@@ -86,7 +92,7 @@ async def test_cancelling_the_consumer_mid_stream_stops_the_driver():
 
     assert got == [("text", "partial")]
     assert rt.cancelled
-    assert _driver_stopped(rt), "the consumer finished while the driver task was still running"
+    assert at_release == [True], "the consumer finished while the driver task was still running"
 
 
 async def test_full_consumption_is_unchanged():
@@ -147,10 +153,53 @@ async def test_a_runtime_that_ignores_the_cancel_is_bounded(monkeypatch, caplog)
     t0 = time.monotonic()
     with caplog.at_level(logging.WARNING, logger="protoagent.server"):
         await agen.aclose()
-    assert time.monotonic() - t0 < 2.0
-    assert any("did not stop within" in r.getMessage() for r in caplog.records)
+    elapsed = time.monotonic() - t0
+    # It WAITED the bound before giving up (a cancel-only stop returns at once), and no longer.
+    assert 0.15 <= elapsed < 2.0
+    assert any("did not stop within 0.2s" in r.getMessage() for r in caplog.records)
     release.set()  # let the stubborn task finish so the loop closes clean
     await asyncio.sleep(0.05)
+
+
+async def test_a_driver_dropped_past_the_bound_has_its_late_failure_retrieved(monkeypatch, caplog):
+    """A driver still running after the settle bound is dropped; if it fails later, its
+    exception is retrieved (debug-logged) instead of asyncio's "Task exception was never
+    retrieved" at GC."""
+    import gc
+
+    monkeypatch.setattr(chat_acp, "_ACP_CANCEL_SETTLE_S", 0.05)
+    release = asyncio.Event()
+
+    class _StubbornThenFails:
+        agent = "wedged"
+
+        async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
+            await text_callback("x")
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                await release.wait()  # ignore the cancel...
+            raise RuntimeError("boom after the bound")  # ...then fail, with nobody awaiting
+
+    loop = asyncio.get_running_loop()
+    unretrieved: list[dict] = []
+    old_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: unretrieved.append(ctx))
+    try:
+        agen = chat_acp._acp_drive_turn(_StubbornThenFails(), "m")
+        await agen.__anext__()
+        with caplog.at_level(logging.DEBUG, logger="protoagent.server"):
+            await agen.aclose()
+            del agen
+            release.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            gc.collect()
+    finally:
+        loop.set_exception_handler(old_handler)
+
+    assert not [c for c in unretrieved if "never retrieved" in str(c.get("message", ""))]
+    assert any("finished late with: RuntimeError('boom after the bound')" in r.getMessage() for r in caplog.records)
 
 
 async def test_collected_caller_releases_only_after_the_turn_stopped(monkeypatch):
