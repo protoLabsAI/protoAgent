@@ -18,15 +18,22 @@ type HookResult = ReturnType<typeof useAttachments>;
 let container: HTMLElement;
 let root: Root;
 let result: { current: HookResult };
+let Probe: (props: UseAttachmentsOptions) => null;
 
 function renderHook(opts: UseAttachmentsOptions) {
   result = { current: undefined as unknown as HookResult };
-  function Probe(props: UseAttachmentsOptions) {
+  Probe = function Probe(props: UseAttachmentsOptions) {
     result.current = useAttachments(props);
     return null;
-  }
+  };
   act(() => root.render(h(Probe, opts)));
   return result;
+}
+
+// Re-render the SAME mounted Probe with new options (state and refs survive) — the way
+// the slot re-renders the hook when the active model changes.
+function rerender(opts: UseAttachmentsOptions) {
+  act(() => root.render(h(Probe, opts)));
 }
 
 // Let the FileReader / mocked-fetch promise chains settle inside act.
@@ -150,6 +157,18 @@ describe("useAttachments — upload pipeline", () => {
     expect(r.current.attachments[0]).toMatchObject({ status: "ready", native: true });
   });
 
+  it("reads the CURRENT visionModel: switching to a vision model after first render skips describe (#3855)", async () => {
+    const spy = vi.spyOn(api, "attachToChat");
+    const r = renderHook(baseOpts({ imageDescribe: true, visionModel: false }));
+    rerender(baseOpts({ imageDescribe: true, visionModel: true }));
+    act(() => void r.current.uploadAttachment(imageFile()));
+    await flush();
+    expect(spy).not.toHaveBeenCalled();
+    expect(r.current.attachments).toHaveLength(1);
+    expect(r.current.attachments[0]).toMatchObject({ status: "ready", native: true });
+    expect(r.current.attachments[0].context).toBeUndefined();
+  });
+
   it("a failed describe never sinks the ready native image", async () => {
     vi.spyOn(api, "attachToChat").mockRejectedValue(new Error("describe down"));
     const onError = vi.fn();
@@ -220,6 +239,20 @@ describe("useAttachments — add paths", () => {
     await flush();
     expect(e.preventDefault).toHaveBeenCalled();
     expect(r.current.attachments).toMatchObject([{ name: "shot.png", kind: "image" }]);
+  });
+
+  it("onPaste with clipboard files AND large text attaches only the files (#3855)", async () => {
+    const r = renderHook(baseOpts());
+    const e = {
+      clipboardData: transfer([imageFile()], "x".repeat(LARGE_PASTE_CHARS + 1)),
+      preventDefault: vi.fn(),
+    };
+    act(() => r.current.onPaste(e as never));
+    await flush();
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(r.current.attachments).toHaveLength(1);
+    expect(r.current.attachments).toMatchObject([{ name: "shot.png", kind: "image" }]);
+    expect(api.attachToChat).not.toHaveBeenCalled(); // the text was never converted/uploaded
   });
 
   it("onPaste turns a LARGE text paste into a 'Pasted text.txt' pill", async () => {
