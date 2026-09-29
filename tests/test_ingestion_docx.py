@@ -45,6 +45,8 @@ from ingestion import (
 )
 from ingestion import engine
 
+pytestmark = pytest.mark.platform_sensitive
+
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 # The OLE2 compound-file signature every legacy binary .doc starts with.
 OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"

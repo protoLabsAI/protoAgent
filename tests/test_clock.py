@@ -10,6 +10,8 @@ import pytest
 
 from infra import clock
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 class _SleepingClock:
     """A sleep-counting clock that jumps ``gap`` seconds after its first reading, the way

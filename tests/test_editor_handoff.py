@@ -20,6 +20,8 @@ from graph.config import LangGraphConfig
 from runtime import editor_handoff as eh
 from runtime import turn_activity
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _clean_store():

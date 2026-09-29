@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from graph.middleware.memory import contained_in, session_file_candidates
+import pytest
 
 
 # ── the containment predicate ─────────────────────────────────────────────────
@@ -35,6 +36,7 @@ def test_a_sibling_with_a_shared_prefix_escapes(tmp_path):
     assert not contained_in(str(base), str(sibling / "x.json"))
 
 
+@pytest.mark.platform_sensitive
 def test_a_symlinked_memory_dir_still_compares_correctly(tmp_path):
     real = tmp_path / "real"
     real.mkdir()

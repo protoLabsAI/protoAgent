@@ -103,6 +103,10 @@ def test_checks_workflow_preserves_stable_gate_and_full_suite_shards() -> None:
     assert "--splits 2 --group ${{ matrix.group }}" in workflow
     assert "--splitting-algorithm least_duration" in workflow
     assert "--durations-path tests/windows_test_durations.json" in workflow
+    # PRs/main run the marked subset; only the nightly schedule runs the whole suite.
+    assert "SCOPE_ARGS=(-m platform_sensitive)" in workflow
+    assert "FULL_SUITE: ${{ github.event_name == 'schedule' }}" in workflow
+    assert "\n  schedule:\n" in workflow
     assert "\n  windows-rust-tests:\n" in workflow
     assert "cargo test --locked" in workflow
     assert "\n  windows-tests:\n    name: Windows tests (native)\n" in workflow

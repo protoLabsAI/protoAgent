@@ -48,6 +48,8 @@ import yaml
 
 from graph.plugins.testkit import FakeRegistry, load_plugin
 
+pytestmark = pytest.mark.platform_sensitive
+
 REPO = Path(__file__).resolve().parent.parent
 ROOT = REPO / "plugins" / "agent_browser"
 

@@ -16,9 +16,12 @@ from tests.bashpath import real_bash
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "reset.sh"
 
-pytestmark = pytest.mark.skipif(
-    real_bash() is None, reason="reset.sh is a bash wrapper — nothing to exercise without a real bash"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        real_bash() is None, reason="reset.sh is a bash wrapper — nothing to exercise without a real bash"
+    ),
+    pytest.mark.platform_sensitive,
+]
 
 
 def _free_port() -> int:

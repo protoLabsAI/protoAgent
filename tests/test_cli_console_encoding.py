@@ -97,6 +97,7 @@ def test_cli_help_is_cp1252_encodable(module, builder):
     assert not bad, "non-cp1252 characters in CLI help (a Windows console can't print them):\n" + "\n".join(bad)
 
 
+@pytest.mark.platform_sensitive
 def test_frozen_smoke_path_fleet_help_under_cp1252():
     """The exact desktop-build smoke leg: ``python -m server fleet --help`` (the frozen
     binary's entry) with a cp1252 pipe, as on the Windows runner."""

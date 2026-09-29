@@ -15,6 +15,8 @@ import pytest
 from tests.test_artifact_plugin import _load
 from tools.fs_tools import Project, ProjectRegistry
 
+pytestmark = pytest.mark.platform_sensitive
+
 SEQ = "\n".join(
     [
         "sequenceDiagram",

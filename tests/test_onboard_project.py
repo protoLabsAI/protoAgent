@@ -34,6 +34,8 @@ from graph.config import LangGraphConfig
 from graph.plugins.host import HOST
 from tools import onboard_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _symlink_or_skip(link: Path, to: Path) -> None:
     """Windows without developer mode can't create symlinks — skip, don't fail."""

@@ -14,6 +14,8 @@ import pytest
 from plugins.coding_agent import git_harness as harness
 from tools.shell import run_command
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 async def _git(cwd, *args) -> str:
     res = await run_command(["git", *args], cwd=str(cwd))

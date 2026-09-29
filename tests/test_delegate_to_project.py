@@ -265,6 +265,7 @@ def test_return_diff_parses_and_defaults_on():
 # ── the diff comes back: real ACP child, real git ──────────────────────────────
 
 
+@pytest.mark.platform_sensitive
 async def test_unmanaged_project_dispatch_returns_the_delegates_diff(coder_registry, projects_config):
     root = projects_config["rw"]
     reply = await coder_registry.dispatch("coder", "add a line", project=resolve("rw"))
@@ -352,6 +353,7 @@ def test_base_env_drops_inherited_repository_overrides(monkeypatch, tmp_path):
     assert env["GIT_OPTIONAL_LOCKS"] == "0"
 
 
+@pytest.mark.platform_sensitive
 def test_render_truncates_and_points_at_the_full_diff(tmp_path):
     root = _repo(tmp_path / "big")
     before = cs.snapshot(str(root))
@@ -364,6 +366,7 @@ def test_render_truncates_and_points_at_the_full_diff(tmp_path):
     assert "line 1999" in _git(root, "diff", before.tree, after.tree)
 
 
+@pytest.mark.platform_sensitive
 def test_render_reports_a_commit_the_delegate_made(tmp_path):
     root = _repo(tmp_path / "commits")
     before = cs.snapshot(str(root))

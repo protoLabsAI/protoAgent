@@ -508,6 +508,7 @@ def _rows_written_by(store, before: set) -> list[dict]:
     return [r for r in store.recent(500) if r["row_id"] not in before]
 
 
+@pytest.mark.platform_sensitive
 async def test_a_run_that_dies_before_it_starts_books_none_of_the_previous_runs_effort(wired, tmp_path):
     """The reported case, end to end: run A does three tool calls in session
     ``sess-run-a``; run B's worktree is gone before it starts, so it never gets past

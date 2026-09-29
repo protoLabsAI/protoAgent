@@ -41,6 +41,8 @@ from infra.proc import (
     untrack_tree,
 )
 
+pytestmark = pytest.mark.platform_sensitive
+
 REPO = Path(__file__).resolve().parent.parent
 
 posix_only = pytest.mark.skipif(

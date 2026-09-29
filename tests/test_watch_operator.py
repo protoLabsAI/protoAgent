@@ -7,6 +7,8 @@ from graph.config import LangGraphConfig
 from graph.watches.controller import WatchController
 from graph.watches.store import WatchStore
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _wire(monkeypatch, tmp_path):
     from runtime.state import STATE

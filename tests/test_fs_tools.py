@@ -12,6 +12,8 @@ import pytest
 
 from tools.fs_tools import Project, ProjectRegistry, build_fs_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 _LIST_COMMAND = "dir /b" if os.name == "nt" else "ls"
 
 

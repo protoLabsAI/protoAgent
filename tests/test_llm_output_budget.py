@@ -22,6 +22,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from graph import llm
 from graph.llm import _ReasoningChatOpenAI
 
+pytestmark = pytest.mark.platform_sensitive
+
 _VLLM_OVERFLOW = (
     "This model's maximum context length is {w} tokens. However, you requested {r} output tokens "
     "and your prompt contains at least {p} input tokens, for a total of at least {t} tokens."

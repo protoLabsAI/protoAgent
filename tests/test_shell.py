@@ -9,6 +9,8 @@ import pytest
 
 from tools.shell import run_command
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.mark.asyncio
 async def test_success_and_stdout():

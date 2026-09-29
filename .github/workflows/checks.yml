@@ -13,6 +13,11 @@ on:
     # merged to main once) — they need the full gate at each slice, not only at the end.
     branches: [main, 'epic/**']
     types: [opened, synchronize, reopened, ready_for_review]
+  # Nightly: the one run that takes the Windows lane over the WHOLE Python suite. PRs and
+  # main pushes run only the `platform_sensitive` subset there (see windows-python-tests),
+  # so this is the net for an OS-dependent test that slipped its mark.
+  schedule:
+    - cron: "17 7 * * *"
 
 permissions:
   contents: read
@@ -280,9 +285,15 @@ jobs:
 
   windows-python-tests:
     name: Windows Python tests (shard ${{ matrix.group }}/2)
-    # The previous single job spent 15–18 of its ~19 minutes in pytest. Two
-    # isolated runners preserve the complete suite while halving the critical
-    # path; pytest-split keeps collection/order semantics within each shard.
+    # PRs and main pushes run only `-m platform_sensitive` (~27% of the suite): the
+    # tests that spawn processes, signal, lock, chmod/symlink, replace/rename files,
+    # branch on the platform, or import code that does — plus every file that ever
+    # failed natively (#2412). The rest is platform-neutral Python the Linux job
+    # already gates, and on Windows it cost ~0.2s/test in tmp-dir/filesystem overhead
+    # (~25 min for the full suite). tests/test_platform_sensitive_marks.py keeps the
+    # marks honest; the nightly `schedule` run still covers the whole suite.
+    # Two isolated shards halve the critical path; pytest-split keeps
+    # collection/order semantics within each shard.
     needs: windows-scope
     if: >-
       needs.windows-scope.outputs.python_tests == 'true' &&
@@ -320,21 +331,24 @@ jobs:
         run: |
           uv sync --frozen --python 3.12
           uv pip install pytest pytest-asyncio pytest-split==0.11.0
-      - name: Run full-suite shard ${{ matrix.group }}/2
+      - name: Run shard ${{ matrix.group }}/2
         # tests/windows_native_exclusions.txt is the #2412 burndown: files that
         # failed natively at the 2026-08-08 baseline (currently empty). The two
-        # groups are disjoint and exhaustive, so every non-excluded test still
-        # gates the PR.
+        # groups are disjoint and exhaustive over the selected tests.
         shell: bash
+        env:
+          FULL_SUITE: ${{ github.event_name == 'schedule' }}
         run: |
           source .venv/Scripts/activate
+          SCOPE_ARGS=(-m platform_sensitive)
+          if [ "${FULL_SUITE}" = "true" ]; then SCOPE_ARGS=(); fi
           IGNORE_ARGS=()
           while IFS= read -r path; do
             if [[ -n "${path}" && ! "${path}" =~ ^[[:space:]]*# ]]; then
               IGNORE_ARGS+=("--ignore=${path}")
             fi
           done < tests/windows_native_exclusions.txt
-          python -m pytest tests/ -q "${IGNORE_ARGS[@]}" \
+          python -m pytest tests/ -q "${SCOPE_ARGS[@]}" "${IGNORE_ARGS[@]}" \
             --splits 2 --group ${{ matrix.group }} --splitting-algorithm least_duration \
             --durations-path tests/windows_test_durations.json
 

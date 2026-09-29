@@ -22,7 +22,10 @@ from runtime.state import STATE
 from tools import git_read
 from tools.git_read import working_tree_diff
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs the git binary")
+pytestmark = [
+    pytest.mark.skipif(shutil.which("git") is None, reason="needs the git binary"),
+    pytest.mark.platform_sensitive,
+]
 
 @pytest.fixture(autouse=True)
 def _unwired_host_config(monkeypatch):

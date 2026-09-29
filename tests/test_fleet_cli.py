@@ -1128,6 +1128,7 @@ def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkey
     body = json.loads(capsys.readouterr().out)
     assert body["hubs"][0]["name"] == evil and body["hubs"][0]["version"] == "1\x9b0"  # raw, for scripts
 
+@pytest.mark.platform_sensitive
 def test_the_non_interactive_verbs_never_load_textual(tmp_path):
     """S6 (#3473): `fleet --all --json` reached the hub enumerator through `deck.hubs`, whose
     module top imports the Textual screen — a frozen build without Textual would have died

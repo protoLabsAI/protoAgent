@@ -9,6 +9,8 @@ from graph.config import LangGraphConfig
 from runtime.state import STATE
 from server.operator_mcp import build_server, operator_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _cfg(tools):
     c = LangGraphConfig()

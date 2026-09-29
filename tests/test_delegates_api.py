@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 import plugins.delegates.api as api
 from plugins.delegates import store
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def fake_io(monkeypatch):

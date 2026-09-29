@@ -83,6 +83,7 @@ print("rc", cli.run_fleet_cli(["--self-check"]))
 """
 
 
+@pytest.mark.platform_sensitive
 def test_a_module_loaded_only_at_render_time_fails_the_self_check(tmp_path):
     """Why the self-check renders instead of importing: Rich resolves its unicode cell table
     with `import_module` on the first wide/non-ASCII cell — a PyInstaller scan cannot see it,
@@ -94,6 +95,7 @@ def test_a_module_loaded_only_at_render_time_fails_the_self_check(tmp_path):
     assert "rich._unicode_data.unicode" in out.stderr
 
 
+@pytest.mark.platform_sensitive
 def test_the_desktop_smoke_passes_against_the_dev_server():
     """`scripts/fleet_deck_smoke.py` without `--bin` runs `python -m server` — the same
     checks the desktop build runs against the frozen binary, so a check that could never

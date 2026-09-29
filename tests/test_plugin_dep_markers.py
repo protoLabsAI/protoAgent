@@ -16,6 +16,8 @@ import pytest
 from graph.plugins import installer
 from graph.plugins.manifest import load_manifest
 
+pytestmark = pytest.mark.platform_sensitive
+
 # The Terminal plugin's REAL dependency declaration, verbatim from
 # github.com/protoLabsAI/terminal-plugin protoagent.plugin.yaml (v0.4.1): Linux/macOS use
 # the stdlib pty (no deps); only Windows needs pywinpty.

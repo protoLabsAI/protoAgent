@@ -14,6 +14,8 @@ from graph.plugins.registry import PluginRegistry
 from plugins.execute_code import register
 from plugins.execute_code.engine import build_execute_code_tool, run_code
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @tool
 async def echo_tool(text: str) -> str:

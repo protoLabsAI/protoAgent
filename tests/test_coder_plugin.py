@@ -12,6 +12,8 @@ from plugins.coder.generate import extract_code
 from plugins.coder.solve import Budget, Verdict, solve
 from plugins.coder.verify import _parse, run_tests
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 # ── ladder helpers ────────────────────────────────────────────────────────────
 

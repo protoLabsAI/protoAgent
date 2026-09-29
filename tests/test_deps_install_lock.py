@@ -201,6 +201,7 @@ def _wait_for(cond, what: str, timeout: float = 60.0) -> None:
         time.sleep(0.01)
 
 
+@pytest.mark.platform_sensitive
 def test_two_processes_on_one_environment_run_one_pip(plugin, monkeypatch):
     """Two interpreters sharing one environment and one box root: a dev and a default
     instance on one checkout's venv, fleet members on the managed runtime, the CLI beside a

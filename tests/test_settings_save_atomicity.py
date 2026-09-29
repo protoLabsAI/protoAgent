@@ -24,6 +24,8 @@ from tests.privacy_asserts import assert_owner_only
 import pytest
 import yaml as _yaml
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def isolated_config(monkeypatch, tmp_path: Path):

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from graph.workspaces import manager
+import pytest
 
 
 def _member(tmp_path, monkeypatch, record: dict | None):
@@ -144,6 +145,7 @@ def test_reset_setup_drops_the_contract_with_the_marker(tmp_path, monkeypatch):
     reset_setup()  # idempotent, like the marker
 
 
+@pytest.mark.platform_sensitive
 def test_the_host_contract_file_is_gitignored():
     """Runtime state, never config to commit: in a fork (this is a template repo) a
     committed contract would put the banner on every clone. Both the default instance

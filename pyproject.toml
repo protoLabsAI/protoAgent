@@ -255,6 +255,13 @@ forbidden_modules = ["server", "operator_api"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    # The Windows-native CI lane runs ONLY these on PRs and main pushes (a nightly run
+    # covers the full suite). tests/test_platform_sensitive_marks.py enforces the mark on
+    # any test that spawns processes, signals, locks, chmods/symlinks, os.replace/rename,
+    # branches on the platform, or imports a module that does.
+    "platform_sensitive: exercises OS-dependent behavior; the Windows CI lane's PR subset",
+]
 
 [tool.ruff]
 line-length = 120
