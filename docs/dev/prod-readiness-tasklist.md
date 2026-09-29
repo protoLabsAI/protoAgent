@@ -74,7 +74,7 @@ Suggested order (dependency-aware):
 | ID | Task | Evidence | Effort | Disp. |
 |----|------|----------|:------:|:-----:|
 | C1 | Break up `_main()` (534 L); extract host-binding **security gate** into a testable fn | `server/__init__.py:274,794` | M | 🟡 Next |
-| C2 | Decompose `agent_init.py` (1387 L); fix 67 in-fn imports/load order | `server/agent_init.py` | L | ⚪ Backlog |
+| C2 | Decompose `agent_init.py` (3,028 L after the maintenance-loops slice #3807; was 3,728); fix in-fn imports/load order | `server/agent_init.py`, epic #3804 | L | 🟡 In progress |
 | C3 | Factor `_chat_langgraph_stream` (301 L) + `_run_turn_stream` | `server/chat.py:435,152` | M | ⚪ Backlog (gate on E1) |
 | C4 | Type `AppState`; funnel 49 mutation sites through owned methods | `runtime/state.py:16` | M | ⚪ Backlog |
 | C5 | Retire deprecated `peer_consult` from core toolset | `tools/peer_tools.py:97`, `lg_tools.py:750` | S | 🟡 Next |

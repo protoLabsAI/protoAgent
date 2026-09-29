@@ -1092,7 +1092,7 @@ def test_detect_soul_drift_compares_against_earliest_snapshot(monkeypatch, tmp_p
 def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path):
     """The curation pass publishes `persona.drift_detected` (score + signals + rationale)
     to the event bus when the drift score crosses the configured threshold."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     _seed_soul_history(
         monkeypatch,
@@ -1102,7 +1102,7 @@ def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path
     )
     published = []
     monkeypatch.setattr(
-        agent_init,
+        maintenance_loops,  # the pass's home (#3807) — where its _event_bus resolves
         "_event_bus",
         SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
     )
@@ -1130,7 +1130,7 @@ def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path
 def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
     """A near-identical persona scores below threshold -> the pass runs but publishes
     nothing (still returns the report for observability)."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     _seed_soul_history(
         monkeypatch,
@@ -1140,7 +1140,7 @@ def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
     )
     published = []
     monkeypatch.setattr(
-        agent_init,
+        maintenance_loops,  # the pass's home (#3807) — where its _event_bus resolves
         "_event_bus",
         SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
     )
@@ -1152,7 +1152,7 @@ def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
 
 def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
     """soul_drift_enabled=False -> the pass is a no-op (no detection, no publish)."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     _seed_soul_history(
         monkeypatch,
@@ -1162,7 +1162,7 @@ def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
     )
     published = []
     monkeypatch.setattr(
-        agent_init,
+        maintenance_loops,  # the pass's home (#3807) — where its _event_bus resolves
         "_event_bus",
         SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
     )
@@ -1173,17 +1173,19 @@ def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
 
 def test_maybe_run_soul_drift_pass_gates_to_interval(monkeypatch, tmp_path):
     """The interval gate runs the pass once, then suppresses further runs until the
-    cadence elapses (verified by counting detect_soul_drift calls)."""
-    from server import agent_init
+    cadence elapses (verified by counting detect_soul_drift calls).
 
-    monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
+    The gate state and the pass both live on maintenance_loops (#3807) — patched there."""
+    from server import agent_init, maintenance_loops
+
+    monkeypatch.setattr(maintenance_loops, "_last_soul_drift_check", 0.0)
     calls = {"n": 0}
 
     def _fake_run(cfg):
         calls["n"] += 1
         return {"score": 0.0}
 
-    monkeypatch.setattr(agent_init, "_run_soul_drift_pass", _fake_run)
+    monkeypatch.setattr(maintenance_loops, "_run_soul_drift_pass", _fake_run)
     cfg = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=24)
 
     assert agent_init._maybe_run_soul_drift_pass(cfg) is not None  # first tick runs
@@ -1191,7 +1193,7 @@ def test_maybe_run_soul_drift_pass_gates_to_interval(monkeypatch, tmp_path):
     assert calls["n"] == 1
 
     # interval_hours=0 disables the pass outright.
-    monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
+    monkeypatch.setattr(maintenance_loops, "_last_soul_drift_check", 0.0)
     disabled = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=0)
     assert agent_init._maybe_run_soul_drift_pass(disabled) is None
 

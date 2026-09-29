@@ -378,7 +378,6 @@ from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A s
 # AGENT_NAME_ENV / _event_bus / _bundle_root from this module — all defined above
 # this line — so the import is not a cycle.
 from server.agent_init import (  # noqa: E402,F401 — re-export of the extracted agent-init backend
-    _a2a_reaper_loop,
     _apply_settings_changes,
     _build_activity_log,
     _build_checkpointer,
@@ -389,12 +388,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _build_scheduler,
     _build_skills_index,
     _build_telemetry_store,
-    _checkpoint_prune_loop,
     _init_langgraph_agent,
-    _memory_guard_loop,
-    _plugin_autoupdate_loop,
-    _secrets_refresh_loop,
-    _watch_loop,
     _mount_plugin_routers,
     _plugin_agent_invoke,
     _populate_plugin_host,
@@ -403,12 +397,23 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _reload_plugin_surfaces,
     _resolve_checkpoint_db,
     _resolve_skills_db,
-    _retire_thread,
     _run_on_server_loop,
     _start_inbox_now_recovery_once,
     _start_scheduler_async,
     _stop_scheduler_async,
     _sync_autostart_with_config,
+)
+
+# The background maintenance loops + _retire_thread live in server/maintenance_loops.py
+# (#3807); imported from their home for the lifespan's create_task wiring below.
+from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the extracted maintenance loops
+    _a2a_reaper_loop,
+    _checkpoint_prune_loop,
+    _memory_guard_loop,
+    _plugin_autoupdate_loop,
+    _retire_thread,
+    _secrets_refresh_loop,
+    _watch_loop,
 )
 
 

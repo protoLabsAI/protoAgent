@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from server import agent_init
+from server import agent_init, maintenance_loops
 
 
 def _cfg(**over):
@@ -69,8 +69,9 @@ def stub_installer(monkeypatch):
     monkeypatch.setattr(installer_mod, "is_release_tag", fake_is_release_tag)
     monkeypatch.setattr(loader_mod, "purge_plugin_modules", fake_purge)
     monkeypatch.setattr(agent_init, "_apply_settings_changes", fake_apply)
-    # Default: the server is idle so the safe-moment gate passes.
-    monkeypatch.setattr(agent_init, "_server_is_idle", lambda: True)
+    # Default: the server is idle so the safe-moment gate passes. Patched on
+    # maintenance_loops — the sweep's home, where its bare-name call resolves (#3807).
+    monkeypatch.setattr(maintenance_loops, "_server_is_idle", lambda: True)
 
     # Capture bus events without a real bus.
     import server as server_mod
@@ -147,14 +148,14 @@ async def test_sweep_skips_uninstalled_policy_entry(stub_installer):
 
 
 async def test_idle_gate_defers_when_busy(stub_installer, monkeypatch):
-    monkeypatch.setattr(agent_init, "_server_is_idle", lambda: False)
+    monkeypatch.setattr(maintenance_loops, "_server_is_idle", lambda: False)
     cfg = _cfg()  # when: idle
     assert await agent_init._plugin_autoupdate_sweep(cfg, cfg.plugins_update_policy) == 0
     assert stub_installer.installed == []
 
 
 async def test_when_always_bypasses_idle_gate(stub_installer, monkeypatch):
-    monkeypatch.setattr(agent_init, "_server_is_idle", lambda: False)
+    monkeypatch.setattr(maintenance_loops, "_server_is_idle", lambda: False)
     cfg = _cfg(plugins_update_policy={"demo": {"track": "main", "when": "always"}})
     n = await agent_init._plugin_autoupdate_sweep(cfg, cfg.plugins_update_policy)
     assert n == 1
