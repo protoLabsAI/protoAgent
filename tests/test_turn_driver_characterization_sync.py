@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -351,8 +352,74 @@ async def test_goal_turn_auto_answers_a_hitl_park(env, monkeypatch):
     out = await chat_mod.chat("go", "s1")
 
     assert out[0]["content"] == "on it\n\n---\nmet"
-    assert g.resumes == [turn_control._AUTONOMOUS_HITL_SENTINEL]  # ODDITY vs streaming: bare, not id-keyed
+    # Keyed by interrupt id, like the streaming driver (#3872 — was a bare resume value).
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
     assert g.updates == []
+
+
+class _StrictResumeGraph(ScriptedGraph):
+    """LangGraph's rules: a bare ``Command(resume=value)`` with more than one pending
+    interrupt is an error, and an id-keyed resume answers THAT interrupt. Ids are stable
+    for an interrupt's life (assigned when it pends, kept after others are answered), so
+    re-answering an id that was already answered is caught rather than accepted."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._ids: list[str] = []  # parallel to self.pending
+        self._next_id = 0
+
+    def _sync_ids(self):
+        while len(self._ids) < len(self.pending):
+            self._ids.append(f"int-{self._next_id}")
+            self._next_id += 1
+
+    def _answer_resume(self, graph_input):
+        if not isinstance(graph_input, Command):
+            return
+        self._sync_ids()
+        resume = graph_input.resume
+        if not isinstance(resume, dict):
+            if len(self.pending) > 1:
+                raise RuntimeError("bare resume with multiple pending interrupts")
+            super()._answer_resume(graph_input)
+            del self._ids[:1]
+            return
+        self.resumes.append(resume)
+        for key in resume:
+            if key not in self._ids:
+                raise RuntimeError(f"resume for unknown or already-answered interrupt {key!r}")
+            i = self._ids.index(key)
+            del self._ids[i]
+            del self.pending[i]
+
+    async def aget_state(self, config):
+        self._sync_ids()
+        interrupts = [SimpleNamespace(id=i, value=v) for i, v in zip(self._ids, self.pending)]
+        return SimpleNamespace(tasks=(), interrupts=interrupts)
+
+
+@pytest.mark.asyncio
+async def test_goal_turn_auto_answers_parallel_interrupts_one_id_at_a_time(env, monkeypatch):
+    """#3872: two gated tool calls in one turn pend two interrupts at once; the goal
+    auto-answer resumes each BY ID (the first pending one), never with a bare value."""
+    monkeypatch.setattr(env.state, "goal_controller", FakeGoals([("done", "met")]), raising=False)
+    g = _StrictResumeGraph(
+        invokes=[
+            Invoke(turn_result(), steps=[set_interrupt("approve a?"), set_interrupt("approve b?")]),
+            turn_result(),
+            turn_result(AIMessage(content="both done")),
+        ]
+    )
+    monkeypatch.setattr(env.state, "graph", g, raising=False)
+
+    out = await chat_mod.chat("go", "s1")
+
+    assert out[0]["content"] == "both done\n\n---\nmet"
+    assert g.resumes == [
+        {"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL},
+        {"int-1": turn_control._AUTONOMOUS_HITL_SENTINEL},
+    ]
+    assert g.updates == []  # nothing left to clear
 
 
 @pytest.mark.asyncio

@@ -184,6 +184,9 @@ from server.turn_stream import (  # noqa: F401 — re-export
     _run_turn_stream,
     _speaks_for_the_lead,
 )
+# The goal drive loop and the autonomous HITL auto-answer — ONE copy both turn drivers
+# use (#3884). Not re-exported: reach it as ``_goal_loop.<name>`` (tests/test_goal_loop_seam.py).
+from server import goal_loop as _goal_loop
 from server.turn_telemetry import (  # noqa: F401 — re-export under the historical private names
     make_usage_callback as _make_usage_callback,
     record_local_turn as _record_local_turn,
@@ -841,30 +844,21 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
         _fence = None
     # When a goal is already active, the whole turn is goal-driven (suppress cross-session
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
-    _goal_state = STATE.goal_controller.active_goal(session_id) if STATE.goal_controller is not None else None
+    _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
-    # Kickoff injection (#1910): on the FIRST goal-driven turn (iteration 0, not a HITL resume)
-    # rewrite the message to carry the goal condition, so the agent begins on the goal instead
-    # of asking "what goal?" — the raw user text is folded into the kickoff prompt. Re-invoke
-    # iterations already get the goal via the continuation prompt, so gate on iteration 0.
-    if goal_active and not resume and _goal_state.iteration == 0:
-        message = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=message)
+    # Kickoff injection (#1910) — shared with the non-streaming driver (server/goal_loop.py).
+    message = _goal_loop.kickoff_message(_goal_state, message, resume=resume)
 
     # One graph turn (model tokens accumulated silently; A2A consumers get progress from
     # tool_start/tool_end). Final text is extracted once via extract_output().
     accumulated_raw = ""
     paused = False
     last_tool_out = ""  # streaming equivalent of _last_tool_text — the empty-turn fallback answer
-    # An autonomous turn (no operator watching) must never deadlock on a HITL pause: when one
-    # of these turns hits input_required we resume the graph with a "no operator" sentinel and
-    # run another pass, up to a cap, instead of parking the task forever (see _AUTONOMOUS_*).
-    # A goal-driven turn is autonomous BY DEFINITION (#1911): a goal is an explicit opt-in to
-    # self-drive, so it must take the no-deadlock path and never park on a HITL interrupt even
-    # over plain (undeclared) A2A — otherwise the first "what goal?" ask parks the task and the
-    # drive loop below never runs (the #1910 deadlock). Non-goal turns are unchanged.
-    _autonomous = _turn_control._is_autonomous(request_metadata) or goal_active
+    # An autonomous turn (no operator watching, or goal-driven — #1911) must never deadlock
+    # on a HITL pause: the shared policy (server/goal_loop.py) answers each input_required
+    # with the no-operator sentinel and runs another pass, up to a cap, then gives up.
+    _auto = _goal_loop.HitlAutoAnswer(_goal_loop.is_autonomous_turn(request_metadata, goal_active=goal_active))
     _resume_value = (message if resume else None)
-    _auto_answers = 0
     with goal_turn(goal_active):
         while True:
             _autoanswer_pending = False
@@ -888,13 +882,14 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                     if kind == "__raw__":
                         accumulated_raw = payload
                     elif kind == "input_required":
-                        if not _autonomous:
+                        _verdict = _auto.on_interrupt()
+                        if _verdict == _goal_loop.PARK:
                             # Operator/a2a turn: surface it and park the turn; the A2A runner sets
                             # the task input-required and the caller resumes via message/send on the
                             # same taskId. (A human — local or at the remote a2a caller — can answer.)
                             yield (kind, payload)
                             paused = True
-                        elif _auto_answers < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
+                        elif _verdict == _goal_loop.ANSWER:
                             # No human can answer — auto-answer this interrupt and re-run the turn so
                             # it completes, rather than parking an (un-sweepable) input-required task.
                             # The graph is checkpointed at the interrupt; the resume below feeds the
@@ -911,15 +906,15 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                         yield (kind, payload)
             if _autoanswer_pending:
                 # Resume past the interrupt with the no-operator sentinel and run another pass;
-                # images belong only to the first (fresh) pass, so drop them on resume.
-                _auto_answers += 1
-                _resume_value = _turn_control._AUTONOMOUS_HITL_SENTINEL
+                # images belong only to the first (fresh) pass, so drop them on resume. The
+                # turn stream keys the resume by interrupt id (_resume_payload).
+                _resume_value = _auto.answer()
                 images = None
                 continue
             if _autonomous_giveup:
                 # Discard the un-answered interrupt so the checkpoint isn't left dangling, then
                 # fall through to the normal completion path below (extract_output → done).
-                await _clear_pending_interrupt(config)
+                await _auto.give_up(config)
             break
 
     # A paused turn produced no final answer — don't run the dropped-scratch kicker or
@@ -929,38 +924,23 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
 
     final_text = extract_output(accumulated_raw)
 
-    # Goal mode: when an active goal exists for this session, verify the outcome after the
-    # agent stops; if not met, re-invoke on the same thread with a continuation prompt until
-    # the verifier passes, the iteration budget is spent, or it's flagged unachievable.
-    if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
-        guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
-        note = ""
-        while guard < hard_cap:
-            guard += 1
-            decision = await STATE.goal_controller.evaluate(session_id, last_text=final_text)
-            if decision is None:
-                break
-            note = decision.note
-            yield ("tool_start", f"🎯 {decision.note}")
-            if decision.action == "done":
-                break
-            if _awaiting_self_resume(session_id):
-                # The agent handed off to a watch/schedule that resumes this session — pause the
-                # drive (goal stays active) rather than spinning; the trigger's fire continues it.
-                note = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
-                yield ("tool_start", f"🎯 {note}")
-                break
-            # Fresh-context goals get a scoped per-iteration thread; same-session reuse
-            # `config`. Shared helper keeps the streaming + non-streaming loops in lockstep.
-            cont_config = _goal_continuation_config(config, decision.state)
-
+    # Goal mode (shared drive, server/goal_loop.py): verify the outcome after the agent
+    # stops; while not met, run the continuation it asks for. The 🎯 status frames are this
+    # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
+    # it (the status frames are transient and can coalesce).
+    drive = _goal_loop.GoalDrive(session_id, config, final_text)
+    async with contextlib.aclosing(drive.steps()) as _goal_steps:
+        async for step in _goal_steps:
+            if isinstance(step, _goal_loop.GoalNote):
+                yield ("tool_start", f"🎯 {step.note}")
+                continue
             cont_raw = ""
             with goal_turn():
                 async with contextlib.aclosing(
                     _turn_stream._run_turn_stream(
-                        decision.message,
+                        step.message,
                         session_id,
-                        cont_config,
+                        step.config,
                         model=_model,
                         reasoning_effort=_effort,
                         incognito=_incognito,
@@ -971,14 +951,8 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                             cont_raw = payload
                         else:
                             yield (kind, payload)
-            cont_text = extract_output(cont_raw)
-            if cont_text:
-                final_text = cont_text
-        # Append the terminal goal outcome to the answer so the A2A terminal artifact
-        # carries it, matching the non-streaming path (the 🎯 status frames above are
-        # transient and can coalesce).
-        if note:
-            final_text = f"{final_text}\n\n---\n{note}"
+            step.text = extract_output(cont_raw)
+    final_text = drive.text
 
     # Never end the stream on a silent empty answer (a native-reasoning model that emitted
     # only reasoning, or an otherwise empty turn): surface the last tool result or a
@@ -1704,9 +1678,7 @@ async def _chat_langgraph_impl(
                 more for the recovery prompt (#3805)."""
                 # When a goal is already active, the whole turn is goal-driven —
                 # suppress cross-session prior_sessions on the initial turn too.
-                _goal_state = (
-                    STATE.goal_controller.active_goal(session_id) if STATE.goal_controller is not None else None
-                )
+                _goal_state = _goal_loop.active_goal(session_id)
                 goal_active = _goal_state is not None
                 # Sharing the streaming thread means sharing its serialization contract:
                 # every other writer to `a2a:{sid}` (the streaming turn driver,
@@ -1749,12 +1721,9 @@ async def _chat_langgraph_impl(
 
                         graph_input = Command(resume=await _resume_payload(config, turn_message))
                     else:
-                        _msg = turn_message
-                        # Kickoff injection (#1910), same as the streaming path: the first
-                        # goal-driven turn (iteration 0) carries the goal condition so the agent
-                        # begins on the goal instead of asking "what goal?".
-                        if goal_active and _goal_state.iteration == 0:
-                            _msg = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=turn_message)
+                        # Kickoff injection (#1910) — shared with the streaming driver
+                        # (server/goal_loop.py); this branch is never a HITL resume.
+                        _msg = _goal_loop.kickoff_message(_goal_state, turn_message, resume=False)
                         graph_input = {
                             # Vision parts ride the user message when the model supports
                             # them (#1943) — same gating as the streaming path.
@@ -1766,25 +1735,15 @@ async def _chat_langgraph_impl(
                         }
                     with goal_turn(goal_active):
                         result = await STATE.graph.ainvoke(graph_input, config=config)
-                        # Headless-first parity (#1911): a goal-driven turn is autonomous, so if it
-                        # parks on a HITL interrupt there's no operator here to answer — resume with
-                        # the no-operator sentinel and re-run (bounded) instead of echoing the ask
-                        # and stalling the drive. Non-goal turns are untouched (they still echo).
-                        if goal_active:
-                            from langgraph.types import Command
-
-                            _auto = 0
-                            while _auto < _turn_control._MAX_AUTONOMOUS_AUTOANSWERS:
-                                if await _pending_interrupt_value(config) is None:
-                                    break
-                                _auto += 1
-                                result = await STATE.graph.ainvoke(
-                                    Command(resume=_turn_control._AUTONOMOUS_HITL_SENTINEL), config=config
-                                )
-                            if await _pending_interrupt_value(config) is not None:
-                                # Budget spent, still parked → clear the dangling interrupt so the
-                                # checkpoint isn't stranded; the drive loop below continues on the text.
-                                await _clear_pending_interrupt(config)
+                        # Headless-first parity (#1911), the shared policy (server/goal_loop.py): a
+                        # goal-driven turn is autonomous, so if it parks on a HITL interrupt there's
+                        # no operator here to answer — resume (keyed by interrupt id, #3872) with the
+                        # no-operator sentinel and re-run, bounded, then clear. This surface carries
+                        # no request metadata, so only a goal makes it autonomous; non-goal turns
+                        # are untouched (they still echo the ask below).
+                        result = await _goal_loop.HitlAutoAnswer(goal_active).settle(
+                            config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=config)
+                        )
                 raw = _last_ai(result)
                 response = extract_output(raw)
 
@@ -1825,29 +1784,14 @@ async def _chat_langgraph_impl(
                         "(This is not the previous turn's answer.)"
                     )
 
-                # Goal mode: verify after the agent stops; re-invoke with a
-                # continuation prompt until met / exhausted / unachievable.
-                if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
-                    guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
-                    note = ""
-                    while guard < hard_cap:
-                        guard += 1
-                        decision = await STATE.goal_controller.evaluate(session_id, last_text=response)
-                        if decision is None:
-                            break
-                        note = decision.note
-                        if decision.action == "done":
-                            break
-                        if _awaiting_self_resume(session_id):
-                            # Async handoff (ADR 0079) — mirror the streaming path: the agent queued a
-                            # watch/schedule that resumes this session, so pause the drive instead of
-                            # spinning; the trigger's fire continues the goal.
-                            note = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
-                            break
-                        # Fresh-context goals get a scoped per-iteration thread; same-session
-                        # reuse `config`. Same shared helper as the streaming path (no drift).
-                        cont_config = _goal_continuation_config(config, decision.state)
-
+                # Goal mode (shared drive, server/goal_loop.py): verify after the agent
+                # stops; run each continuation it asks for. No status surface here — the
+                # verifier notes are skipped and only the terminal note reaches the reply.
+                drive = _goal_loop.GoalDrive(session_id, config, response)
+                async with contextlib.aclosing(drive.steps()) as _goal_steps:
+                    async for step in _goal_steps:
+                        if isinstance(step, _goal_loop.GoalNote):
+                            continue
                         # Lock the BASE thread (mirrors the streaming driver, which holds it
                         # across the whole goal loop): same-session iterations write `config`'s
                         # thread directly; fresh-context ones still exclude compact/rewind/
@@ -1856,19 +1800,16 @@ async def _chat_langgraph_impl(
                             with goal_turn():
                                 result = await STATE.graph.ainvoke(
                                     {
-                                        "messages": [HumanMessage(content=decision.message)],
+                                        "messages": [HumanMessage(content=step.message)],
                                         "session_id": session_id,
                                         **_state_extra,
                                     },
                                     # Fresh-context iterations get a scoped config without the
                                     # turn's callbacks — re-attach usage_cb so their tokens count.
-                                    config={**cont_config, "callbacks": [usage_cb]},
+                                    config={**step.config, "callbacks": [usage_cb]},
                                 )
-                        nxt = extract_output(_last_ai(result))
-                        if nxt:
-                            response = nxt
-                    if note:
-                        response = f"{response}\n\n---\n{note}"
+                        step.text = extract_output(_last_ai(result))
+                response = drive.text
 
                 return [{"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}]
 
