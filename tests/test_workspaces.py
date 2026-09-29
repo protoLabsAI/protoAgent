@@ -951,6 +951,17 @@ class TestRemoveKeepsDataUnlessPurged:
 # ── #2583: a locked workspace is a retryable partial, not a 500 ───────────────
 
 
+def _record_backoff(monkeypatch) -> list[float]:
+    """Swap the real retry backoff (``_rmtree_resilient`` sleeps ~2s across its
+    attempts) for a recorder, so the tests pin the schedule without waiting it out.
+    The helper imports ``time`` locally, so the module attribute is the seam."""
+    import time
+
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    return slept
+
+
 def test_purge_retries_a_transiently_locked_workspace(root, monkeypatch):
     """The Windows race: a member's handles can outlive its process by a moment, so the
     delete right after the stop loses. It must retry rather than fail the whole purge."""
@@ -966,11 +977,13 @@ def test_purge_retries_a_transiently_locked_workspace(root, monkeypatch):
         return real_rmtree(path, **kw)
 
     monkeypatch.setattr(manager.shutil, "rmtree", flaky)
+    slept = _record_backoff(monkeypatch)
 
     out = manager.remove("alpha", purge=True)
 
     assert out["removed"] == ["workspace"] and not ws.exists()
     assert calls["n"] == 2  # first attempt lost the race, second won
+    assert slept == [0.2]  # it backed off once before the retry
 
 
 def test_purge_reports_a_permanently_locked_workspace_as_busy(root, monkeypatch):
@@ -978,14 +991,20 @@ def test_purge_reports_a_permanently_locked_workspace_as_busy(root, monkeypatch)
     the OSError escape and the endpoint answered a generic 500 after already stopping the
     member and clearing its record."""
     manager.create("alpha")
+    calls = {"n": 0}
 
     def always_locked(path, **kw):
+        calls["n"] += 1
         raise OSError(32, "The process cannot access the file because it is being used")
 
     monkeypatch.setattr(manager.shutil, "rmtree", always_locked)
+    slept = _record_backoff(monkeypatch)
 
     with pytest.raises(manager.WorkspaceBusy) as excinfo:
         manager.remove("alpha", purge=True)
+
+    assert calls["n"] == 5  # every attempt was made before giving up
+    assert slept == pytest.approx([0.2, 0.4, 0.6, 0.8])  # with a growing backoff between them
 
     msg = str(excinfo.value)
     assert "IS stopped" in msg and "retry" in msg.lower()  # names the state + the way out

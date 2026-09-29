@@ -772,7 +772,13 @@ while True:
             os._exit(1)
         else:
             tool("own")
-            time.sleep(2.8)
+            # Keep generating until the test stops the orphan (its pipe closes), then
+            # a little longer, so that EOF lands mid-turn — without a fixed multi-second
+            # guess at when the test gets there. Bounded, in case it never does.
+            deadline = time.monotonic() + 10
+            while not os.path.exists(SENTINEL) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.3)
             chunk()
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 '''

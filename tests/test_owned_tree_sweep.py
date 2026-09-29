@@ -135,11 +135,11 @@ def test_a_sigkilled_owners_tree_is_reaped_by_the_next_sweep(tmp_path, box):
     owner, grandchild, record = _spawn_owner(tmp_path, box)
     assert record.exists(), "the owner never wrote its record"
     _sigkill(owner)
-    time.sleep(0.5)
+    time.sleep(0.1)  # give a (wrongly) propagated kill a moment to land
     # The gap this fixes: nothing in the dead owner could run, so its tree is still up.
     assert _alive(grandchild), "precondition: a SIGKILLed owner's tree survives it"
 
-    assert sweep_orphaned_trees(grace=0.5) >= 1
+    assert sweep_orphaned_trees(grace=0.2) >= 1
     assert _wait(lambda: not _alive(grandchild)), "the sweep left the dead owner's tree running"
     assert not record.exists(), "a swept record must go"
 
@@ -153,7 +153,7 @@ def test_a_group_that_lost_its_leader_is_still_reaped(tmp_path, box):
     assert _wait(lambda: not _alive(leader)), "precondition: the launcher is gone"
     assert _alive(grandchild), "precondition: its work runs on, leaderless"
 
-    assert sweep_orphaned_trees(grace=0.5) >= 1
+    assert sweep_orphaned_trees(grace=0.2) >= 1
     assert _wait(lambda: not _alive(grandchild)), "a leaderless group survived the sweep"
 
 
@@ -245,7 +245,7 @@ def test_a_corrupt_record_never_blocks_the_sweep(tmp_path, box):
     owner, grandchild, record = _spawn_owner(tmp_path, box)
     _sigkill(owner)
 
-    assert sweep_orphaned_trees(grace=0.5) >= 1
+    assert sweep_orphaned_trees(grace=0.2) >= 1
     assert _wait(lambda: not _alive(grandchild)), "a corrupt record stopped the sweep reaching a real one"
     assert not any(p.exists() for p in bad), "a corrupt record must be cleared, not left to trip every sweep"
 
@@ -261,9 +261,9 @@ def test_a_final_reap_kills_only_what_it_asked_to_stop_first(box):
     _KILL_AFTER.append(stubborn.pid)
     track_tree(stubborn.pid)
 
-    reaper = threading.Thread(target=proc_mod.reap_tracked_trees, kwargs={"grace": 1.0})
+    reaper = threading.Thread(target=proc_mod.reap_tracked_trees, kwargs={"grace": 0.6})
     reaper.start()
-    time.sleep(0.3)  # inside the grace
+    time.sleep(0.2)  # inside the grace
     late = subprocess.Popen(["sleep", "300"], **group_kwargs())
     _KILL_AFTER.append(late.pid)
     track_tree(late.pid)

@@ -117,7 +117,7 @@ async def _stream_then_disconnect(app, *, frames_before_disconnect: int = 1) -> 
 
 
 @pytest.mark.asyncio
-async def test_turn_survives_sse_consumer_disconnect():
+async def test_turn_survives_sse_consumer_disconnect(monkeypatch):
     gate = asyncio.Event()  # holds the turn mid-flight until the client has left
     resumed = asyncio.Event()  # proves the producer ran ON past the disconnect
 
@@ -128,13 +128,15 @@ async def test_turn_survives_sse_consumer_disconnect():
         yield ("text", "second")
         yield ("done", "first second")
 
+    # Shrink the hardened registry's 0.5s retire grace so waiting past it is cheap.
+    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     app = _build_app(stream)
     task_id = await _stream_then_disconnect(app)
 
-    # Wait deliberately PAST the hardened registry's 0.5s retire grace before
-    # releasing the turn — if "subscriber left" is treated as "cancel the turn",
-    # this is where the producer dies.
-    await asyncio.sleep(0.8)
+    # Wait deliberately PAST the retire grace (5x) before releasing the turn — if
+    # "subscriber left" is treated as "cancel the turn", this is where the
+    # producer dies.
+    await asyncio.sleep(0.1)
     gate.set()
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
@@ -148,7 +150,7 @@ async def test_turn_survives_sse_consumer_disconnect():
 
 
 @pytest.mark.asyncio
-async def test_disconnected_turn_tool_frames_land_in_task_history():
+async def test_disconnected_turn_tool_frames_land_in_task_history(monkeypatch):
     """The catch-up content S1 replays: tool frames emitted while nobody was
     subscribed must still land in the durable task's history."""
     gate = asyncio.Event()
@@ -160,9 +162,10 @@ async def test_disconnected_turn_tool_frames_land_in_task_history():
         yield ("tool_end", {"id": "t1", "name": "file_bug", "output": "BUG-9"})
         yield ("done", "filed")
 
+    monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     app = _build_app(stream)
     task_id = await _stream_then_disconnect(app)
-    await asyncio.sleep(0.8)
+    await asyncio.sleep(0.1)  # past the (shrunk) retire grace
     gate.set()
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:

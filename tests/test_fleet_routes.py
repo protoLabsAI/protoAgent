@@ -717,6 +717,9 @@ def test_purge_that_cannot_delete_the_workspace_is_409_not_500(client, monkeypat
         raise OSError(32, "The process cannot access the file because it is being used")
 
     monkeypatch.setattr(manager.shutil, "rmtree", always_locked)
+    # Keep every retry attempt but skip the real ~2s backoff between them (the
+    # schedule itself is pinned in test_workspaces).
+    monkeypatch.setitem(manager._rmtree_resilient.__kwdefaults__, "delay", 0.0)
 
     resp = client.delete("/api/fleet/alpha?purge=true")
 

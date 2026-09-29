@@ -801,18 +801,25 @@ def test_call_timeout_degrades_to_a_recoverable_tool_error(tmp_path) -> None:
     turn — forever. `mcp.call_timeout_seconds` bounds the invocation itself, and
     a trip degrades into a tool-error string the model can act on rather than
     killing the turn.
+
+    And a timed-out call cancels only ITS request — the shared session survives,
+    so the next call reuses it instead of respawning the subprocess.
     """
-    cfg, _boot_file = _fixture_server_cfg(tmp_path)
-    cfg.mcp_call_timeout_seconds = 1.0
+    cfg, boot_file = _fixture_server_cfg(tmp_path)
+    cfg.mcp_call_timeout_seconds = 0.2
     clients, tools, _meta = build_mcp_tools(cfg)
     hang = next(t for t in tools if t.name == "fix__hang")
+    ping = next(t for t in tools if t.name == "fix__ping")
     try:
         out = str(asyncio.run(hang.ainvoke({})))
         assert "Tool error" in out
-        assert "timed out after 1s" in out
+        assert "timed out after 0.2s" in out
         assert "fix__hang" in out
         # Still a RESULT, not a raised exception — the turn survives.
         assert "Do NOT treat this as fatal" in out
+        # The session is still usable after the timeout.
+        assert "pong:after" in str(asyncio.run(ping.ainvoke({"text": "after"})))
+        assert _boots(boot_file) == 1  # no reconnect — the timeout was not a death
     finally:
         _pool_of(clients).close(timeout=2.0)
 
@@ -820,28 +827,12 @@ def test_call_timeout_degrades_to_a_recoverable_tool_error(tmp_path) -> None:
 def test_call_timeout_per_server_override(tmp_path) -> None:
     """A server that legitimately does long work overrides the global bound;
     `0` opts out entirely."""
-    cfg, _boot_file = _fixture_server_cfg(tmp_path, call_timeout=1.0)
+    cfg, _boot_file = _fixture_server_cfg(tmp_path, call_timeout=0.2)
     cfg.mcp_call_timeout_seconds = 3600.0  # global would never fire in this test
     clients, tools, _meta = build_mcp_tools(cfg)
     hang = next(t for t in tools if t.name == "fix__hang")
     try:
-        assert "timed out after 1s" in str(asyncio.run(hang.ainvoke({})))
-    finally:
-        _pool_of(clients).close(timeout=2.0)
-
-
-def test_call_timeout_leaves_the_session_usable(tmp_path) -> None:
-    """A timed-out call cancels only ITS request — the shared session survives,
-    so the next call reuses it instead of respawning the subprocess."""
-    cfg, boot_file = _fixture_server_cfg(tmp_path)
-    cfg.mcp_call_timeout_seconds = 1.0
-    clients, tools, _meta = build_mcp_tools(cfg)
-    hang = next(t for t in tools if t.name == "fix__hang")
-    ping = next(t for t in tools if t.name == "fix__ping")
-    try:
-        assert "timed out" in str(asyncio.run(hang.ainvoke({})))
-        assert "pong:after" in str(asyncio.run(ping.ainvoke({"text": "after"})))
-        assert _boots(boot_file) == 1  # no reconnect — the timeout was not a death
+        assert "timed out after 0.2s" in str(asyncio.run(hang.ainvoke({})))
     finally:
         _pool_of(clients).close(timeout=2.0)
 
@@ -894,7 +885,7 @@ def test_caller_cancel_propagates_instead_of_becoming_a_result(tmp_path) -> None
         # as TimeoutError; if it is swallowed into a return VALUE, py3.12's
         # timeout() sees a normal exit and hands the value back instead.
         with pytest.raises(TimeoutError):
-            await asyncio.wait_for(hang.ainvoke({}), 2.0)
+            await asyncio.wait_for(hang.ainvoke({}), 0.3)
 
     try:
         asyncio.run(_cancel_mid_call())
