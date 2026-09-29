@@ -1,7 +1,7 @@
 """Scheduler protocol — the contract the backend honors.
 
 ``LocalScheduler`` implements this shape; the agent-facing tools in
-``tools/lg_tools.py`` only see the protocol, so it stays a clean seam for an
+``tools/scheduler_tools.py`` only see the protocol, so it stays a clean seam for an
 alternative backend a fork might add.
 """
 
