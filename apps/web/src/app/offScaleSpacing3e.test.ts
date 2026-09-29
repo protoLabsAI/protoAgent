@@ -140,12 +140,18 @@ describe("no exact-scale px spacing literal in the activity/code-pane/identity/f
     expect(offendersIn("../fleet/fleet.css", commented)).toEqual([]);
   });
 
-  it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): each spot-check is a mixed-shorthand value where the exact-scale
-    // member tokenized and the off-scale member survived — one assertion covers both invariants.
-    expect(CSS_SOURCES["../activity/activity.css"]).toContain("padding: var(--pl-space-2) 10px");
+  it("pins activity/identity onto the new half-step tokens and holds code-pane/fleet on their literals", () => {
+    // protoContent#547 step 3 (this card): the DS now ships the half-step spacing scale, so
+    // activity.css + identity.css move their surviving half-steps (10/6px) onto
+    // var(--pl-space-2_5)/var(--pl-space-1_5). The two mixed-shorthand pins below assert the
+    // fully tokenized strings — the exact-scale member and the former half-step both read a token.
+    expect(CSS_SOURCES["../activity/activity.css"]).toContain("padding: var(--pl-space-2) var(--pl-space-2_5)");
+    expect(CSS_SOURCES["../agent/identity.css"]).toContain(
+      "padding: var(--pl-space-1_5) var(--pl-space-2) var(--pl-space-1_5) var(--pl-space-1_5)",
+    );
+    // code-pane.css + fleet.css still carry their half-step literals — the sibling card tokenizes
+    // those next — so their pins stay on the literal form until then.
     expect(CSS_SOURCES["../codeviewer/code-pane.css"]).toContain("padding: var(--pl-space-1) 6px");
-    expect(CSS_SOURCES["../agent/identity.css"]).toContain("padding: 6px var(--pl-space-2) 6px 6px");
     expect(CSS_SOURCES["../fleet/fleet.css"]).toContain("padding: 10px var(--pl-space-1)");
   });
 });

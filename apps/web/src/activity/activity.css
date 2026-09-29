@@ -47,8 +47,8 @@
 .activity-stimulus {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 6px;
+  gap: var(--pl-space-1_5);
+  margin: 0 0 var(--pl-space-1_5);
   padding-left: var(--pl-space-2);
   border-left: 2px solid var(--pl-color-border);
   color: var(--pl-color-fg-subtle);
@@ -96,12 +96,12 @@
   padding: var(--pl-space-3);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-3);
 }
 .activity-entry {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1);
 }
 /* Entry header: provenance badge + an "open in reader" affordance (ADR 0062),
    revealed on hover/focus so the feed stays clean. */
@@ -132,8 +132,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
-  padding: 2px 7px;
-  border-radius: 999px;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border-radius: var(--pl-radius-pill);
   font-weight: 600;
   border: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg-muted);
@@ -168,7 +168,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--pl-space-2);
-  padding: 10px;
+  padding: var(--pl-space-2_5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 
@@ -176,13 +176,13 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
 }
 
 .inbox-item-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin-bottom: var(--pl-space-1);
 }
 
