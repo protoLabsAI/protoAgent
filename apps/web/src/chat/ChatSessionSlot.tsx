@@ -8,7 +8,7 @@ import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
-import { chatCommandsQuery, chatMentionsQuery, runtimeStatusQuery } from "../lib/queries";
+import { runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type {
@@ -16,7 +16,6 @@ import type {
   ConsumedSteer,
   HitlPayload,
   QueuedSteer,
-  SlashCommand,
   SystemNoteTone,
 } from "../lib/types";
 import { HitlForm } from "./HitlForm";
@@ -31,12 +30,10 @@ import {
   type SessionStatus,
 } from "./chat-store";
 import { PublishDialog } from "./PublishDialog";
-import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
-import { mentionTokenAt } from "./mentionToken";
+import { findSlashCommand } from "../ext/slashRegistry";
 import { continueRun, leadingRun, runHas, toggleMention } from "./mentionRun";
 import { insertRoomBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
-import { useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
 import { ComposerModelSelect } from "./ComposerModelSelect";
@@ -47,7 +44,9 @@ import {
   useServerTurn,
 } from "./server-turn-store";
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
-import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
+import { messageId } from "./messageId";
+import { useAttachments } from "./useAttachments";
+import { useSlashAutocomplete } from "./useSlashAutocomplete";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
@@ -74,10 +73,6 @@ import {
   type ServerTurnPhase,
 } from "./serverInterjections";
 
-function messageId() {
-  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 // A stable event function whose body always sees the latest render. Transcript props need
 // stable identities so composer-only state changes can stop at the memo boundary, while
 // message actions must still observe current session/status state when they are clicked.
@@ -86,38 +81,6 @@ function useLatestCallback<Args extends unknown[], Result>(callback: (...args: A
   callbackRef.current = callback;
   return useCallback((...args: Args) => callbackRef.current(...args), []);
 }
-
-// Read a File to bare base64 (no `data:…;base64,` prefix) — the proto Part `raw`
-// (bytes) field for a native-vision image.
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const s = String(reader.result || "");
-      const comma = s.indexOf(",");
-      resolve(comma >= 0 ? s.slice(comma + 1) : s);
-    };
-    reader.onerror = () => reject(reader.error || new Error("file read failed"));
-    reader.readAsDataURL(file);
-  });
-}
-
-// A file being attached to the next message. Uploaded to /api/knowledge/attach on
-// pick; `context` is the backend's ready-to-prepend block (full text or lede).
-type PendingAttachment = {
-  id: string;
-  name: string;
-  kind: "file" | "image";
-  status: "uploading" | "ready" | "error";
-  context?: string;
-  mode?: "inline" | "indexed";
-  error?: string;
-  // Native-vision images skip the pipeline: their base64 + mime ride the turn as
-  // a multimodal A2A part straight to the model (no `context`).
-  native?: boolean;
-  b64?: string;
-  mime?: string;
-};
 
 // Append an actionable pointer when a turn fails on something the operator can
 // fix in the UI — chiefly model auth (a bad/blank API key 401s). Keeps the raw
@@ -356,11 +319,6 @@ export function ChatSessionSlot({
   // capability rather than the source: it is not server-specific.
   const turnInterruptible = status === "streaming" || Boolean(serverTurnControl);
 
-  // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
-  // the backend tiers it (inline small / index large) and returns a `context`
-  // block we prepend to the SENT message (not the visible bubble) on send.
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Native vision: when the active model accepts images, attached images go
   // straight to the model as multimodal parts; otherwise they take the pipeline.
   const { data: runtime } = useQuery(runtimeStatusQuery());
@@ -373,103 +331,36 @@ export function ChatSessionSlot({
   // image attaches via the pipeline instead of erroring.
   const imageDescribe = Boolean(runtime?.model?.image_describe);
 
-  async function uploadAttachment(file: File) {
-    const id = messageId();
-    const kind: "file" | "image" = file.type.startsWith("image/") ? "image" : "file";
-    setAttachments((a) => [...a, { id, name: file.name, kind, status: "uploading" }]);
+  const {
+    attachments,
+    setAttachments,
+    fileInputRef,
+    removeAttachment,
+    onDragOver: onAttachDragOver,
+    onDrop: onAttachDrop,
+    onPaste: onAttachPaste,
+    openFilePicker,
+    onFileInputChange,
+  } = useAttachments({ sessionId, onError, visionModel, imageDescribe });
 
-    // Images always ride the turn natively as multimodal parts: a vision model
-    // sees them directly, and on a text-only model the server still bridges them
-    // into the media store so image tools can act on them by id (#1969) — the
-    // old hard error (#1374) is gone.
-    if (kind === "image") {
-      try {
-        const b64 = await fileToBase64(file);
-        setAttachments((a) =>
-          a.map((x) =>
-            x.id === id
-              ? { ...x, status: "ready", native: true, b64, mime: file.type || "image/png", mode: "inline" }
-              : x,
-          ),
-        );
-      } catch (e) {
-        const msg = errMsg(e);
-        setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
-        onError(`Couldn't read ${file.name}: ${msg}`);
-        return;
-      }
-      // A configured describe model (#1381) still adds a textual description for a
-      // text-only chat model — best-effort context alongside the native part; a
-      // describe failure never sinks the already-ready attachment.
-      if (visionModel || !imageDescribe) return;
-      try {
-        const form = new FormData();
-        form.append("file", file);
-        form.append("session_id", sessionId);
-        const r = await api.attachToChat(form);
-        if (r.enabled && r.context) {
-          setAttachments((a) => a.map((x) => (x.id === id ? { ...x, context: r.context } : x)));
-        }
-      } catch {
-        // native attachment already succeeded; description is additive
-      }
-      return;
-    }
+  // Slash-command + @-mention autocomplete (useSlashAutocomplete.ts). `runClientSlash` is
+  // this slot's hoisted dispatcher below — the hook only calls it from event handlers.
+  const {
+    commands,
+    flagOn,
+    slashMatches,
+    slashActive,
+    slashSel,
+    slashSigil,
+    activeSlashRef,
+    refreshSlash,
+    setSlashIndex,
+    setSlashDismissed,
+    setSlashCtx,
+    completeCommand,
+    onSlashKeyDown,
+  } = useSlashAutocomplete({ textareaRef, session, draft, setDraft, runClientSlash });
 
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("session_id", sessionId);
-      const r = await api.attachToChat(form);
-      if (!r.enabled || !r.context) throw new Error("attachment not accepted");
-      setAttachments((a) =>
-        a.map((x) => (x.id === id ? { ...x, status: "ready", context: r.context, mode: r.mode } : x)),
-      );
-    } catch (e) {
-      const msg = errMsg(e);
-      setAttachments((a) => a.map((x) => (x.id === id ? { ...x, status: "error", error: msg } : x)));
-      onError(`Couldn't attach ${file.name}: ${msg}`);
-    }
-  }
-
-  function removeAttachment(id: string) {
-    setAttachments((a) => a.filter((x) => x.id !== id));
-  }
-
-  // Slash-command autocomplete. The dropdown is active while typing a "/name" token
-  // (before a space). Commands the SERVER handles (e.g. /goal, plugin commands, user-facing
-  // skills) come from a shared QUERY, not a per-slot fetch: the list is identical for every
-  // open chat tab, so one key means one fetch shared by every composer — and by the ⌘K
-  // palette, which lists the same commands.
-  const commandsQ = useQuery(chatCommandsQuery());
-  const commands = useMemo(() => commandsQ.data?.commands ?? [], [commandsQ.data]);
-  const [slashIndex, setSlashIndex] = useState(0);
-  const [slashDismissed, setSlashDismissed] = useState(false);
-  // The "/name" token the caret currently sits in ({query, start}), or null. Recomputed
-  // from the LIVE textarea caret (not just the draft) so the popover triggers MID-INPUT —
-  // typing "/" at any cursor position opens it, not only when "/" is char 0 (#1530).
-  // One token context for BOTH sigils (#3042). A draft can't start with `/` and `@` at
-  // once, so `/` commands and `@` participants share one popover, one keyboard nav and
-  // one completion path — the sigil only decides which list fills it.
-  const [slashCtx, setSlashCtx] = useState<{ query: string; start: number; end: number; sigil: "/" | "@" } | null>(
-    null,
-  );
-  // The `@`-addressable roster (#3042). A QUERY, not a one-shot fetch: its key is
-  // prefixed under `delegates`, so adding or editing a delegate in Settings invalidates
-  // it and the popover updates without a page reload.
-  const mentionsQ = useQuery(chatMentionsQuery());
-  const mentions: SlashCommand[] = useMemo(
-    () =>
-      (mentionsQ.data?.mentions ?? []).map((m) => ({
-        name: m.name,
-        kind: m.kind,
-        description: m.description,
-        usage: m.usage,
-      })),
-    [mentionsQ.data],
-  );
-  // Keeps the keyboard-selected item scrolled into view during ↑/↓ nav (#1528).
-  const activeSlashRef = useRef<HTMLButtonElement | null>(null);
   // How many room exchanges this turn has delivered (#3051). Per-turn, reset at send:
   // the first fills the in-flight bubble, the rest append.
   const roomReplies = useRef(0);
@@ -479,97 +370,6 @@ export function ChatSessionSlot({
   // operator can delete, not hidden sticky state.
   const pendingRun = useRef<string[]>([]);
   const runAnswered = useRef(false);
-
-  // Re-parse the slash token from the textarea's current value + caret. Called on input,
-  // on caret moves (native keyup/click/select/focus listeners below), and after any
-  // programmatic caret change — so the popover state tracks the caret wherever it is.
-  const refreshSlash = useCallback(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    const caret = ta.selectionStart ?? ta.value.length;
-    const slash = slashTokenAt(ta.value, caret);
-    if (slash) return setSlashCtx({ ...slash, sigil: "/" });
-    const mention = mentionTokenAt(ta.value, caret);
-    setSlashCtx(mention ? { ...mention, sigil: "@" } : null);
-  }, []);
-
-  // Caret moves that don't fire onChange (arrow keys, clicks, selection, focus) still need
-  // to re-evaluate the popover so "/" mid-input opens/closes as the caret enters/leaves a token.
-  useEffect(() => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.addEventListener("keyup", refreshSlash);
-    ta.addEventListener("click", refreshSlash);
-    ta.addEventListener("select", refreshSlash);
-    ta.addEventListener("focus", refreshSlash);
-    return () => {
-      ta.removeEventListener("keyup", refreshSlash);
-      ta.removeEventListener("click", refreshSlash);
-      ta.removeEventListener("select", refreshSlash);
-      ta.removeEventListener("focus", refreshSlash);
-    };
-  }, [refreshSlash]);
-
-  const slashQuery = slashDismissed ? null : slashCtx?.query ?? null;
-
-  // Developer-flag gate (ADR 0068): a registered command tagged with `flag:` is listed
-  // and dispatched only while its flag resolves ON — flag-off, it's as if unregistered.
-  const flagOn = useFlagPredicate();
-
-  const slashSigil = slashDismissed ? null : slashCtx?.sigil ?? null;
-
-  const slashMatches = useMemo(() => {
-    if (slashQuery === null) return [];
-    const q = slashQuery.toLowerCase();
-    if (slashSigil === "@") {
-      // Participants, not commands: no client registry, no flag gate, no dedup — the
-      // server resolver already returned exactly the addressable set.
-      const matched = mentions.filter(
-        (m) => !q || m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q),
-      );
-      // Who has SPOKEN in this chat comes first (#3049) — derived from the transcript,
-      // so it can never disagree with what happened. Ordering, not filtering:
-      // `@somebody-else` still routes; refusing an address would be a surprise, not a
-      // safeguard.
-      const roster = sessionCast(session);
-      if (!roster.length) return matched;
-      const rank = (name: string) => {
-        const at = roster.indexOf(name);
-        return at === -1 ? roster.length : at;
-      };
-      return [...matched].sort((a, b) => rank(a.name) - rank(b.name));
-    }
-    // Client-side commands (ADR 0061) surface first, then server skills. The client set
-    // comes from the slash-command registry — core (/new, /clear, /effort) AND any fork-
-    // registered commands — so neither is hardcoded here.
-    const all: SlashCommand[] = [
-      ...registeredSlashCommands()
-        .filter((c) => !c.flag || flagOn(c.flag))
-        .map((c) => ({ name: c.name, description: c.description, usage: c.usage })),
-      ...commands,
-    ];
-    // Dedup by token: a command that exists BOTH as a client command and a server skill
-    // (e.g. /goal, /clear) must appear once — the client entry (listed first) wins.
-    const seen = new Set<string>();
-    const unique = all.filter((c) => {
-      const n = c.name.toLowerCase();
-      if (seen.has(n)) return false;
-      seen.add(n);
-      return true;
-    });
-    return unique.filter(
-      (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
-    );
-  }, [slashQuery, slashSigil, commands, mentions, flagOn, session?.messages]);
-
-  const slashActive = slashMatches.length > 0;
-  const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
-
-  // Auto-scroll the keyboard-selected item into view during ↑/↓ nav so it never hides
-  // below the popover's scroll edge (standard listbox behavior, #1528).
-  useEffect(() => {
-    if (slashActive) activeSlashRef.current?.scrollIntoView({ block: "nearest" });
-  }, [slashSel, slashActive]);
 
   // Post a local SYSTEM NOTE to the thread (e.g. a /effort confirmation, a status line, a
   // warning) — never sent to the agent, just shown so the operator sees a local action took
@@ -649,73 +449,11 @@ export function ChatSessionSlot({
     });
   });
 
-  function completeCommand(cmd: SlashCommand) {
-    // Replace ONLY the "/name" token the caret is in — surrounding text is preserved so a
-    // command can be completed at the start, middle, or end of the draft (#1530). Fall back
-    // to the whole draft if the token is somehow unknown (defensive).
-    const token = slashCtx;
-    const start = token ? token.start : 0;
-    const end = token ? token.end : draft.length;
-    // Place the caret + re-sync the popover after React commits the new value.
-    const settleCaret = (pos: number) => {
-      requestAnimationFrame(() => {
-        const ta = textareaRef.current;
-        if (!ta) return;
-        // A form the command opened (e.g. /model's picker — possibly ASYNC, after a
-        // schema fetch) owns focus on appear (#1978) — don't yank it back. Checked at
-        // fire time against the DOM: state/refs can't see an openForm that hasn't
-        // happened yet. Either race order converges on the form keeping focus.
-        if (document.activeElement?.closest(".hitl-float")) return;
-        ta.focus();
-        ta.selectionStart = ta.selectionEnd = pos;
-        refreshSlash();
-      });
-    };
-    // A client command runs on pick — drop just its token from the draft (keeping any
-    // surrounding text); a server skill inserts "/name " to edit + send.
-    const sigil = token?.sigil ?? "/";
-    if (sigil === "/" && runClientSlash(cmd.name)) {
-      setDraft(draft.slice(0, start) + draft.slice(end));
-      setSlashIndex(0);
-      setSlashDismissed(true);
-      setSlashCtx(null);
-      settleCaret(start);
-      return;
-    }
-    const insert = `${sigil}${cmd.name} `;
-    setDraft(draft.slice(0, start) + insert + draft.slice(end));
-    setSlashIndex(0);
-    setSlashDismissed(true); // a space follows, so it would close anyway
-    setSlashCtx(null);
-    settleCaret(start + insert.length);
-  }
-
   // Runs BEFORE the DS PromptInput's Enter-to-submit (via its onKeyDown seam):
   // preventDefault to take over the key. Slash-menu nav wins while open; ⌘/Ctrl+Enter
   // inserts a newline. Plain Enter falls through → PromptInput submits (→ send()).
   function onComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (slashActive) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setSlashIndex((i) => (i + 1) % slashMatches.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
-        return;
-      }
-      if (event.key === "Enter" || event.key === "Tab") {
-        event.preventDefault();
-        completeCommand(slashMatches[slashSel]);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setSlashDismissed(true);
-        return;
-      }
-    }
+    if (onSlashKeyDown(event)) return;
     // ↑ with a message QUEUED and nothing typed pulls that message back out of the turn to
     // edit (#2837) — decided in queuedRecall.ts. Ahead of the history ring below: the live
     // queued message beats the copy of it the ring also holds.
@@ -2543,14 +2281,8 @@ export function ChatSessionSlot({
           e.preventDefault(); // keep focus from leaving the field
           textareaRef.current?.focus();
         }}
-        onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); }}
-        onDrop={(e) => {
-          const files = filesFromTransfer(e.dataTransfer);
-          if (files.length) {
-            e.preventDefault();
-            files.forEach((f) => void uploadAttachment(f));
-          }
-        }}
+        onDragOver={onAttachDragOver}
+        onDrop={onAttachDrop}
       >
         {/* Who is in this chat (#3049) — derived from the transcript, so it can never
             drift from what happened (the tracked-list version grew chips a deleted draft
@@ -2696,26 +2428,8 @@ export function ChatSessionSlot({
           }
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
-          onPaste={(e) => {
-            // Paste-to-attach (the DS onPaste seam). Clipboard files — incl.
-            // IMAGES/screenshots that some browsers expose only via items[] —
-            // become attachments.
-            const files = filesFromTransfer(e.clipboardData);
-            if (files.length) {
-              e.preventDefault();
-              files.forEach((f) => void uploadAttachment(f));
-              return;
-            }
-            // A large text paste becomes a removable attachment pill (routed
-            // through the attach pipeline → tiered inline/indexed) instead of
-            // flooding the field; small pastes fall through to the textarea.
-            const text = e.clipboardData?.getData("text/plain") ?? "";
-            if (isLargePaste(text)) {
-              e.preventDefault();
-              void uploadAttachment(pastedTextFile(text));
-            }
-          }}
-          onAttach={() => fileInputRef.current?.click()}
+          onPaste={onAttachPaste}
+          onAttach={openFilePicker}
           // The model picker lives in the DS composer's actions slot (ADR 0048 / the
           // ComposerWithAttachments DS pattern) — replaces the separate chip below.
           // Fork-registered composer actions (ADR 0061) render alongside it.
@@ -2812,11 +2526,7 @@ export function ChatSessionSlot({
           multiple
           hidden
           accept={CHAT_ATTACH_ACCEPT}
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            files.forEach((f) => void uploadAttachment(f));
-            e.target.value = ""; // allow re-picking the same file
-          }}
+          onChange={onFileInputChange}
         />
       </div>
 
