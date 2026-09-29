@@ -2569,6 +2569,389 @@ def _set_trace_output(text: str) -> None:
         log.debug("[tracing] turn output not recorded", exc_info=True)
 
 
+# ── Shared pre-turn dispatch + failure handling (#3805) ─────────────────────
+# Both turn drivers — the streaming ``_chat_langgraph_stream_impl`` (A2A / console)
+# and the non-streaming ``_chat_langgraph_impl`` (``chat()``: OpenAI-compat /v1,
+# /api/chat, plugin surfaces) — used to carry their own copy of this chain and of
+# the error handling. The copies drifted: the non-streaming one never learned
+# `/subagent` or the context-overflow compact-and-retry. ONE chain now, and one
+# failure classifier; each driver only decides how to SHAPE what it yields.
+
+
+@dataclass
+class _PreTurn:
+    """Mutable outcome of :func:`_pre_turn_dispatch` (an async generator can't
+    return a value, so the caller reads this after draining it).
+
+    ``message`` — the text the turn should run on (a `/skill` rewrites it).
+    ``handled`` — a short-circuit answered the turn; its terminal frame
+    (``done`` / ``input_required``) was the last one yielded.
+    ``acp`` — not handled, and the configured runtime is ACP (ADR 0033): the
+    driver runs its own ACP shape instead of the native loop.
+    """
+
+    message: str
+    handled: bool = False
+    acp: bool = False
+
+
+async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: dict | None):
+    """The pre-turn dispatch chain, in its one canonical order: @-mention → /goal →
+    /lifecycle → plugin command → workflow → subagent → skill (rewrite, falls
+    through) → unknown /command → ACP switch.
+
+    Yields the same ``(kind, payload)`` frames the streaming driver emits (work
+    cards, room replies, then a terminal ``done`` / ``input_required``); the
+    non-streaming driver drains it and keeps only the terminal frame. Exceptions
+    propagate to the driver's turn-level handler.
+    """
+    message = pre.message
+    # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
+    # routes straight to that delegate, short-circuiting the LLM turn. Checked
+    # BEFORE goal control (and every slash-command below) so an @-mention is
+    # never swallowed by an active goal; a no-op when the delegates plugin isn't
+    # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
+    # The exchange WRITES this session's checkpointer thread, so it takes the
+    # same per-thread lock every other writer takes (see the turn lock below,
+    # and compact/rewind). Without it a mention landing while a goal
+    # continuation or a scheduled fire writes the same thread lost-updates the
+    # transcript — the exact corruption that lock exists to prevent.
+    # A direct address deliberately skips the graph, so there are no model or
+    # tool events to reassure the operator while a slow delegate works (#3052).
+    # Open one ordinary work card before entering the (potentially queued)
+    # exchange. The console's existing elapsed timer then keeps ticking even
+    # when the adapter has no native progress stream. Unknown / bare mentions
+    # answer synchronously and do not need a card.
+    _addressed = _parse_at_delegates(message)
+    _mention_tool: dict | None = None
+    if _addressed is not None and _addressed[1]:
+        _mention_names = " ".join(f"@{name}" for name in _addressed[0])
+        _mention_tool = {
+            "id": f"mention:{','.join(_addressed[0])}",
+            "name": _mention_names,
+            "input": _addressed[1],
+        }
+        yield ("tool_start", _mention_tool)
+
+    try:
+        async with _thread_lock(_resolve_thread_id(request_metadata, session_id)):
+            _at_reply, _at_outcome = await _at_delegate_exchange(
+                message, session_id, request_metadata
+            )
+    except Exception as exc:
+        # Most adapter failures are ordinary room outcomes, but an unexpected
+        # exchange failure still flows to the turn-level error handler below.
+        # Settle the card first so the console cannot strand it as running.
+        if _mention_tool is not None:
+            yield (
+                "tool_end",
+                {
+                    "id": _mention_tool["id"],
+                    "name": _mention_tool["name"],
+                    "output": str(exc) or type(exc).__name__,
+                    "error": True,
+                },
+            )
+        raise
+    if _mention_tool is not None:
+        _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
+        # Distinct participants, not dispatches: over three rounds two delegates
+        # produce six outcomes, and "6 replied over 3 rounds" describes a room of
+        # six people that does not exist.
+        _answered = len(
+            {
+                str(item.get("author") or "")
+                for item in (_at_outcome or [])
+                if item.get("ok") and not item.get("silent")
+            }
+        )
+        _rounds = max((int(item.get("round") or 1) for item in (_at_outcome or [])), default=1)
+        if _at_outcome:
+            _status = f"{_answered} replied"
+            if _failed:
+                _status += f", {_failed} failed"
+            if _rounds > 1:
+                # A multi-round room is several passes over the same cast; the
+                # card is the only place the operator learns it took more than
+                # one, since a settle is deliberately quiet in the reply text.
+                _status += f" over {_rounds} rounds"
+        else:
+            # Every stopped local target can fall through to the lead's normal
+            # consent/start path (#3126); the addressed wait itself still ended.
+            _status = "Handed to lead" if _at_reply is None else "Finished"
+        yield (
+            "tool_end",
+            {
+                "id": _mention_tool["id"],
+                "name": _mention_tool["name"],
+                "output": _status,
+                "error": bool(_failed and not _answered),
+            },
+        )
+    if _at_reply is not None:
+        for _exchange in _at_outcome or []:
+            if _exchange.get("silent"):
+                continue  # a `pass` is not a message — no thread record, no frame
+            # One authorship frame per exchange: the answer is that participant's
+            # own words, not the lead agent's, and a multi-mention turn is several
+            # participants answering. `text` rides along so a console that renders
+            # per-exchange messages has the words with the byline; consumers that
+            # don't know this kind ignore it (the executor's if/elif has no else)
+            # and still get the whole answer on the `done` frame.
+            #
+            # `in_answer` says that the `done` text restates THIS reply, so a
+            # console rendering the bubble must not render the answer too
+            # (#3449). Set only where the composer claimed it — see the tail of
+            # `_at_delegate_exchange` for what disqualifies a turn — and omitted
+            # rather than sent false, so the key's presence is the claim and
+            # every other `room_reply` producer (a `delegate_to` exchange, a
+            # drained background reply) stays untouched: those replies are NOT
+            # in the lead's answer, which is its own synthesis.
+            yield (
+                "room_reply",
+                {
+                    "author": _exchange.get("author") or "",
+                    "from": "operator",
+                    "text": str(_exchange.get("reply") or ""),
+                    "ok": bool(_exchange.get("ok")),
+                    "catchup": int(_exchange.get("catchup") or 0),
+                    "truncated": bool(_exchange.get("truncated")),
+                    **({"in_answer": True} if _exchange.get("in_answer") else {}),
+                },
+            )
+        # The part of the answer NO participant's bubble carries (#3449) — a
+        # failed address's line, an empty reply's stand-in, the room's own bound
+        # notes. Its own frame, so a console that renders the bubbles can render
+        # the whole answer exactly once instead of either doubling the replies or
+        # dropping this. Last, because it is a footnote on what was just said, and
+        # only when the composer claimed something (see `_at_delegate_exchange`:
+        # with nothing claimed the console lands the answer whole, and this frame
+        # would be the duplicate).
+        _room_note_text = next(
+            (str(o.get("room_note") or "") for o in (_at_outcome or []) if o.get("room_note")), ""
+        )
+        if _room_note_text:
+            yield ("room_reply", {"note": True, "from": "room", "text": _room_note_text, "ok": True})
+        pre.handled = True
+        yield ("done", _at_reply)
+        return
+
+    # Goal control messages (/goal ...) short-circuit the turn: set /
+    # status / clear a goal and return the reply without running the graph.
+    if STATE.goal_controller is not None:
+        reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
+        if reply is not None:
+            gs = STATE.goal_controller.active_goal(session_id)
+            if STATE.goal_controller.is_set_ack(reply) and gs is not None:
+                # /goal SET kicks the drive immediately (#1910): surface the ack as a
+                # status frame, then fall through into a goal-driven turn instead of
+                # short-circuiting here and waiting for a separate inbound message. The
+                # goal condition is injected at the kickoff below (iteration 0), which
+                # also covers a plain message arriving on an already-active goal.
+                yield ("tool_start", f"🎯 {reply}")
+            else:
+                pre.handled = True
+                yield ("done", reply)
+                return
+
+    # Core /lifecycle command (ADR 0074) — read-only listing of the lifecycle
+    # events + configured reactions + registered hooks. Reserved like /goal.
+    lc_reply = _lifecycle_command_reply(message)
+    if lc_reply is not None:
+        pre.handled = True
+        yield ("done", lc_reply)
+        return
+
+    # Plugin-registered chat control command (/<name> …) short-circuits the
+    # turn with the plugin's reply — user-only, like /goal (e.g. the github
+    # plugin's /issue). No plugin claims a token by default ⇒ falls through.
+    name, rest = _parse_slash_command(message)
+    if name:
+        cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
+        if isinstance(cmd_reply, _PluginFormRequest):
+            # A plugin form rides the SAME input_required frame the agent HITL
+            # uses (ADR 0045 — one canonical wire), tagged with a callback id so
+            # the console routes the answers to the plugin's on_submit instead of
+            # resuming a graph interrupt (there is none) — #1701 Slice 2.
+            pre.handled = True
+            yield ("input_required", {**cmd_reply.form, "plugin_callback_id": cmd_reply.callback_id})
+            return
+        if cmd_reply is not None:
+            pre.handled = True
+            yield ("done", cmd_reply)
+            return
+
+    # Workflow slash command (/<workflow-name> …) short-circuits the turn:
+    # run the recipe and return its output. Each step renders its own
+    # tool card (gather → angles → brief) so a multi-step workflow shows
+    # live progress instead of one opaque card that looks hung.
+    parsed = _parse_workflow_command(message)
+    if parsed is not None:
+        wf_name, wf_inputs = parsed
+        _WF_DONE = object()
+        step_q: asyncio.Queue = asyncio.Queue()
+
+        async def _on_step(event: dict) -> None:
+            await step_q.put(event)
+
+        async def _runner() -> str:
+            try:
+                return await _run_parsed_workflow(wf_name, wf_inputs, on_step=_on_step)
+            finally:
+                await step_q.put(_WF_DONE)
+
+        runner = asyncio.create_task(_runner())
+        # An umbrella card for the whole workflow, then one per step.
+        yield (
+            "tool_start",
+            {
+                "id": f"workflow:{wf_name}",
+                "name": f"workflow:{wf_name}",
+                "input": _coerce_tool_value(wf_inputs),
+            },
+        )
+        while True:
+            event = await step_q.get()
+            if event is _WF_DONE:
+                break
+            sid = event.get("step_id", "")
+            step_tool_id = f"workflow:{wf_name}:{sid}"
+            label = f"{wf_name} · {sid}"
+            if event.get("phase") == "start":
+                yield ("tool_start", {"id": step_tool_id, "name": label, "input": event.get("subagent", "")})
+            else:
+                yield (
+                    "tool_end",
+                    {
+                        "id": step_tool_id,
+                        "name": label,
+                        "output": extract_output(event.get("output", "")) or event.get("output", ""),
+                    },
+                )
+        wf_out = await runner
+        yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
+        pre.handled = True
+        yield ("done", wf_out)
+        return
+
+    # Subagent slash command (/<subagent> <prompt>) short-circuits the
+    # turn: run the one worker and return its output (ADR 0020 — run from
+    # chat). Renders a single tool card. A workflow of the same name wins.
+    parsed_sub = _parse_subagent_command(message)
+    if parsed_sub is not None:
+        sub_type, sub_prompt = parsed_sub
+        if not sub_prompt:
+            pre.handled = True
+            yield ("done", f"Usage: `/{sub_type} <prompt>` — describe the task for the {sub_type} subagent.")
+            return
+        sub_tool_id = f"subagent:{sub_type}"
+        yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
+        sub_out = await _run_parsed_subagent(sub_type, sub_prompt, session_id=session_id)
+        yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
+        pre.handled = True
+        yield ("done", sub_out)
+        return
+
+    # User-facing skill slash command (/<skill> [args]) — does NOT
+    # short-circuit: rewrite the message to inject the skill's procedure
+    # as a directive, then fall through to the normal lead-agent turn so
+    # every streaming / HITL / goal invariant holds (ADR 0052).
+    parsed_skill = _parse_skill_command(message)
+    if parsed_skill is not None:
+        message = _skill_directive(*parsed_skill)
+
+    # Unknown /command (#2893) — the message looks like a slash command but
+    # matched nothing above: short-circuit with a hint instead of handing the
+    # raw `/foobar` text to the agent turn. Non-command uses of `/` (paths,
+    # prose) fall through — see _unknown_slash_command_reply.
+    unknown_reply = _unknown_slash_command_reply(message)
+    if unknown_reply is not None:
+        pre.handled = True
+        yield ("done", unknown_reply)
+        return
+
+    pre.message = message
+
+    # ACP runtime (ADR 0033 slice 4) — when `agent_runtime: acp:<agent>`, an
+    # external coding agent (proto/codex/claude/…) drives the turn over ACP
+    # instead of the native LangGraph loop. The decision is shared; each driver
+    # runs it in its own shape (both through `_acp_drive_turn`).
+    from runtime.acp_runtime import is_acp_runtime
+
+    pre.acp = bool(is_acp_runtime(STATE.graph_config))
+
+
+def _short_circuit_reply(frame: tuple | None) -> list[dict[str, Any]]:
+    """The non-streaming shape of a pre-turn short-circuit's terminal frame."""
+    kind, payload = frame if frame is not None else ("done", "")
+    if kind == "input_required":
+        # Non-streaming callers (e.g. the OpenAI-compat /v1 path) can't render a
+        # plugin form — degrade to a text note pointing at the console (#1701 S2).
+        _title = (payload or {}).get("title") or "This command"
+        return [{"role": "assistant", "content": f"**{_title}** needs a form — open it in the protoAgent console."}]
+    return [{"role": "assistant", "content": payload}]
+
+
+# The retry prompt + status line for the context-overflow recovery (#2783, ADR 0101 D4).
+_OVERFLOW_RETRY_PROMPT = (
+    "(The previous request overflowed the context window and the earlier "
+    "history was compacted to a summary. Continue exactly where you left off.)"
+)
+_OVERFLOW_NOTICE = (
+    "🧹 The request overflowed the model's context window — older history was force-compacted; retrying once."
+)
+_PROVIDER_CLOSED_MSG = "The model provider closed the stream (possibly rate-limited). Please retry."
+
+
+def _is_provider_stream_drop(exc: BaseException) -> bool:
+    """The provider dropped the stream and the per-call reconnects
+    (graph.llm._astream) were exhausted, or content had already streamed — a clean
+    terminal outcome (most likely rate limiting), not a code bug (#1728)."""
+    from graph.llm import RETRYABLE_STREAM_ERRORS
+
+    return isinstance(exc, RETRYABLE_STREAM_ERRORS)
+
+
+async def _overflow_compacted(exc: BaseException, thread_id: str | None, session_id: str) -> bool:
+    """True when ``exc`` is a context-window overflow from a NATIVE turn on
+    ``thread_id`` and a forced compaction actually shrank that thread — i.e. the
+    caller should retry the turn once (#2783, ADR 0101 D4).
+
+    Before this, nothing caught the overflow class: the raw error surfaced,
+    ModelFallback re-sent the same oversized prompt elsewhere, and the next turn hit
+    the same wall. ``thread_id`` is None when the failure came from before the native
+    turn (a pre-turn short-circuit, or the ACP runtime) — compacting there would
+    rewrite a thread the failing request never used, so nothing is retried. The
+    turn's lock has already unwound, so the compact and the retry re-acquire it.
+    """
+    if thread_id is None or _is_provider_stream_drop(exc):
+        return False
+    from graph.llm import is_context_overflow_error
+
+    return bool(is_context_overflow_error(exc)) and await _force_compact_for_overflow(thread_id, session_id)
+
+
+async def _fail_turn(exc: BaseException, session_id: str, *, tag: str) -> str:
+    """Log, record (#2593) and describe a failed turn — ONE classifier for both drivers,
+    so the two surfaces leave the SAME transcript and the same log shape. Returns the
+    user-facing message (the streaming driver's ``error`` payload; the non-streaming
+    driver wraps it as ``**Error:** …``)."""
+    if _is_provider_stream_drop(exc):
+        log.warning(
+            "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
+            tag,
+            session_id,
+            type(exc).__name__,
+            exc,
+        )
+        msg = _PROVIDER_CLOSED_MSG
+    else:
+        log.error("[%s] unhandled exception for session=%s: %s", tag, session_id, exc, exc_info=exc)
+        msg = str(exc)
+    await record_failed_turn(session_id, f"**Error:** {msg}")
+    return msg
+
+
 async def _chat_langgraph_stream_impl(
     message: str,
     session_id: str,
@@ -2636,268 +3019,24 @@ async def _chat_langgraph_stream_impl(
         ),
         request_metadata_scope(request_metadata),
     ):
+        # Set only once the NATIVE turn is about to run: the overflow recovery in the
+        # handler below compacts + retries that thread, and must not fire for a failure
+        # from the pre-turn chain or the ACP runtime (which never used it).
+        _tid: str | None = None
         try:
-            # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
-            # routes straight to that delegate, short-circuiting the LLM turn. Checked
-            # BEFORE goal control (and every slash-command below) so an @-mention is
-            # never swallowed by an active goal; a no-op when the delegates plugin isn't
-            # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
-            # The exchange WRITES this session's checkpointer thread, so it takes the
-            # same per-thread lock every other writer takes (see the turn lock below,
-            # and compact/rewind). Without it a mention landing while a goal
-            # continuation or a scheduled fire writes the same thread lost-updates the
-            # transcript — the exact corruption that lock exists to prevent.
-            # A direct address deliberately skips the graph, so there are no model or
-            # tool events to reassure the operator while a slow delegate works (#3052).
-            # Open one ordinary work card before entering the (potentially queued)
-            # exchange. The console's existing elapsed timer then keeps ticking even
-            # when the adapter has no native progress stream. Unknown / bare mentions
-            # answer synchronously and do not need a card.
-            _addressed = _parse_at_delegates(message)
-            _mention_tool: dict | None = None
-            if _addressed is not None and _addressed[1]:
-                _mention_names = " ".join(f"@{name}" for name in _addressed[0])
-                _mention_tool = {
-                    "id": f"mention:{','.join(_addressed[0])}",
-                    "name": _mention_names,
-                    "input": _addressed[1],
-                }
-                yield ("tool_start", _mention_tool)
-
-            try:
-                async with _thread_lock(_resolve_thread_id(request_metadata, session_id)):
-                    _at_reply, _at_outcome = await _at_delegate_exchange(
-                        message, session_id, request_metadata
-                    )
-            except Exception as exc:
-                # Most adapter failures are ordinary room outcomes, but an unexpected
-                # exchange failure still flows to the turn-level error handler below.
-                # Settle the card first so the console cannot strand it as running.
-                if _mention_tool is not None:
-                    yield (
-                        "tool_end",
-                        {
-                            "id": _mention_tool["id"],
-                            "name": _mention_tool["name"],
-                            "output": str(exc) or type(exc).__name__,
-                            "error": True,
-                        },
-                    )
-                raise
-            if _mention_tool is not None:
-                _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
-                # Distinct participants, not dispatches: over three rounds two delegates
-                # produce six outcomes, and "6 replied over 3 rounds" describes a room of
-                # six people that does not exist.
-                _answered = len(
-                    {
-                        str(item.get("author") or "")
-                        for item in (_at_outcome or [])
-                        if item.get("ok") and not item.get("silent")
-                    }
-                )
-                _rounds = max((int(item.get("round") or 1) for item in (_at_outcome or [])), default=1)
-                if _at_outcome:
-                    _status = f"{_answered} replied"
-                    if _failed:
-                        _status += f", {_failed} failed"
-                    if _rounds > 1:
-                        # A multi-round room is several passes over the same cast; the
-                        # card is the only place the operator learns it took more than
-                        # one, since a settle is deliberately quiet in the reply text.
-                        _status += f" over {_rounds} rounds"
-                else:
-                    # Every stopped local target can fall through to the lead's normal
-                    # consent/start path (#3126); the addressed wait itself still ended.
-                    _status = "Handed to lead" if _at_reply is None else "Finished"
-                yield (
-                    "tool_end",
-                    {
-                        "id": _mention_tool["id"],
-                        "name": _mention_tool["name"],
-                        "output": _status,
-                        "error": bool(_failed and not _answered),
-                    },
-                )
-            if _at_reply is not None:
-                for _exchange in _at_outcome or []:
-                    if _exchange.get("silent"):
-                        continue  # a `pass` is not a message — no thread record, no frame
-                    # One authorship frame per exchange: the answer is that participant's
-                    # own words, not the lead agent's, and a multi-mention turn is several
-                    # participants answering. `text` rides along so a console that renders
-                    # per-exchange messages has the words with the byline; consumers that
-                    # don't know this kind ignore it (the executor's if/elif has no else)
-                    # and still get the whole answer on the `done` frame.
-                    #
-                    # `in_answer` says that the `done` text restates THIS reply, so a
-                    # console rendering the bubble must not render the answer too
-                    # (#3449). Set only where the composer claimed it — see the tail of
-                    # `_at_delegate_exchange` for what disqualifies a turn — and omitted
-                    # rather than sent false, so the key's presence is the claim and
-                    # every other `room_reply` producer (a `delegate_to` exchange, a
-                    # drained background reply) stays untouched: those replies are NOT
-                    # in the lead's answer, which is its own synthesis.
-                    yield (
-                        "room_reply",
-                        {
-                            "author": _exchange.get("author") or "",
-                            "from": "operator",
-                            "text": str(_exchange.get("reply") or ""),
-                            "ok": bool(_exchange.get("ok")),
-                            "catchup": int(_exchange.get("catchup") or 0),
-                            "truncated": bool(_exchange.get("truncated")),
-                            **({"in_answer": True} if _exchange.get("in_answer") else {}),
-                        },
-                    )
-                # The part of the answer NO participant's bubble carries (#3449) — a
-                # failed address's line, an empty reply's stand-in, the room's own bound
-                # notes. Its own frame, so a console that renders the bubbles can render
-                # the whole answer exactly once instead of either doubling the replies or
-                # dropping this. Last, because it is a footnote on what was just said, and
-                # only when the composer claimed something (see `_at_delegate_exchange`:
-                # with nothing claimed the console lands the answer whole, and this frame
-                # would be the duplicate).
-                _room_note_text = next(
-                    (str(o.get("room_note") or "") for o in (_at_outcome or []) if o.get("room_note")), ""
-                )
-                if _room_note_text:
-                    yield ("room_reply", {"note": True, "from": "room", "text": _room_note_text, "ok": True})
-                yield ("done", _at_reply)
+            # The pre-turn dispatch chain (@-mention, /goal, /lifecycle, plugin command,
+            # workflow, subagent, skill, unknown /command, ACP switch) is SHARED with
+            # the non-streaming driver (#3805) — see _pre_turn_dispatch. Its frames
+            # (work cards, room replies, the terminal `done`) stream straight through.
+            pre = _PreTurn(message)
+            async with contextlib.aclosing(_pre_turn_dispatch(pre, session_id, request_metadata)) as _pre_frames:
+                async for frame in _pre_frames:
+                    yield frame
+            if pre.handled:
                 return
+            message = pre.message
 
-            # Goal control messages (/goal ...) short-circuit the turn: set /
-            # status / clear a goal and return the reply without running the graph.
-            if STATE.goal_controller is not None:
-                reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
-                if reply is not None:
-                    gs = STATE.goal_controller.active_goal(session_id)
-                    if STATE.goal_controller.is_set_ack(reply) and gs is not None:
-                        # /goal SET kicks the drive immediately (#1910): surface the ack as a
-                        # status frame, then fall through into a goal-driven turn instead of
-                        # short-circuiting here and waiting for a separate inbound message. The
-                        # goal condition is injected at the kickoff below (iteration 0), which
-                        # also covers a plain message arriving on an already-active goal.
-                        yield ("tool_start", f"🎯 {reply}")
-                    else:
-                        yield ("done", reply)
-                        return
-
-            # Core /lifecycle command (ADR 0074) — read-only listing of the lifecycle
-            # events + configured reactions + registered hooks. Reserved like /goal.
-            lc_reply = _lifecycle_command_reply(message)
-            if lc_reply is not None:
-                yield ("done", lc_reply)
-                return
-
-            # Plugin-registered chat control command (/<name> …) short-circuits the
-            # turn with the plugin's reply — user-only, like /goal (e.g. the github
-            # plugin's /issue). No plugin claims a token by default ⇒ falls through.
-            name, rest = _parse_slash_command(message)
-            if name:
-                cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
-                if isinstance(cmd_reply, _PluginFormRequest):
-                    # A plugin form rides the SAME input_required frame the agent HITL
-                    # uses (ADR 0045 — one canonical wire), tagged with a callback id so
-                    # the console routes the answers to the plugin's on_submit instead of
-                    # resuming a graph interrupt (there is none) — #1701 Slice 2.
-                    yield ("input_required", {**cmd_reply.form, "plugin_callback_id": cmd_reply.callback_id})
-                    return
-                if cmd_reply is not None:
-                    yield ("done", cmd_reply)
-                    return
-
-            # Workflow slash command (/<workflow-name> …) short-circuits the turn:
-            # run the recipe and return its output. Each step renders its own
-            # tool card (gather → angles → brief) so a multi-step workflow shows
-            # live progress instead of one opaque card that looks hung.
-            parsed = _parse_workflow_command(message)
-            if parsed is not None:
-                wf_name, wf_inputs = parsed
-                _WF_DONE = object()
-                step_q: asyncio.Queue = asyncio.Queue()
-
-                async def _on_step(event: dict) -> None:
-                    await step_q.put(event)
-
-                async def _runner() -> str:
-                    try:
-                        return await _run_parsed_workflow(wf_name, wf_inputs, on_step=_on_step)
-                    finally:
-                        await step_q.put(_WF_DONE)
-
-                runner = asyncio.create_task(_runner())
-                # An umbrella card for the whole workflow, then one per step.
-                yield (
-                    "tool_start",
-                    {
-                        "id": f"workflow:{wf_name}",
-                        "name": f"workflow:{wf_name}",
-                        "input": _coerce_tool_value(wf_inputs),
-                    },
-                )
-                while True:
-                    event = await step_q.get()
-                    if event is _WF_DONE:
-                        break
-                    sid = event.get("step_id", "")
-                    step_tool_id = f"workflow:{wf_name}:{sid}"
-                    label = f"{wf_name} · {sid}"
-                    if event.get("phase") == "start":
-                        yield ("tool_start", {"id": step_tool_id, "name": label, "input": event.get("subagent", "")})
-                    else:
-                        yield (
-                            "tool_end",
-                            {
-                                "id": step_tool_id,
-                                "name": label,
-                                "output": extract_output(event.get("output", "")) or event.get("output", ""),
-                            },
-                        )
-                wf_out = await runner
-                yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
-                yield ("done", wf_out)
-                return
-
-            # Subagent slash command (/<subagent> <prompt>) short-circuits the
-            # turn: run the one worker and return its output (ADR 0020 — run from
-            # chat). Renders a single tool card. A workflow of the same name wins.
-            parsed_sub = _parse_subagent_command(message)
-            if parsed_sub is not None:
-                sub_type, sub_prompt = parsed_sub
-                if not sub_prompt:
-                    yield ("done", f"Usage: `/{sub_type} <prompt>` — describe the task for the {sub_type} subagent.")
-                    return
-                sub_tool_id = f"subagent:{sub_type}"
-                yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
-                sub_out = await _run_parsed_subagent(sub_type, sub_prompt, session_id=session_id)
-                yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
-                yield ("done", sub_out)
-                return
-
-            # User-facing skill slash command (/<skill> [args]) — does NOT
-            # short-circuit: rewrite the message to inject the skill's procedure
-            # as a directive, then fall through to the normal lead-agent turn so
-            # every streaming / HITL / goal invariant holds (ADR 0052).
-            parsed_skill = _parse_skill_command(message)
-            if parsed_skill is not None:
-                message = _skill_directive(*parsed_skill)
-
-            # Unknown /command (#2893) — the message looks like a slash command but
-            # matched nothing above: short-circuit with a hint instead of handing the
-            # raw `/foobar` text to the agent turn. Non-command uses of `/` (paths,
-            # prose) fall through — see _unknown_slash_command_reply.
-            unknown_reply = _unknown_slash_command_reply(message)
-            if unknown_reply is not None:
-                yield ("done", unknown_reply)
-                return
-
-            # ACP runtime (ADR 0033 slice 4) — when `agent_runtime: acp:<agent>`, an
-            # external coding agent (proto/codex/claude/…) drives the turn over ACP
-            # instead of the native LangGraph loop. One stateful ACP session per thread.
-            from runtime.acp_runtime import is_acp_runtime
-
-            if is_acp_runtime(STATE.graph_config):
+            if pre.acp:
                 _acp_tid = _resolve_thread_id(request_metadata, session_id)
                 # Hold the runtime "in-flight" for the whole turn so a concurrent turn's
                 # eviction can't close it mid-stream (a long ACP coding turn can outlast the
@@ -2966,74 +3105,33 @@ async def _chat_langgraph_stream_impl(
             # tracing.py.
             raise
         except Exception as e:
-            from graph.llm import RETRYABLE_STREAM_ERRORS
-
-            if isinstance(e, RETRYABLE_STREAM_ERRORS):
-                # The provider dropped the stream and the per-call reconnects
-                # (graph.llm._astream) were exhausted, or content had already
-                # streamed. That's a clean terminal outcome — most likely account
-                # rate limiting — not a code bug, so log it as such (a background
-                # scheduler can observe the failed turn and reschedule). #1728.
-                log.warning(
-                    "[a2a-stream] provider closed the stream for session=%s (%s: %s) — "
-                    "possible rate limit; failing the turn cleanly",
-                    session_id,
-                    type(e).__name__,
-                    e,
-                )
-                retry_msg = "The model provider closed the stream (possibly rate-limited). Please retry."
-                await record_failed_turn(session_id, f"**Error:** {retry_msg}")
-                yield ("error", retry_msg)
-            else:
-                # Context overflow (#2783, ADR 0101 D4): before this, NOTHING caught
-                # the overflow class — the raw error surfaced, ModelFallback re-sent
-                # the same oversized prompt elsewhere, and the next turn hit the same
-                # wall. Now: force-compact the thread once (safety-valve semantics —
-                # archive best-effort, loud on failure) and retry a single time. A
-                # second failure falls through to the honest error below, but the
-                # thread is smaller, so the NEXT turn no longer inherits the wall.
-                from graph.llm import is_context_overflow_error
-
-                # The turn's `async with _thread_lock` unwound before this handler ran,
-                # so the compact + retry re-acquire it — the serialize-per-thread
-                # invariant must hold for the rewrite exactly as for a turn.
-                if is_context_overflow_error(e) and await _force_compact_for_overflow(_tid, session_id):
-                    yield (
-                        "tool_start",
-                        "🧹 The request overflowed the model's context window — older history "
-                        "was force-compacted; retrying once.",
-                    )
-                    try:
-                        async with _thread_lock(_tid):
-                            # Same class as the initial turn (ADR 0115 D6) — the retry is the
-                            # same operator/A2A turn, just after a force-compact.
-                            with _interactive_turn_priority((request_metadata or {}).get("origin")):
-                                async for frame in _run_native_turn(
-                                    "(The previous request overflowed the context window and the earlier "
-                                    "history was compacted to a summary. Continue exactly where you left off.)",
-                                    session_id,
-                                    config,
-                                    request_metadata=request_metadata,
-                                    resume=False,
-                                    images=None,
-                                ):
-                                    yield frame
-                        return
-                    except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
-                        log.exception(
-                            "[a2a-stream] overflow retry failed for session=%s: %s", session_id, retry_exc
-                        )
-                        e = retry_exc
-
-                log.exception(
-                    "[a2a-stream] unhandled exception for session=%s: %s",
-                    session_id,
-                    e,
-                )
-                # Same record as the non-streaming path: the two surfaces must leave the
-                # SAME transcript, or an exported thread depends on which one ran (#2593).
-                await record_failed_turn(session_id, f"**Error:** {e}")
-                yield ("error", str(e))
+            # Context overflow (#2783, ADR 0101 D4): force-compact the thread once and
+            # retry a single time. A second failure falls through to the honest error
+            # below, but the thread is smaller, so the NEXT turn no longer inherits the
+            # wall. Same classifier as the non-streaming driver (#3805).
+            if await _overflow_compacted(e, _tid, session_id):
+                yield ("tool_start", _OVERFLOW_NOTICE)
+                try:
+                    async with _thread_lock(_tid):
+                        # Same class as the initial turn (ADR 0115 D6) — the retry is the
+                        # same operator/A2A turn, just after a force-compact.
+                        with _interactive_turn_priority((request_metadata or {}).get("origin")):
+                            async for frame in _run_native_turn(
+                                _OVERFLOW_RETRY_PROMPT,
+                                session_id,
+                                config,
+                                request_metadata=request_metadata,
+                                resume=False,
+                                images=None,
+                            ):
+                                yield frame
+                    return
+                except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
+                    log.exception("[a2a-stream] overflow retry failed for session=%s: %s", session_id, retry_exc)
+                    e = retry_exc
+            # Same record as the non-streaming path: the two surfaces must leave the
+            # SAME transcript, or an exported thread depends on which one ran (#2593).
+            yield ("error", await _fail_turn(e, session_id, tag="a2a-stream"))
         finally:
             tracing.flush()
 
@@ -3954,76 +4052,31 @@ async def _chat_langgraph_impl(
         input=_redact(message),
         incognito=bool(incognito),
     ):
+        # Set only once the NATIVE turn is about to run — the overflow recovery below
+        # compacts + retries that thread (same contract as the streaming driver, #3805).
+        native_tid: str | None = None
         try:
-            # STEP 0 — @-delegate dispatch (S1): same short-circuit as the streaming path,
-            # returned as the assistant message. Checked before goal control / every slash
-            # command; a no-op when the delegates plugin isn't loaded. See _at_delegate_reply.
+            # The pre-turn dispatch chain is SHARED with the streaming driver (#3805) —
+            # see _pre_turn_dispatch. This surface can't render the intermediate frames
+            # (work cards, room replies, a /goal SET ack — that one is folded into the
+            # turn's terminal goal note), so only the terminal frame becomes the reply.
             # No request_metadata on this driver — the thread resolves from the session
-            # id alone, as it does everywhere else in this function. Same per-thread
-            # lock contract as the streaming driver: the exchange writes the thread.
-            async with _thread_lock(_resolve_thread_id(None, session_id)):
-                _at_reply, _ = await _at_delegate_exchange(message, session_id, None)
-            if _at_reply is not None:
-                return _traced([{"role": "assistant", "content": _at_reply}])
+            # id alone, as it does everywhere else in this function.
+            pre = _PreTurn(message)
+            last_frame: tuple | None = None
+            async with contextlib.aclosing(_pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
+                async for frame in _pre_frames:
+                    last_frame = frame
+            if pre.handled:
+                return _traced(_short_circuit_reply(last_frame))
+            message = pre.message
 
-            # Goal control messages short-circuit (status / clear) — but a /goal SET kicks the
-            # drive immediately (#1910) rather than returning just the ack: fall through into a
-            # goal-driven turn (the condition is injected at the kickoff below). The ack is
-            # folded into the turn's terminal goal note, so the caller still sees it.
-            if STATE.goal_controller is not None:
-                reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
-                if reply is not None and not (
-                    STATE.goal_controller.is_set_ack(reply)
-                    and STATE.goal_controller.active_goal(session_id) is not None
-                ):
-                    return _traced([{"role": "assistant", "content": reply}])
-
-            # Core /lifecycle command (ADR 0074) — read-only listing. Reserved like /goal.
-            lc_reply = _lifecycle_command_reply(message)
-            if lc_reply is not None:
-                return _traced([{"role": "assistant", "content": lc_reply}])
-
-            # Plugin-registered chat control command (/<name> …) short-circuits —
-            # user-only, like /goal (e.g. the github plugin's /issue). No plugin
-            # claims a token by default ⇒ falls through to normal dispatch.
-            name, rest = _parse_slash_command(message)
-            if name:
-                cmd_reply = await _run_plugin_chat_command(name, rest, session_id)
-                if isinstance(cmd_reply, _PluginFormRequest):
-                    # Non-streaming callers (e.g. the OpenAI-compat /v1 path) can't render
-                    # a form — degrade to a text note pointing at the console (#1701 S2).
-                    _title = cmd_reply.form.get("title") or "This command"
-                    return _traced([{"role": "assistant", "content": f"**{_title}** needs a form — open it in the protoAgent console."}])
-                if cmd_reply is not None:
-                    return _traced([{"role": "assistant", "content": cmd_reply}])
-
-            # Workflow slash command (/<workflow-name> …) short-circuits the turn.
-            parsed = _parse_workflow_command(message)
-            if parsed is not None:
-                return _traced([{"role": "assistant", "content": await _run_parsed_workflow(*parsed)}])
-
-            # User-facing skill slash command (/<skill> [args], ADR 0052) — rewrite
-            # the message to inject the skill's procedure and fall through to the
-            # normal turn (does not short-circuit). Workflows of the same token win.
-            parsed_skill = _parse_skill_command(message)
-            if parsed_skill is not None:
-                message = _skill_directive(*parsed_skill)
-
-            # Unknown /command (#2893) — same guard as the streaming path: a message
-            # that looks like a slash command but matched nothing above returns a hint
-            # instead of running the agent turn on the raw `/foobar` text.
-            unknown_reply = _unknown_slash_command_reply(message)
-            if unknown_reply is not None:
-                return _traced([{"role": "assistant", "content": unknown_reply}])
-
-            # Non-native runtime (ADR 0033) — same switch as the streaming driver, same
-            # position (after the control-plane short-circuits). Without it, an acp:*
-            # config silently ran this surface (OpenAI-compat /v1, the desktop /api/chat
-            # fallback, internal self-prompts) on the native loop — which a gateway-less
-            # ACP-only setup (e.g. the Hermes preset) can't serve at all.
-            from runtime.acp_runtime import is_acp_runtime
-
-            if is_acp_runtime(STATE.graph_config):
+            # Non-native runtime (ADR 0033) — the switch itself is shared (see
+            # _pre_turn_dispatch). Without it, an acp:* config silently ran this surface
+            # (OpenAI-compat /v1, the desktop /api/chat fallback, internal self-prompts)
+            # on the native loop — which a gateway-less ACP-only setup (e.g. the Hermes
+            # preset) can't serve at all.
+            if pre.acp:
                 return _traced(await _acp_turn_collected(session_id, message))
 
             # Same thread-id resolution as the streaming path (ADR 0069 D4): the
@@ -4061,30 +4114,49 @@ async def _chat_langgraph_impl(
                         return msg.content if isinstance(msg.content, str) else msg.text
                 return ""
 
-            # When a goal is already active, the whole turn is goal-driven —
-            # suppress cross-session prior_sessions on the initial turn too.
-            _goal_state = (
-                STATE.goal_controller.active_goal(session_id) if STATE.goal_controller is not None else None
-            )
-            goal_active = _goal_state is not None
-            # Sharing the streaming thread means sharing its serialization contract:
-            # every other writer to `a2a:{sid}` (the streaming turn driver,
-            # compact_session, rewind_session) holds the per-thread lock — an
-            # unlocked graph turn here could lost-update a concurrent one (e.g. the
-            # desktop /api/chat fallback racing a console /compact on the same tab).
-            async with _thread_lock(config["configurable"]["thread_id"]):
-                # HITL hold (#1560) — same contract as the streaming path: while the
-                # thread is parked at a form/question/approval interrupt, hold a fresh
-                # operator message (it folds in right after the form response) and echo
-                # the pending ask; the marked answer resumes the graph properly.
-                hold = await _hold_if_hitl_pending(
-                    message, session_id, config, request_metadata=({"hitl_resume": True} if hitl_resume else None)
+            async def _native_turn(
+                turn_message: str,
+                turn_images: list[tuple[str, str]] | None,
+                *,
+                overflow_retry: bool = False,
+            ) -> list[dict[str, Any]]:
+                """One native turn on this session's thread, as the reply list. Run once
+                for the operator's message and, after a context-overflow compaction, once
+                more for the recovery prompt (#3805)."""
+                # When a goal is already active, the whole turn is goal-driven —
+                # suppress cross-session prior_sessions on the initial turn too.
+                _goal_state = (
+                    STATE.goal_controller.active_goal(session_id) if STATE.goal_controller is not None else None
                 )
-                if hold is not None and hold is not _HITL_RESUME:
-                    payload = _interrupt_payload(hold)
-                    question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
-                    return _traced(
-                        [
+                goal_active = _goal_state is not None
+                # Sharing the streaming thread means sharing its serialization contract:
+                # every other writer to `a2a:{sid}` (the streaming turn driver,
+                # compact_session, rewind_session) holds the per-thread lock — an
+                # unlocked graph turn here could lost-update a concurrent one (e.g. the
+                # desktop /api/chat fallback racing a console /compact on the same tab).
+                async with _thread_lock(config["configurable"]["thread_id"]):
+                    # HITL hold (#1560) — same contract as the streaming path: while the
+                    # thread is parked at a form/question/approval interrupt, hold a fresh
+                    # operator message (it folds in right after the form response) and echo
+                    # the pending ask; the marked answer resumes the graph properly.
+                    # The overflow retry skips it, as the streaming retry does: its message
+                    # is the recovery prompt, not an operator message to hold.
+                    hold = (
+                        None
+                        if overflow_retry
+                        else await _hold_if_hitl_pending(
+                            turn_message,
+                            session_id,
+                            config,
+                            request_metadata=({"hitl_resume": True} if hitl_resume else None),
+                        )
+                    )
+                    if hold is not None and hold is not _HITL_RESUME:
+                        payload = _interrupt_payload(hold)
+                        question = (
+                            payload.get("question") or payload.get("title") or "The agent needs input to continue."
+                        )
+                        return [
                             {
                                 "role": "assistant",
                                 "content": (
@@ -4093,159 +4165,147 @@ async def _chat_langgraph_impl(
                                 ),
                             }
                         ]
-                    )
-                if hold is _HITL_RESUME:
-                    from langgraph.types import Command
-
-                    graph_input = Command(resume=await _resume_payload(config, message))
-                else:
-                    _msg = message
-                    # Kickoff injection (#1910), same as the streaming path: the first
-                    # goal-driven turn (iteration 0) carries the goal condition so the agent
-                    # begins on the goal instead of asking "what goal?".
-                    if goal_active and _goal_state.iteration == 0:
-                        _msg = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=message)
-                    graph_input = {
-                        # Vision parts ride the user message when the model supports
-                        # them (#1943) — same gating as the streaming path.
-                        "messages": [_vision_human_message(_msg, images, session_id=session_id, incognito=incognito)],
-                        "session_id": session_id,
-                        **_state_extra,
-                    }
-                with goal_turn(goal_active):
-                    result = await STATE.graph.ainvoke(graph_input, config=config)
-                    # Headless-first parity (#1911): a goal-driven turn is autonomous, so if it
-                    # parks on a HITL interrupt there's no operator here to answer — resume with
-                    # the no-operator sentinel and re-run (bounded) instead of echoing the ask
-                    # and stalling the drive. Non-goal turns are untouched (they still echo).
-                    if goal_active:
+                    if hold is _HITL_RESUME:
                         from langgraph.types import Command
 
-                        _auto = 0
-                        while _auto < _MAX_AUTONOMOUS_AUTOANSWERS:
-                            if await _pending_interrupt_value(config) is None:
-                                break
-                            _auto += 1
-                            result = await STATE.graph.ainvoke(
-                                Command(resume=_AUTONOMOUS_HITL_SENTINEL), config=config
-                            )
-                        if await _pending_interrupt_value(config) is not None:
-                            # Budget spent, still parked → clear the dangling interrupt so the
-                            # checkpoint isn't stranded; the drive loop below continues on the text.
-                            await _clear_pending_interrupt(config)
-            raw = _last_ai(result)
-            response = extract_output(raw)
+                        graph_input = Command(resume=await _resume_payload(config, turn_message))
+                    else:
+                        _msg = turn_message
+                        # Kickoff injection (#1910), same as the streaming path: the first
+                        # goal-driven turn (iteration 0) carries the goal condition so the agent
+                        # begins on the goal instead of asking "what goal?".
+                        if goal_active and _goal_state.iteration == 0:
+                            _msg = STATE.goal_controller.kickoff_prompt(_goal_state, user_message=turn_message)
+                        graph_input = {
+                            # Vision parts ride the user message when the model supports
+                            # them (#1943) — same gating as the streaming path.
+                            "messages": [
+                                _vision_human_message(_msg, turn_images, session_id=session_id, incognito=incognito)
+                            ],
+                            "session_id": session_id,
+                            **_state_extra,
+                        }
+                    with goal_turn(goal_active):
+                        result = await STATE.graph.ainvoke(graph_input, config=config)
+                        # Headless-first parity (#1911): a goal-driven turn is autonomous, so if it
+                        # parks on a HITL interrupt there's no operator here to answer — resume with
+                        # the no-operator sentinel and re-run (bounded) instead of echoing the ask
+                        # and stalling the drive. Non-goal turns are untouched (they still echo).
+                        if goal_active:
+                            from langgraph.types import Command
 
-            # Robustness parity with the streaming path (bd-2qy): a turn can end
-            # with no assistant text — at an ask_human interrupt, after a `wait`
-            # yield, or on a scratch-only turn. Returning "" gives /api/chat +
-            # OpenAI-compat callers a silent empty 200; surface something useful.
-            if not response:
-                interrupt_val = await _pending_interrupt_value(config)
-                if interrupt_val is not None:
-                    # ask_human / HITL — the graph paused for input. There's no
-                    # task to park on this non-streaming surface, so echo the
-                    # prompt; the caller answers with a follow-up message, which
-                    # continues the thread (the checkpointer kept the history).
-                    payload = _interrupt_payload(interrupt_val)
-                    question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
-                    return _traced(
-                        [
+                            _auto = 0
+                            while _auto < _MAX_AUTONOMOUS_AUTOANSWERS:
+                                if await _pending_interrupt_value(config) is None:
+                                    break
+                                _auto += 1
+                                result = await STATE.graph.ainvoke(
+                                    Command(resume=_AUTONOMOUS_HITL_SENTINEL), config=config
+                                )
+                            if await _pending_interrupt_value(config) is not None:
+                                # Budget spent, still parked → clear the dangling interrupt so the
+                                # checkpoint isn't stranded; the drive loop below continues on the text.
+                                await _clear_pending_interrupt(config)
+                raw = _last_ai(result)
+                response = extract_output(raw)
+
+                # Robustness parity with the streaming path (bd-2qy): a turn can end
+                # with no assistant text — at an ask_human interrupt, after a `wait`
+                # yield, or on a scratch-only turn. Returning "" gives /api/chat +
+                # OpenAI-compat callers a silent empty 200; surface something useful.
+                if not response:
+                    interrupt_val = await _pending_interrupt_value(config)
+                    if interrupt_val is not None:
+                        # ask_human / HITL — the graph paused for input. There's no
+                        # task to park on this non-streaming surface, so echo the
+                        # prompt; the caller answers with a follow-up message, which
+                        # continues the thread (the checkpointer kept the history).
+                        payload = _interrupt_payload(interrupt_val)
+                        question = (
+                            payload.get("question") or payload.get("title") or "The agent needs input to continue."
+                        )
+                        return [
                             {
                                 "role": "assistant",
                                 "content": f"🙋 **Input needed:** {question}",
                                 "usage": _sum_usage(usage_cb.usage_metadata),
                             }
                         ]
+
+                # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
+                # to the last tool result so the caller gets a signal, not a blank.
+                # Both lookups are scoped to THIS turn, so reaching the final string means
+                # the turn genuinely produced nothing — most likely it died mid-stream. Say
+                # that plainly: the whole point of #2300 is that a caller must be able to
+                # tell "no answer" from "an answer", and the previous wording read like a
+                # deliberate quiet turn rather than a failure worth retrying.
+                if not response:
+                    response = _last_tool_text(result) or (
+                        "**Error:** the turn produced no reply — it may have stalled or been "
+                        "interrupted. Nothing was returned for this request; retry it. "
+                        "(This is not the previous turn's answer.)"
                     )
 
-            # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
-            # to the last tool result so the caller gets a signal, not a blank.
-            # Both lookups are scoped to THIS turn, so reaching the final string means
-            # the turn genuinely produced nothing — most likely it died mid-stream. Say
-            # that plainly: the whole point of #2300 is that a caller must be able to
-            # tell "no answer" from "an answer", and the previous wording read like a
-            # deliberate quiet turn rather than a failure worth retrying.
-            if not response:
-                response = _last_tool_text(result) or (
-                    "**Error:** the turn produced no reply — it may have stalled or been "
-                    "interrupted. Nothing was returned for this request; retry it. "
-                    "(This is not the previous turn's answer.)"
-                )
+                # Goal mode: verify after the agent stops; re-invoke with a
+                # continuation prompt until met / exhausted / unachievable.
+                if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
+                    guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
+                    note = ""
+                    while guard < hard_cap:
+                        guard += 1
+                        decision = await STATE.goal_controller.evaluate(session_id, last_text=response)
+                        if decision is None:
+                            break
+                        note = decision.note
+                        if decision.action == "done":
+                            break
+                        if _awaiting_self_resume(session_id):
+                            # Async handoff (ADR 0079) — mirror the streaming path: the agent queued a
+                            # watch/schedule that resumes this session, so pause the drive instead of
+                            # spinning; the trigger's fire continues the goal.
+                            note = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
+                            break
+                        # Fresh-context goals get a scoped per-iteration thread; same-session
+                        # reuse `config`. Same shared helper as the streaming path (no drift).
+                        cont_config = _goal_continuation_config(config, decision.state)
 
-            # Goal mode: verify after the agent stops; re-invoke with a
-            # continuation prompt until met / exhausted / unachievable.
-            if STATE.goal_controller is not None and STATE.goal_controller.active_goal(session_id):
-                guard, hard_cap = 0, STATE.graph_config.goal_max_iterations + 2
-                note = ""
-                while guard < hard_cap:
-                    guard += 1
-                    decision = await STATE.goal_controller.evaluate(session_id, last_text=response)
-                    if decision is None:
-                        break
-                    note = decision.note
-                    if decision.action == "done":
-                        break
-                    if _awaiting_self_resume(session_id):
-                        # Async handoff (ADR 0079) — mirror the streaming path: the agent queued a
-                        # watch/schedule that resumes this session, so pause the drive instead of
-                        # spinning; the trigger's fire continues the goal.
-                        note = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
-                        break
-                    # Fresh-context goals get a scoped per-iteration thread; same-session
-                    # reuse `config`. Same shared helper as the streaming path (no drift).
-                    cont_config = _goal_continuation_config(config, decision.state)
+                        # Lock the BASE thread (mirrors the streaming driver, which holds it
+                        # across the whole goal loop): same-session iterations write `config`'s
+                        # thread directly; fresh-context ones still exclude compact/rewind/
+                        # streaming turns keyed on the base id.
+                        async with _thread_lock(config["configurable"]["thread_id"]):
+                            with goal_turn():
+                                result = await STATE.graph.ainvoke(
+                                    {
+                                        "messages": [HumanMessage(content=decision.message)],
+                                        "session_id": session_id,
+                                        **_state_extra,
+                                    },
+                                    # Fresh-context iterations get a scoped config without the
+                                    # turn's callbacks — re-attach usage_cb so their tokens count.
+                                    config={**cont_config, "callbacks": [usage_cb]},
+                                )
+                        nxt = extract_output(_last_ai(result))
+                        if nxt:
+                            response = nxt
+                    if note:
+                        response = f"{response}\n\n---\n{note}"
 
-                    # Lock the BASE thread (mirrors the streaming driver, which holds it
-                    # across the whole goal loop): same-session iterations write `config`'s
-                    # thread directly; fresh-context ones still exclude compact/rewind/
-                    # streaming turns keyed on the base id.
-                    async with _thread_lock(config["configurable"]["thread_id"]):
-                        with goal_turn():
-                            result = await STATE.graph.ainvoke(
-                                {
-                                    "messages": [HumanMessage(content=decision.message)],
-                                    "session_id": session_id,
-                                    **_state_extra,
-                                },
-                                # Fresh-context iterations get a scoped config without the
-                                # turn's callbacks — re-attach usage_cb so their tokens count.
-                                config={**cont_config, "callbacks": [usage_cb]},
-                            )
-                    nxt = extract_output(_last_ai(result))
-                    if nxt:
-                        response = nxt
-                if note:
-                    response = f"{response}\n\n---\n{note}"
+                return [{"role": "assistant", "content": response, "usage": _sum_usage(usage_cb.usage_metadata)}]
 
-            return _traced([{"role": "assistant", "content": response, "usage": _sum_usage(usage_cb.usage_metadata)}])
+            native_tid = config["configurable"]["thread_id"]
+            return _traced(await _native_turn(message, images))
         except Exception as e:
-            from graph.llm import RETRYABLE_STREAM_ERRORS
-
-            if isinstance(e, RETRYABLE_STREAM_ERRORS):
-                log.warning(
-                    "[chat] provider closed the stream for session=%s (%s: %s) — possible rate limit",
-                    session_id,
-                    type(e).__name__,
-                    e,
-                )
-                retry_msg = "the model provider closed the stream (possibly rate-limited). Please retry."
-                await record_failed_turn(session_id, f"**Error:** {retry_msg}")
-                return _traced(
-                    [
-                        {
-                            "role": "assistant",
-                            "content": f"**Error:** {retry_msg}",
-                            "error": turn_error(e, retry_msg),
-                        }
-                    ]
-                )
-            log.exception(
-                "[chat] unhandled exception for session=%s: %s",
-                session_id,
-                e,
-            )
-            await record_failed_turn(session_id, f"**Error:** {e}")
-            return _traced([{"role": "assistant", "content": f"**Error:** {e}", "error": turn_error(e)}])
+            # Context overflow (#2783, ADR 0101 D4) — the recovery the streaming driver
+            # always had and this one lacked (#3805): force-compact the thread once and
+            # retry a single time; a second failure surfaces honestly below.
+            if await _overflow_compacted(e, native_tid, session_id):
+                try:
+                    return _traced(await _native_turn(_OVERFLOW_RETRY_PROMPT, None, overflow_retry=True))
+                except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
+                    log.exception("[chat] overflow retry failed for session=%s: %s", session_id, retry_exc)
+                    e = retry_exc
+            msg = await _fail_turn(e, session_id, tag="chat")
+            return _traced([{"role": "assistant", "content": f"**Error:** {msg}", "error": turn_error(e, msg)}])
         finally:
             tracing.flush()
