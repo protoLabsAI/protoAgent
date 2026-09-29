@@ -116,21 +116,22 @@ def test_bad_router_does_not_break_the_batch(app):
 
 
 def test_reload_serves_the_current_router_code(app):
-    key = {"plugin_id": "weather", "prefix": "/plugins/weather"}
+    # The production prefix for a plugin view router (#1732: /api/plugins/<id>).
+    key = {"plugin_id": "weather", "prefix": "/api/plugins/weather"}
     _mount_plugin_routers([{**key, "router": _view_router("scaffold hello")}])
     c = TestClient(app)
-    assert c.get("/plugins/weather/view").json()["msg"] == "scaffold hello"
+    assert c.get("/api/plugins/weather/view").json()["msg"] == "scaffold hello"
 
     n_after_first_mount = len(app.router.routes)
 
     # The reload passes a FRESH router built from the CURRENT code — it must serve
     # (previously the first mount won forever and the edit was invisible).
     _mount_plugin_routers([{**key, "router": _view_router("real weather page")}])
-    assert c.get("/plugins/weather/view").json()["msg"] == "real weather page"
+    assert c.get("/api/plugins/weather/view").json()["msg"] == "real weather page"
     # ...with no leak: the stale entry left when the fresh one landed, so the route
     # table is the same size after any number of remounts.
     _mount_plugin_routers([{**key, "router": _view_router("third revision")}])
-    assert c.get("/plugins/weather/view").json()["msg"] == "third revision"
+    assert c.get("/api/plugins/weather/view").json()["msg"] == "third revision"
     assert len(app.router.routes) == n_after_first_mount
 
 
