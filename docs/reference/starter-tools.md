@@ -68,6 +68,9 @@ answer. Hard-denied to subagents; auto-answered on autonomous turns so nothing d
 | [`save_skill(name, description, body, tools=None, provenance_reason="", source_session_id="")`](#save_skill) | Create a new skill. Additive-only: refuses to overwrite. |
 | [`recent_activity(limit=30, window_hours=168)`](#recent_activity) | Read-only digest of recent turns + a telemetry rollup. |
 
+`list_skills` / `save_skill` / `recent_activity` are defined in `tools/self_edit_tools.py`
+(`_build_curation_tools`); `load_skill` stays in `tools/lg_tools.py`.
+
 ### Memory & knowledge — bound when a `KnowledgeStore` exists
 
 Built by default; drop the whole group with `middleware.knowledge: false`. See
@@ -161,6 +164,9 @@ Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) 
 | [`delete_skill(name, reason, source_session_id="")`](#delete_skill) | Delete an editable skill and archive its outgoing version. | auto self-improvement on a private/layered store |
 | [`set_config(updates)`](#set_config) | Change the agent's own **operational** config — models, routing, plugin settings. Lead agent only. | `tools.self_config_enabled: true` (default **off**) |
 | [`search_tools(query="", limit=10)`](#search_tools) | Load deferred tools by capability. | `tools.deferred.enabled: true` (default **off**) |
+
+The self-editing tools (`edit_soul`, `update_skill`, `delete_skill`, `set_config`) are
+defined in `tools/self_edit_tools.py`.
 
 ## Why a tool isn't bound {#missing}
 
