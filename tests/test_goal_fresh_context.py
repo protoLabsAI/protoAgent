@@ -99,10 +99,6 @@ async def test_parse_plain_text_fresh_context_false(tmp_path):
 # --- GoalState field + status line ------------------------------------------
 
 
-def test_goal_state_default_is_false():
-    assert GoalState(session_id="s", condition="x").fresh_context is False
-
-
 def test_status_line_tags_fresh_context():
     fresh = GoalState(session_id="s", condition="x", fresh_context=True)
     assert "fresh-context" in fresh.status_line()

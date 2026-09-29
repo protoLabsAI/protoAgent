@@ -160,13 +160,6 @@ def test_ac1_default_deny_non_public_paths(monkeypatch):
         assert c.post(p).status_code == 401, f"POST {p} should be 401"
 
 
-# AC2: /healthz is public
-def test_ac2_healthz_public(monkeypatch):
-    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    assert _client_multi().get("/healthz").status_code == 200
-
-
 # AC3: /metrics is gated when a token is configured, public only in open mode,
 # and can be re-opened for an anonymous scraper via PROTOAGENT_PUBLIC_METRICS=1.
 def test_ac3_metrics_gated_when_token_set(monkeypatch):
@@ -199,13 +192,6 @@ def test_metrics_gated_when_only_api_key_set(monkeypatch):
     c = _client_multi()
     assert c.get("/metrics").status_code == 401
     assert c.get("/metrics", headers={"x-api-key": "k"}).status_code == 200
-
-
-# AC4: /.well-known/agent-card.json is public
-def test_ac4_agent_card_public(monkeypatch):
-    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    assert _client_multi().get("/.well-known/agent-card.json").status_code == 200
 
 
 # A plugin-declared public prefix is exempted; a core path can never be, and the
@@ -565,24 +551,6 @@ def test_set_public_prefixes_rejects_core_route_prefix(monkeypatch):
         auth.set_public_prefixes([])
 
 
-# AC5: /app is public (SPA served without auth)
-def test_ac5_app_public(monkeypatch):
-    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    c = _client_multi()
-    assert c.get("/app").status_code == 200
-    assert c.get("/app/settings").status_code == 200
-
-
-# AC6: /favicon.svg is public
-def test_ac6_favicon_public(monkeypatch):
-    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    c = _client_multi()
-    assert c.get("/favicon.svg").status_code == 200
-    assert c.get("/favicon.ico").status_code == 200
-
-
 # AC7: SSE with valid query token passes
 def test_ac7_sse_valid_token(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
@@ -665,6 +633,7 @@ def test_ac10_bearer_passes_api(monkeypatch):
     hdr = {"Authorization": "Bearer secret"}
     assert c.post("/api/subagents/run", headers=hdr).status_code == 200
     assert c.post("/api/config", headers=hdr).status_code == 200
+    assert c.post("/v1/chat/completions", headers=hdr).status_code == 200
 
 
 # AC11: plugin routes are guarded by default-deny
@@ -695,10 +664,12 @@ def test_ac12_open_mode_no_401(monkeypatch):
     ):
         resp = c.get(p)
         assert resp.status_code != 401, f"GET {p} should not be 401 in open mode"
+        # default (no token) → everything open for writes too (local console keeps working)
+        assert c.post(p).status_code in (200, 405), f"POST {p} should be open in open mode"
 
 
-# AC13: tested in test_plugin_route_hotmount.py — _mount_plugin_routers warning
-# (see test_mount_warns_non_conforming_prefix below for the core logic)
+# AC13: _mount_plugin_routers warns on a non-conforming prefix (mount mechanics
+# themselves: test_plugin_router_mount.py).
 
 
 def test_ac13_mount_warns_non_conforming_prefix(monkeypatch, caplog):
@@ -740,15 +711,6 @@ def test_ac13_mount_warns_non_conforming_prefix(monkeypatch, caplog):
         _mount_plugin_routers([{"plugin_id": "myplugin", "router": r2, "prefix": "/api/plugins/myplugin"}])
     assert ("myplugin", "/api/plugins/myplugin") in STATE.plugin_router_keys
     assert not any("does not start with" in m for m in caplog.messages)
-
-
-# AC14: /api/sse-token endpoint returns a token
-def test_ac14_sse_token_endpoint():
-    """generate_sse_token returns a valid token when bearer is configured."""
-    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    token = auth.generate_sse_token("session-1")
-    assert token  # non-empty
-    assert auth._validate_sse_token(token)
 
 
 def test_ac14_sse_token_empty_in_open_mode(monkeypatch):
@@ -806,19 +768,6 @@ def test_sse_proxied_events_path(monkeypatch):
 # ── 5. guard covers the console + OpenAI-compat APIs (prod-readiness) ──────────
 
 
-def test_api_and_v1_are_guarded_when_token_set(monkeypatch):
-    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
-    c = _client_multi()
-    # operator API + OpenAI-compat now require the bearer (the P0 gap)
-    assert c.post("/api/config").status_code == 401
-    assert c.post("/v1/chat/completions").status_code == 401
-    assert c.post("/a2a").status_code == 401
-    hdr = {"Authorization": "Bearer secret"}
-    assert c.post("/api/config", headers=hdr).status_code == 200
-    assert c.post("/v1/chat/completions", headers=hdr).status_code == 200
-
-
 def test_public_paths_stay_public_when_token_set(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
     auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
@@ -828,19 +777,11 @@ def test_public_paths_stay_public_when_token_set(monkeypatch):
     assert c.get("/healthz").status_code == 200
     assert c.get("/.well-known/agent-card.json").status_code == 200
     assert c.get("/app").status_code == 200
+    assert c.get("/app/settings").status_code == 200
     assert c.get("/manifest.json").status_code == 200
     assert c.get("/sw.js").status_code == 200
     assert c.get("/favicon.svg").status_code == 200
     assert c.get("/favicon.ico").status_code == 200
-
-
-def test_apis_open_when_no_token(monkeypatch):
-    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
-    auth.configure(bearer_token=None, api_key="", allowed_origins_raw="")
-    c = _client_multi()
-    # default (no token) → everything open (local console keeps working)
-    for p in ("/a2a", "/api/config", "/v1/chat/completions", "/api/events", "/healthz"):
-        assert c.post(p).status_code in (200, 405)  # 405 only if method not allowed
 
 
 # ── 6. boot gate: non-loopback bind without a token ──────────────────────────
