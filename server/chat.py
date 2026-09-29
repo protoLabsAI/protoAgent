@@ -2397,6 +2397,15 @@ def _set_trace_output(text: str) -> None:
 # failure classifier; each driver only decides how to SHAPE what it yields.
 
 
+# The answer to a fenced turn (#2972) on an ACP runtime: the fence can't be enforced there,
+# so the turn is refused rather than run with the external agent's full toolset.
+_FENCED_ACP_REFUSAL = (
+    "I can't act on this message here: it came through a restricted channel, and this agent "
+    "runs on an external coding runtime that can't enforce that channel's tool limits. "
+    "Ask the operator to handle it directly."
+)
+
+
 @dataclass
 class _PreTurn:
     """Mutable outcome of :func:`_pre_turn_dispatch` (an async generator can't
@@ -2414,6 +2423,7 @@ class _PreTurn:
     handled: bool = False
     acp: bool = False
     fenced: bool = False
+    fence: list[str] | None = None
 
 
 async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: dict | None):
@@ -2436,7 +2446,20 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     if pre.fenced:
         from runtime.acp_runtime import is_acp_runtime
 
-        pre.acp = bool(is_acp_runtime(STATE.graph_config))
+        # FAIL CLOSED on an external (ACP) runtime. The fence is a list of THIS agent's
+        # tool names, enforced by SubagentFenceMiddleware on the NATIVE lead turn; an ACP
+        # agent (claude-code, codex, …) runs its own toolset, which that list can't
+        # describe or restrict — so running the untrusted text there would hand it the
+        # external agent's full tools. Refuse the turn with a clear answer instead.
+        if is_acp_runtime(STATE.graph_config):
+            log.warning(
+                "[chat] refused a fenced turn (tool_fence=%s) on session %s: this agent runs on an "
+                "ACP runtime, which can't enforce the fence",
+                list(pre.fence or []),
+                session_id,
+            )
+            yield ("done", _FENCED_ACP_REFUSAL)
+            pre.handled = True
         return
     # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
     # routes straight to that delegate, short-circuiting the LLM turn. Checked
@@ -3216,7 +3239,7 @@ async def _chat_langgraph_impl(
             # turn's terminal goal note), so only the terminal frame becomes the reply.
             # No request_metadata on this driver — the thread resolves from the session
             # id alone, as it does everywhere else in this function.
-            pre = _PreTurn(message, fenced=bool(tool_fence))
+            pre = _PreTurn(message, fenced=bool(tool_fence), fence=list(tool_fence or []))
             last_frame: tuple | None = None
             async with contextlib.aclosing(_pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
                 async for frame in _pre_frames:
