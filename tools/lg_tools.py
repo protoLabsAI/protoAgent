@@ -410,6 +410,11 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     except httpx.HTTPError as e:
         return f"Error: fetch failed: {e}"
 
+    # Out of hops while still redirecting: the body is a 30x stub, not the page — say so
+    # rather than hand it to the model as the page's content under a `[302]` header.
+    if resp.is_redirect:
+        return f"Error: too many redirects (more than {hops}) fetching {url}"
+
     if resp.status_code >= 400:
         return f"Error: HTTP {resp.status_code} for {url}"
 
