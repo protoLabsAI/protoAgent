@@ -610,7 +610,7 @@ def _turn_kind(row: dict) -> str:
     """Which non-comparable population a row belongs to, for `outliers()` baselines.
 
     ``acp:<delegate>`` is this repo's marker for "this turn was not gateway-metered"
-    (plugins/coding_agent/acp_client.py, server.chat._acp_drive_turn). Such a run takes
+    (plugins/coding_agent/acp_client.py, server.chat_acp._acp_drive_turn). Such a run takes
     minutes where a gateway turn takes seconds, so a model too new to have a baseline of
     its own falls back to the median of its OWN kind rather than the mixed sample —
     otherwise a first coder run is flagged for being a coder run (#3041, #3015).

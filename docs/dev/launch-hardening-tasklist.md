@@ -115,7 +115,7 @@ Additive guards / one-liners; near-zero regression risk, high security ROI.
   federation vector (the main one) can't be gated without a **separate operator-vs-federation
   token** model. (`data`'s eval escape is already closed in Batch 2, so `data` is no longer
   an RCE sink — only `command`/`test`/`ci` remain.)
-- [x] **ACP runtime eviction race** — Med · Med–High · M — `server/chat.py:102-141`.
+- [x] **ACP runtime eviction race** — Med · Med–High · M — `server/chat_acp.py` (was `server/chat.py:102-141`; moved in #3828).
   Fixed: `asyncio.Lock` around all registry mutation, an `_ACP_BUSY` refcount so eviction
   never closes an in-flight runtime (idle TTL + LRU cap both skip busy), `pop(tid, None)`
   safety, and `_acp_acquire`/`_acp_release` helpers. The ACP turn body was extracted to
