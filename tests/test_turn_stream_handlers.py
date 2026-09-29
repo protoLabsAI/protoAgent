@@ -25,6 +25,9 @@ from tests._turn_driver_fakes import (
     model_end,
     model_start,
     text,
+    tool_end,
+    tool_msg,
+    tool_start,
 )
 
 turn_stream = importlib.import_module("server.turn_stream")
@@ -118,3 +121,66 @@ def test_handler_map():
     assert ts._handler_for("on_custom_event", "other") is None
     assert ts._handler_for("on_chain_end", "usage") is None
     assert ts._handler_for("", "") is None
+
+
+# ── per-run bookkeeping is consumed at tool end (#3883) ──────────────────────
+#
+# ``_on_tool_start`` stashes per-run_id state (the execution-latency stamp, a foreground
+# ``delegate_to``'s target) that ``_on_tool_end`` must REMOVE, not just read: a run_id seen
+# again later in the same turn is a fresh start. Reading without removing would carry the
+# first run's stamp/target into the second — a stale latency, or a plain tool card
+# rendered as the earlier delegate's room bubble — and grow the maps for a long turn.
+
+
+@pytest.mark.asyncio
+async def test_a_reused_run_id_for_plain_tools_starts_fresh(env):
+    c = env.clock
+    env.install(
+        tool_start("t1", "get_time"),
+        c.tick(0.5),
+        tool_end("t1", "get_time", tool_msg("noon", "tc1")),
+        c.tick(2),
+        # The same run_id ends again with no start of its own: no latency stamp is left
+        # over from the first run, so it measures 0 — not the 2s since that stale stamp.
+        tool_end("t1", "get_time", tool_msg("later", "tc2")),
+    )
+    frames = [f async for f in _stream() if f[0] == "tool_end"]
+    assert [(p["id"], p["duration_ms"]) for _, p in frames] == [("tc1", 500), ("tc2", 0)]
+
+
+@pytest.mark.asyncio
+async def test_a_reused_run_id_for_delegate_to_starts_fresh(env):
+    c = env.clock
+    env.install(
+        tool_start("f1", "delegate_to", {"target": "proto", "query": "Review it"}),
+        tool_end("f1", "delegate_to", tool_msg("LGTM", "d1")),
+        # The same run_id now carries a delegate_to with no target: nothing is stashed, so
+        # it closes as an ordinary tool card — not as another bubble authored by `proto`.
+        tool_start("f1", "delegate_to", {"target": "  "}),
+        c.tick(0.1),
+        tool_end("f1", "delegate_to", tool_msg("Error: target required", "d2")),
+    )
+    frames = [f async for f in _stream() if f[0] in ("room_reply", "tool_end")]
+    assert [(k, p.get("author") or p.get("addressed_to") or p.get("id")) for k, p in frames] == [
+        ("room_reply", "proto"),  # the lead's ask
+        ("room_reply", "proto"),  # proto's reply
+        ("tool_end", "d2"),
+    ]
+    assert frames[1][1]["text"] == "LGTM"
+    assert frames[2][1]["output"] == "Error: target required"
+    assert frames[2][1]["duration_ms"] == 100
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_delegate_to_consumes_its_latency_stamp(env):
+    # The foreground delegate_to branch returns before the tool card; its start stamp must
+    # still be consumed, or a later end on the same run_id measures from the stale stamp.
+    c = env.clock
+    env.install(
+        tool_start("f1", "delegate_to", {"target": "proto", "query": "Review it"}),
+        tool_end("f1", "delegate_to", tool_msg("LGTM", "d1")),
+        c.tick(3),
+        tool_end("f1", "get_time", tool_msg("noon", "tc9")),
+    )
+    frames = [f async for f in _stream() if f[0] == "tool_end"]
+    assert [(p["id"], p["duration_ms"]) for _, p in frames] == [("tc9", 0)]

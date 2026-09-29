@@ -236,6 +236,9 @@ def _on_tool_start(st: _TurnStreamState, event: dict, name: str, parent_tool_id)
 def _on_tool_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
     output = event.get("data", {}).get("output", "")
     rid = event.get("run_id")
+    # Consume the latency stamp up front: the delegate_to branches below return before
+    # the tool card, and a stamp they left behind would leak into a reused run_id (#3883).
+    started_at = st.tool_started.pop(rid, None) if rid else None
     # `delegate_to` renders as the participant's own chat bubble, not a tool card:
     # the collaboration the lead moderates then reads as a conversation (proto,
     # reviewer) rather than machinery under one reply (#3042). REPLACES the card —
@@ -307,7 +310,7 @@ def _on_tool_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -
         )
         return
     tool_duration_ms = (
-        int(max(0.0, time.monotonic() - st.tool_started.pop(rid, time.monotonic())) * 1000) if rid else 0
+        int(max(0.0, time.monotonic() - (time.monotonic() if started_at is None else started_at)) * 1000) if rid else 0
     )
     # Close the card keyed by the tool_call id (the ToolMessage carries it);
     # fall back to run_id/name for non-tool-message producers. A ToolMessage
