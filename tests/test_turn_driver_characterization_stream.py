@@ -1007,21 +1007,8 @@ async def test_consumer_closing_early_is_silent(env):
     assert first == ("text", "one")
     assert g.updates == []  # an abandoned turn is not a failed one
     assert turn_control.active_turns() == 0  # the wrapper's own finally ran
-    # ODDITY (same class as #3837): the wrapper iterates the impl with a bare `async for`,
-    # so closing the WRAPPER does not close the impl generator. Its `finally` — the trace
-    # flush and the per-thread lock release — waits for the event loop's async-generator
-    # finalizer. Flip these two asserts if the wrapper learns `aclosing`.
-    assert env.trace.flushes == 0
-    assert turn_control._thread_lock("a2a:s-close").locked()
-    import gc
-
-    gc.collect()
-    # Bounded poll, not a fixed tick count: how many loop turns the finalizer's aclose()
-    # needs depends on how many awaits the impl's `finally` performs.
-    for _ in range(200):
-        if env.trace.flushes and not turn_control._thread_lock("a2a:s-close").locked():
-            break
-        await asyncio.sleep(0)
+    # The wrapper closes the impl inside its own aclose (#3870): the trace is flushed and
+    # the per-thread lock released before aclose() returns — no GC/finalizer involved.
     assert env.trace.flushes == 1
     assert not turn_control._thread_lock("a2a:s-close").locked()
 

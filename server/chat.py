@@ -1534,16 +1534,22 @@ async def _chat_langgraph_stream(
     _turn_control._turn_started(session_id)
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
-        async for _ev in _chat_langgraph_stream_impl(
-            message,
-            session_id,
-            caller_trace=caller_trace,
-            resume=resume,
-            request_metadata=request_metadata,
-            images=images,
-        ):
-            _trace_terminal_output(_ev)
-            yield _ev
+        # aclosing (#3870): a bare `async for` does not close the impl when the consumer
+        # closes THIS generator early, so the impl's `finally` (thread-lock release, trace
+        # flush) would wait for the loop's async-generator finalizer (GC).
+        async with contextlib.aclosing(
+            _chat_langgraph_stream_impl(
+                message,
+                session_id,
+                caller_trace=caller_trace,
+                resume=resume,
+                request_metadata=request_metadata,
+                images=images,
+            )
+        ) as _impl:
+            async for _ev in _impl:
+                _trace_terminal_output(_ev)
+                yield _ev
     finally:
         _turn_control._turn_ended(session_id)
 
