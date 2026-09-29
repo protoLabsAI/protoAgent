@@ -621,15 +621,29 @@ async def test_autonomous_turn_auto_answers_then_gives_up_and_clears(env):
 
     frames = await _run("deploy", request_metadata={"origin": "scheduler"})
 
-    # ODDITY: text streamed before an auto-answered interrupt never reaches `done` — the
-    # paused pass yields `input_required` instead of `__raw__`, so its text is dropped
-    # from the final answer (the live stream showed it).
-    assert frames == [("text", "asking"), ("done", _EMPTY)]
+    # Text streamed before an auto-answered interrupt reaches `done` (#3873): the paused
+    # passes yield `input_required`, not `__raw__`, so the driver carries their text.
+    assert frames == [("text", "asking"), ("done", "asking")]
     assert len(g.stream_calls) == cap + 1
     assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}] * cap
     assert g.updates == [
         ({"configurable": {"thread_id": "a2a:s1"}, "recursion_limit": LangGraphConfig().max_iterations}, None)
     ]
+
+
+@pytest.mark.asyncio
+async def test_auto_answered_turn_done_carries_the_text_from_both_sides_of_the_interrupt(env):
+    """#3873: the text before an auto-answered interrupt and the resumed pass's text both
+    reach `done`, joined as a new paragraph — and the live stream carries the SAME string
+    (the break rides the resumed pass's first delta), so a consumer rendering from `done`
+    (the A2A terminal artifact) and one rendering the deltas agree."""
+    g = env.install(streams=[[text("r0", "Checking."), set_interrupt("Which env?")], [text("r1", "Deployed.")]])
+
+    frames = await _run("deploy", request_metadata={"origin": "scheduler"})
+
+    assert frames == [("text", "Checking."), ("text", "\n\nDeployed."), ("done", "Checking.\n\nDeployed.")]
+    assert "".join(p for k, p in frames if k == "text") == frames[-1][1]
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
 
 
 @pytest.mark.asyncio
