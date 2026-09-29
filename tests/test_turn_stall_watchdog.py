@@ -36,6 +36,12 @@ def _request_context(text: str = "hi") -> RequestContext:
     return RequestContext(call_context=ServerCallContext(), request=req, task_id="t-1", context_id="c-1")
 
 
+# The stall window the tests run under. Kept small so the suite doesn't wait it
+# out for real, but with a 4:1 margin over the slow-stream gaps (150ms of
+# scheduling slack) so a loaded CI runner can't turn a healthy gap into a stall.
+_STALL = 0.2
+
+
 async def _run(stream_fn, stall: float) -> list[TurnOutcome]:
     seen: list[TurnOutcome] = []
     set_terminal_hook(seen.append)
@@ -55,7 +61,7 @@ async def test_a_silent_turn_is_failed_not_left_working():
         await asyncio.sleep(3600)  # the wedged step — a tool call that never returns
         yield ("done", "never")
 
-    outcomes = await asyncio.wait_for(_run(stream, stall=0.4), 15)
+    outcomes = await asyncio.wait_for(_run(stream, stall=_STALL), 15)
     assert entered.is_set()
     assert [o.state for o in outcomes] == ["failed"]  # NOT stuck in working
 
@@ -71,7 +77,7 @@ async def test_the_failure_names_the_step_that_wedged():
 
     seen: list[TurnOutcome] = []
     set_terminal_hook(seen.append)
-    executor = ProtoAgentExecutor(stream, stall_timeout_provider=lambda: 0.4)
+    executor = ProtoAgentExecutor(stream, stall_timeout_provider=lambda: _STALL)
     queue = EventQueue()
     await asyncio.wait_for(executor.execute(_request_context(), queue), 15)
 
@@ -98,12 +104,12 @@ async def test_a_slow_but_streaming_turn_is_never_cut_off():
 
     async def stream(text, ctx, **kwargs):
         for i in range(12):
-            await asyncio.sleep(0.1)  # 1.2s total, vs a 0.4s stall window
+            await asyncio.sleep(_STALL / 4)  # 3x the stall window in total; each gap a quarter of it
             yield ("tool_start", {"id": f"c{i}", "name": "web_search", "input": "{}"})
             yield ("tool_end", {"id": f"c{i}", "name": "web_search", "output": "ok"})
         yield ("done", "finished after a long but healthy run")
 
-    outcomes = await asyncio.wait_for(_run(stream, stall=0.4), 20)
+    outcomes = await asyncio.wait_for(_run(stream, stall=_STALL), 20)
     assert [o.state for o in outcomes] == ["completed"]
     assert outcomes[0].tool_calls == 12
 
@@ -113,7 +119,7 @@ async def test_zero_disables_the_guard():
     """The escape hatch has to actually pass the stream straight through."""
 
     async def stream(text, ctx, **kwargs):
-        await asyncio.sleep(0.5)  # would trip any positive window used in these tests
+        await asyncio.sleep(_STALL * 1.25)  # would trip any positive window used in these tests
         yield ("done", "slow but allowed")
 
     outcomes = await asyncio.wait_for(_run(stream, stall=0), 20)
@@ -126,7 +132,7 @@ async def test_no_provider_means_no_guard():
     they must keep the previous unbounded behavior rather than inherit a default."""
 
     async def stream(text, ctx, **kwargs):
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(_STALL * 1.25)  # longer than the window the other tests use
         yield ("done", "ok")
 
     seen: list[TurnOutcome] = []
@@ -167,7 +173,7 @@ async def test_the_wedged_step_is_actually_cancelled():
             cancelled.set()
             raise
 
-    await asyncio.wait_for(_run(stream, stall=0.4), 15)
+    await asyncio.wait_for(_run(stream, stall=_STALL), 15)
     assert cancelled.is_set()
 
 

@@ -362,7 +362,7 @@ def test_search_files_output_cap_engages_mid_range_not_just_between_matches(work
     assert out.count("\n") + 1 <= _MAX_SEARCH_OUTPUT_LINES + 2
 
 
-def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
+def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace, monkeypatch):
     # `query` is model-supplied; stdlib `re` has no match timeout, and capping the
     # matched slice's LENGTH does not help — verified separately that ~30-40
     # adversarial chars already take 70s+ against stdlib `re`, far below any sane
@@ -370,6 +370,10 @@ def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
     # clean timeout error within a few seconds, not hang indefinitely.
     import time
 
+    import tools.fs_tools as fs_mod
+
+    # The production 2s bound is read per match; shrink it so the test doesn't wait it out.
+    monkeypatch.setattr(fs_mod, "_REGEX_MATCH_TIMEOUT_S", 0.1)
     _, a, _ = workspace
     # (a|a)+b: confirmed empirically to blow past a 2s regex timeout at ~40 chars
     # of non-matching input — a genuinely pathological case, not a fast/optimized one.
@@ -380,7 +384,7 @@ def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
     out = t["search_files"].invoke({"project": "a", "query": r"(a|a)+b", "regex": True})
     elapsed = time.monotonic() - start
 
-    assert elapsed < 10.0  # bounded by the 2s per-match timeout, not left to run forever
+    assert elapsed < 10.0  # bounded by the per-match timeout, not left to run forever
     assert out.startswith("Error:") and "too long" in out
 
 

@@ -33,6 +33,28 @@ def _make_scheduler(tmp_path: Path, agent: str = "gina-test", **kw) -> LocalSche
     )
 
 
+async def _wait_until(pred, timeout: float = 5.0) -> None:
+    """Poll ``pred`` until true (or fail loudly at the deadline) instead of
+    sleeping a fixed guess at how long the polling loop needs."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not pred():
+        if loop.time() > deadline:
+            raise AssertionError("condition not met before the deadline")
+        await asyncio.sleep(0.01)
+
+
+def _fast_poll(monkeypatch) -> None:
+    """Tick the poll loop every 50ms instead of the production 1s."""
+    import scheduler.local as sl
+
+    monkeypatch.setattr(sl, "_POLL_INTERVAL_S", 0.05)
+
+
+def _settled(s: LocalScheduler) -> bool:
+    return not s._inflight_ids and not s._fire_tasks
+
+
 class _FakeResponse:
     def __init__(self, status_code: int = 200, text: str = "", payload: dict | None = None):
         self.status_code = status_code
@@ -598,8 +620,11 @@ async def test_fire_defers_quietly_when_agent_not_reachable(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 async def test_due_job_fires(tmp_path, monkeypatch):
-    """End-to-end: an ISO job in the past gets picked up and POSTs to /a2a."""
-    s = _make_scheduler(tmp_path)
+    """End-to-end: an ISO job in the past gets picked up, POSTs to /a2a, and
+    publishes `scheduler.fired` on the bus (ADR 0051)."""
+    _fast_poll(monkeypatch)
+    events: list = []
+    s = _make_scheduler(tmp_path, event_publish=lambda topic, data: events.append((topic, data)))
     # Schedule for 1 second ago so the first tick claims it
     past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     s.add_job("FIRED-ME", past, job_id="firetest")
@@ -629,8 +654,7 @@ async def test_due_job_fires(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
     await s.start()
-    # Give the polling loop one tick (poll interval is 1s)
-    await asyncio.sleep(1.5)
+    await _wait_until(lambda: fired and _settled(s))
     await s.stop()
 
     assert any("FIRED-ME" in str(c["json"]) for c in fired)
@@ -645,48 +669,9 @@ async def test_due_job_fires(tmp_path, monkeypatch):
     assert msg["contextId"] == "system:activity"
     assert msg["metadata"]["origin"] == "scheduler"
 
-
-async def test_fire_publishes_scheduler_fired_event(tmp_path, monkeypatch):
-    """A dispatched job publishes `scheduler.fired` on the bus (ADR 0051)."""
-    events: list = []
-    s = LocalScheduler(
-        agent_name="gina-test",
-        invoke_url="http://127.0.0.1:7870",
-        api_key="k",
-        bearer_token="b",
-        db_dir=tmp_path,
-        event_publish=lambda topic, data: events.append((topic, data)),
-    )
-    past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
-    s.add_job("nightly audit", past, job_id="firetest")
-
-    class _FakeResponse:
-        status_code = 200
-        text = "ok"
-
-    class _FakeClient:
-        def __init__(self, *_a, **_kw):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_a):
-            return False
-
-        async def post(self, *_a, **_kw):
-            return _FakeResponse()
-
-    import httpx
-
-    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
-    await s.start()
-    await asyncio.sleep(1.5)
-    await s.stop()
-
-    fired = [d for (t, d) in events if t == "scheduler.fired"]
-    assert fired and fired[0]["job_id"] == "firetest"
-    assert fired[0]["prompt"] == "nightly audit"
+    bus = [d for (t, d) in events if t == "scheduler.fired"]
+    assert bus and bus[0]["job_id"] == "firetest"
+    assert bus[0]["prompt"] == "FIRED-ME"
 
 
 @pytest.mark.asyncio
@@ -698,9 +683,11 @@ async def test_fire_failure_leaves_job_in_place(tmp_path, monkeypatch):
     consumed one-shot jobs on transient failures. Now the job stays
     until delivery actually succeeds.
     """
+    _fast_poll(monkeypatch)
     s = _make_scheduler(tmp_path)
     past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     s.add_job("DURABLE", past, job_id="firetest")
+    posts: list[int] = []
 
     class _FakeResponse:
         status_code = 503
@@ -717,6 +704,7 @@ async def test_fire_failure_leaves_job_in_place(tmp_path, monkeypatch):
             return False
 
         async def post(self, url, headers=None, json=None):
+            posts.append(1)
             return _FakeResponse()
 
     import httpx
@@ -724,7 +712,7 @@ async def test_fire_failure_leaves_job_in_place(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
     await s.start()
-    await asyncio.sleep(1.5)  # one polling tick
+    await _wait_until(lambda: posts and _settled(s))  # the failed fire has settled
     await s.stop()
 
     # Job survives the failed fire, will be retried on the next tick.
@@ -897,9 +885,10 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
     """A scheduled turn that runs longer than the poll interval must fire ONCE.
 
     message/send blocks until the turn is terminal, so a multi-tick turn would
-    otherwise be re-claimed every second and fire repeatedly (the duplicate
+    otherwise be re-claimed every tick and fire repeatedly (the duplicate
     scheduled-turn / spam bug). The in-flight guard prevents re-claiming.
     """
+    _fast_poll(monkeypatch)
     s = _make_scheduler(tmp_path)
     past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     s.add_job("SLOW", past, job_id="slow")  # one-shot, already due
@@ -918,7 +907,7 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
 
         async def post(self, url, headers=None, json=None):
             calls.append(1)
-            await asyncio.sleep(2.2)  # turn spans multiple 1s poll ticks
+            await asyncio.sleep(0.3)  # turn spans ~6 (50ms) poll ticks
 
             class _R:
                 status_code = 200
@@ -931,7 +920,8 @@ async def test_slow_fire_not_refired_while_in_flight(tmp_path, monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _SlowClient)
 
     await s.start()
-    await asyncio.sleep(2.8)  # several ticks elapse during the single slow turn
+    await _wait_until(lambda: calls and _settled(s))  # several ticks elapse during the single slow turn
+    await asyncio.sleep(0.15)  # a few more ticks after it lands: still nothing to re-claim
     await s.stop()
 
     assert len(calls) == 1  # fired once, not once-per-tick

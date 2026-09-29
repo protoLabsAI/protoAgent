@@ -126,13 +126,15 @@ mode, out, port, ignore_term = sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.a
 from infra.proc import group_kwargs, track_tree
 import server
 
-if ignore_term:
-    owned = subprocess.Popen(["sh", "-c", "trap '' TERM; echo ready; exec sleep 300"],
-                             stdout=subprocess.PIPE, text=True, **group_kwargs())
-    assert owned.stdout.readline().strip() == "ready"  # the trap is in place
-else:
-    owned = subprocess.Popen(["sleep", "300"], **group_kwargs())
+owned = subprocess.Popen(["sleep", "300"], **group_kwargs())
 track_tree(owned.pid)
+extra = {}
+if ignore_term:  # a SECOND owned tree, beside the plain one, that shrugs off SIGTERM
+    stubborn = subprocess.Popen(["sh", "-c", "trap '' TERM; echo ready; exec sleep 300"],
+                                stdout=subprocess.PIPE, text=True, **group_kwargs())
+    assert stubborn.stdout.readline().strip() == "ready"  # the trap is in place
+    track_tree(stubborn.pid)
+    extra["stubborn"] = stubborn.pid
 
 def publish(info):
     # Atomic: the test polls for the file, so it must never see it half-written.
@@ -142,7 +144,7 @@ def publish(info):
 
 if mode == "watchdog":
     server._install_parent_death_watchdog()
-    publish({"owned": owned.pid})
+    publish({"owned": owned.pid, **extra})
     time.sleep(300)
     sys.exit(0)
 
@@ -161,7 +163,7 @@ async def app(scope, receive, send):
         await asyncio.sleep(0.2)
 
 import uvicorn
-publish({"owned": owned.pid})
+publish({"owned": owned.pid, **extra})
 server.build_uvicorn_server(
     uvicorn.Config(app, host="127.0.0.1", port=port, timeout_graceful_shutdown=5, log_level="warning")
 ).run()
@@ -232,36 +234,30 @@ def _kill_member(member: subprocess.Popen) -> None:
 
 @posix_only
 def test_a_member_sigkilled_mid_drain_takes_its_owned_trees_with_it(tmp_path):
-    member, info, port = _spawn_member(tmp_path, mode="server")
+    """#3428: the hub SIGKILLs a member whose graceful drain outlasts its budget, which
+    pre-empts the member's own teardown. Its owned trees must still be dead inside the
+    hub's window — both a plain one and one that ignores SIGTERM, whose KILL escalation
+    has to land before the member it depends on is itself SIGKILLed.
+
+    One member carries both trees: each run has to wait out the real straggler budget
+    (it is read from production on purpose), so a second member would only repeat it."""
+    assert proc_mod.TEARDOWN_GRACE < _hub_straggler_budget()
+    member, info, port = _spawn_member(tmp_path, mode="server", ignore_term=True)
     stream = _hold_a_stream_open(port)
     try:
         still_draining = _run_the_hubs_shutdown_against(member)
         # Without this the test proves nothing: #3428 is the member being SIGKILLed
         # BEFORE its teardown, which only happens while the drain is still running.
         assert still_draining, "the open stream should hold the drain past the hub's budget"
-        # The tree is gone BEFORE the hub's SIGKILL lands — so it no longer depends on
-        # the drain, the lifespan, or whether the member gets to finish either.
+        # The trees are gone BEFORE the hub's SIGKILL lands — so they no longer depend
+        # on the drain, the lifespan, or whether the member gets to finish either.
         assert _wait_dead(info["owned"], 0.5), "the owned tree outlived its member (ppid=1)"
+        assert _wait_dead(info["stubborn"], 0.5), "a SIGTERM-ignoring owned tree outlived its member"
     finally:
         stream.close()
         _kill_member(member)
         signal_tree(info["owned"], force=True)
-
-
-@posix_only
-def test_a_tree_that_ignores_sigterm_is_dead_inside_the_hubs_window(tmp_path):
-    """SIGTERM alone would leave this one running; the KILL escalation has to land
-    inside the hub's budget, before the member it depends on is itself SIGKILLed."""
-    assert proc_mod.TEARDOWN_GRACE < _hub_straggler_budget()
-    member, info, port = _spawn_member(tmp_path, mode="server", ignore_term=True)
-    stream = _hold_a_stream_open(port)
-    try:
-        assert _run_the_hubs_shutdown_against(member), "the open stream should hold the drain past the hub's budget"
-        assert _wait_dead(info["owned"], 0.5), "a SIGTERM-ignoring owned tree outlived its member"
-    finally:
-        stream.close()
-        _kill_member(member)
-        signal_tree(info["owned"], force=True)
+        signal_tree(info["stubborn"], force=True)
 
 
 @posix_only
