@@ -15,23 +15,25 @@ import pytest
 
 @pytest.fixture
 def store_root(tmp_path, monkeypatch):
-    """Point the per-instance store root at a temp dir and pin a display name."""
-    import server.agent_init as ai
+    """Point the per-instance store root at a temp dir and pin a display name. Patched on
+    ``server.stores`` — where ``_agent_store_db`` resolves them (#3829)."""
+    import server.stores as st
 
-    monkeypatch.setattr(ai, "instance_paths", lambda: type("P", (), {"store": lambda _s, n: tmp_path / n})())
-    monkeypatch.setattr(ai, "agent_name", lambda: "traderAgent")
+    monkeypatch.setattr(st, "instance_paths", lambda: type("P", (), {"store": lambda _s, n: tmp_path / n})())
+    monkeypatch.setattr(st, "agent_name", lambda: "traderAgent")
     return tmp_path
 
 
 def test_store_path_is_constant_so_a_rename_cannot_move_it(store_root, monkeypatch):
     import server.agent_init as ai
+    import server.stores as st
 
     first = ai._agent_store_db("inbox")
     assert first == store_root / "inbox" / "agent.db"
     first.write_bytes(b"")  # the store exists now
 
     # THE regression: rename the agent and resolve again — same file, not a fresh one.
-    monkeypatch.setattr(ai, "agent_name", lambda: "merchantBot")
+    monkeypatch.setattr(st, "agent_name", lambda: "merchantBot")
     assert ai._agent_store_db("inbox") == first
 
 
@@ -93,10 +95,11 @@ def test_builders_resolve_through_the_shared_helper(store_root, monkeypatch):
     """All three stores go through `_agent_store_db` — a builder that kept its own
     name-keyed path would reintroduce the bug for that one store only."""
     import server.agent_init as ai
+    import server.stores as st
 
     seen: list[str] = []
-    monkeypatch.setattr(ai, "_agent_store_db", lambda store, **kw: (seen.append(store), store_root / f"{store}.db")[1])
-    monkeypatch.setattr(ai, "instance_paths", lambda: type("P", (), {"store": lambda _s, n: store_root / n})())
+    monkeypatch.setattr(st, "_agent_store_db", lambda store, **kw: (seen.append(store), store_root / f"{store}.db")[1])
+    monkeypatch.setattr(st, "instance_paths", lambda: type("P", (), {"store": lambda _s, n: store_root / n})())
 
     cfg = type("C", (), {"inbox_db_path": "", "auth_token": ""})()
     ai._build_inbox_store(cfg)
