@@ -169,3 +169,18 @@ async def test_a_reused_run_id_for_delegate_to_starts_fresh(env):
     assert frames[1][1]["text"] == "LGTM"
     assert frames[2][1]["output"] == "Error: target required"
     assert frames[2][1]["duration_ms"] == 100
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_delegate_to_consumes_its_latency_stamp(env):
+    # The foreground delegate_to branch returns before the tool card; its start stamp must
+    # still be consumed, or a later end on the same run_id measures from the stale stamp.
+    c = env.clock
+    env.install(
+        tool_start("f1", "delegate_to", {"target": "proto", "query": "Review it"}),
+        tool_end("f1", "delegate_to", tool_msg("LGTM", "d1")),
+        c.tick(3),
+        tool_end("f1", "get_time", tool_msg("noon", "tc9")),
+    )
+    frames = [f async for f in _stream() if f[0] == "tool_end"]
+    assert [(p["id"], p["duration_ms"]) for _, p in frames] == [("tc9", 0)]
