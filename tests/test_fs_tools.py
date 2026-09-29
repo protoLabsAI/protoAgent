@@ -605,16 +605,19 @@ def test_run_command_runs_via_shell(workspace):
 _ENV_PROBE_NAMES = ("A2A_AUTH_TOKEN", "AGENT_NAME", "PROTOAGENT_HOME", "OPENAI_API_KEY", "GH_TOKEN", "KEEP_ME")
 
 
-def _env_probe_command() -> str:
+def _probe(t, project_dir) -> dict:
+    """Print the probe vars from a script file — `"<python>" probe.py`, one quoted pair, so
+    Windows `cmd /c` doesn't strip quotes from an inline `-c "…"` (it drops the outer pair
+    when a line starts with a quote and has more than two)."""
     import sys
 
-    names = ",".join(repr(n) for n in _ENV_PROBE_NAMES)
-    return f'"{sys.executable}" -c "import os; [print(n, os.environ.get(n, \'<unset>\')) for n in ({names})]"'
-
-
-def _probe(t) -> dict:
-    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": _env_probe_command()}))
-    return dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
+    (project_dir / "envprobe.py").write_text(
+        "import os\n" + "".join(f"print({n!r}, os.environ.get({n!r}, '<unset>'))\n" for n in _ENV_PROBE_NAMES)
+    )
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": f'"{sys.executable}" envprobe.py'}))
+    seen = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
+    assert set(_ENV_PROBE_NAMES) <= set(seen), out  # the probe ran and printed every name
+    return seen
 
 
 def test_run_command_does_not_hand_project_code_the_agents_identity(workspace, monkeypatch):
@@ -625,9 +628,13 @@ def test_run_command_does_not_hand_project_code_the_agents_identity(workspace, m
     for n in _ENV_PROBE_NAMES:
         monkeypatch.setenv(n, f"live-{n.lower()}")
     t = _tools(
-        _Cfg(filesystem_projects=[{"name": "a", "path": str(a)}], filesystem_allow_run=True, filesystem_run_requires_approval=False)
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+        )
     )
-    seen = _probe(t)
+    seen = _probe(t, a)
     for n in ("A2A_AUTH_TOKEN", "AGENT_NAME", "PROTOAGENT_HOME", "OPENAI_API_KEY", "GH_TOKEN"):
         assert seen[n] == "<unset>", (n, seen)
     assert seen["KEEP_ME"] == "live-keep_me"  # ordinary vars pass
@@ -645,7 +652,7 @@ def test_run_command_env_passthrough_readmits_named_vars(workspace, monkeypatch)
             filesystem_run_command_env_passthrough=["GH_TOKEN"],
         )
     )
-    seen = _probe(t)
+    seen = _probe(t, a)
     assert seen["GH_TOKEN"] == "live-gh_token" and seen["A2A_AUTH_TOKEN"] == "<unset>"
 
 
@@ -653,10 +660,22 @@ def test_scrub_agent_env_rules():
     from infra.proc import scrub_agent_env
 
     env = {
-        "PATH": "/bin", "HOME": "/h", "LANG": "C", "NODE_ENV": "test",
-        "A2A_AUTH_TOKEN": "t", "AGENT_NAME": "n", "PROTOAGENT_INSTANCE": "i", "PROTOAGENT_BOX_ROOT": "b",
-        "OPENAI_API_KEY": "k", "gateway_api_key": "k", "LANGFUSE_SECRET_KEY": "s", "LANGFUSE_PUBLIC_KEY": "p",
-        "NPM_TOKEN": "x", "DB_PASSWORD": "x", "GH_PAT": "x", "API_KEY": "x",
+        "PATH": "/bin",
+        "HOME": "/h",
+        "LANG": "C",
+        "NODE_ENV": "test",
+        "A2A_AUTH_TOKEN": "t",
+        "AGENT_NAME": "n",
+        "PROTOAGENT_INSTANCE": "i",
+        "PROTOAGENT_BOX_ROOT": "b",
+        "OPENAI_API_KEY": "k",
+        "gateway_api_key": "k",
+        "LANGFUSE_SECRET_KEY": "s",
+        "LANGFUSE_PUBLIC_KEY": "p",
+        "NPM_TOKEN": "x",
+        "DB_PASSWORD": "x",
+        "GH_PAT": "x",
+        "API_KEY": "x",
     }
     out = scrub_agent_env(env)
     assert out == {"PATH": "/bin", "HOME": "/h", "LANG": "C", "NODE_ENV": "test"}
@@ -1529,7 +1548,6 @@ def _same_snapshot_gate(monkeypatch, module, attr):
         return out
 
     monkeypatch.setattr(module, attr, gated)
-
 
 
 def test_parallel_edit_file_calls_both_land(workspace, monkeypatch):
