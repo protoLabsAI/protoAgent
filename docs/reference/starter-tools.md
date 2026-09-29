@@ -436,6 +436,8 @@ when both sources are empty.
 
 See [Memory & the knowledge store](/explanation/memory-and-knowledge) for the model behind
 these, and [Ingestion](/guides/ingestion) for the pipeline `knowledge_ingest` drives.
+The memory tools are defined in `tools/memory_tools.py` (`_build_memory_tools`) and bound by
+`get_all_tools()` when a knowledge store is present.
 
 ### `memory_ingest`
 
