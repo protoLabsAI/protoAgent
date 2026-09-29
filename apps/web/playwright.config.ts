@@ -12,6 +12,9 @@ export default defineConfig({
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   fullyParallel: true,
+  // Playwright defaults to half the cores — 2 on the 4-vCPU GitHub runner. The specs are
+  // hermetic per worker (state keyed by parallelIndex), so use all four in CI.
+  workers: process.env.CI ? 4 : undefined,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "github" : "list",
