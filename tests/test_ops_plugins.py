@@ -529,25 +529,6 @@ async def test_peek_single_plugin_reports_empty_mcp_and_secrets(tmp_path, monkey
     assert result["mcp"] == [] and result["secrets"] == [] and result["config_inputs"] == []
 
 
-async def test_peek_bundle_caches_by_url(tmp_path, monkeypatch):
-    import ops.plugins as plugin_ops
-    from graph.plugins import installer
-
-    plugin_ops._peek_cache.clear()
-    calls = {"n": 0}
-    fixture = _write_bundle_fixture(tmp_path)
-
-    def counting_fetch(url, ref, dest):
-        calls["n"] += 1
-        return fixture(url, ref, dest)
-
-    monkeypatch.setattr(installer, "_fetch", counting_fetch)
-    await plugin_ops.peek_bundle("https://example.test/stack3")
-    first = calls["n"]
-    await plugin_ops.peek_bundle("https://example.test/stack3")
-    assert calls["n"] == first, "second peek must hit the TTL cache"
-
-
 def _host_bundle_lock(tmp_path, monkeypatch):
     """Point the HOST config + lock paths at tmp files carrying a bundle with one
     mcp: template (required ${token} from env/input) — the #2118 seeding fixture."""

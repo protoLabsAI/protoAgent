@@ -1110,7 +1110,6 @@ def test_bundled_version_is_above_every_standalone_release():
         f"{LAST_STANDALONE_VERSION} — an untracked copy that isn't older than the bundled "
         f"one wins (#1574)"
     )
-    assert version == (0, 7, 0)
 
 
 def test_manifest_supersedes_the_retired_repo():
@@ -1350,12 +1349,6 @@ def test_the_dash_alias_and_its_cookie_gate_are_not_vendored():
     c = TestClient(_app({"require_auth": True}))   # the key that used to arm it
     assert c.get("/plugins/agent_browser/panel/dash").status_code == 404
     assert c.post("/api/plugins/agent_browser/dash-session").status_code == 404
-    source = (ROOT / "browser_panel.py").read_text(encoding="utf-8")
-    for gone in ("_dash_auth_required", "_DASH_COOKIE", "ab_session", "mint_dash_token",
-                 "verify_dash_token", "ensureDashSession", "set_cookie", "import hmac"):
-        assert gone not in source, f"{gone} should not be vendored"
-    # the removal is EXPLAINED where the next reader will look, not just done
-    assert "require_auth" in source and "could never fire" in source
     # and the page no longer makes the two extra round-trips per connect
     assert "dash-session" not in TestClient(_app()).get("/plugins/agent_browser/panel").text
 

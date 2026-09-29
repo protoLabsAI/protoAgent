@@ -761,14 +761,6 @@ async def test_acp_dispatch_reuses_client(monkeypatch):
 # ── #3091: ACP delegation timeout — raised default + per-call override ─────────
 
 
-def test_acp_default_timeout_is_1800():
-    """#3091: implementation-shaped ACP delegates (TDD cycles, venv setup, CI gates)
-    outrun the old 600s default. With no timeout_s configured, the parsed default is
-    1800s (30 min)."""
-    d = ADAPTERS["acp"].parse({"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"})
-    assert d.timeout_s == 1800.0
-
-
 def test_acp_timeout_field_default_is_1800():
     """The Settings form field mirrors the code default, so the console shows 1800, not 600."""
     field = next(f for f in ADAPTERS["acp"].config_schema() if f.key == "timeout_s")
@@ -799,7 +791,9 @@ def _stub_acp_prompt(monkeypatch, seen):
 
 
 async def test_acp_dispatch_uses_configured_timeout(monkeypatch):
-    """No per-call override ⇒ dispatch enforces the delegate's configured timeout_s (1800)."""
+    """No per-call override ⇒ dispatch enforces the delegate's parsed default timeout_s.
+    #3091: implementation-shaped ACP delegates (TDD cycles, venv setup, CI gates) outrun
+    the old 600s default, so with no timeout_s configured the default is 1800s (30 min)."""
     seen: dict = {}
     _stub_acp_prompt(monkeypatch, seen)
     d = ADAPTERS["acp"].parse({"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"})

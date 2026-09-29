@@ -70,6 +70,19 @@ async def test_push_config_survives_restart(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_push_config_set_upserts_by_config_id(tmp_path):
+    """Re-setting the same config id replaces the row rather than duplicating it — on the
+    production (database-backed) store, not the SDK's in-memory one."""
+    ctx = _ctx()
+    store, engine = await _fresh_push_store(str(tmp_path / "a2a-push.db"))
+    for url in ("https://8.8.8.8/one", "https://8.8.8.8/two"):
+        await store.set_info("task-x", TaskPushNotificationConfig(task_id="task-x", id="cfg-1", url=url), ctx)
+    rows = await store.get_info("task-x", ctx)
+    assert [(r.id, r.url) for r in rows] == [("cfg-1", "https://8.8.8.8/two")]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_task_record_survives_restart(tmp_path):
     """A task persisted by one DatabaseTaskStore is visible to a fresh one."""
     from a2a.types import a2a_pb2

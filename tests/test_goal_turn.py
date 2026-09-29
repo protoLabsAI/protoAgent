@@ -5,10 +5,6 @@ from __future__ import annotations
 from graph.goals.goal_turn import goal_turn, in_goal_turn
 
 
-def test_default_is_false():
-    assert in_goal_turn() is False
-
-
 def test_marker_is_set_inside_and_cleared_after():
     assert in_goal_turn() is False
     with goal_turn():

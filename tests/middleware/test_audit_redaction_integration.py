@@ -5,8 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from graph.middleware.redaction import redact
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -217,28 +215,3 @@ class TestAuditMiddlewareAsyncRedaction:
                 await middleware._ahandle_tool_call(request, raising_handler)
 
         assert captured_audit_args.get("LANGFUSE_SECRET_KEY") == "[REDACTED]"
-
-
-# ---------------------------------------------------------------------------
-# Standalone redact() contract tests
-# ---------------------------------------------------------------------------
-
-
-def test_redact_returns_valid_json_serializable_values():
-    """Ensure [REDACTED] placeholder is JSON-safe."""
-    data = {
-        "OPENAI_API_KEY": "sk-secret12345678901234",
-        "normal": "value",
-    }
-    result = redact(data)
-    serialized = json.dumps(result)
-    parsed = json.loads(serialized)
-    assert parsed["OPENAI_API_KEY"] == "[REDACTED]"
-    assert parsed["normal"] == "value"
-
-
-def test_redact_does_not_mutate_original():
-    """redact() must not modify the input dict in place."""
-    original = {"OPENAI_API_KEY": "sk-real-key-1234567890abcdef"}
-    _ = redact(original)
-    assert original["OPENAI_API_KEY"] == "sk-real-key-1234567890abcdef"

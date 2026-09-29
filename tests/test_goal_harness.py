@@ -7,7 +7,10 @@ Hermetic + CI-safe (no model, no network): ``command``/``test``/``data`` run for
 shell + real file); ``ci`` and ``llm`` are faked at their single reach-out point
 (``tools.gh_cli.run_gh`` / ``graph.llm.create_llm``). Matrix per verifier type — MET → the
 goal finishes ``achieved``; NOT-MET → the drive loop ``continue``s — plus the completion
-contract injection, the contract-less backward-compat path, and budget exhaustion.
+contract injection. The ``command`` verifier's met/not-met, the contract-less
+backward-compat path and budget exhaustion are owned by ``tests/test_goal_controller.py``
+(``test_evaluate_met`` / ``test_evaluate_not_met_continues`` / ``test_evaluate_exhausts_budget`` /
+``test_continuation_without_contract_is_unchanged``).
 
 Run:  ``uv run python -m pytest tests/test_goal_harness.py -v``
 """
@@ -71,22 +74,6 @@ def fake_ci(monkeypatch):
 
 
 # ── the matrix: each verifier type, MET → achieved / NOT-MET → continue ─────
-@pytest.mark.asyncio
-async def test_command_met_achieves(tmp_path):
-    c = _ctrl(tmp_path)
-    _set(c, "s", "build green", {"type": "command", "command": "exit 0"})
-    d = await c.evaluate("s", last_text="ran the build")
-    assert d.action == "done" and d.state.status == "achieved"
-
-
-@pytest.mark.asyncio
-async def test_command_not_met_continues(tmp_path):
-    c = _ctrl(tmp_path)
-    _set(c, "s", "build green", {"type": "command", "command": "exit 1"})
-    d = await c.evaluate("s", last_text="still broken")
-    assert d.action == "continue"
-
-
 @pytest.mark.asyncio
 async def test_test_verifier_met_achieves(tmp_path):
     c = _ctrl(tmp_path)
@@ -172,15 +159,6 @@ async def test_contract_injected_into_continuation(tmp_path):
     assert "a test outside the module fails" in d.message
 
 
-@pytest.mark.asyncio
-async def test_contractless_goal_has_no_contract_block(tmp_path):
-    c = _ctrl(tmp_path)
-    _set(c, "s", "x", {"type": "command", "command": "exit 1"})
-    d = await c.evaluate("s", last_text="working")
-    assert d.action == "continue"
-    assert "Contract for this goal" not in d.message  # backward-compat: no contract → no block
-
-
 # ── the `/goal {json}` chat/eval path now carries the contract too (not just the API) ──
 @pytest.mark.asyncio
 async def test_goal_json_chat_path_carries_contract(tmp_path):
@@ -199,12 +177,3 @@ async def test_goal_json_chat_path_carries_contract(tmp_path):
     assert g.boundaries == ["graph/ only"]
     assert g.stop_when == "CI goes red"
     assert g.has_contract
-
-
-# ── lifecycle edge: the budget bounds a never-met goal ─────────────────────
-@pytest.mark.asyncio
-async def test_budget_exhaustion_finishes(tmp_path):
-    c = _ctrl(tmp_path)
-    _set(c, "s", "x", {"type": "command", "command": "exit 1"}, max_iterations=1)
-    d = await c.evaluate("s", last_text="try 1")
-    assert d.action == "done" and d.state.status == "exhausted"
