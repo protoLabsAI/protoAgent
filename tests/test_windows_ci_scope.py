@@ -2,10 +2,11 @@
 
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
-from scripts.windows_ci_scope import WindowsScope, classify_paths, main
+from scripts.windows_ci_scope import WindowsScope, classify_paths, classify_web, main
 
 
 ROOT = Path(__file__).parent.parent
@@ -76,6 +77,7 @@ def test_cli_unions_positional_and_stdin_paths(monkeypatch, capsys) -> None:
     assert json.loads(capsys.readouterr().out) == {
         "python_tests": True,
         "rust_tests": False,
+        "web_tests": False,
     }
 
 
@@ -86,6 +88,7 @@ def test_cli_json_uses_booleans(capsys) -> None:
     assert json.loads(capsys.readouterr().out) == {
         "python_tests": False,
         "rust_tests": False,
+        "web_tests": False,
     }
 
 
@@ -104,3 +107,68 @@ def test_checks_workflow_preserves_stable_gate_and_full_suite_shards() -> None:
     assert "cargo test --locked" in workflow
     assert "\n  windows-tests:\n    name: Windows tests (native)\n" in workflow
     assert "needs: [windows-scope, windows-python-tests, windows-rust-tests]" in workflow
+    # web-e2e is path-scoped but must fail OPEN when classification didn't succeed.
+    web = workflow.split("\n  web-e2e:\n", 1)[1]
+    assert "needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true'" in web
+    assert "web_tests: ${{ steps.scope.outputs.web_tests }}" in workflow
+
+
+def test_web_gate_runs_only_for_paths_the_web_job_consumes() -> None:
+    """Python-only PRs skip the web job; anything it reads keeps it."""
+
+    for path in ("graph/agent.py", "server/cli.py", "docs/guide.md", "uv.lock", "plugins/notes/view.html"):
+        assert classify_web([path]) is False, path
+    for path in (
+        "apps/web/src/app/App.tsx",
+        "apps/web/e2e/palette.spec.ts",
+        "package-lock.json",
+        "plugins/artifact/shell.js",
+        "runtime/flags.py",
+        "graph/snapshot_op.py",
+        ".github/workflows/checks.yml",
+        "scripts/windows_ci_scope.py",
+    ):
+        assert classify_web([path]) is True, path
+    assert classify_web(["graph/agent.py", "apps/web/src/main.tsx"]) is True
+
+
+def test_web_gate_fails_closed_on_missing_input() -> None:
+    assert classify_web([]) is True
+
+
+_RELATIVE_REF = re.compile(r"""["'`]((?:\.\./)+[^"'`?\s]+)""")
+
+
+def test_every_web_reference_outside_the_workspace_is_classified() -> None:
+    """A new `../../../x` reference from apps/web must keep the web job running for x.
+
+    The web gate only runs for listed paths, so a console file that starts reading
+    something outside apps/web (a `?raw` import of a Python file, a mock server
+    serving a plugin) would otherwise let a change to that file skip the job.
+    """
+
+    web = ROOT / "apps" / "web"
+    sources = [
+        p
+        for sub in ("src", "e2e", "scripts")
+        for p in (web / sub).rglob("*")
+        if p.suffix in {".ts", ".tsx", ".mjs", ".js", ".cjs"} and "node_modules" not in p.parts
+    ]
+    sources += [p for p in web.glob("*.config.*") if p.is_file()]
+    missing = []
+    for src in sources:
+        for ref in _RELATIVE_REF.findall(src.read_text(encoding="utf-8")):
+            target = (src.parent / ref).resolve()
+            try:
+                rel = target.relative_to(ROOT.resolve()).as_posix()
+            except ValueError:
+                continue
+            if rel.startswith(("apps/web/", "node_modules/")) or rel == "apps/web":
+                continue
+            if rel == ".":  # vite's envDir: it reads only root .env files, classified as web
+                assert classify_web([".env.local"])
+                continue
+            probe = rel + "/x" if ref.endswith("/") or target.is_dir() else rel
+            if not classify_web([probe]):
+                missing.append(f"{src.relative_to(ROOT).as_posix()} -> {rel}")
+    assert not missing, "add these to _WEB_EXTERNAL_PATHS in scripts/windows_ci_scope.py: " + ", ".join(missing)

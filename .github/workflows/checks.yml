@@ -249,15 +249,17 @@ jobs:
           python -m pytest tests/ -q
 
   windows-scope:
-    name: Classify Windows test scope
-    # Drafts retain the existing zero-Windows-cost behavior. Ready PRs classify
-    # their entire base...head diff; pushes to main always request both suites.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: Classify CI test scope
+    # Classifies the PR's entire base...head diff for the path-scoped gates (the
+    # Windows-native suites and web-e2e); pushes to main always request every gate.
+    # Runs on drafts too, because web-e2e runs on drafts — the Windows jobs carry
+    # their own draft guard below, so drafts keep zero Windows cost.
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     outputs:
       python_tests: ${{ steps.scope.outputs.python_tests }}
       rust_tests: ${{ steps.scope.outputs.rust_tests }}
+      web_tests: ${{ steps.scope.outputs.web_tests }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -282,7 +284,9 @@ jobs:
     # isolated runners preserve the complete suite while halving the critical
     # path; pytest-split keeps collection/order semantics within each shard.
     needs: windows-scope
-    if: needs.windows-scope.outputs.python_tests == 'true'
+    if: >-
+      needs.windows-scope.outputs.python_tests == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # 35, not 25: shard 2 ran 17–25 min and was cancelled at the cap on 3 of 12 main
     # commits (2026-09-29) — the duration seed was a month stale, so ~4.5k newer tests
@@ -340,7 +344,9 @@ jobs:
     # without exercising their Rust changes. This conditional lane tests the
     # actual Tauri crate and normally finishes before the Python shards.
     needs: windows-scope
-    if: needs.windows-scope.outputs.rust_tests == 'true'
+    if: >-
+      needs.windows-scope.outputs.rust_tests == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 25
     steps:
@@ -490,6 +496,14 @@ jobs:
 
   web-e2e:
     name: Web E2E smoke
+    # Path-scoped: the job drives the built SPA against a mock backend, so a PR that
+    # touches nothing it reads (scripts/windows_ci_scope.py `_needs_web`) skips it —
+    # a job skipped by `if:` reports success, keeping the required check green.
+    # Fails OPEN: if classification itself failed, the job still runs.
+    needs: windows-scope
+    if: >-
+      !cancelled() &&
+      (needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true')
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # Browsers + system deps come PREINSTALLED in the Playwright job container —
     # ZERO apt at runtime. This retires the apt lock-contention flake class that
