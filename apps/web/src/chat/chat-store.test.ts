@@ -297,7 +297,7 @@ describe("persist debouncing", () => {
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
     chatStore.updateMessages(sessionId, msg("final answer"));
-    chatStore.setSessionStatus(sessionId, "idle"); // ChatSurface's stream-done path
+    chatStore.setSessionStatus(sessionId, "idle"); // ChatSessionSlot's stream-done path
     expect(setItem).toHaveBeenCalledTimes(1);
     const written = JSON.parse(setItem.mock.calls[0][1] as string);
     const session = written.sessions.find((s: { id: string }) => s.id === sessionId);
@@ -576,7 +576,7 @@ describe("cross-tab persistence", () => {
 });
 
 // Incognito threads (ADR 0069 D3b): the flag lives ON the session (persisted with it)
-// so ChatSurface can stamp metadata.incognito onto EVERY send while it's on — the
+// so ChatSessionSlot can stamp metadata.incognito onto EVERY send while it's on — the
 // backend flag is per-message, and a mixed thread would leak earlier incognito content
 // into a later non-incognito turn's summary.
 describe("incognito sessions", () => {

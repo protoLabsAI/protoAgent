@@ -3,7 +3,7 @@ import type { ChatMessage } from "../lib/types";
 /** Which A2A task a Stop press should cancel (#1617).
  *
  *  The composer's Stop historically used only the slot's live `taskId` state —
- *  set when THIS ChatSurface instance started the turn. But a slot can render a
+ *  set when THIS ChatSessionSlot instance started the turn. But a slot can render a
  *  turn it did not start: after a reload, a navigation remount, or on desktop
  *  where the Tauri relay pumps frames into the shared chat store regardless of
  *  which instance is mounted. In every one of those states the live taskId is

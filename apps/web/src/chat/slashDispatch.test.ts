@@ -162,21 +162,21 @@ describe("slashDispatchTarget — what a caller must check before offering a com
 });
 
 // The projection is only as honest as what the slot puts INTO it. Both fields are live
-// per-render values in ChatSurface (`session?.id`, the `surfaceActive` prop); pinning a
+// per-render values in ChatSessionSlot (`session?.id`, the `surfaceActive` prop); pinning a
 // literal there — the easy "it's always visible when you'd dispatch" assumption — would
 // restore the exact silent no-op this seam reports its way out of, and every test above
 // would still pass because they register by hand.
-const CHAT_SURFACE = (
-  import.meta.glob("./ChatSurface.tsx", { query: "?raw", import: "default", eager: true }) as Record<
+const CHAT_SESSION_SLOT = (
+  import.meta.glob("./ChatSessionSlot.tsx", { query: "?raw", import: "default", eager: true }) as Record<
     string,
     string
   >
-)["./ChatSurface.tsx"];
+)["./ChatSessionSlot.tsx"];
 
 describe("the chat slot's registration (source guard)", () => {
   it("passes its live session and visibility, never a literal", () => {
-    const call = CHAT_SURFACE.match(/registerSlashDispatcher\(\{[\s\S]*?\}\)/)?.[0];
-    expect(call, "ChatSurface must register through registerSlashDispatcher({...})").toBeTruthy();
+    const call = CHAT_SESSION_SLOT.match(/registerSlashDispatcher\(\{[\s\S]*?\}\)/)?.[0];
+    expect(call, "ChatSessionSlot must register through registerSlashDispatcher({...})").toBeTruthy();
     expect(call).toContain("surfaceActive");
     expect(call).not.toMatch(/surfaceActive:\s*(true|false)\b/);
     expect(call).toContain("sessionId");

@@ -20,7 +20,7 @@
 // still on its way, and neither is ever used to guess: an unresolved item is KEPT (the
 // caller re-checks on a backoff) rather than settled as read or sent twice.
 //
-// Pure, so the whole table is unit-tested (serverInterjections.test.ts); ChatSurface does
+// Pure, so the whole table is unit-tested (serverInterjections.test.ts); ChatSessionSlot does
 // the RPCs and applies the plan.
 
 import type { QueuedSteer } from "../lib/types";

@@ -10,7 +10,7 @@ import type { ChatMessage } from "../lib/types";
 // The backend now brackets each such self-POST with `turn.started` / `turn.finished` bus
 // events carrying the target `session_id` and an `origin` (`background-resume` /
 // `scheduler` / `watch-<id>`). This tiny store tracks which sessions currently have a
-// server turn in flight so ChatSurface can render the EXISTING typing indicator, labelled
+// server turn in flight so ChatSessionSlot can render the EXISTING typing indicator, labelled
 // by trigger, without hijacking `sessionStatusMap` (which drives the composer/send loop)
 // or inserting a placeholder message. Additive and self-contained — clears on finish.
 

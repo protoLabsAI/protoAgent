@@ -108,7 +108,7 @@ describe("dismissable cancelled delegation card (#3095)", () => {
   it("dismissing removes ONLY the cancelled card — the other card and the answer stay", async () => {
     const el = await render(settledTurn(), () => {});
     expect(el.querySelectorAll(".pl-toolcard").length).toBe(2);
-    // The filter ChatSurface applies at render time, driven by the ×'d id.
+    // The filter ChatSessionSlot applies at render time, driven by the ×'d id.
     const filtered = hideDismissedToolCalls(settledTurn(), new Set(["t-task"]));
     const after = await rerender(filtered, () => {});
     expect(after.querySelectorAll(".pl-toolcard").length).toBe(1);

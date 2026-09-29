@@ -16,7 +16,7 @@ import type { PaletteView } from "@protolabsai/ui/command-palette";
 import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
 
 // Upsert a streaming tool event onto a message's toolCalls AND its ordered `parts`
-// (mirrors ChatSurface's onToolCall): start → a running card (nested under its parent
+// (mirrors ChatSessionSlot's onToolCall): start → a running card (nested under its parent
 // `task` — authoritative `evt.parentId`, else last-open-task), and a top-level tool
 // opens/extends a `tools` part in emission order so text↔tool interleave renders live;
 // end → flip the matching card to done/error and stamp elapsed.
@@ -112,7 +112,7 @@ export function PaletteChat({
   // Reconnect an interrupted turn (ADR 0057 durability). Runs once per open: if the last
   // assistant message is stuck "streaming" with a durable taskId — the palette was closed
   // mid-turn — reconcile it against the server's A2A task (tasks/get), finalizing when
-  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSurface's
+  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSessionSlot's
   // self-heal so a reopened palette shows the turn still running, or its finished result.
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this session owns the stream

@@ -139,7 +139,7 @@ export function applyNavIntent(intent: NavIntent) {
       // does not check the id it is handed: for a session deleted in that window (another
       // browser tab's cross-tab merge, a background job) it still sets `currentSessionId` and
       // pushes the phantom id into `activeSessions` — evicting a real tab — after which
-      // ChatSurface's `useSession` finds nothing and mounts a DEAD SLOT.
+      // ChatSessionSlot's `useSession` finds nothing and mounts a DEAD SLOT.
       //
       // The check belongs HERE and not in the row's `run()`: in the desktop launcher `run()`
       // executes in a different JS context from the store that is about to be mutated, so a

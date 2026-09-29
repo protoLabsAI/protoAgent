@@ -3,7 +3,7 @@
 //
 // A session's `streaming` status locks its composer: Stop shows, Send is disabled, and an
 // interjection queued for a server turn is held back as though this browser's own stream
-// will drain it. Several producers set it: a local turn (ChatSurface's runTurn), a reattach
+// will drain it. Several producers set it: a local turn (ChatSessionSlot's runTurn), a reattach
 // (reattach.ts), and boot (chat-store derives it from a transcript with a live turn). Each
 // is meant to settle it when it ends. A producer that ended without settling it, because it
 // was cancelled or never mounted, left the session locked for good (#3474 fixed one such

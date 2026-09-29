@@ -73,7 +73,7 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
     key: taskId || `${session}:${(text || error).slice(0, 32)}`,
     failed,
     content,
-    // Matches ChatSurface's own `failed ? "error" : "done"` so a pushed failure and a
+    // Matches ChatSessionSlot's own `failed ? "error" : "done"` so a pushed failure and a
     // streamed one park the bubble identically.
     status: failed ? "error" : "done",
     toast: failed
