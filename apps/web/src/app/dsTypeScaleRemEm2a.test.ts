@@ -73,14 +73,11 @@ describe("DS type-scale 2a — rem/em font-sizes → DS tokens", () => {
 // Pin EVERY migrated single-selector site by selector so a later re-map to the wrong step is
 // caught (the sweep above only proves no rem/em survives; these prove each landed on the right
 // step). Values follow the card mapping: 0.72–0.8rem → xs, 0.82–0.86rem → sm, 0.85em → sm,
-// 0.8em → xs. The only migrated site NOT listed is theme.css's `.federated-loading,
-// .federated-error` comma-list rule (0.85rem → sm), which the single-selector `rule()` helper
-// cannot isolate — the sweep test already covers it.
+// 0.8em → xs. (theme.css's `.setup-link` and `.federated-*` sites were dead selectors,
+// retired in #3863, so they are no longer pinned here.)
 describe("DS type-scale 2a — each migrated site reads the mapped step", () => {
   const SITES: Array<[css: string, file: string, selector: string, token: string, note: string]> = [
     [themeCss, "theme.css", ".settings-status", "xs", "0.8rem → xs"],
-    [themeCss, "theme.css", ".setup-link", "xs", "0.8rem → xs"],
-    [themeCss, "theme.css", ".federated-error-detail", "xs", "0.78rem → xs"],
     [themeCss, "theme.css", ".update-notice-cur", "xs", "0.8em → xs"],
     [settingsCss, "settings.css", ".settings-inline-status", "xs", "0.8rem → xs"],
     [settingsCss, "settings.css", ".setting-label", "sm", "0.86rem → sm"],
