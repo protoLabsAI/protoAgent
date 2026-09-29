@@ -4,8 +4,9 @@
 // state) with the steering endpoints spied. Pins: queueing a steer / an interjection and
 // their failure paths, the transcript-settle effect, ✕ dequeue (removed / consumed /
 // failed), the own-stream turn-end reconcile (settle, re-send, the HITL hold), the idle
-// effect's live-stream guard, the server-interjection reconcile on mount (re-send vs the
-// HITL hold), Stop's clear, persistence, and per-render closures.
+// effect's live-stream guard and its status → idle trigger, the server-interjection
+// reconcile on mount (re-send vs the HITL hold) and on a live task-id change, Stop's
+// clear, persistence, and per-render closures.
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -303,6 +304,19 @@ describe("useSteerQueue — own-stream turn-end reconcile", () => {
     expect(runTurn).toHaveBeenCalledWith("left over");
   });
 
+  it("the idle effect re-runs when the status goes streaming → idle (a reattached turn ending)", async () => {
+    saveSteers(sessionId, [{ id: "s1", text: "left over" }]);
+    const runTurn = mkRun();
+    pendingSteer.mockResolvedValue({ pending: [{ id: "s1", text: "left over" }] });
+    renderHook(baseOpts({ runTurn, status: "streaming" }));
+    await flush();
+    expect(pendingSteer).not.toHaveBeenCalled();
+    // The turn this slot did not run ends: same session, no new mount — only the status moves.
+    rerender(baseOpts({ runTurn, status: "idle" }));
+    await flush();
+    expect(runTurn).toHaveBeenCalledWith("left over");
+  });
+
   it("the idle effect stays out of a stream this slot owns (abortRef set)", async () => {
     saveSteers(sessionId, [{ id: "s1", text: "left over" }]);
     const runTurn = mkRun();
@@ -355,6 +369,32 @@ describe("useSteerQueue — server-interjection reconcile", () => {
     expect(runTurn).not.toHaveBeenCalled();
     expect(r.current.steerQueue).toEqual([]);
     expect(messagesOf().some((m) => m.id === "i2" && m.content === "read it")).toBe(true);
+  });
+
+  it("re-runs when the live control's task id changes while the turn label stays the same", async () => {
+    chatStore.setServerTurnControl({
+      sessionId,
+      taskId: "t1",
+      origin: "scheduler",
+      trigger: "x",
+      controllable: true,
+      operatorControllable: true,
+    });
+    saveSteers(sessionId, [{ id: "i1", text: "for t1", serverTaskId: "t1" }]);
+    pendingSteer.mockResolvedValue({ pending: [{ id: "i1", text: "for t1" }], drained: [] });
+    taskSteerState.mockResolvedValue({ state: "canceled", consumed: [] });
+    const runTurn = mkRun();
+    const label = "Scheduled: nightly digest";
+    renderHook(baseOpts({ runTurn, status: "idle", serverTurnControl: { taskId: "t1" }, serverTurnLabel: label }));
+    await flush();
+    // Its turn is the live one: nothing stale, so nothing asked.
+    expect(pendingSteer).not.toHaveBeenCalled();
+    // stop() clears the control while useServerTurn still reports the label.
+    chatStore.clearServerTurnControl(sessionId);
+    rerender(baseOpts({ runTurn, status: "idle", serverTurnControl: null, serverTurnLabel: label }));
+    await flush();
+    expect(pendingSteer).toHaveBeenCalledWith(sessionId);
+    expect(runTurn).toHaveBeenCalledWith("for t1");
   });
 
   // An interjection whose server turn still reads "working" is kept and re-checked on the
