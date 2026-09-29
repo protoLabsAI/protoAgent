@@ -510,7 +510,7 @@ class AcpClient:
         #
         # For the chat turn, note what the exclusion does and does not buy. On the
         # streaming/A2A path that turn is ALREADY booked under the same ``acp:<agent>``
-        # label — ``server.chat._acp_drive_turn`` yields a usage frame the executor's
+        # label — ``server.chat_acp._acp_drive_turn`` yields a usage frame the executor's
         # terminal hook records — so a row from here would double it. On the
         # NON-streaming driver (``/v1/chat/completions``, ``/api/chat``, the ADR 0018
         # ``HOST.invoke()`` seam) that turn is booked NOWHERE: the ACP branch of
@@ -1845,7 +1845,7 @@ class AcpClient:
         Tokens and cost are recorded as ZERO deliberately. The coding agent bills its own
         subscription and protoAgent never observes those numbers; the ``acp:<name>`` model
         label is the honest "this turn was not gateway-metered" marker, the same
-        convention ``server.chat._acp_drive_turn`` uses, and #3006 settled that a
+        convention ``server.chat_acp._acp_drive_turn`` uses, and #3006 settled that a
         half-wired or invented field here is worse than an absent one. ``tool_calls`` is
         the one non-zero effort figure we can honestly claim: it is counted off the wire,
         not inferred.

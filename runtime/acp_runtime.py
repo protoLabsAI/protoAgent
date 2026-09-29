@@ -468,7 +468,7 @@ class AcpRuntime:
             mcp_servers=[mcp] if mcp else [],
             # This client drives the agent's OWN chat turn, not a coder dispatch. On the
             # streaming/A2A path that turn is already booked under the same `acp:<agent>`
-            # label (`server.chat._acp_drive_turn` yields the usage frame the executor's
+            # label (`server.chat_acp._acp_drive_turn` yields the usage frame the executor's
             # terminal hook records), so a row from here would double it in the very
             # rollup #3015 exists to make trustworthy. On the non-streaming driver the
             # turn is booked nowhere — a gap #3015 neither opens nor closes, because a

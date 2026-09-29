@@ -322,7 +322,7 @@ def test_constructing_for_native_raises():
 async def test_chat_caches_acp_runtime_per_thread(monkeypatch):
     import importlib
 
-    chat = importlib.import_module("server.chat")  # the `server.chat` attr is the re-exported fn
+    chat_acp = importlib.import_module("server.chat_acp")
     from runtime.state import STATE
 
     monkeypatch.setattr(
@@ -331,11 +331,11 @@ async def test_chat_caches_acp_runtime_per_thread(monkeypatch):
         types.SimpleNamespace(agent_runtime="acp:codex", operator_mcp_tools=[], acp_agents={}),
         raising=False,
     )
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
-    r1 = await chat._get_acp_runtime("t1")
-    r2 = await chat._get_acp_runtime("t1")
-    r3 = await chat._get_acp_runtime("t2")
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
+    r1 = await chat_acp._get_acp_runtime("t1")
+    r2 = await chat_acp._get_acp_runtime("t1")
+    r3 = await chat_acp._get_acp_runtime("t2")
     assert r1 is r2  # same thread → same stateful ACP session
     assert r1 is not r3  # different thread → its own session
     assert r1.agent == "codex"
@@ -518,134 +518,142 @@ def _chat_module():
     return importlib.import_module("server.chat")
 
 
+def _acp_module():
+    """``server.chat_acp`` — the ONE home of the ACP registry + turn driving (#3828).
+    Patch and mutate it here; ``server.chat``'s re-exports are copies."""
+    import importlib
+
+    return importlib.import_module("server.chat_acp")
+
+
 async def test_evict_idle_runtime():
     """Runtimes whose last access exceeds _ACP_IDLE_TTL_S are evicted."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
 
     rt_old = _MockRuntime("old-agent")
     rt_fresh = _MockRuntime("fresh-agent")
 
     now = 100_000.0
-    chat._ACP_RUNTIMES["old"] = rt_old
-    chat._ACP_RUNTIME_ACCESS["old"] = now - chat._ACP_IDLE_TTL_S - 1  # expired
-    chat._ACP_RUNTIMES["fresh"] = rt_fresh
-    chat._ACP_RUNTIME_ACCESS["fresh"] = now - 10  # still warm
+    chat_acp._ACP_RUNTIMES["old"] = rt_old
+    chat_acp._ACP_RUNTIME_ACCESS["old"] = now - chat_acp._ACP_IDLE_TTL_S - 1  # expired
+    chat_acp._ACP_RUNTIMES["fresh"] = rt_fresh
+    chat_acp._ACP_RUNTIME_ACCESS["fresh"] = now - 10  # still warm
 
-    await chat._evict_acp_runtimes(now)
+    await chat_acp._evict_acp_runtimes(now)
 
-    assert "old" not in chat._ACP_RUNTIMES
-    assert "old" not in chat._ACP_RUNTIME_ACCESS
+    assert "old" not in chat_acp._ACP_RUNTIMES
+    assert "old" not in chat_acp._ACP_RUNTIME_ACCESS
     assert rt_old.closed is True
 
-    assert "fresh" in chat._ACP_RUNTIMES
+    assert "fresh" in chat_acp._ACP_RUNTIMES
     assert rt_fresh.closed is False
 
 
 async def test_evict_lru_when_over_cap(monkeypatch):
     """When the number of runtimes exceeds _ACP_MAX_RUNTIMES, LRU entries are evicted."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
 
-    original_cap = chat._ACP_MAX_RUNTIMES
-    monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", 2)
+    original_cap = chat_acp._ACP_MAX_RUNTIMES
+    monkeypatch.setattr(chat_acp, "_ACP_MAX_RUNTIMES", 2)
 
     now = 100_000.0
     runtimes = {}
     for i, name in enumerate(["a", "b", "c"]):
         rt = _MockRuntime(name)
-        chat._ACP_RUNTIMES[name] = rt
-        chat._ACP_RUNTIME_ACCESS[name] = now - (10 - i)  # a oldest, c newest
+        chat_acp._ACP_RUNTIMES[name] = rt
+        chat_acp._ACP_RUNTIME_ACCESS[name] = now - (10 - i)  # a oldest, c newest
         runtimes[name] = rt
 
-    await chat._evict_acp_runtimes(now)
+    await chat_acp._evict_acp_runtimes(now)
 
     # "a" was least-recently-used → evicted
-    assert "a" not in chat._ACP_RUNTIMES
+    assert "a" not in chat_acp._ACP_RUNTIMES
     assert runtimes["a"].closed is True
     # "b" and "c" survive (at or below cap)
-    assert "b" in chat._ACP_RUNTIMES
-    assert "c" in chat._ACP_RUNTIMES
+    assert "b" in chat_acp._ACP_RUNTIMES
+    assert "c" in chat_acp._ACP_RUNTIMES
     assert runtimes["b"].closed is False
     assert runtimes["c"].closed is False
 
-    monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", original_cap)
+    monkeypatch.setattr(chat_acp, "_ACP_MAX_RUNTIMES", original_cap)
 
 
 async def test_busy_runtime_not_idle_evicted():
     """A runtime with an in-flight turn (_ACP_BUSY > 0) is NEVER idle-evicted — a long
     ACP coding turn can outlast the idle TTL, and closing it would kill the live turn."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
-    chat._ACP_BUSY.clear()
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
+    chat_acp._ACP_BUSY.clear()
 
     rt = _MockRuntime("busy-agent")
     now = 100_000.0
-    chat._ACP_RUNTIMES["busy"] = rt
-    chat._ACP_RUNTIME_ACCESS["busy"] = now - chat._ACP_IDLE_TTL_S - 1  # stale past the TTL
-    chat._ACP_BUSY["busy"] = 1  # in-flight
+    chat_acp._ACP_RUNTIMES["busy"] = rt
+    chat_acp._ACP_RUNTIME_ACCESS["busy"] = now - chat_acp._ACP_IDLE_TTL_S - 1  # stale past the TTL
+    chat_acp._ACP_BUSY["busy"] = 1  # in-flight
 
-    await chat._evict_acp_runtimes(now)
-    assert "busy" in chat._ACP_RUNTIMES and rt.closed is False  # protected while in-flight
+    await chat_acp._evict_acp_runtimes(now)
+    assert "busy" in chat_acp._ACP_RUNTIMES and rt.closed is False  # protected while in-flight
 
-    chat._ACP_BUSY.pop("busy")  # turn finished
-    await chat._evict_acp_runtimes(now)
-    assert "busy" not in chat._ACP_RUNTIMES and rt.closed is True  # now evictable
-    chat._ACP_BUSY.clear()
+    chat_acp._ACP_BUSY.pop("busy")  # turn finished
+    await chat_acp._evict_acp_runtimes(now)
+    assert "busy" not in chat_acp._ACP_RUNTIMES and rt.closed is True  # now evictable
+    chat_acp._ACP_BUSY.clear()
 
 
 async def test_busy_runtime_not_lru_evicted(monkeypatch):
     """Over-cap LRU eviction skips an in-flight runtime even when it IS the LRU, and
     evicts the next non-busy victim instead."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
-    chat._ACP_BUSY.clear()
-    monkeypatch.setattr(chat, "_ACP_MAX_RUNTIMES", 2)
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
+    chat_acp._ACP_BUSY.clear()
+    monkeypatch.setattr(chat_acp, "_ACP_MAX_RUNTIMES", 2)
 
     now = 100_000.0
     rts = {}
     for i, name in enumerate(["a", "b", "c"]):
         rt = _MockRuntime(name)
-        chat._ACP_RUNTIMES[name] = rt
-        chat._ACP_RUNTIME_ACCESS[name] = now - (10 - i)  # a oldest (LRU), c newest
+        chat_acp._ACP_RUNTIMES[name] = rt
+        chat_acp._ACP_RUNTIME_ACCESS[name] = now - (10 - i)  # a oldest (LRU), c newest
         rts[name] = rt
-    chat._ACP_BUSY["a"] = 1  # the LRU is in-flight
+    chat_acp._ACP_BUSY["a"] = 1  # the LRU is in-flight
 
-    await chat._evict_acp_runtimes(now)
-    assert "a" in chat._ACP_RUNTIMES and rts["a"].closed is False  # LRU but busy → skipped
-    assert "b" not in chat._ACP_RUNTIMES and rts["b"].closed is True  # next non-busy victim
-    assert "c" in chat._ACP_RUNTIMES
-    chat._ACP_BUSY.clear()
+    await chat_acp._evict_acp_runtimes(now)
+    assert "a" in chat_acp._ACP_RUNTIMES and rts["a"].closed is False  # LRU but busy → skipped
+    assert "b" not in chat_acp._ACP_RUNTIMES and rts["b"].closed is True  # next non-busy victim
+    assert "c" in chat_acp._ACP_RUNTIMES
+    chat_acp._ACP_BUSY.clear()
 
 
 async def test_acp_acquire_release_refcount():
     """_acp_acquire marks the runtime in-flight (refcount++); _acp_release clears it."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
-    chat._ACP_BUSY.clear()
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
+    chat_acp._ACP_BUSY.clear()
 
     rt = _MockRuntime("x")
-    chat._ACP_RUNTIMES["t"] = rt
-    chat._ACP_RUNTIME_ACCESS["t"] = time.monotonic()  # warm so eviction leaves it
+    chat_acp._ACP_RUNTIMES["t"] = rt
+    chat_acp._ACP_RUNTIME_ACCESS["t"] = time.monotonic()  # warm so eviction leaves it
 
-    got = await chat._acp_acquire("t")
+    got = await chat_acp._acp_acquire("t")
     assert got is rt
-    assert chat._ACP_BUSY.get("t") == 1
-    await chat._acp_release("t")
-    assert "t" not in chat._ACP_BUSY
-    chat._ACP_BUSY.clear()
+    assert chat_acp._ACP_BUSY.get("t") == 1
+    await chat_acp._acp_release("t")
+    assert "t" not in chat_acp._ACP_BUSY
+    chat_acp._ACP_BUSY.clear()
 
 
 async def test_get_acp_runtime_bumps_access(monkeypatch):
     """Calling _get_acp_runtime on an existing thread bumps its access timestamp."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
 
     from runtime.state import STATE
 
@@ -656,12 +664,12 @@ async def test_get_acp_runtime_bumps_access(monkeypatch):
         raising=False,
     )
 
-    rt1 = await chat._get_acp_runtime("bump-test")
-    ts1 = chat._ACP_RUNTIME_ACCESS["bump-test"]
+    rt1 = await chat_acp._get_acp_runtime("bump-test")
+    ts1 = chat_acp._ACP_RUNTIME_ACCESS["bump-test"]
 
     # Nudge monotonic forward (any subsequent call will have a later timestamp).
-    rt2 = await chat._get_acp_runtime("bump-test")
-    ts2 = chat._ACP_RUNTIME_ACCESS["bump-test"]
+    rt2 = await chat_acp._get_acp_runtime("bump-test")
+    ts2 = chat_acp._ACP_RUNTIME_ACCESS["bump-test"]
 
     assert rt1 is rt2  # same runtime returned
     assert ts2 >= ts1  # access timestamp bumped
@@ -669,9 +677,9 @@ async def test_get_acp_runtime_bumps_access(monkeypatch):
 
 async def test_eviction_during_get_acp_runtime(monkeypatch):
     """_get_acp_runtime evicts idle entries before creating/returning the requested one."""
-    chat = _chat_module()
-    chat._ACP_RUNTIMES.clear()
-    chat._ACP_RUNTIME_ACCESS.clear()
+    chat_acp = _acp_module()
+    chat_acp._ACP_RUNTIMES.clear()
+    chat_acp._ACP_RUNTIME_ACCESS.clear()
 
     from runtime.state import STATE
 
@@ -686,18 +694,18 @@ async def test_eviction_during_get_acp_runtime(monkeypatch):
     # clock that _get_acp_runtime reads — an absolute 0.0 only evicts when time.monotonic()
     # already exceeds the TTL (true on a long-up dev box, false on a fresh CI runner).
     stale = _MockRuntime("stale")
-    chat._ACP_RUNTIMES["stale-thread"] = stale
-    chat._ACP_RUNTIME_ACCESS["stale-thread"] = time.monotonic() - chat._ACP_IDLE_TTL_S - 1  # ancient
+    chat_acp._ACP_RUNTIMES["stale-thread"] = stale
+    chat_acp._ACP_RUNTIME_ACCESS["stale-thread"] = time.monotonic() - chat_acp._ACP_IDLE_TTL_S - 1  # ancient
 
-    rt = await chat._get_acp_runtime("new-thread")
+    rt = await chat_acp._get_acp_runtime("new-thread")
 
     # The stale entry was evicted.
-    assert "stale-thread" not in chat._ACP_RUNTIMES
+    assert "stale-thread" not in chat_acp._ACP_RUNTIMES
     assert stale.closed is True
 
     # The requested runtime was created and returned.
-    assert rt is chat._ACP_RUNTIMES["new-thread"]
-    assert "new-thread" in chat._ACP_RUNTIME_ACCESS
+    assert rt is chat_acp._ACP_RUNTIMES["new-thread"]
+    assert "new-thread" in chat_acp._ACP_RUNTIME_ACCESS
 
 
 def test_adapters_derived_from_canonical_catalog():
@@ -768,7 +776,7 @@ def test_catalog_merges_registered_custom_agents():
 async def test_acp_turn_collected_returns_single_message_with_usage(monkeypatch):
     """The non-streaming ACP path folds the frame stream into the one assistant
     message the /api/chat + OpenAI-compat callers expect, usage in OpenAI shape."""
-    chat = _chat_module()
+    chat_acp = _acp_module()
 
     async def fake_drive(rt, message):
         yield ("text", "hel")
@@ -784,10 +792,10 @@ async def test_acp_turn_collected_returns_single_message_with_usage(monkeypatch)
     async def fake_release(tid):
         return None
 
-    monkeypatch.setattr(chat, "_acp_acquire", fake_acquire)
-    monkeypatch.setattr(chat, "_acp_release", fake_release)
-    monkeypatch.setattr(chat, "_acp_drive_turn", fake_drive)
-    out = await chat._acp_turn_collected("s1", "hi")
+    monkeypatch.setattr(chat_acp, "_acp_acquire", fake_acquire)
+    monkeypatch.setattr(chat_acp, "_acp_release", fake_release)
+    monkeypatch.setattr(chat_acp, "_acp_drive_turn", fake_drive)
+    out = await chat_acp._acp_turn_collected("s1", "hi")
     assert out == [
         {
             "role": "assistant",
@@ -798,7 +806,7 @@ async def test_acp_turn_collected_returns_single_message_with_usage(monkeypatch)
 
 
 async def test_acp_turn_collected_surfaces_error(monkeypatch):
-    chat = _chat_module()
+    chat_acp = _acp_module()
 
     async def fake_drive(rt, message):
         yield ("error", "ACP runtime (mock) failed: boom")
@@ -809,10 +817,10 @@ async def test_acp_turn_collected_surfaces_error(monkeypatch):
     async def fake_release(tid):
         return None
 
-    monkeypatch.setattr(chat, "_acp_acquire", fake_acquire)
-    monkeypatch.setattr(chat, "_acp_release", fake_release)
-    monkeypatch.setattr(chat, "_acp_drive_turn", fake_drive)
-    out = await chat._acp_turn_collected("s1", "hi")
+    monkeypatch.setattr(chat_acp, "_acp_acquire", fake_acquire)
+    monkeypatch.setattr(chat_acp, "_acp_release", fake_release)
+    monkeypatch.setattr(chat_acp, "_acp_drive_turn", fake_drive)
+    out = await chat_acp._acp_turn_collected("s1", "hi")
     assert "boom" in out[0]["content"] and "usage" not in out[0]
 
 
@@ -822,6 +830,7 @@ async def test_nonstreaming_impl_routes_to_acp(monkeypatch):
     import types as _types
 
     chat = _chat_module()
+    chat_acp = _acp_module()
     from runtime.state import STATE
 
     monkeypatch.setattr(
@@ -836,7 +845,7 @@ async def test_nonstreaming_impl_routes_to_acp(monkeypatch):
     async def fake_collected(session_id, message):
         return sentinel
 
-    monkeypatch.setattr(chat, "_acp_turn_collected", fake_collected)
+    monkeypatch.setattr(chat_acp, "_acp_turn_collected", fake_collected)
     out = await chat._chat_langgraph_impl("plain message", "sess-x")
     assert out is sentinel  # switched before any graph/native-path work
 
@@ -861,7 +870,7 @@ async def test_drive_turn_usage_frame_carries_no_unconsumed_context_fields(monke
     contract is that an ACP turn reports zero tokens and zero cost (the external
     agent's own subscription meters it), which is what this now pins.
     """
-    chat = _chat_module()
+    chat_acp = _acp_module()
 
     class _Rt(_MockRuntime):
         async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
@@ -870,7 +879,7 @@ async def test_drive_turn_usage_frame_carries_no_unconsumed_context_fields(monke
         def last_usage(self):
             return {"used": 123, "size": 1000}
 
-    frames = [f async for f in chat._acp_drive_turn(_Rt(), "m")]
+    frames = [f async for f in chat_acp._acp_drive_turn(_Rt(), "m")]
     usage = next(p for k, p in frames if k == "usage")
     assert usage["input_tokens"] == 0 and usage["cost_usd"] == 0.0
     assert usage["model"] == "acp:mock"  # the honest "not gateway-metered" signal
@@ -882,14 +891,14 @@ async def test_acp_drive_turn_warns_when_delivered_reply_still_empty(caplog):
     """Boundary observability (#2991): when the reply that actually reaches the caller is
     still empty after the runtime's retry, the drive layer logs delegate + output_len +
     tool_calls at the delivery point (a normal reply logs nothing)."""
-    chat = _chat_module()
+    chat_acp = _acp_module()
 
     class _Rt(_MockRuntime):
         async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
             return "Let me read the relevant files first."  # still boilerplate, no tool calls
 
     with caplog.at_level(logging.WARNING):
-        frames = [f async for f in chat._acp_drive_turn(_Rt("codex"), "m")]
+        frames = [f async for f in chat_acp._acp_drive_turn(_Rt("codex"), "m")]
 
     assert ("done", "Let me read the relevant files first.") in frames
     warns = [r.getMessage() for r in caplog.records if "empty reply after retry" in r.getMessage()]
@@ -897,7 +906,7 @@ async def test_acp_drive_turn_warns_when_delivered_reply_still_empty(caplog):
 
 
 async def test_acp_drive_turn_no_warn_on_normal_reply(caplog):
-    chat = _chat_module()
+    chat_acp = _acp_module()
 
     class _Rt(_MockRuntime):
         async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
@@ -907,7 +916,7 @@ async def test_acp_drive_turn_no_warn_on_normal_reply(caplog):
             return "Fixed it."
 
     with caplog.at_level(logging.WARNING):
-        frames = [f async for f in chat._acp_drive_turn(_Rt("codex"), "m")]
+        frames = [f async for f in chat_acp._acp_drive_turn(_Rt("codex"), "m")]
 
     assert ("done", "Fixed it.") in frames
     assert not [r for r in caplog.records if "empty reply" in r.getMessage()]
@@ -1163,7 +1172,7 @@ def test_persona_doc_names_nothing_when_resolution_fails(monkeypatch):
 async def test_acp_drive_turn_turns_a_tool_update_into_a_same_id_refining_start():
     """#3691: the coder's refined name/args re-announce the SAME card id, so the console
     fills the card in by id, marked `refine` so it isn't counted as another call."""
-    chat = _chat_module()
+    chat_acp = _acp_module()
 
     class _Rt(_MockRuntime):
         async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
@@ -1174,7 +1183,7 @@ async def test_acp_drive_turn_turns_a_tool_update_into_a_same_id_refining_start(
             await tool_callback({"phase": "end", "id": "t1", "name": "Read app.py", "output": "ok"})
             return "done-text"
 
-    frames = [f async for f in chat._acp_drive_turn(_Rt(), "m")]
+    frames = [f async for f in chat_acp._acp_drive_turn(_Rt(), "m")]
     starts = [p for k, p in frames if k == "tool_start"]
 
     assert starts == [
