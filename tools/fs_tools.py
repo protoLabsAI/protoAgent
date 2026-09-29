@@ -42,6 +42,7 @@ from langgraph.prebuilt import InjectedState
 from infra.proc import child_env, detached_kwargs, scrub_agent_env
 from tools.fs_view import split_lines
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
+from tools.session import _session_id_from
 from tools.shell import run_command as _shell_run
 
 log = logging.getLogger("protoagent.fs")
@@ -506,7 +507,7 @@ def _offer_editor_handoff(
     turning the switch off takes effect without a graph rebuild.
 
     The session id comes from the INJECTED graph state: ``current_session_id()`` reads
-    empty inside a tool body (see ``tools.lg_tools._session_id_from``)."""
+    empty inside a tool body (see ``tools.session._session_id_from``)."""
     if not bool(getattr(config, "filesystem_editor_handoff", True)):
         return ""
     # Never offer an INCOGNITO chat (ADR 0069): the Zed shim continues it with ordinary
@@ -514,13 +515,8 @@ def _offer_editor_handoff(
     # "Continue in Zed" item is hidden for incognito tabs for the same reason.
     if isinstance(state, dict) and state.get("incognito"):
         return ""
-    # Same resolution as ``tools.lg_tools._session_id_from`` (not imported: lg_tools is the
-    # whole core toolset and drags the scheduler in) — injected state first, contextvar only
-    # as the off-graph fallback.
-    from observability import tracing
-
-    session_id = (state.get("session_id") or "").strip() if isinstance(state, dict) else ""
-    session_id = session_id or (tracing.current_session_id() or "")
+    # Injected state first, contextvar only as the off-graph fallback.
+    session_id = _session_id_from(state)
     if not session_id:
         return ""
     proj = registry.get(project)

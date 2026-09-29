@@ -24,7 +24,8 @@ from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
-from tools.lg_tools import HITL_TOOL_NAMES, _session_id_from, drop_disabled_tools, get_all_tools
+from tools.lg_tools import HITL_TOOL_NAMES, drop_disabled_tools, get_all_tools
+from tools.session import _session_id_from
 
 logger = logging.getLogger(__name__)
 

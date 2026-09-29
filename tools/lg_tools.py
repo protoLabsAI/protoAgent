@@ -55,6 +55,7 @@ from langgraph.prebuilt import InjectedState
 from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES, superseded_by_id
 from scheduler.interface import is_cron, parse_ttl
 from tools.fallbacks import with_fallback
+from tools.session import _session_id_from  # re-exported: forks / plugins import it from here
 
 log = logging.getLogger("protoagent.tools")
 
@@ -1619,25 +1620,6 @@ def _build_task_tools(tasks_store) -> list:
         return f"Closed {i['id']}: {i['title']}"
 
     return [task_create, task_list, task_update, task_close]
-
-
-def _session_id_from(state: Any) -> str:
-    """Resolve the originating session id from inside a TOOL BODY.
-
-    The graph state (``graph/state.py``) reliably carries ``session_id`` at
-    tool-execution time — every turn's graph input stamps it. The
-    ``tracing.current_session_id()`` contextvar is visible to MIDDLEWARE but NOT
-    to a tool body under LangGraph (the tool runs in a different execution
-    context), so it silently reads empty there — which is why ``wait`` dropped
-    its same-session resume to the Activity thread (ADR 0053) and why ``set_goal``
-    would refuse with "No active session". Prefer the injected state; keep the
-    contextvar only as a fallback for tools invoked outside a graph turn."""
-    from observability import tracing
-
-    sid = ""
-    if isinstance(state, dict):
-        sid = (state.get("session_id") or "").strip()
-    return sid or (tracing.current_session_id() or "")
 
 
 def _build_set_goal_tool():
