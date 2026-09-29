@@ -129,6 +129,53 @@ async def test_fetch_url_rejects_non_http_scheme():
         assert result.startswith("Error:"), f"accepted unsafe url: {bad!r}"
 
 
+def _mock_httpx(monkeypatch, handler):
+    """Route fetch_url's AsyncClient through an in-process transport."""
+    import httpx
+
+    real = httpx.AsyncClient
+
+    class _Client(real):
+        def __init__(self, *a, **k):
+            k["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_reports_a_redirect_loop_instead_of_the_30x_body(monkeypatch):
+    """Past the hop cap the last response is still a redirect; its stub body used to
+    come back as the page's content under a `[302]` header."""
+    import httpx
+
+    from tools.lg_tools import fetch_url
+
+    def _loop(request):
+        n = int(request.url.params.get("n", "0"))
+        return httpx.Response(302, headers={"location": f"/r?n={n + 1}"}, text="Moved")
+
+    _mock_httpx(monkeypatch, _loop)
+    result = await fetch_url.ainvoke({"url": "https://example.com/r"})
+    assert result.startswith("Error: too many redirects"), result
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_follows_a_short_redirect_chain(monkeypatch):
+    import httpx
+
+    from tools.lg_tools import fetch_url
+
+    def _handler(request):
+        if request.url.path == "/final":
+            return httpx.Response(200, headers={"content-type": "text/plain"}, text="the page")
+        return httpx.Response(301, headers={"location": "/final"})
+
+    _mock_httpx(monkeypatch, _handler)
+    result = await fetch_url.ainvoke({"url": "https://example.com/start"})
+    assert result.startswith("[200]") and "the page" in result, result
+
+
 @pytest.mark.asyncio
 async def test_current_time_survives_a_missing_tz_database(monkeypatch):
     """Windows ships no IANA data (stdlib zoneinfo needs the bundled tzdata
