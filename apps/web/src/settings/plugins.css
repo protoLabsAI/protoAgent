@@ -1,7 +1,7 @@
 /* Plugins panel — moved from app/theme.css (#832). The settings-panel-exclusive
    install/list/marketplace UI (PluginsSection + PluginsSurface). Left in theme.css:
-   .plugin-row / .plugin-row-actions / .plugin-hint (shared with the MCP panel), the
-   .plugin-view* host (ADR 0026), and the .federated-* federated view card (ADR 0034). */
+   .plugin-row-actions / .plugin-hint (shared with the MCP panel) and the
+   .plugin-view* host (ADR 0026). */
 
 /* Plugins → Marketplace: discovery links (directory + GitHub topic). */
 .plugin-market {

@@ -1,6 +1,4 @@
-/* Activity surface (ADR 0003) — moved from app/theme.css (#832). The
-   background-stream rail dot (.rail-dot) stays in theme.css: it styles the
-   always-mounted shell rail buttons, not the Activity surface. */
+/* Activity surface (ADR 0003) — moved from app/theme.css (#832). */
 .activity-body {
   display: flex;
   flex-direction: column;

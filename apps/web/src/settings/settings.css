@@ -2,8 +2,7 @@
 /* Moved from app/theme.css (#832) — settings-form chrome rendered by
    SettingsCategory + the DelegatesSection footer. Banners are DS Alert (pl-alert)
    now; only the stage spacing lives here. Left in theme.css: .settings-status
-   (also rendered by SchedulePanel) and the .settings-help-link / .setup-link rule
-   (it pairs the setup wizard's link styling). */
+   (also rendered by SchedulePanel) and the .settings-help-link rule. */
 .settings-banner {
   margin-bottom: 10px;
 }

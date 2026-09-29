@@ -52,28 +52,6 @@
   border-right: 0;
 }
 
-/* Bottom utility bar — panel collapse toggles, pinned to their sides. */
-.utility-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--pl-space-2);
-  padding: 0 10px var(--pl-space-2);
-  border-top: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg);
-  font-size: var(--pl-font-size-2xs);
-}
-
-/* Panel toggles are DS icon buttons carrying aria-pressed (true = panel shown).
-   The DS doesn't tone [aria-pressed="false"], so mark the collapsed state with
-   accent — matching the retired collapsed-toggle tint, tokens only (no hex). */
-.utility-bar [aria-pressed="false"] {
-  color: var(--pl-color-accent);
-}
-
-.utility-bar .util-spacer {
-  flex: 1;
-}
-
 /* Undelivered priority-now page (#3351): tint the Feed pill's unread badge as an alert so a
    page whose automatic delivery failed reads as conspicuous before the operator opens the feed. */
 .activity-badge--alert {
@@ -217,16 +195,6 @@
   border-top: none;
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--pl-space-4);
-  padding: 0 var(--pl-space-4);
-  border-bottom: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg);
-}
-
 /* macOS desktop (invisible title bar): inset the brand so it clears the native
    traffic lights that float top-left over the content. The topbar carries
    `data-tauri-drag-region`, so this area drags the window. Mac build ONLY — the
@@ -244,161 +212,13 @@
   animation-duration: 450ms;
 }
 
-.brand-lockup {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.brand-mark {
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-}
-
-.brand-name {
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.brand-subline,
 .panel-kicker,
-.message-role,
 .metric span,
 .subagent-row span,
 .issue-row span {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
-}
-
-.topbar-status {
-  display: flex;
-  align-items: center;
-  gap: var(--pl-space-2);
-}
-
-.workspace {
-  min-height: 0;
-  display: grid;
-  /* The right column's width comes from --right-width (set inline in App.tsx
-     from the persisted/resized panel width; 0px when collapsed). Keeping the
-     template in CSS — not inline — lets the media query below collapse to two
-     columns instead of leaving a blank reserved column. */
-  /* ADR 0035 — symmetric dual rails: [left rail | left surface | right surface | right rail].
-     The right rail mirrors the left on the far edge; the right surface (content) track collapses
-     to 0 via --right-width while the right rail stays put. */
-  grid-template-columns: 72px minmax(0, 1fr) var(--right-width, 360px) 72px;
-}
-
-.rail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px var(--pl-space-2);
-  border-right: 1px solid var(--pl-color-border);
-}
-
-/* Right rail mirrors the left, bordered on its left edge (ADR 0035 D1). */
-.rail-right {
-  border-right: none;
-  border-left: 1px solid var(--pl-color-border);
-}
-
-.rail button {
-  min-height: 48px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--pl-space-1);
-  border: 1px solid transparent;
-  border-radius: var(--pl-radius);
-  background: transparent;
-  color: var(--pl-color-fg-subtle);
-  cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
-}
-
-.rail button span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--pl-font-mono);
-  font-size: var(--pl-font-size-3xs);
-}
-
-.rail button:hover,
-.rail button.active {
-  border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-hover);
-  color: var(--pl-color-fg);
-}
-
-.stage {
-  min-width: 0;
-  min-height: 0;
-  padding: var(--pl-space-3);
-  border-right: 1px solid var(--pl-color-border);
-}
-
-.right-panel {
-  position: relative; /* anchors the resize handle on its left edge */
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  padding: var(--pl-space-3);
-  /* Mirror .stage exactly (ADR 0035 D1 — symmetric rails): a plain cell whose single surface
-     child fills via its own height:100%. (The old inner grid auto/auto/1fr was for a multi-child
-     right panel; post-renderSurface it left the lone surface stuck in the content-sized first row.) */
-}
-
-/* Collapsed panels: the workspace grid sets their track to 0; zero the box so
-   no residual padding/border shows (the element stays a grid item — using
-   display:none would shift the other items into the wrong tracks). min-width:0
-   lets the tracks shrink to 0 / resize freely. */
-.rail {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.workspace.right-collapsed .right-panel {
-  padding: 0;
-  border: 0;
-}
-
-/* Drag handle on the boundary between the stage and the right panel. */
-/* A real grab target (ADR 0035 S3): a 14px hit area centered on the divider, with a
-   thin always-visible grip line that thickens on hover/focus/active. */
-.resize-handle {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  margin-left: -7px;
-  cursor: col-resize;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.resize-handle::before {
-  content: "";
-  width: 2px;
-  height: 100%;
-  background: var(--pl-color-border);
-  transition: background 120ms ease, width 120ms ease;
-}
-.resize-handle:hover::before,
-.resize-handle:focus-visible::before,
-.resize-handle:active::before {
-  width: 4px;
-  background: color-mix(in srgb, var(--pl-color-accent) 60%, transparent);
-}
-.resize-handle:focus-visible {
-  outline: none;
 }
 
 .panel {
@@ -454,14 +274,6 @@
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.notes-panel {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-}
-
-.beads-panel {
-  grid-template-rows: auto auto minmax(0, 1fr);
-}
-
 /* .panel-header / .panel-header.compact now live in @protolabsai/ui (.pl-panel-header).
    The .panel-kicker + .panel-actions classes stay — surfaces use them directly
    (e.g. telemetry section heads, workflow toolbars), not only via PanelHeader. */
@@ -480,7 +292,6 @@ select:disabled {
   opacity: 0.55;
 }
 
-.message-list,
 .issue-list,
 .subagent-list,
 .table-list {
@@ -685,7 +496,7 @@ select:disabled {
 
 /* The chat thread now uses the DS Conversation/Message components (bd-1rn) —
    the old hand-rolled `.message*` bubble rules were removed. Generic list scroll
-   (`.message-list, .issue-list, …`) stays above for the other surfaces. */
+   (`.issue-list, .subagent-list, …`) stays above for the other surfaces. */
 
 /* Tool-call cards + per-tool renderers — moved to src/chat/tool-calls.css (#832). */
 
@@ -768,26 +579,12 @@ textarea {
   resize: vertical;
 }
 
-.composer textarea,
-.notes-editor {
-  min-height: 0;
-  resize: none;
-}
-
-/* The chat input's compact fixed height (.composer textarea) — moved to
-   src/chat/chat.css (#832). .notes-editor keeps its own sizing above/below. */
-
 .field {
   display: grid;
   gap: 6px;
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
-}
-
-.field.grow {
-  min-height: 0;
-  padding: 0 var(--pl-space-3);
 }
 
 /* New-task dialog form (TasksPanel) — a vertical stack of .field rows, with
@@ -805,59 +602,11 @@ textarea {
 
 /* Identity panel — the SOUL.md field — moved to src/agent/identity.css (#832). */
 
-.field-hint {
-  color: var(--pl-color-fg-subtle);
-  font-size: var(--pl-font-size-2xs);
-  opacity: 0.75;
-}
-
-.field-warn {
-  color: var(--pl-color-status-error);
-  opacity: 1;
-}
-
 .subagent-grid {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) auto;
   gap: 10px;
   padding: var(--pl-space-3);
-}
-
-.subagent-mode {
-  margin: var(--pl-space-3) var(--pl-space-3) 0;
-}
-
-.batch-task-list {
-  min-height: 0;
-  display: grid;
-  gap: 10px;
-  overflow: auto;
-  padding: 0 var(--pl-space-3);
-}
-
-.batch-task-row {
-  display: grid;
-  gap: var(--pl-space-2);
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
-  padding: 10px;
-}
-
-.batch-task-header {
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--pl-color-fg-subtle);
-  font-family: var(--pl-font-mono);
-  font-size: var(--pl-font-size-xs);
-}
-
-.batch-task-fields {
-  display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
-  gap: 10px;
 }
 
 .checkbox-field {
@@ -896,30 +645,9 @@ textarea {
   white-space: pre-wrap;
 }
 
-/* Activity surface + rail dot (ADR 0003) ------------------------------------ */
-/* .rail-badge retired (#832) — dead class; the rail unread count is the DS
-   SurfaceRail .pl-count--rail (app-shell.tsx), fed by App.tsx's count. */
-
-/* Background chat-streaming indicator on the Chat rail button — a small pulsing
-   dot (no count), shown while a turn streams on another tab. */
-.rail-dot {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--pl-color-status-success);
-  animation: rail-dot-pulse 1.4s ease-in-out infinite;
-}
-@keyframes rail-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.7); }
-}
-
-.rail button {
-  position: relative;
-}
+/* Activity surface (ADR 0003) ---------------------------------------------- */
+/* .rail-badge and the .rail-dot streaming indicator are retired (#832, #3863) — the rail
+   unread count is the DS SurfaceRail .pl-count--rail (app-shell.tsx), fed by App.tsx's count. */
 
 /* Activity surface + provenance feed (.activity-*) — moved to src/activity/activity.css (#832). */
 
@@ -1034,71 +762,6 @@ textarea {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.notes-editor {
-  height: 100%;
-  border: 0;
-  border-radius: 0 0 var(--pl-radius) var(--pl-radius);
-  background: transparent;
-  padding: var(--pl-space-3);
-}
-
-.notes-tabbar {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: var(--pl-space-2) 10px;
-  border-bottom: 1px solid var(--pl-color-border);
-}
-
-.notes-tabbar button {
-  max-width: 140px;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: var(--pl-radius);
-  background: transparent;
-  color: var(--pl-color-fg-subtle);
-  padding: 0 9px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.notes-tabbar button.active,
-.notes-tabbar button:hover {
-  border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-hover);
-  color: var(--pl-color-fg);
-}
-
-.notes-meta {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: var(--pl-space-2);
-  align-items: center;
-  padding: 10px;
-  border-bottom: 1px solid var(--pl-color-border);
-}
-
-.notes-meta input {
-  height: 32px;
-}
-
-.issue-create {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--pl-space-2);
-  padding: 10px;
-  border-bottom: 1px solid var(--pl-color-border);
-}
-
-.issue-create-meta {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 104px 82px minmax(0, 1fr);
-  gap: var(--pl-space-2);
 }
 
 .issue-list {
@@ -1376,14 +1039,12 @@ textarea {
 }
 
 .setup-summary,
-.finish-list,
-.toggle-grid {
+.finish-list {
   display: grid;
   gap: var(--pl-space-2);
 }
 
-.status-line,
-.toggle-row {
+.status-line {
   min-height: 36px;
   display: flex;
   align-items: center;
@@ -1403,7 +1064,6 @@ textarea {
   color: var(--pl-color-accent-fg);
 }
 
-.toggle-row span,
 .status-line span {
   min-width: 0;
   overflow: hidden;
@@ -1424,11 +1084,6 @@ textarea {
   font-size: var(--pl-font-size-xs);
 }
 
-.toggle-row input {
-  width: 18px;
-  height: 18px;
-}
-
 .setup-grid {
   display: grid;
   gap: var(--pl-space-3);
@@ -1438,36 +1093,9 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.setup-grid.three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .setup-grid.model-row {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
-}
-
-.setup-checkbox {
-  justify-self: start;
-}
-
-.setup-error,
-.setup-message {
-  margin: 0 18px;
-  border-radius: var(--pl-radius);
-  padding: 9px 10px;
-}
-
-.setup-error {
-  border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 30%, transparent);
-  background: color-mix(in srgb, var(--pl-color-status-error) 14%, transparent);
-  color: var(--pl-color-status-error);
-}
-
-.setup-message {
-  border: 1px solid color-mix(in srgb, var(--pl-color-status-success) 28%, transparent);
-  background: color-mix(in srgb, var(--pl-color-status-success) 16%, transparent);
-  color: var(--pl-color-status-success);
 }
 
 /* "Test connection" result line in the model step. */
@@ -1599,7 +1227,6 @@ textarea {
   /* Dense content grids collapse to a single column on phones. */
   .subagent-grid,
   .setup-grid.two,
-  .setup-grid.three,
   .setup-grid.model-row {
     grid-template-columns: 1fr;
   }
@@ -1643,16 +1270,14 @@ textarea {
 /* ── Settings surface ─────────────────────────────────────────────────────── */
 /* The settings-form chrome (.settings-banner / .settings-group / .setting-..., ADR 0047
    .setting-inheritance) moved to src/settings/settings.css (#832). Left here, shared:
-   .settings-status (SchedulePanel renders it too) + the .settings-help-link / .setup-link
-   rule (it pairs the setup wizard's link styling). */
+   .settings-status (SchedulePanel renders it too) + the .settings-help-link rule. */
 .settings-status {
   margin: 0 0 10px;
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
 }
-.settings-help-link,
-.setup-link {
+.settings-help-link {
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
@@ -1660,8 +1285,7 @@ textarea {
   color: var(--pl-color-accent-fg);
   text-decoration: none;
 }
-.settings-help-link:hover,
-.setup-link:hover {
+.settings-help-link:hover {
   text-decoration: underline;
 }
 
@@ -1800,36 +1424,13 @@ textarea {
 /* Plugins panel (ADR 0027, .plugin-install-* / .plugin-list / .plugin-row-main / -title /
    .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint
    + .btn-icon.danger:hover) — moved to src/settings/plugins.css (#832). The bare
-   .plugin-row stays here: it's shared with the MCP panel + the Plugins surface. */
-.plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: var(--pl-space-3); background: var(--pl-color-bg-raised); border: 1px solid var(--pl-color-border); border-radius: 9px; }
-
-/* Federated plugin view (ADR 0034) — loading + bounded error card (D6). */
-.federated-loading,
-.federated-error {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--pl-space-2);
-  padding: 14px;
-  font-size: var(--pl-font-size-sm);
-  color: var(--pl-color-fg-subtle);
-}
-.federated-loading { align-items: center; }
-.federated-error { color: var(--pl-color-status-warning); }
-.federated-error strong { color: var(--pl-color-fg); }
-.federated-error-detail {
-  margin: var(--pl-space-1) 0 var(--pl-space-2);
-  font-family: var(--pl-font-mono);
-  font-size: var(--pl-font-size-xs);
-  color: var(--pl-color-fg-subtle);
-  word-break: break-word;
-}
+   .plugin-row and the federated-view .federated-* cards were dead and retired (#3863). */
 
 /* Fleet manager (Settings → Agents, ADR 0042) — the .fleet-list / .fleet-row* /
    .fleet-rename-input / .fleet-meta / .fleet-error / .fleet-purge / .fleet-discover
    rules moved to src/fleet/fleet.css (#832). The .fleet-active-tag / .fleet-delegate-tag /
    .fleet-host-tag text tags are now DS <Badge> (#832).
-   Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), .field-hint
-   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), plus the global
+   Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), the topbar .fleet-switcher* (FleetSwitcher), plus the global
    ::view-transition root crossfade. The status dots (FleetSwitcher + FleetManager) are the DS
    <StatusDot> now, so the hand-rolled .fleet-dot* is retired. */
 
@@ -1930,10 +1531,6 @@ textarea {
   flex-direction: column;
   gap: 10px;
   margin-top: var(--pl-space-1);
-}
-.field-hint {
-  font-size: var(--pl-font-size-2xs);
-  color: var(--pl-color-fg-subtle);
 }
 
 /* Topbar fleet switcher (ADR 0042) — the agent name as a DS Menu trigger (#1078).
