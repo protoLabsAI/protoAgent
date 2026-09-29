@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 import server.turn_control as turn_control
+import server.turn_stream as turn_stream
 from tests._seam_scan import stale_patches
 
 # Every name ``server.chat`` re-exports from ``server.turn_control`` — the same object.
@@ -157,7 +158,13 @@ def test_callers_reach_the_patched_helpers_through_turn_control():
     so a patch on the owner is what runs. Reads, not just calls: the HITL constants are
     compared/passed, never called."""
     offenders: list[str] = []
-    for rel in ("server/chat.py", "server/chat_acp.py", "server/chat_session_ops.py", "server/chat_rooms.py"):
+    for rel in (
+        "server/chat.py",
+        "server/chat_acp.py",
+        "server/chat_session_ops.py",
+        "server/chat_rooms.py",
+        "server/turn_stream.py",
+    ):
         tree = ast.parse((_REPO / rel).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in _CALL_THROUGH:
@@ -302,7 +309,7 @@ async def test_native_turn_reads_is_autonomous_from_turn_control(monkeypatch):
     chat = _chat()
     fake = _AskThenAnswer()
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
-    monkeypatch.setattr(chat, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
     monkeypatch.setattr(turn_control, "_is_autonomous", lambda md: True)
     frames = await _native_frames(chat, {})
     assert "input_required" not in [k for k, _ in frames]
@@ -322,7 +329,7 @@ async def test_native_turn_reads_the_autoanswer_cap_and_sentinel_from_turn_contr
         return None
 
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
-    monkeypatch.setattr(chat, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
     monkeypatch.setattr(chat, "_clear_pending_interrupt", _clear)
     monkeypatch.setattr(turn_control, "_MAX_AUTONOMOUS_AUTOANSWERS", 1)
     monkeypatch.setattr(turn_control, "_AUTONOMOUS_HITL_SENTINEL", sentinel)

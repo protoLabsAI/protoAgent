@@ -135,7 +135,7 @@ Note the message has **no `parts`** — the frame is pure telemetry, which is ex
 
 There is no `total_tokens`; derive it.
 
-**Producer** — `server/chat.py::_run_turn_stream` yields a `("usage", {...})` frame per LLM call (line 793), carrying the cache fields, the per-call `cost_usd` from `observability/pricing.py::cost_usd`, and the *actual* model that served the call. `a2a_impl/executor.py` accumulates them (line 469) and `_terminal_parts` (line 649) builds the fragment via `pa.cost_metadata(...)`. Requires `stream_usage=True` on the client — `graph/llm.py` sets it.
+**Producer** — `server/turn_stream.py::_run_turn_stream` yields a `("usage", {...})` frame per LLM call, carrying the cache fields, the per-call `cost_usd` from `observability/pricing.py::cost_usd`, and the *actual* model that served the call. `a2a_impl/executor.py` accumulates them (line 469) and `_terminal_parts` (line 649) builds the fragment via `pa.cost_metadata(...)`. Requires `stream_usage=True` on the client — `graph/llm.py` sets it.
 
 **Consumers** call `pa.parse_cost(artifact["metadata"])` (or read the URI key directly) and record per-(agent, skill) samples. The consumer keys on the `skill` ID from the card, so **skill IDs must be stable**. The in-repo reference consumer is `evals/client.py::_extract`, which scans both the artifact's and the terminal status message's `metadata`.
 
@@ -216,7 +216,7 @@ This is how a live consumer (the React operator console) watches the agent work:
 | `error` | Error text (on `failed`). |
 | `parentToolCallId` | Present only when the tool ran *inside* a subagent delegation: the parent `task` call's id, so a client can nest the child card under it. Not part of the SDK's `ToolCallPayload` — the executor sets it as an extra key on the fragment (`a2a_impl/executor.py` line 639). |
 
-**Producer** — `server/chat.py::_run_turn_stream` yields structured `("tool_start" | "tool_end", {id, name, input|output, parentId?})` tuples off langchain's `astream_events` (lines 676–745). Values are coerced by `_coerce_tool_value` / `_coerce_tool_output` and truncated. The executor's event loop turns each into a frame via `_tool_call_frame` (`a2a_impl/executor.py` line 606), which returns a `(part, metadata)` pair where **exactly one side is non-`None`**:
+**Producer** — `server/turn_stream.py::_run_turn_stream` yields structured `("tool_start" | "tool_end", {id, name, input|output, parentId?})` tuples off langchain's `astream_events`. Values are coerced by `_coerce_tool_value` / `_coerce_tool_output` (which stay in `server/chat.py`) and truncated. The executor's event loop turns each into a frame via `_tool_call_frame` (`a2a_impl/executor.py` line 606), which returns a `(part, metadata)` pair where **exactly one side is non-`None`**:
 
 - a **dict** payload → `(None, {TOOL_CALL_EXT_URI: {...}})` — the URI-keyed fragment, emitted as a status message with *no* parts;
 - a **plain-string** payload (legacy producers; the goal-mode `🎯 …` notes still take this path) → `(text_part, None)` — a plain text status part, so text-only consumers see progress.

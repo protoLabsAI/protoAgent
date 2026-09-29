@@ -227,7 +227,7 @@ def _delegate_to(peer_url="https://peer/a2a", name="orbis"):
 
 async def _dispatch_capturing_usage(monkeypatch, *responses, target="orbis", **tool_args):
     """Run ``delegate_to`` under ``astream_events`` — the same consumer
-    ``server/chat.py::_run_turn_stream`` is — and return (reply, usage payloads)."""
+    ``server/turn_stream.py::_run_turn_stream`` is — and return (reply, usage payloads)."""
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _PeerClient(*responses))
     tool = _delegate_to(name=target)
     usage: list[dict] = []

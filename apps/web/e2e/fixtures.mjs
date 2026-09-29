@@ -1147,7 +1147,7 @@ function scenarioFor(prompt) {
       input: { query: "agent client protocol" },
       output: "1 result(s): Agent Client Protocol — https://agentclientprotocol.com",
       // The post-tool answer is the NEXT model call, so the server opens its first delta
-      // with a paragraph break (server/chat.py _run_turn_stream) and the terminal replace
+      // with a paragraph break (server/turn_stream.py _run_turn_stream) and the terminal replace
       // — the whole turn's text — carries the same break. The client's parts drop a
       // run's leading whitespace, so that replace must still read as "nothing diverged"
       // and keep the interleaving (parts.ts replaceText).

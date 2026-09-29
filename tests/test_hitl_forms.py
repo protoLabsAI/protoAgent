@@ -70,6 +70,7 @@ from runtime.state import STATE
 # server/__init__.py, so resolve the actual submodule from sys.modules.
 chat_mod = importlib.import_module("server.chat")
 turn_control = importlib.import_module("server.turn_control")
+turn_stream = importlib.import_module("server.turn_stream")
 
 
 class _FakeTurnStream:
@@ -102,7 +103,7 @@ async def test_autonomous_turn_auto_answers_hitl(monkeypatch):
     # No goal controller → the goal-verification block is skipped; isolate the turn loop.
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
     fake = _FakeTurnStream()
-    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
 
     frames = await _collect(
         chat_mod._run_native_turn(
@@ -124,7 +125,7 @@ async def test_autonomous_turn_auto_answers_hitl(monkeypatch):
 async def test_operator_turn_still_parks_on_hitl(monkeypatch):
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
     fake = _FakeTurnStream()
-    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
 
     frames = await _collect(
         chat_mod._run_native_turn(
@@ -161,7 +162,7 @@ async def test_autonomous_turn_force_completes_after_cap(monkeypatch):
     # autonomous turn: after the cap it force-completes and clears the stray interrupt.
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
     fake = _AlwaysAsksStream()
-    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
     cleared: list = []
 
     async def _fake_clear(config):
@@ -355,7 +356,7 @@ async def test_attended_nudge_parks_on_request_user_input_form(monkeypatch):
     operator rather than auto-answering — the form sibling of the ask_human park (#3110)."""
     monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
     fake = _FormHitlStream()
-    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_stream, "_run_turn_stream", fake)
 
     frames = await _collect(
         chat_mod._run_native_turn(
