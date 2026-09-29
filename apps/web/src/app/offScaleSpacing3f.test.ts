@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 // px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
 // chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/3/5/6/7/10/14/18/20px, …) are intentionally LEFT as literals — they wait on the
-// DS gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not spacing).
+// half-steps (2/3/5/6/7/10/14/18/20px, …) are OUTSIDE this guard's matcher — it flags ONLY the
+// five exact-scale values, and only when they sit in a spacing declaration (a `left: 8px` /
+// `border-radius: 4px` is not spacing). Those half-steps ride the DS gap tokens shipped by
+// protoContent#547 (`--pl-space-{0_5,1_5,2_5}`); the #525/#547 step-3 card tokenized them in
+// snapshot.css + schedule.css, while devices.css/telemetry.css keep literals until the sibling card.
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as fontSizeGuard.test.ts /
 // tokenNameGuard.test.ts: this tsconfig has no node types and under jsdom `import.meta.url`
@@ -142,14 +144,18 @@ describe("no exact-scale px spacing literal in the snapshot/devices/schedule/tel
     expect(offendersIn("../schedule/schedule.css", commented)).toEqual([]);
   });
 
-  it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): each spot-check is a mixed-shorthand value where the exact-scale
-    // member tokenized and the off-scale member survived — one assertion covers both invariants.
-    expect(CSS_SOURCES["../settings/snapshot.css"]).toContain("padding: 10px var(--pl-space-3)");
-    expect(CSS_SOURCES["../settings/snapshot.css"]).toContain("padding: var(--pl-space-2) 14px");
+  it("pins the snapshot/schedule half-steps this card tokenized, and the devices/telemetry ones still awaiting the sibling card", () => {
+    // The DS gap tokens from protoContent#547 (`--pl-space-{0_5,1_5,2_5}`) let the #525/#547 step-3
+    // card move the snapshot + schedule half-steps card 3f had left as literals onto tokens. Each
+    // snapshot/schedule pin is a mixed-shorthand value whose exact-scale member card 3f already
+    // tokenized and whose off-scale member this card moved onto a half-step token (10px→2_5, 14→4,
+    // 6px→1_5) — one assertion covers both.
+    expect(CSS_SOURCES["../settings/snapshot.css"]).toContain("padding: var(--pl-space-2_5) var(--pl-space-3)");
+    expect(CSS_SOURCES["../settings/snapshot.css"]).toContain("padding: var(--pl-space-2) var(--pl-space-4)");
+    expect(CSS_SOURCES["../schedule/schedule.css"]).toContain("gap: var(--pl-space-1) var(--pl-space-1_5)");
+    // devices.css / telemetry.css keep their half-step LITERALS until the sibling card tokenizes them.
     expect(CSS_SOURCES["../settings/devices.css"]).toContain("padding: var(--pl-space-2) 10px");
     expect(CSS_SOURCES["../settings/devices.css"]).toContain("padding: 6px var(--pl-space-3)");
-    expect(CSS_SOURCES["../schedule/schedule.css"]).toContain("gap: var(--pl-space-1) 6px");
     expect(CSS_SOURCES["../settings/telemetry.css"]).toContain("padding: var(--pl-space-3) 14px");
   });
 });

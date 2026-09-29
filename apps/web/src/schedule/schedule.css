@@ -14,17 +14,17 @@
 .schedule-modes {
   display: inline-flex;
   gap: var(--pl-space-1);
-  padding: 3px;
+  padding: var(--pl-space-0_5);
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   align-self: flex-start;
 }
 .schedule-modes button {
   border: none;
   background: transparent;
   color: var(--pl-color-fg-muted);
-  padding: 5px 14px;
-  border-radius: 6px;
+  padding: var(--pl-space-1) var(--pl-space-3);
+  border-radius: var(--pl-radius-md);
   font-size: var(--pl-font-size-sm);
   cursor: pointer;
 }
@@ -44,8 +44,8 @@
 }
 .schedule-preview code {
   margin-left: var(--pl-space-2);
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   font-size: var(--pl-font-size-xs);
@@ -58,7 +58,7 @@
   flex: 1;
   min-width: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   border: 0;
   background: transparent;
   padding: 0;
@@ -94,8 +94,8 @@
 .schedule-detail-grid dt { color: var(--pl-color-fg-subtle); }
 .schedule-detail-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .schedule-detail-grid code {
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   font-size: var(--pl-font-size-xs);
@@ -109,26 +109,26 @@
 }
 
 /* #2159 — inline month calendar + 12/24h toggle for the New Schedule builder. */
-.schedule-once { display: flex; flex-direction: column; gap: 10px; }
-.schedule-once-fields { display: flex; gap: 10px; }
+.schedule-once { display: flex; flex-direction: column; gap: var(--pl-space-2_5); }
+.schedule-once-fields { display: flex; gap: var(--pl-space-2_5); }
 .schedule-once-fields .field { flex: 1; }
 
 .cal {
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   padding: var(--pl-space-2);
   background: var(--pl-color-bg-raised);
   user-select: none;
 }
-.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--pl-space-1_5); }
 .cal-title { font-size: var(--pl-font-size-sm); font-weight: 600; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-.cal-dow { margin-bottom: 2px; }
-.cal-wd { text-align: center; font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); padding: 2px 0; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: var(--pl-space-0_5); }
+.cal-dow { margin-bottom: var(--pl-space-0_5); }
+.cal-wd { text-align: center; font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); padding: var(--pl-space-0_5) 0; }
 .cal-day {
   aspect-ratio: 1 / 1; min-height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid transparent; border-radius: 6px;
+  border: 1px solid transparent; border-radius: var(--pl-radius-md);
   background: transparent; color: var(--pl-color-fg); font-size: var(--pl-font-size-xs); cursor: pointer;
 }
 .cal-day:hover { background: var(--pl-color-bg-hover); }
@@ -145,9 +145,9 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-raised);
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
@@ -159,11 +159,11 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--pl-space-1) 6px;
+  gap: var(--pl-space-1) var(--pl-space-1_5);
 }
 .schedule-preview-banner .preview-cron {
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-size: var(--pl-font-size-xs);
@@ -172,12 +172,12 @@
 .schedule-preview-banner .preview-error {
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 6px;
+  gap: var(--pl-space-1);
+  margin-top: var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
 }
 
 .field-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--pl-space-2); }
-.time-12h { display: flex; gap: 6px; }
+.time-12h { display: flex; gap: var(--pl-space-1_5); }
 .time-12h > * { flex: 1; }
