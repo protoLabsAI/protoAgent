@@ -142,7 +142,7 @@ def host_allowed(host: str | None) -> bool:
 
 # ── Cross-site requests (Origin + Fetch Metadata) ─────────────────────────────────────────
 
-# The desktop app's webview origins (apps/desktop/src-tauri/src/lib.rs ``is_own_origin``;
+# The desktop app's webview origins (apps/desktop/src-tauri/src/navigation.rs ``is_own_origin``;
 # ``tauri://localhost`` on macOS/Linux, ``http://tauri.localhost`` on Windows) — the same pair
 # the server's CORS ``allow_origin_regex`` admits. The webview's origin never equals the hub's
 # ``Host``, so without these the desktop console couldn't open a remote member's live view.
