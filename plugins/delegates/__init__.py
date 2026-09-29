@@ -226,7 +226,7 @@ async def _offer_start_and_retry(
         # cannot come up must degrade to the plain error, not re-prompt every call.
         return None
 
-    from tools.lg_tools import _session_id_from
+    from tools.session import _session_id_from
 
     session_id = _session_id_from(state) or ""
     if not granted(session_id):
@@ -338,7 +338,7 @@ async def _dispatch_into_room(
         from graph.mention_op import catchup_caps, dispatch_into_room
         from graph.thread_ids import resolve_thread_id
         from runtime.state import STATE
-        from tools.lg_tools import _session_id_from
+        from tools.session import _session_id_from
 
         from . import conversations
 
@@ -441,7 +441,7 @@ async def _spawn_background_delegation(
         )
 
     try:
-        from tools.lg_tools import _session_id_from
+        from tools.session import _session_id_from
 
         # Injected graph state, not the tracing contextvar (empty in a tool body) — the
         # session id is what the completion drains back to (ADR 0050).
