@@ -50,6 +50,8 @@
    now; the chord travels on the tooltip and in `aria-keyshortcuts`. */
 .palette-btn {
   /* lucide's Search sits high in its box, so a flush pill reads a hair tall next to the
-     other glyphs. Nudge its optical centre onto their baseline. */
-  padding-left: 7px;
+     other glyphs. Nudge its optical centre onto their baseline. The 7px nudge snaps up to
+     the 8px grid step (protoContent#547); a bare token, since a shipped sheet resolves the
+     DS tokens and carries no literal fallback. */
+  padding-left: var(--pl-space-2);
 }

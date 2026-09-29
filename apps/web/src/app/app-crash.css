@@ -1,5 +1,8 @@
 /* Full-page fallback for the root error boundary (#872). Token-driven so it follows
-   the operator's theme even while the app proper is broken. */
+   the operator's theme even while the app proper is broken.
+   Spacing (like the colour reads) keeps its px literal in fallback position so the crash
+   screen still lays out if the DS token stylesheet failed to load — the reason this is the
+   one file tokenNameGuard's literal-fallback sweep exempts (protoContent#547). */
 
 .app-crash {
   height: 100vh;
@@ -8,8 +11,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 24px;
+  gap: var(--pl-space-3, 12px);
+  padding: var(--pl-space-6, 24px);
   text-align: center;
   background: var(--pl-color-bg, #0a0a0c);
   color: var(--pl-color-fg, #ededed);
@@ -36,8 +39,8 @@
 
 .app-crash__actions {
   display: flex;
-  gap: 10px;
-  margin-top: 6px;
+  gap: var(--pl-space-2_5, 10px);
+  margin-top: var(--pl-space-1_5, 6px);
 }
 
 .app-crash__hint {
