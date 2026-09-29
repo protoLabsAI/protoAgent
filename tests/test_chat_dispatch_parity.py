@@ -6,7 +6,7 @@
 plugin surfaces). Each used to carry its own copy of the pre-turn dispatch chain and
 the error handling, and the non-streaming copy drifted: it never learned the
 context-overflow compact-and-retry or the ``/<subagent>`` slash command. Both now run
-ONE shared chain (``_pre_turn_dispatch``) and ONE failure classifier; these pin the
+ONE shared chain (``_pre_turn_dispatch``, in ``server/chat_dispatch.py`` since #3861) and ONE failure classifier; these pin the
 behaviours the non-streaming path was missing, through ``chat()`` itself.
 """
 
@@ -25,6 +25,10 @@ chat_mod = importlib.import_module("server.chat")
 rooms_mod = importlib.import_module("server.chat_rooms")
 # The HITL hold lives in server.turn_control (#3847) — patch it there.
 turn_control = importlib.import_module("server.turn_control")
+# The pre-turn dispatch lives in server.chat_dispatch (#3861) and reaches the subagent
+# runner through its owner, server.chat_commands — patch it there.
+dispatch_mod = importlib.import_module("server.chat_dispatch")
+commands_mod = importlib.import_module("server.chat_commands")
 
 _OVERFLOW = "Error code: 400 - This model's maximum context length is 128000 tokens."
 
@@ -148,7 +152,7 @@ async def test_subagent_slash_command_runs_via_chat(graph, monkeypatch):
         ran.append((sub_type, prompt, session_id))
         return "worker output"
 
-    monkeypatch.setattr(chat_mod, "_run_parsed_subagent", _fake_run)
+    monkeypatch.setattr(commands_mod, "_run_parsed_subagent", _fake_run)
 
     out = await chat_mod.chat("/researcher find the latest on X", "s-sub")
 
@@ -171,7 +175,7 @@ async def test_a_fenced_turn_runs_no_short_circuit(graph, monkeypatch, message):
     async def _never(*a, **k):  # pragma: no cover — must not escape the fence
         raise AssertionError("a fenced turn ran a subagent")
 
-    monkeypatch.setattr(chat_mod, "_run_parsed_subagent", _never)
+    monkeypatch.setattr(commands_mod, "_run_parsed_subagent", _never)
 
     out = await chat_mod.chat(message, "s-fenced", tool_fence=["discord_read"], origin="plugin")
 
@@ -187,7 +191,7 @@ async def test_bare_subagent_command_via_chat_returns_usage(graph, monkeypatch):
     async def _never(*a, **k):  # pragma: no cover — must not run without a prompt
         raise AssertionError("ran a subagent with no prompt")
 
-    monkeypatch.setattr(chat_mod, "_run_parsed_subagent", _never)
+    monkeypatch.setattr(commands_mod, "_run_parsed_subagent", _never)
 
     out = await chat_mod.chat("/researcher", "s-sub-usage")
 
@@ -258,7 +262,7 @@ async def test_a_fenced_turn_on_an_acp_runtime_is_refused_not_run(graph, monkeyp
 
     assert ran == []  # the external agent never saw the untrusted text (the hole)
     assert g.inputs == []  # nor did the native loop run it unfenced
-    assert out[0]["content"] == chat_mod._FENCED_ACP_REFUSAL
+    assert out[0]["content"] == dispatch_mod._FENCED_ACP_REFUSAL
 
 
 @pytest.mark.asyncio
