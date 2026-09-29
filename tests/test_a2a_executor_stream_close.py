@@ -319,12 +319,10 @@ def env(monkeypatch):
     ],
 )
 async def test_real_driver_releases_thread_lock_and_flushes_trace_by_return(env, script, state, _outcomes):
-    # The factory is the driver's impl generator, not the `_chat_langgraph_stream` wrapper:
-    # the wrapper's own bare `async for` over the impl is the same bug one level down
-    # (#3870, fixed separately). This pins the executor's half — it closes what it's given.
+    # The public wrapper, exactly as server/__init__.py wires it into the A2A executor.
     env.install([script])
     ctx = _request_context(context_id="s-3876")
-    executor = ProtoAgentExecutor(chat_mod._chat_langgraph_stream_impl, stall_timeout_provider=lambda: 30.0)
+    executor = ProtoAgentExecutor(chat_mod._chat_langgraph_stream, stall_timeout_provider=lambda: 30.0)
 
     await executor.execute(ctx, EventQueue())
 
