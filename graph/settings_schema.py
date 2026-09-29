@@ -1012,6 +1012,19 @@ FIELDS: list[Field] = [
         depends_on={"key": "filesystem.run_requires_approval"},
     ),
     Field(
+        "filesystem.run_command_env_passthrough",
+        "filesystem_run_command_env_passthrough",
+        "Env vars passed to commands",
+        "string_list",
+        "Filesystem",
+        "run_command runs project code (tests, builds, scripts) with a scrubbed environment: "
+        "this agent's own identity and instance (A2A_AUTH_TOKEN, AGENT_NAME, PROTOAGENT_*) and "
+        "credential-shaped variables (*_API_KEY, *_TOKEN, *_SECRET, …) are removed, so a test "
+        "suite can't act as this agent or write into its data. List variable names (one per "
+        "line, exact) to pass through anyway, e.g. GH_TOKEN for a project that calls gh.",
+        depends_on={"key": "filesystem.allow_run"},
+    ),
+    Field(
         "filesystem.editor_command",
         "filesystem_editor_command",
         "Open-in-editor command",

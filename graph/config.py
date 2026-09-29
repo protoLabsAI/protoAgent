@@ -2022,6 +2022,10 @@ class LangGraphConfig:
     # are dropped with a warning when the tools build (tools/run_auto_approve.py).
     # Empty (default) = every command asks, exactly as before.
     filesystem_run_auto_approve: list[str] = field(default_factory=list)
+    # ``run_command`` runs project code with a SCRUBBED env: no A2A_AUTH_TOKEN / AGENT_NAME /
+    # PROTOAGENT_* and no credential-shaped vars (infra.proc.scrub_agent_env). Env var names
+    # listed here are passed through anyway (e.g. GH_TOKEN for a `gh` the project calls).
+    filesystem_run_command_env_passthrough: list[str] = field(default_factory=list)
     # Operator's desktop editor for the ``open_in_editor`` tool — a command line
     # (``zed``, ``code -g``, ``cursor -g``) split with shlex; the fenced target is
     # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
@@ -2727,6 +2731,11 @@ class LangGraphConfig:
             ),
             filesystem_run_auto_approve=[
                 str(x) for x in ((data.get("filesystem", {}) or {}).get("run_auto_approve") or []) if x is not None
+            ],
+            filesystem_run_command_env_passthrough=[
+                str(x).strip()
+                for x in ((data.get("filesystem", {}) or {}).get("run_command_env_passthrough") or [])
+                if x is not None and str(x).strip()
             ],
             filesystem_editor_command=str(
                 (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""

@@ -39,7 +39,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langgraph.prebuilt import InjectedState
 
-from infra.proc import child_env, detached_kwargs
+from infra.proc import child_env, detached_kwargs, scrub_agent_env
 from tools.fs_view import split_lines
 from tools.run_auto_approve import compile_auto_approve, match_auto_approve
 from tools.shell import run_command as _shell_run
@@ -758,6 +758,8 @@ def build_fs_tools(config) -> list:
     # so a settings save (hot reload) re-validates — with unusable entries dropped + warned.
     # Only consulted when the gate would otherwise fire; see tools/run_auto_approve.py.
     auto_approve_rules = compile_auto_approve(getattr(config, "filesystem_run_auto_approve", None)) if allow_run else []
+    # Names an operator re-admits into run_command's otherwise-scrubbed env (see below).
+    run_env_passthrough = tuple(getattr(config, "filesystem_run_command_env_passthrough", None) or ())
 
     def _mode(p: Project) -> str:
         if not p.write:
@@ -1401,7 +1403,12 @@ def build_fs_tools(config) -> list:
                     command,
                     runner,
                 )
-            res = await _shell_run(argv, cwd=str(root), timeout=timeout)
+            # The command runs PROJECT code (its tests, build, scripts) — it must not inherit the
+            # live agent's identity (A2A_AUTH_TOKEN, AGENT_NAME), its instance (PROTOAGENT_HOME
+            # and friends → it could write real data) or credential-shaped vars. Operator names
+            # in filesystem.run_command_env_passthrough are kept.
+            base = scrub_agent_env(child_env(), passthrough=run_env_passthrough)
+            res = await _shell_run(argv, cwd=str(root), timeout=timeout, base_env=base)
             if res.error:
                 raise ToolException(res.error)
             body = res.stdout or "(no output)"

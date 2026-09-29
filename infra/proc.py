@@ -131,6 +131,37 @@ def _inside(entry: str, roots: tuple[str, ...]) -> bool:
     return any(c == r or c.startswith(r.rstrip(os.sep) + os.sep) for c in candidates for r in roots)
 
 
+# What a command the AGENT runs in a project must not inherit (friction 2026-09-28: pytest
+# under run_command read the live agent's A2A_AUTH_TOKEN / AGENT_NAME and failed, and
+# PROTOAGENT_HOME pointed it at the live instance's data). The agent's own identity and
+# instance, plus anything shaped like a credential. An operator re-admits names with
+# ``filesystem.run_command_env_passthrough``.
+_AGENT_IDENTITY_EXACT = frozenset({"A2A_AUTH_TOKEN", "AGENT_NAME"})
+_AGENT_IDENTITY_PREFIXES = ("PROTOAGENT_",)
+_CREDENTIAL_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_SECRET_KEY", "_PASSWORD", "_PRIVATE_KEY", "_PAT")
+_CREDENTIAL_EXACT = frozenset(
+    {"API_KEY", "SECRET_KEY", "AUTH_TOKEN", "ACCESS_TOKEN", "PRIVATE_KEY", "PUBLIC_KEY", "LANGFUSE_PUBLIC_KEY"}
+)
+
+
+def scrub_agent_env(env: Mapping[str, str], passthrough=()) -> dict[str, str]:
+    """``env`` minus the running agent's identity/instance vars and credential-shaped vars —
+    for a command the agent runs inside a project (its tests, build, scripts), which must
+    not act as, or write into, the live agent. ``passthrough`` names survive (exact,
+    case-sensitive). PATH, HOME, locale and toolchain vars are untouched."""
+    keep = {str(n) for n in passthrough or () if str(n).strip()}
+    out: dict[str, str] = {}
+    for key, value in env.items():
+        if key not in keep:
+            up = key.upper()
+            if key in _AGENT_IDENTITY_EXACT or key.startswith(_AGENT_IDENTITY_PREFIXES):
+                continue
+            if up in _CREDENTIAL_EXACT or up.endswith(_CREDENTIAL_SUFFIXES):
+                continue
+        out[key] = value
+    return out
+
+
 def child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
     """A copy of ``base`` (default ``os.environ``) safe to hand an EXTERNAL program.
 
@@ -790,6 +821,7 @@ __all__ = [
     "akill_tree",
     "begin_tree_teardown",
     "child_env",
+    "scrub_agent_env",
     "detached_kwargs",
     "group_kwargs",
     "kill_tree",
