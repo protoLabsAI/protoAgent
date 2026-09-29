@@ -2588,11 +2588,13 @@ class _PreTurn:
     (``done`` / ``input_required``) was the last one yielded.
     ``acp`` — not handled, and the configured runtime is ACP (ADR 0033): the
     driver runs its own ACP shape instead of the native loop.
+    ``fenced`` — the turn carries a ``tool_fence`` (#2972): no short-circuit runs.
     """
 
     message: str
     handled: bool = False
     acp: bool = False
+    fenced: bool = False
 
 
 async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: dict | None):
@@ -2606,6 +2608,17 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     propagate to the driver's turn-level handler.
     """
     message = pre.message
+    # A FENCED turn (#2972 — an untrusted party's message relayed by a plugin
+    # surface) runs none of the short-circuits below: each one does work outside
+    # the lead turn — a subagent (`/self-improve` can edit the SOUL), a workflow, a
+    # plugin command, a delegate exchange, a goal change — where the fence, which
+    # only SubagentFenceMiddleware enforces on the lead turn, can't reach it. The
+    # text goes to the fenced lead turn verbatim instead.
+    if pre.fenced:
+        from runtime.acp_runtime import is_acp_runtime
+
+        pre.acp = bool(is_acp_runtime(STATE.graph_config))
+        return
     # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
     # routes straight to that delegate, short-circuiting the LLM turn. Checked
     # BEFORE goal control (and every slash-command below) so an @-mention is
@@ -4062,7 +4075,7 @@ async def _chat_langgraph_impl(
             # turn's terminal goal note), so only the terminal frame becomes the reply.
             # No request_metadata on this driver — the thread resolves from the session
             # id alone, as it does everywhere else in this function.
-            pre = _PreTurn(message)
+            pre = _PreTurn(message, fenced=bool(tool_fence))
             last_frame: tuple | None = None
             async with contextlib.aclosing(_pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
                 async for frame in _pre_frames:

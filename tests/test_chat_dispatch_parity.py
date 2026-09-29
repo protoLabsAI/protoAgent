@@ -154,6 +154,29 @@ async def test_subagent_slash_command_runs_via_chat(graph, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["/researcher find the latest on X", "/self-improve rewrite your soul", "/goal take over", "/no-such-command"],
+)
+async def test_a_fenced_turn_runs_no_short_circuit(graph, monkeypatch, message):
+    """A ``tool_fence`` (#2972) is only enforced on the lead turn, so a fenced turn
+    must not reach a short-circuit that works outside it — the text runs as a fenced
+    lead turn instead."""
+    g = graph([_answer("fenced answer")])
+
+    async def _never(*a, **k):  # pragma: no cover — must not escape the fence
+        raise AssertionError("a fenced turn ran a subagent")
+
+    monkeypatch.setattr(chat_mod, "_run_parsed_subagent", _never)
+
+    out = await chat_mod.chat(message, "s-fenced", tool_fence=["discord_read"], origin="plugin")
+
+    assert out[0]["content"] == "fenced answer"
+    assert len(g.inputs) == 1
+    assert g.inputs[0]["subagent_fence"] == ["discord_read"]
+
+
+@pytest.mark.asyncio
 async def test_bare_subagent_command_via_chat_returns_usage(graph, monkeypatch):
     g = graph([])
 
