@@ -351,8 +351,40 @@ async def test_goal_turn_auto_answers_a_hitl_park(env, monkeypatch):
     out = await chat_mod.chat("go", "s1")
 
     assert out[0]["content"] == "on it\n\n---\nmet"
-    assert g.resumes == [turn_control._AUTONOMOUS_HITL_SENTINEL]  # ODDITY vs streaming: bare, not id-keyed
+    # Keyed by interrupt id, like the streaming driver (#3872 — was a bare resume value).
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
     assert g.updates == []
+
+
+class _StrictResumeGraph(ScriptedGraph):
+    """LangGraph's rule: a bare ``Command(resume=value)`` with more than one pending
+    interrupt is an error — only an id-keyed resume says which one it answers."""
+
+    def _answer_resume(self, graph_input):
+        if isinstance(graph_input, Command) and not isinstance(graph_input.resume, dict) and len(self.pending) > 1:
+            raise RuntimeError("bare resume with multiple pending interrupts")
+        super()._answer_resume(graph_input)
+
+
+@pytest.mark.asyncio
+async def test_goal_turn_auto_answers_parallel_interrupts_one_id_at_a_time(env, monkeypatch):
+    """#3872: two gated tool calls in one turn pend two interrupts at once; the goal
+    auto-answer resumes each BY ID (the first pending one), never with a bare value."""
+    monkeypatch.setattr(env.state, "goal_controller", FakeGoals([("done", "met")]), raising=False)
+    g = _StrictResumeGraph(
+        invokes=[
+            Invoke(turn_result(), steps=[set_interrupt("approve a?"), set_interrupt("approve b?")]),
+            turn_result(),
+            turn_result(AIMessage(content="both done")),
+        ]
+    )
+    monkeypatch.setattr(env.state, "graph", g, raising=False)
+
+    out = await chat_mod.chat("go", "s1")
+
+    assert out[0]["content"] == "both done\n\n---\nmet"
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}] * 2
+    assert g.updates == []  # nothing left to clear
 
 
 @pytest.mark.asyncio

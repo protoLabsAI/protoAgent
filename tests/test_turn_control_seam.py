@@ -164,6 +164,7 @@ def test_callers_reach_the_patched_helpers_through_turn_control():
         "server/chat_session_ops.py",
         "server/chat_rooms.py",
         "server/turn_stream.py",
+        "server/goal_loop.py",
     ):
         tree = ast.parse((_REPO / rel).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -447,8 +448,9 @@ async def test_nonstreaming_driver_reads_beacon_priority_and_hitl_constants_from
     assert out[0]["content"] == "answer"
     # The held marker IS turn_control's _HITL_RESUME → a real resume, not the "input needed" echo.
     assert isinstance(inputs[0], Command) and inputs[0].resume == "resume:hello"
-    # Goal-driven + still parked → exactly the patched cap of auto-answers, each the patched sentinel.
-    assert [i.resume for i in inputs[1:]] == [sentinel, sentinel]
+    # Goal-driven + still parked → exactly the patched cap of auto-answers, each the patched
+    # sentinel — built through server.chat._resume_payload (id-keyed, #3872).
+    assert [i.resume for i in inputs[1:]] == [f"resume:{sentinel}", f"resume:{sentinel}"]
     assert seen[0] == ("started", "s-sync") and seen[1][0] == "priority" and seen[-1] == ("ended", "s-sync")
     assert ("cleared",) in seen
 
