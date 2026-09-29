@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest";
 // scale — `--pl-space-{1,2,3,4,6}` (4/8/12/16/24px) — and this card moved every EXACT-scale
 // px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
-// chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/3/5/6/7/10/14/18px, …) are intentionally LEFT as literals — they wait on the DS
-// gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not spacing).
-// (chat-component.css and promptviewer.css are a sibling card, 3c2.)
+// chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). The
+// off-scale half-steps (2/3/5/6/7/9/10/14px, …) this guard once left as literals — waiting on
+// the DS half-step scale (protoContent#525/#547) — are now tokenized too: #547 shipped
+// --pl-space-{0_5,1_5,2_5} on @protolabsai/design 0.11.0, and the radius+spacing card moved the
+// chat/hitl half-steps onto it (the tokenized spot-checks below). This matcher still flags ONLY
+// the five exact-scale values, and only when they sit in a spacing declaration (a `left: 8px` /
+// `border-radius: 4px` is not spacing). (chat-component.css and promptviewer.css are a sibling
+// card, 3c2.)
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as fontSizeGuard.test.ts /
 // tokenNameGuard.test.ts: this tsconfig has no node types and under jsdom `import.meta.url`
@@ -112,7 +115,8 @@ describe("no exact-scale px spacing literal in the chat/hitl CSS (DS audit spaci
   });
 
   it("the matcher leaves half-steps, negatives, tokens, and non-spacing props alone", () => {
-    // Half-steps and off-scale values wait on protoContent#547 — never flagged.
+    // Half-steps aren't in this matcher's exact-scale alternation — the migrated ones are pinned
+    // tokenized below (not flagged here), and a genuinely uncovered value like 18px never matches.
     for (const half of ["2", "3", "5", "6", "7", "10", "14", "18"]) {
       expect(spacingHits("  padding: " + half + "px;")).toEqual([]);
     }
@@ -138,14 +142,19 @@ describe("no exact-scale px spacing literal in the chat/hitl CSS (DS audit spaci
     expect(offendersIn("../chat/hitl.css", commented)).toEqual([]);
   });
 
-  it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): each spot-check is a mixed-shorthand value where the exact-scale
-    // member tokenized and the off-scale member survived — one assertion covers both invariants.
-    expect(CSS_SOURCES["../chat/chat.css"]).toContain("padding: 10px var(--pl-space-3)");
-    expect(CSS_SOURCES["../chat/chat.css"]).toContain("padding: 2px 6px 2px var(--pl-space-2)");
-    expect(CSS_SOURCES["../chat/chat.css"]).toContain("margin: 6px 0 0 var(--pl-space-3)");
-    expect(CSS_SOURCES["../chat/hitl.css"]).toContain("padding: 6px var(--pl-space-2)");
-    expect(CSS_SOURCES["../chat/hitl.css"]).toContain("padding: var(--pl-space-2) 10px");
-    expect(CSS_SOURCES["../chat/hitl.css"]).toContain("padding: var(--pl-space-3) 14px");
+  it("proves the half-steps this card tokenized now read DS tokens (protoContent#525/#547)", () => {
+    // r2 (half-steps tokenized): each spot-check is a value where the exact-scale member AND the
+    // former off-scale half-step now read a DS token — #547's half-step scale shipped on
+    // @protolabsai/design 0.11.0 (--pl-space-{0_5,1_5,2_5}), so no raw px survives at these sites.
+    expect(CSS_SOURCES["../chat/chat.css"]).toContain("padding: var(--pl-space-2_5) var(--pl-space-3)");
+    expect(CSS_SOURCES["../chat/chat.css"]).toContain("padding: var(--pl-space-0_5) var(--pl-space-1_5) var(--pl-space-0_5) var(--pl-space-2)");
+    expect(CSS_SOURCES["../chat/chat.css"]).toContain("margin: var(--pl-space-1_5) 0 0 var(--pl-space-3)");
+    expect(CSS_SOURCES["../chat/hitl.css"]).toContain("padding: var(--pl-space-1_5) var(--pl-space-2)");
+    expect(CSS_SOURCES["../chat/hitl.css"]).toContain("padding: var(--pl-space-2) var(--pl-space-2_5)");
+    expect(CSS_SOURCES["../chat/hitl.css"]).toContain("padding: var(--pl-space-3) var(--pl-space-3)");
+    // …and the raw-px forms these replaced are gone from both files.
+    expect(CSS_SOURCES["../chat/chat.css"]).not.toContain("padding: 10px var(--pl-space-3)");
+    expect(CSS_SOURCES["../chat/chat.css"]).not.toContain("margin: 6px 0 0 var(--pl-space-3)");
+    expect(CSS_SOURCES["../chat/hitl.css"]).not.toContain("padding: var(--pl-space-3) 14px");
   });
 });

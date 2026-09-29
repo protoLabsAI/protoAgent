@@ -53,13 +53,13 @@
    card tracks the workspace accent. Guarded by hitl-accent.test.ts. */
 .hitl-card {
   margin: 0 var(--pl-space-3) var(--pl-space-2);
-  padding: var(--pl-space-3) 14px;
+  padding: var(--pl-space-3) var(--pl-space-3);
   border: 1px solid var(--pl-color-accent);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 
 .hitl-title {
@@ -123,8 +123,8 @@
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 5px;
-  padding: 6px var(--pl-space-2);
+  border-radius: var(--pl-radius);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   font: inherit;
 }
 
@@ -139,10 +139,10 @@
 
 .hitl-detail {
   margin: 0;
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 5px;
+  border-radius: var(--pl-radius);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   white-space: pre-wrap;
@@ -216,11 +216,11 @@
   align-items: flex-start;
   gap: var(--pl-space-2);
   text-align: left;
-  padding: 10px;
+  padding: var(--pl-space-2_5);
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   cursor: pointer;
   font: inherit;
   transition: border-color 0.1s ease, background 0.1s ease;
@@ -250,7 +250,7 @@
 .hitl-card-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 
 .hitl-card-label {
