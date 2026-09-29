@@ -13,7 +13,7 @@ Enable/disable edits ``plugins.enabled`` and hot-reloads.
 ENABLE is fully live: tools/middleware/MCP rebuild with the graph, and a plugin's
 router — which is what serves a console view (the view iframe just points at a
 router route) — is hot-mounted on the same reload (``_mount_plugin_routers`` in
-``server.agent_init``, #822). So enabling a view-contributing plugin needs no
+``server.plugin_wiring``, #822). So enabling a view-contributing plugin needs no
 restart; ``restart_recommended`` stays False for enable.
 
 DISABLE no longer lingers: the reload reconcile stops surfaces (ADR 0018) and

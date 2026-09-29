@@ -16,6 +16,7 @@ import asyncio
 import pytest
 
 import server.agent_init as ai
+import server.plugin_wiring as pw  # the reconcile's home (#3821) — patch its grace periods THERE
 from runtime.state import STATE
 
 
@@ -265,7 +266,7 @@ async def _settle(n=50):
 
 @pytest.mark.asyncio
 async def test_a_task_that_outlives_the_grace_is_cancelled_before_its_replacement_starts(monkeypatch):
-    monkeypatch.setattr(ai, "_SURFACE_RESTART_GRACE_S", 0.05)
+    monkeypatch.setattr(pw, "_SURFACE_RESTART_GRACE_S", 0.05)
     log: list = []
 
     async def _stubborn():  # ignores stop(), but honours cancel
@@ -288,8 +289,8 @@ async def test_a_task_that_outlives_the_grace_is_cancelled_before_its_replacemen
 
 @pytest.mark.asyncio
 async def test_a_surface_that_will_not_end_is_kept_and_not_doubled(monkeypatch):
-    monkeypatch.setattr(ai, "_SURFACE_RESTART_GRACE_S", 0.02)
-    monkeypatch.setattr(ai, "_SURFACE_CANCEL_GRACE_S", 0.02)
+    monkeypatch.setattr(pw, "_SURFACE_RESTART_GRACE_S", 0.02)
+    monkeypatch.setattr(pw, "_SURFACE_CANCEL_GRACE_S", 0.02)
     started: list = []
     release = asyncio.Event()
 

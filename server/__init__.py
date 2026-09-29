@@ -389,12 +389,8 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _build_skills_index,
     _build_telemetry_store,
     _init_langgraph_agent,
-    _mount_plugin_routers,
-    _plugin_agent_invoke,
-    _populate_plugin_host,
     _register_plugin_subagents,
     _reload_langgraph_agent,
-    _reload_plugin_surfaces,
     _resolve_checkpoint_db,
     _resolve_skills_db,
     _run_on_server_loop,
@@ -414,6 +410,15 @@ from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the e
     _retire_thread,
     _secrets_refresh_loop,
     _watch_loop,
+)
+
+# Plugin router mounting, the plugin host and surface reconcile live in
+# server/plugin_wiring.py (#3821); imported from their home for _main's wiring below.
+from server.plugin_wiring import (  # noqa: E402,F401 — re-export of the extracted plugin wiring
+    _mount_plugin_routers,
+    _plugin_agent_invoke,
+    _populate_plugin_host,
+    _reload_plugin_surfaces,
 )
 
 

@@ -622,7 +622,7 @@ def register(registry) -> None:
     """Entry point — called once at load with a PluginRegistry.
 
     Two routers at DISTINCT prefixes (a same-prefix second router would be silently
-    dropped by the host's de-dupe — see server.agent_init._mount_plugin_routers):
+    dropped by the host's de-dupe — see server.plugin_wiring._mount_plugin_routers):
     the view PAGE under the public ``/plugins/notes`` (ungated, iframe-loadable) and
     the DATA routes under ``/api/plugins/notes`` (gated, fetched with the token)."""
     registry.register_tools(
