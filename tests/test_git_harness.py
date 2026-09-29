@@ -1,17 +1,19 @@
 """Managed-git harness (ADR 0076) — real-git lifecycle tests + claim/dedup.
 
 Follows the repo's real-subprocess style (tests/test_shell.py): a real ``git init``
-repo in tmp_path with a bare local "origin", so branch/commit/push behavior is
+repo with a bare local "origin" (built once per module, copied per test), so branch/commit/push behavior is
 exercised for real. Only the ``gh`` PR layer is faked (monkeypatched ``run_gh``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import subprocess
 
 import pytest
 
 from plugins.coding_agent import git_harness as harness
+from tests._git_templates import copy_clone_with_origin
 from tools.shell import run_command
 
 
@@ -21,21 +23,33 @@ async def _git(cwd, *args) -> str:
     return res.stdout
 
 
-@pytest.fixture
-async def repo(tmp_path):
-    """A work clone with a local bare origin, one pushed commit on main."""
-    origin = tmp_path / "origin.git"
-    work = tmp_path / "work"
-    assert (await run_command(["git", "init", "--bare", str(origin)])).ok
-    assert (await run_command(["git", "clone", str(origin), str(work)])).ok
-    await _git(work, "config", "user.email", "test@example.com")
-    await _git(work, "config", "user.name", "Test")
+def _git_sync(cwd, *args) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+@pytest.fixture(scope="module")
+def repo_template(tmp_path_factory):
+    """Built ONCE per module: a bare origin + a work clone with one pushed commit on main.
+
+    Each test gets a private copy (``repo``) — building this pair costs ~8 git spawns."""
+    root = tmp_path_factory.mktemp("git-harness-template")
+    origin, work = root / "origin.git", root / "work"
+    _git_sync(root, "init", "--bare", str(origin))
+    _git_sync(root, "clone", str(origin), str(work))
+    _git_sync(work, "config", "user.email", "test@example.com")
+    _git_sync(work, "config", "user.name", "Test")
     (work / "README.md").write_text("hello\n")
-    await _git(work, "add", "-A")
-    await _git(work, "commit", "-m", "init")
-    await _git(work, "branch", "-M", "main")
-    await _git(work, "push", "-u", "origin", "main")
-    return work
+    _git_sync(work, "add", "-A")
+    _git_sync(work, "commit", "-m", "init")
+    _git_sync(work, "branch", "-M", "main")
+    _git_sync(work, "push", "-u", "origin", "main")
+    return root
+
+
+@pytest.fixture
+def repo(repo_template, tmp_path):
+    """A private work clone with its own bare origin, one pushed commit on main."""
+    return copy_clone_with_origin(repo_template, tmp_path)
 
 
 def _fake_gh(monkeypatch, responses: dict[str, tuple[int, str, str]]) -> list[list[str]]:
@@ -366,7 +380,7 @@ async def test_managed_dispatch_dedups_inflight_item(repo, monkeypatch):
     assert sum("[managed git]" in r for r in replies) == 1
 
 
-async def test_managed_dispatch_preflight_returns_existing_pr(repo, monkeypatch):
+async def test_managed_dispatch_preflight_returns_existing_pr(tmp_path, monkeypatch):
     from plugins.delegates.adapters import AcpAdapter
 
     # An open PR whose head branch carries item-43's suffix — a DIFFERENT slug than this
@@ -377,7 +391,8 @@ async def test_managed_dispatch_preflight_returns_existing_pr(repo, monkeypatch)
         raise AssertionError("coder must not be dispatched when an open PR exists")
 
     monkeypatch.setattr(AcpAdapter, "_prompt", must_not_run)
-    reply = await AcpAdapter().dispatch(_managed_delegate(repo), "Anything", item_id="item-43")
+    # No repo needed: the PR pre-flight short-circuits before any git runs (gh is faked).
+    reply = await AcpAdapter().dispatch(_managed_delegate(tmp_path), "Anything", item_id="item-43")
     assert "pull/11" in reply and "already exists" in reply
 
 
@@ -398,7 +413,7 @@ async def test_unmanaged_dispatch_untouched(repo, monkeypatch):
 # ── name inference + item-id-suffix dedup (ADR 0076 follow-up) ─────────────────
 
 
-async def test_preflight_pr_matches_by_item_id_suffix(repo, monkeypatch):
+async def test_preflight_pr_matches_by_item_id_suffix(tmp_path, monkeypatch):
     """Dedup keys on the stable `-<id7>` item suffix, NOT the slug — so an open PR is
     found even if the re-run's inferred slug differs from the original."""
     iid = "abc123def456"  # 12-char id (like derive_item_id); last7 -> "3def456"
@@ -409,11 +424,11 @@ async def test_preflight_pr_matches_by_item_id_suffix(repo, monkeypatch):
     import json as _json
 
     _fake_gh(monkeypatch, {"pr list": (0, _json.dumps(prs), "")})
-    assert await harness.preflight_pr(str(repo), iid) == "https://gh/pr/2"
+    assert await harness.preflight_pr(str(tmp_path), iid) == "https://gh/pr/2"
 
     # No branch carrying this item's suffix -> no match (fresh dispatch proceeds).
     _fake_gh(monkeypatch, {"pr list": (0, _json.dumps(prs[:1]), "")})
-    assert await harness.preflight_pr(str(repo), iid) == ""
+    assert await harness.preflight_pr(str(tmp_path), iid) == ""
 
 
 async def test_infer_title_falls_back_to_none_without_model():

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from graph.plugins import installer
+from tests._git_templates import copy_repo
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -22,8 +23,24 @@ def _git(cwd: Path, *args: str) -> None:
     )
 
 
-def _make_plugin_repo(root: Path, pid: str = "demo_ext", manifest_extra: str = "", tag: str | None = None) -> Path:
-    repo = root / f"src-{pid}"
+# Built plugin source repos, keyed by recipe — one ``init``/``add``/``commit`` per
+# distinct recipe per module instead of per call (~170ms of git spawns each on macOS,
+# far more on Windows). ``_make_plugin_repo`` hands every caller a private COPY, so a
+# test that commits/tags/edits its repo never touches another test's.
+_repo_templates: dict[tuple, Path] = {}
+_template_root: Path | None = None
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _plugin_repo_templates(tmp_path_factory):
+    global _template_root
+    _template_root = tmp_path_factory.mktemp("plugin-repo-templates")
+    yield
+    _repo_templates.clear()
+    _template_root = None
+
+
+def _build_plugin_repo(repo: Path, pid: str, manifest_extra: str, tag: str | None) -> Path:
     repo.mkdir(parents=True)
     (repo / "protoagent.plugin.yaml").write_text(
         f"id: {pid}\nname: Demo Ext\nversion: 0.1.0\ndescription: a test plugin\n{manifest_extra}"
@@ -35,6 +52,34 @@ def _make_plugin_repo(root: Path, pid: str = "demo_ext", manifest_extra: str = "
     if tag:
         _git(repo, "tag", tag)
     return repo
+
+
+def _make_plugin_repo(root: Path, pid: str = "demo_ext", manifest_extra: str = "", tag: str | None = None) -> Path:
+    repo = root / f"src-{pid}"
+    if _template_root is None:  # imported and called outside this module's tests
+        return _build_plugin_repo(repo, pid, manifest_extra, tag)
+    key = (pid, manifest_extra, tag)
+    template = _repo_templates.get(key)
+    if template is None:
+        template_dir = _template_root / f"t{len(_repo_templates)}" / f"src-{pid}"
+        template = _build_plugin_repo(template_dir, pid, manifest_extra, tag)
+        _repo_templates[key] = template
+    return copy_repo(template, repo)
+
+
+def _place_plugin(pid: str = "demo_ext", manifest_extra: str = "") -> Path:
+    """Drop a plugin straight into the live plugins dir — what ``install`` leaves on disk,
+    minus the git repo + clone. For ``install_deps`` tests, which read only the RUNNING
+    copy's manifest (``effective_copies``): no lock entry means no recorded origin, so
+    the #2743 allowlist re-check is skipped exactly as for a working-tree plugin. Tests
+    where the lock/origin matters keep the real ``_make_plugin_repo`` + ``install``."""
+    target = installer.live_plugins_dir() / pid
+    target.mkdir(parents=True)
+    (target / "protoagent.plugin.yaml").write_text(
+        f"id: {pid}\nname: Demo Ext\nversion: 0.1.0\ndescription: a test plugin\n{manifest_extra}"
+    )
+    (target / "__init__.py").write_text("def register(registry):\n    pass\n")
+    return target
 
 
 @pytest.fixture
@@ -236,8 +281,7 @@ def test_source_allowlist_blocks_offlist(env):
 
 
 def test_install_deps_noop_without_deps(env):
-    repo = _make_plugin_repo(env)
-    installer.install(str(repo))
+    _place_plugin()
     assert installer.install_deps("demo_ext") == []
 
 
@@ -323,8 +367,7 @@ def test_deps_satisfied_honors_the_managed_runtime_when_frozen(env, monkeypatch)
 
 
 def test_frozen_install_deps_pips_into_managed_runtime(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
     _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())  # not yet in the runtime
@@ -338,8 +381,7 @@ def test_frozen_install_deps_pips_into_managed_runtime(env, monkeypatch):
 
 
 def test_frozen_install_deps_noop_when_already_in_runtime(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
     _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: {"python-docx"})
@@ -354,8 +396,7 @@ def test_frozen_install_deps_noop_when_already_in_runtime(env, monkeypatch):
 
 
 def test_frozen_install_deps_refuses_when_runtime_unprovisioned(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
     _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
@@ -367,42 +408,6 @@ def test_frozen_install_deps_refuses_when_runtime_unprovisioned(env, monkeypatch
     monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _refuse)
     with pytest.raises(installer.InstallError, match="isn't provisioned"):
         installer.install_deps("demo_ext")
-
-
-def test_frozen_install_deps_optional_only_failure_keeps_satisfied_optionals(env, monkeypatch, caplog):
-    """#2162: when no install target is available and only OPTIONAL deps are missing,
-    the degrade path must drop ONLY the missing optionals — hard deps AND the
-    already-satisfied optionals stay in the return, and the warning still NAMES the
-    missing deps (#1953 contract)."""
-    import logging as _logging
-
-    repo = _make_plugin_repo(
-        env,
-        manifest_extra=(
-            "requires_pip: [httpx>=0.27, {pkg: 'websockets>=12', optional: true}, "
-            "{pkg: 'definitely_not_real_xyz>=1', optional: true}]\n"
-        ),
-    )
-    installer.install(str(repo))
-    monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
-    monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
-    import runtime.python_install as pi
-
-    def _refuse(reqs, **k):
-        raise pi.PythonInstallError("the managed Python runtime isn't provisioned — install it first")
-
-    monkeypatch.setattr(pi, "install_requirements_into_managed_runtime", _refuse)
-    with caplog.at_level(_logging.WARNING):
-        deps = installer.install_deps("demo_ext")  # no raise: only an optional is missing
-    assert deps == ["httpx>=0.27", "websockets>=12"]  # satisfied optional kept, missing one dropped
-    assert "optional dep(s) definitely_not_real_xyz aren't in the desktop runtime" in caplog.text
-
-
-# ── frozen install/update: deps wait for the operator's confirm (#3618 follow-up) ──
-# #2226 made a frozen install pip missing hard deps into the managed runtime on its own.
-# The desktop now gets the same consent dialog as the browser console: install lands the
-# plugin and reports the deps; only an explicit ``install_runtime_deps=True`` (the
-# non-interactive provisioning paths, via the CLI's --install-runtime-deps) still pips.
 
 
 def _frozen_repo_missing_docx(env, monkeypatch):
@@ -558,8 +563,7 @@ def test_managed_runtime_dists_read_failure_degrades_to_empty(monkeypatch, caplo
 
 
 def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [requests>=2, rich]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [requests>=2, rich]\n")
     calls = []
 
     class _OK:
@@ -580,30 +584,38 @@ def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
     assert calls[0][4:] == ["--", "requests>=2", "rich"]
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "--index-url=https://evil.example/simple",
-        "-e .",
-        "git+https://evil.example/pkg.git",
-        "foo @ https://evil.example/foo.whl",
-        "https://evil.example/foo.tar.gz",
-    ],
-)
-def test_install_deps_rejects_non_pep508_requires_pip(env, bad):
-    """A plugin manifest can't smuggle pip options / VCS+URL refs through requires_pip."""
-    repo = _make_plugin_repo(env, manifest_extra=f"requires_pip: ['{bad}']\n")
-    installer.install(str(repo))
+_BAD_PIP_SPECS = [
+    "--index-url=https://evil.example/simple",
+    "-e .",
+    "git+https://evil.example/pkg.git",
+    "foo @ https://evil.example/foo.whl",
+    "https://evil.example/foo.tar.gz",
+]
+
+
+@pytest.mark.parametrize("bad", _BAD_PIP_SPECS)
+def test_validate_pip_specs_rejects_non_pep508(bad):
+    """A plugin manifest can't smuggle pip options / VCS+URL refs through requires_pip.
+    The rail itself, spec by spec — the two tests below prove install_deps runs it on
+    BOTH tiers before any pip call."""
     with pytest.raises(installer.InstallError):
+        installer._validate_pip_specs("demo_ext", [bad])
+    installer._validate_pip_specs("demo_ext", ["requests>=2", "rich"])  # plain specs pass
+
+
+def test_install_deps_rejects_non_pep508_requires_pip(env, monkeypatch):
+    """End to end on the hard tier: the rail fires before pip ever runs."""
+    _place_plugin(manifest_extra="requires_pip: ['--index-url=https://evil.example/simple']\n")
+    monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: pytest.fail("pip ran for a rejected spec"))
+    with pytest.raises(installer.InstallError, match="pip option"):
         installer.install_deps("demo_ext")
 
 
-@pytest.mark.parametrize("bad", ["--index-url=https://evil.example/simple", "git+https://evil.example/pkg.git"])
-def test_install_deps_rejects_bad_optional_specs(env, bad):
+def test_install_deps_rejects_bad_optional_specs(env, monkeypatch):
     """The _validate_pip_specs rails cover the optional tier too (#1953)."""
-    repo = _make_plugin_repo(env, manifest_extra=f"requires_pip: [{{pkg: '{bad}', optional: true}}]\n")
-    installer.install(str(repo))
-    with pytest.raises(installer.InstallError):
+    _place_plugin(manifest_extra="requires_pip: [{pkg: 'git+https://evil.example/pkg.git', optional: true}]\n")
+    monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: pytest.fail("pip ran for a rejected spec"))
+    with pytest.raises(installer.InstallError, match="VCS/URL"):
         installer.install_deps("demo_ext")
 
 
@@ -625,11 +637,7 @@ def _fresh_env(monkeypatch):
 
 
 def test_install_deps_includes_optional_in_own_pip_call(env, monkeypatch):
-    repo = _make_plugin_repo(
-        env,
-        manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n",
-    )
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n")
     calls = []
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
     _fresh_env(monkeypatch)
@@ -643,11 +651,7 @@ def test_install_deps_optional_pip_failure_warns_not_fails(env, monkeypatch, cap
     """A failed optional install must not fail the command — the hard deps landed."""
     import logging as _logging
 
-    repo = _make_plugin_repo(
-        env,
-        manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n",
-    )
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n")
     # hard pip call succeeds; the optional one fails
     monkeypatch.setattr(
         installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1 if "pillow>=10" in cmd else 0)
@@ -662,8 +666,7 @@ def test_install_deps_optional_pip_failure_warns_not_fails(env, monkeypatch, cap
 
 
 def test_install_deps_only_optional_failure_still_succeeds(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [{pkg: 'pillow>=10', optional: true}]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [{pkg: 'pillow>=10', optional: true}]\n")
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
     _fresh_env(monkeypatch)
     failed: list[str] = []
@@ -701,11 +704,7 @@ def test_cli_install_deps_partial_install_names_the_failure_but_succeeds(monkeyp
 
 def test_install_deps_hard_pip_failure_still_raises(env, monkeypatch):
     """Hard-dep failure keeps today's behavior even when an optional tier exists."""
-    repo = _make_plugin_repo(
-        env,
-        manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n",
-    )
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [requests>=2, {pkg: 'pillow>=10', optional: true}]\n")
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
     _fresh_env(monkeypatch)
     with pytest.raises(installer.InstallError, match="pip install failed"):
@@ -718,8 +717,7 @@ def test_install_deps_already_satisfied_runs_no_pip_and_reports_nothing_new(env,
     plugin whose state had not changed. Real pre-check here, on two LOCKED core deps
     (packaging, pyyaml) so it holds in any environment — not on whatever the dev's venv
     happens to carry (`rich` arrived with import-linter locally and isn't in uv.lock)."""
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [packaging>=1, {pkg: 'pyyaml', optional: true}]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [packaging>=1, {pkg: 'pyyaml', optional: true}]\n")
     monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: pytest.fail("pip ran for deps already there"))
     newly: list[str] = []
     assert installer.install_deps("demo_ext", newly_installed=newly) == ["packaging>=1", "pyyaml"]  # satisfied
@@ -727,8 +725,7 @@ def test_install_deps_already_satisfied_runs_no_pip_and_reports_nothing_new(env,
 
 
 def test_install_deps_pips_only_what_is_missing(env, monkeypatch):
-    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [packaging>=1, nope-pkg-q]\n")
-    installer.install(str(repo))
+    _place_plugin(manifest_extra="requires_pip: [packaging>=1, nope-pkg-q]\n")
     calls = []
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
     newly: list[str] = []

@@ -14,6 +14,7 @@ that must hold *without* it (legacy ``.doc`` refusal, the zip guard, the broken-
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import os
 import re
@@ -172,6 +173,10 @@ def _worst_accepted_docx() -> bytes:
     return _package(_body(b"<w:p>" + filler + b"</w:p>" + text))
 
 
+# Building a bomb is the slow part (deflating 1 GiB of padding is ~2.5s; the payload
+# SIZE is the point, so it is not shrunk) and the same bomb feeds more than one test.
+# The bytes are immutable and deterministic: memoize, never rebuild.
+@functools.cache
 def _media_bomb_docx(pad_bytes: int) -> bytes:
     """A real document whose ``word/media/image1.png`` inflates to ``pad_bytes``. Media
     parts carry no text and are re-packed EMPTY, so this must cost nothing."""
@@ -189,6 +194,7 @@ def _media_bomb_docx(pad_bytes: int) -> bytes:
     return buf.getvalue()
 
 
+@functools.cache  # see _media_bomb_docx
 def _lying_size_docx(pad_bytes: int, method: int) -> bytes:
     """``word/document.xml`` inflates to ``len(_HELLO) + pad_bytes`` while its headers
     DECLARE only ``len(_HELLO)`` — with the CRC of that prefix, so zipfile's
