@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 // scale — `--pl-space-{1,2,3,4,6}` (4/8/12/16/24px) — and this card moved every EXACT-scale
 // px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
-// chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/5/6/7/10/14/18px, …) are intentionally LEFT as literals — they wait on the DS
-// gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not spacing).
+// chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). The DS
+// half-step scale (2/6/10px → var(--pl-space-0_5/1_5/2_5)) shipped in protoContent#547 and the
+// owned files now ride it too (pinned by the last test below); the SWEEP itself is unchanged and
+// still flags ONLY the five exact-scale values, and only when they sit in a spacing declaration
+// (a `left: 8px` / `border-radius: 4px` is not spacing). Genuinely uncovered values (1px, 18px,
+// …) stay literals — the DS defines no token for them.
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as fontSizeGuard.test.ts /
 // tokenNameGuard.test.ts: this tsconfig has no node types and under jsdom `import.meta.url`
@@ -140,18 +142,19 @@ describe("no exact-scale px spacing literal in the activity/code-pane/identity/f
     expect(offendersIn("../fleet/fleet.css", commented)).toEqual([]);
   });
 
-  it("pins activity/identity onto the new half-step tokens and holds code-pane/fleet on their literals", () => {
-    // protoContent#547 step 3 (this card): the DS now ships the half-step spacing scale, so
-    // activity.css + identity.css move their surviving half-steps (10/6px) onto
-    // var(--pl-space-2_5)/var(--pl-space-1_5). The two mixed-shorthand pins below assert the
-    // fully tokenized strings — the exact-scale member and the former half-step both read a token.
+  it("pins all four surfaces onto the new half-step tokens (activity/identity/code-pane/fleet)", () => {
+    // protoContent#547 step 3: the DS now ships the half-step spacing scale, so every owned
+    // surface moves its surviving half-steps (10/6px) onto var(--pl-space-2_5)/var(--pl-space-1_5).
+    // Each mixed-shorthand pin asserts the fully tokenized string — the exact-scale member and the
+    // former half-step both read a token.
     expect(CSS_SOURCES["../activity/activity.css"]).toContain("padding: var(--pl-space-2) var(--pl-space-2_5)");
     expect(CSS_SOURCES["../agent/identity.css"]).toContain(
       "padding: var(--pl-space-1_5) var(--pl-space-2) var(--pl-space-1_5) var(--pl-space-1_5)",
     );
-    // code-pane.css + fleet.css still carry their half-step literals — the sibling card tokenizes
-    // those next — so their pins stay on the literal form until then.
-    expect(CSS_SOURCES["../codeviewer/code-pane.css"]).toContain("padding: var(--pl-space-1) 6px");
-    expect(CSS_SOURCES["../fleet/fleet.css"]).toContain("padding: 10px var(--pl-space-1)");
+    // code-pane.css + fleet.css are tokenized by this card too: code-pane's recent/file rows go
+    // var(--pl-space-1) var(--pl-space-1_5) (4/6px) and the fleet row goes
+    // var(--pl-space-2_5) var(--pl-space-1) (10/4px).
+    expect(CSS_SOURCES["../codeviewer/code-pane.css"]).toContain("padding: var(--pl-space-1) var(--pl-space-1_5)");
+    expect(CSS_SOURCES["../fleet/fleet.css"]).toContain("padding: var(--pl-space-2_5) var(--pl-space-1)");
   });
 });
