@@ -17,6 +17,8 @@ import pytest
 import runtime.state as rs
 
 sc = importlib.import_module("server.chat")
+# The room exchange lives in server.chat_rooms (#3838) — patch it there.
+rooms = importlib.import_module("server.chat_rooms")
 
 
 class _Delegate:
@@ -211,7 +213,7 @@ async def test_the_streaming_driver_emits_one_frame_per_exchange(wired, monkeypa
             {"author": "reviewer", "ok": True, "reply": "agreed", "catchup": 2, "truncated": False},
         ]
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _fake)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _fake)
     frames = [f async for f in sc._chat_langgraph_stream_impl("@proto @reviewer status?", "s1")]
     stamps = [dict(p) for k, p in frames if k == "room_reply"]
     assert [(x["author"], x["text"]) for x in stamps] == [("proto", "line 40"), ("reviewer", "agreed")]
@@ -235,7 +237,7 @@ async def test_addressed_turn_opens_live_work_before_delegate_finishes(wired, mo
             {"author": "proto", "ok": True, "reply": "line 40", "catchup": 0, "truncated": False}
         ]
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _slow)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _slow)
     stream = sc._chat_langgraph_stream_impl("@proto status?", "s-progress")
 
     assert await anext(stream) == (
@@ -268,7 +270,7 @@ async def test_the_card_counts_participants_not_dispatches(wired, monkeypatch):
             {"author": "reviewer", "ok": True, "reply": "d", "round": 2, "catchup": 1, "truncated": False},
         ]
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _two_rounds)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _two_rounds)
     frames = [f async for f in sc._chat_langgraph_stream_impl("@proto @reviewer status?", "s-card")]
     ends = [p for k, p in frames if k == "tool_end"]
     assert ends[0]["output"] == "2 replied over 2 rounds"
@@ -290,7 +292,7 @@ async def test_unexpected_address_failure_settles_work_card(wired, monkeypatch):
     async def _boom(message, session_id="", request_metadata=None):
         raise RuntimeError("dispatch machinery broke")
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _boom)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _boom)
     frames = [frame async for frame in sc._chat_langgraph_stream_impl("@proto status?", "s-failed")]
 
     assert frames[:2] == [

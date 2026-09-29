@@ -21,6 +21,8 @@ from graph.config import LangGraphConfig
 
 # The module, not the `chat` function `server/__init__` re-exports under the same name.
 chat_mod = importlib.import_module("server.chat")
+# The room exchange lives in server.chat_rooms (#3838) — patch it there.
+rooms_mod = importlib.import_module("server.chat_rooms")
 
 _OVERFLOW = "Error code: 400 - This model's maximum context length is 128000 tokens."
 
@@ -225,7 +227,7 @@ async def test_streaming_overflow_before_the_native_turn_does_not_compact(graph,
     async def _exploding_exchange(*a, **k):
         raise ValueError(_OVERFLOW)
 
-    monkeypatch.setattr(chat_mod, "_at_delegate_exchange", _exploding_exchange)
+    monkeypatch.setattr(rooms_mod, "_at_delegate_exchange", _exploding_exchange)
 
     frames = [f async for f in chat_mod._chat_langgraph_stream_impl("hello", "s-pre")]
 
