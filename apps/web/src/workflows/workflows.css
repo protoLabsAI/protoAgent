@@ -8,7 +8,7 @@
 .workflow-steps {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: var(--pl-space-1) var(--pl-space-3);
 }
 
@@ -38,14 +38,14 @@
 .builder-focus {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   min-width: 0;
 }
 
 .builder-dot {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   flex: 0 0 auto;
 }
 
@@ -76,7 +76,7 @@
 .builder-input-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   padding: var(--pl-space-2);
@@ -107,7 +107,7 @@
   gap: var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 10px;
+  padding: var(--pl-space-2_5);
 }
 
 .builder-section-head {
@@ -132,15 +132,15 @@
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 5px;
-  padding: 6px var(--pl-space-2);
+  border-radius: var(--pl-radius);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   font: inherit;
 }
 
 .builder-step {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   border-left: 2px solid var(--pl-color-border);
   padding-left: var(--pl-space-2);
 }
@@ -153,7 +153,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
@@ -162,7 +162,7 @@
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -211,7 +211,7 @@
 
 .workflow-step-out strong {
   display: block;
-  margin: 6px var(--pl-space-3) 2px;
+  margin: var(--pl-space-1_5) var(--pl-space-3) var(--pl-space-0_5);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
@@ -243,8 +243,8 @@
 
 .workflow-gate-count {
   min-width: 18px;
-  padding: 1px 6px;
-  border-radius: 9px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-accent);
   color: var(--pl-color-fg-on-accent);
   font-size: var(--pl-font-size-2xs);
@@ -255,9 +255,9 @@
 .workflow-gate-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0 var(--pl-space-3);
-  padding: 10px;
+  padding: var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -287,7 +287,7 @@
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 5px;
+  border-radius: var(--pl-radius);
   padding: var(--pl-space-2);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
@@ -296,7 +296,7 @@
 .workflow-gate-busy {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   justify-content: flex-end;
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-xs);
@@ -316,9 +316,9 @@
 .workflow-lanes {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: var(--pl-space-1) var(--pl-space-3);
-  padding: 10px;
+  padding: var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
@@ -328,7 +328,7 @@
 .workflow-lane {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   flex: none;
 }
 
@@ -340,7 +340,7 @@
 .workflow-lane + .workflow-lane::before {
   content: "";
   position: absolute;
-  left: -14px;
+  left: calc(-1 * var(--pl-space-4));
   top: 50%;
   width: 10px;
   border-top: 1px solid var(--pl-color-border-strong, var(--pl-color-border));
@@ -350,9 +350,9 @@
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
-  padding: 3px var(--pl-space-2);
+  padding: var(--pl-space-0_5) var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
@@ -417,7 +417,7 @@
 
 .run-status {
   padding: 1px var(--pl-space-2);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   font-size: var(--pl-font-size-2xs);
   font-weight: 600;
   border: 1px solid var(--pl-color-border);
@@ -463,7 +463,7 @@
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
-  padding: 7px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   font-size: var(--pl-font-size-sm);
   cursor: pointer;
   list-style: none;
@@ -474,7 +474,7 @@
 }
 
 .run-step .output-block {
-  margin: 0 10px 10px;
+  margin: 0 var(--pl-space-2_5) var(--pl-space-2_5);
 }
 
 .run-step-time {
@@ -525,7 +525,7 @@
 .run-degraded {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0 var(--pl-space-3);
   color: var(--pl-color-status-warning);
   font-size: var(--pl-font-size-xs);
@@ -546,7 +546,7 @@
 .workflow-picker-actions {
   display: flex;
   gap: var(--pl-space-1);
-  padding-bottom: 2px;
+  padding-bottom: var(--pl-space-0_5);
 }
 
 /* Run history — collapsed list of past runs; a row opens it in the timeline. */
@@ -557,7 +557,7 @@
 .run-history summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   cursor: pointer;
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-xs);
@@ -572,15 +572,15 @@
 .run-history-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-top: 6px;
+  gap: var(--pl-space-0_5);
+  margin-top: var(--pl-space-1_5);
 }
 
 .run-history-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
+  gap: var(--pl-space-2_5);
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   border: 1px solid transparent;
   border-radius: var(--pl-radius);
   background: none;
@@ -619,9 +619,9 @@
 }
 
 .builder-chip {
-  padding: 2px var(--pl-space-2);
+  padding: var(--pl-space-0_5) var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-bg);
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-mono);
@@ -638,7 +638,7 @@
   display: flex;
   gap: var(--pl-space-2);
   align-items: flex-start;
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-warning) 40%, transparent);
   border-radius: var(--pl-radius);
   color: var(--pl-color-status-warning);
@@ -647,7 +647,7 @@
 
 .builder-errors svg {
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--pl-space-0_5);
 }
 
 .builder-errors ul {
@@ -690,7 +690,7 @@
 .builder-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   flex-wrap: wrap;
 }
 
@@ -701,10 +701,10 @@
 .builder-toolchip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: var(--pl-space-1) 10px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-1) var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-bg);
   color: var(--pl-color-fg-muted);
   font: inherit;
@@ -730,7 +730,7 @@
 .builder-stage {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   min-width: 0;
   max-width: 100%;
 }
@@ -747,7 +747,7 @@
 .builder-editor {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   min-width: 0;
 }
 
@@ -773,10 +773,10 @@
 .dag-node {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--pl-space-1);
   min-width: 150px;
   max-width: 200px;
-  padding: 7px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg);
@@ -792,7 +792,7 @@
 .dag-node-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
 }
 
@@ -848,7 +848,7 @@
 }
 
 .builder-menu-label {
-  padding: var(--pl-space-1) 10px 2px;
+  padding: var(--pl-space-1) var(--pl-space-2_5) var(--pl-space-0_5);
   font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
