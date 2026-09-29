@@ -13,10 +13,6 @@
   .chip{font-size:11px;color:var(--pl-color-fg-muted,#8a8f98)}
   .chip.stale::before{content:"⟳ ";animation:spin 1.2s linear infinite;display:inline-block}
   @keyframes spin{to{transform:rotate(360deg)}}
-  button.refresh{background:none;border:1px solid var(--pl-color-border,#272b33);color:var(--pl-color-fg,#e6e6e6);
-    border-radius:var(--pl-radius,6px);padding:3px 10px;font-size:12px;cursor:pointer}
-  button.refresh:hover{background:var(--pl-color-bg-subtle,#15181d)}
-  button.refresh:disabled{opacity:.5;cursor:default}
   .err{color:var(--pl-color-status-error,#f85149);font-size:12px;margin:8px 0}
   .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--pl-color-fg-muted,#8a8f98);margin:6px 2px 8px}
   .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 2px 12px}
@@ -48,7 +44,7 @@
   .panel dd{margin:0;overflow-wrap:anywhere}
   .panel a{color:var(--pl-color-accent,#6cb6ff);text-decoration:none}
   .panel a:hover{text-decoration:underline}
-  .panel .close{float:right;background:none;border:none;color:var(--pl-color-fg-muted,#8a8f98);cursor:pointer;font-size:14px;padding:0}
+  #panel-close{float:right}
   .panel .kindtag{display:inline-block;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
     border:1px solid var(--pl-color-border,#272b33);border-radius:4px;padding:0 4px;margin-left:6px;
     color:var(--pl-color-fg-muted,#8a8f98);vertical-align:middle}
@@ -65,7 +61,7 @@
     <h1>Org Chart</h1><div class="sub" id="summary"></div>
     <div class="spacer"></div>
     <span class="chip" id="freshness"></span>
-    <button class="refresh" id="refresh" title="Drop caches and re-crawl the fleet">⟳ Refresh</button>
+    <button class="pl-btn pl-btn--sm" type="button" id="refresh" title="Drop caches and re-crawl the fleet">⟳ Refresh</button>
   </header>
   <div class="legend">
     <span><i style="background:var(--pl-color-accent,#6cb6ff)"></i>this agent</span>
@@ -80,7 +76,7 @@
   <div class="cols">
     <div id="graph" class="gwrap"></div>
     <aside class="panel" id="panel" hidden>
-      <button class="close" id="panel-close" title="Close">✕</button>
+      <button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" id="panel-close" title="Close" aria-label="Close">✕</button>
       <h2 id="p-name"></h2>
       <div class="role" id="p-role"></div>
       <dl id="p-rows"></dl>

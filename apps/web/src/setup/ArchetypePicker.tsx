@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 
 import { RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
+import { Button } from "@protolabsai/ui/primitives";
 
 import { lucideIcon } from "../lib/lucideIcon";
 import type { Archetype } from "../lib/types";
@@ -50,14 +51,15 @@ export function ArchetypePicker({
     list.map((a) => (
       <div key={a.id} className="archetype-card">
         <RadioCard value={a.id} icon={lucideIcon(a.icon, 22)} title={a.label} blurb={a.blurb} />
-        <button
+        <Button
           type="button"
-          className="archetype-preview-link"
+          variant="ghost"
+          size="sm"
           aria-label={`What's included in ${a.label}`}
           onClick={() => setPreviewing(a)}
         >
           What&apos;s included →
-        </button>
+        </Button>
       </div>
     ));
 

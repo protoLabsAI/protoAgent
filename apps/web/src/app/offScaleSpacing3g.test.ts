@@ -164,11 +164,12 @@ describe("no exact-scale px spacing literal in the goals/tools/settings/keybindi
   });
 
   it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): the first three are mixed-shorthand values where the exact-scale
+    // r2 (half-steps unchanged): the two below are mixed-shorthand values where the exact-scale
     // member tokenized and the off-scale member survived — one assertion covers both invariants.
+    // (keybindings.css's `.kb-reset { padding: 2px var(--pl-space-1) }` half-step was retired with
+    // the rule itself when that reset control became a DS Button — protoContent#551, card 4c.)
     expect(CSS_SOURCES["../goals/goals.css"]).toContain("padding: 10px 34px 10px var(--pl-space-3)");
     expect(CSS_SOURCES["./tools.css"]).toContain("padding: var(--pl-space-2) 10px");
-    expect(CSS_SOURCES["../settings/keybindings.css"]).toContain("padding: 2px var(--pl-space-1)");
     // Standalone half-steps elsewhere in the owned files are untouched.
     expect(CSS_SOURCES["../goals/goals.css"]).toContain("gap: 6px");
     expect(CSS_SOURCES["../settings/settings.css"]).toContain("gap: 14px");

@@ -77,19 +77,6 @@
   border-color: var(--pl-color-accent);
   color: var(--pl-color-accent);
 }
-.kb-reset {
-  font: inherit;
-  border: none;
-  background: transparent;
-  color: var(--pl-color-fg-subtle);
-  cursor: pointer;
-  padding: 2px var(--pl-space-1);
-  border-radius: var(--pl-radius);
-}
-.kb-reset:hover {
-  color: var(--pl-color-fg);
-  background: var(--pl-color-bg-hover);
-}
 .kb-row__conflict {
   grid-column: 1 / -1;
   font-size: var(--pl-font-size-xs);

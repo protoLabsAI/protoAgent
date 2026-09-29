@@ -367,14 +367,14 @@ function DelegationRow({ message }: { message: ChatMessage }) {
           </span>
         ) : null}
         {message.content ? (
-          <button
-            type="button"
-            className="chat-delegation-toggle"
+          <Button
+            variant="ghost"
+            size="sm"
             aria-expanded={open}
             onClick={() => setOpen((v) => !v)}
           >
             {open ? "Hide brief" : "Show brief"}
-          </button>
+          </Button>
         ) : null}
       </div>
       {d?.error ? <p className="chat-delegation-error">{d.error}</p> : null}
@@ -419,15 +419,16 @@ function BackgroundReportCard({
         <Button className="chat-report-open" size="sm" variant="ghost" onClick={open}>
           Open
         </Button>
-        <button
-          type="button"
-          className="chat-report-dismiss"
+        <Button
+          variant="ghost"
+          size="xs"
+          icon
           onClick={() => dismiss(report.jobId)}
           title="Dismiss — the report stays in the Background agents panel"
           aria-label="Dismiss report"
         >
           <X size={14} />
-        </button>
+        </Button>
       </div>
     </Message>
   );
@@ -529,15 +530,16 @@ function ScheduledReportCard({
             {title}
           </span>
           <span className="chat-scheduled-time">{fmtFiredAt(scheduled.firedAt)}</span>
-          <button
-            type="button"
-            className="chat-report-dismiss"
+          <Button
+            variant="ghost"
+            size="xs"
+            icon
             onClick={() => dismiss(key)}
             title="Dismiss — the full turn stays in the Activity log"
             aria-label="Dismiss scheduled result"
           >
             <X size={14} />
-          </button>
+          </Button>
         </div>
         <div className="chat-scheduled-summary">{summary}</div>
         <div className="chat-scheduled-actions">
@@ -573,15 +575,16 @@ function ScheduledChip({
         <span className="chat-report-title" title={line}>
           {line}
         </span>
-        <button
-          type="button"
-          className="chat-report-dismiss"
+        <Button
+          variant="ghost"
+          size="xs"
+          icon
           onClick={() => dismiss(key)}
           title="Dismiss — the full turn stays in the Activity log"
           aria-label="Dismiss scheduled result"
         >
           <X size={14} />
-        </button>
+        </Button>
       </div>
     </Message>
   );

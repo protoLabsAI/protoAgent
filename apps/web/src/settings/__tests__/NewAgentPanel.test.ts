@@ -160,9 +160,10 @@ describe("NewAgentPanel — step 1: the picker is cards only", () => {
     expect(buttonNamed(/^Create/, container)).toBeUndefined();
   });
 
-  it("gives every card its own 'What's included' link", async () => {
+  it("gives every card its own 'What's included' DS Button", async () => {
     await mountPanel();
-    const links = [...container.querySelectorAll(".archetype-card .archetype-preview-link")];
+    const links = [...container.querySelectorAll('.archetype-card button[aria-label^="What\'s included"]')];
+    expect(links.every((l) => l.classList.contains("pl-btn"))).toBe(true);
     expect(links.map((l) => l.getAttribute("aria-label"))).toEqual(["What's included in Basic", "What's included in Scout"]);
   });
 

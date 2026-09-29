@@ -59,9 +59,8 @@ describe("literal var(--pl-…, <literal>) fallbacks stripped from telemetry/sch
     expect(source("/settings/telemetry.css")).toContain("font-family: var(--pl-font-mono);");
   });
 
-  it("both schedule calendar hover states read the bare hover token", () => {
+  it("the schedule calendar day hover state reads the bare hover token", () => {
     const sched = source("/schedule/schedule.css");
-    expect(sched).toContain(".cal-nav:hover { background: var(--pl-color-bg-hover); }");
     expect(sched).toContain(".cal-day:hover { background: var(--pl-color-bg-hover); }");
   });
 

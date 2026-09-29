@@ -75,8 +75,10 @@ describe("Chat rem/em font-sizes → DS type scale (DS audit type-scale 2b)", ()
   });
 
   it("produced only in-scale tokens for the migrated sites (counts match the 2b conversion)", () => {
-    // 20 rem sites in chat.css (the em chip is untouched) + the 15 the px migration already left.
-    expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(35);
+    // 20 rem sites in chat.css (the em chip is untouched) + the 15 the px migration already
+    // left, less the one `.chat-delegation-toggle` site removed when that hand-rolled control
+    // was swapped to a DS Button (#551 action-button rule, card 2).
+    expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(34);
     // tool-calls.css had no prior token font-sizes; all 18 come from this migration.
     expect((toolCallsCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(18);
   });
