@@ -19,7 +19,7 @@
 .doc-viewer__title {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 .doc-viewer__heading {
