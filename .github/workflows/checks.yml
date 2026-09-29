@@ -284,7 +284,11 @@ jobs:
     needs: windows-scope
     if: needs.windows-scope.outputs.python_tests == 'true'
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
-    timeout-minutes: 25
+    # 35, not 25: shard 2 ran 17–25 min and was cancelled at the cap on 3 of 12 main
+    # commits (2026-09-29) — the duration seed was a month stale, so ~4.5k newer tests
+    # were unmeasured and piled onto one shard. Regenerate the seed when that recurs:
+    #   pytest tests/ --store-durations --durations-path tests/windows_test_durations.json
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
