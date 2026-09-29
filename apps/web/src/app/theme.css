@@ -1494,22 +1494,6 @@ textarea {
   line-height: 1.4;
 }
 
-/* Archetype "what's included" preview (setup wizard + fleet new-agent panel) */
-.archetype-preview-link {
-  margin-top: var(--pl-space-2);
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  font-size: var(--pl-font-size-xs);
-  cursor: pointer;
-  text-align: left;
-}
-.archetype-preview-link:hover {
-  color: var(--pl-color-fg);
-  text-decoration: underline;
-}
-
 /* Choose-time runtime requirement (#2186 follow-on): the picked archetype needs the
    managed Python runtime and this host hasn't provisioned it. */
 .archetype-runtime-notice {
@@ -1897,9 +1881,8 @@ textarea {
 .archetype-card > .pl-radiocard {
   flex: 1;
 }
-.archetype-card > .archetype-preview-link {
-  margin-top: 0;
-  padding: 2px var(--pl-space-1);
+/* Layout-only: keep the DS "What's included" Button start-aligned in the card column. */
+.archetype-card > .pl-btn {
   align-self: flex-start;
 }
 .archetype-step-actions {
