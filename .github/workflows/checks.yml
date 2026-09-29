@@ -208,7 +208,11 @@ jobs:
   tests:
     name: Python tests
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
-    timeout-minutes: 15
+    # The suite runs 12–14 min on a free runner and grows with every PR; at 15 the
+    # cap cancelled green runs mid-suite (2 of 15 main commits on 2026-09-29, plus
+    # PRs), and a cancelled required check blocks the merge. 25 matches the
+    # Windows lanes; if it creeps toward this too, shard it like they are.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
