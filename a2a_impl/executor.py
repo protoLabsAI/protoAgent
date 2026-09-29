@@ -108,32 +108,47 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
     ``wait_for`` cancel propagates into the tool call itself.
 
     ``seconds <= 0`` disables the guard and passes the stream straight through.
-    """
-    if seconds <= 0:
-        async for item in stream:
-            yield item
-        return
 
-    iterator = stream.__aiter__()
-    while True:
-        try:
-            item = await asyncio.wait_for(iterator.__anext__(), seconds)
-        except StopAsyncIteration:
+    Closing THIS generator closes ``stream`` too (#3876): a bare ``async for`` does not
+    close the generator it iterates when the iterating generator is itself closed, so the
+    stream's ``finally`` (thread-lock release, trace flush) would otherwise wait for the
+    event loop's async-generator finalizer. The stall path closes ``stream`` itself, so the
+    ``finally`` skips it there — ``stream`` is closed exactly once either way.
+    """
+    closed = False
+    try:
+        if seconds <= 0:
+            async for item in stream:
+                yield item
             return
-        except TimeoutError:
-            # The step is already cancelled by wait_for; aclose() finalizes the
-            # generator so its `finally` blocks run. Bounded and best-effort —
-            # a cleanup that hangs must not replace one hang with another.
+
+        iterator = stream.__aiter__()
+        while True:
             try:
-                await asyncio.wait_for(stream.aclose(), 5.0)
-            except (Exception, asyncio.CancelledError):  # noqa: BLE001
-                logger.debug("[a2a] stalled stream did not close cleanly", exc_info=True)
-            raise TurnStalled(
-                f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
-                "It was stopped rather than left running invisibly — the last step never "
-                "returned. Retry, or narrow whatever that step was doing."
-            ) from None
-        yield item
+                item = await asyncio.wait_for(iterator.__anext__(), seconds)
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                # The step is already cancelled by wait_for; aclose() finalizes the
+                # generator so its `finally` blocks run. Bounded and best-effort —
+                # a cleanup that hangs must not replace one hang with another.
+                closed = True
+                try:
+                    await asyncio.wait_for(stream.aclose(), 5.0)
+                except (Exception, asyncio.CancelledError):  # noqa: BLE001
+                    logger.debug("[a2a] stalled stream did not close cleanly", exc_info=True)
+                raise TurnStalled(
+                    f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
+                    "It was stopped rather than left running invisibly — the last step never "
+                    "returned. Retry, or narrow whatever that step was doing."
+                ) from None
+            yield item
+    finally:
+        if not closed:
+            # A no-op when ``stream`` already finished (exhausted or raised); otherwise
+            # this is the guard being closed/cancelled at a ``yield`` — close ``stream``
+            # now rather than leave its cleanup to GC.
+            await stream.aclose()
 
 
 @dataclass
@@ -753,8 +768,14 @@ class ProtoAgentExecutor(AgentExecutor):
         # so the failure names the step that never returned instead of just "stalled".
         last_activity = ["starting up"]
 
+        # The guarded stream, held so the `finally` can close it (#3876). Every terminal
+        # branch below RETURNS from inside the loop with the stream suspended at the
+        # terminal frame's `yield`; a bare `async for` leaves it there, so its `finally`
+        # — the chat driver's per-thread lock release, trace flush, turn bookkeeping —
+        # waited for the event loop's async-generator finalizer (GC).
+        guarded: AsyncGenerator[tuple[str, Any], None] | None = None
         try:
-            async for event_type, payload in _stall_guarded(
+            guarded = _stall_guarded(
                 self._stream_factory(
                     text,
                     context.context_id,
@@ -765,7 +786,8 @@ class ProtoAgentExecutor(AgentExecutor):
                 ),
                 self._stall_timeout_seconds(),
                 last_activity,
-            ):
+            )
+            async for event_type, payload in guarded:
                 _capture_trace_id()
                 # A contiguous reasoning run ends at the first non-reasoning event:
                 # flush the buffered tail first so frames reach the consumer in
@@ -1007,6 +1029,23 @@ class ProtoAgentExecutor(AgentExecutor):
             _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
 
         finally:
+            # Close the stream BEFORE returning (#3876). Ordering, deliberately:
+            #   1. the terminal frame (completed / input-required / failed) is already
+            #      enqueued above, so a slow cleanup never delays it reaching the client;
+            #   2. `_notify_terminal` already ran, while the stream was still suspended
+            #      inside its trace scope (the trace id was captured in the loop anyway);
+            #   3. the stream's cleanup then runs HERE, in this task and context, before
+            #      execute() returns — so a blocking message/send (whose response waits
+            #      for this producer to finish) never answers while the thread lock is
+            #      still held, and a streaming client's next message queues on the lock
+            #      for at most this cleanup, never for GC.
+            # A no-op when the stream already finished (exhausted, raised, or stalled —
+            # the stall guard closes its own stream).
+            if guarded is not None:
+                try:
+                    await guarded.aclose()
+                except Exception:  # noqa: BLE001 — the turn's outcome is already recorded
+                    logger.exception("[a2a] stream cleanup raised for task %s", context.task_id)
             # Every `_outcome` read happens in the except/return paths above, so
             # disarming here can never lose a turn's samples. Also covers the
             # input_required park — the resumed execute() re-arms fresh.
