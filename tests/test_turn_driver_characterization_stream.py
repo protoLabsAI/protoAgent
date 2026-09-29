@@ -1117,10 +1117,11 @@ async def test_a_custom_thread_resolver_keys_the_turn(env, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_record_failed_turn_keys_the_default_thread_even_under_a_custom_resolver(env, monkeypatch):
-    """ODDITY: ``record_failed_turn`` resolves the thread with NO request metadata, so a
-    resolver that scopes off metadata records the failure on a different thread than the
-    one the turn ran on."""
+async def test_record_failed_turn_keys_the_turns_own_thread_under_a_custom_resolver(env, monkeypatch):
+    """A failed turn is recorded on the thread it RAN on (#3871): the driver hands its
+    resolved thread id to ``record_failed_turn`` instead of it re-resolving without the
+    request metadata (which put the record on ``proj-None:…`` under a metadata-aware
+    resolver)."""
     monkeypatch.setattr(
         env.state, "thread_id_resolver", lambda md, sid: f"proj-{md.get('project')}:{sid}", raising=False
     )
@@ -1129,7 +1130,7 @@ async def test_record_failed_turn_keys_the_default_thread_even_under_a_custom_re
     await _run("hello", "s-res", request_metadata={"project": "p9"})
 
     assert g.stream_calls[0][1]["configurable"]["thread_id"] == "proj-p9:s-res"
-    assert g.updates[0][0] == {"configurable": {"thread_id": "proj-None:s-res"}}
+    assert g.updates[0][0] == {"configurable": {"thread_id": "proj-p9:s-res"}}
 
 
 @pytest.mark.asyncio
@@ -1186,3 +1187,26 @@ async def test_a_caller_trace_with_only_a_trace_id(env):
 
     assert env.trace.sessions[0]["metadata"]["caller_trace_id"] == "T1"
     assert "caller_span_id" not in env.trace.sessions[0]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_turn_failure_is_recorded_on_the_metadata_resolved_thread(env, monkeypatch):
+    """#3871: a failure BEFORE the native turn resolved its thread (the pre-turn chain) is
+    still recorded on the metadata-aware thread, not the metadata-less default."""
+    from server import chat_dispatch
+
+    monkeypatch.setattr(
+        env.state, "thread_id_resolver", lambda md, sid: f"proj-{md.get('project')}:{sid}", raising=False
+    )
+    g = env.install(streams=[])
+
+    async def _boom(pre, session_id, request_metadata):
+        raise ValueError("pre-turn boom")
+        yield  # pragma: no cover — makes this an async generator
+
+    monkeypatch.setattr(chat_dispatch, "_pre_turn_dispatch", _boom)
+
+    frames = await _run("hello", "s-pre", request_metadata={"project": "p9"})
+
+    assert frames == [("error", "pre-turn boom")]
+    assert g.updates[0][0] == {"configurable": {"thread_id": "proj-p9:s-pre"}}

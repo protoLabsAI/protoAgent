@@ -1208,11 +1208,14 @@ async def _force_compact_for_overflow(thread_id: str, session_id: str) -> bool:
         return False
 
 
-async def _fail_turn(exc: BaseException, session_id: str, *, tag: str) -> str:
+async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id: str | None = None) -> str:
     """Log, record (#2593) and describe a failed turn — ONE classifier for both drivers,
     so the two surfaces leave the SAME transcript and the same log shape. Returns the
     user-facing message (the streaming driver's ``error`` payload; the non-streaming
-    driver wraps it as ``**Error:** …``)."""
+    driver wraps it as ``**Error:** …``).
+
+    ``thread_id`` is the thread the turn ran on, as the driver resolved it — the record
+    must land THERE, not on a re-resolution without the turn's request metadata (#3871)."""
     if _is_provider_stream_drop(exc):
         log.warning(
             "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
@@ -1225,7 +1228,7 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str) -> str:
     else:
         log.error("[%s] unhandled exception for session=%s: %s", tag, session_id, exc, exc_info=exc)
         msg = str(exc)
-    await record_failed_turn(session_id, f"**Error:** {msg}")
+    await record_failed_turn(session_id, f"**Error:** {msg}", thread_id=thread_id)
     return msg
 
 
@@ -1424,7 +1427,10 @@ async def _chat_langgraph_stream_impl(
                     e = retry_exc
             # Same record as the non-streaming path: the two surfaces must leave the
             # SAME transcript, or an exported thread depends on which one ran (#2593).
-            yield ("error", await _fail_turn(e, session_id, tag="a2a-stream"))
+            # Record on the thread the turn ran on (#3871): `_tid` once the native turn
+            # resolved it, else the same metadata-aware resolution (pre-turn chain / ACP).
+            _fail_tid = _tid or _turn_control._resolve_thread_id(request_metadata, session_id)
+            yield ("error", await _fail_turn(e, session_id, tag="a2a-stream", thread_id=_fail_tid))
         finally:
             tracing.flush()
 
@@ -1455,7 +1461,7 @@ def _upstream_status(exc: BaseException) -> int | None:
     return code if isinstance(code, int) and 400 <= code < 600 else None
 
 
-async def record_failed_turn(session_id: str, text: str) -> bool:
+async def record_failed_turn(session_id: str, text: str, *, thread_id: str | None = None) -> bool:
     """Append a failed turn's error to its checkpointed thread. Returns True if recorded.
 
     A turn that raises used to leave the checkpoint holding only the user's message: the
@@ -1472,6 +1478,11 @@ async def record_failed_turn(session_id: str, text: str) -> bool:
 
     Best-effort by construction: this runs ON the failure path, so it must never raise and
     mask the error it exists to describe.
+
+    ``thread_id`` is the thread the failed turn ran on. Callers that resolved it (both
+    turn drivers) must pass it: re-resolving here has no request metadata, so under a
+    metadata-aware resolver (ADR 0069 D4) the record landed on a different thread
+    (#3871). Omitted, it falls back to the metadata-less default resolution.
     """
     graph = STATE.graph
     if graph is None or not text.strip():
@@ -1480,7 +1491,7 @@ async def record_failed_turn(session_id: str, text: str) -> bool:
         from langchain_core.messages import AIMessage  # lazy, like every other use here
 
         await graph.aupdate_state(
-            {"configurable": {"thread_id": _turn_control._resolve_thread_id(None, session_id)}},
+            {"configurable": {"thread_id": thread_id or _turn_control._resolve_thread_id(None, session_id)}},
             {"messages": [AIMessage(content=text, additional_kwargs={"protoagent_turn_failed": True})]},
         )
         return True
@@ -1837,7 +1848,7 @@ async def _chat_langgraph_impl(
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly
                     log.exception("[chat] overflow retry failed for session=%s: %s", session_id, retry_exc)
                     e = retry_exc
-            msg = await _fail_turn(e, session_id, tag="chat")
+            msg = await _fail_turn(e, session_id, tag="chat", thread_id=native_tid)
             return _traced([{"role": "assistant", "content": f"**Error:** {msg}", "error": turn_error(e, msg)}])
         finally:
             tracing.flush()
