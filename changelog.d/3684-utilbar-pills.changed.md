@@ -1,1 +1,0 @@
-- **Utility-bar pills use the design-system Button (#3684).** The command palette, background-agents, and shared utility-widget pills are now DS `<Button icon size="xs" variant="ghost">` instead of bespoke `.util-btn` elements, keeping their testids, aria-labels, tooltips, and the background-jobs unread dot.

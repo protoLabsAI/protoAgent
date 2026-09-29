@@ -15,6 +15,527 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.185.0] - 2026-09-29
+
+### Added
+- **execute_code spills long output to a file instead of dropping it (#3701).** When a script's stdout exceeds `output_truncate`, the head is still returned inline, but the FULL output is now written to a per-session scratch file under the plugin store (`spill/`) and the marker names the absolute path plus a **paged** recovery read that starts past the head — so a follow-up read returns the tail, not the same head again, and evidence sweeps no longer have to re-run with narrower prints. Spill files are capped at 5 MB and pruned after 24h; a failed write falls back to the old truncation marker and never fails the run.
+
+- **`onboard_project(refresh=true)` fetches and fast-forwards an existing clone (#3733).** Re-onboarding a checkout already on disk never fetched, so its "up to date with origin/main" was only as fresh as the last fetch, and an agent with no shell had no safe way to update it. `refresh=true` fetches the upstream and fast-forwards. It never resets or merges: it refuses, with the reason, on uncommitted tracked changes, a branch with no upstream, or local commits the upstream doesn't have. Without `refresh`, reuse still leaves the directory untouched and now says how to refresh it.
+
+- **Langfuse: Claude Code coder runs now trace every model call. Its native OTel spans nest under the `acp:` span through a local relay that strips account identity and maps token usage (#3742).**
+  While tracing is on, a `claude-agent-acp` coder is spawned with Claude Code's native tracing, exporting to `127.0.0.1`. The relay drops `user.email`, `organization.id` and account ids, which Claude Code can't turn off. It redacts string attributes, maps token counts to `gen_ai.usage.*` (so Langfuse prices each call), moves a pooled process's later turns into their own traces, and forwards with this process's credentials. The agent-reported turn totals become a generation only if no native model-call span arrives for that turn, so the spend is never counted twice or lost. The coder never sees the Langfuse keys, and prompt and tool content stay off. Opt out with `PROTOAGENT_ACP_NATIVE_TRACING=0`.
+
+- **Model in-flight limiter settings (#3760).** New agent-scoped, hot-reloadable config keys `model.max_inflight` (default 0, limiter off), `model.inflight_queue_timeout` (300 s), and `model.inflight_interactive_reserve` (1) size a per-process cap on concurrent model calls per lane (ADR 0115 D2); nothing reads them yet.
+
+- **Per-lane in-flight limiter core for model calls (#3760).** New `graph/llm_limiter.py` implements the pure ADR 0115 mechanism — a bounded, priority-ordered (`interactive` > `default` > `bulk`, with per-minute aging and an interactive reserve) wait queue per `(base_url, model)` lane, a `GatewayQueueTimeout`, and a D8 snapshot — off by default and wired in by later cards.
+
+- **Model lane telemetry: queue depth, wait time, GET /api/telemetry/llm-lanes (#3760).** The ADR 0115 in-flight limiter now feeds four Prometheus signals (inflight, queue depth, queue wait, queue timeouts) and exposes its per-lane snapshot over `GET /api/telemetry/llm-lanes` and `sdk.llm_lanes()`, so operators and in-process plugins can tell a lane that is deliberately queuing from a gateway that has gone slow.
+
+- **Priority classes for the model in-flight limiter (#3760).** Operator chat and console turns now run under the ADR 0115 `interactive` class and recipe fan-out steps under `bulk`, while A2A, background and scheduled turns stay `default`; `sdk.llm_priority(cls)` lets a plugin tag its own block of model calls (pr-reviewer marks its review panels `bulk`).
+
+- **Model calls acquire a per-lane in-flight slot when model.max_inflight is set (#3760).** Every gateway, codex, and anthropic-oauth chat call now takes one ADR 0115 slot per `(base_url, model)` lane — acquired outside the stream timeout guard so queue wait never counts toward `request_timeout`, held until the stream ends or is cancelled, and re-acquired (with the original arrival) across reconnects; `max_inflight: 0` stays a pure pass-through.
+
+### Changed
+- **Fleet Room composer moves onto the design system (#3683).** The broadcast bar's raw text
+  input and send button are replaced by the DS `PromptInput` from `@protolabsai/ui/ai`, which
+  now owns the field/send chrome. The @-mention / broadcast target renders as a `PromptInput`
+  attachment chip above the field: a specific member is a removable chip (removing it clears the
+  target back to broadcast) and the "Everyone else · N" fan-out is a read-only chip. Enter, ⌘↵
+  (force broadcast) and the @-mention flow are unchanged. Part of #3683.
+
+- **Remaining hand-rolled form controls move onto the design system (#3683).** The Skills
+  editor's two raw `<input type="checkbox">` (invokable-as-slash and its user-only companion)
+  become the DS `Checkbox` from `@protolabsai/ui/forms`, and the workflow gate editors' raw
+  `<textarea className="workflow-gate-edit">` (PendingGateCard + the inline run-timeline gate)
+  become the DS `Textarea`. Behaviour is unchanged: each checkbox keeps its `aria-label`
+  accessible name and its visible `/slash` label, unchecking the slash trigger still clears
+  "user only", and each textarea keeps its `workflow-gate-edit` styling, `edited prompt`
+  accessible name, `rows`, value and change handler. Separately, the activity feed's local
+  `Badge` helper — which shadowed the DS `Badge` name yet only renders the provenance row — is
+  renamed `OriginProvenance`; its markup is unchanged.
+
+- **Fleet Room roster + diagnostics controls move onto the design system (#3683).** The last raw
+  `<button>`s and `<input>` in the Fleet Room are replaced by the DS `Button` and `Input`: the
+  roster member button, the per-row start/stop, diagnostics and open-console icon buttons, the
+  @-mention list items, and the diagnostics drawer's Back, Retry, Refresh and Inspect buttons plus
+  the task-id field. Refresh and Inspect now use `Button`'s `loading` prop while their read is in
+  flight (spinner + disabled), and the field/button chrome — padding, border, background, radius,
+  hover and focus rings — is owned by the DS instead of hand-rolled CSS. Behaviour, disabled
+  conditions and accessible names are unchanged. Completes #3683.
+
+- **Background-agents dialog markup moved to design-system Button + Accordion (#3684).** Clear-finished, jump-to-chat, stop and delete are now DS `Button`s (destructive stop/delete use the `danger` variant), and each job is a DS `Accordion`/`AccordionItem` disclosure instead of a hand-rolled expander — non-expandable jobs render an inert trigger.
+
+- **Mobile session switcher rebuilt on the DS Drawer (#3684).** The mobile chat-first shell's session sheet now renders a DS `Drawer side="bottom"` with DS Buttons instead of hand-rolled sheet chrome, so it inherits the design system's scrim, slide-in, Escape/overlay dismiss, focus trap and `<body>` portal (focus return to the trigger is added in the consumer, since the DS Drawer doesn't restore it yet).
+
+- **Utility-bar pills use the design-system Button (#3684).** The command palette, background-agents, and shared utility-widget pills are now DS `<Button icon size="xs" variant="ghost">` instead of bespoke `.util-btn` elements, keeping their testids, aria-labels, tooltips, and the background-jobs unread dot.
+
+- **Utility-bar chrome now uses DS Button (#3684).** The Settings pill and the bottom/left/right panel toggles are DS `Button icon size="xs" variant="ghost"`; the panel toggles expose their shown/collapsed state via `aria-pressed` (true = shown) instead of the old `is-off` class, and the dead `.status-dot` topbar-health CSS is removed.
+
+- **App chrome no longer re-implements the design system (#3684).** The operator console's app
+  chrome is fully on DS components now: the utility-bar pills and panel toggles are DS `Button`s
+  (xs, ≥24px touch targets, `aria-pressed` reflecting shown/hidden state), the mobile session
+  switcher rides a DS `Drawer side="bottom"`, and the Background agents dialog is a DS
+  `Accordion`/`AccordionItem` + `Button` disclosure. All the hand-rolled chrome those replaced —
+  `.util-btn`, `.status-dot`, the mobile sheet's backdrop/grip, and the Background-jobs
+  `rowmain`/`rowhead`/`stop`/`clear` control rules — is deleted, and the surviving `.bg-jobs-*`
+  content styling drops its `#hex` fallbacks and literal radii for DS tokens.
+
+- **App shell, tools rail and the protoLabs icon drop their dark-only token fallbacks and legacy `--brand-*` aliases (#3685).**
+  `app/theme.css`, `app/tools.css` and `app/ProtoLabsIcon.tsx` pinned `var(--pl-…, #hex)`
+  fallbacks (activity/field/inbox status tints, input inset, resize handle, tools-row pulse,
+  knowledge drop, the accent icon and its gradient) and leaned on the retired `--brand-violet*`
+  / `--brand-indigo-bright` aliases (metric/status/setup icons, setup progress + icon chrome,
+  settings/setup help links). Since `@protolabsai/design` loads before any app CSS the `--pl-*`
+  tokens always resolve, so the fallbacks could only ever paint a frozen dark colour — deaf to
+  light mode and to ThemePanel overrides. All hex fallbacks are dropped for the bare
+  `var(--pl-…)`; alias TEXT/icon sites now read `--pl-color-accent-fg` (AA on light and dark)
+  and fill/border sites read `--pl-color-accent`.
+
+- **The last legacy `--brand-*` accent aliases are deleted and the token-hygiene invariants go tree-wide (#3685).**
+  `app/theme-base.css` was the final home of the retired `--brand-violet`/`--brand-violet-light`/
+  `--brand-indigo`/`--brand-indigo-bright`/`--brand-pink` aliases (two of them still carrying a
+  dark-only `var(--pl-color-accent, #hex)` fallback); with every consumer already re-pointed onto
+  real `@protolabsai/design` tokens they are now removed, so `--brand-*` appears nowhere in the
+  console. The `--success`/`--warning`/`--error`/`--danger`/`--info` status compat aliases are
+  kept byte-identical. `app/tokenNameGuard.test.ts` gains two tree-wide sweeps that turn the
+  earlier per-sheet strips into repo-wide guards: no `var(--pl-…, #hex)` fallback may ship outside
+  `app/app-crash.css` and the `theme-base.css` status aliases, and the `--brand-` prefix may not
+  appear anywhere but that guard (built by concat). Both report `src/<path>:<line>` and self-test
+  their patterns.
+
+- **Chat stylesheets drop dead literal fallbacks in `var(--pl-*, …)` reads (#3685).** The pinned design-system tokens are always loaded before app CSS — and `tokenNameGuard.test.ts` proves every `var(--pl-*)` (including `--pl-motion-base`/`--pl-motion-ease`) is declared by the installed DS — so a literal fallback could never paint. The chat mono-stack sites (`chat-component.css`, `promptviewer.css`), the usage-tip `--pl-font-sans` and the model-select `--pl-color-bg-raised` in `chat.css`, and the tool-spotlight animation's `--pl-motion-base`/`--pl-motion-ease` in `tool-calls.css` now read the bare tokens. Value-only edits; nested token fallbacks (`var(--pl-a, var(--pl-b))`) are untouched.
+
+- **Code viewer, activity feed and schedule builder drop their dark-only token fallbacks (#3685).**
+  These three stylesheets read `var(--pl-…, #hex)` custom properties, but the design
+  package loads before any app CSS so the `--pl-*` tokens always resolve — the hex
+  fallbacks could only ever paint a frozen dark colour, never help. They are removed, and
+  the retired `--brand-*` aliases are re-pointed to real DS tokens: the scheduler origin
+  tint uses `--pl-color-chart-series2`, the a2a origin uses `--pl-color-chart-series8`, and
+  the calendar's selected day uses the `--pl-color-accent` / `--pl-color-fg-on-accent` pair
+  instead of a hardcoded violet with white text. All now track light mode and per-agent
+  ThemePanel overrides.
+
+- **Settings and Memory stylesheets drop their dark-only hex fallbacks and legacy `--brand-*` aliases (#3685).** The pinned design-system tokens are always loaded before app CSS, so a `var(--pl-…, #hex)` fallback could only ever paint a wrong, dark-only colour. The snapshot, path-picker, settings and memory sheets now reference the bare `--pl-*` tokens, and the path-picker selection tint plus the settings dirty-row marker read `--pl-color-accent` instead of the retired `--brand-violet*` aliases — so muted text, the snapshot tab underline and status text, the selection tint and the active-row marker all track the active theme (e.g. memory muted text resolves to the light `#52525b` under `data-theme="light"`). No new hex literals.
+
+- **Console: drop the dead literal `var(--pl-X, …)` fallbacks in fleet-room / fleet-activity / work / hitl CSS (#3685).**
+  `main.tsx` imports `@protolabsai/design` before any app CSS and `tokenNameGuard.test.ts`
+  proves every `var(--pl-*)` resolves to an installed-DS token, so a literal fallback in
+  `var(--pl-X, <literal>)` can never paint — it is dead, drifted code. The mono font stacks
+  (`ui-monospace, "SF Mono", Menlo, monospace`) and the popover-shadow literals
+  (`0 2px 8px rgba(…)` / `0 -10px 28px -14px rgba(…)`) are removed, leaving the bare
+  `var(--pl-font-mono)` / `var(--pl-shadow-popover)` — rendering is unchanged. The two
+  token-to-token fallbacks in `fleet-room.css` (the @-mention popover's raised-surface and
+  strong-border sites) are left intact. A new source-level guard (`dsStaleFallbackDrop1b.test.ts`)
+  pins the drop for the four files.
+
+- **Drop dead literal `var(--pl-*)` fallbacks in goals/memory CSS (#3685).** `main.tsx` loads
+  `@protolabsai/design` before any app CSS and `tokenNameGuard.test.ts` proves every `var(--pl-*)`
+  resolves, so a literal fallback can never paint — it is drifted, dark-only dead code. Rewrote the
+  two audited sites to read the bare token: `goals.css` `.goal-row:hover` background
+  (`var(--pl-color-bg-hover, rgba(127,127,127,0.06))` → `var(--pl-color-bg-hover)`) and `memory.css`
+  `.memory-detail-snippet` color (`var(--pl-color-fg, inherit)` → `var(--pl-color-fg)`). Added
+  `apps/web/src/app/dsStaleFallbackGoalsMemory.test.ts`, a compile-time `?raw` guard (no `node:fs`)
+  that fails if a literal `var(--pl-*, …)` fallback creeps back into either sheet while still allowing
+  nested token fallbacks (`var(--pl-x, var(--pl-y))`). Part of the DS-adoption audit (rule
+  stale-fallback).
+
+- **The stale-fallback cleanup goes tree-wide: no `var(--pl-…, <literal>)` fallback may ship (#3685).**
+  Cards 1a–1f dropped every literal `var(--pl-…, <value>)` fallback from `apps/web/src` one surface
+  at a time; `app/tokenNameGuard.test.ts` now turns that into a single tree-wide invariant, strictly
+  wider than the existing hex sweep. Because the pinned `@protolabsai/design` tokens always load
+  before app CSS, any literal fallback is dead weight that can only paint a wrong, theme-deaf value —
+  so hex, `rgba()`/`color-mix()`, font stacks, shadows, `inherit` and bare px values are all now
+  rejected. The one legal shape is a nested TOKEN fallback whose value is ENTIRELY another
+  `var(--pl-…)` read (e.g. `var(--pl-color-fg-subtle, var(--pl-color-fg-muted))`); the fallback is
+  parsed with balanced parentheses so an `rgba(…)` or `0 2px 8px rgba(…)` shadow is caught whole.
+  Only `app/app-crash.css` (the root error-boundary screen, #872) and `*.test.ts(x)` fixtures are
+  exempt. `theme-base.css` is no longer exempt from the hex rule either — card 1a dropped its
+  status-alias hex fallbacks — while its `--success`/`--info` status compat aliases stay pinned.
+  Both sweeps report sorted `src/<path>:<line>` and self-test their patterns (built by concat).
+
+- **Web: dropped dead literal `var(--pl-*, <fallback>)` font fallbacks in four DS-token sites (#3685).** `main.tsx` loads `@protolabsai/design` before any app CSS, so `--pl-font-mono`/`--pl-font-sans` always resolve and the literal `ui-monospace, monospace`/`monospace`/`inherit` fallbacks in the activity feed, Identity panel, and code viewer were dead code — rewritten to bare `var(--pl-X)`. Nested token fallbacks (`var(--pl-a, var(--pl-b))`) and the type-scale-owned `fontSize` are untouched; a source-level guard pins the strip.
+
+- **Telemetry, schedule and snapshot stylesheets drop their literal `var(--pl-…, <literal>)` fallbacks (#3685).** The design package's tokens are always loaded (via `main.tsx`) before any app CSS, so a literal fallback in `var(--pl-…, <literal>)` is dead code that could never paint. The telemetry trace links now read `var(--pl-font-mono)`, the schedule calendar hover states read `var(--pl-color-bg-hover)`, and the snapshot rows/caveat read `var(--pl-color-bg-inset)` — all bare tokens. No token names change, no new literals are added, and token-to-token `var()` fallbacks are left untouched.
+
+- **Workflows surface CSS drops its stale dark-only hex fallbacks (#3685).**
+  Every `var(--pl-…, #hex)` in `apps/web/src/workflows/workflows.css` — status
+  dots, badges, borders and accent text, including the ones nested in
+  `color-mix()` — is now a bare `var(--pl-…)`. The design package's tokens are
+  always loaded before any app CSS, so those `#hex` fallbacks could never paint
+  anything but a wrong, dark-only colour; removing them lets the workflow
+  status/accent colours track the active theme (they resolve to the light token
+  values under `data-theme="light"`). No token names change and no new hex
+  literals are added; token-to-token `var()` fallbacks are left untouched.
+
+- **Feed pill unread badge is now the DS `Count` primitive (#3688).** The Activity/Feed
+  widget's hand-rolled `<span>` badge is replaced by `Count` from `@protolabsai/ui/primitives`,
+  so it renders as `span.pl-count`. The alert-state `.activity-badge--alert` rule in
+  `app/theme.css` colours it with the bare `var(--pl-color-status-error)` token (no hex
+  fallback) and still wins over `.pl-count` at equal specificity. Text logic, the
+  `data-alert="now"` blocked-page marker, and the unread/pending render condition are unchanged.
+
+- **Tabbed AppShell columns use the DS `<Tabs attached>` fused-surface layout (#3688).** The
+  plugin sub-tab strip now fuses to its panel card via `@protolabsai/ui` 0.63's `<Tabs attached>`
+  (top-radiused `bg-raised` strip, border on every side but the bottom, next-sibling panel drops
+  its own top edge) instead of the local `.pl-appshell__col > .pl-tabs` / `.pl-appshell__bottom`
+  override, which is deleted. Rail and bottom-dock plugin views read as one card as before;
+  embedded Configure mode stays detached.
+
+- **Chat ▸ chat / prompt-viewer / chat-component / HITL stylesheets adopt the DS type scale (#3688).** The 42 in-range `font-size:<n>px` literals in `chat/chat.css`, `promptviewer.css`, `chat-component.css` and `hitl.css` now reference the bare `--pl-font-size-*` tokens (9/11/12/13px map to `3xs`/`2xs`/`xs`/`sm` at identical px). Seven half-pixel sites snapped to their nearest token px (12.5px → `sm`/13px, 10.5px → `2xs`/11px) — a +0.5px change; every site is in the 9-18px range, so no DS gap remains. Only `font-size` values changed — the HITL accent chain and the composer field outline suppression are untouched. No px fallbacks, no new hex literals.
+
+- **Console: drop the app-wide `.pl-dialog__body` padding rule now that dialogs carry the DS `padding` prop (#3688).**
+  Every content `<Dialog>` in the console passes `padding="roomy"` (`.pl-dialog__body--roomy`, 24px)
+  and the three edge-to-edge dialogs pass `padding="none"` (`.pl-dialog__body--flush`, 0), so the
+  body inset is sourced entirely from the design-system `Dialog` component. This removes the redundant
+  local CSS: the unscoped `.pl-dialog__body { padding: 24px }` default in `theme.css`, and the
+  `padding: 0` counter-overrides on `.settings-overlay`/`.theme-quick-dialog` (`settings.css`) and
+  `.goal-create-modal` (`goals.css`). Dialogs render identically — content dialogs keep a 24px body,
+  the settings/theme/goal dialogs stay flush with their existing height/overflow/flex behaviour.
+  Final part of #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Console: edge-to-edge content dialogs opt into DS 0.63 `<Dialog padding="none">` (#3688).**
+  The settings overlay (`SettingsOverlay`), the theme quick dialog (`ThemeQuickButton`) and the
+  goal-create dialog (`GoalsPanel`) now pass `padding="none"`, which `@protolabsai/ui` 0.63.0
+  renders as `.pl-dialog__body--flush` (padding 0). These three dialogs are edge-to-edge today only
+  because scoped CSS counter-overrides the app-wide `.pl-dialog__body { padding: 24px }` rule; while
+  that global rule still exists the scoped rules win and these dialogs render identically. Declaring
+  the intent on the component is what keeps them flush once a later card deletes both the scoped
+  `padding: 0` declarations and the global rule (the DS default is 16px). Each dialog keeps its
+  scoped className; no CSS changes. Part of #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Console: mcp-catalog, docviewer, knowledge & memory content dialogs opt into DS 0.63 `<Dialog padding="roomy">` (#3688).**
+  The common-MCP-server catalog dialog (`McpCatalogDialog`), the document reader
+  (`DocumentViewer`), both knowledge-store dialogs — add-source and add-entry
+  (`KnowledgeStore`) — and the memory injection-detail dialog (`MemorySurface`) now pass
+  `padding="roomy"`, which `@protolabsai/ui` 0.63.0 renders as `.pl-dialog__body--roomy`
+  (24px). While the app-wide `.pl-dialog__body { padding: 24px }` rule still exists these
+  dialogs render identically; the opt-in is what preserves their 24px body padding once a
+  later card deletes that global rule (the DS default is 16px). No CSS changes. Part of
+  #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Console: schedule & settings content dialogs opt into DS 0.63 `<Dialog padding="roomy">` (#3688).**
+  The new-schedule and edit/view-schedule dialogs (`SchedulePanel`), the add/edit-delegate dialog
+  (`DelegatesSection`), the archetype setup dialog (`NewAgentPanel`) and the pair-remote-fleet dialog
+  (`PairRemoteDialog`) now pass `padding="roomy"`, which `@protolabsai/ui` 0.63.0 renders as
+  `.pl-dialog__body--roomy` (24px). While the app-wide `.pl-dialog__body { padding: 24px }` rule still
+  exists these dialogs render identically; the opt-in is what preserves their 24px body padding once a
+  later card deletes that global rule (the DS default is 16px). No CSS changes. Part of #3688 (DS 0.63
+  card 3, Dialog body padding).
+
+- **Content dialogs opt into DS Dialog `padding="roomy"` (#3688).** The persona version-history,
+  auth-required, update-available, and watch-create dialogs now pass `padding="roomy"` so their
+  bodies keep 24px padding once the app-wide `.pl-dialog__body` rule is removed by a later DS 0.63
+  card. While that global rule still exists these render identically — this is a no-visual-change
+  opt-in ahead of the deletion.
+
+- **Console: content dialogs opt into DS `Dialog padding="roomy"` — utility pills (#3688).**
+  The shared utility-pill dialog (`UtilityWidget`, covering every consumer) plus the Background
+  agents, Work folders and New task dialogs now pass `padding="roomy"`, adding the DS 0.63
+  `.pl-dialog__body--roomy` modifier (`var(--pl-space-6)` = 24px). This is a no-op while the
+  app-wide `.pl-dialog__body` theme.css rule still forces 24px; it opts these bodies in ahead of
+  a later card that deletes that rule, so they keep their padding instead of falling back to the
+  DS default `var(--pl-space-4)` = 16px. Part of #3688.
+
+- **Console: playbook & plugin content dialogs opt into DS 0.63 `<Dialog padding="roomy">` (#3688).**
+  The skill author/edit dialog (`PlaybooksSurface`), the git-URL install dialog
+  (`InstallPluginDialog`), the per-plugin settings dialog (`PluginSettingsDialog`) and the
+  install-time Python-deps prompt (`depsInstall`) now pass `padding="roomy"`, which `@protolabsai/ui`
+  0.63.0 renders as `.pl-dialog__body--roomy` (24px). While the app-wide
+  `.pl-dialog__body { padding: 24px }` rule still exists these dialogs render identically; the opt-in
+  is what preserves their 24px body padding once a later card deletes that global rule (the DS default
+  is 16px). No CSS changes. Part of #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Content dialogs opt into DS `Dialog padding="roomy"` (#3688).** The path picker, the two
+  provider-connection dialogs (add/edit and remove), the QuickSetting editor and the archetype
+  "What's included" preview now pass `padding="roomy"` to the design-system `Dialog` (DS 0.63).
+  While `theme.css`'s app-wide `.pl-dialog__body` padding still exists this renders identically;
+  it makes each content dialog keep its 24px body padding once that global rule is removed.
+
+- **Console: bumped `@protolabsai/design` to ^0.10.0 and `@protolabsai/ui` to ^0.62.1 for the DS type scale (#3688).**
+  The design package now ships the `--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl}` custom
+  properties (10/11/12/13/14/16/18px) that the console's font-size migration will move
+  sites onto. This card is dependency-only — no CSS or component source changes — and lays
+  the foundation the later type-scale cards build on.
+
+- **Console literal-`font-size` guard (#3688).** Added `apps/web/src/app/fontSizeGuard.test.ts`,
+  which sweeps every `apps/web/src` stylesheet (via a compile-time `?raw` glob, no `node:fs`)
+  and fails on any literal px `font-size` declaration — including custom properties whose name
+  ends in `font-size` (e.g. `--diffs-font-size: 12px`) — reporting sorted `src/<path>:<line>`.
+  Comments are stripped first, so only live declarations count. The only exemptions are the
+  root crash-fallback `app/app-crash.css` (whole file, #872) and the two `settings/devices.css`
+  `.devices-code` pairing-code sites (`28px` / mobile `22px`), pinned by selector + value as the
+  known DS-scale gap protoLabsAI/protoContent#534. This closes the type-scale migration: a
+  hard-coded px `font-size` can no longer creep back into a shipped surface. Part of #3688.
+
+- **Composer model menu adopts the DS base `.pl-menu` scroll cap and `Menu className` (#3688).**
+  `@protolabsai/ui` 0.63 moved the menu scroll cap (`max-height` to the Radix-measured available
+  height, `overflow-y: auto`, `overscroll-behavior: contain`) onto base `.pl-menu`, so the console's
+  local override in `theme.css` is deleted — every DS Menu now caps and scrolls from the design
+  system alone. `<Menu>` also accepts a `className` now (landed on the Radix Content next to
+  `pl-menu`), so the composer's model picker carries `className="composer-model-menu"` directly
+  instead of a hidden marker child; the phone full-screen-sheet rule retargets from
+  `.pl-menu:has(> .composer-model-menu)` to `.pl-menu.composer-model-menu`. Behaviour is unchanged.
+
+- **Settings ▸ Path picker / Telemetry / Providers / Delegates stylesheets adopt the DS type scale (#3688).** The 14 in-range `font-size:<n>px` literals in `settings/pathpicker.css`, `telemetry.css`, `providers.css` and `delegates.css` now reference the bare `--pl-font-size-*` tokens (11/12/13px map to `2xs`/`xs`/`sm` at identical px). Four half-pixel sites snapped to their nearest token px (12.5px → `sm`/13px, 11.5px → `2xs`/11px) — a ±0.5px change; every site is in the 9-18px range, so no DS gap remains. No px fallbacks, no new hex literals.
+
+- **Settings ▸ Plugins / Snapshot / Devices / Keyboard stylesheets adopt the DS type scale (#3688).** The 39 in-range `font-size:<n>px` literals in `settings/plugins.css`, `snapshot.css`, `devices.css` and `keybindings.css` now reference the bare `--pl-font-size-*` tokens — 10/11/12/13/14px map to `3xs`/`2xs`/`xs`/`sm`/`base` at identical px, so nothing renders larger or smaller. The two big pairing-code sites in `devices.css` (`.devices-code code` at 28px and its `max-width: 767px` 22px override) have no matching DS token and stay as literal px, flagged as a design-system gap. No px fallbacks, no new hex literals.
+
+- **Schedule builder, activity feed and code-pane font-sizes move onto the DS type scale (#3688).**
+  The three stylesheets carried bare `font-size: <n>px` literals; each now reads the matching
+  `--pl-font-size-*` step (10/11/12/13/14px → `3xs`/`2xs`/`xs`/`sm`/`base`) with no px fallback,
+  so text sizing tracks the design system. The code-pane's `--diffs-font-size` custom property
+  hands `var(--pl-font-size-xs)` (12px) into pierre's diff viewer, so diff code still renders at
+  12px. Size-only change — no colour, spacing or layout was touched. Part of #3688.
+
+- **Console: docviewer + fleet font-size onto the DS type scale (#3688).**
+  Every px font-size in `docviewer/docviewer.css` (2 sites) and `fleet/fleet.css`
+  (8 sites) now reads the matching `--pl-font-size-*` scale token with no px fallback;
+  size is theme-invariant so nothing renders differently. The `.fleet-name-link`
+  focus-ring outline is left untouched.
+
+- **Console: app/theme.css font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `app/theme.css` now reads a bare
+  `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token (no px fallback). Five half-pixel
+  values snap to the nearest step (theme-invariant): the archetype-preview description and
+  playbook description `12.5px → 13px`, the playbook title strong `13.5px → 14px`, and the
+  archetype-preview soul block and playbook meta `11.5px → 11px`. Everything else renders
+  identically; pre-existing rem/em font-sizes are left untouched. Part of #3688.
+
+- **Console: fleet-room / fleet-activity / app-drawer / work overview font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `app/fleet-room.css`, `app/fleet-activity.css`,
+  `app/app-drawer.css` and `app/work.css` now reads a bare
+  `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token (no px fallback). Seven half-pixel
+  values snap to the nearest step (theme-invariant): the feed source and text plus the
+  diagnostics state line `12.5px → 13px`, the roster meta, diagnostics log and pre blocks
+  `11.5px → 11px`, and the roster tag `9.5px → 10px`. Part of #3688.
+
+- **Console: shell / mobile font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `app/theme-base.css`, `app/mobile-shell.css`,
+  `app/mobile-native.css` and `app/tools.css` now reads a bare
+  `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token (no px fallback). The console body and
+  `h1`/`h2` map to `base` (14px, unchanged); the mobile-native `input,textarea,select` iOS
+  focus-zoom guard maps to `lg`, which still resolves to exactly 16px. Two values snap to the
+  nearest step (theme-invariant): the mobile shell title `15px → 16px` and the tools name
+  `12.5px → 13px`. Part of #3688.
+
+- **Console: workflows / goals / watches / agent-identity font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `workflows.css`, `goals.css`, `watches.css` and
+  `agent/identity.css` now reads a bare `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token
+  (no px fallback). Five half-pixel values snap to the nearest step (theme-invariant): the run
+  history row and goal timeline reason `12.5px → 13px`, and the run history steps, builder chip
+  and goal evidence block `11.5/10.5px → 11px`. Part of #3688.
+
+- **Console DS foundation: bump `@protolabsai/ui` to `^0.63.0` and `@protolabsai/design` to `^0.10.1` (#3688).**
+  0.63.0 carries the base `.pl-menu` scroll cap, `<Menu className>`, `<Tabs attached>`, `<Dialog padding>`
+  and the `Count` primitive — the design-system fixes the follow-up cards adopt in place of local console
+  overrides. The `uiDependencyFloor` guard's minimum moves to `0.63.0` so the declared range can't silently
+  regress below the versions carrying those fixes. Dependency-floor bump only; no console code or CSS ships
+  in this card.
+
+- **The shipped Design System Engineer persona preset now reflects the archetype's current reach (#3719).**
+  The preset (`config/soul-presets/design-system.md`) describes, in first person, the three
+  capabilities it can perform today — adherence audits of a codebase or a live URL (a score plus
+  findings split into system gaps vs. consumer fixes), breaking a rendered site into repeated UI
+  patterns classified as covered / needs-a-variant / genuinely-missing, and generating a full
+  dark + light brand theme against the live token contract with every foreground/background pair
+  contrast-checked — and the two-board operating model: the persona owns the design-system repos
+  and briefs the consuming app's project manager rather than editing the app, with cross-repo work
+  not called done until it is verified merged **and** published. All prior principles and the
+  Personality section are preserved; it stays pure persona (ADR 0079).
+
+- **Theme, fleet and devices stylesheets drop their literal `var(--pl-…, <literal>)` fallbacks (#3774).**
+  `@protolabsai/design` loads before any app CSS and `tokenNameGuard.test.ts` already proves
+  every `var(--pl-…)` in `apps/web/src` resolves to an installed token, so a literal fallback
+  is dead code — and several had drifted from the DS values (the status-alias hexes in
+  `theme-base.css`, the `--pl-space-4`/`--pl-radius` px stand-ins, and the mono font stacks).
+  `app/theme-base.css` (the `--success`/`--warning`/`--error`/`--danger`/`--info` compat
+  aliases, hexes removed but the aliases kept), `app/theme.css`, `fleet/fleet.css` and
+  `settings/devices.css` now read the bare `var(--pl-X)`. Value-only edits; nested
+  `var(--pl-a, var(--pl-b))` fallbacks and the deliberately-exempt `app-crash.css` are left
+  in place. A new `app/dsStaleFallbackDrop.test.ts` pins the four sheets.
+
+- **App theme + docviewer stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `app/theme.css` and `docviewer/docviewer.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the console's remaining hand-rolled chrome and the full-screen document reader track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 0 10px 8px` → `0 10px var(--pl-space-2)`, `padding: 4px 12px 12px 33px` → `var(--pl-space-1) var(--pl-space-3) var(--pl-space-3) 33px`). Off-scale half-steps (2/6/10/14/22/28/33px, …), negative margins, non-spacing properties (`border-radius`, `left`, `width`) and calc() interiors are intentionally left as literals — the half-steps wait on the DS gap protoContent#547 — and the pinned home-indicator gutter `padding-bottom: max(env(safe-area-inset-bottom), 12px)` is kept verbatim. The streamdown table "copy as" menu shadow in `theme.css` is also tokenized (`0 6px 20px rgb(0 0 0 / 28%)` → `var(--pl-shadow-popover)`); the auth-dialog overlay scrim keeps its theme-independent near-black `rgb(8, 8, 12)` (the DS `--pl-color-bg` token is light in light mode, which would defeat the fully-opaque scrim's intent). A scoped regression guard (`offScaleSpacing3a.test.ts`) sweeps the two files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Workflows / plugins / path-picker stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `workflows/workflows.css`, `settings/plugins.css` and `settings/pathpicker.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 8px 10px` → `var(--pl-space-2) 10px`, `padding: 10px 12px` → `10px var(--pl-space-3)`). Off-scale half-steps (2/3/5/6/7/10/14/18px, …), negative margins, and non-spacing properties (`border-radius`, `left`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3b.test.ts`) sweeps the three files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Providers connections stylesheet adopts the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration in `settings/providers.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the Model ▸ Connections panel tracks the operator's chosen density instead of hardcoding it. Off-scale half-steps (`10px`), negative margins, and non-spacing properties are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. The `settings-type-scale-tokens-7b` guard pins the tokenized `.providers-panel > .muted` margin.
+
+- **Chat + HITL stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `chat/chat.css` and `chat/hitl.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the chat surface and the HITL request card track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 10px 12px` → `10px var(--pl-space-3)`, `margin: 0 12px 8px` → `0 var(--pl-space-3) var(--pl-space-2)`). Off-scale half-steps (2/5/6/7/10/14px, …), negative margins, and non-spacing properties (`border-radius`, `left`, `width`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. The `chat-type-scale-tokens` guard's `.chat-memory-note` pin is updated to the tokenized margin, and a scoped regression guard (`offScaleSpacing3c.test.ts`) sweeps the two files and fails on any exact-scale px that returns in a spacing declaration.
+</content>
+
+- **Chat-component + prompt-viewer stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `chat/chat-component.css` and `chat/promptviewer.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the inline chat components and the prompt viewer track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 10px 12px` → `10px var(--pl-space-3)`, `gap: 4px 16px` → `var(--pl-space-1) var(--pl-space-4)`). Off-scale half-steps (2/6/7/9/10px, …), negative margins, and non-spacing properties (`border-radius`, `line-height`, `width`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. The `chat-type-scale-tokens` guard's two `padding` pins are updated to the tokenized shorthand, and a scoped regression guard (`offScaleSpacing3c2.test.ts`) sweeps the two files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Fleet Room / Fleet Activity / Work overview / app drawer stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `app/fleet-room.css`, `app/fleet-activity.css`, `app/work.css` and `app/app-drawer.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 12px 14px 8px` → `var(--pl-space-3) 14px var(--pl-space-2)`). Off-scale half-steps (2/6/10/11/14/28px, …), negative margins, and non-spacing properties are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3d.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Activity / code pane / identity / fleet stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `activity/activity.css`, `codeviewer/code-pane.css`, `agent/identity.css` and `fleet/fleet.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 6px 8px 6px 6px` → `6px var(--pl-space-2) 6px 6px`). Off-scale half-steps (2/5/6/7/10/14/18px, …), negative margins, and non-spacing properties (`border-radius`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3e.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Snapshot / devices / schedule / telemetry stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `settings/snapshot.css`, `settings/devices.css`, `schedule/schedule.css` and `settings/telemetry.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 8px 10px` → `var(--pl-space-2) 10px`, `gap: 8px 16px` → `var(--pl-space-2) var(--pl-space-4)`). Off-scale half-steps (2/3/5/6/7/10/14/18/20px, …), negative margins, and non-spacing properties (`border-radius`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3f.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Goals / tools / settings / keybindings stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `goals/goals.css`, `app/tools.css`, `settings/settings.css` and `settings/keybindings.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 8px 10px` → `var(--pl-space-2) 10px`, `margin: 4px 0 12px` → `var(--pl-space-1) 0 var(--pl-space-3)`, `padding: 10px 34px 10px 12px` → `10px 34px 10px var(--pl-space-3)`). Off-scale half-steps (2/6/7/10/14/18/28/34px, …), negative margins, and non-spacing properties (`top`, `border-radius`, `min-width`, `grid-template-columns`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3g.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Mobile-shell / tool-calls / delegates / watches stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `app/mobile-shell.css`, `chat/tool-calls.css`, `settings/delegates.css` and `watches/watches.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 6px 8px` → `6px var(--pl-space-2)`, `padding: 10px 34px 10px 12px` → `10px 34px 10px var(--pl-space-3)`). Off-scale half-steps (2/3/5/6/7/9/10/34px, …), negative margins, and non-spacing properties (`left`/`top`/`border-radius`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547 — and the mobile shell's pinned home-indicator gutter `padding-bottom: max(env(safe-area-inset-bottom), 12px)` is kept verbatim. A scoped regression guard (`offScaleSpacing3h.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Theme / settings / memory stylesheets move rem/em font-sizes onto the DS type scale (#3688).** `fontSizeGuard` (#3772) bans only px, so rem/em font-sizes sat off the scale. Every rem/em font-size in `app/theme.css`, `settings/settings.css` and `memory/memory.css` now reads a bare `--pl-font-size-*` step (1rem = 16px; 0.72–0.8rem → `xs`, 0.82–0.86rem → `sm`, 0.85em → `sm`, 0.8em → `xs`), and IdentityPanel's inline soul-textarea `fontSize: "13px"` becomes `var(--pl-font-size-sm)`, so these surfaces track the DS type scale instead of hardcoding sizes. The `.update-notice-ver` rule also drops its literal `ui-monospace, monospace` stack for `var(--pl-font-mono)` — it renders in the fixed-size DS Dialog title, so the `em` bought no scaling. Font-size only otherwise (that one font-family swap is the sole exception). A scoped guard (`app/dsTypeScaleRemEm2a.test.ts`) sweeps the three sheets plus the IdentityPanel inline style and fails on any rem/em font-size that returns.
+
+- **Chat ▸ chat / tool-calls stylesheets move their rem font-sizes onto the DS type scale (#3688).** Every `font-size:<n>rem` in `chat/chat.css` (20 sites) and `chat/tool-calls.css` (18 sites) now reads a bare `--pl-font-size-*` token per the audit mapping (1rem = 16px): `0.72–0.8rem` → `xs` (12px), `0.82–0.86rem` → `sm` (13px), `0.9rem` → `base` (14px), so these surfaces track the DS scale instead of hardcoding rem. The one deliberate survivor is the inline mono slash-command chip (`.chat-user-text.chat-slash-cmd`, `0.9em`) — inline code the brief allows to stay em-relative. Only `font-size` values changed; a scoped guard (`chat-type-scale-rem.test.ts`) sweeps both files and fails on any returning rem, on any second em, and the sibling `chat-type-scale-tokens.test.ts` count pin is bumped accordingly.
+
+- **fontSizeGuard now fails on rem/em CSS font-sizes and inline `fontSize` literals, not just px (#3688).** The type-scale audit's final guard extends `fontSizeGuard.test.ts` two ways. In CSS it now flags `font-size:<n>rem` and `<n>em` (previously only `<n>px`), sweeping every `apps/web/src` stylesheet; the sole pinned survivors are the crash-fallback file (`app/app-crash.css`, whole file), the `.devices-code code` pairing-code display (`28px`/`22px`, protoContent#534), and the inline mono slash-command chip (`chat/chat.css .chat-user-text.chat-slash-cmd`, `0.9em`) which the brief allows to stay em-relative. A second glob now also sweeps every non-test TSX under `apps/web/src` and fails on any inline `fontSize:` whose value is a numeric literal (`fontSize: 13`) or a px/rem/em string (`fontSize: "0.8rem"`), while allowing a token read (`fontSize: "var(--pl-font-size-*)"`) and non-length theme-blob values (`fontSize: "lg"`). The tree already passes: 2a/2b tokenized every in-range rem/em, and the one inline `fontSize` (agent `IdentityPanel.tsx`) already reads `--pl-font-size-sm`.
+
+### Fixed
+- **Artifact plugin resolves its store through the instance plugin store, honouring the box root (#3644).**
+  `_store_path()` derived the store's directory straight from the home dir
+  (`~/.protoagent/artifact[/<PROTOAGENT_INSTANCE>]`), ignoring `PROTOAGENT_BOX_ROOT` /
+  `PROTOAGENT_HOME` (ADR 0004 / 0065): a box-scoped server wrote its artifacts into the
+  real home, and a default install with no instance stored them one level ABOVE the
+  instance root. It now resolves through `sdk.plugin_store(plugin_id="artifact")` — the
+  same seam the friction and notes plugins use — so the dev sandbox and every fleet member
+  get their own copy. A pre-scoping store is migrated into the new location on first access
+  — both `history.json` AND its `blobs/` move together, so file-artifact downloads keep
+  resolving — while sibling instance subdirectories under a bare legacy dir are left where
+  they are. The migration source is the store's OLD location,
+  `~/.protoagent/artifact[/<inst>]` (HOME-relative, exactly where the pre-scoping code wrote
+  it), NOT the box root: the desktop sidecar and containers point the box root at their own
+  directory (Tauri's config dir; `/sandbox`) while the old store lived under HOME, so reading
+  the legacy source from HOME is what keeps a desktop or container upgrade from silently
+  losing its history and pins. `ARTIFACT_DIR` is unchanged (still an env-only override, still
+  `/<PROTOAGENT_INSTANCE>`-scoped), and a path-resolution failure falls back to the legacy
+  path so a store access never fails over where its file lives.
+
+- **Notes plugin resolves its note through the instance store, honouring the box root (#3644).**
+  `_note_path()` derived the note's directory straight from the home dir, so an isolated
+  server wrote its note into the real home, fleet members sharing a HOME shared one note,
+  and a default install stored it one level above the instance root. It now resolves
+  through `sdk.plugin_store(plugin_id="notes")` (ADR 0004 / 0065) — the same fix as the
+  artifact plugin — and adopts a pre-scoping note (and its history) on first access. The
+  legacy dir is BOX-SCOPED (`box_root()/notes`, honouring `PROTOAGENT_BOX_ROOT`), so a
+  box-rooted server sharing the operator's real HOME never reaches into their live
+  `~/.protoagent/notes` to move or leak it. `NOTES_DIR` is unchanged, and a
+  path-resolution failure falls back to the legacy path so a note tool never fails over
+  where its file lives.
+
+- **Chat-scoped keyboard shortcuts now fire whenever the chat panel is the active region, not only while the composer holds focus (#3677).**
+  ⌘T / ⌘K / Esc / ⌃Tab / the ⌘1–9 tab jumps / ⌘O only fired while a focusable control inside the chat surface had DOM focus, because the keydown host resolved scopes from `document.activeElement`. Clicking the transcript, a message, or whitespace leaves focus on `<body>` (and in WebKit even clicking a tab/toolbar `<button>` doesn't focus it), so the scope chain came back empty and every scoped binding was dropped. The host now tracks the last pointerdown/focusin target and, when the keydown target has fallen back to body, resolves the scope against it — provided it's still in the DOM and not inside a `hidden` / `aria-hidden="true"` region. This is generic to every `data-kb-scope` panel, including fork/plugin ones.
+
+- **The code pane no longer drags a wheel-up back to the bottom after opening a file (#3679).**
+  The scroll-to-line loop kept re-snapping to its target for about 4 s after every open, and a line near the end of a short file never counted as "arrived", so scrolling up over the pane was undone until the loop ran out. It now stops as soon as you wheel, touch, press or use a scroll key in the pane. The agent's next open (show_code, a link, follow mode) still moves it.
+
+- **`execute_code`: `tools.*` calls made from threads no longer cross responses (#3681).**
+  The script-side tool bridge shared one socket with no lock, so a `ThreadPoolExecutor`
+  fanning out `tools.fetch_url` got other calls' results back, or died with a
+  `JSONDecodeError` near char 8190. Now each call holds a lock for its whole exchange,
+  and a reply with the wrong id raises instead of being handed over. Bridged calls are
+  thread-safe but serialized, as the tool description now says. The parent also answers
+  a malformed request frame with an error instead of dropping it, which used to leave the
+  caller hanging until the timeout.
+
+- **Memory, chat, workflows and the app-crash screen now follow the theme instead of a frozen dark fallback (#3682).**
+  These surfaces read CSS variables the pinned design package never defines
+  (`--pl-color-text-muted`, `--pl-color-success`/`--pl-color-error`, and a nested
+  `--pl-bg`/`--pl-fg`), so the `var()`s never resolved and each site painted its hardcoded
+  dark hex — deaf to light mode and to per-agent ThemePanel overrides. They now reference
+  the real tokens (`--pl-color-fg-muted`, `--pl-color-status-success`/`-error`,
+  `--pl-color-bg`/`--pl-color-fg`) with the same fallbacks, so muted text and the workflow
+  status dots/borders track the active theme (e.g. memory muted text resolves to the light
+  `#52525b` under `data-theme="light"`).
+
+- **Console `--pl-*` token-name guard (#3682).** Added `apps/web/src/app/tokenNameGuard.test.ts`, which derives the set of `--pl-*` custom properties the installed design system actually defines (from `@protolabsai/design`'s tokens plus `@protolabsai/ui`'s plugin-kit — never a hand-copied list) and fails on any `var(--pl-…)` in the console source, including nested fallbacks, that names a token the DS never declares. Fixed the four phantom names the sweep surfaced so they resolve to real DS tokens (and honor light mode / operator theme overrides) instead of painting a permanent fallback: `--pl-color-border-danger` → `--pl-color-status-error` (failed scheduled + server-result cards), `--pl-color-bg-sunken` → `--pl-color-bg-inset` (active roster chip), `--pl-color-border-subtle` → `--pl-color-border` (keybinding rows) and `--pl-color-text` → `--pl-color-fg` (memory snippet).
+
+- **Plugin theming bridge: the six legacy curated keys now read the real `--pl-color-*` tokens instead of retired aliases (#3682).**
+  `consoleTheme()`'s backward-compat keys (`bg`/`bgPanel`/`fg`/`fgMuted`/`brand`/`border`) read `--bg`/`--bg-panel`/`--fg`/`--fg-muted`/`--brand-violet-light`/`--border`, which `theme-base.css` retired (#2233), so older plugin-kits received empty strings (or a stray shadcn `--border`). The keys are unchanged — they now read `--pl-color-bg`, `--pl-color-bg-raised`, `--pl-color-fg`, `--pl-color-fg-muted`, `--pl-color-accent` and `--pl-color-border`.
+
+- **Chat accents now follow the workspace/theme accent instead of a frozen dark fallback (#3685).**
+  The HITL request card (border, wizard dot, option hover/focus/selected fill, checkmark),
+  the slash-command user bubble and badge, the success system note and the slash-menu name
+  all pinned legacy `--brand-*` aliases or `var(--pl-…, #hex)` fallbacks. Since the DS tokens
+  are always loaded, those fallbacks could only ever paint a wrong, dark-only colour — deaf
+  to light mode and to per-agent ThemePanel overrides. These sites now read the semantic
+  `--pl-color-accent` / `--pl-color-accent-fg` DS tokens directly.
+
+- **Chat, tool-call and prompt-viewer accents now follow the theme instead of a frozen dark fallback (#3685).**
+  `chat-component.css`, `tool-calls.css` and `promptviewer.css` pinned a `var(--pl-…, #hex)`
+  fallback on every accent/surface/focus site and leaned on the retired `--brand-violet*`
+  aliases. Since the design package's tokens are always loaded, those hex fallbacks could only
+  paint a wrong, dark-only colour, and the aliases bypassed the semantic tokens. All fallbacks
+  are dropped for the bare `var(--pl-…)`; tool-call accent TEXT (chips, links, calc result,
+  wait icon, editor links) now reads `--pl-color-accent-fg` so it stays readable on the card
+  body under `data-theme="light"`, and the prompt-viewer budget bars/borders read
+  `--pl-color-accent`.
+
+- **The desktop launcher panel is now a solid surface and every focus ring is a 2px accent ring (#3687).**
+  Two brand-rule breaks in the console, fixed as a pure consumer change (no dependency
+  bump). The frameless quick-launcher palette dropped its glass morphism — the
+  translucent `color-mix` surface and the `backdrop-filter` blur, banned on UI surfaces by
+  the design ruling — for a solid `--pl-color-bg-raised` card carrying only the standard
+  `--pl-shadow-popover`; the see-through window margin still comes from the transparent
+  overlay scrim. The global `:focus-visible` ring on buttons/inputs/textareas/selects (and
+  the matching fleet name-link ring) moves from `1px solid --pl-color-fg` to the
+  DS-standard `2px solid --pl-color-focus`, so the whole console shows one consistent
+  focus ring that clears WCAG 1.4.11 contrast in both themes.
+
+- **browser_eval sends scripts over stdin (#3689).** The agent_browser plugin now runs `agent-browser eval --stdin` with the JavaScript on the child's standard input instead of passing it as an argv item. A large script (design-system-plugin's ~32K-char `SITE_PROBE_JS`) built a command line past Windows' 32,767-char `CreateProcess` limit and failed with WinError 206 before it ever ran; on stdin the command line stays tiny regardless of script size. The about:blank page-content probe used by `browser_screenshot`/`browser_pdf` takes the same path. Expression validation, error strings, and the setup-gap recheck behavior are unchanged.
+
+- **Langfuse: board-dispatched ACP coder runs now carry a session, the agent tag and their input; coder tool spans record the real arguments; and every turn records its output, even one with no final model reply (#3690).**
+  A board coder run had no enclosing turn, so it became a sessionless, untagged root trace. Its session is now `coder:<name>:<worktree>`.
+  claude-agent-acp sends a tool's arguments in a later `tool_call_update`, which is now folded in, so a span shows `tool:Read src/app.py` with its `file_path` instead of `{"input": "read"}`.
+  `@delegate` exchanges, `ask_human` or approval parks and errors now write their terminal frame as the trace output.
+
+- **ACP tool cards now show the real file or command, not just the tool kind (`read` / `execute`) (#3691).**
+  claude-agent-acp opens each call with empty arguments and a generic title, then sends the real ones in a later `tool_call_update`. The ACP client now forwards that as an `update` tool event, and the ACP runtime re-announces the same card id with the refined name and args, which the console fills in by id. It isn't counted as another call. The end event is also named after the refined card instead of `tool`. Consumers that only handle `start`/`end` ignore the new phase.
+  The console now fills in an existing card on a repeated `start` for the same id, keeping its position, nesting and timer. Before, a repeated start could render the card twice if text arrived in between, including after a reload.
+
+- **Deleting a referenced delegate names its references (#3692).** Removing (or renaming) a delegate in Settings ▸ Delegates now refuses with a 409 that names every config path still pointing at it — `project_board.coder`, the `project_board.coders` model-tier ladder (each rung), any per-project `project_board.projects.<p>.coder`/`.coders`, and `fallback`/`fallbacks` lists on other delegate entries — instead of succeeding silently and letting the board loop pause itself at save time. Pass `force` to delete anyway, or `repoint_to=<other delegate>` to rewrite every reference in the same save.
+
+- **Langfuse: non-streaming turns (`/v1`, `/api/chat`, `HOST.invoke()`) now record their reply as the trace output on every path, not only when the turn ends on a final model reply (#3695).**
+  `@delegate` exchanges, slash commands, HITL parks and error bubbles previously left `chat` traces with input and no output. The output is redacted before it is capped, and incognito turns stay empty. This matches the streaming fix in #3693.
+
+- **Langfuse: a coder run started under a non-exported OTel span (such as an a2a-sdk handler span) is now a proper root trace with its session and tags, not a child of a parent that never reaches Langfuse (#3696).**
+  `tracing.in_active_trace()` now counts only spans the Langfuse SDK exports, using its own public `is_default_export_span` filter. `trace_span(root=True)` starts from an empty OTel context, the same way `trace_session` does for turns.
+
+- **Streaming model calls honor request_timeout (#3699).** A streaming model request now enforces `model.request_timeout` as both a time-to-first-token deadline and an inter-chunk idle deadline, so a provider that holds an SSE stream open while producing nothing (including the native `anthropic-oauth` path, where an httpx read timeout never caught it) aborts within the timeout, retries per `max_retries`, and then fails the turn with a clear error naming the provider/model — instead of hanging silently for minutes. A stream that keeps producing chunks is unbounded, so long outputs still complete.
+
+- **Background A2A delegations no longer lose a finished peer's reply (#3700).** A `delegate_to(background=True)` whose peer ran past `poll_timeout_s` used to come back FAILED ("still running … without observable progress") even after the peer finished — the reply was lost and the caller had no task id, so the only recovery was a re-send that double-boards the work. Progress for the poll deadline is now the PEER's own task status (a status-message change resets it, so a long tool chain that emits no text is not timed out), a background delegation keeps polling the peer's task after the deadline (reusing the late-collection GetTask poll) and delivers its real reply as the job result if it finishes, and when the deadline genuinely stands the result names the peer task id, its last state and status message, and how to resume/collect it — never "retry". `poll_timeout_s` stays per-delegate configurable and the error text says so.
+
+- **execute_code's Exposed-tools setting describes the real default; new additive extra_tools (#3701).** The "Exposed tools" (`tools`) description no longer claims "empty = all" — empty means the curated read-only default set, and a non-empty list replaces it. A new `extra_tools` config key bridges tools (e.g. a plugin read tool like `github_search_issues`) on top of whichever set applies, so operators no longer have to re-list every core tool just to add one. Unregistered names are ignored and logged; `execute_code` can't bridge itself.
+
+- **ACP coder timeouts now count time the machine spends asleep. An 1800s bound no longer holds a board coder for hours on a Mac that sleeps (#3724).**
+  asyncio's clock (`time.monotonic()`, which is `mach_absolute_time` on macOS) stops during sleep, so `asyncio.wait_for(…, 1800)` meant 1800s of *awake* time. Coders dispatched during a sleeping Mac's background wakes ran 2,089s to 12,802s of wall time. The new `infra.clock.wait_for` keeps its deadline on a sleep-counting clock (`CLOCK_MONOTONIC` on macOS, `CLOCK_BOOTTIME` on Linux) and re-checks it every 15s, so a timeout fires at most 15s after a wake. `AcpClient` uses it for `session/prompt` and the turn-lock acquire.
+
+- **Langfuse: ACP coder runs trace their real tool durations, model usage and cost, and why they failed; work interrupted by a restart no longer orphans its trace (#3725).**
+  Coder tool spans open at the call's start and close at its end, instead of showing 0s. claude-agent-acp's reported token usage and API-equivalent cost become a generation under the `acp:` span, labelled with the session's model. A failed coder run (timeout, agent error, cancel) writes its reason as the output. The span also carries the coder's plan and a redacted reasoning tail.
+  At shutdown, spans still open are ended as `WARNING` before the flush, so an operator restart no longer leaves nameless orphan traces. A turn that ends with an empty reply records that, instead of recording nothing. A workflow run cancelled by its caller is now marked `ERROR` with a `[cancelled]` output, and its run record is finished instead of being left `running`.
+
+### Removed
+- **Removed the orphaned `.util-btn` CSS (#3684).** Every utility-bar pill is now a DS `<Button>`, so `theme.css`'s `.util-btn` rules (and their `#7c8cff`/`#1a1a1f` hex fallbacks + 5px radius) and the `.util-btn:active` mobile press-feedback selector are deleted; the `.utility-bar` container and its `[aria-pressed="false"]` collapsed-toggle tint stay.
+
+- **Removed the now-unused shadcn/Tailwind npm deps and `components.json` from the console (#3686).**
+  With part 1's Tailwind CSS wiring gone, nothing imports `@radix-ui/react-dropdown-menu`,
+  `class-variance-authority`, `clsx`, `react-markdown`, `rehype-highlight`, `remark-gfm`,
+  `tailwind-merge`, `tailwindcss-animate` or `tailwindcss` — all are dropped from
+  `apps/web/package.json`, and the stale shadcn config (`components.json`, which pointed at a
+  `src/components/ui` and `src/lib/cn` that never existed) is deleted. `autoprefixer` and
+  `postcss` stay, since part 1 left an autoprefixer-only `postcss.config.cjs`. The markdown /
+  code-block / graph stack (streamdown, katex, shiki, `@xyflow/react`, the DS packages) is
+  untouched. (Part 2 of 2, closes the issue.)
+
+- **Dropped the dead shadcn/Tailwind CSS wiring from the operator console (#3686).**
+  ADR 0037's incremental migration left `app/tailwind.css` (the `@tailwind` layers plus a
+  shadcn `:root` token block) and `tailwind.config.cjs` behind, but nothing consumed them —
+  no Tailwind utility classNames, no `@apply`, and preflight was already off. The stylesheet,
+  its config and the `main.tsx` import are removed; `postcss.config.cjs` is reduced to
+  autoprefixer only (Tailwind is gone, but autoprefixer still supplies the `-moz-user-select`
+  and other vendor prefixes the source relies on). The built CSS loses only the 65 unused
+  `--tw-*` custom properties and the shadcn `:root` block — every colour already resolves
+  through the `--pl-*` design tokens, so nothing renders differently. (Part 1 of 2; part 2
+  removes the now-unused npm deps and `components.json`.)
+
+### Security
+- **`run_command` runs project code with a scrubbed environment (#3801).** A command the agent runs inside a managed project (its test suite, a build, a script) no longer inherits the running agent's identity (`A2A_AUTH_TOKEN`, `AGENT_NAME`), its instance (`PROTOAGENT_HOME` and every other `PROTOAGENT_*`, so it can't write into the live agent's data) or credential-shaped variables (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, …). List names in the new **Filesystem ▸ Env vars passed to commands** (`filesystem.run_command_env_passthrough`) to pass specific ones through, e.g. `GH_TOKEN` for a project that calls `gh`.
+
+### Docs
+- **ADR 0115: gateway in-flight limiter (#3760).** Proposed design for a bounded, priority-ordered per-lane in-flight limit on model calls, off by default.
+
+- **Operator guide for the model in-flight limiter (#3760).** New how-to on sizing, priority classes, `GatewayQueueTimeout`, and reading the lane metrics (`local_queue` vs `gateway_degraded`), plus the three `model.*` config keys and `GET /api/telemetry/llm-lanes` in the references.
+
 ## [0.184.1] - 2026-09-27
 
 ### Added

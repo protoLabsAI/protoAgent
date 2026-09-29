@@ -1,1 +1,0 @@
-- **Model in-flight limiter settings (#3760).** New agent-scoped, hot-reloadable config keys `model.max_inflight` (default 0, limiter off), `model.inflight_queue_timeout` (300 s), and `model.inflight_interactive_reserve` (1) size a per-process cap on concurrent model calls per lane (ADR 0115 D2); nothing reads them yet.

@@ -1,1 +1,0 @@
-- **Background-agents dialog markup moved to design-system Button + Accordion (#3684).** Clear-finished, jump-to-chat, stop and delete are now DS `Button`s (destructive stop/delete use the `danger` variant), and each job is a DS `Accordion`/`AccordionItem` disclosure instead of a hand-rolled expander — non-expandable jobs render an inert trigger.
