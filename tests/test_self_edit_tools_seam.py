@@ -13,13 +13,13 @@ Deliberately NOT stale: the ``_build_*`` builders themselves — ``get_all_tools
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import pytest
 
 import tools.lg_tools as lg_tools
 import tools.self_edit_tools as self_edit_tools
+from tests._seam_scan import stale_patches
 
 # Collaborators whose only live callers moved: patch them on tools.self_edit_tools.
 _MOVED_COLLABORATORS = {
@@ -47,44 +47,9 @@ _RE_EXPORTED = (
     "_config_write_refusal",
 )
 
-_TESTS = Path(__file__).resolve().parent
-
-
-def _lg_tools_aliases(tree: ast.AST) -> set[str]:
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname or a.name for a in node.names if a.name == "tools.lg_tools"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "tools":
-            aliases |= {a.asname or a.name for a in node.names if a.name == "lg_tools"}
-    return aliases
-
 
 def test_no_test_patches_a_moved_collaborator_on_lg_tools():
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = _lg_tools_aliases(tree)
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                target = first.value
-                if target.startswith("tools.lg_tools.") and target.rsplit(".", 1)[1] in _MOVED_COLLABORATORS:
-                    stale.append(f"{path.name}:{node.lineno} {target}")
-            elif (
-                isinstance(first, ast.Name)
-                and first.id in aliases
-                and len(node.args) > 1
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _MOVED_COLLABORATORS
-            ):
-                stale.append(f"{path.name}:{node.lineno} {first.id}.{node.args[1].value}")
+    stale = stale_patches("tools.lg_tools", _MOVED_COLLABORATORS)
     assert not stale, "patch these on tools.self_edit_tools, not lg_tools (#3839): " + ", ".join(stale)
 
 

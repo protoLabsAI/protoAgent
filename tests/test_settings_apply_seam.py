@@ -16,12 +16,14 @@ from pathlib import Path
 
 import server.agent_init as agent_init
 import server.settings_apply as settings_apply
+from tests._seam_scan import stale_patches
 
 # Names whose only live binding (as a callee / read) is in settings_apply. Deliberately
 # absent: ``_apply_settings_changes`` — its published address stays
-# ``server.agent_init``: operator_api and the devkit plugin import it from there at call
-# time, and maintenance_loops / plugin_wiring / the plugin host / ``save_all`` call it
-# through agent_init, so a patch on agent_init DOES intercept every caller. And
+# ``server.agent_init``: operator_api (config_routes included, #3856) and the devkit plugin
+# import it from there at call time, and maintenance_loops / plugin_wiring / the plugin
+# host / ``save_all`` call it through agent_init, so a patch on agent_init DOES intercept
+# every caller. And
 # ``_reload_langgraph_agent``, which never moved (settings_apply calls it through
 # agent_init at call time).
 _MOVED_COLLABORATORS = {
@@ -41,46 +43,21 @@ _MOVED_COLLABORATORS = {
 }
 
 _RE_EXPORTED = (_MOVED_COLLABORATORS - {"_event_bus"}) | {"_apply_settings_changes", "_CONFIG_WRITE_LOCK"}
-
-_TESTS = Path(__file__).resolve().parent
-
-
-def _agent_init_aliases(tree: ast.AST) -> set[str]:
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname or a.name for a in node.names if a.name == "server.agent_init"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "server":
-            aliases |= {a.asname or a.name for a in node.names if a.name == "agent_init"}
-    return aliases
+# ``server/__init__`` re-exports these as names only — nothing calls them through the
+# package, so a patch on ``server.<name>`` intercepts nothing (``server._event_bus`` is the
+# package's OWN bus, not a copy).
+_PACKAGE_COPIES = (_MOVED_COLLABORATORS - {"_event_bus"}) | {"_apply_settings_changes"}
 
 
 def test_no_test_patches_a_moved_collaborator_on_agent_init():
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = _agent_init_aliases(tree)
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                target = first.value
-                if target.startswith("server.agent_init.") and target.rsplit(".", 1)[1] in _MOVED_COLLABORATORS:
-                    stale.append(f"{path.name}:{node.lineno} {target}")
-            elif (
-                isinstance(first, ast.Name)
-                and first.id in aliases
-                and len(node.args) > 1
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _MOVED_COLLABORATORS
-            ):
-                stale.append(f"{path.name}:{node.lineno} {first.id}.{node.args[1].value}")
+    stale = stale_patches("server.agent_init", _MOVED_COLLABORATORS)
     assert not stale, "patch these on server.settings_apply, not agent_init (#3848): " + ", ".join(stale)
+
+
+def test_no_test_patches_the_package_level_copies():
+    """``server.<name>`` resolves (re-export) but no caller reads it there (#3856)."""
+    stale = stale_patches("server", _PACKAGE_COPIES)
+    assert not stale, "patch these on server.agent_init / server.settings_apply, not server: " + ", ".join(stale)
 
 
 def test_re_exports_are_the_same_objects():
@@ -140,11 +117,51 @@ def test_save_all_calls_apply_through_agent_init(monkeypatch):
 
 
 def test_callers_resolve_apply_through_agent_init():
-    """maintenance_loops / plugin_wiring / the devkit plugin look the apply path up on
-    agent_init at call time, never via a module-level ``from … import``."""
-    root = _TESTS.parent
+    """maintenance_loops / plugin_wiring / config_routes / the devkit plugin look the apply
+    path up on agent_init at call time, never via a module-level ``from … import`` of it;
+    and ``server/__init__`` never reads its re-exported copy."""
+    root = Path(__file__).resolve().parent.parent
     for rel in ("server/maintenance_loops.py", "server/plugin_wiring.py", "server/settings_apply.py"):
         tree = ast.parse((root / rel).read_text(encoding="utf-8"))
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module in {"server.agent_init", "server.settings_apply"}:
                 raise AssertionError(f"{rel}: module-level import from {node.module}")
+    for rel in ("operator_api/config_routes.py", "operator_api/mcp_routes.py", "operator_api/plugin_routes.py"):
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module in {"server.agent_init", "server.settings_apply"}:
+                names = {a.name for a in node.names}
+                assert "_apply_settings_changes" not in names, f"{rel}: module-level import of the apply path"
+    pkg = ast.parse((root / "server/__init__.py").read_text(encoding="utf-8"))
+    reads = [
+        n.lineno
+        for n in ast.walk(pkg)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id == "_apply_settings_changes"
+    ]
+    assert not reads, f"server/__init__ calls its re-exported copy (a patch on agent_init misses it): {reads}"
+
+
+def test_agent_init_patch_reaches_the_config_routes(monkeypatch):
+    """Behavioral proof (#3856): a patch on ``agent_init._apply_settings_changes`` is what
+    ``POST /api/config`` and the SOUL-history restore run."""
+    import sys
+    import types
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api.config_routes import register_config_routes
+
+    seen: list[dict] = []
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda **kw: seen.append(kw) or (True, ["patched"]))
+    cio = types.ModuleType("graph.config_io")
+    cio.read_soul_version = lambda vid: "archived persona"
+    cio.read_soul = lambda: "current persona"
+    app = FastAPI()
+    register_config_routes(app)
+    client = TestClient(app)
+
+    assert client.post("/api/config", json={"config": {"a": 1}}).json() == {"ok": True, "messages": ["patched"]}
+    monkeypatch.setitem(sys.modules, "graph.config_io", cio)
+    assert client.post("/api/config/soul/history/v1/restore").json()["messages"] == ["patched"]
+    assert seen == [{"config": {"a": 1}, "soul": None}, {"soul": "archived persona"}]

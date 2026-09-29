@@ -14,7 +14,6 @@ The other direction is pinned too: the moved exchange reaches ``server.turn_cont
 
 from __future__ import annotations
 
-import ast
 import importlib
 from pathlib import Path
 
@@ -22,6 +21,7 @@ import pytest
 
 import runtime.state as rs
 import server.chat_rooms as chat_rooms
+from tests._seam_scan import stale_patches
 
 # Every name that moved — ``server.chat`` re-exports each as the same object.
 _MOVED = (
@@ -36,7 +36,6 @@ _MOVED = (
     "_with_room_notes",
 )
 
-_TESTS = Path(__file__).resolve().parent
 _SELF = Path(__file__).resolve()
 
 
@@ -45,63 +44,8 @@ def _chat():
     return importlib.import_module("server.chat")
 
 
-def _is_chat_import(node: ast.AST, helpers: set[str]) -> bool:
-    """``importlib.import_module("server.chat")`` or a call to a local helper returning it."""
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-    if name == "import_module":
-        return bool(node.args) and isinstance(node.args[0], ast.Constant) and node.args[0].value == "server.chat"
-    return name in helpers
-
-
-def _chat_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
-    helpers = {
-        fn.name
-        for fn in ast.walk(tree)
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(isinstance(r, ast.Return) and _is_chat_import(r.value, set()) for r in ast.walk(fn))
-    }
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname for a in node.names if a.name == "server.chat" and a.asname}
-        elif isinstance(node, ast.Assign) and _is_chat_import(node.value, helpers):
-            aliases |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-    return aliases, helpers
-
-
-def _is_chat_ref(node: ast.AST, aliases: set[str], helpers: set[str]) -> bool:
-    return (isinstance(node, ast.Name) and node.id in aliases) or _is_chat_import(node, helpers)
-
-
 def test_no_test_patches_moved_room_names_on_server_chat():
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        if path.resolve() == _SELF:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases, helpers = _chat_aliases(tree)
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch", "delattr"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                target = first.value
-                if target.startswith("server.chat.") and target.rsplit(".", 1)[1] in _MOVED:
-                    stale.append(f"{path.name}:{node.lineno} {target}")
-            elif (
-                _is_chat_ref(first, aliases, helpers)
-                and len(node.args) > 1
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _MOVED
-            ):
-                stale.append(f"{path.name}:{node.lineno} server.chat.{node.args[1].value}")
+    stale = stale_patches("server.chat", _MOVED, exclude=[_SELF])
     assert not stale, "patch these on server.chat_rooms, not server.chat (#3838): " + ", ".join(stale)
 
 

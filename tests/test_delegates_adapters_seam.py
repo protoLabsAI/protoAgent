@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 
 from plugins.delegates import a2a, acp_adapter, adapters, base
+from tests._seam_scan import stale_patches
 
 _HOMES = {"a2a": a2a, "acp_adapter": acp_adapter, "base": base}
 
@@ -36,46 +37,12 @@ def _module_names(mod) -> set[str]:
 
 _MOVED = {name: home for home, mod in _HOMES.items() for name in _module_names(mod)}
 
-_TESTS = Path(__file__).resolve().parent
-
-
-def _adapters_aliases(tree: ast.AST) -> set[str]:
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname or a.name for a in node.names if a.name == "plugins.delegates.adapters"}
-        elif isinstance(node, ast.ImportFrom) and node.module == "plugins.delegates":
-            aliases |= {a.asname or a.name for a in node.names if a.name == "adapters"}
-    return aliases
-
 
 def test_no_test_patches_a_moved_name_on_adapters():
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = _adapters_aliases(tree)
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch", "delattr"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                target = first.value
-                if target.startswith("plugins.delegates.adapters.") and target.rsplit(".", 1)[1] in _MOVED:
-                    stale.append(f"{path.name}:{node.lineno} {target} (→ {_MOVED[target.rsplit('.', 1)[1]]})")
-            elif (
-                isinstance(first, ast.Name)
-                and first.id in aliases
-                and len(node.args) > 1
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _MOVED
-            ):
-                stale.append(
-                    f"{path.name}:{node.lineno} {first.id}.{node.args[1].value} (→ {_MOVED[node.args[1].value]})"
-                )
+    stale = [
+        f"{hit} (→ {_MOVED[hit.name.rpartition('.')[2]]})"
+        for hit in stale_patches("plugins.delegates.adapters", _MOVED)
+    ]
     assert not stale, "patch these on their new home module, not adapters (#3831): " + ", ".join(stale)
 
 

@@ -24,7 +24,9 @@ Its published address stays ``server.agent_init._apply_settings_changes``: opera
 and the devkit plugin import it from there at call time (the layering contracts bind them
 to that one module), maintenance_loops / plugin_wiring / agent_init's plugin host call it
 through agent_init, and ``save_all`` below does too — so ONE patch point intercepts every
-caller.
+caller. (``server/__init__`` re-exports it too, but only as a name: nothing calls it
+through ``server``, so a patch there intercepts nothing — tests/test_settings_apply_seam.py
+pins both halves.)
 """
 
 import functools

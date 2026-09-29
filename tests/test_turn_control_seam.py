@@ -14,8 +14,10 @@ The rebound idle-beacon ints (``_ACTIVE_TURNS`` / ``_LAST_TURN_MONOTONIC``) are 
 re-exported at all: ``global`` rebinding in ``_turn_started`` would leave any copy stale.
 
 The other direction is pinned too: both turn drivers and the sibling ``chat_*`` modules
-reach ``_thread_lock`` / ``_resolve_thread_id`` / ``_hold_if_hitl_pending`` through
-``server.turn_control`` at CALL time, and the HITL hold reaches ``server.chat``'s
+reach every ``_CALL_THROUGH`` name (the locks / resolver / HITL hold, and since #3856 the
+autonomy classifier, auto-answer cap + sentinel, idle beacon, priority scope and
+HITL-resume marker) through ``server.turn_control`` at CALL time — a source scan plus a
+break-the-fake test per name — and the HITL hold reaches ``server.chat``'s
 ``_pending_interrupt_value`` at call time, so a patch on either owner lands.
 """
 
@@ -28,6 +30,7 @@ from pathlib import Path
 import pytest
 
 import server.turn_control as turn_control
+from tests._seam_scan import stale_patches
 
 # Every name ``server.chat`` re-exports from ``server.turn_control`` — the same object.
 _REEXPORTED = (
@@ -81,8 +84,21 @@ _STATE = (
     "_LIVE_SERVER_TURNS",
     "_THREAD_LOCKS",
 )
-# The helpers tests patch — every caller outside turn_control goes through the module.
-_CALL_THROUGH = ("_thread_lock", "_resolve_thread_id", "_hold_if_hitl_pending")
+# The names the drivers use — every caller outside turn_control reads them through the
+# module (``_turn_control.<name>``), so a patch on the owner is what runs (#3856 added the
+# last seven: the drivers used to read those via server.chat's import-time copies).
+_CALL_THROUGH = (
+    "_thread_lock",
+    "_resolve_thread_id",
+    "_hold_if_hitl_pending",
+    "_is_autonomous",
+    "_MAX_AUTONOMOUS_AUTOANSWERS",
+    "_AUTONOMOUS_HITL_SENTINEL",
+    "_turn_started",
+    "_turn_ended",
+    "_interactive_turn_priority",
+    "_HITL_RESUME",
+)
 
 _TESTS = Path(__file__).resolve().parent
 _SELF = Path(__file__).resolve()
@@ -94,67 +110,8 @@ def _chat():
     return importlib.import_module("server.chat")
 
 
-def _is_chat_import(node: ast.AST, helpers: set[str]) -> bool:
-    """``importlib.import_module("server.chat")`` or a call to a local helper returning it."""
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-    if name == "import_module":
-        return bool(node.args) and isinstance(node.args[0], ast.Constant) and node.args[0].value == "server.chat"
-    return name in helpers
-
-
-def _chat_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
-    helpers = {
-        fn.name
-        for fn in ast.walk(tree)
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and any(isinstance(r, ast.Return) and _is_chat_import(r.value, set()) for r in ast.walk(fn))
-    }
-    aliases: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            aliases |= {a.asname for a in node.names if a.name == "server.chat" and a.asname}
-        elif isinstance(node, ast.Assign) and _is_chat_import(node.value, helpers):
-            aliases |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-    return aliases, helpers
-
-
-def _is_chat_ref(node: ast.AST, aliases: set[str], helpers: set[str]) -> bool:
-    return (isinstance(node, ast.Name) and node.id in aliases) or _is_chat_import(node, helpers)
-
-
 def test_no_test_patches_or_touches_moved_turn_control_names_on_server_chat():
-    stale: list[str] = []
-    for path in sorted(_TESTS.rglob("test_*.py")):
-        if path.resolve() == _SELF:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases, helpers = _chat_aliases(tree)
-        for node in ast.walk(tree):
-            # ``chat._ATTENDED_SESSIONS.clear()`` … — state read/mutated through the copy.
-            if isinstance(node, ast.Attribute) and node.attr in _STATE and _is_chat_ref(node.value, aliases, helpers):
-                stale.append(f"{path.name}:{node.lineno} server.chat.{node.attr}")
-                continue
-            if not (isinstance(node, ast.Call) and node.args):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in {"setattr", "object", "patch", "delattr"}:
-                continue
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                target = first.value
-                if target.startswith("server.chat.") and target.rsplit(".", 1)[1] in _MOVED:
-                    stale.append(f"{path.name}:{node.lineno} {target}")
-            elif (
-                _is_chat_ref(first, aliases, helpers)
-                and len(node.args) > 1
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _MOVED
-            ):
-                stale.append(f"{path.name}:{node.lineno} server.chat.{node.args[1].value}")
+    stale = stale_patches("server.chat", _MOVED, state=_STATE, exclude=[_SELF])
     assert not stale, "patch/touch these on server.turn_control, not server.chat (#3847): " + ", ".join(stale)
 
 
@@ -195,25 +152,23 @@ def test_server_package_and_route_module_bind_the_real_objects():
 
 
 def test_callers_reach_the_patched_helpers_through_turn_control():
-    """No module outside ``turn_control`` calls ``_thread_lock`` / ``_resolve_thread_id`` /
-    ``_hold_if_hitl_pending`` by a bare (import-time) binding or through ``server.chat`` —
-    only as ``_turn_control.<name>(…)``, so a patch on the owner is what runs."""
+    """No module outside ``turn_control`` reads a ``_CALL_THROUGH`` name by a bare
+    (import-time) binding or through ``server.chat`` — only as ``_turn_control.<name>``,
+    so a patch on the owner is what runs. Reads, not just calls: the HITL constants are
+    compared/passed, never called."""
     offenders: list[str] = []
     for rel in ("server/chat.py", "server/chat_acp.py", "server/chat_session_ops.py", "server/chat_rooms.py"):
         tree = ast.parse((_REPO / rel).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if isinstance(func, ast.Name) and func.id in _CALL_THROUGH:
-                offenders.append(f"{rel}:{node.lineno} bare {func.id}()")
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in _CALL_THROUGH:
+                offenders.append(f"{rel}:{node.lineno} bare {node.id}")
             elif (
-                isinstance(func, ast.Attribute)
-                and func.attr in _CALL_THROUGH
-                and not (isinstance(func.value, ast.Name) and func.value.id == "_turn_control")
+                isinstance(node, ast.Attribute)
+                and node.attr in _CALL_THROUGH
+                and not (isinstance(node.value, ast.Name) and node.value.id == "_turn_control")
             ):
-                offenders.append(f"{rel}:{node.lineno} {ast.unparse(func)}()")
-    assert not offenders, "call these through server.turn_control (#3847): " + ", ".join(offenders)
+                offenders.append(f"{rel}:{node.lineno} {ast.unparse(node)}")
+    assert not offenders, "reach these through server.turn_control (#3847/#3856): " + ", ".join(offenders)
 
 
 @pytest.mark.asyncio
@@ -303,3 +258,231 @@ async def test_idle_beacon_has_one_home(monkeypatch):
     assert [ev async for ev in chat._chat_langgraph_stream("hi", "s-beacon")] == [("done", "ok")]
     assert seen == [1, 0]  # in flight → not idle
     assert turn_control._ACTIVE_TURNS == 0
+
+
+# ── break-the-fake: a patch on turn_control reaches the drivers (#3856) ─────────────────
+
+
+class _AskThenAnswer:
+    """``_run_turn_stream`` stand-in: records each pass's ``resume_value``; the first pass
+    parks on a HITL interrupt, later passes answer (or keep asking, ``always_ask``)."""
+
+    def __init__(self, *, always_ask: bool = False):
+        self.resume_values: list = []
+        self.always_ask = always_ask
+
+    def __call__(self, message, session_id, config, *, resume_value=None, **_kw):
+        self.resume_values.append(resume_value)
+        ask = self.always_ask or len(self.resume_values) == 1
+
+        async def _gen():
+            if ask:
+                yield ("input_required", {"question": "which?"})
+            else:
+                yield ("__raw__", "answered")
+
+        return _gen()
+
+
+async def _native_frames(chat, request_metadata):
+    return [
+        f
+        async for f in chat._run_native_turn(
+            "go", "s-native", {"configurable": {"thread_id": "t-native"}}, request_metadata=request_metadata
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_native_turn_reads_is_autonomous_from_turn_control(monkeypatch):
+    """An operator turn (empty origin) parks — unless turn_control's classifier says
+    autonomous, which only reaches the driver if it reads ``_turn_control._is_autonomous``."""
+    from runtime.state import STATE
+
+    chat = _chat()
+    fake = _AskThenAnswer()
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(chat, "_run_turn_stream", fake)
+    monkeypatch.setattr(turn_control, "_is_autonomous", lambda md: True)
+    frames = await _native_frames(chat, {})
+    assert "input_required" not in [k for k, _ in frames]
+    assert ("done", "answered") in frames
+
+
+@pytest.mark.asyncio
+async def test_native_turn_reads_the_autoanswer_cap_and_sentinel_from_turn_control(monkeypatch):
+    """The auto-answer budget and the no-operator resume value are turn_control's."""
+    from runtime.state import STATE
+
+    chat = _chat()
+    fake = _AskThenAnswer(always_ask=True)
+    sentinel = object()
+
+    async def _clear(config):
+        return None
+
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(chat, "_run_turn_stream", fake)
+    monkeypatch.setattr(chat, "_clear_pending_interrupt", _clear)
+    monkeypatch.setattr(turn_control, "_MAX_AUTONOMOUS_AUTOANSWERS", 1)
+    monkeypatch.setattr(turn_control, "_AUTONOMOUS_HITL_SENTINEL", sentinel)
+    frames = await _native_frames(chat, {"origin": "scheduler"})
+    assert [k for k, _ in frames][-1] == "done"
+    assert fake.resume_values == [None, sentinel]  # ONE auto-answer, with the patched sentinel
+
+
+@pytest.mark.asyncio
+async def test_streaming_driver_reads_beacon_priority_and_hitl_resume_from_turn_control(monkeypatch):
+    """``_chat_langgraph_stream``: the idle beacon, the ADR 0115 priority scope and the
+    HITL-resume marker all come from turn_control at call time."""
+    import contextlib
+
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    chat = _chat()
+    seen: list = []
+    marker = object()
+
+    @contextlib.contextmanager
+    def _priority(origin):
+        seen.append(("priority", origin))
+        yield
+
+    async def _hold(message, session_id, config, *, request_metadata):
+        return marker
+
+    async def _native(message, session_id, config, *, request_metadata=None, resume=False, images=None):
+        seen.append(("native", resume))
+        yield ("done", "ok")
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(), raising=False)
+    monkeypatch.setattr(chat, "_run_native_turn", _native)
+    monkeypatch.setattr(turn_control, "_turn_started", lambda sid: seen.append(("started", sid)))
+    monkeypatch.setattr(turn_control, "_turn_ended", lambda sid: seen.append(("ended", sid)))
+    monkeypatch.setattr(turn_control, "_interactive_turn_priority", _priority)
+    monkeypatch.setattr(turn_control, "_hold_if_hitl_pending", _hold)
+    monkeypatch.setattr(turn_control, "_HITL_RESUME", marker)
+
+    frames = [f async for f in chat._chat_langgraph_stream("hello", "s-stream", request_metadata={"origin": "user"})]
+    assert frames == [("done", "ok")]
+    # The held marker IS turn_control's _HITL_RESUME → the turn resumes instead of re-parking.
+    assert seen == [("started", "s-stream"), ("priority", "user"), ("native", True), ("ended", "s-stream")]
+
+
+@pytest.mark.asyncio
+async def test_nonstreaming_driver_reads_beacon_priority_and_hitl_constants_from_turn_control(monkeypatch):
+    """``chat()`` → ``_chat_langgraph``: the idle beacon, the priority scope, the
+    HITL-resume marker and (goal-driven) the auto-answer cap + sentinel are turn_control's."""
+    import contextlib
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.types import Command
+
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    chat = _chat()
+    seen: list = []
+    inputs: list = []
+    marker, sentinel = object(), object()
+
+    @contextlib.contextmanager
+    def _priority(origin):
+        seen.append(("priority", origin))
+        yield
+
+    async def _hold(message, session_id, config, *, request_metadata):
+        return marker
+
+    async def _resume_payload(config, value):
+        return f"resume:{value}"
+
+    async def _pending(config):
+        return "still asking"
+
+    async def _clear(config):
+        seen.append(("cleared",))
+
+    class _Graph:
+        async def ainvoke(self, graph_input, config=None):
+            inputs.append(graph_input)
+            return {"messages": [HumanMessage(content="q"), AIMessage(content="answer")]}
+
+    class _Goals:
+        async def parse_control(self, message, session_id, trusted=False):
+            return None  # not a /goal command
+
+        def active_goal(self, sid):
+            return SimpleNamespace(iteration=1)
+
+        async def evaluate(self, sid, last_text=""):
+            return None
+
+    monkeypatch.setattr(STATE, "graph", _Graph(), raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", _Goals(), raising=False)
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(), raising=False)
+    monkeypatch.setattr(chat, "_resume_payload", _resume_payload)
+    monkeypatch.setattr(chat, "_pending_interrupt_value", _pending)
+    monkeypatch.setattr(chat, "_clear_pending_interrupt", _clear)
+    monkeypatch.setattr(turn_control, "_turn_started", lambda sid: seen.append(("started", sid)))
+    monkeypatch.setattr(turn_control, "_turn_ended", lambda sid: seen.append(("ended", sid)))
+    monkeypatch.setattr(turn_control, "_interactive_turn_priority", _priority)
+    monkeypatch.setattr(turn_control, "_hold_if_hitl_pending", _hold)
+    monkeypatch.setattr(turn_control, "_HITL_RESUME", marker)
+    monkeypatch.setattr(turn_control, "_MAX_AUTONOMOUS_AUTOANSWERS", 2)
+    monkeypatch.setattr(turn_control, "_AUTONOMOUS_HITL_SENTINEL", sentinel)
+
+    out = await chat.chat("hello", "s-sync")
+    assert out[0]["content"] == "answer"
+    # The held marker IS turn_control's _HITL_RESUME → a real resume, not the "input needed" echo.
+    assert isinstance(inputs[0], Command) and inputs[0].resume == "resume:hello"
+    # Goal-driven + still parked → exactly the patched cap of auto-answers, each the patched sentinel.
+    assert [i.resume for i in inputs[1:]] == [sentinel, sentinel]
+    assert seen[0] == ("started", "s-sync") and seen[1][0] == "priority" and seen[-1] == ("ended", "s-sync")
+    assert ("cleared",) in seen
+
+
+@pytest.mark.asyncio
+async def test_streaming_overflow_retry_reads_priority_from_turn_control(monkeypatch):
+    """The context-overflow retry re-enters the ADR 0115 priority scope — turn_control's."""
+    import contextlib
+
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    chat = _chat()
+    origins: list = []
+    calls: list = []
+
+    @contextlib.contextmanager
+    def _priority(origin):
+        origins.append(origin)
+        yield
+
+    async def _hold(message, session_id, config, *, request_metadata):
+        return None
+
+    async def _native(message, session_id, config, *, request_metadata=None, resume=False, images=None):
+        calls.append(message)
+        if len(calls) == 1:
+            raise RuntimeError("context overflow")
+        yield ("done", "recovered")
+
+    async def _compacted(exc, thread_id, session_id):
+        return True
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(), raising=False)
+    monkeypatch.setattr(chat, "_run_native_turn", _native)
+    monkeypatch.setattr(chat, "_overflow_compacted", _compacted)
+    monkeypatch.setattr(turn_control, "_interactive_turn_priority", _priority)
+    monkeypatch.setattr(turn_control, "_hold_if_hitl_pending", _hold)
+
+    frames = [f async for f in chat._chat_langgraph_stream("hello", "s-ovf", request_metadata={"origin": "user"})]
+    assert frames[-1] == ("done", "recovered")
+    assert origins == ["user", "user"]  # the initial turn AND the retry

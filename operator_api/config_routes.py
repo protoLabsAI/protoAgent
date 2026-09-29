@@ -8,7 +8,9 @@ settings edits. Extracted from ``server._main`` (ADR 0023 phase 3) into a
 Config-changing routes offload to a worker thread (#497): applying settings
 recompiles the graph, which would otherwise freeze the event loop. The apply /
 finish-setup logic lives in ``server.settings_apply`` (#3848; imported through its
-``server.agent_init`` re-export); these handlers are the thin HTTP layer over it.
+``server.agent_init`` re-export); these handlers are the thin HTTP layer over it. Every
+handler imports ``_apply_settings_changes`` from ``server.agent_init`` at CALL time
+(#3856), so a patch on ``agent_init`` — its one patch point — intercepts them too.
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ from pydantic import BaseModel
 
 from runtime.state import STATE
 from server.agent_init import (
-    _apply_settings_changes,
     _build_settings_callbacks,
     _reset_settings_keys,
 )
@@ -171,6 +172,8 @@ def register_config_routes(app) -> None:
     async def _api_post_config(req: ConfigReloadRequest):
         # Offload off the event loop (#497) — the reload's graph compile is heavy
         # and would otherwise freeze the server for its duration.
+        from server.agent_init import _apply_settings_changes
+
         ok, messages = await asyncio.to_thread(_apply_settings_changes, config=req.config, soul=req.soul)
         return {"ok": ok, "messages": messages}
 
@@ -206,6 +209,8 @@ def register_config_routes(app) -> None:
             return {"ok": True, "messages": ["already the current persona"], "restored": version_id}
         # Reuse the tested save+reload path: it snapshots the CURRENT persona before overwriting
         # (so restore is reversible) and recompiles the graph off the event loop (#497).
+        from server.agent_init import _apply_settings_changes
+
         ok, messages = await asyncio.to_thread(_apply_settings_changes, soul=content)
         return {"ok": ok, "messages": messages, "restored": version_id}
 
@@ -841,6 +846,7 @@ def register_config_routes(app) -> None:
         # event loop (#497); the live applier is the same _apply_settings_changes as before.
         from ops import OpContext
         from ops.config import set_config
+        from server.agent_init import _apply_settings_changes
 
         result = await set_config(
             nest_updates(req.updates),
