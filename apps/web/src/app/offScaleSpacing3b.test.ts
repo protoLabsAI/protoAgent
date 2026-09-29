@@ -6,9 +6,10 @@ import { describe, expect, it } from "vitest";
 // px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
 // chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/3/5/6/7/10/14/18px, …) are intentionally LEFT as literals — they wait on the DS
-// gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `border-radius: 4px` is not spacing).
+// half-steps (2/3/5/6/7/10/14/18px, …) got their own DS tokens in protoContent#547 (2→0_5, 6→1_5,
+// 10→2_5, …) and the step-3 cards migrate them per-file; this guard still flags ONLY the five
+// exact-scale values, and only when they sit in a spacing declaration (a `left: 8px` /
+// `border-radius: 4px` is not spacing).
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as fontSizeGuard.test.ts /
 // tokenNameGuard.test.ts: this tsconfig has no node types and under jsdom `import.meta.url`
@@ -142,20 +143,24 @@ describe("no exact-scale px spacing literal in the workflows/plugins/pathpicker 
     expect(offendersIn("../settings/plugins.css", commented)).toEqual([]);
   });
 
-  it("pins the workflows half-steps now tokenized, and the ones the sibling cards still owe", () => {
+  it("pins the workflows/plugins/pathpicker half-steps now tokenized off protoContent#547", () => {
     // protoContent#547 shipped the DS spacing half-steps in @protolabsai/design 0.11.0, so the
-    // radius+spacing step-3 card moved the workflows off-scale spacing onto --pl-space-{0_5,1_5,2_5}.
-    // These two were mixed-shorthand values whose half-step member is now a token too; re-pinned to
-    // the fully tokenized strings so a regression that reintroduces a raw 6px/10px here is caught.
-    // plugins.css / pathpicker.css are tokenized by later sibling cards, so their half-step literals
-    // are still expected to survive for now (this card left them alone).
+    // radius+spacing step-3 cards moved these surfaces' off-scale spacing onto --pl-space-{0_5,1_5,2_5}.
+    // These were mixed-shorthand values whose half-step member is now a token too; re-pinned to the
+    // fully tokenized strings so a regression that reintroduces a raw 6px/10px here is caught.
     expect(CSS_SOURCES["../workflows/workflows.css"]).toContain(
       "padding: var(--pl-space-1_5) var(--pl-space-2)",
     );
     expect(CSS_SOURCES["../workflows/workflows.css"]).toContain(
       "padding: var(--pl-space-2) var(--pl-space-2_5)",
     );
-    expect(CSS_SOURCES["../settings/plugins.css"]).toContain("padding: 10px var(--pl-space-3)");
-    expect(CSS_SOURCES["../settings/pathpicker.css"]).toContain("padding: 6px var(--pl-space-2)");
+    // plugins.css: the marketplace-link padding (was `10px var(--pl-space-3)`) and pathpicker.css:
+    // the browser-row padding (was `6px var(--pl-space-2)`) are tokenized by THIS card.
+    expect(CSS_SOURCES["../settings/plugins.css"]).toContain(
+      "padding: var(--pl-space-2_5) var(--pl-space-3)",
+    );
+    expect(CSS_SOURCES["../settings/pathpicker.css"]).toContain(
+      "padding: var(--pl-space-1_5) var(--pl-space-2)",
+    );
   });
 });

@@ -3,7 +3,7 @@
 .path-picker {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .path-picker-input {
   flex: 1;
@@ -42,7 +42,7 @@
 .path-browser-note {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0;
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-warning);
@@ -53,7 +53,7 @@
   height: 260px;
   overflow-y: auto;
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   padding: var(--pl-space-1);
 }
 .path-browser-row {
@@ -61,9 +61,9 @@
   align-items: center;
   gap: var(--pl-space-2);
   width: 100%;
-  padding: 6px var(--pl-space-2);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   background: transparent;
   color: var(--pl-color-fg);
   font: inherit;
@@ -102,7 +102,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .path-browser-chosen {
   flex: 1;
