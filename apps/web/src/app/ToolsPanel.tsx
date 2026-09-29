@@ -280,7 +280,7 @@ function WorkFoldersButton() {
   );
 }
 
-// Mirrors the backend's `_falsey` (graph/config.py). The registry's `fs` / `write` values
+// Mirrors the backend's `_falsey` (graph/config_load.py). The registry's `fs` / `write` values
 // can arrive as strings from JSON, an env overlay or a hand-edit — `"false"` is a truthy
 // string in JS exactly as it is in Python. A bare `p.fs === false` here would label a
 // project read-write in the console while the backend correctly kept it OUT of the fence:

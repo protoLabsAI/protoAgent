@@ -200,7 +200,7 @@ class ProjectionOptions:
         # render the empty `<prior_sessions/>` tag, which is "off" spelled in a way
         # nothing documents. The defaults come off the FIELDS above rather than being
         # retyped — a literal here would silently revert a changed default. Silent
-        # like the budget clamp above: `graph/config.py` already warns for an
+        # like the budget clamp above: `graph/config_load.py` already warns for an
         # operator's YAML, and direct construction is a caller's bug, not a typo.
         for attr in ("prior_sessions_max", "prior_sessions_max_tokens"):
             default = getattr(type(self), attr)
@@ -286,7 +286,7 @@ class ProjectionOptions:
 
 def _coerce_prior_sessions_policy(value) -> str:
     """``context.prior_sessions`` → one of newest|relevant|off; anything else
-    reads as ``newest`` (``graph/config.py`` already warned at load time).
+    reads as ``newest`` (``graph/config_load.py`` already warned at load time).
 
     ``False`` means ``off``: YAML 1.1 parses a bare ``off`` as that boolean, and
     this is duck-typed over whatever object a runtime hands in — an external

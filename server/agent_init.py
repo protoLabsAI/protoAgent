@@ -1450,7 +1450,7 @@ def _filter_nested_to_host_keys(config: dict) -> tuple[dict, list[str]]:
     dict; return ``(host_only, dropped)`` where ``dropped`` is the dotted keys that
     were not host-scoped (agent-only / secret) and so are refused on the Host layer.
 
-    Mirrors ``graph.config._filter_to_host_keys`` (the READ-side guard) so the host
+    Mirrors ``graph.config_load._filter_to_host_keys`` (the READ-side guard) so the host
     file can't accumulate agent keys, and enforces D5: secret-typed keys are never
     written to the non-secret host file."""
     from graph.config import _get_dotted, _set_dotted
