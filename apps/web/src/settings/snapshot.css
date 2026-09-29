@@ -15,7 +15,7 @@
   color: var(--pl-color-fg-muted);
 }
 .snapshot-section {
-  margin-bottom: 20px;
+  margin-bottom: var(--pl-space-5);
   padding-bottom: var(--pl-space-4);
   border-bottom: 1px solid var(--pl-color-border);
 }
@@ -25,7 +25,7 @@
 .snapshot-section h3 {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0 0 var(--pl-space-2);
   font-size: var(--pl-font-size-sm);
   font-weight: 600;
@@ -53,10 +53,10 @@
 .snapshot-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   justify-content: space-between;
-  padding: 6px 10px;
-  border-radius: 6px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
+  border-radius: var(--pl-radius-md);
   background: var(--pl-color-bg-inset);
   font-size: var(--pl-font-size-xs);
 }
@@ -75,8 +75,8 @@
 }
 .snapshot-caveat {
   margin: var(--pl-space-4) 0 0;
-  padding: 10px var(--pl-space-3);
-  border-radius: 6px;
+  padding: var(--pl-space-2_5) var(--pl-space-3);
+  border-radius: var(--pl-radius-md);
   background: var(--pl-color-bg-inset);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
@@ -92,7 +92,7 @@
   border-bottom: 1px solid var(--pl-color-border);
 }
 .new-agent-source button {
-  padding: var(--pl-space-2) 14px;
+  padding: var(--pl-space-2) var(--pl-space-4);
   border: 0;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
@@ -113,7 +113,7 @@
 .snapshot-import-error {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
 }
