@@ -57,6 +57,9 @@ class ScriptedGraph:
         self.pending: list = []
         self.stream_calls: list[tuple[Any, dict]] = []
         self.invoke_calls: list[tuple[Any, dict]] = []
+        # Set when the driver makes a graph call the test didn't script — the drivers catch
+        # Exception on these paths, so the raise alone could be swallowed into an error frame.
+        self.overrun = False
         self.updates: list[tuple[dict, Any]] = []
         self.resumes: list = []
         self.on_call = None  # optional hook(graph, config) run at the start of each call
@@ -72,6 +75,9 @@ class ScriptedGraph:
         if self.on_call:
             self.on_call(self, config)
         self._answer_resume(graph_input)
+        if not self.streams:
+            self.overrun = True
+            raise AssertionError(f"unscripted astream_events call #{len(self.stream_calls)}")
         script = self.streams.pop(0)
         for item in script:
             if isinstance(item, Raise):
@@ -86,6 +92,9 @@ class ScriptedGraph:
         if self.on_call:
             self.on_call(self, config)
         self._answer_resume(graph_input)
+        if not self.invokes:
+            self.overrun = True
+            raise AssertionError(f"unscripted ainvoke call #{len(self.invoke_calls)}")
         out = self.invokes.pop(0)
         if isinstance(out, Raise):
             raise out.exc

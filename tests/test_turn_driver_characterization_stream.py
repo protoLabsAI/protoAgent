@@ -95,7 +95,11 @@ def env(monkeypatch):
 
     e.install = install
     e.state = rs.STATE
-    return e
+    yield e
+    # A driver making a graph call the test didn't script must fail the test even when the
+    # driver's own error handling swallowed the fake's AssertionError into a frame/record.
+    graph = getattr(e, "graph", None)
+    assert graph is None or not graph.overrun, "driver made an unscripted graph call"
 
 
 async def _run(message="hello", session_id="s1", **kw):
@@ -1012,7 +1016,11 @@ async def test_consumer_closing_early_is_silent(env):
     import gc
 
     gc.collect()
-    for _ in range(5):
+    # Bounded poll, not a fixed tick count: how many loop turns the finalizer's aclose()
+    # needs depends on how many awaits the impl's `finally` performs.
+    for _ in range(200):
+        if env.trace.flushes and not turn_control._thread_lock("a2a:s-close").locked():
+            break
         await asyncio.sleep(0)
     assert env.trace.flushes == 1
     assert not turn_control._thread_lock("a2a:s-close").locked()

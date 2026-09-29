@@ -80,7 +80,11 @@ def env(monkeypatch):
 
     e.install = install
     e.state = rs.STATE
-    return e
+    yield e
+    # A driver making a graph call the test didn't script must fail the test even when the
+    # driver's own error handling swallowed the fake's AssertionError into a frame/record.
+    graph = getattr(e, "graph", None)
+    assert graph is None or not graph.overrun, "driver made an unscripted graph call"
 
 
 def _cfg(sid="s1"):
@@ -224,6 +228,7 @@ async def test_hitl_hold_queues_the_message_and_echoes_the_pending_ask(env):
         ]
         assert g.invoke_calls == []
         assert steering.pending("s1") == 1
+        assert turn_control.active_turns() == 0  # the hold path released the turn counter
     finally:
         steering.forget("s1")
 
