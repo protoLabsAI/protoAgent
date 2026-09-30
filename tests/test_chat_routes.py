@@ -126,6 +126,26 @@ def test_openai_completion_reports_real_usage(monkeypatch):
     assert body["usage"] == {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
 
 
+def test_openai_completion_rejects_malformed_messages_with_an_openai_400(monkeypatch):
+    # #3929: no user message used to come back as a 200 `[{"error": …}, 400]` (a
+    # Flask-style tuple FastAPI serialised as-is); a non-list `messages` raised
+    # AttributeError → plain 500. Both are OpenAI-shaped 400s now, and no turn runs.
+    seen: dict = {}
+    c = _client(monkeypatch, seen=seen)
+    for payload in (
+        {"messages": [{"role": "system", "content": "be terse"}]},  # no user message
+        {"messages": []},
+        {"messages": "hi"},  # not a list
+        {"messages": {"role": "user", "content": "hi"}},
+        {"messages": ["hi"]},  # entries aren't objects
+    ):
+        resp = c.post("/v1/chat/completions", json=payload)
+        assert resp.status_code == 400, payload
+        err = resp.json()["error"]
+        assert err["type"] == "invalid_request_error" and err["param"] == "messages" and err["message"], payload
+    assert "origin" not in seen  # rejected before a turn was started
+
+
 def test_openai_completion_usage_defaults_to_zero(monkeypatch):
     # A short-circuit / older reply carries no usage → zeros, as before (no crash).
     c = _client(monkeypatch)
@@ -917,6 +937,33 @@ def test_aside_session_route(monkeypatch):
     body = c.post("/api/chat/sessions/s1/aside", json={"question": "what's the answer?"}).json()
     assert seen == [("s1", "what's the answer?")]
     assert body["found"] is True and body["answer"] == "42"
+
+
+def test_aside_session_route_reports_a_model_error_structurally(monkeypatch):
+    # #3929: a provider error inside the side turn used to escape as a plain-text 500.
+    # It is now the endpoint's own {found, answer, reason, message} shape at 502 — the
+    # REAL aside_session + run_aside run here; only the graph's model call fails.
+    import runtime.state as rs
+
+    class _Snap:
+        values = {"messages": []}
+
+    class _FailingGraph:
+        async def aget_state(self, config):
+            return _Snap()
+
+        async def ainvoke(self, graph_input, config):
+            raise RuntimeError("Error code: 429 - rate limited")
+
+    c = _client(monkeypatch, graph=_FailingGraph())
+    monkeypatch.setattr(rs.STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "checkpoint_path", None, raising=False)
+    resp = c.post("/api/chat/sessions/s1/aside", json={"question": "what did we decide?"})
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["found"] is False and body["answer"] == "" and body["reason"] == "model_error"
+    assert "rate limited" in body["message"]
+    assert body["detail"] == body["message"]  # the console's generic error parser reads `detail`
 
 
 def test_fork_session_route(monkeypatch):

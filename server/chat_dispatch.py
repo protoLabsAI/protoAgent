@@ -80,6 +80,26 @@ def _unknown_slash_command_reply(message: str) -> str | None:
     return f"Unknown command /{name}. Type / to see available commands."
 
 
+# The reply to `/goal …` when goal mode is off (#3929). Names the config key
+# (`goal.enabled`, GraphConfig.goal_enabled) since it isn't a visible Settings field.
+GOAL_MODE_DISABLED_REPLY = (
+    "Goal mode is off for this agent, so `/goal` does nothing here. To enable it, set "
+    "`goal.enabled: true` in the agent's `langgraph-config.yaml` and restart the agent."
+)
+
+
+def _goal_disabled_reply(message: str) -> str | None:
+    """:data:`GOAL_MODE_DISABLED_REPLY` if ``message`` is a ``/goal`` command, else ``None``.
+
+    Only consulted when ``STATE.goal_controller`` is ``None`` (goal mode disabled). Uses
+    the same ``_slash_kind`` resolution that reserves ``goal`` from the unknown-command
+    catch, so the two can't disagree about what counts as ``/goal``."""
+    name, _rest = _chat_commands._parse_slash_command(message)
+    if not name or _slash_kind(name) != "goal":
+        return None
+    return GOAL_MODE_DISABLED_REPLY
+
+
 def _lifecycle_command_reply(message: str) -> str | None:
     """If ``message`` is the core ``/lifecycle`` command (ADR 0074), return its read-only
     listing — the three lifecycle events plus the currently-configured config reactions and
@@ -319,6 +339,13 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                 pre.handled = True
                 yield ("done", reply)
                 return
+    elif (_goal_off := _goal_disabled_reply(message)) is not None:
+        # Goal mode off (#3929): `/goal` is still reserved (the unknown-slash catch exempts
+        # it), so without this it fell through to the model, which invented an answer
+        # ("Goals cleared."). Answer deterministically instead, on both drivers.
+        pre.handled = True
+        yield ("done", _goal_off)
+        return
 
     # Core /lifecycle command (ADR 0074) — read-only listing of the lifecycle
     # events + configured reactions + registered hooks. Reserved like /goal.

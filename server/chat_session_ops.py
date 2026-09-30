@@ -353,7 +353,8 @@ async def aside_session(
 
     Resolves the session's checkpointer ``thread_id`` and runs ``run_aside``, which reads
     that thread's messages and runs an incognito turn on a fresh EPHEMERAL thread — so the
-    main thread's checkpoint is never written. Returns ``{found, answer, reason, message}``.
+    main thread's checkpoint is never written. Returns ``{found, answer, reason, message}``;
+    a model/provider failure returns ``found: False, reason: "model_error"`` (#3929).
 
     Deliberately does NOT hold the per-thread lock across the turn: the aside never writes
     the main thread (nothing to guard), and a side chat is meant to run *alongside* the main
@@ -364,14 +365,27 @@ async def aside_session(
     from graph.aside_op import run_aside
 
     tid = _turn_control._resolve_thread_id(request_metadata, session_id)
-    result = await run_aside(
-        STATE.graph,
-        STATE.checkpointer,
-        tid,
-        question,
-        session_id=session_id,
-        db_path=getattr(STATE, "checkpoint_path", None),
-    )
+    try:
+        result = await run_aside(
+            STATE.graph,
+            STATE.checkpointer,
+            tid,
+            question,
+            session_id=session_id,
+            db_path=getattr(STATE, "checkpoint_path", None),
+        )
+    except Exception as exc:  # noqa: BLE001 — a provider/model error is a reported failure, not a crash
+        # #3929: a provider 400/429 (or any model-side failure) used to propagate out of
+        # the route as a plain-text 500. Report it in the endpoint's own shape instead;
+        # the route maps reason=model_error to a 502.
+        log.exception("[aside] side turn failed for session=%s", session_id)
+        detail = str(exc).strip() or type(exc).__name__
+        return {
+            "found": False,
+            "answer": "",
+            "reason": "model_error",
+            "message": f"The side question failed — the model call errored: {detail}",
+        }
     reason = result.get("reason")
     msg = {
         "no_checkpointer": "No conversation yet — start chatting, then ask a side question.",

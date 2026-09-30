@@ -282,3 +282,27 @@ async def test_an_unfenced_turn_on_an_acp_runtime_still_runs_there(graph, monkey
     out = await chat_mod.chat("hello", "s-acp", origin="plugin")
 
     assert out[0]["content"] == "acp ran it" and ran == ["hello"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["/goal", "/goal clear", "/goal ship the release"])
+async def test_goal_command_with_goal_mode_off_is_answered_on_both_drivers(graph, monkeypatch, message):
+    """#3929: with goal mode disabled (no controller) `/goal …` is still a reserved name
+    — exempt from the unknown-slash catch — so it used to fall through to the model,
+    which invented an answer ("Goals cleared."). Both drivers now answer
+    deterministically, naming the config key, and never run the graph."""
+    g = graph([])  # an ainvoke would pop from an empty list and fail the test
+
+    out = await chat_mod.chat(message, "s-goal-off")
+    assert out[0]["content"] == dispatch_mod.GOAL_MODE_DISABLED_REPLY
+    assert "goal.enabled" in out[0]["content"]
+    assert "error" not in out[0]
+
+    async def _never(*a, **k):  # pragma: no cover — the model must not answer /goal
+        raise AssertionError("the streaming driver ran a native turn for /goal")
+        yield
+
+    monkeypatch.setattr(chat_mod, "_run_native_turn", _never)
+    frames = [f async for f in chat_mod._chat_langgraph_stream_impl(message, "s-goal-off")]
+    assert frames[-1] == ("done", dispatch_mod.GOAL_MODE_DISABLED_REPLY)
+    assert g.inputs == []

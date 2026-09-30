@@ -245,14 +245,23 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
     graph — a `/help` command, an unknown slash command, "setup not complete", a
     HITL hold. Those spend nothing, so they get no row: a telemetry surface that
     counts control-plane replies as turns is worse than one that doesn't.
+
+    A FAILED turn is the exception (#3929): it is always recorded, with whatever
+    usage it managed (zero when the provider rejected the first call — a 400/429
+    before any usage — or when it died before the graph). Skipping it made failed
+    ``/v1`` and ``/api/chat`` turns invisible in ``/api/telemetry/recent`` while
+    failed A2A turns showed up as ``failed``, so the success rate over-reported.
+    ``state`` is ``failed`` only when the reply carries the structured ``error`` key
+    (#3914's contract) or the impl raised — control-plane replies never carry it.
     """
     try:
         usage_cb = sink.get("usage_cb")
-        if usage_cb is None:
+        failed = state == "failed"
+        if usage_cb is None and not failed:
             return
-        per_model = getattr(usage_cb, "usage_metadata", None) or {}
+        per_model = (getattr(usage_cb, "usage_metadata", None) or {}) if usage_cb is not None else {}
         models, usage, cost = telemetry_usage(per_model)
-        if not models and not usage["input_tokens"] and not usage["output_tokens"]:
+        if not failed and not models and not usage["input_tokens"] and not usage["output_tokens"]:
             return  # reached the graph but made no model call (an ACP turn, a tool-only short-circuit)
 
         from observability import tracing
