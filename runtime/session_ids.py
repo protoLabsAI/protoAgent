@@ -14,11 +14,16 @@ mints (and every id an existing on-disk session carries) passes unchanged, and o
 client produces are refused —
 
 * empty, or ``.`` / ``..`` on their own;
-* longer than :data:`MAX_SESSION_ID_LEN` (the task store's ``context_id`` column width);
+* longer than :data:`MAX_SESSION_ID_LEN` (the chat tombstone table's key width);
 * containing a path separator (``/`` or ``\\``), a control character (NUL included), ``%``
   (reserved: the session-memory filename mapper encodes ``:`` as ``%3A``, so a literal ``%``
-  could alias another session's encoded name), or a character Windows forbids in filenames
-  (``< > " | ? *``).
+  could alias another session's encoded name), or one of the characters Windows forbids in
+  filenames (``< > " | ? *``).
+
+This is a shape rule, not a complete portable-filename validator: Windows reserved device names
+(``CON``, ``NUL``, ...) and trailing dots/spaces are not refused here. Each store that turns an
+id into a filename still owns its own mapping and its own check that the resolved path stays
+under its base (e.g. ``graph.middleware.memory.contained_in``).
 
 ``/v1`` keeps its own normalization (``operator_api.chat_routes._v1_session_id``) because the
 OpenAI ``user`` field is free text by contract; its output always satisfies this check.
@@ -30,7 +35,7 @@ from typing import Annotated
 
 from pydantic import AfterValidator
 
-#: The A2A task store's ``context_id`` / the tombstone table's key are ``String(255)``.
+#: The chat tombstone table's key (``chat_session_tombstones.context_id``) is ``String(255)``.
 MAX_SESSION_ID_LEN = 255
 
 _FORBIDDEN_CHARS = frozenset('/\\%<>"|?*')

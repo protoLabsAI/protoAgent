@@ -222,14 +222,43 @@ def test_operator_goal_set_refuses_an_unusable_session_id(monkeypatch):
 
 # --- A2A contextId ----------------------------------------------------------------------
 
+_A2A_ROUTERS: list = []
+
+
+@pytest.fixture
+async def _a2a_wiring():
+    """Clean hooks in, drained routers + registries out (the production handler wiring
+    below installs both)."""
+    import asyncio
+
+    from a2a_impl import hitl_routing
+    from a2a_impl.executor import set_progress_hook, set_terminal_hook
+
+    set_terminal_hook(None)
+    set_progress_hook(None)
+    yield
+    for handler, router in _A2A_ROUTERS:
+        await router.drain()
+        pending = set(getattr(handler._active_task_registry, "_cleanup_tasks", ()) or ())
+        if pending:
+            await asyncio.wait(pending, timeout=5)
+    _A2A_ROUTERS.clear()
+    hitl_routing._ROUTER[0] = None
+    set_terminal_hook(None)
+    set_progress_hook(None)
+
 
 def _a2a_handler(calls: list):
+    """A real a2a-sdk request handler wired like production (server/__init__.py):
+    hardened registry + the parked-task routing wrappers on the send entry points."""
     from a2a.server.request_handlers import DefaultRequestHandler
     from a2a.server.tasks import InMemoryPushNotificationConfigStore, InMemoryTaskStore
     from a2a.types import AgentSkill
 
     import protolabs_a2a as pa
+    from a2a_impl import hitl_routing
     from a2a_impl.executor import ProtoAgentExecutor
+    from a2a_impl.registry import harden_active_task_registry
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
         calls.append(ctx)
@@ -243,12 +272,17 @@ def _a2a_handler(calls: list):
         skills=[AgentSkill(id="chat", name="chat", description="d", tags=["chat"])],
         bearer=False,
     )
-    return DefaultRequestHandler(
+    handler = DefaultRequestHandler(
         agent_executor=ProtoAgentExecutor(stream),
         task_store=InMemoryTaskStore(),
         agent_card=card,
         push_config_store=InMemoryPushNotificationConfigStore(),
     )
+    assert harden_active_task_registry(handler)
+    router = hitl_routing.install_parked_task_routing(handler)
+    assert router is not None
+    _A2A_ROUTERS.append((handler, router))
+    return handler
 
 
 def _a2a_msg(ctx: str):
@@ -259,38 +293,59 @@ def _a2a_msg(ctx: str):
     )
 
 
+async def _stored_tasks(handler, ctx: str) -> list:
+    from a2a.server.context import ServerCallContext
+    from a2a.types.a2a_pb2 import ListTasksRequest
+
+    page = await handler.task_store.list(ListTasksRequest(context_id=ctx, page_size=50), ServerCallContext())
+    return list(page.tasks)
+
+
+_UNUSABLE_CTX = ["../../outside", "a/b", "a\\b", "x\x00y", "a%3Ab"]
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ctx", ["../../outside", "a\\b", "x\x00y", "a%3Ab"])
-async def test_a2a_refuses_an_unusable_context_id_before_the_turn(ctx):
+@pytest.mark.parametrize("ctx", _UNUSABLE_CTX)
+async def test_a2a_send_refuses_an_unusable_context_id_and_stores_no_task(_a2a_wiring, ctx):
     from a2a.server.context import ServerCallContext
     from a2a.utils.errors import InvalidParamsError
 
-    from a2a_impl.executor import set_progress_hook, set_terminal_hook
-
-    set_terminal_hook(None)
-    set_progress_hook(None)
     calls: list = []
     handler = _a2a_handler(calls)
     with pytest.raises(InvalidParamsError):
         await handler.on_message_send(_a2a_msg(ctx), ServerCallContext())
-    assert calls == []
+    assert calls == []  # no turn
+    assert await _stored_tasks(handler, ctx) == []  # and no task row the sidebar could list
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ctx", _UNUSABLE_CTX)
+async def test_a2a_stream_refuses_an_unusable_context_id_and_stores_no_task(_a2a_wiring, ctx):
+    from a2a.server.context import ServerCallContext
+    from a2a.utils.errors import InvalidParamsError
+
+    calls: list = []
+    handler = _a2a_handler(calls)
+    events: list = []
+    with pytest.raises(InvalidParamsError):
+        async for event in handler.on_message_send_stream(_a2a_msg(ctx), ServerCallContext()):
+            events.append(event)
+    assert events == [] and calls == []
+    assert await _stored_tasks(handler, ctx) == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ctx", ["chat-1727712345678-k3j9x2", "a2a:peer-agent:ctx-1", str(uuid.uuid4())])
-async def test_a2a_first_party_context_ids_still_run(ctx):
+async def test_a2a_first_party_context_ids_still_run(_a2a_wiring, ctx):
     from a2a.server.context import ServerCallContext
     from a2a.types import TaskState
 
-    from a2a_impl.executor import set_progress_hook, set_terminal_hook
-
-    set_terminal_hook(None)
-    set_progress_hook(None)
     calls: list = []
     handler = _a2a_handler(calls)
     task = await handler.on_message_send(_a2a_msg(ctx), ServerCallContext())
     assert task.status.state == TaskState.TASK_STATE_COMPLETED
     assert calls == [ctx]
+    assert [t.id for t in await _stored_tasks(handler, ctx)] == [task.id]
 
 
 # --- session-memory store: resolution never fails, never leaves the base -------------

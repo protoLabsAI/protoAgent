@@ -507,10 +507,10 @@ class ProtoAgentExecutor(AgentExecutor):
         # refused HITL answer to the context's current pause.)
         if context.current_task is not None and _is_terminal(context.current_task):
             raise InvalidParamsError(message=f"Task {context.task_id} has already ended")
-        # The contextId IS the chat session id downstream (checkpointer thread, task store,
-        # per-session stores), so it takes the same shape rule as every HTTP chat entry
-        # point. Refused before anything is enqueued — no task row, no turn.
-        # (The SDK always assigns one; an absent id is left to the existing handling.)
+        # Backstop only: the entry-point check (hitl_routing.check_context_id, installed on
+        # the handler's send methods) refuses an unusable contextId before the SDK creates a
+        # task. Reaching here means a handler without that wrapper — the turn is still
+        # refused, but the SDK records the raise as a FAILED task under this context.
         _ctx = str(context.context_id or "")
         _ctx_problem = session_id_problem(_ctx) if _ctx else None
         if _ctx_problem is not None:
