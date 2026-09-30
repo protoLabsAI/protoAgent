@@ -919,6 +919,33 @@ def test_aside_session_route(monkeypatch):
     assert body["found"] is True and body["answer"] == "42"
 
 
+def test_aside_session_route_reports_a_model_error_structurally(monkeypatch):
+    # #3929: a provider error inside the side turn used to escape as a plain-text 500.
+    # It is now the endpoint's own {found, answer, reason, message} shape at 502 — the
+    # REAL aside_session + run_aside run here; only the graph's model call fails.
+    import runtime.state as rs
+
+    class _Snap:
+        values = {"messages": []}
+
+    class _FailingGraph:
+        async def aget_state(self, config):
+            return _Snap()
+
+        async def ainvoke(self, graph_input, config):
+            raise RuntimeError("Error code: 429 - rate limited")
+
+    c = _client(monkeypatch, graph=_FailingGraph())
+    monkeypatch.setattr(rs.STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "checkpoint_path", None, raising=False)
+    resp = c.post("/api/chat/sessions/s1/aside", json={"question": "what did we decide?"})
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["found"] is False and body["answer"] == "" and body["reason"] == "model_error"
+    assert "rate limited" in body["message"]
+    assert body["detail"] == body["message"]  # the console's generic error parser reads `detail`
+
+
 def test_fork_session_route(monkeypatch):
     # Thin pass-through to server.chat.fork_session (#2803) — forwards the path
     # session_id, the new_session_id, and the rewind-shaped target spec.

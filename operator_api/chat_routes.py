@@ -800,9 +800,16 @@ def register_chat_routes(app, ui: str) -> None:
         touching it. The turn runs incognito on a fresh EPHEMERAL thread seeded with the
         main thread's messages; the main thread's checkpoint is never written (the
         isolation is structural — see graph/aside_op). Returns
-        ``{found, answer, reason, message}``. Body: ``{"question": "..."}``."""
+        ``{found, answer, reason, message}``. Body: ``{"question": "..."}``.
+
+        A model/provider failure (``reason: "model_error"``) is the same shape at
+        status 502, with ``detail`` mirroring ``message`` for generic HTTP clients
+        (#3929) — it used to escape as a plain-text 500."""
         question = str((body or {}).get("question") or "")
-        return await aside_session(session_id, question)
+        result = await aside_session(session_id, question)
+        if result.get("reason") == "model_error":
+            return JSONResponse(status_code=502, content={**result, "detail": result.get("message", "")})
+        return result
 
     @app.post("/api/chat/sessions/{session_id}/rewind")
     async def _api_rewind_session(session_id: str, body: dict | None = None):
