@@ -935,6 +935,22 @@ async def test_overflow_compacts_then_retries_once_with_the_recovery_prompt(env,
 
 
 @pytest.mark.asyncio
+async def test_goal_overflow_retry_runs_the_bare_recovery_prompt_not_a_second_kickoff(env, compaction, monkeypatch):
+    """#3891 F1: on the first goal turn the kickoff wraps the OPERATOR's message; the
+    overflow retry re-runs that same turn with the recovery prompt, unwrapped."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(streams=[[Raise(ValueError(_OVERFLOW))], [text("r1", "recovered")]])
+
+    frames = await _run("big ask", "s-ovf")
+
+    assert g.stream_calls[0][0]["messages"][-1].content == "KICKOFF<big ask>"
+    assert g.stream_calls[1][0]["messages"][-1].content == chat_mod._OVERFLOW_RETRY_PROMPT
+    assert goals.kickoffs == ["big ask"]
+    assert frames[-1] == ("done", "recovered\n\n---\nmet")
+
+
+@pytest.mark.asyncio
 async def test_overflow_retry_failure_surfaces_and_records_the_second_error(env, compaction):
     calls, _ = compaction
     g = env.install(streams=[[Raise(ValueError(_OVERFLOW))], [text("r1", "half"), Raise(ValueError("second failure"))]])

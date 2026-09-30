@@ -166,8 +166,9 @@ async def _native_turn(
             )
         else:
             # Kickoff injection (#1910) — shared with the streaming driver
-            # (server/goal_loop.py); this branch is never a HITL resume.
-            _msg = _goal_loop.kickoff_message(_goal_state, turn_message, resume=False)
+            # (server/goal_loop.py); this branch is never a HITL resume, and the
+            # overflow retry's recovery prompt is never wrapped (#3891 F1).
+            _msg = _goal_loop.kickoff_message(_goal_state, turn_message, resume=False, overflow_retry=overflow_retry)
             graph_input = {
                 # Vision parts ride the user message when the model supports
                 # them (#1943) — same gating as the streaming path.

@@ -559,6 +559,22 @@ async def test_overflow_retry_skips_the_hold_and_keeps_the_turn_overrides(env, c
 
 
 @pytest.mark.asyncio
+async def test_goal_overflow_retry_runs_the_bare_recovery_prompt_not_a_second_kickoff(env, compaction, monkeypatch):
+    """#3891 F1: on the first goal turn the kickoff wraps the OPERATOR's message; the
+    overflow retry re-runs that same turn with the recovery prompt, unwrapped."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install([Raise(ValueError(_OVERFLOW)), turn_result(AIMessage(content="recovered"))])
+
+    out = await chat_mod.chat("big", "s1")
+
+    assert g.invoke_calls[0][0]["messages"][0].content == "KICKOFF<big>"
+    assert g.invoke_calls[1][0]["messages"][0].content == chat_mod._OVERFLOW_RETRY_PROMPT
+    assert goals.kickoffs == ["big"]
+    assert out[0]["content"] == "recovered\n\n---\nmet"
+
+
+@pytest.mark.asyncio
 async def test_overflow_retry_does_not_hold_even_when_an_interrupt_is_pending(env, compaction):
     """The retry runs the recovery prompt, never the hold — even if the failed turn left
     the thread parked."""

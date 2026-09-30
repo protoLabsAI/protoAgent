@@ -835,10 +835,13 @@ def _is_spent_firing_job(job) -> bool:
 # The HITL hold (``_hold_if_hitl_pending``) moved to server/turn_control.py (#3847).
 
 
-async def _run_native_turn(message, session_id, config, *, request_metadata=None, resume=False, images=None):
+async def _run_native_turn(
+    message, session_id, config, *, request_metadata=None, resume=False, images=None, overflow_retry=False
+):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
-    lock around the whole turn without a deep in-line reindent."""
+    lock around the whole turn without a deep in-line reindent. ``overflow_retry`` marks
+    the context-overflow re-run, whose recovery prompt is never goal-kicked-off (#3891 F1)."""
     from graph.goals.goal_turn import goal_turn
 
     # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
@@ -859,7 +862,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
     # Kickoff injection (#1910) — shared with the non-streaming driver (server/goal_loop.py).
-    message = _goal_loop.kickoff_message(_goal_state, message, resume=resume)
+    message = _goal_loop.kickoff_message(_goal_state, message, resume=resume, overflow_retry=overflow_retry)
 
     # One graph turn (model tokens accumulated silently; A2A consumers get progress from
     # tool_start/tool_end). Final text is extracted once via extract_output().
@@ -1435,6 +1438,7 @@ async def _chat_langgraph_stream_impl(
                                     request_metadata=request_metadata,
                                     resume=False,
                                     images=None,
+                                    overflow_retry=True,
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:
