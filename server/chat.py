@@ -268,6 +268,8 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
     room_replies: list[dict] = []
     for j in jobs:
         result = j.result or ""
+        # Why a non-completed job ended (#3945) — surfaced wherever the job is briefed.
+        _err = "" if j.status == "completed" else str(getattr(j, "error", "") or "")
         author = str(getattr(j, "result_author", "") or "")
         if author:
             # Persist the same envelope as foreground/direct addressing so the lead,
@@ -277,10 +279,13 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             from graph.mention_op import _envelope
 
             ok = j.status == "completed"
-            _err = str(getattr(j, "error", "") or "")
-            text = result.strip() or (
-                "(replied with nothing)" if ok else (f"({j.status}: {_err})" if _err else f"({j.status})")
-            )
+            _note = f"({j.status}: {_err})" if _err else f"({j.status})"
+            if ok:
+                text = result.strip() or "(replied with nothing)"
+            else:
+                # A failed delegate's partial reply still gets the status + cause appended,
+                # so neither the lead nor the console mistakes it for a finished answer.
+                text = f"{result.strip()}\n\n{_note}" if result.strip() else _note
             msgs.append(
                 HumanMessage(
                     content=_envelope(author, text),
@@ -321,7 +326,7 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             f"<status>{j.status}</status>\n"
             # Why it failed (#3945), so the agent reports the real cause to the operator
             # instead of guessing from an empty result.
-            + (f"<error>{_err}</error>\n" if j.status != "completed" and (_err := str(getattr(j, "error", "") or "")) else "")
+            + (f"<error>{_err}</error>\n" if _err else "")
             + "<result>\n"
             f"{result}\n"
             "</result>\n"

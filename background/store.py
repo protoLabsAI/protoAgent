@@ -24,6 +24,8 @@ log = logging.getLogger("protoagent.background")
 
 STATUSES = ("running", "completed", "failed", "canceled")
 _TERMINAL = ("completed", "failed", "canceled")
+# The `error` a job reconciled at startup carries (#3945): its detached turn died with the process.
+INTERRUPTED_ERROR = "interrupted: the server restarted before the job finished"
 
 
 @dataclass
@@ -459,8 +461,8 @@ class BackgroundStore:
             cur = db.execute(
                 "UPDATE background_jobs SET status = 'failed', "
                 "result = 'Interrupted — the background turn did not complete before a restart.', "
-                "completed_at = ? WHERE status = 'running'",
-                (now,),
+                "error = ?, completed_at = ? WHERE status = 'running'",
+                (INTERRUPTED_ERROR, now),
             )
             db.commit()
             return cur.rowcount

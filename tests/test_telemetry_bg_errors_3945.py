@@ -260,3 +260,58 @@ def test_the_error_column_migrates_onto_an_old_db(tmp_path):
     jid = s.create(agent_name="a", origin_session="s", subagent_type="r", description="d", prompt="p")
     assert s.mark_complete(jid, "failed", "", error="boom") is True
     assert s.get(jid).error == "boom"
+
+
+def test_a_failed_authored_job_with_a_partial_reply_still_carries_its_error(bg):
+    """A delegate (room-reply) job that failed mid-answer: the partial text is kept AND
+    the status + error are appended, in the model message and the console room reply."""
+    a2a, mgr, _jid, _published = bg
+    jid = mgr.store.create(
+        agent_name="a",
+        origin_session="chat-42",
+        subagent_type="delegate",
+        description="ask ava",
+        prompt="p",
+        deterministic=True,
+        result_author="ava",
+    )
+    mgr.store.mark_complete(jid, "failed", "Half an answer", error="Error code: 429")
+
+    msgs, room = chat_mod._drain_background("chat-42")
+
+    (reply,) = [r for r in room if r["id"] == jid]
+    assert reply["ok"] is False
+    assert "Half an answer" in reply["text"] and "(failed: Error code: 429)" in reply["text"]
+    assert any("Half an answer" in m.content and "Error code: 429" in m.content for m in msgs)
+
+
+def test_a_failed_authored_job_with_no_reply_reports_the_error(bg):
+    a2a, mgr, _jid, _published = bg
+    jid = mgr.store.create(
+        agent_name="a",
+        origin_session="chat-42",
+        subagent_type="delegate",
+        description="d",
+        prompt="p",
+        deterministic=True,
+        result_author="ava",
+    )
+    mgr.store.mark_complete(jid, "failed", "", error="boom")
+
+    _msgs, room = chat_mod._drain_background("chat-42")
+
+    (reply,) = [r for r in room if r["id"] == jid]
+    assert reply["text"] == "(failed: boom)"
+
+
+def test_a_job_reconciled_at_startup_says_it_was_interrupted(tmp_path):
+    from background.store import INTERRUPTED_ERROR, BackgroundStore
+
+    s = BackgroundStore(str(tmp_path / "jobs.db"))
+    jid = s.create(agent_name="a", origin_session="s", subagent_type="r", description="d", prompt="p")
+
+    assert s.reconcile_interrupted() == 1
+
+    job = s.get(jid)
+    assert job.status == "failed" and job.error == INTERRUPTED_ERROR
+    assert "restarted" in job.error
