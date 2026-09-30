@@ -52,6 +52,35 @@ from server import turn_control as _turn_control
 log = logging.getLogger("protoagent.server")
 
 
+# How long an abandoned workflow runner gets to settle after its cancel (#3933) — the
+# same bound, for the same reason, as ``server.chat_acp._ACP_CANCEL_SETTLE_S``: the
+# caller's own cleanup (and the next turn behind it) waits on it.
+_WORKFLOW_CANCEL_SETTLE_S = 10.0
+
+
+async def _stop_abandoned_workflow(runner: asyncio.Task, wf_name: str) -> None:
+    """Cancel an abandoned ``/workflow`` runner and wait (bounded) for it to stop, so the
+    dispatch generator's close returns only once the workflow has actually ended. Never
+    raises for the runner's own outcome; a cancel of the CALLER while waiting propagates.
+    Mirrors ``server.chat_acp._stop_abandoned_driver`` (#3837)."""
+    runner.cancel()
+    done, _ = await asyncio.wait({runner}, timeout=_WORKFLOW_CANCEL_SETTLE_S)
+    if not done:
+        log.warning(
+            "[workflow] abandoned /%s run did not stop within %gs of cancel — releasing anyway",
+            wf_name,
+            _WORKFLOW_CANCEL_SETTLE_S,
+        )
+        # Nobody awaits it now: retrieve its eventual outcome so a late failure doesn't
+        # surface only as asyncio's "Task exception was never retrieved" at GC.
+        runner.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return
+    if runner.cancelled():
+        log.info("[workflow] abandoned /%s run cancelled (its turn ended early)", wf_name)
+    elif runner.exception() is not None:
+        log.debug("[workflow] abandoned /%s run ended with: %r", wf_name, runner.exception())
+
+
 def _chat():
     """``server.chat`` the MODULE, resolved at call time — by path, because ``server``
     re-exports the ``chat`` FUNCTION under the submodule's name."""
@@ -367,33 +396,50 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                 await step_q.put(_WF_DONE)
 
         runner = asyncio.create_task(_runner())
-        # An umbrella card for the whole workflow, then one per step.
-        yield (
-            "tool_start",
-            {
-                "id": f"workflow:{wf_name}",
-                "name": f"workflow:{wf_name}",
-                "input": _chat()._coerce_tool_value(wf_inputs),
-            },
-        )
-        while True:
-            event = await step_q.get()
-            if event is _WF_DONE:
-                break
-            sid = event.get("step_id", "")
-            step_tool_id = f"workflow:{wf_name}:{sid}"
-            label = f"{wf_name} · {sid}"
-            if event.get("phase") == "start":
-                yield ("tool_start", {"id": step_tool_id, "name": label, "input": event.get("subagent", "")})
-            else:
-                yield (
-                    "tool_end",
-                    {
-                        "id": step_tool_id,
-                        "name": label,
-                        "output": extract_output(event.get("output", "")) or event.get("output", ""),
-                    },
-                )
+        finished = False
+        try:
+            # An umbrella card for the whole workflow, then one per step.
+            yield (
+                "tool_start",
+                {
+                    "id": f"workflow:{wf_name}",
+                    "name": f"workflow:{wf_name}",
+                    "input": _chat()._coerce_tool_value(wf_inputs),
+                },
+            )
+            while True:
+                event = await step_q.get()
+                if event is _WF_DONE:
+                    finished = True
+                    break
+                sid = event.get("step_id", "")
+                step_tool_id = f"workflow:{wf_name}:{sid}"
+                label = f"{wf_name} · {sid}"
+                if event.get("phase") == "start":
+                    yield ("tool_start", {"id": step_tool_id, "name": label, "input": event.get("subagent", "")})
+                else:
+                    yield (
+                        "tool_end",
+                        {
+                            "id": step_tool_id,
+                            "name": label,
+                            "output": extract_output(event.get("output", "")) or event.get("output", ""),
+                        },
+                    )
+        finally:
+            # Closed early (#3933) — GeneratorExit at a `yield` or CancelledError at the
+            # `get()`. The runner is part of THIS turn, so it ends with the turn: cancel
+            # it, never leave it running detached. That matches every other kind of turn
+            # here — this generator is closed only when its driver's OWN turn is ending
+            # (an A2A CancelTask, the stall guard, the driver itself being closed), and
+            # that same close stops a native turn's graph run and an ACP turn
+            # (`_stop_abandoned_driver`, #3837). A client merely dropping its SSE does
+            # NOT close it: the a2a SDK keeps the producer (`ProtoAgentExecutor.execute`)
+            # consuming the stream in the background, so a workflow outlives a
+            # disconnect exactly as a native turn does. What must not survive is a
+            # runner whose turn is over and whose frames nobody will ever read.
+            if not finished:
+                await _stop_abandoned_workflow(runner, wf_name)
         wf_out = await runner
         yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
         pre.handled = True
