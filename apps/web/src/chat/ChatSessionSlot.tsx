@@ -51,7 +51,14 @@ import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
-import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
+import {
+  applyComponent,
+  applyReasoning,
+  applyText,
+  applyToolEvent,
+  isParkedState,
+  settleStreamEnd,
+} from "./turnReducers";
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
@@ -1031,6 +1038,14 @@ export function ChatSessionSlot({
     // below can reconcile against the durable task exactly when it's needed.
     let sawAuthoritativeText = false;
     let turnTaskId = "";
+    // The turn PARKED on the operator (#3956): the stream reported input-required (an
+    // `ask_human` question, a form, an approval) or auth-required. The SDK closes the stream
+    // there, but the turn is not over — the answer continues the same task — so the close
+    // leaves the bubble streaming + paused rather than settling it done. A plugin composer
+    // form rides the same frame but parks no graph (its redeem completes the task
+    // server-side), so it settles as before.
+    let parkedOnOperator = false;
+    let pluginForm = false;
 
     // Reveal queue (#2993): streamed answer deltas don't render the instant
     // their frame arrives — they drip out at a steady ~word cadence. Diagnosis
@@ -1166,12 +1181,28 @@ export function ChatSessionSlot({
           }
         },
         onInputRequired: (payload) => {
+          if (payload.plugin_callback_id) pluginForm = true;
           updateHitl(payload);
           // Alert natively if the window is hidden/unfocused (menu-bar-only
           // desktop, or a backgrounded tab) so the form isn't missed.
           notifyIfHidden(
             payload.title || "protoAgent needs your input",
             payload.question || payload.description,
+          );
+        },
+        onTaskState: (state) => {
+          // The latest state wins: a turn that parks is marked paused at once, so its
+          // in-flight card reads "waiting for you" while the form is up (#3956).
+          const parked = isParkedState(state) && !pluginForm;
+          if (parked === parkedOnOperator) return;
+          parkedOnOperator = parked;
+          if (!parked) return;
+          reveal.flush();
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((m) => (m.id === assistantId ? settleStreamEnd(m, { parked: true }) : m)),
           );
         },
         onText: (text, append) => {
@@ -1368,6 +1399,15 @@ export function ChatSessionSlot({
           }
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
+          if (parkedOnOperator) {
+            // Parked, not over (#3956): the bubble stays streaming + paused — waiting now,
+            // and the bubble a reload's reattach resubscribes to its own task through.
+            chatStore.updateMessages(
+              session.id,
+              latest.messages.map((m) => (m.id === assistantId ? settleStreamEnd(m, { parked: true }) : m)),
+            );
+            return;
+          }
           const placeholder = latest.messages.find((m) => m.id === assistantId);
           const placeholderEmpty =
             !placeholder?.content && !placeholder?.parts?.length && !placeholder?.toolCalls?.length;
@@ -1394,7 +1434,6 @@ export function ChatSessionSlot({
             chatStore.updateMessages(session.id, settleTurnBubbles(latest.messages, assistantId));
             return;
           }
-          const now = Date.now();
           chatStore.updateMessages(
             session.id,
             // A turn split to place a steer/delegation can end with NOTHING after the
@@ -1402,24 +1441,14 @@ export function ChatSessionSlot({
             // leaving a continuation that opened for text which never came. Settling
             // that draws a blank row under the answer, so fold it away (turnText.ts).
             // Same move as the pure-fan-out drop above, for the same reason.
+            // A completed turn can't have tools still running: a tool_end frame that
+            // races with the terminal `done` (e.g. a workflow card whose end arrives in
+            // the same tick) would otherwise leave the card spinning forever —
+            // settleStreamEnd flips any lingering `running` card to `done`.
             settleTurnBubbles(
-              latest.messages.map((message) => {
-                if (message.id !== assistantId) return message;
-                // A completed turn can't have tools still running: a tool_end frame
-                // that races with the terminal `done` (e.g. a workflow card whose
-                // end arrives in the same tick) would otherwise leave the card
-                // spinning forever. Flip any lingering `running` cards to `done`.
-                const toolCalls = message.toolCalls?.map((c) =>
-                  c.status === "running"
-                    ? {
-                        ...c,
-                        status: "done" as const,
-                        durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
-                      }
-                    : c,
-                );
-                return { ...message, status: "done", toolCalls };
-              }),
+              latest.messages.map((message) =>
+                message.id === assistantId ? settleStreamEnd(message, { parked: false }) : message,
+              ),
               assistantId,
             ),
           );
@@ -1454,7 +1483,7 @@ export function ChatSessionSlot({
       // the durable task — the server's artifact is the source of truth and a
       // straight REPLACE collapses any doubled/lost-chunk divergence. Skipped on
       // every healthy turn (the terminal frame sets sawAuthoritativeText).
-      if (!sawAuthoritativeText && turnTaskId) {
+      if (!sawAuthoritativeText && turnTaskId && !parkedOnOperator) {
         try {
           const res = await api.getTask(turnTaskId);
           if (/completed/i.test(res.state) && res.text) {

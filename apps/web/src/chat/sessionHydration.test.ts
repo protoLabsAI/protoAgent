@@ -901,6 +901,57 @@ describe("boot hydration", () => {
     expect(commit.mock.calls[0][0].map((session) => session.id).sort()).toEqual(["chat-empty", "chat-new"]);
   });
 
+  it("leaves a warm-cache PARKED turn to its reattach: not re-fetched, not clobbered (#3956)", async () => {
+    // Hydration skips a session already in the local cache on purpose — the local copy is
+    // the richer one. That is only safe because the live close now persists a parked turn
+    // as streaming + paused (settleStreamEnd): the boot sees a live turn, mounts the slot,
+    // and the reattach resubscribes to the session's OWN task and brings the form back.
+    const parked = {
+      id: "chat-parked",
+      title: "Fruit",
+      messages: [
+        { id: "u1", role: "user", content: "pick a fruit", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          status: "streaming",
+          paused: true,
+          taskId: "task-parked",
+          toolCalls: [{ id: "ask-1", name: "ask_human", status: "running", paused: true }],
+          parts: [{ kind: "tools", ids: ["ask-1"] }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    expect(needsDurableHydration(parked)).toBe(false);
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [parked] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [summary(parked.id)] });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+
+    await hydrateDurableChatSessions();
+
+    expect(reads).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    // And a merge that did carry the recovered copy keeps the local parked bubble as is.
+    const current = {
+      sessions: [parked],
+      currentSessionId: parked.id,
+      activeSessions: [parked.id],
+      sessionStatusMap: {},
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+      serverTurnControls: {},
+    };
+    const recovered = sessionFromDurableTurns(summary(parked.id), [
+      turn({ task_id: "task-parked", state: "TASK_STATE_INPUT_REQUIRED", status: { state: "TASK_STATE_INPUT_REQUIRED" }, text: "", artifacts: [] }),
+    ]);
+    expect(recovered).not.toBeNull();
+    expect(mergeHydratedSessions(current as never, [recovered!]).sessions[0]).toBe(parked);
+  });
+
   it("fetches stale non-empty sessions that need durable render repair (#3340)", async () => {
     const ordinary = {
       id: "chat-local",
