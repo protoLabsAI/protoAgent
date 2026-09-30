@@ -32,8 +32,8 @@ import hashlib
 import json
 import logging
 import os
-import re
 import threading
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -194,12 +194,26 @@ def secret_paths() -> tuple[tuple[str, str], ...]:
 try:
     from ruamel.yaml import YAML  # type: ignore
 
-    _ruamel = YAML(typ="rt")
-    _ruamel.preserve_quotes = True
-    _ruamel.indent(mapping=2, sequence=4, offset=2)
     _HAS_RUAMEL = True
 except ImportError:
     _HAS_RUAMEL = False
+
+# One parser PER THREAD. A ruamel ``YAML`` keeps its reader/scanner state on the
+# instance, so a single shared one parsing on two threads at once corrupts both
+# parses — and config is read on the event loop while a write loads the same file in
+# a worker thread (two ``POST /api/delegates`` at once hit exactly that).
+_yaml_local = threading.local()
+
+
+def _rt_yaml() -> Any:
+    """This thread's round-trip parser, configured for the live-config layout."""
+    y = getattr(_yaml_local, "yaml", None)
+    if y is None:
+        y = YAML(typ="rt")
+        y.preserve_quotes = True
+        y.indent(mapping=2, sequence=4, offset=2)
+        _yaml_local.yaml = y
+    return y
 
 
 # Files that make up the live config tier — migrated as a unit by the one-shot
@@ -380,7 +394,7 @@ def _migrate_dead_max_iterations_default() -> bool:
 
         text = read_text_utf8(live)
         if _HAS_RUAMEL:
-            doc = _ruamel.load(text) or _ruamel.load("{}\n")
+            doc = _rt_yaml().load(text) or _rt_yaml().load("{}\n")
         else:
             import yaml
 
@@ -634,7 +648,7 @@ def _write_seed_snapshot(seed_doc: Any, path: Path) -> None:
 
     buf = io.StringIO()
     if _HAS_RUAMEL:
-        _ruamel.dump(seed_doc, buf)
+        _rt_yaml().dump(seed_doc, buf)
     else:
         import yaml
 
@@ -656,13 +670,13 @@ def load_yaml_doc(path: Path | None = None) -> Any:
     if resolved == config_yaml_path():
         ensure_live_config()
     if not resolved.exists():
-        return {} if not _HAS_RUAMEL else _ruamel.load("{}\n")
+        return {} if not _HAS_RUAMEL else _rt_yaml().load("{}\n")
 
     from infra.paths import read_text_utf8
 
     text = read_text_utf8(resolved)
     if _HAS_RUAMEL:
-        return _ruamel.load(text) or _ruamel.load("{}\n")
+        return _rt_yaml().load(text) or _rt_yaml().load("{}\n")
     import yaml
 
     return yaml.safe_load(text) or {}
@@ -682,7 +696,7 @@ def save_yaml_doc(doc: Any, path: Path | None = None) -> None:
     resolved = Path(path) if path is not None else config_yaml_path()
     buf = io.StringIO()
     if _HAS_RUAMEL:
-        _ruamel.dump(doc, buf)
+        _rt_yaml().dump(doc, buf)
     else:
         log.warning(
             "ruamel.yaml not installed — YAML comments in %s will not be "
