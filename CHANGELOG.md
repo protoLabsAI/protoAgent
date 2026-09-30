@@ -15,6 +15,389 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.186.0] - 2026-09-30
+
+### Changed
+- **Background maintenance loops now live in `server/maintenance_loops.py` (#3807).** The checkpoint-prune, watch, A2A-reaper, memory-guard, plugin auto-update and secrets-refresh loops, `_retire_thread`, and the persona drift/audit passes moved out of `server/agent_init.py` (−700 lines) with no behavior change; `server.agent_init` and `server` re-export them. Tests that fake their collaborators (`_server_is_idle`, `_run_soul_drift_pass`, `_last_soul_drift_check`, `_event_bus`) now patch `server.maintenance_loops`, and a seam guard fails any test that still patches those names on `agent_init`, where the patch would silently not intercept.
+
+- **Console: `lib/api.ts` split into slug-routing, HTTP and A2A-stream modules (#3808).**
+  `apps/web/src/lib/api/routing.ts` (slug routing + auth header), `api/http.ts` (`ApiError`,
+  error predicates, `request`/`requestForm`/`memberRequest`) and `api/a2aStream.ts` (A2A part
+  decoders, SSE parsing, the shared frame dispatcher) now hold what was the first ~1,000 lines
+  of `api.ts`. `api.ts` re-exports every moved name, so no importer changes.
+
+- **Chat session ops now live in `server/chat_session_ops.py`, and the non-streaming usage helpers in `server/turn_telemetry.py` (#3810).**
+  `/compact`, export, publish preview/publish/revoke, the `/btw` aside, rewind, fork and the delegate-continuity
+  cleanup moved out of `server/chat.py`, as did the usage callback, the usage folds and the non-streaming telemetry
+  row writer — about 680 lines, with no behavior change. `server.chat` re-exports every moved name, so imports and
+  `operator_api.chat_routes` are unchanged; the moved gestures reach `server.chat`'s thread lock and thread-id
+  resolver at call time, and a seam guard fails any test that patches a moved name on `server.chat`, where the
+  patch would silently not intercept.
+
+- **Plugin wiring moved out of `server/agent_init.py` (#3821).** Plugin router mounting + HTTP
+  wrapping, the plugin registries and host, and plugin-surface hot-reload reconcile now live in
+  `server/plugin_wiring.py` (second slice of the agent_init decomposition, epic #3804). Every
+  moved name is re-exported from `server.agent_init` and `server`; no behavior change.
+
+- **Console: the Workflows and Model ▸ Connections surfaces now read the DS radius + spacing scales (#3887, Refs protoContent#525, Refs protoContent#547).**
+  Now that `@protolabsai/design` 0.11.0 ships the radius scale (`--pl-radius-md/-lg/-xl/-pill`)
+  and the spacing half-steps (`--pl-space-0_5/-1_5/-2_5`), every `border-radius` in
+  `workflows.css` moves onto a token — `5px → var(--pl-radius)`, the `9px` count badge →
+  `var(--pl-radius-lg)`, and the five `999px` chips/pills/dots (`.builder-dot`, `.lane-chip`,
+  `.run-status`, `.builder-chip`, `.builder-toolchip`, all genuine pills, none a rectangle) →
+  `var(--pl-radius-pill)`. Off-scale `padding`/`margin`/`gap`/`left` literals in `workflows.css`
+  and two `10px` gaps in `providers.css` snap to the nearest scale token so the operator's chosen
+  density flows through (e.g. `6px → --pl-space-1_5`, `10px → --pl-space-2_5`, `2px → --pl-space-0_5`,
+  `left: -14px → calc(-1 * var(--pl-space-4))`). Border/outline widths, icon sizes, `1px`/`18px` and
+  other uncovered values are left as literals. The `offScaleSpacing3b` guard's two workflows pins are
+  re-pointed at the fully tokenized strings.
+
+- **Console: the Plugins and folder/file Path-picker surfaces now read the DS radius + spacing scales (#3887, Refs protoContent#525, Refs protoContent#547).**
+  Following the workflows/providers card, `settings/plugins.css` and `settings/pathpicker.css` move
+  onto `@protolabsai/design` 0.11.0's radius scale (`--pl-radius-md/-lg/-pill`) and spacing
+  half-steps (`--pl-space-0_5/-1_5/-2_5`). Every `border-radius` becomes a token — the plugin
+  marketplace link / installed-bundle row / path-browser list `8px` and the plugin card `9px` →
+  `var(--pl-radius-lg)`, the path-browser row `6px` → `var(--pl-radius-md)`, and the `.plugin-chip`
+  `999px` (a genuine pill, not a rectangle) → `var(--pl-radius-pill)`. Off-scale
+  `padding`/`margin`/`gap` literals snap to the nearest scale token so the operator's chosen density
+  flows through (`2px → --pl-space-0_5`, `6px → --pl-space-1_5`, `10px → --pl-space-2_5`, and the
+  snaps `3px gap → --pl-space-1`, `7px → --pl-space-1_5`, `14px → --pl-space-4`); `1px` borders/gap
+  and the `18px` deps-list indent stay literal (out of scope). No behavior change.
+
+- **Bump @protolabsai/design to ^0.11.0 and @protolabsai/ui to ^0.66.1; tokenNameGuard accepts `_` in token names (#3887).** Adds radius scale (`--pl-radius-md/-lg/-xl/-pill`) and spacing half-steps (`--pl-space-0_5/-1_5/-2_5`) to the installed DS. The token-name guard's `DECL` and `VAR_REF` regexes are widened from `[a-z0-9-]` to `[a-z0-9_-]` so `var(--pl-space-0_5)` is captured whole rather than truncated at the underscore.
+
+- **Console: the Work hub overview and the app menu drawer read the DS radius + spacing scales (Refs protoContent#525, Refs protoContent#547).**
+  Step 3 of the DS-audit migration for `apps/web/src/app/work.css` and `app/app-drawer.css`.
+  Both `border-radius` literals in the drawer move onto `@protolabsai/design` 0.11.0's radius
+  scale: the launcher `.app-drawer-item` container (`8px`, not `12px`) → `var(--pl-radius-lg)`
+  by the table, and the `.app-drawer-version` badge's `999px` (a genuine pill, not a rectangle)
+  → `var(--pl-radius-pill)`. Off-scale `padding`/`margin`/`gap` literals move onto the #547
+  spacing scale, using the half-step tokens (`--pl-space-0_5/-1_5/-2_5`): the exact half-steps
+  `2px → --pl-space-0_5`, `6px → --pl-space-1_5`, `10px → --pl-space-2_5`, and the off-grid
+  values snapped to the nearest step on the local rhythm — the `.work-row` `gap: 7px → --pl-space-2`
+  (aligning the dot-to-title gap with the card head's 8px icon gap), the `.work-card-blank`
+  `padding` top `14px → --pl-space-3` (keeping top < the 16px bottom), and the drawer
+  `.app-drawer-item` `padding: 9px 10px → var(--pl-space-2) var(--pl-space-2_5)`. No 7px or 12px
+  radius calls, and the only `999px` is on a pill, not a rectangle. `1px` hairlines/borders,
+  `outline-offset`, and width/element sizes are left as literals (out of scope). Pure token
+  substitution with ≤2px snaps; the `offScaleSpacing3d` guard's work/app-drawer pins are re-pinned
+  to the tokenized strings.
+
+- **Console: the Settings surface and the Keyboard rebind list now read the DS radius and spacing scales (protoContent#525/#547).**
+  Every `border-radius` px literal in `settings/settings.css` and `settings/keybindings.css` moved
+  onto the radius scale (`--pl-radius` for 4px corners, `--pl-radius-md` for the 6px secrets-var
+  chips, `--pl-radius-pill` for the keybinding scope badge). Spacing px on padding/margin/gap moved
+  onto the DS spacing scale, using the new half-step tokens (`--pl-space-0_5/-1_5/-2_5`) for the
+  2/6/10px values; off-scale half-steps that the DS scale still has no step for (7→`--pl-space-2`,
+  the three `gap: 14px`→`--pl-space-4`, and the two `margin: 3/5px`→`--pl-space-1`) snapped to the
+  nearest token on the local rhythm. Uncovered values (18/26/28px, border widths, track/viewport
+  sizes) are left as literals. Pure token substitution — no visual or behavioural change.
+
+- **Console: `app/theme.css` + `docviewer.css` radius & spacing literals now read the DS radius/spacing tokens (Refs protoContent#525, Refs protoContent#547).** Step 3 of the DS-audit migration: every `border-radius` px moves onto the #525 radius scale (`4px→--pl-radius`, `6px→-md`, `8/9px→-lg`, `999px→-pill`), and every off-scale spacing px on a `padding*`/`margin*`/`gap`/`row-gap`/`column-gap` declaration moves onto the #547 spacing scale — the exact half-steps `2/6/10px` to `--pl-space-0_5/-1_5/-2_5`, the on-scale `20px` to `--pl-space-5`, and the off-grid `3/5/7/9/14px` snapped to their nearest step (e.g. `14px→--pl-space-3`), with negative margins expressed as `calc(-1 * var(--pl-space-*))`. The safe-area gutters (`max(env(safe-area-inset-bottom), 12px)`, `calc(8px + env(…))`) and off-grid survivors with no DS token (`18/22/28/33/60px`) are left verbatim. Visual output is unchanged; the sites now track operator density/radius rescales instead of painting hardcoded px. The `offScaleSpacing3a` guard is updated to pin the tokenized values and gains a half-step scan plus a radius scan.
+
+- **Console: chat.css and hitl.css radius + off-scale spacing now read DS tokens (protoContent#525/#547).**
+  Every `border-radius` px literal in `apps/web/src/chat/chat.css` and `chat/hitl.css` moves onto the DS
+  radius scale (`--pl-radius`/`-md`/`-lg`/`-pill`) — dots/chips/badges → `-pill`, the 8–12px in-flow cards
+  (`.chat-scheduled-card`, `.chat-server-result-card`, `.chat-delegation-row`) → `-lg`, 6px → `-md`, and
+  2–5px → `--pl-radius` — and every padding/margin/gap/inset/offset px moves onto the spacing scale,
+  including the half-steps the DS shipped on `@protolabsai/design` 0.11.0 (`--pl-space-0_5/-1_5/-2_5`).
+  Off-scale 3/5/7/14px values snap to the nearest DS step (rounding down with the local rhythm); 1px
+  hairlines, border/outline widths, font/icon sizes and `50%`/`0` radii are left alone. Visual-only token
+  substitution — the token values equal the literals they replace.
+
+- **Console palette button + crash screen adopt the DS spacing scale (#3688, protoContent#547).** The one off-scale spacing site in `app/palette.css` — the palette button's `padding-left: 7px` optical nudge — snaps up to the 8px grid step and reads the bare `var(--pl-space-2)` token (a shipped sheet always resolves the DS tokens, so it carries no fallback). The root error-boundary crash screen `app/app-crash.css` moves its `gap: 12px`, `padding: 24px`, `gap: 10px` and `margin-top: 6px` onto `--pl-space-3` / `-6` / `-2_5` / `-1_5` — but, exactly like its colour reads, each keeps the original px as a literal fallback so the screen still lays out if the DS token stylesheet never loaded, which is why app-crash.css is the one file the token guard's literal-fallback sweep exempts. Font sizes, the sr-only 1px box, the list metrics and other non-spacing values are intentionally left as literals.
+
+- **Console: Fleet Room's roster and activity feed now read the DS radius and spacing scales (protoContent#525, protoContent#547).**
+  Every `border-radius` and off-scale spacing literal in `fleet-room.css` and `fleet-activity.css`
+  moved onto @protolabsai/design 0.11.0 tokens. Radii map to `--pl-radius`/`-md`/`-lg`/`-pill`
+  (2–5px → base, 7px → `-md` on the small chips / `-lg` on the content boxes, 8–10px → `-lg`, the
+  two status/task pills → `-pill`); the `50%` presence dots are left alone. Padding/margin/gap plus
+  the mention-popover inset and offsets map to `--pl-space-0_5…-5` (2 → `0_5`, 6 → `1_5`, 10 → `2_5`,
+  20 → `-5`, and the 14px header gutters snap up to `-4`). Genuinely off-scale values (1/11/28px,
+  border widths, font and element sizes) stay literals. Visual output is unchanged apart from ≤2px
+  snaps on the former 5/7/9/14px sites; the `offScaleSpacing3d` guard's fleet pins were re-pinned to
+  the tokenized strings.
+
+- **Console: the archetype picker's "What's included" control is now a DS Button (#3832, protoContent#551).**
+  The per-card `What's included →` action in `ArchetypePicker` moved off the hand-rolled
+  `.archetype-preview-link` button onto the design-system `Button` (variant `ghost`, size
+  `sm`), satisfying the DS action-button rule. Its aria-label and preview handler are
+  unchanged; the old `.archetype-preview-link` CSS is gone, leaving only a layout-only
+  start-alignment rule for the card's button.
+
+- **Console: the per-shortcut "reset to default" control in Settings ▸ Keyboard is now a DS Button (#3832, protoContent#551).** The hand-rolled `↺` `<button className="kb-reset">` became a `<Button variant="ghost" size="xs" icon>` rendering a lucide `RotateCcw` glyph (`aria-hidden`), satisfying protoContent#551's action-button rule. Its title, aria-label and reset handler are unchanged; the `kb-key` combo recorders stay raw (they capture keys, they aren't actions), and the now-dead `.kb-reset` CSS rules were removed.
+
+- **Console: chat action controls now use the DS `Button` primitive (#3832, protoContent#551).** The three report/scheduled-result dismiss ✕ buttons, the delegation "Show/Hide brief" toggle, and the background-work "View" button in `ChatMessageView`/`BackgroundWorkStrip` render through `@protolabsai/ui` `Button` (ghost variant, `xs`/`sm` size, `icon` for the dismiss glyphs) instead of hand-rolled `<button>` elements — same handlers, `aria-label` and `aria-expanded`. Their now-unused `.chat-report-dismiss`, `.chat-delegation-toggle` and `.chat-bgwork-open` rules were removed from `chat.css`.
+
+- **Console: the MCP catalog "All servers" back control is now the DS `Button` (#3832, protoContent#551).**
+  The action-button rule (design-system card 3a) moves the hand-rolled
+  `<button className="mcp-catalog-back">` in the Add-a-common-MCP-server dialog to
+  `<Button variant="ghost" size="sm">` with the same click behavior and children, and
+  drops the now-unused `.mcp-catalog-back` rule from `theme.css`. The UpdateNotice update
+  pill is left as-is: its floating look (999px pill radius, raised background, popover
+  shadow) has no DS `Button` prop or token equivalent, and reproducing it would mean
+  hand-rolled overrides the rule is meant to remove.
+
+- **Console: the month calendar's prev/next controls are DS Buttons (#3832, protoContent#551).** The New Schedule builder's `MonthCalendar` now renders its Previous/Next month controls as the DS `Button` (`variant="ghost"`, `size="sm"`, `icon`) instead of the hand-rolled `.cal-nav` `<button>`, per the action-button rule. The aria-labels and step handlers are unchanged, and the `.cal-day` grid cells stay raw (they are grid cells, not actions). The now-unused `.cal-nav`/`.cal-nav:hover` CSS is removed.
+
+- **Console: the mobile header's Back, Menu, Search and New-chat actions now render via the DS `Button` (#3832, protoContent#551).** Per the protoContent#551 action-button rule (an action — a label or a single-purpose icon — uses the DS `Button`, not a raw `<button>`), MobileShell's four header icon buttons are now `<Button variant="ghost" size="md" icon>`, keeping their existing `type`, `aria-label`, `title`, `disabled`, `onClick`, the `data-testid="header-menu"` hook the drawer e2e specs pin, and the lucide glyph. The session-title switcher stays a sanctioned composite `<button>`, and the centring spacer stays an `aria-hidden` `<span>`. The hand-rolled `.mshell-head-btn` CSS (border/background/colour/tap-highlight/`:active`) is retired in favour of a chrome-free `.mshell-head-spacer` that keeps the 44px touch floor.
+
+- **Org Chart view's Refresh and panel Close buttons now use the DS plugin-kit button (#3832, protoContent#551).** Both action buttons were hand-rolled `<button>`s with local CSS; they now carry the kit's `pl-btn` classes (`pl-btn--sm` for Refresh, `pl-btn--ghost pl-btn--icon pl-btn--sm` for Close), gaining `type="button"` and, for Close, `aria-label="Close"`. The local `.refresh`/`.close` rules are dropped (only the Close float layout stays); no literal colours or sizes are introduced and the click behaviour is unchanged.
+
+- **Console: the ScheduleBuilder 12h/24h toggle is now a DS Button (#3832, protoContent#551).** The Repeat
+  tab's hour-format toggle swaps the hand-rolled `.hour-toggle` `<button>` for the design-system
+  `Button` (variant `ghost`, size `xs`) per the #551 action-button rule, keeping the same title,
+  click handler and 12h/24h label. The now-unused `.hour-toggle` CSS is removed.
+
+- **Console: the chat tool-call value renderers read the DS radius and spacing half-step tokens (protoContent#525, protoContent#547).** `chat/tool-calls.css` moves every `border-radius` px onto the DS radius scale (5px→`--pl-radius`, 6px→`--pl-radius-md`) and every off-scale spacing px (2/3/5/6/7/10px on padding/margin/gap) onto the scale, using the new half-step tokens (`--pl-space-0_5`, `--pl-space-1_5`, `--pl-space-2_5`) alongside `-1`/`-2`, so the tool-card bodies track the operator's chosen density and theme instead of frozen literals. Off-grid gaps snap to the nearest step (`3px→space-1`, `5px→space-1_5`, `10px→space-2_5`), and the two 7px sites snap by intent (the cancel-button padding and the web-search result-list gap →`space-2`, the fetch head-row gap →`space-1_5`); 1px verticals, border widths, and size/`max-height` lengths are untouched. The tool-calls pins in `offScaleSpacing3h` and `chat-type-scale-rem` are re-pinned to the tokenized strings; no radius or spacing site keeps a raw px.
+
+- **Console: a tree-wide guard pins radius & off-scale spacing literals out of every console stylesheet (Refs protoContent#525, Refs protoContent#547).** Step 3 (final) of the DS-audit migration: `apps/web/src/app/radiusSpacingGuard.test.ts` sweeps every `apps/web/src/**/*.css` (via a Vite `?raw` glob, comments stripped, line numbers preserved) and fails with `src/<path>:<line>` on (1) any `border-radius` — or per-corner longhand (`border-{top,bottom}-{left,right}-radius`, `border-{start,end}-{start,end}-radius`) — whose value carries a px/rem literal (only `var(--pl-radius*)`, `0`, `50%`, `inherit` clear), and (2) any 2/3/5/6/7/9/10/14px literal (incl. negatives) on a spacing property (`padding*`/`margin*`/`gap`/`row-gap`/`column-gap`/`inset*`/`top`/`right`/`bottom`/`left`) — `1px`, `0`, `var(--pl-space-*)` and `calc(-1 * var(--pl-space-*))` clear. `env(safe-area-inset*)` values (pinned by `mobileBottomInset`) and the px in a `var(--pl-space-*, <px>)` fallback (`app-crash.css`) are exempt. This turns the per-file guards (`offScaleSpacing3a` et al.) into one tree-wide invariant, so a reintroduced `border-radius: 5px` or `padding: 7px` in any surface fails with its file:line. The allowlist is empty and its size is asserted, so any future carve-out is deliberate. Test-only; no shipped behavior change.
+
+- **Console: Settings ▸ Devices and the Telemetry dashboard now read the DS radius and spacing scales (protoContent#525, protoContent#547).**
+  Every off-scale `border-radius` and spacing literal in `apps/web/src/settings/devices.css` and
+  `settings/telemetry.css` moved onto @protolabsai/design 0.11.0 tokens. The one radius — the QR
+  quiet-zone box's `border-radius: 8px` — maps to `--pl-radius-lg` (no 7px/12px radii, no pills).
+  Padding/margin/gap map to `--pl-space-0_5…-5`: the lossless half-steps `2 → 0_5`, `6 → 1_5`,
+  `10 → 2_5`, the exact steps `16 → -4` and `20 → -5`, and the rhythm snaps `5 → 1_5`, `7 → 1_5`,
+  `3 → 0_5`, `14 → -4`. Genuinely off-scale values stay literals (Telemetry's `22px` section
+  margin, `18px` insights margin, and the `1px` trace-copy hairline). Visual output is unchanged
+  apart from ≤2px snaps on the former 3/5/7/14px sites; the `offScaleSpacing3f` guard's
+  devices/telemetry pins were re-pinned to the tokenized strings.
+
+- **Console: the mobile shell, delegates form and watches panel now read the DS half-step spacing scale (Refs protoContent#525, Refs protoContent#547).**
+  Step 3 of the DS-audit spacing migration: every off-scale spacing px on a
+  `padding*`/`margin*`/`gap`/`top`/`right`/`bottom`/`left` declaration in `app/mobile-shell.css`,
+  `settings/delegates.css` and `watches/watches.css` moves onto the half-step tokens
+  @protolabsai/design 0.11.0 shipped — `6px→--pl-space-1_5`, `10px→--pl-space-2_5` (the watches
+  row padding, the delegates env-editor gaps, the delegates advanced-group gap/padding-top, the
+  watches clear-button `right`), and the exact-scale `8px` sites (mobile toast side gutters, watches
+  clear-button `top`) to `--pl-space-2`. The one gap with no exact half-step, the session-row
+  `gap: 9px`, snaps down to `--pl-space-2` (8px). The uncovered `34px` watches reveal gutter, the
+  `1px` border widths, and every value that reads `env(safe-area-inset*)` — including the pinned
+  home-indicator gutter `max(env(safe-area-inset-bottom), 12px)` and the toast `top` offset — are
+  left verbatim. Pure token substitution; the only visible change is the ≤1px `gap: 9px→8px` snap.
+  The `offScaleSpacing3h` guard's watches/mobile-shell/delegates pins are re-pinned to the
+  tokenized strings.
+
+- **Console: Activity feed and Identity panel read the new DS radius + spacing tokens (protoContent#525/#547).** The Activity provenance/inbox surface (`activity.css`) and the SOUL Identity panel (`agent/identity.css`) move their remaining literal `border-radius`/spacing pixels onto the `@protolabsai/design` 0.11.0 scale that #3888 installed: the two `999px` pills read `var(--pl-radius-pill)`, and padding/margin/gap literals read the radius and half-step spacing tokens (`--pl-space-0_5/-1_5/-2_5`, plus `-1/-2/-3`). A handful of off-grid gaps are snapped to the nearest step (`14px→space-3`, `5px→space-1`, `7px→space-2`); non-spacing lengths (18px, 260px, border widths) are untouched. The `offScaleSpacing3e` guard's activity/identity pins are re-pinned to the tokenized strings.
+
+- **Console: the Tools panel and Goals side-panel CSS read the DS radius and spacing half-step tokens (protoContent#525, protoContent#547).**
+  `apps/web/src/app/tools.css` and `apps/web/src/goals/goals.css` move every hardcoded
+  `border-radius` px onto the `@protolabsai/design` 0.11.0 radius scale (`--pl-radius-md`,
+  `--pl-radius-lg`) and every off-scale spacing px on padding/margin/gap/top/right onto the scale —
+  including the protoContent#547 half-steps `--pl-space-{0_5,1_5,2_5}` — so both surfaces track the
+  operator's chosen density and radii instead of frozen literals. Direct half-steps are exact
+  (`2px`→`0_5`, `6px`→`1_5`, `10px`→`2_5`, `8px`→`2`); one value snaps by +1px (the tools-row
+  vertical `padding: 7px`→`--pl-space-2`, keeping the panel's dominant 8px rhythm). No radius or
+  spacing site keeps a raw px; uncovered values stay literal (the goals row's `34px` horizontal
+  padding, the goals list's `18px` indent, `1px` hairlines/margins, border/outline widths and
+  element sizes).
+
+- **Console: Code pane and Fleet manager read the new DS radius + spacing tokens (protoContent#525/#547).** The docked code/diff viewer (`codeviewer/code-pane.css`) and the fleet manager + pairing forms (`fleet/fleet.css`) move their remaining literal `border-radius`/spacing pixels onto the `@protolabsai/design` 0.11.0 scale that #3888 installed: every `border-radius` reads `var(--pl-radius)` (all were 4px in code-pane, one 3px in fleet — no rectangle pills), and padding/margin/gap literals read the half-step spacing tokens (`--pl-space-0_5/-1_5/-2_5`, plus `-1/-2/-3`), including the drag-handle's matched `6px 2px` padding / `-6px -2px` negative-margin pair (now `var(--pl-space-1_5) var(--pl-space-0_5)` and `calc(-1 * …)`). A few off-grid values are snapped to the nearest step (`14px→space-3`, `5px→space-1_5`, `7px→space-2`, `3px→space-1`); non-spacing lengths (border/outline widths, box-shadow offsets, `outline-offset`, `width`/`14px`/`18px`, the `1px` clip margin) are untouched. The `offScaleSpacing3e` guard's code-pane/fleet pins are re-pinned to the tokenized strings.
+
+- **Console: the schedule builder and agent-snapshot CSS move border-radius and off-scale spacing onto DS radius/space tokens (protoContent#525, protoContent#547).**
+  `apps/web/src/schedule/schedule.css` and `apps/web/src/settings/snapshot.css` now read the
+  `@protolabsai/design` 0.11.0 radius scale (`--pl-radius` / `-md` / `-lg`) for every
+  `border-radius`, and the spacing scale — including the protoContent#547 half-steps
+  `--pl-space-{0_5,1_5,2_5}` and `-5` — for padding/margin/gap, so both surfaces track the
+  operator's chosen density and radii instead of hardcoded px. Off-scale spacing snaps: `3px`→`0_5`,
+  `5px`→`1`, `14px`→`3` (schedule mode button) and `14px`→`4` (snapshot source tab). No visual
+  behaviour otherwise changes; `1px` hairlines, border widths and element sizes stay as literals.
+
+- **Console: the chat inline-component and prompt-viewer surfaces read the DS radius and spacing half-step tokens (protoContent#525, protoContent#547).** `chat-component.css` and `promptviewer.css` move every hardcoded `border-radius` px onto the DS radius scale (`--pl-radius`, `--pl-radius-lg`, `--pl-radius-pill`) and every off-scale spacing px (2/6/7/9/10px on padding/margin/gap) onto the new half-step tokens (`--pl-space-0_5`, `--pl-space-1_5`, `--pl-space-2_5`), so both surfaces track the operator's chosen density and theme instead of frozen literals. Two spacing values snap by ±1px to the nearest token (the timeline step `gap: 9px`→`--pl-space-2`, the code-ref chip's vertical `padding: 7px`→`--pl-space-2`); no radius or spacing site keeps a raw px.
+
+- **Console: the three sanctioned composite raw-`<button>` controls carry the DS-audit `hand-rolled-control` line-level exception (#3832, protoContent#551).**
+  The app-drawer surface rows, the app-drawer Settings row and the composer's model-menu
+  trigger are deliberate composite controls (icon + label, and a menu trigger); designSystem
+  ruled they stay raw `<button>`s rather than a DS primitive, and the audit heuristic is not
+  being widened. Each now carries an inline `/* ds-audit-ignore hand-rolled-control … */`
+  block comment so the design-system audit stops flagging them. Comments only — no markup,
+  props, classNames, handlers or behaviour changed.
+
+### Fixed
+- **`onboard_project` says when it re-cloned a registered project's missing checkout (#3643).**
+  If a registered project's folder had been deleted, the tool cloned it back but still
+  replied "Reused the existing checkout — nothing changed", which hid that the checkout had
+  been missing. A missing registered root is what unbinds the filesystem tools. The reply
+  now says the checkout was missing and was re-cloned, and that `read_file` / `search_files`
+  come back in a new chat if they dropped out of the session.
+
+- **`/v1`, `/api/chat` and plugin turns now recover from a context-window overflow and run `/<subagent>` commands (#3805).**
+  The non-streaming turn driver carried its own drifted copy of the pre-turn dispatch and error handling: an
+  overflowing turn failed instead of force-compacting and retrying once, and `/<subagent> <prompt>` fell through
+  to a plain agent turn. Both drivers now share one dispatch chain and one failure classifier, so a dropped
+  provider stream also records the same transcript text on either surface.
+  A turn carrying a `tool_fence` (an untrusted party relayed by a plugin surface) now runs
+  none of the slash / @-mention short-circuits, which do their work outside the fence; the
+  text goes to the fenced lead turn instead.
+
+- **Chat stream survives one malformed SSE frame (#3811).**
+  A single unparsable event used to throw out of the frame parser and drop every
+  frame after it, failing the whole turn; it is now skipped with a console warning.
+
+- **Windows `run_command` can run commands with quoted paths (#3813).** Under the default `cmd` shell, `"C:\Program Files\Tool\tool.exe" --version` failed with `'\"C:\...\"' is not recognized`. The argv list was re-quoted with backslash escapes that cmd.exe does not understand. cmd now receives the command line verbatim (`cmd /d /s /c "<command>"`), and the goal `command` verifier gets the same fix. POSIX and PowerShell are unchanged.
+
+- **Redacting a secret no longer eats the closing quote or backtick after it (#3816).**
+  The env-var assignment pattern (`OPENAI_API_KEY=…`, `A2A_AUTH_TOKEN: …`) matched up to the
+  next whitespace, so it swallowed a closing `"` or `` ` `` along with the value. Redacted
+  source stopped parsing, and a reviewer reading through the redaction layer FAILed a PR on
+  a syntax error that wasn't on disk. The value now stops at the first whitespace or closing
+  delimiter (an opening quote is kept, and what it wraps is still redacted), so string
+  literals, JSON values and markdown code spans keep their delimiters.
+
+- **`fetch_url` reports a redirect loop instead of returning the redirect stub as the page (#3817).**
+  Past the 5-hop cap the last response was still a 30x, and its "Moved" body came back to the
+  model as the page content under a `[302]` header; it now returns a "too many redirects" error.
+
+- **An ACP turn now stops when its client goes away (#3837).** Closing the console tab,
+  a dropped connection or an A2A cancel mid-turn used to leave the external coding agent
+  working on an orphaned turn while its runtime was released as idle. The turn is now
+  cancelled — the agent is sent ACP `session/cancel` — and has stopped before the runtime
+  is released, bounded at 10 seconds for an agent that has stopped reading.
+
+- **A chat turn abandoned mid-stream now releases its thread lock and flushes its trace right away (#3870).**
+  When a client disconnected or closed the tab during a streamed turn, the outer stream closed but the
+  inner turn generator was left for garbage collection, so the per-thread lock and the Langfuse trace
+  flush waited on the async-generator finalizer and the next turn on that thread could queue behind it.
+  Closing the stream now closes the turn before the close returns.
+
+- **A failed chat turn is now recorded on the thread it ran on (#3871).**
+  The failure record (#2593) re-resolved the thread without the turn's request metadata, so under a
+  metadata-aware thread resolver (ADR 0069 D4 — per-project scoping, A2A `contextId`) the `**Error:**`
+  entry landed on a different thread than the conversation that failed. Both turn drivers now hand the
+  thread they resolved to `record_failed_turn`.
+
+- **A no-reply turn is now a failed turn on `/v1`, and auto-answered turns keep their early text (#3873).**
+  A non-streaming turn that produced no reply returned `**Error:** …` content with no structured `error`,
+  so telemetry counted it completed and `/v1/chat/completions` answered it 200 as if it were the answer; it
+  now carries the `error` key and `/v1` answers `500 server_error` like any other failed turn. On the
+  streaming driver, text streamed before an interrupt the agent auto-answered (an autonomous or goal-driven
+  turn) never reached the terminal `done`, so a consumer rendering from it (the A2A terminal artifact) lost
+  the start of the answer; it is now carried across the auto-answer, joined as a new paragraph on the live
+  stream and in `done` alike.
+
+- **An A2A turn now releases its thread lock and flushes its trace before the turn returns (#3876).**
+  The A2A executor returned on the terminal frame without closing the turn stream, so on every
+  A2A turn the chat driver's cleanup (per-thread lock release, trace flush) waited for the event
+  loop's async-generator finalizer. The executor now closes the stream right after emitting the
+  terminal state, and the stall guard closes the stream it wraps when it is itself closed or
+  cancelled.
+
+- **Closing a streaming chat turn early now closes its inner turn generators too (#3877).**
+  The native turn and its graph event loops (initial, goal continuation, overflow retry)
+  are wrapped in `contextlib.aclosing`, so their cleanup runs before the stream's
+  `aclose()` returns instead of at garbage collection.
+
+- **Goal turns over `/v1`, `/api/chat` and plugin surfaces no longer fail when two approval-gated tools pause at once (#3884).**
+  When a goal-driven turn hit a HITL interrupt with nobody to answer it, the non-streaming driver auto-answered
+  with a bare resume value, which LangGraph rejects when more than one interrupt is pending (two gated tool calls
+  in one step). It now resumes by interrupt id, as the streaming driver always did (#3872). The goal drive loop
+  and the autonomous auto-answer now have one shared implementation (`server/goal_loop.py`) used by both drivers.
+
+- **Goal-driven and autonomous turns now behave the same on the streaming and non-streaming chat paths (#3891).**
+  A context-overflow retry on a goal's first turn re-runs the recovery prompt as-is instead of wrapping it in
+  the goal kickoff. A `chat()` turn from a server-fired origin (scheduler, watch, webhook, background…)
+  auto-answers a HITL pause instead of echoing it; operator surfaces (`/api/chat`, `/v1`, plugins) still park.
+  An interrupt raised inside a goal continuation is auto-answered under the turn's one budget when the turn is
+  autonomous, and otherwise stops the drive and surfaces the ask (streaming no longer leaks a stray
+  `input_required` mid-drive; non-streaming no longer drops it). The goal verifier judges the answer after the
+  empty-reply fallback on both paths, with the goal note appended after evaluation.
+
+- **The per-turn tool allowlist now applies to every graph pass of a turn (#3908).** Goal-mode
+  continuations on the streaming driver (including fresh-context ones) and HITL resumes on both
+  drivers now carry the fence, matching the initial pass.
+
+- **Tool-fenced turns follow one set of rules across streaming dispatch, resumes and held messages (#3926).**
+  A fenced streaming turn skips the pre-turn short-circuits and is refused on an ACP runtime (background
+  subagent jobs excepted); a fenced resume intersects with the parked turn's fence; a parked question
+  completes on its own resume while an out-of-fence approval is declined; and a held fenced message narrows the pass that reads it.
+
+- **Native Codex (ChatGPT OAuth) turns no longer fail with Langfuse tracing on (#3928).**
+  The trace-context middleware stamped Langfuse `metadata` onto every client with an
+  `extra_body` slot, and the ChatGPT Codex backend rejects it (`400 Unsupported parameter:
+  metadata`), so every turn on a native Codex model failed. The stamp now goes only to
+  clients built for an OpenAI-compatible (gateway) connection; native Codex and Claude
+  generations are still recorded in the agent's own Langfuse trace.
+
+- **Five server gaps from a dev smoke are closed (#3929).** A failed non-streaming turn
+  (`/v1`, `/api/chat`) now writes a `failed` telemetry row even with zero usage;
+  `/api/chat/sessions/{id}/aside` reports a model error as `{found: false, reason:
+  "model_error"}` at 502 instead of a plain 500; `/v1/chat/completions` answers a missing
+  user message or malformed `messages` with an OpenAI-shaped 400; `/goal` with goal mode
+  off replies that it is off (enable with `goal.enabled: true`) instead of reaching the
+  model; and a v0.3 `tasks/get` for a missing task returns -32001, like the v1 path.
+
+- **A paused HITL turn no longer hangs a fresh browser, and answering it no longer orphans the task that paused (#3930).**
+  Reattaching to a turn waiting on a form now settles off the subscription's input-required snapshot instead of
+  waiting for a stream the server rightly holds open (A2A: input-required is interrupted, not terminal), so the
+  form's Send/Dismiss work at once. A form answer now continues the task that paused, as A2A specifies (the console
+  sends its task id; the server routes an answer without one), and a composer message held behind the form hands the
+  pause to its own task and completes the older one, so no input-required task is left behind to rebuild as a
+  spinning card.
+
+- **Non-streaming chat surfaces a HITL question even when the turn also wrote text (#3931).**
+  `/api/chat`, `/v1` and plugin `invoke()` turns that wrote text and then paused for input
+  used to return the text alone — the question was lost, and a goal set during that turn
+  was driven on into a thread still waiting for its answer. The reply now carries the text
+  followed by the question, and the goal drive stops at the pause, as streaming does.
+
+- **Three turn-lifecycle leaks closed: orphaned `/workflow` runs, stranded server-turn controls, stale steering queues (#3933).**
+  A `/<workflow>` command whose turn ended early (A2A cancel, stall guard) left its workflow running
+  unobserved; it is now cancelled and awaited (bounded) with the turn, as native and ACP turns already
+  were. A plain client disconnect still lets it finish, like any other turn.
+  A server-fired turn that crashed before its terminal update kept its operator-control entry forever;
+  the executor now signals every exit and the registry is capped at 1024 (oldest evicted, logged).
+  Steering queues for sessions whose turn never took another model step are evicted after 7 idle days
+  or past 1024 sessions (least recently written first), with a warning when messages are dropped.
+
+- **Unfenced turns start unfenced; work a fenced turn leaves behind stays fenced (#3939).**
+  A plain streaming turn no longer inherits a tool fence left on its thread by an
+  earlier turn. Background-job briefings, scheduled and `wait` resumes, watch reactions
+  and hooks, goal completion hooks and lifecycle reactions now run under the fence of the
+  turn that created them. A goal set by a fenced turn is pursued under that fence by every
+  turn that drives it, and a narrowed fence holds for a turn's goal continuations and
+  overflow retry on both drivers. Subagents a fenced turn delegates to (background or
+  in-turn `task`) run under their allowlist intersected with that fence — one whose
+  allowlist doesn't overlap the fence now runs with no tools. A goal set by a fenced turn
+  no longer queues a self-improvement review.
+
+- **Concurrent config reads and writes no longer corrupt each other's YAML parse (#3941).**
+  `graph/config_io.py` shared one ruamel parser across threads, and ruamel keeps its
+  reader state on the instance, so a config read on the event loop could collide with a
+  write loading the same file in a worker thread (two `POST /api/delegates` at once failed
+  with `IndexError: string index out of range` or a spurious `ParserError`). Each thread now gets its own parser,
+  configured the same way.
+
+- **A turn's model override now reaches its subagents and background jobs (#3944).**
+  One precedence everywhere: the subagent's own pinned model (`subagents.<name>.model`),
+  then the turn's model override (the chat tab's pick, `metadata.model`), then
+  `routing.aux_model` / the main model. In-graph `task()` / `task_batch()` delegations
+  and `/<subagent>` slash runs used to skip the override; a background job's detached
+  turn carried no model at all and ran on the default even with its subagent pinned.
+  It now carries the resolved model in its fire metadata. With no pin and no override
+  nothing changes.
+
+- **Non-streaming telemetry rows get their trace id and A2A's statuses; failed background jobs keep their error (#3945).**
+  `/v1` and `/api/chat` rows now carry the turn's Langfuse trace id (captured inside the
+  trace scope), a HITL park or hold on those surfaces is recorded `input_required` instead
+  of `completed`, and slash-command replies write a row as they do over A2A. A background
+  job that fails now stores its terminal error on the job row, the `background.completed`
+  event and the `<task-notification>`, so the agent reports the real cause (e.g. a 429).
+
+- **An unknown goal verifier is refused on every entry point; `/v1` answers 502 for an unreachable gateway; workflow replies lose the raw subagent marker; the workflows plugin's config no longer collides with core; a parked turn renders as paused (#3946).**
+  `POST /api/goals`, `set_goal_safe` (plugin SDK / agent tool) and the chat `/goal` path now reject a
+  `plugin` verifier whose check isn't registered — the route returns 400 naming the available
+  verifiers and kicks no turn, instead of creating a goal that could never pass. A model gateway
+  that can't be reached (connection refused / DNS / timeout) is now an OpenAI-shaped 502 from
+  `/v1/chat/completions`, not a 500. Workflow step outputs drop the internal
+  `[<subagent> completed: workflow …]` header (warning headers are kept). The workflows plugin's
+  settings move to their own `workflow_runs` section (`workflows:` is core's), so `max_runs` binds
+  and the "collides with a built-in" warning is gone. In the console, a turn parked on operator
+  input shows its `ask_human` card and bubble as waiting — no spinner, timer or streaming placeholder.
+
+### Security
+- **A fenced message on an ACP-runtime agent is refused instead of run unrestricted (#3846).** A `tool_fence` (the allowlist a plugin surface such as Discord's peer path puts on an untrusted party's message) is enforced only on the native turn, so on an agent whose `agent_runtime` is `acp:*` the external coding agent received that message with its full toolset. The turn is now answered with a refusal and runs nowhere. Unfenced turns on ACP are unchanged.
+
 ## [0.185.0] - 2026-09-29
 
 ### Added
