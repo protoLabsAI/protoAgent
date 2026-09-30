@@ -57,6 +57,20 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A card whose turn is PAUSED on the operator (#3946): the DS frame is rendered "done"
+   for want of a paused glyph, so hide that glyph; the header's "waiting for you" chip
+   carries the state. */
+.tool-paused .pl-toolcard__status {
+  display: none;
+}
+.tool-waiting {
+  color: var(--pl-color-fg-subtle);
+  white-space: nowrap;
+}
+.tool-waiting svg {
+  vertical-align: -1px;
+}
+
 /* Estimated context cost on a SETTLED card (toolCost.ts, #2282). Like .tool-elapsed it
    only appears past a threshold, so its presence is itself the signal — the operator is
    looking for the expensive call, not reading a number off every row. Same subtle

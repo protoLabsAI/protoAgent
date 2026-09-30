@@ -17,6 +17,7 @@ synthesis. Streaming is untouched.
 import json
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -358,6 +359,57 @@ def test_v1_internal_fault_is_500_not_502(monkeypatch):
     body = r.json()
     assert body["error"]["type"] == "server_error"
     assert body["error"]["upstream_status"] is None
+
+
+def _connection_refused():
+    """What the openai SDK raises when the gateway can't be reached at all: an
+    APIConnectionError chained onto the httpx transport error — no HTTP status."""
+    import httpx
+    import openai
+
+    req = httpx.Request("POST", "http://127.0.0.1:1/v1/chat/completions")
+    try:
+        try:
+            raise httpx.ConnectError("[Errno 61] Connection refused", request=req)
+        except httpx.ConnectError as inner:
+            raise openai.APIConnectionError(request=req) from inner
+    except openai.APIConnectionError as exc:
+        return exc
+
+
+@pytest.mark.parametrize(
+    "make_exc",
+    [
+        _connection_refused,
+        lambda: __import__("openai").APITimeoutError(request=__import__("httpx").Request("POST", "http://gw/v1")),
+        lambda: ConnectionRefusedError(61, "Connection refused"),
+        # Wrapped by a framework layer: the transport error is only on the cause chain.
+        lambda: _wrapped(_connection_refused()),
+    ],
+    ids=["openai-connection-error", "openai-timeout", "builtin-connection-refused", "wrapped"],
+)
+def test_v1_unreachable_gateway_is_502_not_500(monkeypatch, make_exc):
+    """#3946: a gateway that can't be reached carries no HTTP status, so it read as an
+    internal 500 — but it's the hop behind us failing, exactly what 502 means."""
+    c = _client(monkeypatch, graph=_FakeGraph([AIMessage(content="x")]), chat_reply=_err_reply(make_exc()))
+
+    r = _raw(c)
+
+    assert r.status_code == 502
+    body = r.json()
+    assert body["error"]["type"] == "server_error"  # OpenAI-shaped, not a bare string
+    assert body["error"]["upstream_status"] is None
+    assert "choices" not in body
+
+
+def _wrapped(inner):
+    try:
+        try:
+            raise inner
+        except Exception as e:
+            raise RuntimeError("graph run failed") from e
+    except RuntimeError as outer:
+        return outer
 
 
 def test_v1_streaming_failure_is_an_http_error_not_an_sse_frame(monkeypatch):

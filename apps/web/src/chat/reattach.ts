@@ -40,8 +40,17 @@ import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
-import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
+import {
+  applyComponent,
+  applyReasoning,
+  applyText,
+  applyToolEvent,
+  applyUsage,
+  pauseBubble,
+} from "./turnReducers";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
+
+export { pauseBubble, unpauseBubble } from "./turnReducers";
 
 // Kept in sync with streamWatchdog.ts TERMINAL_RE.
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -122,6 +131,19 @@ export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatM
     );
 }
 
+/** Mark `messageId` PAUSED on the operator (#3946): the turn parked (input-required) and
+ *  nothing is producing into the bubble until the operator answers. Its status stays
+ *  `streaming` — the turn is not over and the answer continues it — but the bubble and its
+ *  in-flight cards render as waiting: before this a fresh browser's reattach left the
+ *  `ask_human` card spinning with a climbing timer, and an empty bubble showed the
+ *  streaming placeholder, for as long as the form went unanswered. Only a streaming bubble
+ *  is touched. */
+export function markTurnPaused(messages: ChatMessage[], messageId: string): ChatMessage[] {
+  return messages.map((m) =>
+    m.id === messageId && m.status === "streaming" ? pauseBubble(m) : m,
+  );
+}
+
 /** The paused bubble a HITL answer just answered, settled. A reattach that found its turn
  *  PAUSED leaves the bubble `streaming` on purpose — the turn was not over — and the answer
  *  then continues the task in a NEW bubble (a form/question answer), so nothing else would
@@ -136,8 +158,11 @@ export function settleAnsweredPause(messages: ChatMessage[], messageId: string |
       ? {
           ...m,
           status: "done",
+          paused: undefined,
           durableSnapshotFallback: undefined,
-          toolCalls: m.toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" as const } : c)),
+          toolCalls: m.toolCalls?.map((c) =>
+            c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
+          ),
         }
       : m,
   );
@@ -183,8 +208,10 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
       settleTurnBubbles(
         reconciled.map((m) => {
           if (m.id !== assistantId) return m;
-          const toolCalls = m.toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" as const } : c));
-          return { ...m, status: failed ? "error" : "done", toolCalls, durableSnapshotFallback: undefined };
+          const toolCalls = m.toolCalls?.map((c) =>
+            c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
+          );
+          return { ...m, status: failed ? "error" : "done", paused: undefined, toolCalls, durableSnapshotFallback: undefined };
         }),
         assistantId,
       ),
@@ -258,6 +285,8 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         usage: undefined,
         contextWindow: undefined,
         durableSnapshotFallback: undefined,
+        // The snapshot says what state the turn is in now; a pause is re-marked below.
+        paused: undefined,
       }));
     },
     onStatus: (status) => hooks.onStatus?.(status),
@@ -301,6 +330,8 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         // full MAX_POLLS budget holding the session "streaming", which kept the
         // re-rendered HITL form's buttons disabled) and free the composer. No
         // finalize: the turn isn't over, the replay above re-rendered the form.
+        const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+        if (cur) chatStore.updateMessages(sessionId, markTurnPaused(cur.messages, assistantId));
         chatStore.setSessionStatus(sessionId, "idle");
         return;
       }
@@ -338,9 +369,11 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   /** Paused on the operator: un-busy the session so the re-rendered form's buttons work,
    *  but DON'T finalize — stamping the message "done" would misrepresent a turn the
-   *  server still owns. Mirrors the live path, where a stream ending on input-required
-   *  lands on idle without touching the message. */
+   *  server still owns. The bubble is marked paused instead, so it and its in-flight
+   *  `ask_human` card render as waiting rather than spinning (#3946). */
   function settlePaused() {
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+    if (cur) chatStore.updateMessages(sessionId, markTurnPaused(cur.messages, assistantId));
     chatStore.setSessionStatus(sessionId, "idle");
   }
 

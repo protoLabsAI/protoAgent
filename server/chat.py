@@ -1577,6 +1577,37 @@ def _upstream_status(exc: BaseException | None) -> int | None:
     return code if isinstance(code, int) and 400 <= code < 600 else None
 
 
+def _upstream_unreachable(exc: BaseException | None) -> bool:
+    """True when the turn failed because the model gateway could not be REACHED at all —
+    connection refused, DNS failure, a connect/read timeout (#3946). No HTTP status comes
+    back in that case, so :func:`_upstream_status` is ``None`` and ``/v1`` used to call it
+    an internal 500; it is a failed proxy hop and belongs with the other 502s.
+
+    Walks the ``__cause__``/``__context__`` chain, since the openai SDK's
+    ``APIConnectionError`` wraps the underlying ``httpx`` transport error (and a
+    framework layer may wrap it again). Bounded, so a cyclic chain can't spin."""
+    transport: tuple[type[BaseException], ...] = (ConnectionError,)
+    try:
+        import httpx
+
+        transport += (httpx.TransportError,)
+    except ImportError:  # pragma: no cover — httpx ships with the openai SDK
+        pass
+    try:
+        import openai
+
+        transport += (openai.APIConnectionError,)  # APITimeoutError subclasses it
+    except ImportError:  # pragma: no cover
+        pass
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        if isinstance(exc, transport):
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 async def record_failed_turn(session_id: str, text: str, *, thread_id: str | None = None) -> bool:
     """Append a failed turn's error to its checkpointed thread. Returns True if recorded.
 
@@ -1628,13 +1659,19 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
     rendering the bubble (it ignores the extra key, like ``usage``); ``/v1`` maps this to
     a real HTTP error. The content string is unchanged, so nothing that reads it moves.
     """
-    return {
+    err = {
         "message": message or str(exc or "the turn failed"),
         "type": _ERROR_TYPE_BY_STATUS.get(_upstream_status(exc), "server_error"),
         "upstream_status": _upstream_status(exc),
         # None for a failure with no exception behind it (a turn that produced no reply, #3873).
         "exception": type(exc).__name__ if exc is not None else None,
     }
+    if err["upstream_status"] is None and _upstream_unreachable(exc):
+        # The gateway never answered (connection refused / DNS / timeout) — no status to
+        # carry, but still a failed upstream hop: /v1 maps it to 502, not 500 (#3946).
+        # Only present when true, so the established error shape is otherwise unchanged.
+        err["upstream_unreachable"] = True
+    return err
 
 
 async def _chat_langgraph(

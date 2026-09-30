@@ -807,6 +807,10 @@ export type ToolCall = {
    *  wire preview, so the context-cost chip must estimate from this instead. */
   outputChars?: number;
   status: "running" | "done" | "error";
+  /** In flight when its turn PARKED on the operator (input-required, #3946): the call is
+   *  waiting on a human, not working — rendered as waiting (no spinner, no climbing
+   *  timer). Cleared when the turn resumes or the card settles. */
+  paused?: boolean;
   /** Client wall-clock when the start frame arrived (ms epoch). */
   startedAt?: number;
   /** Elapsed start→end, stamped client-side when the end frame arrives. */
@@ -1130,6 +1134,11 @@ export type ChatMessage = {
   reasoning?: string;
   createdAt?: number;
   status?: "streaming" | "done" | "error";
+  /** The turn is PAUSED on the operator (input-required / auth-required, #3946). The
+   *  status stays `streaming` — the server still owns the turn and the answer continues
+   *  it — but nothing is being produced, so the bubble renders as waiting: no streaming
+   *  spinner, no running-card timers. Cleared when the turn resumes or settles. */
+  paused?: boolean;
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;

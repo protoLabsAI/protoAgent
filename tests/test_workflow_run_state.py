@@ -258,3 +258,65 @@ def test_writable_dir_expands_tilde(monkeypatch):
     out = wf._writable_dir()
     assert "~" not in str(out)
     assert out.is_absolute()  # expanded to a real absolute dir (drive-anchored on Windows)
+
+
+def test_step_outputs_drop_the_subagent_completed_header(tmp_path, monkeypatch):
+    # #3946: `run_subagent` returns `[<type> completed: <description>]\n\n<body>` (graph/agent
+    # run_manual_subagent) — a tool-result marker for a lead model. In a workflow it leaked
+    # into the reply as a raw "[researcher completed: workflow demo:brief]" first line and
+    # into every downstream prompt. The clean-finish header is dropped; warning headers stay.
+    prompts: dict[str, str] = {}
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        step = description.rsplit(":", 1)[-1]
+        prompts[step] = prompt
+        return f"[{subagent_type} completed: {description}]\n\n<{step}-out>"
+
+    _patch_sdk(monkeypatch, run_subagent)
+    store = WorkflowRunStore(tmp_path)
+    result = asyncio.run(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+
+    assert result["output"] == "<brief-out>"
+    assert "completed:" not in prompts["brief"] and "<gather-out>" in prompts["brief"]
+    assert store.load(result["run_id"])["step_outputs"] == {"gather": "<gather-out>", "brief": "<brief-out>"}
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("[researcher completed: workflow demo:s]\n\nbody", "body"),
+        ("[researcher completed: workflow demo:s] -- no output produced.", "(no output produced)"),
+        # Warning headers carry real signal (treat the lane as a Gap) — kept verbatim.
+        (
+            "[researcher hard-stopped at max_turns: workflow demo:s — PARTIAL output; "
+            "unverified remainder is a Gap]\n\nbody",
+            None,
+        ),
+        ("[researcher ended without its deliverable: workflow demo:s] -- no output produced; x", None),
+        # Another subagent's / description's header is not ours to strip.
+        ("[coder completed: workflow demo:s]\n\nbody", None),
+        ("plain answer", None),
+    ],
+)
+def test_strip_completed_header(raw, expected):
+    out = wf._strip_completed_header(raw, "researcher", "workflow demo:s")
+    assert out == (raw if expected is None else expected)
+
+
+def test_workflows_plugin_config_section_does_not_collide_with_core(caplog):
+    # #3946: the manifest claimed `workflows`, core's reserved built-in section (the
+    # `workflows.dir` recipe root) — so its `max_runs` config never bound and every config
+    # load logged "config_section 'workflows' collides with a built-in". It has its own now.
+    import logging
+    from pathlib import Path
+
+    from graph.plugins.pconfig import _RESERVED_SECTIONS, discover_plugin_config
+
+    assert "workflows" in _RESERVED_SECTIONS  # core still owns `workflows:` — not unreserved
+    plugins_root = Path(wf.__file__).resolve().parent.parent
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        schemas = discover_plugin_config([plugins_root], {"workflows"})
+    mine = [s for s in schemas if s.plugin_id == "workflows"]
+    assert len(mine) == 1 and mine[0].section not in _RESERVED_SECTIONS
+    assert mine[0].defaults.get("max_runs") == 200
+    assert not [r for r in caplog.records if "collides with a built-in" in r.getMessage()]

@@ -853,6 +853,8 @@ workflows:
 | `enabled` | `true` | Expose `run_workflow` / `save_workflow` and load `*.yaml` recipes. |
 | `dir` | `/sandbox/workflows` | Writable recipe root (`/sandbox`→`~/.protoagent` fallback). Bundled recipes also load from `workflows/`. |
 
+The workflows **plugin**'s own settings live in their own section, `workflow_runs` (not `workflows`, which is this built-in one): `workflow_runs.max_runs` (default `200`) is how many finished runs `.runs/` keeps.
+
 ## `plugins`
 
 Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribute tools, bundled skills, FastAPI routes, background surfaces, subagents, and managed MCP servers (ADR 0018/0019). They run **in-process** with the agent's privileges, so a third-party plugin is **disabled by default** — only enable plugins you trust. (First-party bundled plugins like `discord`/`google` ship `enabled: true` in their own manifest.)

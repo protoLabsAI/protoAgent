@@ -175,7 +175,8 @@ async def test_untrusted_chat_refuses_shell_and_eval_verifiers(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_untrusted_chat_allows_declarative_verifiers(tmp_path):
+async def test_untrusted_chat_allows_declarative_verifiers(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"p:v": object()})
     c = _ctrl(tmp_path)
     ok = [
         "/goal make the build green",  # fuzzy → llm
@@ -281,7 +282,8 @@ def test_set_goal_operator_coerces_string_contract_lists(tmp_path):
     assert state.boundaries == ["tools/"]
 
 
-def test_set_goal_safe_stores_contract(tmp_path):
+def test_set_goal_safe_stores_contract(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"p:v": object()})
     c = _ctrl(tmp_path)
     ok, _ = c.set_goal_safe(
         "s",

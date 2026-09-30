@@ -140,6 +140,9 @@ const MIME = {
 // dispatcher's foreign-context guard passes it through. Served by GetTask AND as the
 // opening frame of the (held-open) SubscribeToTask stream, as the real server does.
 function pausedTask(id) {
+  // An id carrying "paused-ask_human" is parked in an `ask_human` call (#3946): its history replays the
+  // card's START frame and never an end — the call is in flight until the operator answers.
+  const ask = String(id).includes("paused-ask_human");
   return {
     id, contextId: "s-stuck",
     status: {
@@ -147,11 +150,30 @@ function pausedTask(id) {
       message: {
         parts: [{
           metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
-          data: { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
+          data: ask
+            ? { question: "Which fruit should I pick?" }
+            : { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
         }],
       },
     },
     artifacts: [],
+    ...(ask
+      ? {
+          history: [
+            { role: "ROLE_USER", parts: [{ text: "pick a fruit" }] },
+            {
+              role: "ROLE_AGENT",
+              parts: [],
+              metadata: {
+                "https://proto-labs.ai/a2a/ext/tool-call-v1": {
+                  toolCallId: "ask-1", name: "ask_human", phase: "started",
+                  args: JSON.stringify({ question: "Which fruit should I pick?" }),
+                },
+              },
+            },
+          ],
+        }
+      : {}),
   };
 }
 function sendJson(res, body, status = 200) {

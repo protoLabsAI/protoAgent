@@ -143,6 +143,8 @@ class GoalController:
                 "verifier with `contains`. (Shell/eval and absolute-path verifiers are "
                 "operator-only.)"
             )
+        if err := self.unknown_plugin_verifier_error(spec):
+            return f"Could not set goal: {err}"
         if not trusted and (spec or {}).get("type") == "data":
             # Persist the scope with the verifier: evaluation happens after the request's
             # trust signal is gone. Direct trusted/operator specs keep the legacy CWD-relative
@@ -224,6 +226,24 @@ class GoalController:
             )
         return False
 
+    @staticmethod
+    def unknown_plugin_verifier_error(verifier: dict | None) -> str | None:
+        """Error message when ``verifier`` is a ``plugin`` verifier whose ``check`` isn't in
+        the live plugin-verifier registry, else ``None`` (#3946). Such a goal is created but
+        can NEVER pass — it spins to the iteration cap and ends 'unachievable' — so every
+        set path (agent tool, plugin SDK, REST, chat ``/goal``) refuses it up front and
+        names the registered verifiers so the caller can pick a real one."""
+        if (verifier or {}).get("type") != "plugin":
+            return None
+        from graph.goals.verifiers import plugin_verifier_names
+
+        check = (verifier or {}).get("check") or ""
+        known = plugin_verifier_names()
+        if not check or check in known:
+            return None
+        avail = ", ".join(known) if known else "(none registered — enable a plugin that contributes a verifier)"
+        return f"unknown plugin verifier {check!r}. Available verifiers: {avail}."
+
     # Verifier types safe to set PROGRAMMATICALLY (agent / plugin / REST). Only
     # `plugin` qualifies (ADR 0028 D3): command/test/ci shell out, and `data`
     # eval()s a spec expr — all code-exec sinks that stay operator-only (/goal).
@@ -259,6 +279,8 @@ class GoalController:
             return (False, "a goal condition is required.")
         if not (verifier.get("check")):
             return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
+        if err := self.unknown_plugin_verifier_error(verifier):
+            return (False, err)
         state = GoalState(
             session_id=session_id,
             condition=condition,
@@ -303,6 +325,10 @@ class GoalController:
         vtype = verifier.get("type", "llm")
         if vtype not in VERIFIERS:
             return (False, f"unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}.")
+        if vtype == "plugin" and not verifier.get("check"):
+            return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
+        if err := self.unknown_plugin_verifier_error(verifier):
+            return (False, err)
         state = GoalState(
             session_id=session_id,
             condition=condition,

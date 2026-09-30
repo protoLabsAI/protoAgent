@@ -324,12 +324,14 @@ def _v1_error_response(err: dict) -> JSONResponse:
       (``a2a_impl.auth``); echoing an upstream 401 would send callers to re-check the
       one credential that is fine. 502 says "the hop behind me failed" and the body
       names it — ``upstream_status`` carries the original.
+    - **Gateway unreachable ⇒ 502** (#3946) — connection refused / DNS / timeout carries
+      no HTTP status, but it is still the hop behind us failing, not our own code.
     - **No HTTP status at all ⇒ 500** — that's a fault in our own turn, not a proxy hop.
     """
     upstream = err.get("upstream_status")
     if upstream == 429:
         status = 429
-    elif isinstance(upstream, int):
+    elif isinstance(upstream, int) or err.get("upstream_unreachable"):
         status = 502
     else:
         status = 500
@@ -1028,7 +1030,8 @@ def register_chat_routes(app, ui: str) -> None:
 
         **Failure semantics (#2578).** A turn that raises returns an OpenAI-shaped
         ``{"error": {...}}`` body with a non-2xx status — 429 mirrored, any other
-        upstream HTTP failure as 502, an internal fault as 500 (see
+        upstream HTTP failure or an unreachable gateway as 502 (#3946), an internal
+        fault as 500 (see
         ``_v1_error_response``). It used to answer 200 with the exception text as the
         assistant's content and ``finish_reason: "stop"``, so an SDK client counted a
         hard auth failure as a successful completion."""

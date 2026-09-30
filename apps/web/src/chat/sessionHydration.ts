@@ -19,10 +19,12 @@ import {
 } from "./chat-store";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
-import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
+import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
 const FAILED = /failed|canceled|cancelled/i;
+// Parked on the operator (input-required / auth-required): not over, but not working.
+const PAUSED = /input.required|auth.required/i;
 
 function timestamp(value: string | null): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -197,6 +199,10 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // a newer Task snapshot. The reattach handler recognizes this marker and
     // clears snapshot-derived fields immediately before authoritative replay.
     assistant = { ...assistant, durableSnapshotFallback: true };
+    // A turn PARKED on the operator renders as waiting from the first paint (#3946) — even
+    // in a session whose slot never mounts a reattach. The reattach re-marks it off the
+    // live snapshot; the answer that continues the turn clears it.
+    if (PAUSED.test(turn.state)) assistant = pauseBubble(assistant);
   }
   // A turn the agent had nothing left to say after — everything it did came before the
   // last interjection — would otherwise settle as a blank row under it (the live path's

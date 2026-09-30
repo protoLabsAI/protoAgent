@@ -618,7 +618,8 @@ async def test_e2e_plain_turn_driving_a_goal_runs_under_the_goals_fence(env, mon
 
 
 @pytest.mark.asyncio
-async def test_a_goal_set_under_a_fence_records_it_and_null_reads_closed(tmp_path):
+async def test_a_goal_set_under_a_fence_records_it_and_null_reads_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"p:x": object()})
     from graph.goals.controller import GoalController
     from graph.goals.store import GoalStore
     from graph.goals.types import GoalState

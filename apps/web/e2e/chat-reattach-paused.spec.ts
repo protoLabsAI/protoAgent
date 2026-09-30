@@ -67,3 +67,55 @@ test("a reattached paused turn re-renders its approval gate with live buttons", 
   await expect(card.getByRole("button", { name: "Approve", exact: true })).toBeEnabled({ timeout: 3_000 });
   await expect(card.getByRole("button", { name: "Deny" })).toBeEnabled({ timeout: 3_000 });
 });
+
+// #3946: after #3935 the SESSION settles on input-required, but the BUBBLE did not — in a
+// fresh browser the replayed `ask_human` card kept its running spinner (and, past the
+// threshold, a climbing timer), and the bubble kept its streaming indicator, for as long as
+// the question went unanswered. The paused turn now renders as waiting.
+test("a reattached turn parked in ask_human renders its card and bubble as paused", async ({ page }) => {
+  await page.addInitScript(() => {
+    const stuck = {
+      version: 1,
+      currentSessionId: "s-stuck",
+      sessions: [
+        {
+          id: "s-stuck",
+          title: "Interrupted turn",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          messages: [
+            { id: "u1", role: "user", content: "pick a fruit", status: "done" },
+            { id: "a1", role: "assistant", content: "", status: "streaming", taskId: "task-stuck-paused-ask_human-1" },
+          ],
+        },
+      ],
+    };
+    window.localStorage.setItem("protoagent.chat.sessions", JSON.stringify(stuck));
+  });
+
+  const subscribed = page.waitForRequest(
+    (req) =>
+      req.url().endsWith("/a2a") &&
+      (req.postData() ?? "").includes("SubscribeToTask") &&
+      (req.postData() ?? "").includes("task-stuck-paused-ask_human-1"),
+  );
+  await page.goto("/app/", { waitUntil: "load" });
+  await subscribed;
+
+  // The question is up and answerable…
+  await expect(page.locator(`${SLOT} .hitl-float .hitl-card`)).toContainText("Which fruit should I pick?");
+  await expect(page.locator(SLOT).getByRole("button", { name: "Stop", exact: true })).toHaveCount(0, {
+    timeout: 3_000,
+  });
+
+  // …and the replayed ask_human card reads as WAITING: no spinner, a "waiting for you" cue.
+  const card = page.locator(`${SLOT} .pl-toolcard`).filter({ hasText: "ask_human" });
+  await expect(card).toHaveCount(1);
+  await expect(card.locator(".tool-waiting")).toContainText("waiting for you", { timeout: 3_000 });
+  await expect(card.locator(".pl-toolcard__status--running")).toHaveCount(0);
+  await expect(card.locator(".tool-elapsed")).toHaveCount(0);
+
+  // The bubble is not "streaming": no live indicator, a paused cue instead.
+  await expect(page.locator(`${SLOT} .chat-streaming-indicator`)).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .chat-paused-indicator`)).toContainText("Waiting for your input");
+});

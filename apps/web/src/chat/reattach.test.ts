@@ -974,3 +974,63 @@ describe("reattach: paused states leave the ordered parts untouched", () => {
     expect(getTask).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3946: the paused settle marks the BUBBLE paused, not just the session idle
+// ---------------------------------------------------------------------------
+
+describe("reattach: a paused settle renders the bubble as waiting (#3946)", () => {
+  it("marks the replayed ask_human card and its bubble paused — still streaming, never finalized", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        handlers.onTaskSnapshot?.();
+        handlers.onToolCall?.({ id: "ask-1", name: "ask_human", phase: "start", input: "{}" });
+        handlers.onInputRequired?.({ question: "Favourite fruit?" });
+        handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+      }),
+    );
+
+    attach(sessionId);
+    await settle();
+
+    const msg = assistantMessage(sessionId);
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(msg?.status).toBe("streaming");
+    expect(msg?.paused).toBe(true);
+    expect(msg?.toolCalls?.[0]).toMatchObject({ name: "ask_human", status: "running", paused: true });
+  });
+
+  it("the fallback poller's paused branch marks it too", async () => {
+    const sessionId = seedStuckMultiPartSession();
+    resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
+    replayTask.mockResolvedValue("TASK_STATE_INPUT_REQUIRED");
+
+    attach(sessionId);
+    await settle();
+
+    expect(assistantMessage(sessionId)?.paused).toBe(true);
+    expect(assistantMessage(sessionId)?.toolCalls?.[0].paused).toBe(true);
+  });
+
+  it("a snapshot of a turn that is WORKING again clears a stale pause", async () => {
+    const sessionId = seedStuckSession();
+    chatStore.updateMessages(
+      sessionId,
+      chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages.map((m) =>
+        m.id === ASSISTANT_ID ? { ...m, paused: true } : m,
+      ),
+    );
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        handlers.onTaskSnapshot?.();
+        handlers.onTaskState?.("TASK_STATE_WORKING");
+      }),
+    );
+
+    attach(sessionId);
+    await settle();
+
+    expect(assistantMessage(sessionId)?.paused).toBeUndefined();
+  });
+});
