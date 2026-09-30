@@ -13,7 +13,15 @@ from plugins.orgchart import topology as topo
 
 
 @pytest.fixture(autouse=True)
-def _fresh_caches():
+def _fresh_caches(monkeypatch):
+    # The topology overlays delegation rows from ``STATE.ledger_store``. A test that booted
+    # the agent earlier on this xdist worker leaves a real ledger there, and anything that
+    # delegated since (a background ``researcher`` job) then draws as extra ``subagent:*``
+    # nodes — node counts and crawl caps here drift with test order (seen on #3939's CI).
+    # Start every test with no ledger; a test of the work overlay sets its own.
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "ledger_store", None, raising=False)
     topo.reset()
     yield
     topo.reset()
