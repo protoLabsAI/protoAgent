@@ -218,6 +218,58 @@ async def test_a_turn_parked_on_hitl_echoes_the_question(env, value, expected):
     assert out == [{"role": "assistant", "content": f"🙋 **Input needed:** {expected}", "usage": _usage(5, 1)}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["scheduler", "watch", "webhook", "background"])
+async def test_an_autonomous_origin_auto_answers_a_hitl_park_like_streaming(env, origin):
+    """#3891 F2: ``chat()`` threads its ``origin`` to the driver, so a turn from an
+    autonomous (server-fired) origin never parks on a HITL pause — it resumes with the
+    no-operator sentinel, keyed by interrupt id, as a streaming turn from that origin does."""
+    g = env.install(
+        [Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})]), turn_result(AIMessage(content="done"))]
+    )
+
+    out = await chat_mod.chat("deploy", "s1", origin=origin)
+
+    assert out[0]["content"] == "done"
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
+    assert env.rows[0]["origin"] == origin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["local", "api-chat", "v1", "plugin", "console"])
+async def test_an_operator_origin_still_parks_and_echoes_the_question(env, origin):
+    """#3891 F2, the other side: the operator surfaces (the console's /api/chat, an
+    OpenAI-compat /v1 caller, a plugin relay) stay attended — the ask is echoed, never
+    auto-answered."""
+    g = env.install([Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})])])
+
+    out = await chat_mod.chat("deploy", "s1", origin=origin)
+
+    assert out[0]["content"] == "🙋 **Input needed:** Which env?"
+    assert g.resumes == [] and g.updates == []
+
+
+@pytest.mark.asyncio
+async def test_an_autonomous_origin_is_exempt_from_the_hitl_hold(env):
+    """#3891 F2: the hold is an operator affordance; an autonomous-origin turn skips it
+    (the streaming driver's exemption), so it runs rather than queueing behind the ask."""
+    from graph import steering
+
+    def _answered(graph):
+        graph.pending.clear()
+
+    g = env.install([Invoke(turn_result(AIMessage(content="ran")), steps=[_answered])])
+    g.pending.append({"question": "Which env?"})
+    try:
+        out = await chat_mod.chat("nightly run", "s1", origin="scheduler")
+
+        assert out[0]["content"] == "ran"
+        assert g.invoke_calls[0][0]["messages"][0].content == "nightly run"
+        assert steering.pending("s1") == 0
+    finally:
+        steering.forget("s1")
+
+
 # ── HITL hold / resume ────────────────────────────────────────────────────────
 
 

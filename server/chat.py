@@ -426,7 +426,9 @@ async def chat(
     ``plugin`` — and prefixes the telemetry row's key, since these turns have no A2A
     task to name them. Without it a row from the OpenAI-compat endpoint is
     indistinguishable from one the console produced, and "which surface is spending
-    this" is the question those rows exist to answer.
+    this" is the question those rows exist to answer. It also decides autonomy (#3891
+    F2): a server-fired origin (``server.turn_control._AUTONOMOUS_ORIGINS``) auto-answers
+    a HITL pause instead of echoing it, as the streaming driver does for that origin.
     """
     if STATE.graph is None:
         return _setup_required_message()
@@ -1584,6 +1586,7 @@ async def _chat_langgraph(
                 hitl_resume=hitl_resume,
                 images=images,
                 tool_fence=tool_fence,
+                origin=origin,
                 _telemetry_sink=sink,
             )
         # The impl catches its own exceptions and reports them as an assistant
