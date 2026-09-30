@@ -426,7 +426,9 @@ async def chat(
     ``plugin`` — and prefixes the telemetry row's key, since these turns have no A2A
     task to name them. Without it a row from the OpenAI-compat endpoint is
     indistinguishable from one the console produced, and "which surface is spending
-    this" is the question those rows exist to answer.
+    this" is the question those rows exist to answer. It also decides autonomy (#3891
+    F2): a server-fired origin (``server.turn_control._AUTONOMOUS_ORIGINS``) auto-answers
+    a HITL pause instead of echoing it, as the streaming driver does for that origin.
     """
     if STATE.graph is None:
         return _setup_required_message()
@@ -835,10 +837,13 @@ def _is_spent_firing_job(job) -> bool:
 # The HITL hold (``_hold_if_hitl_pending``) moved to server/turn_control.py (#3847).
 
 
-async def _run_native_turn(message, session_id, config, *, request_metadata=None, resume=False, images=None):
+async def _run_native_turn(
+    message, session_id, config, *, request_metadata=None, resume=False, images=None, overflow_retry=False
+):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
-    lock around the whole turn without a deep in-line reindent."""
+    lock around the whole turn without a deep in-line reindent. ``overflow_retry`` marks
+    the context-overflow re-run, whose recovery prompt is never goal-kicked-off (#3891 F1)."""
     from graph.goals.goal_turn import goal_turn
 
     # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
@@ -859,25 +864,27 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
     # Kickoff injection (#1910) — shared with the non-streaming driver (server/goal_loop.py).
-    message = _goal_loop.kickoff_message(_goal_state, message, resume=resume)
+    message = _goal_loop.kickoff_message(_goal_state, message, resume=resume, overflow_retry=overflow_retry)
 
-    # One graph turn (model tokens accumulated silently; A2A consumers get progress from
-    # tool_start/tool_end). Final text is extracted once via extract_output().
-    accumulated_raw = ""
-    paused = False
-    last_tool_out = ""  # streaming equivalent of _last_tool_text — the empty-turn fallback answer
     # An autonomous turn (no operator watching, or goal-driven — #1911) must never deadlock
     # on a HITL pause: the shared policy (server/goal_loop.py) answers each input_required
-    # with the no-operator sentinel and runs another pass, up to a cap, then gives up.
+    # with the no-operator sentinel and runs another pass, up to a cap, then gives up. ONE
+    # policy (and budget) for the whole turn: the initial pass and every goal continuation.
     _auto = _goal_loop.HitlAutoAnswer(_goal_loop.is_autonomous_turn(request_metadata, goal_active=goal_active))
-    _resume_value = (message if resume else None)
-    # Text streamed by passes that ended at an auto-answered (or given-up) interrupt: those
-    # passes yield `input_required` instead of `__raw__`, so without this their text reached
-    # the live stream but never the terminal `done` (#3873). Built from the forwarded `text`
-    # frames, which are exactly the pass's accumulated raw text — so `done` stays the SAME
-    # string the live stream carried.
-    _carried = ""
-    with goal_turn(goal_active):
+
+    async def _drive_passes(pass_message, pass_config, *, resume_value, pass_images, out: dict):
+        """Run one graph turn on ``pass_config`` to completion — a pass, then another for
+        each interrupt the policy auto-answers — yielding its live frames. Leaves in ``out``:
+        ``raw`` (the turn's raw text), ``paused`` (it parked at an interrupt for a human)
+        and ``last_tool_out``. The initial turn and each goal continuation both run here, so
+        an interrupt inside a continuation gets the same handling as one in the initial
+        turn (#3891 F4) — it used to leak a stray ``input_required`` frame mid-drive."""
+        # Text streamed by passes that ended at an auto-answered (or given-up) interrupt:
+        # those passes yield `input_required` instead of `__raw__`, so without this their
+        # text reached the live stream but never the terminal `done` (#3873). Built from the
+        # forwarded `text` frames, which are exactly the pass's accumulated raw text — so
+        # `done` stays the SAME string the live stream carried.
+        _carried = ""
         while True:
             _autoanswer_pending = False
             _autonomous_giveup = False
@@ -886,20 +893,24 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
             # this one is closed early — its cleanup would run at GC, not before aclose() returns.
             async with contextlib.aclosing(
                 _turn_stream._run_turn_stream(
-                    message,
+                    pass_message,
                     session_id,
-                    config,
-                    resume_value=_resume_value,
-                    images=images,
+                    pass_config,
+                    resume_value=resume_value,
+                    images=pass_images,
                     model=_model,
                     reasoning_effort=_effort,
                     incognito=_incognito,
+                    # Every pass of a fenced turn is fenced — a continuation too. A
+                    # fresh-context goal runs on a new thread with no checkpointed state to
+                    # inherit, so the fence is stamped on every pass explicitly, as the
+                    # non-streaming driver stamps ``_state_extra`` on its own.
                     subagent_fence=_fence,
                 )
             ) as _turn_frames:
                 async for kind, payload in _turn_frames:
                     if kind == "__raw__":
-                        accumulated_raw = (_carried + _pass_text) if _carried else payload
+                        out["raw"] = (_carried + _pass_text) if _carried else payload
                     elif kind == "text" and _carried:
                         # A resumed pass's text opens a new paragraph after the carried text,
                         # as a new model call's text does within one pass (turn_stream) — on
@@ -915,7 +926,7 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                             # the task input-required and the caller resumes via message/send on the
                             # same taskId. (A human — local or at the remote a2a caller — can answer.)
                             yield (kind, payload)
-                            paused = True
+                            out["paused"] = True
                         elif _verdict == _goal_loop.ANSWER:
                             # No human can answer — auto-answer this interrupt and re-run the turn so
                             # it completes, rather than parking an (un-sweepable) input-required task.
@@ -931,32 +942,54 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
                         if kind == "text":
                             _pass_text += payload
                         if kind == "tool_end" and isinstance(payload, dict) and payload.get("output"):
-                            last_tool_out = str(payload["output"])
+                            out["last_tool_out"] = str(payload["output"])
                         yield (kind, payload)
             if _autoanswer_pending or _autonomous_giveup:
                 # This pass ended at an interrupt, not `__raw__`: keep its text for `done`.
                 _carried += _pass_text
             if _autonomous_giveup and _carried:
-                accumulated_raw = _carried
+                out["raw"] = _carried
             if _autoanswer_pending:
                 # Resume past the interrupt with the no-operator sentinel and run another pass;
                 # images belong only to the first (fresh) pass, so drop them on resume. The
                 # turn stream keys the resume by interrupt id (_resume_payload).
-                _resume_value = _auto.answer()
-                images = None
+                resume_value = _auto.answer()
+                pass_images = None
                 continue
             if _autonomous_giveup:
                 # Discard the un-answered interrupt so the checkpoint isn't left dangling, then
-                # fall through to the normal completion path below (extract_output → done).
-                await _auto.give_up(config)
+                # fall through to the normal completion path (extract_output → done).
+                await _auto.give_up(pass_config)
             break
+
+    # One graph turn (model tokens accumulated silently; A2A consumers get progress from
+    # tool_start/tool_end). Final text is extracted once via extract_output().
+    turn: dict = {"raw": "", "paused": False, "last_tool_out": ""}
+    with goal_turn(goal_active):
+        async with contextlib.aclosing(
+            _drive_passes(
+                message, config, resume_value=(message if resume else None), pass_images=images, out=turn
+            )
+        ) as _frames:
+            async for frame in _frames:
+                yield frame
 
     # A paused turn produced no final answer — don't run the dropped-scratch kicker or
     # goal verification; the task is parked.
-    if paused:
+    if turn["paused"]:
         return
 
-    final_text = extract_output(accumulated_raw)
+    final_text = extract_output(turn["raw"])
+
+    # Never end the stream on a silent empty answer (a native-reasoning model that emitted
+    # only reasoning, or an otherwise empty turn): surface the last tool result or a
+    # placeholder, matching the non-streaming path's _last_tool_text-or-placeholder. Applied
+    # BEFORE the goal drive, as the non-streaming driver does (#3891 F5): the verifier
+    # judges the answer the caller gets — it used to see "" here — and the terminal goal
+    # note is appended after evaluation, so an empty turn under a goal no longer ends as a
+    # bare note with the fallback skipped (the note made the text non-empty).
+    if not final_text:
+        final_text = turn["last_tool_out"] or "_(The agent ended the turn without a textual reply.)_"
 
     # Goal mode (shared drive, server/goal_loop.py): verify the outcome after the agent
     # stops; while not met, run the continuation it asks for. The 🎯 status frames are this
@@ -968,36 +1001,20 @@ async def _run_native_turn(message, session_id, config, *, request_metadata=None
             if isinstance(step, _goal_loop.GoalNote):
                 yield ("tool_start", f"🎯 {step.note}")
                 continue
-            cont_raw = ""
+            cont: dict = {"raw": "", "paused": False, "last_tool_out": ""}
             with goal_turn():
                 async with contextlib.aclosing(
-                    _turn_stream._run_turn_stream(
-                        step.message,
-                        session_id,
-                        step.config,
-                        model=_model,
-                        reasoning_effort=_effort,
-                        incognito=_incognito,
-                        # Every pass of a fenced turn is fenced — a continuation too. A
-                        # fresh-context goal runs on a new thread with no checkpointed
-                        # state to inherit, so the fence is stamped here explicitly, as
-                        # the non-streaming driver stamps ``_state_extra`` on its own.
-                        subagent_fence=_fence,
-                    )
+                    _drive_passes(step.message, step.config, resume_value=None, pass_images=None, out=cont)
                 ) as _cont_frames:
-                    async for kind, payload in _cont_frames:
-                        if kind == "__raw__":
-                            cont_raw = payload
-                        else:
-                            yield (kind, payload)
-            step.text = extract_output(cont_raw)
+                    async for frame in _cont_frames:
+                        yield frame
+            if cont["paused"]:
+                # An attended turn's continuation asked the operator (#3891 F4): the drive
+                # stops here and the turn parks on that ask — no further verify/continue,
+                # no `done` — exactly as an ask in the initial turn parks it.
+                return
+            step.text = extract_output(cont["raw"])
     final_text = drive.text
-
-    # Never end the stream on a silent empty answer (a native-reasoning model that emitted
-    # only reasoning, or an otherwise empty turn): surface the last tool result or a
-    # placeholder, matching the non-streaming path's _last_tool_text-or-placeholder.
-    if not final_text:
-        final_text = last_tool_out or "_(The agent ended the turn without a textual reply.)_"
 
     yield ("done", final_text)
 
@@ -1435,6 +1452,7 @@ async def _chat_langgraph_stream_impl(
                                     request_metadata=request_metadata,
                                     resume=False,
                                     images=None,
+                                    overflow_retry=True,
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:
@@ -1580,6 +1598,7 @@ async def _chat_langgraph(
                 hitl_resume=hitl_resume,
                 images=images,
                 tool_fence=tool_fence,
+                origin=origin,
                 _telemetry_sink=sink,
             )
         # The impl catches its own exceptions and reports them as an assistant

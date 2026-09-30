@@ -800,6 +800,103 @@ async def test_goal_turn_is_autonomous_and_never_parks(env, monkeypatch):
     assert frames[-1] == ("done", "on it\n\n---\nmet")
 
 
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_turn(env, monkeypatch):
+    """#3891 F4: an interrupt raised INSIDE a goal continuation gets the initial turn's
+    handling — auto-answered with the sentinel (keyed by id) on an autonomous (goal-driven)
+    turn, its text carried into the answer the verifier sees. It used to leak a stray
+    `input_required` frame mid-drive and verify an empty continuation."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        streams=[
+            [text("r1", "draft")],
+            [text("r2", "Checking."), set_interrupt({"question": "Which env?"})],
+            [text("r3", "Deployed.")],
+        ]
+    )
+
+    frames = await _run("ship it")
+
+    assert frames == [
+        ("text", "draft"),
+        ("tool_start", "🎯 not yet"),
+        ("text", "Checking."),
+        ("text", "\n\nDeployed."),
+        ("tool_start", "🎯 met"),
+        ("done", "Checking.\n\nDeployed.\n\n---\nmet"),
+    ]
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
+    assert isinstance(g.stream_calls[2][0], Command) and g.stream_calls[2][1] is g.stream_calls[1][1]
+    assert goals.evals == ["draft", "Checking.\n\nDeployed."]
+
+
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupts_share_the_turns_auto_answer_budget(env, monkeypatch):
+    """#3891 F4: ONE budget per turn — answers spent in the initial pass count against a
+    continuation's, and once it is spent the continuation's ask is cleared, never parked."""
+    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        streams=[[set_interrupt("q0")], [text("r1", "draft")], [text("r2", "asking"), set_interrupt("q1")]]
+        + [[set_interrupt(f"q{i}")] for i in range(2, cap + 1)]
+    )
+
+    frames = await _run("ship it")
+
+    assert not any(k == "input_required" for k, _ in frames)
+    assert len(g.resumes) == cap  # 1 in the initial pass + (cap - 1) in the continuation
+    assert len(g.updates) == 1 and g.updates[0][1] is None  # the continuation's ask, cleared
+    assert frames[-1] == ("done", "asking\n\n---\nmet")
+
+
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupt_parks_an_attended_turn_and_stops_the_drive(env, monkeypatch):
+    """#3891 F4: on an attended turn (no autonomous origin; the goal became active during
+    the turn, so the turn didn't start goal-driven) a continuation's ask PARKS the turn:
+    `input_required` is the last frame — no further verify/continue and no `done`."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    goals.active = False
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(streams=[[text("r1", "draft")], [text("r2", "One thing:"), set_interrupt({"question": "Which env?"})]])
+    g.on_call = lambda graph, config: setattr(goals, "active", True)
+
+    frames = await _run("ship it")
+
+    assert frames == [
+        ("text", "draft"),
+        ("tool_start", "🎯 not yet"),
+        ("text", "One thing:"),
+        ("input_required", {"question": "Which env?"}),
+    ]
+    assert goals.kickoffs == [] and goals.evals == ["draft"]
+    assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("script", "answer"),
+    [
+        ([tool_start("t1", "wait"), tool_end("t1", "wait", tool_msg("Wait scheduled for 5m.", "tc1"))], "Wait scheduled for 5m."),
+        ([reasoning("r1", "hmm")], _EMPTY),
+    ],
+)
+async def test_goal_verifier_sees_the_answer_after_the_empty_reply_fallback(env, monkeypatch, script, answer):
+    """#3891 F5: the verifier judges the text the caller gets — the empty-reply fallback
+    (last tool output, else the placeholder) is applied BEFORE evaluation, and the goal
+    note after it, the non-streaming driver's order. It used to verify "" and end the turn
+    on a bare note (the note made the text non-empty, so the fallback never ran)."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    env.install(streams=[script])
+
+    frames = await _run()
+
+    assert goals.evals == [answer]
+    assert frames[-1] == ("done", f"{answer}\n\n---\nmet")
+
+
 # ── _chat_langgraph_stream_impl: setup, tracing, errors, overflow, cancel ─────
 
 
@@ -932,6 +1029,22 @@ async def test_overflow_compacts_then_retries_once_with_the_recovery_prompt(env,
     assert retry_input["messages"][-1].content == chat_mod._OVERFLOW_RETRY_PROMPT
     assert retry_input["model"] == "m1"  # the retry keeps the request's metadata
     assert g.updates == []  # a recovered turn is not a failed one
+
+
+@pytest.mark.asyncio
+async def test_goal_overflow_retry_runs_the_bare_recovery_prompt_not_a_second_kickoff(env, compaction, monkeypatch):
+    """#3891 F1: on the first goal turn the kickoff wraps the OPERATOR's message; the
+    overflow retry re-runs that same turn with the recovery prompt, unwrapped."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(streams=[[Raise(ValueError(_OVERFLOW))], [text("r1", "recovered")]])
+
+    frames = await _run("big ask", "s-ovf")
+
+    assert g.stream_calls[0][0]["messages"][-1].content == "KICKOFF<big ask>"
+    assert g.stream_calls[1][0]["messages"][-1].content == chat_mod._OVERFLOW_RETRY_PROMPT
+    assert goals.kickoffs == ["big ask"]
+    assert frames[-1] == ("done", "recovered\n\n---\nmet")
 
 
 @pytest.mark.asyncio

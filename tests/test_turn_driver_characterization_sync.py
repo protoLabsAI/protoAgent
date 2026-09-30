@@ -218,6 +218,58 @@ async def test_a_turn_parked_on_hitl_echoes_the_question(env, value, expected):
     assert out == [{"role": "assistant", "content": f"🙋 **Input needed:** {expected}", "usage": _usage(5, 1)}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["scheduler", "watch", "webhook", "background"])
+async def test_an_autonomous_origin_auto_answers_a_hitl_park_like_streaming(env, origin):
+    """#3891 F2: ``chat()`` threads its ``origin`` to the driver, so a turn from an
+    autonomous (server-fired) origin never parks on a HITL pause — it resumes with the
+    no-operator sentinel, keyed by interrupt id, as a streaming turn from that origin does."""
+    g = env.install(
+        [Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})]), turn_result(AIMessage(content="done"))]
+    )
+
+    out = await chat_mod.chat("deploy", "s1", origin=origin)
+
+    assert out[0]["content"] == "done"
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
+    assert env.rows[0]["origin"] == origin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["local", "api-chat", "v1", "plugin", "console"])
+async def test_an_operator_origin_still_parks_and_echoes_the_question(env, origin):
+    """#3891 F2, the other side: the operator surfaces (the console's /api/chat, an
+    OpenAI-compat /v1 caller, a plugin relay) stay attended — the ask is echoed, never
+    auto-answered."""
+    g = env.install([Invoke(turn_result(), steps=[set_interrupt({"question": "Which env?"})])])
+
+    out = await chat_mod.chat("deploy", "s1", origin=origin)
+
+    assert out[0]["content"] == "🙋 **Input needed:** Which env?"
+    assert g.resumes == [] and g.updates == []
+
+
+@pytest.mark.asyncio
+async def test_an_autonomous_origin_is_exempt_from_the_hitl_hold(env):
+    """#3891 F2: the hold is an operator affordance; an autonomous-origin turn skips it
+    (the streaming driver's exemption), so it runs rather than queueing behind the ask."""
+    from graph import steering
+
+    def _answered(graph):
+        graph.pending.clear()
+
+    g = env.install([Invoke(turn_result(AIMessage(content="ran")), steps=[_answered])])
+    g.pending.append({"question": "Which env?"})
+    try:
+        out = await chat_mod.chat("nightly run", "s1", origin="scheduler")
+
+        assert out[0]["content"] == "ran"
+        assert g.invoke_calls[0][0]["messages"][0].content == "nightly run"
+        assert steering.pending("s1") == 0
+    finally:
+        steering.forget("s1")
+
+
 # ── HITL hold / resume ────────────────────────────────────────────────────────
 
 
@@ -472,6 +524,112 @@ async def test_goal_turn_gives_up_and_clears_after_the_auto_answer_budget(env, m
 
 
 @pytest.mark.asyncio
+async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_turn(env, monkeypatch):
+    """#3891 F4: an interrupt raised INSIDE a goal continuation gets the initial turn's
+    handling — auto-answered with the sentinel (keyed by id, on the continuation's config)
+    on an autonomous (goal-driven) turn. It used to be dropped: the continuation's
+    pre-interrupt text was verified and the ask left pending on the thread."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [
+            turn_result(AIMessage(content="draft")),
+            Invoke(turn_result(AIMessage(content="Checking.")), steps=[set_interrupt({"question": "Which env?"})]),
+            turn_result(AIMessage(content="Checking."), AIMessage(content="Deployed.")),
+        ]
+    )
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert out[0]["content"] == "Deployed.\n\n---\nmet"
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
+    assert isinstance(g.invoke_calls[2][0], Command) and g.invoke_calls[2][1] is g.invoke_calls[1][1]
+    assert goals.evals == ["draft", "Deployed."]
+    assert g.pending == []
+
+
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupts_share_the_turns_auto_answer_budget(env, monkeypatch):
+    """#3891 F4: ONE budget per turn — answers spent in the initial pass count against a
+    continuation's, and once it is spent the continuation's ask is cleared, never parked."""
+    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [Invoke(turn_result(), steps=[set_interrupt("q0")]), turn_result(AIMessage(content="draft"))]
+        + [Invoke(turn_result(AIMessage(content="asking")), steps=[set_interrupt("q1")])]
+        + [Invoke(turn_result(AIMessage(content="asking")), steps=[set_interrupt(f"q{i}")]) for i in range(2, cap + 1)]
+    )
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert len(g.resumes) == cap  # 1 in the initial pass + (cap - 1) in the continuation
+    assert len(g.updates) == 1 and g.updates[0][1] is None  # the continuation's ask, cleared
+    assert out[0]["content"] == "asking\n\n---\nmet"
+
+
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupt_surfaces_the_ask_on_an_attended_turn(env, monkeypatch):
+    """#3891 F4: on an attended turn (no autonomous origin; the goal became active during
+    the turn) a continuation's ask stops the drive and is surfaced — the continuation's
+    text, then the echoed ask — instead of being silently dropped."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    goals.active = False
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [
+            Invoke(turn_result(AIMessage(content="draft")), usage=[("m1", 10, 1)]),
+            Invoke(
+                turn_result(AIMessage(content="One thing:")),
+                steps=[set_interrupt({"question": "Which env?"})],
+                usage=[("m1", 5, 1)],
+            ),
+        ]
+    )
+    g.on_call = lambda graph, config: setattr(goals, "active", True)
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert out == [
+        {
+            "role": "assistant",
+            "content": "One thing:\n\n🙋 **Input needed:** Which env?",
+            "usage": _usage(15, 2),
+        }
+    ]
+    assert goals.kickoffs == [] and goals.evals == ["draft"]
+    assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("msgs", "answer"),
+    [
+        (
+            (
+                AIMessage(content="", tool_calls=[{"id": "t", "name": "wait", "args": {}}]),
+                ToolMessage(content="Wait scheduled.", tool_call_id="t"),
+            ),
+            "Wait scheduled.",
+        ),
+        ((), _NO_REPLY),
+    ],
+)
+async def test_goal_verifier_sees_the_answer_after_the_empty_reply_fallback(env, monkeypatch, msgs, answer):
+    """#3891 F5 (pinned; this driver already had it): the verifier judges the text the
+    caller gets — the empty-reply fallback is applied BEFORE evaluation, the goal note
+    after it. The streaming driver now does the same."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    env.install([turn_result(*msgs)])
+
+    out = await chat_mod.chat("go", "s1")
+
+    assert goals.evals == [answer]
+    assert out[0]["content"] == f"{answer}\n\n---\nmet"
+
+
+@pytest.mark.asyncio
 async def test_goal_continuations_hold_the_base_thread_lock(env, monkeypatch):
     goals = FakeGoals([("continue", "n", "more"), ("done", "d")], fresh=True, iteration=1)
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
@@ -556,6 +714,22 @@ async def test_overflow_retry_skips_the_hold_and_keeps_the_turn_overrides(env, c
     assert env.overflow_recoveries == [1]
     retry = g.invoke_calls[1][0]
     assert retry["messages"][0].content == chat_mod._OVERFLOW_RETRY_PROMPT and retry["model"] == "m-x"
+
+
+@pytest.mark.asyncio
+async def test_goal_overflow_retry_runs_the_bare_recovery_prompt_not_a_second_kickoff(env, compaction, monkeypatch):
+    """#3891 F1: on the first goal turn the kickoff wraps the OPERATOR's message; the
+    overflow retry re-runs that same turn with the recovery prompt, unwrapped."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install([Raise(ValueError(_OVERFLOW)), turn_result(AIMessage(content="recovered"))])
+
+    out = await chat_mod.chat("big", "s1")
+
+    assert g.invoke_calls[0][0]["messages"][0].content == "KICKOFF<big>"
+    assert g.invoke_calls[1][0]["messages"][0].content == chat_mod._OVERFLOW_RETRY_PROMPT
+    assert goals.kickoffs == ["big"]
+    assert out[0]["content"] == "recovered\n\n---\nmet"
 
 
 @pytest.mark.asyncio

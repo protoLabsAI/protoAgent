@@ -86,6 +86,14 @@ def _last_ai(result) -> str:
     return ""
 
 
+def _input_needed(interrupt_val) -> str:
+    """The reply line for a turn parked at a HITL interrupt: this surface has no task to
+    park on, so it echoes the ask; the caller answers with a follow-up message."""
+    payload = _chat()._interrupt_payload(interrupt_val)
+    question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
+    return f"🙋 **Input needed:** {question}"
+
+
 async def _native_turn(
     turn_message: str,
     turn_images: list[tuple[str, str]] | None,
@@ -98,6 +106,7 @@ async def _native_turn(
     hitl_resume: bool,
     incognito: bool,
     overflow_retry: bool = False,
+    origin: str = "local",
 ) -> list[dict[str, Any]]:
     """One native turn on this session's thread, as the reply list. Run once
     for the operator's message and, after a context-overflow compaction, once
@@ -108,6 +117,12 @@ async def _native_turn(
     ``state_extra`` (the impl's ``_state_extra``) / ``tool_fence`` / ``hitl_resume`` /
     ``incognito``. ``_last_ai`` is module-level; ``goal_turn`` and ``HumanMessage`` are
     imported here (the impl imported them at its top).
+
+    ``origin`` is the surface ``chat()`` was called from (#3891 F2). It is this driver's
+    request metadata for the two decisions the streaming driver makes from its own: an
+    autonomous origin (``server.turn_control._is_autonomous``) auto-answers a HITL pause
+    and is exempt from the hold, exactly as a streaming turn from that origin is; the
+    operator surfaces (``local`` / ``api-chat`` / ``v1`` / ``plugin``) stay attended.
     """
     from langchain_core.messages import HumanMessage
 
@@ -117,11 +132,17 @@ async def _native_turn(
     # suppress cross-session prior_sessions on the initial turn too.
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
+    # The streaming driver's request metadata, as far as this surface has it (#3891 F2):
+    # the origin (autonomy) and the operator's HITL-answer marker.
+    turn_metadata: dict[str, Any] = {"origin": origin}
+    if hitl_resume:
+        turn_metadata["hitl_resume"] = True
     # Sharing the streaming thread means sharing its serialization contract:
     # every other writer to `a2a:{sid}` (the streaming turn driver,
     # compact_session, rewind_session) holds the per-thread lock — an
     # unlocked graph turn here could lost-update a concurrent one (e.g. the
     # desktop /api/chat fallback racing a console /compact on the same tab).
+    auto = _goal_loop.HitlAutoAnswer(_goal_loop.is_autonomous_turn(turn_metadata, goal_active=goal_active))
     async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
         # HITL hold (#1560) — same contract as the streaming path: while the
         # thread is parked at a form/question/approval interrupt, hold a fresh
@@ -136,7 +157,7 @@ async def _native_turn(
                 turn_message,
                 session_id,
                 config,
-                request_metadata=({"hitl_resume": True} if hitl_resume else None),
+                request_metadata=turn_metadata,
             )
         )
         if hold is not None and hold is not _turn_control._HITL_RESUME:
@@ -166,8 +187,9 @@ async def _native_turn(
             )
         else:
             # Kickoff injection (#1910) — shared with the streaming driver
-            # (server/goal_loop.py); this branch is never a HITL resume.
-            _msg = _goal_loop.kickoff_message(_goal_state, turn_message, resume=False)
+            # (server/goal_loop.py); this branch is never a HITL resume, and the
+            # overflow retry's recovery prompt is never wrapped (#3891 F1).
+            _msg = _goal_loop.kickoff_message(_goal_state, turn_message, resume=False, overflow_retry=overflow_retry)
             graph_input = {
                 # Vision parts ride the user message when the model supports
                 # them (#1943) — same gating as the streaming path.
@@ -180,12 +202,11 @@ async def _native_turn(
         with goal_turn(goal_active):
             result = await STATE.graph.ainvoke(graph_input, config=config)
             # Headless-first parity (#1911), the shared policy (server/goal_loop.py): a
-            # goal-driven turn is autonomous, so if it parks on a HITL interrupt there's
-            # no operator here to answer — resume (keyed by interrupt id, #3872) with the
-            # no-operator sentinel and re-run, bounded, then clear. This surface carries
-            # no request metadata, so only a goal makes it autonomous; non-goal turns
-            # are untouched (they still echo the ask below).
-            result = await _goal_loop.HitlAutoAnswer(goal_active).settle(
+            # goal-driven turn, or one from an autonomous origin (#3891 F2), has no
+            # operator here to answer a HITL park — resume (keyed by interrupt id, #3872)
+            # with the no-operator sentinel and re-run, bounded, then clear. Attended
+            # turns are untouched (they still echo the ask below).
+            result = await auto.settle(
                 config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=config)
             )
     raw = _last_ai(result)
@@ -202,14 +223,10 @@ async def _native_turn(
             # task to park on this non-streaming surface, so echo the
             # prompt; the caller answers with a follow-up message, which
             # continues the thread (the checkpointer kept the history).
-            payload = _chat()._interrupt_payload(interrupt_val)
-            question = (
-                payload.get("question") or payload.get("title") or "The agent needs input to continue."
-            )
             return [
                 {
                     "role": "assistant",
-                    "content": f"🙋 **Input needed:** {question}",
+                    "content": _input_needed(interrupt_val),
                     "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
                 }
             ]
@@ -239,6 +256,9 @@ async def _native_turn(
         async for step in _goal_steps:
             if isinstance(step, _goal_loop.GoalNote):
                 continue
+            # Fresh-context iterations get a scoped config without the turn's
+            # callbacks — re-attach usage_cb so their tokens count.
+            cont_config = {**step.config, "callbacks": [usage_cb]}
             # Lock the BASE thread (mirrors the streaming driver, which holds it
             # across the whole goal loop): same-session iterations write `config`'s
             # thread directly; fresh-context ones still exclude compact/rewind/
@@ -251,11 +271,26 @@ async def _native_turn(
                             "session_id": session_id,
                             **state_extra,
                         },
-                        # Fresh-context iterations get a scoped config without the
-                        # turn's callbacks — re-attach usage_cb so their tokens count.
-                        config={**step.config, "callbacks": [usage_cb]},
+                        config=cont_config,
                     )
+                    # An interrupt INSIDE a continuation gets the initial turn's handling
+                    # (#3891 F4) — it used to be dropped: the same policy and budget
+                    # auto-answer it when the turn is autonomous...
+                    result = await auto.settle(
+                        cont_config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=cont_config)
+                    )
+                    # ...and an attended turn stops the drive and surfaces the ask, as the
+                    # streaming driver parks on it.
+                    interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(cont_config)
             step.text = extract_output(_last_ai(result))
+            if interrupt_val is not None:
+                return [
+                    {
+                        "role": "assistant",
+                        "content": (f"{step.text}\n\n" if step.text else "") + _input_needed(interrupt_val),
+                        "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
+                    }
+                ]
     response = drive.text
 
     reply = {"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}
@@ -277,6 +312,7 @@ async def _chat_langgraph_impl(
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
     tool_fence: list[str] | None = None,
+    origin: str = "local",
     _telemetry_sink: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat.
@@ -284,6 +320,7 @@ async def _chat_langgraph_impl(
     ``_telemetry_sink`` (private, set by the ``_chat_langgraph`` wrapper) receives
     this turn's usage callback so the wrapper can write the telemetry row from its
     single exit point rather than at each of this function's many returns (#3000).
+    ``origin`` (the ``chat()`` surface) decides whether the turn is autonomous (#3891 F2).
     """
     from observability import tracing
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
@@ -374,6 +411,7 @@ async def _chat_langgraph_impl(
                     tool_fence=tool_fence,
                     hitl_resume=hitl_resume,
                     incognito=incognito,
+                    origin=origin,
                 )
             )
         except Exception as e:
@@ -394,6 +432,7 @@ async def _chat_langgraph_impl(
                             hitl_resume=hitl_resume,
                             incognito=incognito,
                             overflow_retry=True,
+                            origin=origin,
                         )
                     )
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly

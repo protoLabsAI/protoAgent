@@ -178,8 +178,8 @@ async def test_both_drivers_run_the_shared_goal_drive(state, monkeypatch, surfac
 async def test_both_drivers_run_the_shared_kickoff(state, monkeypatch, surface):
     seen: list = []
 
-    def _kickoff(goal_state, message, *, resume):
-        seen.append((message, resume))
+    def _kickoff(goal_state, message, *, resume, overflow_retry=False):
+        seen.append((message, resume, overflow_retry))
         return f"KICK[{message}]"
 
     monkeypatch.setattr(goal_loop, "kickoff_message", _kickoff)
@@ -194,7 +194,7 @@ async def test_both_drivers_run_the_shared_kickoff(state, monkeypatch, surface):
         monkeypatch.setattr(state, "graph", g, raising=False)
         await _chat().chat("go", "s1")
         assert g.invoke_calls[0][0]["messages"][-1].content == "KICK[go]"
-    assert seen == [("go", False)]
+    assert seen == [("go", False, False)]
 
 
 @pytest.mark.asyncio

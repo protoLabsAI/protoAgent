@@ -69,12 +69,17 @@ def active_goal(session_id: str):
     return ctrl.active_goal(session_id) if ctrl is not None else None
 
 
-def kickoff_message(goal_state, message: str, *, resume: bool) -> str:
+def kickoff_message(goal_state, message: str, *, resume: bool, overflow_retry: bool = False) -> str:
     """Kickoff injection (#1910): the FIRST goal-driven turn (iteration 0, not a HITL
     resume) carries the goal condition — the raw user text folded into the kickoff prompt —
     so the agent begins on the goal instead of asking "what goal?". Later iterations get
-    the goal via the continuation prompt, and a resume's message is an answer, not a turn."""
-    if goal_state is None or resume or goal_state.iteration != 0:
+    the goal via the continuation prompt, and a resume's message is an answer, not a turn.
+
+    The context-overflow retry (``overflow_retry``) is never wrapped either (#3891 F1): the
+    kickoff applies to the OPERATOR's message, and the retry re-runs that same turn with
+    the recovery prompt — folding the recovery prompt in as the "user message" of a second
+    kickoff would hand the agent a goal statement that isn't the operator's."""
+    if goal_state is None or resume or overflow_retry or goal_state.iteration != 0:
         return message
     return STATE.goal_controller.kickoff_prompt(goal_state, user_message=message)
 
