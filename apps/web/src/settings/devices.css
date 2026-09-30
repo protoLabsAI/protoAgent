@@ -5,7 +5,7 @@
 
 .devices-error {
   color: var(--pl-color-fg);
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -15,8 +15,8 @@
   display: flex;
   gap: var(--pl-space-4);
   align-items: center;
-  margin: 10px 0 14px;
-  padding: 14px;
+  margin: var(--pl-space-2_5) 0 var(--pl-space-4);
+  padding: var(--pl-space-4);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised, var(--pl-color-bg));
@@ -30,7 +30,7 @@
   width: 168px;
   height: 168px;
   padding: var(--pl-space-2);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   background: #fff;
 }
 .devices-qr svg {
@@ -58,7 +58,7 @@
 .devices-hosts {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .devices-host {
   padding: var(--pl-space-1) var(--pl-space-2);
@@ -100,8 +100,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--pl-space-2);
-  margin: 10px 0 14px;
-  padding: 14px;
+  margin: var(--pl-space-2_5) 0 var(--pl-space-4);
+  padding: var(--pl-space-4);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised, var(--pl-color-bg));
@@ -113,7 +113,7 @@
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -138,14 +138,14 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .devices-code code {
   font-family: var(--pl-font-mono);
   font-size: 28px;
   font-weight: 600;
   letter-spacing: 0.12em;
-  padding: 6px var(--pl-space-3);
+  padding: var(--pl-space-1_5) var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
@@ -158,7 +158,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .devices-agent-hosts li {
   display: flex;
