@@ -126,6 +126,26 @@ def test_openai_completion_reports_real_usage(monkeypatch):
     assert body["usage"] == {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
 
 
+def test_openai_completion_rejects_malformed_messages_with_an_openai_400(monkeypatch):
+    # #3929: no user message used to come back as a 200 `[{"error": …}, 400]` (a
+    # Flask-style tuple FastAPI serialised as-is); a non-list `messages` raised
+    # AttributeError → plain 500. Both are OpenAI-shaped 400s now, and no turn runs.
+    seen: dict = {}
+    c = _client(monkeypatch, seen=seen)
+    for payload in (
+        {"messages": [{"role": "system", "content": "be terse"}]},  # no user message
+        {"messages": []},
+        {"messages": "hi"},  # not a list
+        {"messages": {"role": "user", "content": "hi"}},
+        {"messages": ["hi"]},  # entries aren't objects
+    ):
+        resp = c.post("/v1/chat/completions", json=payload)
+        assert resp.status_code == 400, payload
+        err = resp.json()["error"]
+        assert err["type"] == "invalid_request_error" and err["param"] == "messages" and err["message"], payload
+    assert "origin" not in seen  # rejected before a turn was started
+
+
 def test_openai_completion_usage_defaults_to_zero(monkeypatch):
     # A short-circuit / older reply carries no usage → zeros, as before (no crash).
     c = _client(monkeypatch)

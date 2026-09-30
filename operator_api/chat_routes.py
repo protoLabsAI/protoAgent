@@ -301,6 +301,17 @@ async def _run_v1_turn(prompt: str, session_id: str, **kw):
     return await asyncio.shield(turn)
 
 
+def _v1_invalid_request(message: str, *, param: str | None = None) -> JSONResponse:
+    """A 400 in OpenAI's error envelope for a request the endpoint can't run (#3929).
+
+    Same ``{"error": {message, type, param, code}}`` shape as :func:`_v1_error_response`,
+    so an OpenAI SDK raises its ``BadRequestError`` instead of reading a 200."""
+    return JSONResponse(
+        {"error": {"message": message, "type": "invalid_request_error", "param": param, "code": None}},
+        status_code=400,
+    )
+
+
 def _v1_error_response(err: dict) -> JSONResponse:
     """Map a failed turn to an OpenAI-shaped HTTP error instead of a 200 (#2578).
 
@@ -1015,10 +1026,15 @@ def register_chat_routes(app, ui: str) -> None:
         ``_v1_error_response``). It used to answer 200 with the exception text as the
         assistant's content and ``finish_reason: "stop"``, so an SDK client counted a
         hard auth failure as a successful completion."""
+        # Malformed input is an OpenAI-shaped 400 (#3929). It used to return a Flask-style
+        # `(body, 400)` tuple, which FastAPI serialised as a 200 `[{…}, 400]`, and a
+        # non-list `messages` raised AttributeError → plain-text 500.
         messages = req.get("messages", [])
+        if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+            return _v1_invalid_request("'messages' must be an array of message objects", param="messages")
         user_msgs = [m for m in messages if m.get("role") == "user"]
         if not user_msgs:
-            return {"error": "No user message provided"}, 400
+            return _v1_invalid_request("No user message provided", param="messages")
         prompt, images = _split_openai_content(user_msgs[-1].get("content", ""))
         session_id = _v1_session_id(req, request)
         stream = req.get("stream", False)
