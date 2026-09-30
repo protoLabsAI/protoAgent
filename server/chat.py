@@ -1011,7 +1011,7 @@ async def _run_native_turn(
     # One graph turn (model tokens accumulated silently; A2A consumers get progress from
     # tool_start/tool_end). Final text is extracted once via extract_output().
     turn: dict = {"raw": "", "paused": False, "last_tool_out": ""}
-    with goal_turn(goal_active):
+    with goal_turn(goal_active) as _goal_pass:
         async with contextlib.aclosing(
             _drive_passes(
                 message, config, resume_value=(message if resume else None), pass_images=images, out=turn
@@ -1042,6 +1042,7 @@ async def _run_native_turn(
     # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
     # it (the status frames are transient and can coalesce).
     drive = _goal_loop.GoalDrive(session_id, config, final_text)
+    drive.last_pass = _goal_pass  # a round-capped pass pauses the drive (#3957)
     _last_config = config
     async with contextlib.aclosing(drive.steps()) as _goal_steps:
         async for step in _goal_steps:
@@ -1056,7 +1057,7 @@ async def _run_native_turn(
             )
             _last_config = step.config
             cont: dict = {"raw": "", "paused": False, "last_tool_out": ""}
-            with goal_turn():
+            with goal_turn() as step.goal_pass:
                 async with contextlib.aclosing(
                     _drive_passes(step.message, step.config, resume_value=None, pass_images=None, out=cont)
                 ) as _cont_frames:

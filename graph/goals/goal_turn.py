@@ -14,22 +14,55 @@ memory-injecting middleware checks ``in_goal_turn()`` to suppress
 contextvar set in the invoking coroutine reaches the synchronous middleware
 hooks running inside the same context — the same mechanism ``trace_session``
 uses for ``session_id``.
+
+The marker is also how a goal-driven pass reports back that the round governor
+ended it at the per-turn round cap (#3957): the contextvar holds a mutable
+:class:`GoalTurn`, the middleware calls :func:`record_round_cap` (LangGraph runs
+nodes in a COPY of the invoking context — the copy holds the same object, so the
+mutation is visible to the driver), and the driver hands the marker to
+``server.goal_loop.GoalDrive``, which pauses the drive instead of re-driving a
+turn that just ran away.
 """
 
 from __future__ import annotations
 
 import contextlib
 import contextvars
+from dataclasses import dataclass
 
-_goal_turn_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar(
+
+@dataclass
+class GoalTurn:
+    """One goal-driven pass (or group of passes). ``round_cap`` is non-zero once the
+    round governor ended the turn at a cap: the cap value, the ``rounds`` run, and the
+    config key that set it (``goal.max_rounds_per_turn`` or ``model.round_hard_cap``)."""
+
+    round_cap: int = 0
+    rounds: int = 0
+    cap_key: str = ""
+
+    @property
+    def capped(self) -> bool:
+        return self.round_cap > 0
+
+
+_goal_turn_ctx: contextvars.ContextVar[GoalTurn | None] = contextvars.ContextVar(
     "_protoagent_goal_turn",
-    default=False,
+    default=None,
 )
 
 
 def in_goal_turn() -> bool:
     """True while executing a goal-driven graph turn."""
-    return _goal_turn_ctx.get()
+    return _goal_turn_ctx.get() is not None
+
+
+def record_round_cap(rounds: int, cap: int, cap_key: str) -> None:
+    """Mark the current goal-driven pass as ended by the round governor at ``cap``.
+    A no-op outside a goal turn."""
+    marker = _goal_turn_ctx.get()
+    if marker is not None:
+        marker.round_cap, marker.rounds, marker.cap_key = int(cap), int(rounds), cap_key
 
 
 @contextlib.contextmanager
@@ -38,13 +71,16 @@ def goal_turn(active: bool = True):
 
     ``active=False`` makes it a no-op so callers can gate inline (e.g. the
     initial turn only suppresses when a goal is already active for the session).
+    Yields the pass's :class:`GoalTurn` marker (a fresh, never-installed one when
+    inactive, so a caller can read ``.capped`` either way).
     """
+    marker = GoalTurn()
     if not active:
-        yield
+        yield marker
         return
-    token = _goal_turn_ctx.set(True)
+    token = _goal_turn_ctx.set(marker)
     try:
-        yield
+        yield marker
     finally:
         # reset can raise if the generator is torn down in a different context
         # (mirrors the trace_session guard); the contextvar resets on context

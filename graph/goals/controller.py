@@ -512,6 +512,16 @@ class GoalController:
         }
         state.history = (list(state.history) + [event])[-_HISTORY_CAP:]
 
+    def note_round_cap(self, session_id: str, reason: str) -> None:
+        """Record on the goal's timeline that the drive paused because a goal-driven turn hit
+        its per-turn round cap (#3957). The goal stays ACTIVE (a pause, like the ADR 0079
+        handoff) — the next operator message or trigger drives it again."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return
+        self._record_history(state, "round_cap", reason, "")
+        self._store.set(state)
+
     def rearm(self, session_id: str, *, add_iterations: int = 0) -> tuple[bool, str, bool, GoalState | None]:
         """Re-arm a goal so its drive loop can (re)start. On an ACTIVE goal this only raises
         the iteration budget (``add_iterations``) — the running loop picks up the higher cap.

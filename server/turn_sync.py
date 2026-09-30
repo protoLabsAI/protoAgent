@@ -217,7 +217,7 @@ async def _native_turn(
                 "session_id": session_id,
                 **state_extra,
             }
-        with goal_turn(goal_active):
+        with goal_turn(goal_active) as goal_pass:
             result = await STATE.graph.ainvoke(graph_input, config=config)
             # Headless-first parity (#1911), the shared policy (server/goal_loop.py): a
             # goal-driven turn, or one from an autonomous origin (#3891 F2), has no
@@ -275,6 +275,7 @@ async def _native_turn(
     # stops; run each continuation it asks for. No status surface here — the
     # verifier notes are skipped and only the terminal note reaches the reply.
     drive = _goal_loop.GoalDrive(session_id, config, response)
+    drive.last_pass = goal_pass  # a round-capped pass pauses the drive (#3957)
     # The fence each continuation runs under: the turn's own, narrowed by any fenced
     # message an earlier pass folded in (steering, #2972) — refreshed from the previous
     # pass's checkpoint, never the turn's original (wider) one. Same as the streaming driver.
@@ -297,7 +298,7 @@ async def _native_turn(
             # thread directly; fresh-context ones still exclude compact/rewind/
             # streaming turns keyed on the base id.
             async with _turn_control._thread_lock(config["configurable"]["thread_id"]):
-                with goal_turn():
+                with goal_turn() as step.goal_pass:
                     result = await STATE.graph.ainvoke(
                         {
                             "messages": [HumanMessage(content=step.message)],

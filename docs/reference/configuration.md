@@ -658,6 +658,7 @@ goal:
   no_progress_limit: 3     # identical verifier evidence N times -> unachievable
   eval_model: ""           # blank = main model (llm verifier / fuzzy goals)
   verify_timeout: 120      # seconds for command/test/ci verifiers
+  max_rounds_per_turn: 50  # model rounds per goal-driven turn; 0 = unlimited
 ```
 
 | Key | Default | What |
@@ -667,6 +668,7 @@ goal:
 | `no_progress_limit` | `3` | Same verifier reason+evidence this many times in a row → `unachievable`. |
 | `eval_model` | `""` | Model for the `llm` verifier (blank = main model). |
 | `verify_timeout` | `120` | Wall-clock seconds for `command`/`test`/`ci` verifiers. |
+| `max_rounds_per_turn` | `50` | Model rounds one **goal-driven** turn (the kickoff or any continuation) may run. At the cap the turn ends with a hand-back and the goal drive **pauses**: the goal stays active, the verifier still judges that turn (a met goal finishes), a `round_cap` event lands on the goal's timeline, and the reply ends with `⏸ goal paused — round cap reached …`. The next message (or a watch/schedule fire) drives it again, so each re-drive costs at most one capped turn. `0` = unlimited — no goal-specific cap (`model.round_hard_cap` still applies if set). With both set, a goal turn stops at the **smaller**; non-goal turns see only `model.round_hard_cap`. Hot-applies on save (no restart). |
 
 **Setting a goal** — `/goal <text>` (fuzzy, `llm`-verified) or a JSON spec:
 ```
