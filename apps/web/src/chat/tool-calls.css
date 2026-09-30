@@ -122,7 +122,7 @@
 .work-stats {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .work-stat-label {
   font-weight: 500;
@@ -130,7 +130,7 @@
 .work-stat {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--pl-space-1);
   color: var(--pl-color-fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -142,7 +142,7 @@
 .work-breakdown {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   max-width: 280px;
@@ -194,9 +194,9 @@
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
-  padding: 1px 7px;
+  padding: 1px var(--pl-space-2);
   width: auto;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   font-size: var(--pl-font-size-xs);
   font-weight: 500;
   line-height: 1.6;
@@ -218,9 +218,9 @@
 .tool-manage-btn {
   display: inline-flex;
   align-items: center;
-  padding: 2px;
+  padding: var(--pl-space-0_5);
   width: auto;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   color: var(--pl-color-fg-subtle);
   border: 1px solid transparent;
   opacity: 0.7;
@@ -242,9 +242,9 @@
 .tool-dismiss-btn {
   display: inline-flex;
   align-items: center;
-  padding: 2px;
+  padding: var(--pl-space-0_5);
   width: auto;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   color: var(--pl-color-fg-subtle);
   border: 1px solid transparent;
   opacity: 0.7;
@@ -273,9 +273,9 @@
 /* Generic JSON-blob fallback box, scoped to the DS body slot. */
 .pl-toolcard__body pre {
   margin: 0;
-  padding: 6px var(--pl-space-2);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   background: var(--pl-color-bg);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   line-height: 1.45;
@@ -290,9 +290,9 @@
    The shared surface for a scalar/text value is a padded, monospace-ish box. */
 .pl-toolcard__section .tool-text,
 .tool-fetch-body {
-  padding: 6px var(--pl-space-2);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   background: var(--pl-color-bg);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
   line-height: 1.5;
@@ -314,7 +314,7 @@
 .tool-kv-row {
   display: grid;
   grid-template-columns: minmax(72px, 22%) minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   align-items: baseline;
 }
 .tool-kv-key {
@@ -335,8 +335,8 @@
 }
 .tool-chip {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
@@ -350,7 +350,7 @@
 .tool-link {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--pl-space-1);
   color: var(--pl-color-accent-fg);
   text-decoration: none;
   word-break: break-all;
@@ -367,16 +367,16 @@
   padding-left: 1.1em;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--pl-space-1);
 }
 
 /* Error result — any tool output starting with "Error:". */
 .tool-error {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 6px var(--pl-space-2);
-  border-radius: 6px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
+  border-radius: var(--pl-radius-md);
   background: color-mix(in srgb, var(--pl-color-status-error) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 28%, transparent);
   color: var(--pl-color-status-error);
@@ -402,15 +402,15 @@
 .tool-multimodal {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .tool-multimodal-note {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
   align-self: flex-start;
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
@@ -428,13 +428,13 @@
 .tool-wait {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
 }
 .tool-wait-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   color: var(--pl-color-fg);
 }
 .tool-wait-head svg {
@@ -464,7 +464,7 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   font-size: var(--pl-font-size-sm);
 }
 .tool-calc code {
@@ -483,7 +483,7 @@
 .tool-time {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 .tool-time .tool-mono {
   font-family: var(--pl-font-mono);
@@ -499,12 +499,12 @@
 .tool-fetch {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
 }
 .tool-fetch-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
 }
 /* .tool-badge retired (#832) — the fetch status code is now the DS <Badge
@@ -517,15 +517,15 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: var(--pl-space-2);
 }
 .tool-result {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px var(--pl-space-2);
+  gap: var(--pl-space-0_5);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   background: var(--pl-color-bg);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   border: 1px solid var(--pl-color-border);
 }
 .tool-result-snippet {
@@ -547,12 +547,12 @@
 .tool-fs {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .tool-fs-head {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);

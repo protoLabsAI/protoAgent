@@ -189,10 +189,13 @@ describe("no exact-scale px spacing literal in the mobile-shell/tool-calls/deleg
     // r2 (half-steps unchanged): the first two are mixed-shorthand values where the exact-scale
     // member tokenized and the off-scale member survived — one assertion covers both invariants.
     expect(CSS_SOURCES["../watches/watches.css"]).toContain("padding: 10px 34px 10px var(--pl-space-3)");
-    expect(CSS_SOURCES["../chat/tool-calls.css"]).toContain("padding: 6px var(--pl-space-2)");
+    // tool-calls.css: the sibling radius+spacing-half-step card (protoContent#525/#547 step 3) has
+    // since tokenized these two on the DS half-step scale (6px→space-1_5, 10px→space-2_5), so the
+    // literals this exact-scale card left behind now read tokens — re-pinned to the new strings.
+    expect(CSS_SOURCES["../chat/tool-calls.css"]).toContain("padding: var(--pl-space-1_5) var(--pl-space-2)");
     // Standalone half-steps elsewhere in the owned files are untouched.
     expect(CSS_SOURCES["./mobile-shell.css"]).toContain("gap: 9px");
     expect(CSS_SOURCES["../settings/delegates.css"]).toContain("gap: 6px");
-    expect(CSS_SOURCES["../chat/tool-calls.css"]).toContain("gap: 10px");
+    expect(CSS_SOURCES["../chat/tool-calls.css"]).toContain("gap: var(--pl-space-2_5)");
   });
 });
