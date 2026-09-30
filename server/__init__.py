@@ -1141,7 +1141,6 @@ def _main():
     # (SQLite via a2a_impl.stores), and push callbacks are SSRF-guarded.
     from a2a.server.request_handlers import DefaultRequestHandler
     from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
-    from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 
     from a2a_impl import auth
     from a2a_impl.executor import set_progress_hook, set_terminal_hook
@@ -1151,6 +1150,7 @@ def _main():
         build_push_sender,
         initialize_a2a_stores,
     )
+    from a2a_impl.v03_compat import create_a2a_jsonrpc_routes
 
     STATE.telemetry_store = _build_telemetry_store(STATE.graph_config)
 
@@ -1358,7 +1358,10 @@ def _main():
         # compat adapter every classic client (`message/send` — the fleet's delegate
         # spine, our own docs' curl examples) gets -32601 Method not found (#1854).
         # Both vocabularies serve on the same endpoint until the fleet migrates.
-        jsonrpc_routes=create_jsonrpc_routes(a2a_request_handler, rpc_url="/a2a", enable_v0_3_compat=True),
+        # create_a2a_jsonrpc_routes also fixes the compat adapter's error codes: a2a-sdk
+        # 1.1.0 turns every v0.3 handler error into -32603, so a missing task read as an
+        # internal error instead of -32001 like the v1 path (#3929).
+        jsonrpc_routes=create_a2a_jsonrpc_routes(a2a_request_handler, rpc_url="/a2a"),
     )
     log.info("[a2a] a2a-sdk routes mounted (JSON-RPC at /a2a + v0.3 compat, card at /.well-known/agent-card.json)")
 
