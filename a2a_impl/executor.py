@@ -225,8 +225,9 @@ def _notify_terminal(outcome: TurnOutcome) -> None:
 
 # A progress hook (ADR 0051) the host can register to observe a turn's realtime
 # frames — fired at turn start (``turn_started``, which carries the task_id + a
-# ``resumed`` flag for HITL continuations), on each tool start/end, and on a HITL
-# pause (``input_required``, with the human-readable prompt) with
+# ``resumed`` flag for HITL continuations), on each tool start/end, on a HITL
+# pause (``input_required``, with the human-readable prompt), and once more as the
+# producer exits however it exits (``turn_ended`` — #3933) with
 # ``(context_id, task_id, frame)``. No-op when unset, so live turns (which already
 # stream over their own SSE) pay nothing; the host publisher uses it to surface
 # detached-turn progress and HITL pauses on the event bus.
@@ -1042,11 +1043,18 @@ class ProtoAgentExecutor(AgentExecutor):
             #      for at most this cleanup, never for GC.
             # A no-op when the stream already finished (exhausted, raised, or stalled —
             # the stall guard closes its own stream).
-            if guarded is not None:
-                try:
-                    await guarded.aclose()
-                except Exception:  # noqa: BLE001 — the turn's outcome is already recorded
-                    logger.exception("[a2a] stream cleanup raised for task %s", context.task_id)
+            try:
+                if guarded is not None:
+                    try:
+                        await guarded.aclose()
+                    except Exception:  # noqa: BLE001 — the turn's outcome is already recorded
+                        logger.exception("[a2a] stream cleanup raised for task %s", context.task_id)
+            finally:
+                # The pair of `turn_started` (#3933): fired on EVERY exit, including the
+                # crash paths where a terminal update itself raised before the terminal
+                # hook ran, so a host that registered this turn on `turn_started` always
+                # gets to forget it. Idempotent for the host by contract.
+                _notify_progress(context.context_id, context.task_id, {"phase": "turn_ended", "origin": _origin})
             # Every `_outcome` read happens in the except/return paths above, so
             # disarming here can never lose a turn's samples. Also covers the
             # input_required park — the resumed execute() re-arms fresh.

@@ -156,7 +156,13 @@ class _LiveServerTurn:
     accepted_ids: set[str] = field(default_factory=set)
 
 
+# Deregistered on park / terminal / the executor's guaranteed ``turn_ended`` frame
+# (server/a2a.py). Bounded anyway (#3933), like ``_ATTENDED_SESSIONS``: an entry a crash
+# path still manages to strand can never grow it without limit. At the cap the OLDEST
+# entry is evicted (insertion order) — a stranded registration is by nature an old one,
+# and the turn starting now is the one an operator is about to address.
 _LIVE_SERVER_TURNS: dict[str, _LiveServerTurn] = {}
+_LIVE_SERVER_TURNS_MAX = 1024
 
 
 def _server_turn_key(session_id: str, task_id: str) -> str:
@@ -217,6 +223,16 @@ def register_live_server_turn(
     if payload is None:
         return None
     key = _server_turn_key(payload["session_id"], payload["task_id"])
+    if key not in _LIVE_SERVER_TURNS:
+        while len(_LIVE_SERVER_TURNS) >= _LIVE_SERVER_TURNS_MAX:
+            stale = _LIVE_SERVER_TURNS.pop(next(iter(_LIVE_SERVER_TURNS)))
+            log.warning(
+                "[server-turn] control registry at cap (%d) — evicting the oldest entry "
+                "(session %s, task %s); it never deregistered",
+                _LIVE_SERVER_TURNS_MAX,
+                stale.session_id,
+                stale.task_id,
+            )
     _LIVE_SERVER_TURNS[key] = _LiveServerTurn(
         session_id=payload["session_id"],
         task_id=payload["task_id"],
