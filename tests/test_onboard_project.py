@@ -345,6 +345,22 @@ async def test_already_registered_is_idempotent(tmp_path, mocks):
     assert "already registered" in out
 
 
+async def test_registered_but_missing_checkout_is_recloned_and_says_so(tmp_path, mocks):
+    """#3643: the folder of a registered project was deleted. The tool clones it back —
+    and must not then report "Reused the existing checkout — nothing changed", which hid
+    that the checkout had been missing (the state that unbinds the filesystem tools)."""
+    target = tmp_path / "widget"  # registered, but NOT on disk
+    entry = {"name": "widget", "path": str(target), "write": False, "github": "acme/widget"}
+    tool = _tool(_cfg(tmp_path, projects=[entry]))
+    out = await tool.ainvoke({"github_repo": "acme/widget"})
+
+    assert len(mocks.clone_calls) == 1  # re-cloned
+    assert mocks.apply_calls == []  # registration already covered it
+    assert "Reused" not in out and "nothing changed" not in out
+    assert "checkout was missing" in out and "cloned" in out
+    assert "new chat" in out  # tells the agent how the fs tools come back
+
+
 async def test_already_registered_in_both_registry_and_override_is_idempotent(tmp_path, mocks):
     target = tmp_path / "widget"
     target.mkdir()

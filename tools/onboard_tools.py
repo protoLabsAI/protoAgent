@@ -1002,6 +1002,16 @@ def build_onboard_tools(config) -> list:
             default_branch=default_branch,
         )
         if reg.status == "already":
+            if not reused_checkout:
+                # Registered, but the folder was gone — we just cloned it back (#3643). Saying
+                # "reused … nothing changed" here hid that the checkout had been missing, and a
+                # missing registered root is exactly what unbinds the filesystem tools.
+                return (
+                    f"{project_name} is already registered at {target} ({rw}), but the checkout was "
+                    f"missing — cloned {ref.display_url} back into it (default branch {default_branch}). "
+                    "If read_file / search_files dropped out of this session while the folder was gone, "
+                    "they come back in a new chat; say so rather than reading files another way."
+                )
             return (
                 f"{project_name} is already registered at {target} ({rw}). "
                 f"Reused the existing checkout — nothing changed.{drift}"
