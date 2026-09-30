@@ -369,7 +369,9 @@ async def test_background_batch_nudge_carries_the_members_fence(tmp_path, _http)
     mgr = _manager(tmp_path)
     with fence_scope(_FENCE):
         for i in range(2):
-            await mgr.spawn(origin_session="o1", subagent_type="custom-role", description=f"d{i}", prompt="p", batch_id="b1")
+            await mgr.spawn(
+                origin_session="o1", subagent_type="custom-role", description=f"d{i}", prompt="p", batch_id="b1"
+            )
     await mgr.spawn(origin_session="o2", subagent_type="custom-role", description="x", prompt="p", batch_id="b2")
     await _settle(mgr)
     _http.posts.clear()
@@ -462,7 +464,9 @@ async def test_scheduler_fire_carries_the_creating_turns_fence(tmp_path, monkeyp
             return _R()
 
     monkeypatch.setattr(httpx, "AsyncClient", _C)
-    s = LocalScheduler(agent_name="t", invoke_url="http://127.0.0.1:7870", api_key="k", bearer_token="b", db_dir=tmp_path)
+    s = LocalScheduler(
+        agent_name="t", invoke_url="http://127.0.0.1:7870", api_key="k", bearer_token="b", db_dir=tmp_path
+    )
     with fence_scope(fence):
         job = s.add_job("resume", "2099-01-01T00:00:00+00:00", job_id="wait:o1", context_id="o1")
     assert job.fence == fence
