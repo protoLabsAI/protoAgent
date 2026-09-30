@@ -787,14 +787,16 @@ async def spawn_background(
     description = (label or "").strip() or prompt.strip().splitlines()[0][:80]
     from graph.subagent_model import current_turn_model
 
+    # A plugin tool spawning from inside a turn carries that turn's model override, like
+    # ``task(run_in_background=True)`` does (#3955); the subagent's pin still wins. Only
+    # passed when there is one — outside a turn the spawn call is exactly as before.
+    turn_model = current_turn_model()
     task_id = await mgr.spawn(
         origin_session=origin_session,
         subagent_type=subagent_type,
         description=description,
         prompt=prompt,
-        # A plugin tool spawning from inside a turn carries that turn's model override,
-        # like ``task(run_in_background=True)`` does (#3955); the pin still wins.
-        turn_model=current_turn_model(),
+        **({"turn_model": turn_model} if turn_model else {}),
     )
     return {
         "ok": True,

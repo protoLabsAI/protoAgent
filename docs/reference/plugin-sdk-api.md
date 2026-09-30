@@ -90,7 +90,7 @@ Ids of the configured subagents — for validating/listing recipe steps.
 ### `sdk.run_subagent` {#sdk-run-subagent}
 
 ```python
-await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None) -> str
+await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None) -> str
 ```
 
 Run a subagent to completion and return its text output.
@@ -104,6 +104,13 @@ lead graph and the console fan-out expose) — a subagent whose allowlist names
 a plugin tool (the review-finder's `github_pr_diff`, a finance backtester)
 must see it here too, or every SDK-driven workflow step silently degrades to
 "No tools available". Pass an explicit list (even `[]`) to override.
+
+`turn_model` is the calling turn's model override; `None` (the default) reads it
+from the in-flight turn (`graph.subagent_model.current_turn_model`, bound by the
+chat drivers), so a workflow step follows the model the operator picked for the
+turn — under the one precedence: the subagent's pin > the override >
+`routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
+none and the step resolves pin > aux > main, as before.
 
 ### `sdk.complete` {#sdk-complete}
 
