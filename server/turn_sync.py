@@ -132,6 +132,10 @@ async def _native_turn(
     # suppress cross-session prior_sessions on the initial turn too.
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
+    if goal_active:
+        # A goal-driven turn also runs under the fence of the turn that SET the goal.
+        tool_fence = _goal_loop.goal_fenced(_goal_state, tool_fence)
+        state_extra = {**state_extra, "subagent_fence": tool_fence}
     # The streaming driver's request metadata, as far as this surface has it (#3891 F2):
     # the origin (autonomy) and the operator's HITL-answer marker.
     turn_metadata: dict[str, Any] = {"origin": origin}
@@ -268,7 +272,10 @@ async def _native_turn(
         async for step in _goal_steps:
             if isinstance(step, _goal_loop.GoalNote):
                 continue
-            cont_fence = await _turn_stream._carried_fence(last_config, cont_fence)
+            # ...and a continuation always drives the (possibly just-set) goal: its fence too.
+            cont_fence = _goal_loop.goal_fenced(
+                _goal_loop.active_goal(session_id), await _turn_stream._carried_fence(last_config, cont_fence)
+            )
             # Fresh-context iterations get a scoped config without the turn's
             # callbacks — re-attach usage_cb so their tokens count.
             cont_config = {**step.config, "callbacks": [usage_cb]}

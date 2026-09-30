@@ -846,6 +846,18 @@ async def _run_subagent_inner(
         AuditMiddleware(),
         build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
     ]
+    # The delegating turn's tool fence (#1639/#2972): a fenced turn that may call
+    # `task` must not reach a wider toolset through the delegation. The subagent runs
+    # under (its allowlist ∩ the parent's fence) — deny-all when they don't overlap —
+    # read from the scope SubagentFenceMiddleware opens around the parent's `task` call
+    # (graph/fence_scope) and enforced by the same middleware on the sub-graph.
+    from graph.fence_scope import current_fence
+    from graph.middleware.subagent_fence import SubagentFenceMiddleware, intersect_fences
+
+    _parent_fence = current_fence()
+    sub_fence = intersect_fences(list(getattr(sub_config, "tools", None) or []), _parent_fence) if _parent_fence else []
+    if sub_fence:
+        sub_middleware.append(SubagentFenceMiddleware())
     # In-history tool-result pruning (#3576) — the lead stack has had it since #2782; a
     # delegation had NO relief valve, and a review finder whose whole job is reading files
     # accumulated raw results until the provider refused the call (ContextWindowExceeded,
@@ -984,7 +996,11 @@ async def _run_subagent_inner(
         ):
             try:
                 async for state in subagent.astream(
-                    {"messages": [{"role": "user", "content": prompt}], "session_id": session_id},
+                    {
+                        "messages": [{"role": "user", "content": prompt}],
+                        "session_id": session_id,
+                        **({"subagent_fence": sub_fence} if sub_fence else {}),
+                    },
                     config=sub_run_config,
                     stream_mode="values",
                 ):

@@ -9,8 +9,11 @@ turn would run unfenced (it can no longer inherit the fence off the thread).
 
 ``SubagentFenceMiddleware`` opens a :func:`fence_scope` around every tool call it lets
 through, so the tool body — and anything it calls, synchronously or via
-``asyncio.to_thread`` / a task it starts (contextvars are copied) — reads the calling
-turn's effective fence from :func:`current_fence`. Scopes nest by intersection
+``asyncio.to_thread`` / ``asyncio.create_task`` (both copy the current context) — reads
+the calling turn's effective fence from :func:`current_fence`. Work handed to
+``loop.run_in_executor`` or a raw ``threading.Thread`` does NOT copy the context and
+reads ``[]``: code there that enqueues a turn must capture ``current_fence()`` first and
+re-enter the scope (or pass the fence explicitly). Scopes nest by intersection
 (narrowest wins): a nested subagent's tool never widens its parent's fence. Outside
 any scope (a plugin route, a config lifecycle hook, the scheduler's own loop) the fence
 is ``[]`` — no turn, no fence.

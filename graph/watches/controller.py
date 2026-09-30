@@ -509,7 +509,17 @@ class WatchController:
 
         The hook and topic name the trigger honestly: a `change` fire is NOT `on_met` — a
         plugin subscribed to `on_met` is told the condition is satisfied, which a mere value
-        move doesn't mean."""
+        move doesn't mean.
+
+        Every reaction runs under the fence of the turn that armed the watch
+        (``graph.fence_scope``): anything it enqueues — the run_prompt turn, a turn a hook
+        or bus subscriber schedules — records that fence and fires under it."""
+        from graph.fence_scope import fence_scope
+
+        with fence_scope(watch.fence):
+            await self._react_in_scope(watch, reason, flapping=flapping)
+
+    async def _react_in_scope(self, watch: Watch, reason: str, *, flapping: bool) -> None:
         if (watch.run_prompt or "").strip() and (watch.run_session or "").strip():
             try:
                 from graph.sdk import run_in_session
@@ -521,12 +531,7 @@ class WatchController:
                 if (watch.last_evidence or "").strip():
                     context += f"\nEvidence: {watch.last_evidence.strip()}"
                 reaction_prompt = f"{context}\n\n{watch.run_prompt}"
-                # The reaction is a server-fired turn: it runs under the fence of the turn
-                # that armed the watch (the scheduler records the enqueuing scope's fence).
-                from graph.fence_scope import fence_scope
-
-                with fence_scope(watch.fence):
-                    run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
+                run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
 
@@ -551,6 +556,7 @@ class WatchController:
     async def _finish(self, watch: Watch, status: str, reason: str, evidence: str = "") -> str:
         from time import time
 
+        from graph.fence_scope import fence_scope
         from graph.watches.hooks import fire_watch_hook
 
         watch.status = status
@@ -563,8 +569,9 @@ class WatchController:
         if status == "met":
             await self._react(watch, reason)
         else:
-            await fire_watch_hook("on_expired", watch)
-            self._publish("watch.expired", watch, reason)
+            with fence_scope(watch.fence):  # same scope as a reaction (see `_react`)
+                await fire_watch_hook("on_expired", watch)
+                self._publish("watch.expired", watch, reason)
         return status
 
     def _publish(self, topic: str, watch: Watch, reason: str = "") -> None:

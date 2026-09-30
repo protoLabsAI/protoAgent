@@ -565,3 +565,209 @@ async def test_goal_hooks_run_under_the_setting_turns_fence(tmp_path, fence):
     finally:
         set_goal_hooks([])
         set_plugin_verifiers({})
+
+
+# ── a goal a fenced turn set is pursued fenced — by every turn that drives it ─
+
+
+async def _drive(driver, message, session_id):
+    if driver == "stream":
+        return await _stream(message, session_id)
+    return await chat_mod.chat(message, session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+@pytest.mark.parametrize("fresh", [False, True], ids=["same-thread", "fresh-context"])
+@pytest.mark.parametrize("goal_fence", [_FENCE, []], ids=["fenced-goal", "unfenced-goal"])
+async def test_e2e_plain_turn_driving_a_goal_runs_under_the_goals_fence(env, monkeypatch, driver, fresh, goal_fence):
+    """A fenced turn set the goal (``GoalState.fence``); the session's next PLAIN turn
+    drives it — the goal-kickoff pass and the continuation both run under that fence."""
+    goals = FakeGoals([("continue", "again", "iterate"), ("done", "met")], iteration=3, fresh=fresh)
+    goals.state.fence = goal_fence
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = _real_graph(
+        monkeypatch,
+        [
+            _call("current_time", "c0"),
+            AIMessage(content="one"),
+            _call("current_time", "c1"),
+            AIMessage(content="two"),
+        ],
+    )
+    sid = f"sG{driver}{int(fresh)}{len(goal_fence)}"
+
+    await _drive(driver, "hi", sid)
+
+    first = await _tool_messages(g, f"a2a:{sid}")
+    cont = await _tool_messages(g, f"a2a:{sid}:goal-iter-4") if fresh else first[1:]
+    tools = [first[0], *cont]
+    assert [t.tool_call_id for t in tools] == ["c0", "c1"]
+    for tool in tools:
+        (_assert_blocked if goal_fence else _assert_ran)(tool)
+
+
+@pytest.mark.asyncio
+async def test_a_goal_set_under_a_fence_records_it_and_null_reads_closed(tmp_path):
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+    from graph.goals.types import GoalState
+    from graph.watches.types import Watch
+
+    c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+    with fence_scope(_FENCE):
+        c.set_goal_safe("s", "cond", {"type": "plugin", "check": "p:x"})
+    assert c.active_goal("s").fence == _FENCE
+    # A pre-fence file (no key) is unfenced; a present-but-unusable fence is deny-all.
+    assert GoalState.from_dict({"session_id": "s", "condition": "c"}).fence == []
+    assert GoalState.from_dict({"session_id": "s", "condition": "c", "fence": None}).fence == [FENCE_DENY_ALL]
+    assert Watch.from_dict({"id": "w", "condition": "c"}).fence == []
+    assert Watch.from_dict({"id": "w", "condition": "c", "fence": None}).fence == [FENCE_DENY_ALL]
+
+
+# ── synchronous `task()` subagents run under the parent turn's fence ─────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parent_fence", "expect_ran"),
+    [(["task"], False), (["task", "current_time"], True), (None, True)],
+    ids=["disjoint-deny-all", "overlap", "unfenced-parent"],
+)
+async def test_e2e_sync_subagent_runs_under_the_parent_fence(env, monkeypatch, parent_fence, expect_ran):
+    import runtime.state as rs
+    import tools.lg_tools as lg
+    from langgraph.checkpoint.memory import MemorySaver
+
+    ran: list[str] = []
+    real_zone = lg.ZoneInfo
+    monkeypatch.setattr(lg, "ZoneInfo", lambda name: (ran.append(name), real_zone(name))[1])
+    fake = _ToolFake(
+        messages=iter(
+            [
+                _call("task", "t1", {"description": "d", "prompt": "what time is it", "subagent_type": "researcher"}),
+                _call("current_time", "s1"),  # the subagent's out-of-(parent)-fence call
+                AIMessage(content="sub done"),
+                AIMessage(content="done"),
+            ]
+        ),
+        disable_streaming=True,
+    )
+    import graph.agent as agent_mod
+
+    # The subagent's model is built at delegation time — keep the fake in place for the turn.
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *a, **k: fake)
+    g = agent_mod.create_agent_graph(LangGraphConfig(), checkpointer=MemorySaver())
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+
+    await _stream("delegate", "sSub", request_metadata={"subagent_fence": parent_fence} if parent_fence else None)
+
+    (task_msg,) = await _tool_messages(g, "a2a:sSub")  # the subagent's calls stay in the sub-graph
+    assert task_msg.tool_call_id == "t1" and task_msg.status == "success"
+    assert ran == (["UTC"] if expect_ran else [])
+
+
+# ── minors: every reaction runs in the creating turn's scope ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_watch_hooks_and_bus_events_run_in_the_watch_fence(tmp_path, monkeypatch):
+    from graph.plugins.host import HOST
+    from graph.watches.controller import WatchController
+    from graph.watches.hooks import set_watch_hooks
+    from graph.watches.store import WatchStore
+
+    seen: list[tuple[str, list[str]]] = []
+    set_watch_hooks([{"on_met": lambda w: seen.append(("hook", current_fence()))}])
+    monkeypatch.setattr(HOST, "publish", lambda topic, data: seen.append((topic, current_fence())))
+    try:
+        c = WatchController(LangGraphConfig(), WatchStore(tmp_path))
+        with fence_scope(_FENCE):
+            _ok, _m, w = c.create(condition="c", verifier={"type": "plugin", "check": "p:v"})
+        await c._react(w, "tripped")
+        await c._finish(w, "expired", "late")
+    finally:
+        set_watch_hooks([])
+    reactions = [(t, f) for t, f in seen if t in ("hook", "watch.met", "watch.expired")]
+    assert reactions == [("hook", _FENCE), ("watch.met", _FENCE), ("watch.expired", _FENCE)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence", [_FENCE, []], ids=["fenced", "unfenced"])
+async def test_goal_bus_event_in_scope_and_review_skipped_when_fenced(tmp_path, monkeypatch, fence):
+    import graph.self_improvement as si
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+    from graph.goals.types import VerifyResult
+    from graph.goals.verifiers import set_plugin_verifiers
+    from graph.plugins.host import HOST
+
+    published: list[list[str]] = []
+    reviews: list[str] = []
+    monkeypatch.setattr(
+        HOST, "publish", lambda topic, data: published.append(current_fence()) if topic == "goal.achieved" else None
+    )
+    monkeypatch.setattr(si, "schedule_review", lambda config, scheduler, state, **kw: reviews.append(state.session_id))
+
+    async def _met(spec, ctx):
+        return VerifyResult(True, "ok", "")
+
+    set_plugin_verifiers({"p:always": _met})
+    try:
+        c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+        with fence_scope(fence):
+            c.set_goal_safe("s", "cond", {"type": "plugin", "check": "p:always"})
+        await c.evaluate("s", last_text="done")
+    finally:
+        set_plugin_verifiers({})
+    assert published == [fence]
+    assert reviews == ([] if fence else ["s"])  # no /self-improve review for a fenced goal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fence", [_FENCE, None], ids=["fenced", "unfenced"])
+async def test_lifecycle_reaction_runs_in_the_triggering_turns_fence(env, monkeypatch, fence):
+    import asyncio
+
+    import graph.lifecycle as lc
+
+    seen: list[list[str]] = []
+
+    async def _fire(event, payload):
+        seen.append(current_fence())
+
+    monkeypatch.setattr(lc, "fire", _fire)
+    monkeypatch.setattr(lc, "should_emit_active", lambda now, last: (True, 0.0, "idle"))
+    env.install(streams=[[text("r1", "ok")]])
+
+    await _stream("hi", "sL", request_metadata={"subagent_fence": fence} if fence else None)
+    await asyncio.sleep(0)
+
+    assert seen == [fence or []]
+
+
+class _GoalSetMidTurn(FakeGoals):
+    """No goal when the turn starts; by the time the initial pass ends one exists that a
+    fenced turn set meanwhile (a concurrent fenced turn, a hook) — with ``fence``."""
+
+    def __init__(self, fence, **kw):
+        super().__init__([("continue", "again", "iterate"), ("done", "met")], **kw)
+        self.state.fence = fence
+        self._checks = 0
+
+    def active_goal(self, session_id):
+        self._checks += 1
+        return self.state if self._checks > 1 else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_e2e_continuation_of_a_goal_set_mid_turn_runs_under_its_fence(env, monkeypatch, driver):
+    monkeypatch.setattr(env.state, "goal_controller", _GoalSetMidTurn(_FENCE, iteration=3), raising=False)
+    g = _real_graph(monkeypatch, [AIMessage(content="one"), _call("current_time", "c1"), AIMessage(content="two")])
+    sid = f"sM{driver}"
+
+    await _drive(driver, "hi", sid)
+
+    (tool,) = await _tool_messages(g, f"a2a:{sid}")
+    _assert_blocked(tool)
