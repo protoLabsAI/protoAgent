@@ -1503,7 +1503,7 @@ class _RecordingBG:
         self.seen_batch_id = "__unset__"
 
     async def spawn(
-        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None
+        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None, **_kw
     ):
         self.seen_origin = origin_session
         self.seen_incognito = origin_incognito
@@ -1569,7 +1569,7 @@ class _RecordingBatchBG:
         self.spawns: list[dict] = []
 
     async def spawn(
-        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None
+        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None, **_kw
     ):
         self.spawns.append(
             {

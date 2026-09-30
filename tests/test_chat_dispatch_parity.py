@@ -148,7 +148,7 @@ async def test_subagent_slash_command_runs_via_chat(graph, monkeypatch):
     g = graph([])
     ran: list[tuple] = []
 
-    async def _fake_run(sub_type, prompt, *, session_id=""):
+    async def _fake_run(sub_type, prompt, *, session_id="", turn_model=""):
         ran.append((sub_type, prompt, session_id))
         return "worker output"
 

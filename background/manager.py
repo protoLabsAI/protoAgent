@@ -131,6 +131,7 @@ class BackgroundManager:
         origin_incognito: bool = False,
         batch_id: str | None = None,
         origin_fence: list[str] | None = None,
+        turn_model: str = "",
     ) -> str:
         """Register a job and fire it detached. Returns the opaque job id immediately.
 
@@ -145,7 +146,12 @@ class BackgroundManager:
         when the last member settles. ``None`` for a lone spawn (a singleton).
 
         ``origin_fence`` is the spawning turn's tool fence; ``None`` reads it from the
-        calling tool's scope (``graph.fence_scope``) — the push-resume nudge runs under it."""
+        calling tool's scope (``graph.fence_scope``) — the push-resume nudge runs under it.
+
+        ``turn_model`` is the spawning turn's model override. The job's model follows the
+        one subagent precedence (#3944, ``graph/subagent_model.py``): the subagent's own
+        pinned model > ``turn_model``; with neither, the fire carries no model and the
+        detached turn runs on the configured default, as before."""
         spawning_fence = _origin_fence(origin_fence)
         job_id = self.store.create(
             agent_name=self.agent_name,
@@ -163,7 +169,10 @@ class BackgroundManager:
         from graph.middleware.subagent_fence import intersect_fences
 
         fence = intersect_fences(_subagent_fence(subagent_type), spawning_fence)
-        t = asyncio.create_task(self._fire(job_id, fired_prompt, fence), name=f"background.fire.{job_id}")
+        from graph.subagent_model import resolve_subagent_model
+
+        model = resolve_subagent_model(None, subagent_type, turn_model, include_default=False)
+        t = asyncio.create_task(self._fire(job_id, fired_prompt, fence, model=model), name=f"background.fire.{job_id}")
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
         log.info("[background] spawned %s (%s): %s", job_id, subagent_type, description)
@@ -486,7 +495,9 @@ class BackgroundManager:
         except Exception:  # noqa: BLE001 — an unreadable body is not a delivery failure
             return ""
 
-    async def _fire(self, job_id: str, prompt: str, fence: list[str] | None = None) -> None:
+    async def _fire(
+        self, job_id: str, prompt: str, fence: list[str] | None = None, *, model: str | None = None
+    ) -> None:
         """POST the job to our own /a2a as a turn in a dedicated background context.
 
         On any delivery failure (non-2xx / network / timeout), mark the job failed —
@@ -521,6 +532,10 @@ class BackgroundManager:
                         # manager's own fire, proven by a single-use in-process token
                         # no remote A2A caller can produce (background/fire_auth.py).
                         **({fire_auth.METADATA_KEY: fire_auth.mint(job_id)} if fence else {}),
+                        # The job's resolved model (#3944): the chat entry reads
+                        # ``metadata.model`` as the turn's model override, exactly as a
+                        # console tab's pick. Absent → the configured default.
+                        **({"model": model} if model else {}),
                     },
                 )
             except Exception as exc:  # noqa: BLE001
