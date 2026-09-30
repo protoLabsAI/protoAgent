@@ -55,7 +55,7 @@ import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./tur
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
-import { reattachKeyForMessages, reattachOrReconcile } from "./reattach";
+import { leadAssistantMessage, reattachKeyForMessages, reattachOrReconcile, settleAnsweredPause } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { loadDraft, loadScroll, saveDraft, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
@@ -979,6 +979,14 @@ export function ChatSessionSlot({
     // (before a re-render), so the closure copy would be stale.
     const base =
       chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? messages;
+    // A HITL answer continues the task that parked (A2A §3.4.3, #3930): the bubble it
+    // resumes, or the lead turn's latest one. The server re-routes a stale id itself.
+    const pausedBubble = opts.hitlResume
+      ? opts.resumeMessageId
+        ? base.find((m) => m.id === opts.resumeMessageId)
+        : leadAssistantMessage(base)
+      : undefined;
+    const pausedTaskId = pausedBubble?.taskId;
     // `hidden` (an approval resume, or a regenerate) sends `content` to the server but
     // omits the user bubble — the agent still receives it, the chat just doesn't show it.
     // A resume flips the SAME assistant message back to streaming (keeping its parts/toolCalls).
@@ -988,7 +996,12 @@ export function ChatSessionSlot({
         ? base.map((m) => (m.id === assistantId ? { ...m, status: "streaming" } : m))
         : opts.hidden
           ? [...base, assistant]
-          : [...base, userMessage, assistant],
+          : [
+              // A form/question answer continues in a new bubble: the one that paused is done.
+              ...(opts.hitlResume ? settleAnsweredPause(base, pausedBubble?.id) : base),
+              userMessage,
+              assistant,
+            ],
     );
     chatStore.setSessionStatus(session.id, "streaming");
     onError("");
@@ -1418,6 +1431,7 @@ export function ChatSessionSlot({
         incognito: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.incognito,
         // Marks this message as the answer to the pending HITL interrupt (#1560).
         hitlResume: opts.hitlResume,
+        taskId: pausedTaskId,
         // What this send looked like in the transcript, carried into the durable turn so
         // a rebuilt chat (ADR 0104) draws the same user bubble — none for a hidden send,
         // the typed text + 📎 list rather than the prepended attachment context.

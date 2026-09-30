@@ -349,12 +349,17 @@ export function contextFromParts(parts?: RawPart[]): ContextWindow | null {
   };
 }
 
+/** A task's answer across its artifacts. A task resumed after a HITL pause answers in
+ *  one artifact per leg (#3930) — the text before the pause, then the text after — so
+ *  each artifact's text opens its own paragraph instead of running on from the last. A
+ *  single-artifact task (every ordinary turn) reads exactly as before. Mirrors the
+ *  server's durable-turn `text` (operator_api/chat_routes.py). */
+export function joinArtifactTexts(texts: string[]): string {
+  return texts.filter(Boolean).join("\n\n");
+}
+
 export function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
-  return (result.artifacts || [])
-    .flatMap((artifact) => artifact.parts || [])
-    .filter((part) => (part.kind === undefined || part.kind === "text") && part.text)
-    .map((part) => part.text)
-    .join("");
+  return joinArtifactTexts((result.artifacts || []).map((artifact) => textFromParts(artifact.parts)));
 }
 
 // Parse complete SSE events (blank-line-delimited) out of a buffer, dispatching
@@ -416,6 +421,10 @@ export type TurnStreamHandlers = {
   /** Fires immediately before a full Task snapshot is replayed. */
   onTaskSnapshot?: () => void;
   onTaskId?: (taskId: string) => void;
+  /** The task's state as of this frame — a Task snapshot's (after it is replayed) or a
+   *  status update's. Lets a reattach see a PAUSED task (input-required / auth-required)
+   *  without waiting for a stream the server rightly keeps open (#3930). */
+  onTaskState?: (state: string) => void;
   onStatus?: (status: string) => void;
   onText?: (text: string, append: boolean) => void;
   onReasoning?: (delta: string) => void;
@@ -425,6 +434,10 @@ export type TurnStreamHandlers = {
    *  is a participant speaking, so each becomes its own authored message. */
   onRoomReply?: (reply: RoomReply) => void;
   onSteerConsumed?: (items: ConsumedSteer[]) => void;
+  /** A durable rebuild only (`replaySteers`): an operator message that arrived MID-task —
+   *  the answer that continued a paused task on its own id (A2A §3.4.3, #3930). The
+   *  task's opening message is not one; the rebuild draws that bubble separately. */
+  onContinuationMessage?: (message: { role?: string; parts?: RawPart[]; metadata?: ExtMetadata }) => void;
   onCost?: (usage: TurnUsage) => void;
   onContext?: (ctx: ContextWindow) => void;
   onInputRequired?: (payload: HitlPayload) => void;
@@ -443,11 +456,16 @@ function replayTaskSnapshot(
   opts: { replaySteers?: boolean } = {},
 ): void {
   const arts = (task as { artifacts?: Array<{ parts?: RawPart[]; metadata?: ExtMetadata }> }).artifacts || [];
-  const accumulated = arts.map((a) => textFromParts(a.parts)).join("");
+  const accumulated = joinArtifactTexts(arts.map((a) => textFromParts(a.parts)));
   const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
     []) as Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }>;
+  let openingSeen = false;
   for (const msg of history) {
-    if ((msg.role || "").includes("USER") || msg.role === "user") continue;
+    if ((msg.role || "").includes("USER") || msg.role === "user") {
+      if (opts.replaySteers && openingSeen) handlers.onContinuationMessage?.(msg);
+      openingSeen = true;
+      continue;
+    }
     const toolEvent = toolEventFromMeta(msg.metadata);
     if (toolEvent) handlers.onToolCall?.(toolEvent);
     const reasoning = reasoningFromParts(msg.parts);
@@ -487,6 +505,15 @@ export function makeA2ADispatcher(
   handlers: TurnStreamHandlers,
   opts: { replaySteers?: boolean } = {},
 ): (frame: A2AFrame) => void {
+  // The task this stream has named so far. A HITL answer that CONTINUES its parked task
+  // (A2A §3.4.3, #3930) gets no Task frame — the SDK sends one only when a task is created
+  // — so the id comes off the first status/artifact update instead.
+  let namedTaskId = "";
+  const nameTask = (id: string | undefined) => {
+    if (!id || id === namedTaskId) return;
+    namedTaskId = id;
+    handlers.onTaskId?.(id);
+  };
   return (frame: A2AFrame) => {
     if (frame.error?.message) throw new Error(frame.error.message);
     const result = frame.result;
@@ -498,6 +525,7 @@ export function makeA2ADispatcher(
     const statusUpdate = result.statusUpdate ?? (result.kind === "status-update" ? result : undefined);
     const artifactUpdate = result.artifactUpdate ?? (result.kind === "artifact-update" ? result : undefined);
     if (task?.id) {
+      namedTaskId = task.id;
       handlers.onTaskId?.(task.id);
       // Snapshot replay covers BOTH shapes: history first (the tool/reasoning
       // frames a detached client missed), then the accumulated artifact text —
@@ -505,8 +533,10 @@ export function makeA2ADispatcher(
       // Task frame is bare (submitted, no artifacts/history), so it's a no-op.
       handlers.onTaskSnapshot?.();
       replayTaskSnapshot(task, handlers, opts);
+      handlers.onTaskState?.((task.status?.state || "").toString());
     }
     if (statusUpdate) {
+      nameTask(statusUpdate.taskId);
       const state = statusUpdate.status?.state || "";
       const parts = statusUpdate.status?.message?.parts;
       const messageText = textFromParts(parts);
@@ -530,8 +560,10 @@ export function makeA2ADispatcher(
       if (state === "failed" || state === "TASK_STATE_FAILED") {
         handlers.onFailed?.(messageText || "the turn failed");
       }
+      if (state) handlers.onTaskState?.(state);
     }
     if (artifactUpdate) {
+      nameTask(artifactUpdate.taskId);
       const aParts = artifactUpdate.artifact?.parts;
       const text = textFromParts(aParts);
       if (text) handlers.onText?.(text, artifactAppends(artifactUpdate));

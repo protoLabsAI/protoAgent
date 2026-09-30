@@ -1431,6 +1431,20 @@ async def _chat_langgraph_stream_impl(
                 # queue (it folds in right after the form response) and the turn re-parks
                 # on the same payload; the marked form answer converts to a real resume.
                 # No pending interrupt ⇒ hold is None and nothing changes.
+                #
+                # A message continuing an input-required TASK (A2A §3.4.3) is only a
+                # graph resume while the THREAD still has that interrupt pending (#3930).
+                # A task orphaned by an answer that landed elsewhere (a fresh task, the
+                # /api/chat fallback) is still input-required but its interrupt is gone:
+                # `Command(resume=…)` on a thread with nothing pending is a silent no-op
+                # in LangGraph, so the operator's text would vanish and the task complete
+                # empty. Run it as the fresh message it now is instead.
+                if resume and await _pending_interrupt_value(config) is None:
+                    log.info(
+                        "[a2a-stream] session=%s: resume on a task with no pending interrupt — running it as a fresh message",
+                        session_id,
+                    )
+                    resume = False
                 if not resume:
                     hold = await _turn_control._hold_if_hitl_pending(
                         message, session_id, config, request_metadata=request_metadata, fence=_fence

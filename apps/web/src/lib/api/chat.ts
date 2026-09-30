@@ -273,6 +273,10 @@ export const chatApi = {
       // fresh turn. Unmarked messages sent while a form is pending are held server-side
       // until the form resolves.
       hitlResume?: boolean;
+      // The PARKED task a `hitlResume` answer continues (A2A §3.4.3: the client answers
+      // an input-required task by sending on the same taskId). Without it the server
+      // routes the answer to the session's parked task itself (#3930).
+      taskId?: string;
       // How this message showed in the transcript, when that is not simply its text. The
       // server ignores both; they ride the message into the task's durable history so a
       // chat rebuilt from it (ADR 0104) draws the same user bubble: `hidden` = none (an
@@ -306,6 +310,7 @@ export const chatApi = {
           ],
           messageId: rpcId,
           contextId: sessionId,
+          ...(opts.hitlResume && opts.taskId ? { taskId: opts.taskId } : {}),
           // Per-turn overrides ride the A2A message metadata (server/chat.py reads them):
           // the tab's chosen model + the /effort reasoning level + incognito (ADR 0069 D3b —
           // per-message server-side, stamped on every send while the thread toggle is on).
@@ -540,7 +545,10 @@ export const chatApi = {
   // fleet proxy all along; the console just never called it. The server replays
   // a Task snapshot first (whose durable history carries everything emitted
   // while nobody was subscribed — replayed via replayTaskSnapshot), then the
-  // same live frames SendStreamingMessage emits. Stream close = turn complete.
+  // same live frames SendStreamingMessage emits. Stream close = turn complete — but a
+  // PAUSED task (input-required) keeps the stream open until the operator answers
+  // (A2A §3.1.6: only a terminal state ends it), so a caller must read the paused state
+  // off the frames (`onTaskState`), not wait for the close (#3930).
   // A TERMINAL task is rejected by the server (UnsupportedOperation) — callers
   // catch and fall back to replayTask() below.
   async resumeTask(taskId: string, sessionId: string, handlers: TurnStreamHandlers = {}) {

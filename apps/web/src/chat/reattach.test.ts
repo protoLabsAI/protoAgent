@@ -18,7 +18,7 @@ import { resumedTurnRender, settleResumedTurn } from "../app/resumedTurn";
 import { applyProgressFrame } from "../app/serverTurnProgress";
 import { api } from "../lib/api";
 import { chatStore } from "./chat-store";
-import { reattachKeyForMessages, reattachOrReconcile, reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachOrReconcile, reattachTurn, settleAnsweredPause } from "./reattach";
 import { liveMessageId } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
@@ -645,6 +645,141 @@ describe("reattach run(): paused states", () => {
       expect(replayTask).not.toHaveBeenCalled();
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// run(): the subscription stays OPEN on a paused task (#3930)
+// ---------------------------------------------------------------------------
+//
+// The real server holds `SubscribeToTask` open for an input-required task — spec-correct:
+// input-required is interrupted, not terminal, and the stream ends only at a terminal
+// state (A2A §3.1.6). These mocks mirror that: the subscription delivers its frames and
+// then never resolves until its signal aborts. Waiting for the close held the session
+// "streaming" — Stop up, the form's Send/Dismiss disabled — until the operator answered
+// the form they could not answer.
+
+/** A subscription the server keeps open: emits `frames`, then settles only on abort. */
+function heldOpen(frames: (handlers: NonNullable<Parameters<typeof api.resumeTask>[2]>) => void) {
+  return (_taskId: string, _sessionId: string, handlers: Parameters<typeof api.resumeTask>[2] = {}) =>
+    new Promise<void>((_resolve, reject) => {
+      frames(handlers);
+      handlers.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+}
+
+describe("reattach run(): a paused task's subscription is held open (#3930)", () => {
+  it("settles paused off the INPUT_REQUIRED snapshot without waiting for the stream to close", async () => {
+    const sessionId = seedStuckSession();
+    let signal: AbortSignal | undefined;
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        signal = handlers.signal;
+        handlers.onTaskSnapshot?.();
+        handlers.onText?.("partial answer", false);
+        handlers.onInputRequired?.({ kind: "approval", title: "Approve the deploy?" });
+        handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+      }),
+    );
+    const onHitl = vi.fn();
+
+    attach(sessionId, { onHitl });
+    await settle();
+
+    // The form is up and ACTIONABLE: the session is idle (HitlForm busy = false)…
+    expect(onHitl).toHaveBeenCalledWith(expect.objectContaining({ title: "Approve the deploy?" }));
+    expect(sessionStatus(sessionId)).toBe("idle");
+    // …without finalizing a turn the server still owns…
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+    expect(assistantMessage(sessionId)?.content).toBe("partial answer");
+    expect(getTask).not.toHaveBeenCalled();
+    expect(replayTask).not.toHaveBeenCalled();
+    // …and the socket the server keeps open for the answer is released.
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it.each(["input-required", "TASK_STATE_AUTH_REQUIRED"])("settles paused on a %s snapshot", async (state) => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(heldOpen((handlers) => handlers.onTaskState?.(state)));
+
+    attach(sessionId);
+    await settle();
+
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+  });
+
+  it("settles paused when a running turn PARKS while attached (a live status update)", async () => {
+    const sessionId = seedStuckSession();
+    let park: () => void = () => {};
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        handlers.onTaskSnapshot?.();
+        handlers.onTaskState?.("TASK_STATE_WORKING");
+        park = () => {
+          handlers.onInputRequired?.({ question: "Favourite fruit?" });
+          handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+        };
+      }),
+    );
+    const onHitl = vi.fn();
+
+    attach(sessionId, { onHitl });
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("streaming"); // still working: stay attached
+
+    park();
+    await settle();
+    expect(onHitl).toHaveBeenCalledWith({ question: "Favourite fruit?" });
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+  });
+
+  it("mutes frames the let-go stream still delivers (the desktop relay cannot be aborted)", async () => {
+    const sessionId = seedStuckSession();
+    let late: () => void = () => {};
+    // The desktop path ignores the abort signal: this subscription NEVER settles.
+    resumeTask.mockImplementation((_taskId, _sessionId, handlers = {}) => {
+      handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+      late = () => handlers.onText?.("an answer another tab resumed", false);
+      return new Promise<void>(() => {});
+    });
+
+    attach(sessionId);
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("idle");
+
+    late();
+    expect(assistantMessage(sessionId)?.content).toBe("partial answer");
+  });
+});
+
+describe("settleAnsweredPause (#3930)", () => {
+  it("settles the paused bubble a form answer continues past — no card spinning for good", () => {
+    const messages = settleAnsweredPause(
+      [
+        { id: "u1", role: "user", content: "fruit?", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          status: "streaming",
+          taskId: "t1",
+          durableSnapshotFallback: true,
+          toolCalls: [{ id: "ask-1", name: "ask_human", status: "running" }],
+        },
+      ],
+      "a1",
+    );
+    expect(messages[1]).toMatchObject({ status: "done", toolCalls: [{ name: "ask_human", status: "done" }] });
+    expect(messages[1].durableSnapshotFallback).toBeUndefined();
+  });
+
+  it("leaves a settled bubble, and every other bubble, alone", () => {
+    const done = { id: "a1", role: "assistant" as const, content: "x", status: "error" as const };
+    const other = { id: "a2", role: "assistant" as const, content: "", status: "streaming" as const };
+    expect(settleAnsweredPause([done, other], "a1")).toEqual([done, other]);
+    expect(settleAnsweredPause([done, other], undefined)).toEqual([done, other]);
+  });
 });
 
 // ---------------------------------------------------------------------------

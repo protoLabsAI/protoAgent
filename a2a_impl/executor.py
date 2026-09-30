@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -43,9 +44,12 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, Part, Task, TaskState, TaskStatus
+from a2a.utils.errors import InvalidParamsError
 from google.protobuf import json_format, struct_pb2
 
 import protolabs_a2a as pa
+
+from a2a_impl import hitl_routing
 
 logger = logging.getLogger(__name__)
 
@@ -482,8 +486,35 @@ class ProtoAgentExecutor(AgentExecutor):
         # initial Task before any TaskStatusUpdateEvent), then transitioned to
         # working.
         resume = bool(context.current_task and _is_input_required(context.current_task))
+        # A parked task another task superseded (#3930): its pause was answered, or re-parked,
+        # on that other task, so this one is over. A settle message NEVER reaches the graph:
+        # it completes the task (with a pointer) only while the task is still paused on the
+        # pause it was scheduled against, and is a no-op otherwise (stale or forged).
+        is_settle, superseded_by = hitl_routing.settle_decision(context.message, context.current_task)
+        if is_settle:
+            if superseded_by is not None:
+                await updater.complete(
+                    message=updater.new_agent_message([_text_part(f"Continued in task {superseded_by}.")])
+                )
+            else:
+                logger.info("[a2a] stale settle for task %s ignored", context.task_id)
+            return
+        # A message reaching a task that has already ENDED (a double-submitted answer that
+        # queued behind the one that completed it) must not reopen it as a fresh turn — and
+        # must not vanish behind a 200 either: refuse it, like the SDK refuses a message
+        # naming a task that had ended before it arrived. (The routing wrapper re-routes a
+        # refused HITL answer to the context's current pause.)
+        if context.current_task is not None and _is_terminal(context.current_task):
+            raise InvalidParamsError(message=f"Task {context.task_id} has already ended")
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
+        # One parked task per context (#3930). A turn that ANSWERED the pause (a resume, or
+        # a hitl_resume) or that PARKED (a held message re-parks on the pending interrupt)
+        # makes every other task parked in the context BEFORE it ended stale — their pause
+        # was consumed or taken over. So they are settled when this turn ENDS (the finally
+        # below), never at its start: turns on a thread are serialized, and a task parking
+        # while this one waited for the thread lock is only known stale once it is done.
+        touches_pause = bool(resume or _md.get("hitl_resume"))
         _origin = str(_md.get("origin", "") or "")
         if not resume:
             await event_queue.enqueue_event(
@@ -581,7 +612,12 @@ class ProtoAgentExecutor(AgentExecutor):
         # final text + the cost/context DataParts — so the durable task and any
         # re-fetch carry the answer exactly once (and a goal retry that changed the
         # text still finalizes correctly).
+        # A resumed leg (a HITL answer continuing its parked task, #3930) streams into an
+        # artifact of its own: reusing the first leg's id would REPLACE the answer text the
+        # task streamed before it paused, and the durable task would lose it.
         answer_aid = f"{context.task_id or 'turn'}-answer"
+        if resume:
+            answer_aid = f"{answer_aid}-resumed-{uuid.uuid4().hex[:8]}"
         _text_buf = ""
         _answer_started = False  # first chunk creates the artifact (append=False); rest append
         # Batched by a char threshold OR an elapsed-time floor, whichever trips
@@ -977,6 +1013,7 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         parts.append(_data_part_proto(payload, HITL_MIME))
                     await updater.requires_input(message=updater.new_agent_message(parts))
+                    touches_pause = True  # settled against in the finally (#3930)
                     # The park leg is a real turn with real spend (#2943): every model
                     # call made before the pause belongs to a row of its own, or HITL
                     # flows — the expensive turn class — vanish from telemetry. The
@@ -1059,6 +1096,10 @@ class ProtoAgentExecutor(AgentExecutor):
             # disarming here can never lose a turn's samples. Also covers the
             # input_required park — the resumed execute() re-arms fresh.
             _end_knowledge_ops(knowledge_token)
+            if touches_pause:
+                hitl_routing.schedule_settle_siblings(
+                    context.context_id, context.task_id, getattr(context, "call_context", None)
+                )
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
@@ -1066,6 +1107,21 @@ class ProtoAgentExecutor(AgentExecutor):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_TERMINAL_STATES = (
+    TaskState.TASK_STATE_COMPLETED,
+    TaskState.TASK_STATE_FAILED,
+    TaskState.TASK_STATE_CANCELED,
+    TaskState.TASK_STATE_REJECTED,
+)
+
+
+def _is_terminal(task: Any) -> bool:
+    try:
+        return task.status.state in _TERMINAL_STATES
+    except AttributeError:
+        return False
 
 
 def _is_input_required(task: Any) -> bool:

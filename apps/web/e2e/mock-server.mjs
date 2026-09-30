@@ -135,6 +135,25 @@ const MIME = {
   ".map": "application/json; charset=utf-8",
 };
 
+// A task PARKED on operator input (#3082, #3930): input-required, its status message
+// carrying the pending approval gate. contextId matches the seeded session so the frame
+// dispatcher's foreign-context guard passes it through. Served by GetTask AND as the
+// opening frame of the (held-open) SubscribeToTask stream, as the real server does.
+function pausedTask(id) {
+  return {
+    id, contextId: "s-stuck",
+    status: {
+      state: "TASK_STATE_INPUT_REQUIRED",
+      message: {
+        parts: [{
+          metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
+          data: { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
+        }],
+      },
+    },
+    artifacts: [],
+  };
+}
 function sendJson(res, body, status = 200) {
   const data = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -878,23 +897,7 @@ const server = createServer(async (req, res) => {
       // contextId matches the seeded session so the frame dispatcher's
       // foreign-context guard passes the replay through.
       if (String(body.params?.id || "").includes("paused")) {
-        return sendJson(res, {
-          jsonrpc: "2.0",
-          id: body.id,
-          result: {
-            id: body.params?.id, contextId: "s-stuck",
-            status: {
-              state: "TASK_STATE_INPUT_REQUIRED",
-              message: {
-                parts: [{
-                  metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
-                  data: { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
-                }],
-              },
-            },
-            artifacts: [],
-          },
-        });
+        return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pausedTask(body.params?.id) });
       }
       // A task id carrying "history" also returns a durable history with a
       // tool-call-v1 frame — the Swap & Resume replay path (reattach.ts) must
@@ -930,6 +933,16 @@ const server = createServer(async (req, res) => {
       });
     }
     if (body?.method === "SubscribeToTask") {
+      // A PAUSED task (input-required) is interrupted, not terminal: the real server
+      // (a2a-sdk 1.1.5) answers with the Task snapshot and then HOLDS the stream open
+      // until the operator's answer continues the task (A2A §3.1.6 ends a subscription
+      // only at a terminal state). Mirror that exactly — the mock that rejected here hid
+      // #3930, a reattach waiting on this stream to close.
+      if (String(body.params?.id || "").includes("paused")) {
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
+        res.write(`data: ${JSON.stringify({ id: body.id, jsonrpc: "2.0", result: { task: pausedTask(body.params?.id) } })}\r\n\r\n`);
+        return; // never ended by the server
+      }
       // The real server rejects resubscribe for a TERMINAL task — the console's
       // reattach then falls back to GetTask snapshot replay. Mirror that.
       return sendJson(res, {

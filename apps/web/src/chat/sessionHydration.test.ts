@@ -95,6 +95,57 @@ describe("durable turn sent times (the chat footer's sent-time widget reads crea
 });
 
 describe("durable turn conversion", () => {
+  it("splits a turn at the HITL answer that continued it on the same task (#3930)", () => {
+    // A form answer continues its parked task (A2A §3.4.3), so ONE durable task holds the
+    // question, the operator's answer, and the work after it. The rebuild draws the answer
+    // where it was sent — not dropped, not merged into the opening prompt.
+    const messages = messagesFromDurableTurn(
+      turn({
+        text: "You like banana.",
+        artifacts: [{ parts: [{ text: "You like banana." }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Ask me my favourite fruit" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "ask-1", name: "ask_human", phase: "started", args: "" } },
+          },
+          { role: "ROLE_AGENT", parts: [{ text: "Favourite fruit?" }] },
+          { role: "ROLE_USER", parts: [{ text: "banana" }], metadata: { hitl_resume: true } },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "ask-1", name: "ask_human", phase: "completed", result: "banana" } },
+          },
+        ],
+      }),
+    );
+    expect(messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "Ask me my favourite fruit"],
+      ["assistant", ""],
+      ["user", "banana"],
+      ["assistant", "You like banana."],
+    ]);
+    expect(messages[1]).toMatchObject({ status: "done", splitOf: "durable-task-1-assistant" });
+    expect(messages[1].toolCalls?.[0]).toMatchObject({ name: "ask_human", status: "done" });
+    expect(messages[3]).toMatchObject({ id: "durable-task-1-assistant", status: "done" });
+  });
+
+  it("a hidden continuation (an approval, a dismissal, a superseded-task settle) splits nothing", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "deploy it" }] },
+          { role: "ROLE_USER", parts: [{ text: "approved" }], metadata: { hidden: true, hitl_resume: true } },
+        ],
+      }),
+    );
+    expect(messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "deploy it"],
+      ["assistant", "answer"],
+    ]);
+  });
+
   it("rebuilds the user bubble and drives assistant text/tools through shared reducers", () => {
     const messages = messagesFromDurableTurn(
       turn({
