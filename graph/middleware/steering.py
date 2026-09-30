@@ -33,6 +33,12 @@ _INTERJECTION = (
 )
 
 
+def strip_interjection(text: str) -> str:
+    """The operator's own text of a folded steer — ``text`` without the model-facing
+    interjection frame (unchanged when it carries none)."""
+    return text[len(_INTERJECTION) :] if text.startswith(_INTERJECTION) else text
+
+
 class SteeringMiddleware(AgentMiddleware):
     """Inject queued mid-turn user messages before the next model call."""
 
