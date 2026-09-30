@@ -36,7 +36,7 @@
 .metric-grid.telemetry-metrics .metric {
   border-right: 1px solid var(--pl-color-border);
   border-bottom: 1px solid var(--pl-color-border);
-  padding: 5px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   min-height: 36px;
 }
 
@@ -46,7 +46,7 @@
    The section that follows it sits tight against the strip — the strip IS that
    section's heading now. */
 .telemetry-views {
-  margin-top: 20px;
+  margin-top: var(--pl-space-5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .telemetry-views + .telemetry-section,
@@ -66,12 +66,12 @@
   text-align: left;
   font-weight: 500;
   color: var(--pl-color-fg-subtle);
-  padding: 6px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   border-bottom: 1px solid var(--pl-color-border);
   white-space: nowrap;
 }
 .telemetry-table td {
-  padding: 6px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   border-bottom: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg-muted);
   white-space: nowrap;
@@ -90,7 +90,7 @@
 .telemetry-table .trace-copy {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
@@ -103,7 +103,7 @@
   text-decoration: underline;
 }
 .telemetry-table .trace-copy {
-  padding: 1px 6px;
+  padding: 1px var(--pl-space-1_5);
 }
 .telemetry-table .trace-none {
   color: var(--pl-color-fg-subtle);
@@ -113,8 +113,8 @@
 .telemetry-insights {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: var(--pl-space-3) 14px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-3) var(--pl-space-4);
   margin-bottom: 18px;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -123,7 +123,7 @@
 .insight-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-1_5);
   font-size: var(--pl-font-size-sm);
 }
 .insight-row.ok { color: var(--pl-color-status-success); }
@@ -138,7 +138,7 @@
 .insight-flags li {
   display: flex;
   gap: var(--pl-space-3);
-  padding: 3px 0;
+  padding: var(--pl-space-0_5) 0;
   color: var(--pl-color-fg-muted);
   border-top: 1px solid var(--pl-color-border);
 }
@@ -148,7 +148,7 @@
 .insight-note {
   font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
-  margin: 2px 0 0;
+  margin: var(--pl-space-0_5) 0 0;
 }
 
 /* Fleet telemetry section (ADR 0006 fleet extension) — read-only rollup across
@@ -171,13 +171,13 @@
   color: var(--pl-color-fg-subtle);
 }
 .fleet-flags {
-  margin-top: 14px;
+  margin-top: var(--pl-space-4);
 }
 .fleet-flags > .panel-kicker {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--pl-space-1_5);
+  margin-bottom: var(--pl-space-1_5);
   color: var(--pl-color-status-warning);
 }
 .fleet-flags .flag-member {
