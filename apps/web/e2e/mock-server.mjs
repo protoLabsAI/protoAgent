@@ -53,6 +53,7 @@ import {
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
   TOOL_CALL_EXT_URI,
+  HITL_MIME,
   VERIFIERS,
   WORKFLOW_RECIPE_FULL,
   WORKFLOW_RUN_RECORD,
@@ -143,15 +144,19 @@ function pausedTask(id) {
   // An id carrying "paused-ask_human" is parked in an `ask_human` call (#3946): its history replays the
   // card's START frame and never an end — the call is in flight until the operator answers.
   const ask = String(id).includes("paused-ask_human");
+  // A turn parked LIVE ("PARK_ASK_HUMAN <label>", #3956) belongs to the session that sent it and
+  // asks its own question — two parked at once must each come back as themselves.
+  const live = liveParks.get(String(id));
+  const question = live?.question ?? "Which fruit should I pick?";
   return {
-    id, contextId: "s-stuck",
+    id, contextId: live?.sessionId ?? "s-stuck",
     status: {
       state: "TASK_STATE_INPUT_REQUIRED",
       message: {
         parts: [{
           metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
           data: ask
-            ? { question: "Which fruit should I pick?" }
+            ? { question }
             : { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
         }],
       },
@@ -167,7 +172,7 @@ function pausedTask(id) {
               metadata: {
                 "https://proto-labs.ai/a2a/ext/tool-call-v1": {
                   toolCallId: "ask-1", name: "ask_human", phase: "started",
-                  args: JSON.stringify({ question: "Which fruit should I pick?" }),
+                  args: JSON.stringify({ question }),
                 },
               },
             },
@@ -225,6 +230,12 @@ const parkedTurns = new Map();
 // session id → release(). Keyed by session for the same reason as parkedTurns: one mock
 // serves every parallel worker, and a release must only ever free its own spec's turn.
 const releasableTurns = new Map();
+// Turns PARKED LIVE on an `ask_human` question ("PARK_ASK_HUMAN <label>", #3956), task id →
+// { sessionId, question }. The task id is per session (so parallel workers and two parked
+// tabs never share one) and carries "paused-ask_human", so GetTask / SubscribeToTask serve it
+// as the parked snapshot a reload's reattach replays. A `hitl_resume` answer naming the task
+// continues it and releases the entry.
+const liveParks = new Map();
 
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
@@ -689,6 +700,7 @@ async function handleA2AStream(req, res, body) {
   // the steer POST carries in its path. That correspondence is what lets a parked turn
   // pick up its OWN interjection and no one else's.
   const sessionId = params.message?.contextId || params.contextId || "e2e-ctx";
+  if (await handleLivePark(res, body, prompt, sessionId)) return;
   const frames = buildFrames({
     rpcId: body.id ?? "1",
     // Echo the contextId the console sent (it rides on the MESSAGE, like the real server,
@@ -791,6 +803,94 @@ async function handleA2AStream(req, res, body) {
     await new Promise((r) => setTimeout(r, gap));
   }
   res.end();
+}
+
+// "PARK_ASK_HUMAN <label>" parks the turn LIVE in an `ask_human` call (#3956), the real
+// server's shape: the tool's START frame, then an input-required status carrying the
+// question — and the stream CLOSES there (the SDK ends SendStreamingMessage at an interrupted
+// state) with no end frame for the call. The answer (`hitl_resume` on that task id, A2A
+// §3.4.3) continues the same task: the call ends and the turn completes, echoing the answer
+// and the task it landed on so a spec can see the RIGHT task was resumed.
+async function handleLivePark(res, body, prompt, sessionId) {
+  const message = body.params?.message ?? {};
+  const resumeTaskId = message.taskId ? String(message.taskId) : "";
+  const answering = message.metadata?.hitl_resume === true && liveParks.has(resumeTaskId);
+  const park = /PARK_ASK_HUMAN\s+(\S+)/.exec(prompt);
+  if (!answering && !park) return false;
+  const rpcId = body.id ?? "1";
+  const wrap = (result) => ({ jsonrpc: "2.0", id: rpcId, result });
+  const status = (taskId, state, extra = {}) =>
+    wrap({ kind: "status-update", taskId, contextId: sessionId, status: { state, ...extra } });
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = async (frame) => {
+    res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
+    await new Promise((r) => setTimeout(r, 40));
+  };
+  if (answering) {
+    const { sessionId: owner } = liveParks.get(resumeTaskId);
+    liveParks.delete(resumeTaskId);
+    await send(status(resumeTaskId, "working", {
+      message: {
+        role: "agent",
+        parts: [{ kind: "text", text: "✅ ask_human" }],
+        metadata: { [TOOL_CALL_EXT_URI]: { toolCallId: "ask-1", name: "ask_human", phase: "completed", result: prompt } },
+      },
+    }));
+    await send(wrap({
+      kind: "artifact-update",
+      taskId: resumeTaskId,
+      contextId: sessionId,
+      artifact: { artifactId: resumeTaskId, parts: [{ kind: "text", text: `You like ${prompt}. (resumed ${resumeTaskId} in ${owner})` }] },
+      lastChunk: true,
+    }));
+    await send(status(resumeTaskId, "completed"));
+    res.end();
+    return true;
+  }
+  const taskId = `task-paused-ask_human-live-${sessionId}`;
+  const question = `Which fruit goes with ${park[1]}?`;
+  // "PARK_ASK_HUMAN PLUGINFORM": a plugin composer form (#1701) on the same input-required
+  // frame. It parks no graph (its redeem completes the task server-side), so the console
+  // must NOT leave the turn paused.
+  if (park[1] === "PLUGINFORM") {
+    const formTask = `task-plugin-form-${sessionId}`;
+    await send(wrap({ kind: "task", id: formTask, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+    await send(status(formTask, "input-required", {
+      message: {
+        role: "agent",
+        parts: [{
+          kind: "data",
+          data: { question: "Plugin form question?", plugin_callback_id: "cb-e2e-1" },
+          metadata: { mimeType: HITL_MIME },
+        }],
+      },
+    }));
+    res.end();
+    return true;
+  }
+  liveParks.set(taskId, { sessionId, question });
+  await send(wrap({ kind: "task", id: taskId, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+  await send(status(taskId, "working", {
+    message: {
+      role: "agent",
+      parts: [{ kind: "text", text: "🔧 ask_human" }],
+      metadata: { [TOOL_CALL_EXT_URI]: { toolCallId: "ask-1", name: "ask_human", phase: "started", args: JSON.stringify({ question }) } },
+    },
+  }));
+  await send(status(taskId, "input-required", {
+    message: { role: "agent", parts: [{ kind: "data", data: { question }, metadata: { mimeType: HITL_MIME } }] },
+  }));
+  // The stream fails AFTER the park (#3956 review): "DROPNET" drops the socket, "ERRFRAME"
+  // sends a JSON-RPC error frame. The task is still parked server-side either way.
+  if (park[1] === "DROPNET") {
+    res.destroy();
+    return true;
+  }
+  if (park[1] === "ERRFRAME") {
+    await send({ jsonrpc: "2.0", id: rpcId, error: { code: -32000, message: "stream failed after the park" } });
+  }
+  res.end();
+  return true;
 }
 
 async function serveStatic(pathname, res) {

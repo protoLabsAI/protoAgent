@@ -101,6 +101,28 @@ describe("reconcileSessionStatus", () => {
     expect(status(session.id)).toBe("streaming");
   });
 
+  it("a bubble PAUSED on the operator does not hold the session; a working one still does (#3956)", () => {
+    // A turn parked on an ask_human question stays `streaming` (it is not over) but nothing
+    // produces into it until the answer. A reattach that gave up must not leave Stop up and
+    // the form's buttons dead behind it.
+    const parked: ChatMessage[] = [
+      { id: "u1", role: "user", content: "pick a fruit", status: "done" },
+      { id: "a1", role: "assistant", content: "", status: "streaming", taskId: "t1", paused: true },
+    ];
+    const sessionId = seed(parked);
+    expect(reconcileSessionStatus(sessionId)).toBe(true);
+    expect(status(sessionId)).toBe("idle");
+    // …while its reattach is still in flight, the claim holds it.
+    const held = seed(parked);
+    const end = claimReattach(held);
+    expect(reconcileSessionStatus(held)).toBe(false);
+    end();
+    // An un-paused streaming bubble is a live turn: unchanged.
+    const live = seed([{ ...parked[0] }, { ...parked[1], paused: undefined }]);
+    expect(reconcileSessionStatus(live)).toBe(false);
+    expect(status(live)).toBe("streaming");
+  });
+
   it("counts claims: one of two overlapping reattaches ending leaves the session held", () => {
     const sessionId = seed(ENDED);
     const first = claimReattach(sessionId);

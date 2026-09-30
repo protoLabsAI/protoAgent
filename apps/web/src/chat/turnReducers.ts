@@ -113,3 +113,70 @@ export function unpauseBubble(m: ChatMessage): ChatMessage {
     toolCalls: m.toolCalls?.map((c) => (c.paused ? { ...c, paused: undefined } : c)),
   };
 }
+
+/** Whether a turn state is PARKED on the operator — input-required / auth-required. Not
+ *  over (the operator's answer continues the same task) and not working either. */
+export function isParkedState(state: string | undefined): boolean {
+  return /input.required|auth.required/i.test(state ?? "");
+}
+
+/** The bubble a LIVE stream leaves behind when it closes (#3956).
+ *
+ *  A turn that PARKED on the operator (an `ask_human` question, a form, an approval) closes
+ *  its stream too — the SDK ends `SendStreamingMessage` at an interrupted state — but it is
+ *  not over. Settling it "done" like a finished turn lied twice: the in-flight `ask_human`
+ *  card flipped to done ✓ while the form was still up, and the persisted transcript said
+ *  the turn had ended, so a reload in the same browser had no streaming bubble to reattach
+ *  and never brought the form back. A parked turn is left `streaming` and marked paused —
+ *  the exact shape a reattach and cold hydration give the same turn (#3946) — so it renders
+ *  as waiting now and reattaches to its own task after a reload. The answer that continues
+ *  the task settles it (`settleAnsweredPause` / `unpauseBubble`).
+ *
+ *  Any other end settles the bubble done, flipping a card whose end frame raced the close
+ *  (still `running`) to done, with its elapsed time stamped. */
+export function settleStreamEnd(message: ChatMessage, opts: { parked: boolean; now?: number }): ChatMessage {
+  if (opts.parked) return message.status === "streaming" ? pauseBubble(message) : message;
+  const now = opts.now ?? Date.now();
+  // Done clears any pause too: a settled bubble never reads as waiting.
+  const toolCalls = message.toolCalls?.map((c) =>
+    c.status === "running"
+      ? {
+          ...c,
+          status: "done" as const,
+          paused: undefined,
+          durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
+        }
+      : c.paused
+        ? { ...c, paused: undefined }
+        : c,
+  );
+  return { ...message, status: "done", paused: undefined, toolCalls };
+}
+
+/** Tracks whether a LIVE stream's turn is parked on the operator (#3956), off the frame
+ *  dispatcher's `onInputRequired` / `onTaskState`.
+ *
+ *  A plugin composer form (#1701) rides the same input-required frame but parks no graph —
+ *  its redeem completes the task server-side — so it never counts as parked. That exclusion
+ *  leans on the dispatcher's order within one status frame: `onInputRequired` (which carries
+ *  the payload, and so the `plugin_callback_id`) fires BEFORE `onTaskState` (lib/api/
+ *  a2aStream.ts, pinned by turnReducers.test.ts). The latest state wins: a working state
+ *  after a park un-parks. `taskState` returns the transition, or null for none. */
+export function createParkTracker() {
+  let parked = false;
+  let pluginForm = false;
+  return {
+    get parked() {
+      return parked;
+    },
+    inputRequired(payload: { plugin_callback_id?: string }) {
+      if (payload.plugin_callback_id) pluginForm = true;
+    },
+    taskState(state: string): "parked" | "unparked" | null {
+      const next = isParkedState(state) && !pluginForm;
+      if (next === parked) return null;
+      parked = next;
+      return next ? "parked" : "unparked";
+    },
+  };
+}

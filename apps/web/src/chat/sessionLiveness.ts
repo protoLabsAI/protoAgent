@@ -58,7 +58,12 @@ export function reconcileSessionStatus(sessionId: string): boolean {
   if (snap.sessionStatusMap[sessionId] !== "streaming") return false;
   if (reattaches.has(sessionId) || localTurns.has(sessionId)) return false;
   const session = snap.sessions.find((s) => s.id === sessionId);
-  if (!session || session.messages.some((message) => message.status === "streaming")) return false;
+  // A bubble PAUSED on the operator is streaming only in the sense that its turn is not
+  // over: nothing is producing into it until the answer continues the task, so it holds the
+  // session no more than a settled one does (#3956). Its reattach, if one runs, is claimed.
+  if (!session || session.messages.some((message) => message.status === "streaming" && !message.paused)) {
+    return false;
+  }
   chatStore.setSessionStatus(sessionId, "idle");
   return true;
 }
