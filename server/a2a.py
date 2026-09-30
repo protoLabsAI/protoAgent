@@ -1035,12 +1035,20 @@ def _handle_background_terminal(outcome) -> None:
     state = getattr(outcome, "state", "completed")
     status = state if state in ("completed", "canceled") else "failed"
     text = extract_output(outcome.text) or outcome.text or ""
+    # Why a job that did not complete ended (#3945). The outcome's `text` is only what
+    # the turn managed to say — for a turn the provider rejected (a 429) that is nothing,
+    # so storing it alone left the job with an empty result and the agent inventing a
+    # cause ("likely a transient issue"). The executor's terminal error names the real one.
+    error = str(getattr(outcome, "error", "") or "").strip()
+    if status != "completed" and not error and state not in ("failed", "canceled"):
+        # A background turn has no one to answer it, so a park is a failure — say so.
+        error = f"the background turn ended in state {state!r}"
     # The background turn's own priced spend, onto its ledger edge (#3565). The executor
     # reports 0.0 when no call reported usage — unknown, not free — so only a positive
     # total is recorded (the same rule its cost-v1 extension applies).
     cost = float(getattr(outcome, "cost_usd", 0.0) or 0.0)
     try:
-        mgr.store.mark_complete(job_id, status, text, cost_usd=cost if cost > 0 else None)
+        mgr.store.mark_complete(job_id, status, text, cost_usd=cost if cost > 0 else None, error=error)
     except Exception:  # noqa: BLE001
         log.exception("[background] failed to settle job %s", job_id)
         return
@@ -1063,6 +1071,7 @@ def _handle_background_terminal(outcome) -> None:
             "description": getattr(job, "description", "") if job else "",
             "origin_session": getattr(job, "origin_session", "") if job else "",
             "result": result_preview,
+            "error": error if status != "completed" else "",
         },
     )
     # Index the full report into the knowledge store (ADR 0070 D2) BEFORE any resume

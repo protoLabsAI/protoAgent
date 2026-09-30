@@ -107,6 +107,7 @@ async def _native_turn(
     incognito: bool,
     overflow_retry: bool = False,
     origin: str = "local",
+    telemetry_sink: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One native turn on this session's thread, as the reply list. Run once
     for the operator's message and, after a context-overflow compaction, once
@@ -123,7 +124,16 @@ async def _native_turn(
     autonomous origin (``server.turn_control._is_autonomous``) auto-answers a HITL pause
     and is exempt from the hold, exactly as a streaming turn from that origin is; the
     operator surfaces (``local`` / ``api-chat`` / ``v1`` / ``plugin``) stay attended.
+
+    ``telemetry_sink`` is the wrapper's telemetry sink: a turn that ends parked at a HITL
+    ask (or held behind one) stamps ``state = "input_required"`` on it, so its row says
+    what the A2A surface's does for the same park instead of ``completed`` (#3945).
     """
+
+    def _parked() -> None:
+        if telemetry_sink is not None:
+            telemetry_sink["state"] = "input_required"
+
     from langchain_core.messages import HumanMessage
 
     from graph.goals.goal_turn import goal_turn
@@ -166,6 +176,7 @@ async def _native_turn(
             )
         )
         if hold is not None and hold is not _turn_control._HITL_RESUME:
+            _parked()
             payload = _chat()._interrupt_payload(hold)
             question = (
                 payload.get("question") or payload.get("title") or "The agent needs input to continue."
@@ -232,6 +243,7 @@ async def _native_turn(
     # asks — so, as for a continuation, only an attended turn is checked.
     interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(config)
     if interrupt_val is not None:
+        _parked()
         return [
             {
                 "role": "assistant",
@@ -306,6 +318,7 @@ async def _native_turn(
                     interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(cont_config)
             step.text = extract_output(_last_ai(result))
             if interrupt_val is not None:
+                _parked()
                 return [
                     {
                         "role": "assistant",
@@ -371,6 +384,13 @@ async def _chat_langgraph_impl(
         input=_redact(message),
         incognito=bool(incognito),
     ):
+        if _telemetry_sink is not None:
+            # The trace id, read HERE while the scope is open (#3945): the wrapper writes
+            # the telemetry row after this `async with` has exited and reset the
+            # contextvar, so reading it there always gave "" — every /v1 and /api/chat
+            # row lost its link to its Langfuse trace. Same capture-during-the-turn rule
+            # as the A2A executor's `_capture_trace_id`.
+            _telemetry_sink["trace_id"] = tracing.current_trace_id() or ""
         # Set only once the NATIVE turn is about to run — the overflow recovery below
         # compacts + retries that thread (same contract as the streaming driver, #3805).
         native_tid: str | None = None
@@ -387,6 +407,13 @@ async def _chat_langgraph_impl(
                 async for frame in _pre_frames:
                     last_frame = frame
             if pre.handled:
+                if _telemetry_sink is not None:
+                    # A short-circuit (slash command, @-address, /goal control…) is a turn
+                    # the A2A surface records a row for — `completed`, or `input_required`
+                    # for a plugin form — so this surface does too (#3945).
+                    _telemetry_sink["short_circuit"] = True
+                    if last_frame is not None and last_frame[0] == "input_required":
+                        _telemetry_sink["state"] = "input_required"
                 return _traced(_chat_dispatch._short_circuit_reply(last_frame))
             message = pre.message
 
@@ -434,6 +461,7 @@ async def _chat_langgraph_impl(
                     hitl_resume=hitl_resume,
                     incognito=incognito,
                     origin=origin,
+                    telemetry_sink=_telemetry_sink,
                 )
             )
         except Exception as e:
@@ -458,6 +486,7 @@ async def _chat_langgraph_impl(
                             incognito=incognito,
                             overflow_retry=True,
                             origin=origin,
+                            telemetry_sink=_telemetry_sink,
                         )
                     )
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly

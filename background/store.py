@@ -72,6 +72,11 @@ class BackgroundJob:
     # into the origin session runs under it, so work a fenced turn left behind never
     # comes back as an unfenced turn. ``[]`` = the spawning turn was unfenced.
     origin_fence: list[str] = field(default_factory=list)
+    # Why a job that did not complete failed (#3945) — the terminal error the turn ended
+    # on (a provider 429, a crash, a stall), kept apart from ``result`` (what the turn
+    # managed to SAY, often nothing). Without it a failed job's row and its completion
+    # notification carried an empty result, and the agent guessed at the cause.
+    error: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -91,6 +96,7 @@ class BackgroundJob:
             "dismissed": self.dismissed,
             "deterministic": self.deterministic,
             "result_author": self.result_author,
+            "error": self.error,
         }
 
 
@@ -115,6 +121,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         deterministic=bool(row["deterministic"] if "deterministic" in keys else 0),
         result_author=(row["result_author"] if "result_author" in keys else "") or "",
         origin_fence=_load_fence(row["origin_fence"] if "origin_fence" in keys else ""),
+        error=(row["error"] if "error" in keys else "") or "",
     )
 
 
@@ -175,7 +182,8 @@ class BackgroundStore:
                     dismissed      INTEGER NOT NULL DEFAULT 0,
                     deterministic  INTEGER NOT NULL DEFAULT 0,
                     result_author  TEXT NOT NULL DEFAULT '',
-                    origin_fence   TEXT NOT NULL DEFAULT '[]'
+                    origin_fence   TEXT NOT NULL DEFAULT '[]',
+                    error          TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -204,6 +212,9 @@ class BackgroundStore:
             # Migrate a pre-origin-fence DB: existing rows were spawned unfenced-recorded → [].
             if "origin_fence" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN origin_fence TEXT NOT NULL DEFAULT '[]'")
+            # Migrate a pre-#3945 DB: a failed job's terminal error (existing rows → '').
+            if "error" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN error TEXT NOT NULL DEFAULT ''")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -292,6 +303,7 @@ class BackgroundStore:
         *,
         now: datetime | None = None,
         cost_usd: float | None = None,
+        error: str = "",
     ) -> bool:
         """Transition a job to a terminal state, idempotently.
 
@@ -302,6 +314,9 @@ class BackgroundStore:
         ``cost_usd`` is the job's model spend when the settling path knows it (the A2A
         terminal hook does — the background turn's own priced usage), carried onto the
         delegation ledger edge (#3565). None means unknown and leaves the column NULL.
+
+        ``error`` is why a non-completed job ended (#3945) — stored beside ``result``, which
+        stays the turn's own output. Ignored for a ``completed`` job.
         """
         if status not in _TERMINAL:
             raise ValueError(f"mark_complete status must be terminal, got {status!r}")
@@ -309,9 +324,9 @@ class BackgroundStore:
         db = self._connect()
         try:
             cur = db.execute(
-                "UPDATE background_jobs SET status = ?, result = ?, completed_at = ? "
+                "UPDATE background_jobs SET status = ?, result = ?, error = ?, completed_at = ? "
                 "WHERE id = ? AND status = 'running'",
-                (status, result or "", completed, job_id),
+                (status, result or "", "" if status == "completed" else (error or ""), completed, job_id),
             )
             db.commit()
             transitioned = cur.rowcount > 0
@@ -345,7 +360,7 @@ class BackgroundStore:
                     # about the delegate (the same rule the dispatch path follows).
                     outcome={"completed": "ok", "failed": "failed"}.get(status, "cancelled"),
                     duration_ms=elapsed,
-                    error=result if status == "failed" else "",
+                    error=(error or result) if status == "failed" else "",
                     cost_usd=cost_usd,
                 )
             except Exception:  # noqa: BLE001 — the ledger must never break a completion

@@ -36,7 +36,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | Topic | Payload keys | Emitted from |
 |---|---|---|
 | `activity.message` | `context_id`, `error`, `origin`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `server/a2a.py` |
-| `background.completed` | `description`, `job_id`, `origin_session`, `result`, `status`, `subagent_type` | `background/manager.py`, `server/a2a.py` |
+| `background.completed` | `description`, `error`, `job_id`, `origin_session`, `result`, `status`, `subagent_type` | `background/manager.py`, `server/a2a.py` |
 | `background.progress` | `error`, `job_id`, `output`, `phase`, `task_id`, `tool`, `tool_call_id` | `server/a2a.py` |
 | `background.started` | `description`, `job_id`, `origin_session`, `status`, `subagent_type` | `background/manager.py` |
 | `chat.progress` | `session_id`, `task_id` | `server/a2a.py` |

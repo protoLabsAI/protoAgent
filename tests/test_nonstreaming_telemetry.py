@@ -151,9 +151,9 @@ def test_a_failed_turn_that_died_before_the_graph_is_recorded(wired):
 
 
 def test_a_control_plane_reply_gets_no_row(wired):
-    # A turn that short-circuited before the graph — an unknown slash command,
-    # "setup not complete", a HITL hold — never populates the sink. It spent
-    # nothing, and counting it as a turn would corrupt every rate the store reports.
+    # A turn whose sink stayed empty ("setup not complete" never reaches the impl)
+    # spent nothing and ran no turn. Slash-command short-circuits and HITL parks/holds
+    # DO get a row now, matching A2A (#3945) — they mark the sink; this one did not.
     _record({})
     assert wired.recent() == []
 

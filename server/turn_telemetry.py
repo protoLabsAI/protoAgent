@@ -241,10 +241,16 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
     """Write the telemetry row for one non-streaming turn (#3000). Best-effort.
 
     ``sink`` is populated by ``_chat_langgraph_impl`` (``server/turn_sync.py``) with the turn's usage
-    callback. It stays empty when the turn short-circuited before reaching the
-    graph — a `/help` command, an unknown slash command, "setup not complete", a
-    HITL hold. Those spend nothing, so they get no row: a telemetry surface that
-    counts control-plane replies as turns is worse than one that doesn't.
+    callback, its trace id (captured INSIDE the trace scope — by the time this runs the
+    scope has closed and ``current_trace_id()`` is empty, #3945), and — for a turn that
+    did not simply complete — ``short_circuit`` / ``state`` markers.
+
+    Which turns get a row matches the A2A surface, which records one for every turn it
+    runs (#3945): a pre-turn short-circuit (a slash command, an unknown ``/command``, an
+    @-address — ``short_circuit``) gets a ``completed`` row, or ``input_required`` for a
+    plugin form; a HITL park or hold gets an ``input_required`` row. A turn that reached
+    the graph, made no model call and simply completed (an ACP turn, a tool-only
+    short-circuit) still gets none.
 
     A FAILED turn is the exception (#3929): it is always recorded, with whatever
     usage it managed (zero when the provider rejected the first call — a 400/429
@@ -256,12 +262,14 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
     """
     try:
         usage_cb = sink.get("usage_cb")
-        failed = state == "failed"
-        if usage_cb is None and not failed:
+        # Recorded even with no model call: a failure (#3929), a short-circuit reply and a
+        # HITL park/hold (#3945) — each is a row on the A2A surface too.
+        always = state in ("failed", "input_required") or bool(sink.get("short_circuit"))
+        if usage_cb is None and not always:
             return
         per_model = (getattr(usage_cb, "usage_metadata", None) or {}) if usage_cb is not None else {}
         models, usage, cost = telemetry_usage(per_model)
-        if not failed and not models and not usage["input_tokens"] and not usage["output_tokens"]:
+        if not always and not models and not usage["input_tokens"] and not usage["output_tokens"]:
             return  # reached the graph but made no model call (an ACP turn, a tool-only short-circuit)
 
         from observability import tracing
@@ -276,7 +284,9 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
             duration_ms=int((time.monotonic() - started) * 1000),
             llm_calls=int(getattr(usage_cb, "llm_calls", 0) or 0),
             tool_calls=int(getattr(usage_cb, "tool_calls", 0) or 0),
-            trace_id=tracing.current_trace_id() or "",
+            # The sink's copy, captured inside the trace scope (#3945); the live read
+            # is only a fallback for a caller that records while its scope is open.
+            trace_id=sink.get("trace_id") or tracing.current_trace_id() or "",
             # No per-call breakdown on this path: LangChain's usage callback
             # aggregates PER MODEL across the turn, so the peak single-call prompt
             # size (context fill) and per-tool durations aren't recoverable from it.
