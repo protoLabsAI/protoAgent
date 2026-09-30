@@ -417,3 +417,82 @@ async def test_answer_to_an_orphaned_input_required_task_reaches_the_agent(monke
         assert any(isinstance(m, HumanMessage) and "banana" in str(m.content) for m in await _history(sid))
     finally:
         hitl_routing._ROUTER[0] = None
+
+
+# ── #3930 review round 2: randomized answer/held-message race on the real graph ──
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", range(24))
+async def test_randomized_answer_vs_held_message_race_never_loses_the_answer(monkeypatch, seed):
+    """A form is pending; a held composer message and the form answer (naming the parked
+    task, or not) race in with 0–10 ms of jitter each. Whatever the interleaving: the
+    answer always reaches the graph as the form's answer, and no task is left
+    input-required without a pending interrupt behind it."""
+    import asyncio
+    import random
+
+    from a2a.server.context import ServerCallContext
+    from a2a.server.request_handlers import DefaultRequestHandler
+    from a2a.server.tasks import InMemoryPushNotificationConfigStore, InMemoryTaskStore
+    from a2a.types import AgentSkill, Message, Part, Role, SendMessageRequest, TaskState
+
+    import protolabs_a2a as pa
+    from a2a_impl import hitl_routing
+    from a2a_impl.executor import ProtoAgentExecutor
+
+    rng = random.Random(seed)
+    sid = f"race-{seed}"
+    _install_graph(
+        monkeypatch,
+        [_form_call(), AIMessage(content="Deployed to prod.")] + [AIMessage(content="ok") for _ in range(6)],
+    )
+    card = pa.build_agent_card(
+        name="t", description="d", url="http://t/a2a", version="0.0.0",
+        skills=[AgentSkill(id="chat", name="chat", description="d", tags=["chat"])], bearer=False,
+    )
+    handler = DefaultRequestHandler(
+        agent_executor=ProtoAgentExecutor(chat_mod._chat_langgraph_stream),
+        task_store=InMemoryTaskStore(),
+        agent_card=card,
+        push_config_store=InMemoryPushNotificationConfigStore(),
+    )
+    router = hitl_routing.install_parked_task_routing(handler)
+    call = ServerCallContext()
+
+    def msg(text, mid, *, task_id="", hitl=False):
+        m = Message(message_id=mid, context_id=sid, role=Role.ROLE_USER, parts=[Part(text=text)])
+        if task_id:
+            m.task_id = task_id
+        if hitl:
+            m.metadata.update({"hitl_resume": True})
+        return SendMessageRequest(message=m)
+
+    async def later(delay, req):
+        await asyncio.sleep(delay)
+        return await handler.on_message_send(req, call)
+
+    try:
+        p1 = await handler.on_message_send(msg("deploy the service", "m1"), call)
+        assert p1.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+        name_task = rng.random() < 0.5
+        results = await asyncio.gather(
+            later(rng.uniform(0, 0.01), msg("also make it blue", "m2")),
+            later(rng.uniform(0, 0.01), msg('{"env": "prod"}', "m3", task_id=p1.id if name_task else "", hitl=True)),
+            return_exceptions=True,
+        )
+        assert not any(isinstance(r, BaseException) for r in results), results
+        for _ in range(3):
+            await router.drain()
+            await asyncio.sleep(0.05)
+
+        history = await _history(sid)
+        assert any(isinstance(m, ToolMessage) and "prod" in str(m.content) for m in history), (
+            "the form answer never reached the graph"
+        )
+        pending = await chat_mod._pending_interrupt_value(_cfg(sid))
+        parked = await hitl_routing.ParkedTaskRouter(handler).parked_tasks(sid, call)
+        assert not parked or pending is not None, [t.id for t in parked]
+        assert len(parked) <= 1
+    finally:
+        hitl_routing._ROUTER[0] = None

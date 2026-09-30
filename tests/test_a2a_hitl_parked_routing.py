@@ -384,7 +384,8 @@ async def test_a_message_naming_a_task_of_another_context_is_refused():
 @pytest.mark.asyncio
 async def test_a_double_submitted_answer_never_reopens_the_completed_task():
     """Two answers race onto the same parked task: the first continues it; the second
-    must not re-run the completed task as a fresh turn."""
+    must not re-run the COMPLETED task as a fresh turn. It is refused by the ended task
+    and re-routed — with nothing parked, to a task of its own."""
     calls: list = []
     handler, router = _handler(_form_stream(calls))
     p1 = await handler.on_message_send(_msg("ask", mid="m1"), CALL)
@@ -396,5 +397,87 @@ async def test_a_double_submitted_answer_never_reopens_the_completed_task():
     await router.drain()
     await asyncio.sleep(0.2)
     assert (await _get(handler, p1.id)).status.state == TaskState.TASK_STATE_COMPLETED
-    # Exactly one resume ran on p1, and no call reopened it as a fresh turn.
-    assert [c for c in calls if not c["resume"]] == [{"text": "ask", "resume": False}], (calls, results)
+    # Exactly one answer continued p1; the other ran on a NEW task — p1 was never reopened.
+    assert sum(1 for c in calls if c["resume"]) == 1, calls
+    assert all(isinstance(r, Task) for r in results), results
+    assert sorted(r.id == p1.id for r in results) == [False, True], results
+    p1_task = await _get(handler, p1.id)
+    assert sum(1 for m in p1_task.history if m.role == Role.ROLE_USER) == 2  # "ask" + one answer
+
+
+# ── review round 2: an answer is never lost to a settle ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_settle_never_completes_a_task_an_answer_is_headed_to():
+    """Deterministic reproducer: the answer is routed to P1, then stalls before the SDK
+    queues it (its second task_store.get). Meanwhile a held message re-parks as P2 and
+    P1's settle is scheduled. The settle must wait for the answer: the answer continues
+    P1, reaches the agent, and nothing is left parked."""
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    p1 = await handler.on_message_send(_msg("ask", mid="m1"), CALL)
+
+    store = handler.task_store
+    real_get = store.get
+    stall, release = asyncio.Event(), asyncio.Event()
+    gets = {"n": 0}
+
+    async def get(task_id, context):
+        if task_id == p1.id and stall.is_set():
+            gets["n"] += 1
+            if gets["n"] == 2:  # the SDK's own lookup, after route() already chose P1
+                await release.wait()
+        return await real_get(task_id, context)
+
+    store.get = get
+    stall.set()
+    answer = asyncio.ensure_future(
+        handler.on_message_send(_msg("banana", mid="m2", task_id=p1.id, hitl_resume=True), CALL)
+    )
+    for _ in range(50):
+        if gets["n"] >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert gets["n"] == 2, "the answer never reached the SDK's lookup"
+
+    held = await handler.on_message_send(_msg("held", mid="m3"), CALL)
+    await router.drain()
+    assert (await _get(handler, p1.id)).status.state == TaskState.TASK_STATE_INPUT_REQUIRED  # not settled
+
+    release.set()
+    result = await asyncio.wait_for(answer, 5)
+    await router.drain()
+    await asyncio.sleep(0.05)
+    await router.drain()
+
+    assert result.id == p1.id and result.status.state == TaskState.TASK_STATE_COMPLETED
+    assert {"text": "banana", "resume": True} in calls
+    assert not any("superseded" in c["text"] for c in calls)
+    # P1's answer consumed the pause, so the task that re-parked on it is settled too.
+    assert (await _get(handler, held.id)).status.state == TaskState.TASK_STATE_COMPLETED
+    assert await _parked(handler) == []
+
+
+@pytest.mark.asyncio
+async def test_a_message_to_an_ended_task_is_not_silently_accepted():
+    """A plain message naming a task that already ended is refused, not swallowed behind
+    a 200; a HITL answer naming one is re-routed to the context's current pause."""
+    from a2a.utils.errors import InvalidParamsError
+
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    p1 = await handler.on_message_send(_msg("ask", mid="m1"), CALL)
+    done = await handler.on_message_send(_msg("kiwi", mid="m2", task_id=p1.id, hitl_resume=True), CALL)
+    assert done.status.state == TaskState.TASK_STATE_COMPLETED
+    await router.drain()
+
+    with pytest.raises(InvalidParamsError):
+        await handler.on_message_send(_msg("hello?", mid="m3", task_id=p1.id), CALL)
+    assert "hello?" not in [c["text"] for c in calls]
+
+    p2 = await handler.on_message_send(_msg("ask again", mid="m4"), CALL)
+    answer = await handler.on_message_send(_msg("mango", mid="m5", task_id=p1.id, hitl_resume=True), CALL)
+    await router.drain()
+    assert answer.id == p2.id and answer.status.state == TaskState.TASK_STATE_COMPLETED
+    assert {"text": "mango", "resume": True} in calls
