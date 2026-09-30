@@ -55,6 +55,16 @@ def _clean_queues():
     steering._QUEUES.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_ledger(monkeypatch):
+    """These tests spawn background jobs and run real delegations, and both record
+    delegation edges into ``STATE.ledger_store``. An earlier test in the session can
+    leave a real store there, so run with no ledger rather than leak edges into it."""
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "ledger_store", None, raising=False)
+
+
 def _graph(monkeypatch, model):
     from unittest.mock import patch
 
