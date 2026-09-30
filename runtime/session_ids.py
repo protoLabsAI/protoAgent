@@ -72,6 +72,15 @@ def require_session_id(session_id: str) -> str:
     return session_id
 
 
+def optional_session_id(session_id: str) -> str:
+    """Like :func:`require_session_id`, but a blank value (empty or whitespace-only) is
+    returned exactly as given — for request fields where "no id" has its own meaning
+    (a default, or "mint one"). Suits a pydantic ``field_validator``."""
+    if not isinstance(session_id, str) or not session_id.strip():
+        return session_id
+    return require_session_id(session_id)
+
+
 #: A FastAPI parameter / pydantic field type carrying the check: an unacceptable id is a 422
 #: before any handler runs. Every ``{session_id}`` path parameter on the chat and goal routes
 #: uses it.

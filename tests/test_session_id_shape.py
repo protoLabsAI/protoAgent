@@ -220,6 +220,51 @@ def test_operator_goal_set_refuses_an_unusable_session_id(monkeypatch):
     assert res["ok"] is False and set_calls == []
 
 
+# --- manual subagent runs ---------------------------------------------------------------
+
+
+def _subagent_client(seen: list):
+    from operator_api.routes import register_operator_routes
+
+    async def _run(payload):
+        seen.append(("run", payload["session_id"]))
+        return "ok"
+
+    async def _batch(payload):
+        seen.append(("batch", payload["session_id"]))
+        return "ok"
+
+    app = FastAPI()
+    register_operator_routes(
+        app, runtime_status=lambda: {}, subagent_list=lambda: [], subagent_run=_run, subagent_batch=_batch
+    )
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("sid", ["../x", "a\\b", "x\x00y", "a%3Ab"])
+def test_subagent_runs_refuse_an_unusable_session_id(sid):
+    seen: list = []
+    c = _subagent_client(seen)
+    assert c.post("/api/subagents/run", json={"prompt": "p", "session_id": sid}).status_code == 422
+    assert c.post("/api/subagents/batch", json={"tasks": [], "session_id": sid}).status_code == 422
+    assert seen == []
+
+
+def test_subagent_runs_keep_default_blank_and_first_party_ids():
+    seen: list = []
+    c = _subagent_client(seen)
+    c.post("/api/subagents/run", json={"prompt": "p"})  # omitted → the default
+    c.post("/api/subagents/run", json={"prompt": "p", "session_id": ""})  # blank → as given
+    c.post("/api/subagents/batch", json={"tasks": [], "session_id": "  "})
+    c.post("/api/subagents/batch", json={"tasks": [], "session_id": "chat-1727712345678-k3j9x2"})
+    assert seen == [
+        ("run", "manual-subagent"),
+        ("run", ""),
+        ("batch", "  "),
+        ("batch", "chat-1727712345678-k3j9x2"),
+    ]
+
+
 # --- A2A contextId ----------------------------------------------------------------------
 
 _A2A_ROUTERS: list = []

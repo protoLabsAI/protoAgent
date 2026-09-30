@@ -10,9 +10,9 @@ from typing import Any
 
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
-from runtime.session_ids import SessionId
+from runtime.session_ids import SessionId, optional_session_id
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +23,16 @@ class SubagentRunRequest(BaseModel):
     description: str = ""
     prompt: str
 
+    # A caller-chosen session id: same shape rule as every chat entry point. Blank is
+    # passed through unchanged (it has always meant "no parent session").
+    _check_session_id = field_validator("session_id")(optional_session_id)
+
 
 class SubagentBatchRequest(BaseModel):
     session_id: str = "manual-subagent"
     tasks: list[dict[str, Any]]
+
+    _check_session_id = field_validator("session_id")(optional_session_id)
 
 
 class ScheduleAddRequest(BaseModel):
