@@ -476,7 +476,15 @@ async def test_streaming_overflow_retry_reads_priority_from_turn_control(monkeyp
         return None
 
     async def _native(
-        message, session_id, config, *, request_metadata=None, resume=False, images=None, overflow_retry=False
+        message,
+        session_id,
+        config,
+        *,
+        request_metadata=None,
+        resume=False,
+        images=None,
+        overflow_retry=False,
+        fence=None,
     ):
         calls.append(message)
         if len(calls) == 1:

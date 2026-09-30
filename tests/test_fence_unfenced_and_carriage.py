@@ -38,6 +38,9 @@ from tests.test_turn_fence_every_pass import _call, _fence_of, _stream, _tool_me
 
 env = _every.env
 
+# Imports the goal verifiers (platform-branching) and spawns a verifier process.
+pytestmark = pytest.mark.platform_sensitive
+
 chat_mod = importlib.import_module("server.chat")
 turn_stream = importlib.import_module("server.turn_stream")
 
@@ -495,7 +498,6 @@ class _Sched:
         return True
 
 
-@pytest.mark.platform_sensitive  # the command verifier spawns a process
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fence", [_FENCE, []], ids=["fenced", "unfenced"])
 async def test_watch_reaction_runs_under_the_creating_turns_fence(tmp_path, monkeypatch, fence):
