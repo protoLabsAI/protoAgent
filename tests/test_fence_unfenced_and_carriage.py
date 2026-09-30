@@ -782,3 +782,420 @@ async def test_e2e_continuation_of_a_goal_set_mid_turn_runs_under_its_fence(env,
 
     (tool,) = await _tool_messages(g, f"a2a:{sid}")
     _assert_blocked(tool)
+
+
+# ── a session whose active goal is fenced: its turns get the goal's pre-turn gating ─
+#
+# A plain (unfenced) turn in a session whose ACTIVE goal a fenced turn set is goal-driven
+# under that goal's fence, so the pre-turn chain gates it exactly as it gates a fenced
+# caller: no short-circuit runs (the text reaches the fenced goal-driven turn verbatim)
+# and an ACP runtime refuses it. `/goal` itself still runs, so the operator can always
+# check, replace or clear the goal.
+
+chat_acp = importlib.import_module("server.chat_acp")
+chat_commands = importlib.import_module("server.chat_commands")
+chat_dispatch = importlib.import_module("server.chat_dispatch")
+
+
+@pytest.fixture
+def _shortcuts(monkeypatch):
+    """`/digest` is a workflow and `/synthesizer` a subagent; running either is recorded."""
+    ran: list[str] = []
+
+    def _wf(message):
+        return ("digest", {}) if message.startswith("/digest") else None
+
+    def _sub(message):
+        return ("synthesizer", message.split(" ", 1)[1]) if message.startswith("/synthesizer ") else None
+
+    async def _run_wf(name, inputs, on_step=None):
+        ran.append(f"workflow:{name}")
+        return "workflow output"
+
+    async def _run_sub(sub_type, prompt, **kw):
+        ran.append(f"subagent:{sub_type}")
+        return "subagent output"
+
+    monkeypatch.setattr(chat_commands, "_parse_workflow_command", _wf)
+    monkeypatch.setattr(chat_commands, "_parse_subagent_command", _sub)
+    monkeypatch.setattr(chat_commands, "_run_parsed_workflow", _run_wf)
+    monkeypatch.setattr(chat_commands, "_run_parsed_subagent", _run_sub)
+    return ran
+
+
+@pytest.fixture
+def _acp_rt(monkeypatch):
+    """An ACP runtime; the message each driver hands it is recorded instead of run."""
+    import runtime.acp_runtime as acp_runtime
+
+    ran: list[str] = []
+
+    async def _acquire(tid):
+        return object()
+
+    async def _release(tid):
+        return None
+
+    async def _drive(rt, message):
+        ran.append(message)
+        yield ("done", "ran-on-acp")
+
+    async def _collected(session_id, message):
+        ran.append(message)
+        return [{"role": "assistant", "content": "ran-on-acp"}]
+
+    monkeypatch.setattr(acp_runtime, "is_acp_runtime", lambda cfg: True)
+    monkeypatch.setattr(chat_acp, "_acp_acquire", _acquire)
+    monkeypatch.setattr(chat_acp, "_acp_release", _release)
+    monkeypatch.setattr(chat_acp, "_acp_drive_turn", _drive)
+    monkeypatch.setattr(chat_acp, "_acp_turn_collected", _collected)
+    return ran
+
+
+def _goal(env, monkeypatch, fence):
+    goals = FakeGoals(iteration=3)  # past the kickoff: the turn's text reaches the graph as-is
+    goals.state.fence = fence
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    return goals
+
+
+async def _reply(driver, message, session_id):
+    """The turn's final answer text."""
+    if driver == "stream":
+        frames = await _stream(message, session_id)
+        assert frames[-1][0] == "done", frames
+        return frames[-1][1]
+    (out,) = await chat_mod.chat(message, session_id)
+    return out["content"]
+
+
+def _script(env, driver, answer="goal answer"):
+    if driver == "stream":
+        return env.install(streams=[[text("r1", answer)]])
+    from tests._turn_driver_fakes import turn_result
+
+    return env.install(invokes=[turn_result(AIMessage(content=answer))])
+
+
+def _graph_inputs(g, driver):
+    return [inp for inp, _ in (g.stream_calls if driver == "stream" else g.invoke_calls)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+@pytest.mark.parametrize("message", ["/digest now", "/synthesizer do it", "/foobar do it"])
+async def test_fenced_goal_turn_runs_no_short_circuit(env, monkeypatch, _shortcuts, driver, message):
+    """A workflow, a subagent, an unknown `/command`: none runs — the text goes to the
+    goal-driven turn verbatim, under the goal's fence."""
+    _goal(env, monkeypatch, _FENCE)
+    g = _script(env, driver)
+
+    answer = await _reply(driver, message, f"sGF{driver}")
+
+    assert _shortcuts == []
+    assert answer == "goal answer"
+    (graph_input,) = _graph_inputs(g, driver)
+    assert graph_input["messages"][-1].content == message
+    assert _fence_of(graph_input) == _FENCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+@pytest.mark.parametrize(
+    ("message", "ran"),
+    [("/digest now", ["workflow:digest"]), ("/synthesizer do it", ["subagent:synthesizer"])],
+)
+async def test_unfenced_goal_turn_still_short_circuits(env, monkeypatch, _shortcuts, driver, message, ran):
+    _goal(env, monkeypatch, [])
+    env.install()  # no graph call
+
+    answer = await _reply(driver, message, f"sGU{driver}")
+
+    assert _shortcuts == ran
+    assert answer.endswith("output")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_fenced_goal_turn_is_refused_on_an_acp_runtime(env, monkeypatch, _acp_rt, driver):
+    _goal(env, monkeypatch, _FENCE)
+    env.install()
+
+    answer = await _reply(driver, "keep going", f"sGA{driver}")
+
+    assert answer == chat_dispatch._GOAL_FENCED_ACP_REFUSAL
+    assert _acp_rt == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_unfenced_goal_turn_still_runs_on_an_acp_runtime(env, monkeypatch, _acp_rt, driver):
+    _goal(env, monkeypatch, [])
+    env.install()
+
+    assert await _reply(driver, "keep going", f"sGB{driver}") == "ran-on-acp"
+    assert _acp_rt == ["keep going"]
+
+
+@pytest.fixture
+def _real_goals(env, monkeypatch, tmp_path):
+    """The real controller, holding an active goal a fenced turn set on session ``s``."""
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"p:x": object()})
+    c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+    with fence_scope(_FENCE):
+        ok, _msg = c.set_goal_safe("s", "cond", {"type": "plugin", "check": "p:x"})
+    assert ok and c.active_goal("s").fence == _FENCE
+    monkeypatch.setattr(env.state, "goal_controller", c, raising=False)
+    return c
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_fenced_goal_turn_still_runs_goal_status_and_clear(env, _real_goals, _acp_rt, driver):
+    """`/goal` is never gated — not even on an ACP runtime, where every other turn in the
+    session is refused while the fenced goal is active. After `/goal clear` the session
+    is back to normal: the next turn runs there."""
+    env.install()
+
+    assert "cond" in await _reply(driver, "/goal", "s")
+    assert await _reply(driver, "/goal clear", "s") == "Goal cleared."
+    assert _real_goals.active_goal("s") is None
+    assert await _reply(driver, "hello", "s") == "ran-on-acp"
+    assert _acp_rt == ["hello"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_operator_can_replace_a_fenced_goal(env, _real_goals, _acp_rt, driver):
+    """`/goal <new>` replaces the fenced goal with the operator's own (unfenced) one, and
+    the turn it kicks off is gated by the NEW goal, not the one it replaced."""
+    env.install()
+
+    await _reply(driver, "/goal ship the release notes", "s")
+
+    goal = _real_goals.active_goal("s")
+    assert goal.condition == "ship the release notes" and goal.fence == []
+    assert _acp_rt == ["/goal ship the release notes"]
+
+
+@pytest.mark.asyncio
+async def test_a_fenced_caller_still_cannot_change_the_goal(env, monkeypatch, _real_goals):
+    """The `/goal` exemption is for the session's own (unfenced) turns: a fenced caller's
+    `/goal clear` stays text for its fenced turn, and the goal survives."""
+
+    async def _not_judged(session_id, **kw):
+        return None  # one pass, no continuation
+
+    monkeypatch.setattr(_real_goals, "evaluate", _not_judged)
+    g = _script(env, "stream", "noted")
+
+    frames = await _stream("/goal clear", "s", request_metadata={"subagent_fence": _FENCE})
+
+    assert frames[-1] == ("done", "noted")
+    assert _real_goals.active_goal("s") is not None
+    ((graph_input, _),) = g.stream_calls
+    assert _fence_of(graph_input) == _FENCE
+
+
+@pytest.fixture
+def _more_shortcuts(monkeypatch):
+    """An `@proto` delegate, a plugin `/issue` command and a `/triage` skill; running
+    (or, for the skill, rewriting) any of them is recorded."""
+    chat_rooms = importlib.import_module("server.chat_rooms")
+    ran: list[str] = []
+
+    def _at(message):
+        return (["proto"], message.split(" ", 1)[1]) if message.startswith("@proto ") else None
+
+    async def _exchange(message, session_id, request_metadata):
+        if _at(message) is None:
+            return None, None  # not addressed: fall through, as the real exchange does
+        ran.append("delegate:proto")
+        return "delegate reply", [{"author": "proto", "reply": "delegate reply", "ok": True}]
+
+    async def _plugin(name, rest, session_id):
+        if name == "issue":
+            ran.append("plugin:issue")
+            return "plugin reply"
+        return None
+
+    def _skill(message):
+        return ({"name": "triage", "prompt_template": "P"}, "x") if message.startswith("/triage") else None
+
+    def _directive(skill, args):
+        ran.append("skill:triage")
+        return "SKILL DIRECTIVE"
+
+    monkeypatch.setattr(chat_rooms, "_parse_at_delegates", _at)
+    monkeypatch.setattr(chat_rooms, "_at_delegate_exchange", _exchange)
+    monkeypatch.setattr(chat_dispatch, "_run_plugin_chat_command", _plugin)
+    monkeypatch.setattr(chat_commands, "_parse_skill_command", _skill)
+    monkeypatch.setattr(chat_commands, "_skill_directive", _directive)
+    return ran
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+@pytest.mark.parametrize("message", ["@proto hi there", "/issue file it", "/triage x", "/lifecycle"])
+async def test_fenced_goal_turn_gates_every_other_short_circuit(env, monkeypatch, _more_shortcuts, driver, message):
+    """An @-mention, a plugin command, a skill rewrite, /lifecycle: none runs — the text
+    reaches the goal-driven turn verbatim, under the goal's fence."""
+    _goal(env, monkeypatch, _FENCE)
+    g = _script(env, driver)
+
+    answer = await _reply(driver, message, f"sGM{driver}")
+
+    assert _more_shortcuts == []
+    assert answer == "goal answer"
+    (graph_input,) = _graph_inputs(g, driver)
+    assert graph_input["messages"][-1].content == message
+    assert _fence_of(graph_input) == _FENCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "ran"),
+    [("@proto hi there", ["delegate:proto"]), ("/issue file it", ["plugin:issue"]), ("/triage x", ["skill:triage"])],
+)
+async def test_unfenced_goal_turn_still_runs_the_other_short_circuits(env, monkeypatch, _more_shortcuts, message, ran):
+    _goal(env, monkeypatch, [])
+    _script(env, "stream")
+
+    await _stream(message, "sGN")
+
+    assert _more_shortcuts == ran
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "noticed"),
+    [("/synthesizer do it", True), ("@proto hi", True), ("/typo", True), ("keep going", False), ("/usr/bin is odd", False)],
+)
+async def test_fenced_goal_turn_says_commands_are_paused(env, monkeypatch, _shortcuts, message, noticed):
+    """A command the goal's scope keeps from running is announced, not silently turned
+    into goal text; plain text gets no notice."""
+    _goal(env, monkeypatch, _FENCE)
+    _script(env, "stream")
+
+    frames = await _stream(message, "sGP")
+
+    assert (("tool_start", chat_dispatch._GOAL_FENCED_COMMANDS_PAUSED) in frames) is noticed
+    assert _shortcuts == []
+
+
+def test_goal_status_says_the_goal_runs_with_a_restricted_tool_scope():
+    from graph.goals.types import GoalState
+
+    scoped = GoalState(session_id="s", condition="c", fence=_FENCE).status_line()
+    assert "restricted tool scope" in scoped and "discord_read" not in scoped
+    assert "restricted tool scope" not in GoalState(session_id="s", condition="c").status_line()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_fenced_goal_session_answers_a_goal_parse_error(env, _real_goals, _acp_rt, driver):
+    """A malformed `/goal` is still goal control — answered, not refused or run."""
+    env.install()
+
+    answer = await _reply(driver, '/goal {"condition": ', "s")
+
+    assert answer.startswith("Could not parse goal")
+    assert _acp_rt == [] and _real_goals.active_goal("s").fence == _FENCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("driver", ["stream", "sync"])
+async def test_a_deny_all_goal_gates_the_pre_turn_chain(env, monkeypatch, tmp_path, _shortcuts, _acp_rt, driver):
+    """A stored goal whose fence is unusable (``null``) reads as deny-all — gated, and
+    refused on an ACP runtime, never treated as unfenced."""
+    import json
+
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+
+    (tmp_path / "s.json").write_text(
+        json.dumps({"session_id": "s", "condition": "c", "verifier": {"type": "llm"}, "status": "active", "fence": None})
+    )
+    c = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+    assert c.active_goal("s").fence == [FENCE_DENY_ALL]
+    monkeypatch.setattr(env.state, "goal_controller", c, raising=False)
+    env.install()
+
+    assert await _reply(driver, "/synthesizer do it", "s") == chat_dispatch._GOAL_FENCED_ACP_REFUSAL
+    assert _shortcuts == [] and _acp_rt == []
+
+
+@pytest.mark.asyncio
+async def test_a_fenced_caller_still_cannot_change_the_goal_sync(env, monkeypatch, _real_goals):
+    async def _not_judged(session_id, **kw):
+        return None
+
+    monkeypatch.setattr(_real_goals, "evaluate", _not_judged)
+    from tests._turn_driver_fakes import turn_result
+
+    g = env.install(invokes=[turn_result(AIMessage(content="noted"))])
+
+    (out,) = await chat_mod.chat("/goal clear", "s", tool_fence=_FENCE, origin="plugin")
+
+    assert out["content"] == "noted"
+    assert _real_goals.active_goal("s") is not None
+    ((graph_input, _),) = g.invoke_calls
+    assert _fence_of(graph_input) == _FENCE
+
+
+# ── the /btw side question runs under the session's goal fence ───────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("goal_fence", "caller_fence", "expect"),
+    [
+        (_FENCE, None, _FENCE),
+        ([], None, []),
+        (_FENCE, ["current_time"], [FENCE_DENY_ALL]),
+        ([], "not-a-list", [FENCE_DENY_ALL]),
+        (["current_time", "discord_read"], ["current_time"], ["current_time"]),
+    ],
+)
+async def test_aside_stamps_the_goal_and_caller_fence(env, monkeypatch, goal_fence, caller_fence, expect):
+    session_ops = importlib.import_module("server.chat_session_ops")
+    _goal(env, monkeypatch, goal_fence)
+    seen: dict = {}
+
+    class _G:
+        async def aget_state(self, config):
+            return SimpleNamespace(values={"messages": []})
+
+        async def ainvoke(self, graph_input, config=None):
+            seen.update(graph_input)
+            return {"messages": [AIMessage(content="aside answer")]}
+
+    monkeypatch.setattr(env.state, "graph", _G(), raising=False)
+    md = {"subagent_fence": caller_fence} if caller_fence is not None else None
+
+    out = await session_ops.aside_session("sA", "what's up?", request_metadata=md)
+
+    assert out["found"] is True
+    assert seen["subagent_fence"] == expect
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("goal_fence", [_FENCE, []], ids=["fenced-goal", "unfenced-goal"])
+async def test_e2e_aside_in_a_fenced_goal_session_blocks_a_tool_outside_the_fence(env, monkeypatch, goal_fence):
+    """The side question runs the REAL graph over the session's context: a tool outside
+    the goal's fence is blocked there, as on every goal-driven pass."""
+    session_ops = importlib.import_module("server.chat_session_ops")
+    aside_op = importlib.import_module("graph.aside_op")
+    monkeypatch.setattr(aside_op.secrets, "token_hex", lambda n: "x")
+    _goal(env, monkeypatch, goal_fence)
+    g = _real_graph(monkeypatch, [_call("current_time", "c0"), AIMessage(content="it's late")])
+    sid = f"sAE{len(goal_fence)}"
+
+    out = await session_ops.aside_session(sid, "what time is it?")
+
+    assert out["found"] is True
+    (tool,) = await _tool_messages(g, f"a2a:{sid}::aside-x")
+    (_assert_blocked if goal_fence else _assert_ran)(tool)

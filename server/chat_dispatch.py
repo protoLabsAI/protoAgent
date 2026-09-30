@@ -5,7 +5,10 @@ Both turn drivers — the streaming ``_chat_langgraph_stream_impl`` in ``server.
 OpenAI-compat /v1, /api/chat, plugin surfaces) — run ONE chain before the turn
 (#3805): @-mention → /goal → /lifecycle → plugin command → workflow → subagent →
 skill (rewrite, falls through) → unknown /command → ACP switch. A fenced turn
-(#2972) skips every short-circuit (and fails closed on an ACP runtime, #3812).
+(#2972) skips every short-circuit (and fails closed on an ACP runtime, #3812). So does
+any turn in a session whose ACTIVE goal a fenced turn set (``GoalState.fence``) — that
+turn is goal-driven under the goal's fence — except ``/goal`` itself, so the operator
+can always check, replace or clear the goal.
 
 **The drivers stay in ``server.chat``** and call ``_PreTurn`` / ``_pre_turn_dispatch``
 / ``_short_circuit_reply`` through this module (``_chat_dispatch.<name>``) at call time.
@@ -152,6 +155,67 @@ _FENCED_ACP_REFUSAL = (
     "Ask the operator to handle it directly."
 )
 
+# The answer to a turn in a session whose active goal carries a tool fence, on an ACP
+# runtime: every turn there drives that goal, and the fence can't be enforced on the
+# external runtime. `/goal clear` (never refused) returns the session to normal.
+_GOAL_FENCED_ACP_REFUSAL = (
+    "I can't run this here: this session's active goal runs with a restricted tool scope, "
+    "and this agent runs on an external coding runtime that can't enforce it. Clear the "
+    "goal with `/goal clear` to continue in this session."
+)
+
+# The status line a turn in such a session gets when its text looked like a command
+# (a `/command` or an `@`-mention): it isn't run — the text goes to the goal-driven turn.
+_GOAL_FENCED_COMMANDS_PAUSED = (
+    "⏸ Commands are paused while this goal runs with a restricted tool scope — "
+    "`/goal clear` to resume."
+)
+
+
+def _looks_like_command(message: str) -> bool:
+    """A `/command` (the same token shape the unknown-command hint uses) or a leading
+    `@`-mention — the text a short-circuit would have claimed."""
+    name, _rest = _chat_commands._parse_slash_command(message)
+    if name and _SLASH_TOKEN_RE.fullmatch(name) is not None:
+        return True
+    return (message or "").lstrip().startswith("@")
+
+
+def _active_goal_fence(session_id: str) -> list[str]:
+    """The tool fence of the session's ACTIVE goal — the fence of the turn that set it
+    (``GoalState.fence``). ``[]`` when there's no active goal or it was set unfenced."""
+    from server import goal_loop as _goal_loop
+
+    return _goal_loop.goal_fenced(_goal_loop.active_goal(session_id), [])
+
+
+async def _goal_control(pre: _PreTurn, message: str, session_id: str):
+    """The ``/goal`` step of the chain: status / clear / set short-circuit the turn
+    (``pre.handled``); a successful SET yields its ack and falls through into the
+    goal-driven turn it kicks off (#1910)."""
+    # Goal control messages (/goal ...) short-circuit the turn: set /
+    # status / clear a goal and return the reply without running the graph.
+    if STATE.goal_controller is not None:
+        reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
+        if reply is not None:
+            gs = STATE.goal_controller.active_goal(session_id)
+            if STATE.goal_controller.is_set_ack(reply) and gs is not None:
+                # /goal SET kicks the drive immediately (#1910): surface the ack as a
+                # status frame, then fall through into a goal-driven turn instead of
+                # short-circuiting here and waiting for a separate inbound message. The
+                # goal condition is injected at the kickoff below (iteration 0), which
+                # also covers a plain message arriving on an already-active goal.
+                yield ("tool_start", f"🎯 {reply}")
+            else:
+                pre.handled = True
+                yield ("done", reply)
+    elif (_goal_off := _goal_disabled_reply(message)) is not None:
+        # Goal mode off (#3929): `/goal` is still reserved (the unknown-slash catch exempts
+        # it), so without this it fell through to the model, which invented an answer
+        # ("Goals cleared."). Answer deterministically instead, on both drivers.
+        pre.handled = True
+        yield ("done", _goal_off)
+
 
 @dataclass
 class _PreTurn:
@@ -163,7 +227,10 @@ class _PreTurn:
     (``done`` / ``input_required``) was the last one yielded.
     ``acp`` — not handled, and the configured runtime is ACP (ADR 0033): the
     driver runs its own ACP shape instead of the native loop.
-    ``fenced`` — the turn carries a ``tool_fence`` (#2972): no short-circuit runs.
+    ``fenced`` — the turn runs under a tool fence: the caller's own ``tool_fence``
+    (#2972), or — set by the chain itself — the fence of the session's active goal. No
+    short-circuit runs (a goal-fenced turn still runs ``/goal``).
+    ``fence`` — that fence (for logging).
     ``acp_exempt`` — a fenced turn the ACP refusal does NOT apply to: only the background
     manager's own detached subagent job (#1639), proven by its single-use fire token
     (``background/fire_auth.py``). It still skips every short-circuit. Default: refused.
@@ -230,10 +297,43 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             yield ("done", _FENCED_ACP_REFUSAL)
             pre.handled = True
         return
+    # A turn in a session whose ACTIVE goal a fenced turn set is goal-driven under that
+    # goal's fence (server/goal_loop.goal_fenced) — so it is gated exactly as a fenced
+    # caller is: no short-circuit (each works outside the fenced lead turn), refused on an
+    # ACP runtime (which can't enforce the fence). The one exception is `/goal` itself,
+    # run first: the operator must always be able to check, replace or clear the goal.
+    # A caller-fenced turn never gets here, so it still can't change the goal.
+    _goal_control_ran = False
+    if _active_goal_fence(session_id):
+        async for frame in _goal_control(pre, message, session_id):
+            yield frame
+        if pre.handled:
+            return
+        _goal_control_ran = True
+        # Re-read: a `/goal <new>` SET just replaced the goal with the operator's own.
+        _goal_fence = _active_goal_fence(session_id)
+        if _goal_fence:
+            from runtime.acp_runtime import is_acp_runtime
+
+            pre.fenced = True
+            pre.fence = _goal_fence
+            if not is_acp_runtime(STATE.graph_config) and _looks_like_command(message):
+                # Say so, rather than let the command silently become goal text.
+                yield ("tool_start", _GOAL_FENCED_COMMANDS_PAUSED)
+            if is_acp_runtime(STATE.graph_config):
+                log.warning(
+                    "[chat] refused a turn on session %s: its active goal is fenced (tool_fence=%s) "
+                    "and this agent runs on an ACP runtime, which can't enforce the fence",
+                    session_id,
+                    _goal_fence,
+                )
+                yield ("done", _GOAL_FENCED_ACP_REFUSAL)
+                pre.handled = True
+            return
     # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
     # routes straight to that delegate, short-circuiting the LLM turn. Checked
     # BEFORE goal control (and every slash-command below) so an @-mention is
-    # never swallowed by an active goal; a no-op when the delegates plugin isn't
+    # never swallowed by an active goal (one with a tool fence gates it above); a no-op when the delegates plugin isn't
     # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
     # The exchange WRITES this session's checkpointer thread, so it takes the
     # same per-thread lock every other writer takes (see the turn lock below,
@@ -360,30 +460,13 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         yield ("done", _at_reply)
         return
 
-    # Goal control messages (/goal ...) short-circuit the turn: set /
-    # status / clear a goal and return the reply without running the graph.
-    if STATE.goal_controller is not None:
-        reply = await STATE.goal_controller.parse_control(message, session_id, trusted=False)
-        if reply is not None:
-            gs = STATE.goal_controller.active_goal(session_id)
-            if STATE.goal_controller.is_set_ack(reply) and gs is not None:
-                # /goal SET kicks the drive immediately (#1910): surface the ack as a
-                # status frame, then fall through into a goal-driven turn instead of
-                # short-circuiting here and waiting for a separate inbound message. The
-                # goal condition is injected at the kickoff below (iteration 0), which
-                # also covers a plain message arriving on an already-active goal.
-                yield ("tool_start", f"🎯 {reply}")
-            else:
-                pre.handled = True
-                yield ("done", reply)
-                return
-    elif (_goal_off := _goal_disabled_reply(message)) is not None:
-        # Goal mode off (#3929): `/goal` is still reserved (the unknown-slash catch exempts
-        # it), so without this it fell through to the model, which invented an answer
-        # ("Goals cleared."). Answer deterministically instead, on both drivers.
-        pre.handled = True
-        yield ("done", _goal_off)
-        return
+    # Goal control (/goal status / clear / set) — see _goal_control. Already run above
+    # when the session's goal was fenced.
+    if not _goal_control_ran:
+        async for frame in _goal_control(pre, message, session_id):
+            yield frame
+        if pre.handled:
+            return
 
     # Core /lifecycle command (ADR 0074) — read-only listing of the lifecycle
     # events + configured reactions + registered hooks. Reserved like /goal.
