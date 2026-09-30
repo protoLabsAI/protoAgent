@@ -95,6 +95,14 @@ seam), not via state updates that enter the checkpointer. The projection:
 3. Is NOT returned as a `messages` state update.
 4. Is NOT checkpointed.
 5. IS captured by prompt observability (D5) for after-the-fact inspection.
+6. Is turn-scoped: it travels from `before_agent()` to that run's model calls
+   in a private, untracked state channel (`UntrackedValue` + `PrivateStateAttr`
+   — absent from invoke results, state snapshots and checkpoints), not on the
+   middleware instance, which one compiled graph shares across every
+   concurrent turn. A HITL resume (`Command(resume=…)`) does not re-run
+   `before_agent()` and starts with the channel empty, so `before_model()`
+   recomposes once for the resumed run. The same holds for the one-shot
+   toolset notice (restored per thread on resume).
 
 **Migration.** Existing checkpoints with stored context frames continue to
 work: the projection layer detects frames already in the checkpoint

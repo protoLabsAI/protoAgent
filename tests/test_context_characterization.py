@@ -21,7 +21,7 @@ from graph.context_frame import (
     context_frame_message,
     is_context_frame,
 )
-from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.knowledge import TURN_PROJECTION_KEY, KnowledgeMiddleware, turn_projection
 
 
 # ---------------------------------------------------------------------------
@@ -109,20 +109,21 @@ class TestBeforeAgent:
     """
 
     def test_stashes_projection_not_messages(self, monkeypatch):
-        """before_agent stashes the projection — returns None (no state update)."""
+        """before_agent hands the projection to the run's private projection
+        channel — never a ``messages`` update, never the shared instance."""
         mw = _mw(store=_FakeStore(hot="Agent is a helpful assistant"))
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         result = mw.before_agent(_state_with_human(), runtime=None)
-        assert result is None
-        assert mw._turn_projection is not None
+        assert set(result) == {TURN_PROJECTION_KEY}
+        assert turn_projection(result)[0]
 
     def test_projection_contains_injected_memory_section(self, monkeypatch):
         """The projection includes an <injected_memory> envelope when memory is injected."""
         mw = _mw(store=_FakeStore(hot="Always remember: be helpful"))
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
-        mw.before_agent(_state_with_human(), runtime=None)
-        assert "<injected_memory>" in mw._turn_projection
-        assert "Always remember: be helpful" in mw._turn_projection
+        _upd = mw.before_agent(_state_with_human(), runtime=None)
+        assert "<injected_memory>" in turn_projection(_upd)[0]
+        assert "Always remember: be helpful" in turn_projection(_upd)[0]
 
     def test_projection_contains_working_state_when_active(self, monkeypatch):
         """The projection includes <working_state> when the agent has active commitments."""
@@ -142,16 +143,17 @@ class TestBeforeAgent:
         mw = _mw(store=None)
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         state = {**_state_with_human(), "session_id": "test-session"}
-        mw.before_agent(state, runtime=None)
-        assert "<working_state>" in mw._turn_projection
-        assert "test goal" in mw._turn_projection
+        _upd = mw.before_agent(state, runtime=None)
+        assert "<working_state>" in turn_projection(_upd)[0]
+        assert "test goal" in turn_projection(_upd)[0]
 
     def test_no_state_update_on_compose(self, monkeypatch):
-        """ADR 0108 D2: before_agent returns None — legacy context channel removed."""
+        """ADR 0108 D2: no messages/context update — legacy context channel removed;
+        the only key is the run-scoped (untracked) projection channel."""
         mw = _mw(store=_FakeStore(hot="x"))
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         result = mw.before_agent(_state_with_human(), runtime=None)
-        assert result is None
+        assert set(result) == {TURN_PROJECTION_KEY}
 
     def test_no_recompose_on_context_frame_input(self, monkeypatch):
         """When the last message is already a context frame, no new frame is composed."""
@@ -160,7 +162,7 @@ class TestBeforeAgent:
         existing_frame = context_frame_message("prior context")
         state = {"messages": [HumanMessage(content="hi"), existing_frame]}
         result = mw.before_agent(state, runtime=None)
-        assert result is None
+        assert result == {TURN_PROJECTION_KEY: {}}  # entered-here marker, nothing composed
 
     def test_no_compose_on_ai_message_last(self, monkeypatch):
         """When the last message is an AI response (re-entry), no frame is composed."""
@@ -168,7 +170,7 @@ class TestBeforeAgent:
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         state = {"messages": [HumanMessage(content="hi"), AIMessage(content="sure")]}
         result = mw.before_agent(state, runtime=None)
-        assert result is None
+        assert result == {TURN_PROJECTION_KEY: {}}  # entered-here marker, nothing composed
 
     def test_incognito_suppresses_memory(self, monkeypatch):
         """Incognito threads get no memory injection (ADR 0069 D3b)."""
@@ -179,8 +181,8 @@ class TestBeforeAgent:
         mw = _mw(store=store)
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "prior session data")
         state = {**_state_with_human("query"), "incognito": True}
-        mw.before_agent(state, runtime=None)
-        projection = mw._turn_projection or ""
+        _upd = mw.before_agent(state, runtime=None)
+        projection = turn_projection(_upd)[0] or ""
         assert "secret fact" not in projection
         assert "rag hit" not in projection
         assert "prior session" not in projection

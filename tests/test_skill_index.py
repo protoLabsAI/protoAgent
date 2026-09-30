@@ -22,14 +22,15 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from graph.skills.index import SkillsIndex
-from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.knowledge import KnowledgeMiddleware, turn_projection
 
 
 # ── Helpers / fixtures ────────────────────────────────────────────────────────
 
 
-def _frame(mw):
-    return mw._turn_projection or ""
+def _frame(update):
+    """The projection text a before_agent update carries (run-scoped, ADR 0108 D2)."""
+    return turn_projection(update)[0]
 
 
 @dataclass
@@ -316,9 +317,9 @@ def test_before_model_injects_available_skills(tmp_db) -> None:
     km = _skills_km(idx)
 
     # The query is irrelevant — the index is the same every turn (progressive disclosure).
-    km.before_agent({"messages": [HumanMessage(content="anything at all")]}, runtime=None)
+    _upd = km.before_agent({"messages": [HumanMessage(content="anything at all")]}, runtime=None)
 
-    ctx = _frame(km)
+    ctx = _frame(_upd)
     assert ctx
     assert "<available_skills>" in ctx
     assert "web-research" in ctx
@@ -333,8 +334,8 @@ def test_before_model_index_independent_of_query(tmp_db) -> None:
     idx.add_skill(_make_artifact(name="web-research", description="Research topics using web search"))
     km = _skills_km(idx)
 
-    km.before_agent({"messages": [HumanMessage(content="completely unrelated zebra")]}, runtime=None)
-    assert "web-research" in _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="completely unrelated zebra")]}, runtime=None)
+    assert "web-research" in _frame(_upd)
 
 
 def test_before_model_lists_all_with_full_rows_capped(tmp_db) -> None:
@@ -349,8 +350,8 @@ def test_before_model_lists_all_with_full_rows_capped(tmp_db) -> None:
     km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_top_k=2)
     km._prior_sessions_cache = ""
 
-    km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None)
-    ctx = _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None)
+    ctx = _frame(_upd)
     assert ctx.count("<skill ") == 5  # every identity present
     assert ctx.count("</skill>") == 2  # full descriptions capped at top_k
     for i in range(5):
@@ -377,24 +378,24 @@ def test_before_model_user_facing_skill_shows_slash(tmp_db) -> None:
         source="disk",
     )
     km = _skills_km(idx)
-    km.before_agent({"messages": [HumanMessage(content="x")]}, runtime=None)
-    ctx = _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="x")]}, runtime=None)
+    ctx = _frame(_upd)
     assert 'slash="/research"' in ctx
 
 
 def test_before_model_no_skills_no_block(tmp_db) -> None:
     """before_model() must omit the block when the index is empty."""
     km = _skills_km(SkillsIndex(db_path=tmp_db))  # empty index
-    km.before_agent({"messages": [HumanMessage(content="some query")]}, runtime=None)
-    assert "<available_skills>" not in _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="some query")]}, runtime=None)
+    assert "<available_skills>" not in _frame(_upd)
 
 
 def test_before_model_no_skills_index_configured() -> None:
     """before_model() must not crash when skills_index is None."""
     km = _make_knowledge_middleware_no_store()  # no skills_index
     km._prior_sessions_cache = ""
-    km.before_agent({"messages": [HumanMessage(content="test query")]}, runtime=None)
-    assert "<available_skills>" not in _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="test query")]}, runtime=None)
+    assert "<available_skills>" not in _frame(_upd)
 
 
 # ── Curation surface (v2 schema: confidence + last_used) ──────────────────────

@@ -12,13 +12,33 @@ envelope (prior-session digest, hot memory, trust-ranked RAG hits), the
 always-on ``<available_skills>`` index (ADR 0060), and the agent's own
 ``<working_state>`` (ADR 0079). This class owns what is graph-specific: the
 turn-entry guard, the digest's TTL cache, and the ephemeral delivery.
+
+**The projection is turn-scoped, not instance-scoped.** One compiled graph (and so
+one instance of this middleware) serves every concurrent turn — A2A callers, the
+console, background jobs, goal loops, the scheduler. The composed projection
+therefore rides the RUN's own state, in a private ``UntrackedValue`` channel
+(:data:`TURN_PROJECTION_KEY`): ``before_agent`` writes it, ``wrap_model_call``
+reads it back off ``request.state``. Each run has its own channel values, so
+overlapping turns each deliver their own composed context; and an untracked
+channel is never written to a checkpoint (nor to pending writes), which keeps
+the ADR 0108 D2 contract — the projection never enters the checkpointer.
+
+A HITL resume (``Command(resume=…)`` after an ``interrupt()``) continues the turn
+from the interrupted node: ``before_agent`` does not run again, and the untracked
+channel starts empty after the checkpoint load. ``before_model`` covers that case —
+when the channel is ABSENT (``before_agent`` always writes it, even as an empty
+marker, on any run that enters at the top), the run is a resume of a turn already
+in progress, so the projection is composed once, lazily, and written back for the
+rest of the run's model calls.
 """
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any, NotRequired
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.agents.middleware.types import PrivateStateAttr
 from langchain_core.messages import HumanMessage
+from langgraph.channels.untracked_value import UntrackedValue
 
 from graph.projection import (
     ProjectionOptions,
@@ -41,6 +61,41 @@ log = logging.getLogger(__name__)
 # per-turn disk I/O.
 _PRIOR_SESSIONS_TTL_S = 60.0
 
+# The run-scoped channel the composed projection rides from ``before_agent`` to
+# every model call of the same turn: ``{"text": str, "sections": list | None}``.
+TURN_PROJECTION_KEY = "protoagent_turn_projection"
+
+
+class KnowledgeState(AgentState):
+    """The private, never-checkpointed channel carrying this turn's projection.
+
+    ``UntrackedValue``: lives for one run only (a resume or the next turn starts
+    without it) and is skipped by both checkpoint and pending-write persistence.
+    ``PrivateStateAttr``: omitted from the graph's input and output schemas, so
+    a caller cannot supply a projection, and it is absent from invoke results,
+    state snapshots and checkpoints. (It does appear in LangGraph's own
+    ``stream_mode="values"``/``"updates"`` frames and ``astream_events`` chain
+    payloads — none of which the server forwards or records.)
+
+    Value shape: ``{"text": str, "sections": list | None}``; ``{}`` is the marker
+    ``before_agent`` writes when it composed nothing, so the channel's PRESENCE
+    means "this run entered at the top" and its absence means "resumed run".
+    """
+
+    protoagent_turn_projection: NotRequired[Annotated[dict | None, UntrackedValue, PrivateStateAttr]]
+
+
+def turn_projection(state_or_update: Any) -> tuple[str, list[dict] | None]:
+    """The ``(text, sections)`` a ``before_agent`` update or a run's state carries —
+    ``("", None)`` when nothing was composed for this turn."""
+    try:
+        value = (state_or_update or {}).get(TURN_PROJECTION_KEY)
+    except AttributeError:  # not a mapping
+        value = None
+    if not isinstance(value, dict):
+        return "", None
+    return str(value.get("text") or ""), value.get("sections")
+
 
 class KnowledgeMiddleware(AgentMiddleware):
     """Inject knowledge store context before each LLM call.
@@ -50,6 +105,8 @@ class KnowledgeMiddleware(AgentMiddleware):
     <prior_sessions> block so the agent has continuity across sessions
     without requiring an active knowledge store.
     """
+
+    state_schema = KnowledgeState
 
     def __init__(
         self,
@@ -125,9 +182,9 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._prior_sessions_max: int = 10  # entries the digest SHOWS (the pool holds one spare)
         # ADR 0108 D2: the per-turn projection is composed in before_agent and
         # delivered ephemerally via wrap_model_call (request.override) so it
-        # never enters the checkpointer.  Stable within the turn's tool loop.
-        self._turn_projection: str | None = None
-        self._turn_sections: list[dict] | None = None
+        # never enters the checkpointer. It is carried in the RUN's state
+        # (TURN_PROJECTION_KEY), never on this instance: the instance is shared
+        # by every concurrent turn.
 
     def _options(self, state=None) -> ProjectionOptions:
         """This middleware's delivery knobs in the shared composer's shape — the
@@ -331,34 +388,66 @@ class KnowledgeMiddleware(AgentMiddleware):
     # ---------------------------------------------------------------------------
 
     def before_agent(self, state, runtime) -> dict | None:
-        """Compose the turn's dynamic context ONCE and stash it for ephemeral
-        delivery via ``wrap_model_call`` (ADR 0108 D2, #3188).
+        """Compose the turn's dynamic context ONCE and hand it to this run's
+        model calls for ephemeral delivery via ``wrap_model_call`` (ADR 0108 D2,
+        #3188).
 
         The projection is composed here (once per turn entry, not per model
-        call) so it is stable within the tool loop, but is NOT returned as a
-        ``messages`` state update — ``wrap_model_call`` delivers it via
-        ``request.override(messages=…)`` which never enters the checkpointer.
+        call) so it is stable within the tool loop. It is NOT a ``messages``
+        update: it goes to the run-scoped :data:`TURN_PROJECTION_KEY` channel
+        (untracked — never checkpointed), and ``wrap_model_call`` delivers it via
+        ``request.override(messages=…)``.
 
-        Guarded on the newest message being a FRESH human input: a HITL resume
-        (``Command(resume=…)``) or a kicker retry re-enters the graph without new
-        input, and must not recompose.
+        Guarded on the newest message being a FRESH human input: a run that
+        enters at the top without new input (a kicker retry) must not recompose,
+        and delivers no projection. Either way the channel is WRITTEN (``{}``
+        when nothing was composed): its presence tells ``before_model`` this run
+        entered here. A HITL resume (``Command(resume=…)``) never runs this hook
+        at all — ``before_model`` composes for it (see there).
         """
         from graph.context_frame import is_context_frame
 
         messages = state.get("messages") or []
         last = messages[-1] if messages else None
         if not isinstance(last, HumanMessage) or is_context_frame(last):
-            self._turn_projection = None
-            return None  # re-entry without fresh input — no recompose, no state churn
-        composed = self.compose_context(state, runtime, record=True)
+            return {TURN_PROJECTION_KEY: {}}  # re-entry without fresh input — no recompose
+        return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=True)}
+
+    def _projection_value(self, state, runtime, *, record: bool) -> dict:
+        composed = self.compose_context(state, runtime, record=record)
         ctx = (composed or {}).get("context") or ""
         if not ctx:
-            self._turn_projection = None
-            self._turn_sections = None
+            return {}
+        return {"text": ctx, "sections": (composed or {}).get("context_sections")}
+
+    def before_model(self, state, runtime) -> dict | None:
+        """Recompose for a RESUMED run — once, lazily.
+
+        ``Command(resume=…)`` (ask_human, fs approvals, request_user_input, and the
+        goal/scheduler auto-resume) continues the turn at the interrupted node, so
+        ``before_agent`` does not run and the untracked channel starts empty. An
+        absent channel therefore means "resume of a turn in progress" (a run that
+        entered at the top always wrote it): compose from this thread's state —
+        whose newest operator message is still the turn's input — and write the
+        channel, so every later model call of the run delivers it. A present
+        channel (the common case) is a no-op. ``record=False``: the turn's
+        injection-log row (ADR 0069 D6) was written when the turn entered.
+        """
+        if TURN_PROJECTION_KEY in (state or {}):
             return None
-        self._turn_projection = ctx
-        self._turn_sections = (composed or {}).get("context_sections")
-        return None
+        from graph.context_frame import is_context_frame
+
+        if not any(isinstance(m, HumanMessage) and not is_context_frame(m) for m in state.get("messages") or []):
+            return {TURN_PROJECTION_KEY: {}}
+        return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=False)}
+
+    async def abefore_model(self, state, runtime) -> dict | None:
+        """Async ``before_model`` — the (rare) resume compose runs off the loop."""
+        if TURN_PROJECTION_KEY in (state or {}):
+            return None
+        import asyncio
+
+        return await asyncio.to_thread(self.before_model, state, runtime)
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
         """The dynamic-context composer behind ``before_agent`` — the shared
@@ -404,9 +493,10 @@ class KnowledgeMiddleware(AgentMiddleware):
         event loop (originally before *every* LLM call; since #2776 it would be
         once per turn — still worth keeping off-loop), so it goes through
         ``asyncio.to_thread`` (same pattern as graph/checkpointer.py). The
-        only state mutated is the prior-sessions cache (str + float
-        assignment), which is benign across threads; the store opens a sqlite
-        connection per call.
+        composed projection is RETURNED (a run-scoped state update), never
+        written to the instance; the only instance state mutated is the
+        prior-sessions cache (a neutral, cross-session pool), which is benign
+        across threads; the store opens a sqlite connection per call.
         """
         import asyncio
 
@@ -425,16 +515,20 @@ class KnowledgeMiddleware(AgentMiddleware):
         (composed once in ``before_agent``) is appended as the last message so
         the model sees current context without it entering the checkpointer.
 
+        The projection is read off THIS request's run state — never off the
+        shared instance — so concurrent turns each see only their own.
+
         Stashes the projected text for PromptCaptureMiddleware (#3191).
         """
         from graph.context_frame import context_frame_message, is_context_frame, stash_projected_context
 
+        text, sections = turn_projection(getattr(request, "state", None))
         msgs = getattr(request, "messages", None) or []
         cleaned = [m for m in msgs if not is_context_frame(m)]
-        if self._turn_projection:
-            cleaned.append(context_frame_message(self._turn_projection))
-            stash_projected_context(self._turn_projection, self._turn_sections)
-        if len(cleaned) != len(msgs) or self._turn_projection:
+        if text:
+            cleaned.append(context_frame_message(text))
+            stash_projected_context(text, sections)
+        if len(cleaned) != len(msgs) or text:
             return request.override(messages=cleaned)
         return request
 

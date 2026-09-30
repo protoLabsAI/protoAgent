@@ -16,7 +16,7 @@ import sqlite3
 from langchain_core.messages import HumanMessage
 
 from graph.memory_facts import consolidate_and_store
-from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.knowledge import KnowledgeMiddleware, turn_projection
 from knowledge.hybrid_store import HybridKnowledgeStore
 from knowledge.layered import LayeredKnowledgeStore
 from knowledge.store import KnowledgeStore
@@ -239,8 +239,8 @@ def test_injected_rag_lines_carry_stored_date(tmp_path):
 
     km = KnowledgeMiddleware(knowledge_store=store)
     km._prior_sessions_cache = ""  # skip session loading
-    km.before_agent({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
-    ctx = km._turn_projection or ""
+    _upd = km.before_agent({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
+    ctx = turn_projection(_upd)[0] or ""
     assert ctx
     # The stored date leads the hit's metadata suffix; the trust tier label
     # rides the same parens (ADR 0069 D8).
@@ -254,5 +254,5 @@ def test_injection_skips_invalidated_chunks(tmp_path):
 
     km = KnowledgeMiddleware(knowledge_store=store)
     km._prior_sessions_cache = ""
-    km.before_agent({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
-    assert "protolabs/reasoning" not in (km._turn_projection or "")
+    _upd = km.before_agent({"messages": [HumanMessage(content="what is the gateway alias?")]}, runtime=None)
+    assert "protolabs/reasoning" not in (turn_projection(_upd)[0] or "")
