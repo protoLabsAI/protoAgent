@@ -108,7 +108,7 @@ def test_moved_driver_reaches_owned_collaborators_through_their_owner():
         "_turn_control": set(_TURN_CONTROL),
         "_chat_dispatch": {"_PreTurn", "_pre_turn_dispatch", "_short_circuit_reply"},
         "_chat_acp": {"_acp_turn_collected"},
-        "_turn_stream": {"_fence_update"},
+        "_turn_stream": {"_fence_update", "_resume_fence_update"},
         "_turn_telemetry": {"make_usage_callback", "sum_usage"},
     }
     offenders: list[str] = []

@@ -158,6 +158,7 @@ async def _native_turn(
                 session_id,
                 config,
                 request_metadata=turn_metadata,
+                fence=tool_fence,
             )
         )
         if hold is not None and hold is not _turn_control._HITL_RESUME:
@@ -179,11 +180,13 @@ async def _native_turn(
 
             # A resume carries no fresh input, so the fence rides the
             # Command's state update: a fenced caller's answer never resumes
-            # a pass with a wider toolset. Unfenced, the parked turn keeps
-            # its own (a resume continues that turn; it does not clear it).
+            # a pass with a wider toolset — it runs under the INTERSECTION of
+            # its fence and the parked turn's (narrowest wins). Unfenced, the
+            # parked turn keeps its own (a resume continues that turn; it does
+            # not clear it).
             graph_input = Command(
                 resume=await _chat()._resume_payload(config, turn_message),
-                **_turn_stream._fence_update(tool_fence),
+                **(await _turn_stream._resume_fence_update(config, tool_fence)),
             )
         else:
             # Kickoff injection (#1910) — shared with the streaming driver

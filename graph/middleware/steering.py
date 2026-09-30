@@ -88,4 +88,19 @@ class SteeringMiddleware(AgentMiddleware):
         # call sees it. The console settles the user's ORIGINAL text into the thread
         # (per-id); only the model sees the framed interjection.
         combined = "\n\n".join(item["text"] for item in queued)
-        return {"messages": [HumanMessage(content=_INTERJECTION + combined)]}, queued
+        update: dict = {"messages": [HumanMessage(content=_INTERJECTION + combined)]}
+        # A message that arrived FENCED (#2972 — e.g. held behind a parked interrupt by
+        # the HITL hold) carries its fence: the rest of the pass that reads it runs under
+        # the intersection of every folded fence and the pass's own (narrowest wins), so
+        # the untrusted text never reaches a wider toolset than the one it was sent with.
+        fences = [item["fence"] for item in queued if item.get("fence")]
+        if fences:
+            from graph.middleware.subagent_fence import intersect_fences
+
+            current = state.get("subagent_fence") if isinstance(state, dict) else getattr(state, "subagent_fence", None)
+            for fence in fences:
+                current = intersect_fences(current, fence)
+            update["subagent_fence"] = current
+        # The live boundary marker carries what the console reconciles (ids, text) — not
+        # the fence, which is enforcement state.
+        return update, [{k: v for k, v in item.items() if k != "fence"} for item in queued]

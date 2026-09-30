@@ -484,13 +484,15 @@ class BackgroundManager:
         # than ``_max_concurrency`` full turns at once. The slot is held for the WHOLE turn —
         # the A2A handler runs the turn synchronously before the POST returns — which is
         # exactly the bound we want (concurrent running turns, not just in-flight requests).
+        from background import fire_auth
+
         async with self._sem:
             try:
                 await self._send_a2a_message(
                     # Dedicated, isolated context per job — keeps the background turn's
                     # history out of the originating chat thread; the job id rides in
                     # the context so the terminal hook can map back without metadata.
-                    context_id=f"background:{job_id}",
+                    context_id=fire_auth.context_for(job_id),
                     text=prompt,
                     metadata={
                         "origin": "background",
@@ -501,11 +503,17 @@ class BackgroundManager:
                         # same allowlist the in-graph task path applies, now on detached
                         # runs too. Absent for non-registry types (no fence).
                         **({"subagent_fence": fence} if fence else {}),
+                        # A fenced turn is refused on an ACP runtime — except this
+                        # manager's own fire, proven by a single-use in-process token
+                        # no remote A2A caller can produce (background/fire_auth.py).
+                        **({fire_auth.METADATA_KEY: fire_auth.mint(job_id)} if fence else {}),
                     },
                 )
             except Exception as exc:  # noqa: BLE001
                 log.exception("[background] fire failed for %s", job_id)
                 self.store.mark_complete(job_id, "failed", f"Background turn delivery error: {exc}")
+            finally:
+                fire_auth.discard(job_id)
 
     async def resume_origin(self, job) -> bool:
         """Push-resume (ADR 0070 D1): submit a terse self-A2A nudge INTO the job's

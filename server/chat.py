@@ -837,6 +837,15 @@ def _is_spent_firing_job(job) -> bool:
 # The HITL hold (``_hold_if_hitl_pending``) moved to server/turn_control.py (#3847).
 
 
+def _metadata_fence(request_metadata: dict | None) -> list | None:
+    """The per-turn tool fence a streaming request carries (``subagent_fence`` metadata —
+    a detached background job, #1639, or a relayed peer turn, #2972), else ``None``."""
+    fence = (request_metadata or {}).get("subagent_fence") or None
+    if fence is not None and not isinstance(fence, (list, tuple)):
+        return None
+    return fence
+
+
 async def _run_native_turn(
     message, session_id, config, *, request_metadata=None, resume=False, images=None, overflow_retry=False
 ):
@@ -856,9 +865,7 @@ async def _run_native_turn(
     _incognito = bool((request_metadata or {}).get("incognito"))
     # Detached background runs of a registry subagent carry the resolved tool
     # allowlist in the fire metadata (#1639) — stamped onto the turn's state below.
-    _fence = (request_metadata or {}).get("subagent_fence") or None
-    if _fence is not None and not isinstance(_fence, (list, tuple)):
-        _fence = None
+    _fence = _metadata_fence(request_metadata)
     # When a goal is already active, the whole turn is goal-driven (suppress cross-session
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     _goal_state = _goal_loop.active_goal(session_id)
@@ -1343,7 +1350,21 @@ async def _chat_langgraph_stream_impl(
             # workflow, subagent, skill, unknown /command, ACP switch) is SHARED with
             # the non-streaming driver (#3805) — see _pre_turn_dispatch. Its frames
             # (work cards, room replies, the terminal `done`) stream straight through.
-            pre = _chat_dispatch._PreTurn(message)
+            # A FENCED turn skips every short-circuit and is refused on an ACP runtime,
+            # as on the non-streaming driver (#3812). The one ACP exception is this
+            # process's own detached background job (#1639), proven by the single-use
+            # token its fire minted (background/fire_auth.py) — redeemed here for EVERY
+            # turn that carries one, so a token is dead once its turn has started.
+            _fence = _metadata_fence(request_metadata)
+            from background import fire_auth
+
+            _own_background_fire = fire_auth.redeem(request_metadata, session_id)
+            pre = _chat_dispatch._PreTurn(
+                message,
+                fenced=bool(_fence),
+                fence=list(_fence or []),
+                acp_exempt=bool(_fence) and _own_background_fire,
+            )
             async with contextlib.aclosing(
                 _chat_dispatch._pre_turn_dispatch(pre, session_id, request_metadata)
             ) as _pre_frames:
@@ -1401,7 +1422,7 @@ async def _chat_langgraph_stream_impl(
                 # No pending interrupt ⇒ hold is None and nothing changes.
                 if not resume:
                     hold = await _turn_control._hold_if_hitl_pending(
-                        message, session_id, config, request_metadata=request_metadata
+                        message, session_id, config, request_metadata=request_metadata, fence=_fence
                     )
                     if hold is _turn_control._HITL_RESUME:
                         resume = True

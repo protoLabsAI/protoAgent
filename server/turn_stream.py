@@ -583,6 +583,31 @@ def _fence_update(fence) -> dict:
     return {"update": {"subagent_fence": [str(t) for t in fence]}}
 
 
+async def _resume_fence_update(config: dict, fence) -> dict:
+    """``Command`` kwargs for the fence of a RESUME pass: narrowest wins.
+
+    A resume continues a PARKED turn whose checkpoint may already hold a fence. A fenced
+    resumer runs the pass under the INTERSECTION of its fence and the parked one
+    (``graph.middleware.subagent_fence.intersect_fences``) — never the resumer's alone,
+    which could widen a parked fenced turn (parked ``[ask_human]`` resumed with
+    ``[ask_human, current_time]`` must not run ``current_time``). Unfenced → no update:
+    the parked turn keeps its own fence. An unreadable checkpoint fails CLOSED (deny-all
+    for the rest of the pass; the parked call itself still completes — see
+    ``is_resumed_parked_call``)."""
+    if not fence:
+        return {}
+    from graph.middleware.subagent_fence import FENCE_DENY_ALL, intersect_fences
+
+    try:
+        snapshot = await STATE.graph.aget_state(config)
+        values = getattr(snapshot, "values", None) or {}
+        parked = values.get("subagent_fence") if isinstance(values, dict) else None
+    except Exception:  # noqa: BLE001 — can't see the parked fence: fail closed
+        log.warning("[fence] could not read the parked turn's fence; resuming with no tools", exc_info=True)
+        return _fence_update([FENCE_DENY_ALL])
+    return _fence_update(intersect_fences(parked, fence))
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -621,7 +646,10 @@ async def _run_turn_stream(
         yield ("room_reply", reply)
 
     graph_input = (
-        Command(resume=await _chat()._resume_payload(config, resume_value), **_fence_update(subagent_fence))
+        Command(
+            resume=await _chat()._resume_payload(config, resume_value),
+            **(await _resume_fence_update(config, subagent_fence)),
+        )
         if resume_value is not None
         # Prepend any completed background-job notifications (ADR 0050) so the model
         # learns of detached work that finished since this session last ran a turn.
