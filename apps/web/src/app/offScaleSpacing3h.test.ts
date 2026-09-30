@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 // px value in a spacing declaration (padding*, margin*, gap, row-gap, column-gap) onto those
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
 // chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
-// half-steps (2/3/5/6/7/9/10/34px, …) are intentionally LEFT as literals — they wait on the DS
-// gap protoContent#547 — so this guard flags ONLY the five exact-scale values, and only when
-// they sit in a spacing declaration (a `left: 8px` / `top: 8px` is not spacing).
+// half-steps (2/3/5/6/7/9/10px) have SINCE been migrated onto the DS half-step scale that
+// @protolabsai/design 0.11.0 shipped (protoContent#525/#547 step 3) — see the migration proof
+// below; truly-uncovered values (34px, 18px, …) stay literals. This SWEEP still flags ONLY the
+// five exact-scale values, and only when they sit in a spacing declaration (`left: 8px` is not
+// swept — positioning is off this sweep's scope even though this card tokenized it by hand).
 //
 // The one deliberate carve-out is the mobile shell's home-indicator gutter
 // `padding-bottom: max(env(safe-area-inset-bottom), 12px)` (mobile-shell.css): its 12px is a
@@ -134,7 +136,7 @@ describe("no exact-scale px spacing literal in the mobile-shell/tool-calls/deleg
   });
 
   it("the matcher leaves half-steps, negatives, tokens, and non-spacing props alone", () => {
-    // Half-steps and off-scale values wait on protoContent#547 — never flagged.
+    // Half-steps and off-scale values are outside this exact-scale sweep — never flagged.
     for (const half of ["2", "3", "5", "6", "7", "9", "10", "34"]) {
       expect(spacingHits("  padding: " + half + "px;")).toEqual([]);
     }
@@ -185,17 +187,24 @@ describe("no exact-scale px spacing literal in the mobile-shell/tool-calls/deleg
     expect(CSS_SOURCES["../watches/watches.css"]).toContain("gap: var(--pl-space-2)");
   });
 
-  it("proves the half-steps this card preserved are still present as literals", () => {
-    // r2 (half-steps unchanged): the first two are mixed-shorthand values where the exact-scale
-    // member tokenized and the off-scale member survived — one assertion covers both invariants.
-    expect(CSS_SOURCES["../watches/watches.css"]).toContain("padding: 10px 34px 10px var(--pl-space-3)");
-    // tool-calls.css: the sibling radius+spacing-half-step card (protoContent#525/#547 step 3) has
-    // since tokenized these two on the DS half-step scale (6px→space-1_5, 10px→space-2_5), so the
-    // literals this exact-scale card left behind now read tokens — re-pinned to the new strings.
+  it("proves this card migrated the half-steps to DS tokens, keeping the uncovered literals", () => {
+    // protoContent#547 step 3 (this card) moved every COVERED half-step in the mobile-shell,
+    // delegates and watches surfaces onto the DS half-step scale that @protolabsai/design 0.11.0
+    // shipped (2px→space-0_5, 6px→space-1_5, 10px→space-2_5), and snapped the one gap that has no
+    // exact half-step (9px→space-2). Re-pinned here to the tokenized strings.
+    // watches: mixed shorthand — 10px→space-2_5 on both ends, the uncovered 34px reveal gutter stays.
+    expect(CSS_SOURCES["../watches/watches.css"]).toContain(
+      "padding: var(--pl-space-2_5) 34px var(--pl-space-2_5) var(--pl-space-3)",
+    );
+    // watches clear-button positioning also migrated: the off-scale right 6px→space-1_5 (r1 covers
+    // top/right/bottom/left), top 8px→space-2.
+    expect(CSS_SOURCES["../watches/watches.css"]).toContain("right: var(--pl-space-1_5)");
+    // mobile-shell's session-row gap snapped 9→8 (space-2); delegates' env-editor gaps 6px→space-1_5.
+    expect(CSS_SOURCES["./mobile-shell.css"]).toContain("gap: var(--pl-space-2)");
+    expect(CSS_SOURCES["../settings/delegates.css"]).toContain("gap: var(--pl-space-1_5)");
+    // tool-calls.css was migrated by the sibling card (bd-3fnh, protoContent#525/#547 step 3): its
+    // half-steps already read tokens (6px→space-1_5, 10px→space-2_5) — left untouched here.
     expect(CSS_SOURCES["../chat/tool-calls.css"]).toContain("padding: var(--pl-space-1_5) var(--pl-space-2)");
-    // Standalone half-steps elsewhere in the owned files are untouched.
-    expect(CSS_SOURCES["./mobile-shell.css"]).toContain("gap: 9px");
-    expect(CSS_SOURCES["../settings/delegates.css"]).toContain("gap: 6px");
     expect(CSS_SOURCES["../chat/tool-calls.css"]).toContain("gap: var(--pl-space-2_5)");
   });
 });
