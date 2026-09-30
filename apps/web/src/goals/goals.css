@@ -9,7 +9,7 @@
   position: relative;
   display: grid;
   gap: var(--pl-space-1);
-  padding: 10px 34px 10px var(--pl-space-3);
+  padding: var(--pl-space-2_5) 34px var(--pl-space-2_5) var(--pl-space-3);
   border-bottom: 1px solid var(--pl-color-border);
   min-width: 0;
   cursor: pointer;
@@ -55,8 +55,8 @@
 
 .goal-row-clear {
   position: absolute;
-  top: 8px;
-  right: 6px;
+  top: var(--pl-space-2);
+  right: var(--pl-space-1_5);
 }
 
 /* New-goal modal (GoalCreateDialog) — a chromeless DS Dialog around the shared HitlForm
@@ -96,7 +96,7 @@
 
 .goal-detail-facts {
   display: grid;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0;
 }
 
@@ -128,7 +128,7 @@
 .goal-detail-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   border-top: 1px solid var(--pl-color-border);
   padding-top: var(--pl-space-3);
 }
@@ -150,7 +150,7 @@
   margin: 0;
   padding-left: 18px;
   display: grid;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 
 .goal-detail-key {
@@ -160,7 +160,7 @@
 
 .goal-detail-evidence {
   margin: 0;
-  padding: var(--pl-space-2) 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -203,7 +203,7 @@
 
 .goal-timeline-body {
   display: grid;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 
