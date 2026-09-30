@@ -83,6 +83,24 @@ async def _ensure_chat_tombstones(conn) -> Any:
     return table
 
 
+def _task_creation_order(task_model) -> Any:
+    """The order a context's tasks were CREATED in: the task table's SQLite ``rowid``.
+
+    The A2A task row keeps only ``last_updated`` — when it last CHANGED — and that is not
+    a turn's place in the conversation (#3963). A pause the operator's plain message moved
+    to a new task leaves the old task to be completed ("Continued in task …") just after the
+    new one parks, so ordering by ``last_updated`` put the still-parked turn BEFORE the one it
+    superseded, and a reader taking the last turn as the live one lost the pause. The SDK
+    inserts a task once, when it is created, and only ever updates it afterwards
+    (``session.merge``), so the rowid is the creation order."""
+    from sqlalchemy import literal_column
+
+    return literal_column(f"{task_model.__tablename__}.rowid")
+
+
+_TERMINAL_TASK_STATE = re.compile(r"completed|failed|canceled|cancelled|rejected", re.IGNORECASE)
+
+
 async def _record_chat_tombstone(conn, session_id: str) -> None:
     """Record durable retirement without unsafe age/count eviction."""
     from sqlalchemy import delete, insert
@@ -137,7 +155,7 @@ async def session_summary(session_id: str) -> dict | None:
                 await conn.execute(
                     select(TaskModel.status)
                     .where(TaskModel.context_id == session_id)
-                    .order_by(TaskModel.last_updated.desc().nulls_last(), TaskModel.id.desc())
+                    .order_by(_task_creation_order(TaskModel).desc())
                     .limit(1)
                 )
             ).first()
@@ -663,6 +681,10 @@ def register_chat_routes(app, ui: str) -> None:
         Turns are keyed by ``context_id`` = the console session id; an in-flight
         turn appears with its accumulated pieces and a non-terminal state.
 
+        Turns are in CREATION order (when each began), and ``live_task_id`` names the
+        newest one while it is not over — working, or parked on the operator — or is null
+        (#3963).
+
         **Read-only** over the store the SDK already persists; no checkpoint
         access, no flag gate (the export sibling's rule)."""
         from runtime.state import STATE
@@ -695,10 +717,10 @@ def register_chat_routes(app, ui: str) -> None:
                         )
                         # Read the NEWEST bounded tail so catch-up always includes
                         # a current HITL/in-flight turn, then restore chronology below.
-                        .order_by(
-                            TaskModel.last_updated.desc().nulls_last(),
-                            TaskModel.id.desc(),
-                        )
+                        # Newest = most recently CREATED, never most recently updated: a
+                        # superseded pause completes after the task that took it over
+                        # (#3963), and a turn's place in the chat is when it began.
+                        .order_by(_task_creation_order(TaskModel).desc())
                         .limit(limit)
                     )
                 ).fetchall()
@@ -734,7 +756,15 @@ def register_chat_routes(app, ui: str) -> None:
             }
             for r in rows
         ]
-        return {"turns": turns}
+        # The turn a reader should treat as LIVE: the newest-created one while it is not over
+        # (working, or parked on the operator), else null. Only the newest can be live — turns
+        # on a session are serialized, and a pause moves to whichever task last parked
+        # (#3930) — so an older row still marked working or parked is an orphan, never the
+        # live turn. A reader resolving "which turn is waiting" reads this, not list position
+        # (#3963).
+        newest = turns[-1] if turns else None
+        live = newest if newest and newest["state"] and not _TERMINAL_TASK_STATE.search(newest["state"]) else None
+        return {"turns": turns, "live_task_id": live["task_id"] if live else None}
 
     @app.get("/api/chat/sessions/{session_id}/publish/preview")
     async def _api_publish_preview(session_id: SessionId, title: str | None = None):

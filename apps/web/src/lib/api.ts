@@ -33,6 +33,7 @@ export {
   hitlFromParts,
   replayDurableChatTurn,
   roomReplyFromParts,
+  supersededByFromStatus,
   textFromParts,
   type DurableChatSession,
   type DurableChatTurn,

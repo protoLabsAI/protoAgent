@@ -112,6 +112,23 @@ export function textFromParts(parts?: Array<{ kind?: string; text?: string }>) {
     .join("");
 }
 
+/** Status-message metadata key the server stamps on a task whose pause another task took
+ *  over (a2a_impl/hitl_routing.py SUPERSEDED_BY). */
+export const SUPERSEDED_BY_KEY = "protoagent_superseded_by";
+const SUPERSEDED_TEXT = /^Continued in task (\S+?)\.?$/;
+
+/** The task that took this one's pause over, or undefined (#3963). A plain message sent
+ *  while a turn waits on the operator re-parks the pause on a NEW task, and the old one is
+ *  completed with a pointer to it — as metadata, and as the "Continued in task …" text a
+ *  server from before the metadata wrote alone. */
+export function supersededByFromStatus(status?: A2AStatus): string | undefined {
+  if (!status || !/completed/i.test(status.state ?? "")) return undefined;
+  const marked = status.message?.metadata?.[SUPERSEDED_BY_KEY];
+  if (typeof marked === "string" && marked) return marked;
+  const match = SUPERSEDED_TEXT.exec(textFromParts(status.message?.parts).trim());
+  return match?.[1];
+}
+
 /** Does this artifact-update frame APPEND to the artifact (vs REPLACE it)?
  *
  *  The A2A `append` bool has NO wire presence at its default: the SDK serializes

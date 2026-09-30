@@ -35,10 +35,11 @@
 // Kept store-only (no component state) so any surface can mount it; HITL and
 // transient-status hooks are injected by the caller.
 
-import { api, type TurnStreamHandlers } from "../lib/api";
+import { api, supersededByFromStatus, type DurableChatTurn, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
+import { messagesFromDurableTurn, orderDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
 import {
   applyComponent,
@@ -220,6 +221,48 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
   chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
 }
 
+// ── a pause another task took over (#3963) ─────────────────────────────────────────────
+//
+// A plain message sent while a turn waits on the operator — from another surface, or from a
+// console that had lost the form — is held and RE-PARKS the pause on a new task; the old task
+// is completed with a pointer to it. A console reattaching to the old task (a warm tab that
+// last saw it parked) found a finished turn and settled it: the form never came back, the
+// next composer reply was held and re-asked on yet another task, and so on. The reattach now
+// follows the pointer: the old bubble settles, and the task(s) that took the pause over are
+// drawn after it the way hydration draws them — the live one last, so the slot's reattach
+// resubscribes to IT and the form comes back.
+
+/** Hops followed at most: each is one GetTask, and a chain longer than this is not one a
+ *  person made by hand. */
+const MAX_SUCCESSORS = 5;
+
+/** The tasks that took `firstId`'s pause over, oldest first, following each one's own
+ *  pointer. Best-effort: a hop that fails ends the chain there. */
+async function successorTurns(firstId: string, cancelled: () => boolean): Promise<DurableChatTurn[]> {
+  const turns: DurableChatTurn[] = [];
+  const seen = new Set<string>();
+  let next: string | undefined = firstId;
+  while (next && !seen.has(next) && turns.length < MAX_SUCCESSORS && !cancelled()) {
+    seen.add(next);
+    const turn: DurableChatTurn | null = await api.getTaskTurn(next).catch(() => null);
+    if (!turn) break;
+    turns.push(turn);
+    next = supersededByFromStatus(turn.status);
+  }
+  return turns;
+}
+
+/** Draw the turns that took a settled pause over after the session's transcript — skipping
+ *  any this console already shows (it sent that message itself) — with the live one last. */
+export function appendSuccessorTurns(sessionId: string, turns: DurableChatTurn[]) {
+  const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (!cur || !turns.length) return;
+  const shown = new Set(cur.messages.map((m) => m.taskId).filter(Boolean));
+  const fresh = turns.filter((turn) => !shown.has(turn.task_id));
+  if (!fresh.length) return;
+  chatStore.updateMessages(sessionId, [...cur.messages, ...orderDurableTurns(fresh).flatMap(messagesFromDurableTurn)]);
+}
+
 /** Reattach the stuck assistant message to its server-owned task. Returns a
  * cancel function (unmount / a new live turn taking over). */
 export function reattachTurn(sessionId: string, assistantId: string, taskId: string, hooks: ReattachHooks = {}) {
@@ -336,9 +379,11 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         return;
       }
       if (!sawTask || !state || TERMINAL.test(state)) {
-        const { state: s2, text } = await api.getTask(taskId).catch(() => ({ state: "", text: "" }));
+        const { state: s2, text, supersededBy } = await api
+          .getTask(taskId)
+          .catch(() => ({ state: "", text: "", supersededBy: undefined }));
         if (cancelled) return; // a late answer must not settle over a turn started since the cancel
-        finalize(sessionId, assistantId, s2 || state, text);
+        await settle(s2 || state, text, supersededBy);
         return;
       }
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -367,6 +412,16 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     },
   };
 
+  /** The turn is over: finalize it — and when its pause was taken over by another task,
+   *  draw that task after it (fetched FIRST: once the bubble settles the slot cancels this
+   *  reattach, so both land in one synchronous step). */
+  async function settle(state: string, text: string, supersededBy: string | undefined) {
+    const successors = supersededBy ? await successorTurns(supersededBy, () => cancelled) : [];
+    if (cancelled) return;
+    finalize(sessionId, assistantId, state, text);
+    appendSuccessorTurns(sessionId, successors);
+  }
+
   /** Paused on the operator: un-busy the session so the re-rendered form's buttons work,
    *  but DON'T finalize — stamping the message "done" would misrepresent a turn the
    *  server still owns. The bubble is marked paused instead, so it and its in-flight
@@ -393,7 +448,9 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         }
         // Stream closed = the turn is over (terminal-by-state, A2A 1.0). Confirm
         // and finalize off the durable task.
-        const { state, text } = await api.getTask(taskId).catch(() => ({ state: "completed", text: "" }));
+        const { state, text, supersededBy } = await api
+          .getTask(taskId)
+          .catch(() => ({ state: "completed", text: "", supersededBy: undefined }));
         // Cancelled while GetTask was out: the cancel already handed the session back, and a
         // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
         // Send live), inviting a second concurrent turn into this slot.
@@ -404,7 +461,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
           settlePaused();
           return;
         }
-        finalize(sessionId, assistantId, state || "completed", text);
+        await settle(state || "completed", text, supersededBy);
         return;
       } catch (err) {
         if (cancelled) return;

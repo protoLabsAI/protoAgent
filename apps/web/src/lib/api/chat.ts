@@ -25,6 +25,7 @@ import {
   consumeSse,
   drainSseBuffer,
   makeA2ADispatcher,
+  supersededByFromStatus,
   textFromTerminalTask,
   type A2AFrame,
   type DurableChatSession,
@@ -119,7 +120,9 @@ export const chatApi = {
   },
 
   chatSessionTurns(sessionId: string, limit = 50) {
-    return request<{ turns: DurableChatTurn[]; reason?: string }>(
+    // `live_task_id` (#3963): the newest turn not yet over — working or parked — or null;
+    // absent from a server that predates it.
+    return request<{ turns: DurableChatTurn[]; live_task_id?: string | null; reason?: string }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/turns?limit=${Math.max(1, Math.min(limit, 200))}`,
     );
   },
@@ -498,7 +501,10 @@ export const chatApi = {
   // is the task FLAT on `result` with TASK_STATE_* states. The old `tasks/get`
   // was Method-not-found against a2a-sdk 1.1 — which made this self-heal finalize
   // a still-running turn instantly with empty state (caught live 2026-06-09).
-  async getTask(taskId: string): Promise<{ state: string; text: string }> {
+  //
+  // `supersededBy` (#3963): the task that took this one's pause over — the reattach
+  // follows it there instead of settling the turn as over.
+  async getTask(taskId: string): Promise<{ state: string; text: string; supersededBy?: string }> {
     const res = await request<A2AFrame>("/a2a", {
       method: "POST",
       headers: { "A2A-Version": "1.0" },
@@ -510,7 +516,33 @@ export const chatApi = {
       | undefined;
     if (!task) return { state: "", text: "" };
     const state = (task.status?.state || "").toString();
-    return { state, text: textFromTerminalTask(task) };
+    const supersededBy = supersededByFromStatus(task.status);
+    return { state, text: textFromTerminalTask(task), ...(supersededBy ? { supersededBy } : {}) };
+  },
+
+  /** One task as a durable turn — the row shape `GET …/turns` serves (ADR 0104) — so a
+   *  console can draw a turn it never saw, the way hydration would (#3963). Null when the
+   *  server has no such task. */
+  async getTaskTurn(taskId: string): Promise<DurableChatTurn | null> {
+    const res = await request<A2AFrame>("/a2a", {
+      method: "POST",
+      headers: { "A2A-Version": "1.0" },
+      body: { jsonrpc: "2.0", id: `turn-${Date.now()}`, method: "GetTask", params: { id: taskId } },
+    });
+    const result = res.result;
+    const task = (result?.task ?? result) as
+      | (NonNullable<A2AFrame["result"]> & { history?: DurableChatTurn["history"] })
+      | undefined;
+    if (!task?.status) return null;
+    return {
+      task_id: String(task.id ?? taskId),
+      state: (task.status.state || "").toString(),
+      last_updated: null,
+      text: textFromTerminalTask(task),
+      status: task.status,
+      artifacts: task.artifacts ?? [],
+      history: task.history ?? [],
+    };
   },
 
   /** A turn's state plus the interjection ids its DURABLE history records as folded in.

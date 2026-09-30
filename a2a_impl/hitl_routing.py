@@ -89,6 +89,10 @@ _TERMINAL = (
 # Metadata key marking a settle message. The executor never runs the graph for a message
 # carrying it (see settle_decision) — a forged one is a no-op, never an answer.
 SETTLE_MARKER = "protoagent_settle"
+# Status-message metadata key on a settled task: the id of the task that took its pause over.
+# The console reads it (a warm tab reattaching to the old task follows it to the new one,
+# #3963); the "Continued in task …" text beside it is for people.
+SUPERSEDED_BY = "protoagent_superseded_by"
 # A registration outlives any plausible queue wait behind a running turn; past this it is
 # pruned, and its settle (if it ever runs) is a no-op.
 _SETTLE_TTL_S = 60 * 60

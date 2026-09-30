@@ -148,6 +148,19 @@ function pausedTask(id) {
   // asks its own question — two parked at once must each come back as themselves.
   const live = liveParks.get(String(id));
   const question = live?.question ?? "Which fruit should I pick?";
+  // A live park keeps the history its task really has — a re-parked one (#3963) only the
+  // held message that re-parked it, and no ask_human card of its own.
+  if (live?.history) {
+    return {
+      id, contextId: live.sessionId,
+      status: {
+        state: "TASK_STATE_INPUT_REQUIRED",
+        message: { parts: [{ metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" }, data: { question } }] },
+      },
+      artifacts: [],
+      history: live.history,
+    };
+  }
   return {
     id, contextId: live?.sessionId ?? "s-stuck",
     status: {
@@ -236,6 +249,59 @@ const releasableTurns = new Map();
 // as the parked snapshot a reload's reattach replays. A `hitl_resume` answer naming the task
 // continues it and releases the entry.
 const liveParks = new Map();
+// A pause RE-PARKED by a plain message (#3963), the real server's shape (#1560/#3930): a
+// message with no hitl_resume sent to a session parked in "PARK_ASK_HUMAN" is held and parks
+// the SAME question on a NEW task; the old task is then completed with a pointer to it
+// ("Continued in task …" + protoagent_superseded_by metadata), stamped ~50 ms AFTER the new
+// one parked. old task id → { sessionId, successor, history }.
+const supersededTasks = new Map();
+// The durable turns (ADR 0104 rows) of every session that parked LIVE, in CREATION order:
+// session id → rows. Served, with the x-e2e-repark-session header, by the session index and
+// GET …/turns — ordered by LAST CHANGE with no live marker, the way main served them before
+// #3963, so the console is proven not to depend on the server's order.
+const durableTurns = new Map();
+let reparkSeq = 0;
+
+function recordDurableTurn(sessionId, row) {
+  const rows = durableTurns.get(sessionId) ?? [];
+  const at = rows.findIndex((r) => r.task_id === row.task_id);
+  if (at >= 0) rows[at] = { ...rows[at], ...row };
+  else rows.push(row);
+  durableTurns.set(sessionId, rows);
+}
+
+function askHumanHistory(prompt, question) {
+  return [
+    { role: "ROLE_USER", parts: [{ text: prompt }] },
+    {
+      role: "ROLE_AGENT",
+      parts: [],
+      metadata: {
+        "https://proto-labs.ai/a2a/ext/tool-call-v1": {
+          toolCallId: "ask-1", name: "ask_human", phase: "started", args: JSON.stringify({ question }),
+        },
+      },
+    },
+  ];
+}
+
+function supersededTask(id) {
+  const entry = supersededTasks.get(String(id));
+  return {
+    id,
+    contextId: entry.sessionId,
+    status: {
+      state: "TASK_STATE_COMPLETED",
+      message: {
+        role: "ROLE_AGENT",
+        parts: [{ text: `Continued in task ${entry.successor}.` }],
+        metadata: { protoagent_superseded_by: entry.successor },
+      },
+    },
+    artifacts: [],
+    history: entry.history,
+  };
+}
 
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
@@ -816,7 +882,12 @@ async function handleLivePark(res, body, prompt, sessionId) {
   const resumeTaskId = message.taskId ? String(message.taskId) : "";
   const answering = message.metadata?.hitl_resume === true && liveParks.has(resumeTaskId);
   const park = /PARK_ASK_HUMAN\s+(\S+)/.exec(prompt);
-  if (!answering && !park) return false;
+  // A plain message into a session parked here (#3963): held, and re-parked on a new task.
+  const reparkFrom =
+    !answering && !park && !resumeTaskId && message.metadata?.hitl_resume !== true
+      ? [...liveParks.entries()].find(([, entry]) => entry.sessionId === sessionId)?.[0] ?? ""
+      : "";
+  if (!answering && !park && !reparkFrom) return false;
   const rpcId = body.id ?? "1";
   const wrap = (result) => ({ jsonrpc: "2.0", id: rpcId, result });
   const status = (taskId, state, extra = {}) =>
@@ -844,6 +915,50 @@ async function handleLivePark(res, body, prompt, sessionId) {
       lastChunk: true,
     }));
     await send(status(resumeTaskId, "completed"));
+    recordDurableTurn(owner, {
+      task_id: resumeTaskId,
+      state: "TASK_STATE_COMPLETED",
+      last_updated: new Date().toISOString(),
+      text: `You like ${prompt}.`,
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: `You like ${prompt}.` }] }],
+    });
+    res.end();
+    return true;
+  }
+  if (reparkFrom) {
+    const { question } = liveParks.get(reparkFrom);
+    const successor = `task-paused-ask_human-repark${++reparkSeq}-${sessionId}`;
+    liveParks.delete(reparkFrom);
+    liveParks.set(successor, { sessionId, question, history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }] });
+    await send(wrap({ kind: "task", id: successor, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+    await send(status(successor, "working"));
+    await send(status(successor, "input-required", {
+      message: { role: "agent", parts: [{ kind: "data", data: { question }, metadata: { mimeType: HITL_MIME } }] },
+    }));
+    const parkedAt = Date.now();
+    recordDurableTurn(sessionId, {
+      task_id: successor,
+      state: "TASK_STATE_INPUT_REQUIRED",
+      last_updated: new Date(parkedAt).toISOString(),
+      text: "",
+      status: {
+        state: "TASK_STATE_INPUT_REQUIRED",
+        message: { role: "ROLE_AGENT", parts: [{ data: { question }, metadata: { mimeType: HITL_MIME } }] },
+      },
+      artifacts: [],
+      history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }],
+    });
+    // The old task's settle lands just AFTER the new one parked — so its last change is later.
+    await new Promise((r) => setTimeout(r, 50));
+    const old = (durableTurns.get(sessionId) ?? []).find((r) => r.task_id === reparkFrom);
+    supersededTasks.set(reparkFrom, { sessionId, successor, history: old?.history ?? [] });
+    recordDurableTurn(sessionId, {
+      task_id: reparkFrom,
+      state: "TASK_STATE_COMPLETED",
+      last_updated: new Date(parkedAt + 50).toISOString(),
+      status: supersededTask(reparkFrom).status,
+    });
     res.end();
     return true;
   }
@@ -869,6 +984,18 @@ async function handleLivePark(res, body, prompt, sessionId) {
     return true;
   }
   liveParks.set(taskId, { sessionId, question });
+  recordDurableTurn(sessionId, {
+    task_id: taskId,
+    state: "TASK_STATE_INPUT_REQUIRED",
+    last_updated: new Date().toISOString(),
+    text: "",
+    status: {
+      state: "TASK_STATE_INPUT_REQUIRED",
+      message: { role: "ROLE_AGENT", parts: [{ data: { question }, metadata: { mimeType: HITL_MIME } }] },
+    },
+    artifacts: [],
+    history: askHumanHistory(prompt, question),
+  });
   await send(wrap({ kind: "task", id: taskId, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
   await send(status(taskId, "working", {
     message: {
@@ -1018,6 +1145,10 @@ const server = createServer(async (req, res) => {
       // and re-render the HITL card from this snapshot — never finalize.
       // contextId matches the seeded session so the frame dispatcher's
       // foreign-context guard passes the replay through.
+      // A pause another task took over (#3963): completed, pointing at its successor.
+      if (supersededTasks.has(String(body.params?.id || ""))) {
+        return sendJson(res, { jsonrpc: "2.0", id: body.id, result: supersededTask(body.params?.id) });
+      }
       if (String(body.params?.id || "").includes("paused")) {
         return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pausedTask(body.params?.id) });
       }
@@ -1060,7 +1191,7 @@ const server = createServer(async (req, res) => {
       // until the operator's answer continues the task (A2A §3.1.6 ends a subscription
       // only at a terminal state). Mirror that exactly — the mock that rejected here hid
       // #3930, a reattach waiting on this stream to close.
-      if (String(body.params?.id || "").includes("paused")) {
+      if (String(body.params?.id || "").includes("paused") && !supersededTasks.has(String(body.params?.id || ""))) {
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
         res.write(`data: ${JSON.stringify({ id: body.id, jsonrpc: "2.0", result: { task: pausedTask(body.params?.id) } })}\r\n\r\n`);
         return; // never ended by the server
@@ -1161,6 +1292,20 @@ const server = createServer(async (req, res) => {
         return sendJson(res, {
           sessions: [{ session_id: "chat-recovered", last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }],
         });
+      }
+      // #3963: a session that parked live, as a FRESH profile finds it — header-gated to
+      // the one session a spec names, so no other spec grows a recovered tab.
+      const reparkSession = req.headers["x-e2e-repark-session"];
+      if (reparkSession && pathname === "/api/chat/sessions") {
+        const rows = durableTurns.get(reparkSession) ?? [];
+        const last = rows.map((r) => r.last_updated).sort().at(-1) ?? null;
+        return sendJson(res, { sessions: [{ session_id: reparkSession, last_updated: last, turn_count: rows.length }] });
+      }
+      if (reparkSession && pathname === `/api/chat/sessions/${reparkSession}/turns`) {
+        const rows = [...(durableTurns.get(reparkSession) ?? [])];
+        // Ordered by LAST CHANGE, no live marker: main's pre-#3963 shape (see durableTurns).
+        rows.sort((a, b) => a.last_updated.localeCompare(b.last_updated));
+        return sendJson(res, { turns: rows });
       }
       if (
         req.headers["x-e2e-session-history"] === "1" &&

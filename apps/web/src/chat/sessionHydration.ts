@@ -5,6 +5,7 @@
 import {
   api,
   replayDurableChatTurn,
+  supersededByFromStatus,
   textFromParts,
   type DurableChatSession,
   type DurableChatTurn,
@@ -214,11 +215,51 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   return [...messages, ...settled, assistant];
 }
 
-/** Build one fixed-id local session from its ordered durable turns. */
+/** The turns in the order the transcript draws them, with the LIVE one last (#3963).
+ *
+ *  Everything downstream reads the session's LAST assistant bubble as its live turn: boot
+ *  mounts the slot off it, the reattach resubscribes to its task, a HITL answer continues
+ *  it. So the turn still in flight — working, or parked on the operator — must end the
+ *  transcript, whatever order the rows arrived in. An older server ordered them by when
+ *  each row last CHANGED, and a pause a plain message moved to a new task left the old task
+ *  to complete ("Continued in task …") just AFTER the new one parked: the completion came
+ *  last, the parked turn sat mid-transcript, nothing reattached, and no form came back.
+ *
+ *  The live turn is the server's `live_task_id`. A server that predates it (the field is
+ *  absent) gets the narrowest inference that covers the quirk: the last row not yet over,
+ *  when every row after it is a task whose pause it took over (a completion pointing
+ *  elsewhere, supersededByFromStatus) — never an older orphan that merely never ended.
+ *
+ *  Once the live turn is known, a PARKED row that is not it lost its pause to a newer task
+ *  (one pause per context, #3930): it is over, and renders so rather than as a second
+ *  "waiting for your input". With nothing known, rows are drawn as they came. */
+export function orderDurableTurns(
+  turns: DurableChatTurn[],
+  liveTaskId?: string | null,
+): DurableChatTurn[] {
+  let live: DurableChatTurn | undefined;
+  if (liveTaskId !== undefined) {
+    live = liveTaskId ? turns.find((turn) => turn.task_id === liveTaskId) : undefined;
+  } else {
+    let at = turns.length - 1;
+    while (at >= 0 && TERMINAL.test(turns[at].state)) at -= 1;
+    if (at >= 0 && turns.slice(at + 1).every((turn) => supersededByFromStatus(turn.status))) live = turns[at];
+  }
+  if (!live && liveTaskId === undefined) return turns;
+  const ordered = live ? [...turns.filter((turn) => turn !== live), live] : turns;
+  return ordered.map((turn) =>
+    turn !== live && PAUSED.test(turn.state) ? { ...turn, state: "TASK_STATE_COMPLETED" } : turn,
+  );
+}
+
+/** Build one fixed-id local session from its durable turns (see orderDurableTurns for the
+ *  order they are drawn in, and `liveTaskId`). */
 export function sessionFromDurableTurns(
   summary: DurableChatSession,
-  turns: DurableChatTurn[],
+  rows: DurableChatTurn[],
+  liveTaskId?: string | null,
 ): ChatSession | null {
+  const turns = orderDurableTurns(rows, liveTaskId);
   const messages = turns.flatMap(messagesFromDurableTurn);
   if (!messages.length) return null;
   const createdAt = timestamp(turns[0]?.last_updated ?? summary.last_updated);
@@ -264,8 +305,8 @@ export async function hydrateDurableChatSessions(): Promise<void> {
     while (cursor < wanted.length) {
       const summary = wanted[cursor++];
       try {
-        const { turns } = await api.chatSessionTurns(summary.session_id, SESSION_TURN_LIMIT);
-        const session = sessionFromDurableTurns(summary, turns);
+        const { turns, live_task_id } = await api.chatSessionTurns(summary.session_id, SESSION_TURN_LIMIT);
+        const session = sessionFromDurableTurns(summary, turns, live_task_id);
         if (session) hydrated.push(session);
       } catch {
         // One session failing must not discard successful siblings.
