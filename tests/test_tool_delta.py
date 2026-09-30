@@ -115,7 +115,7 @@ def test_no_change_injects_nothing():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a"])
     mw = _mw()
-    assert mw.before_agent({}, None) is None
+    assert _note(mw.before_agent({}, None)) == ""  # the marker only — no notice
 
 
 def test_a_change_is_carried_in_run_state_for_wrap_model_call():
@@ -183,7 +183,7 @@ def test_the_injection_is_one_shot_across_turns():
     tool_delta.record_toolset(["a", "b"])
     mw = _mw()
     assert _note(mw.before_agent({}, None))
-    assert mw.before_agent({}, None) is None
+    assert _note(mw.before_agent({}, None)) == ""
 
 
 async def test_the_async_hook_behaves_identically():
@@ -192,4 +192,4 @@ async def test_the_async_hook_behaves_identically():
     mw = _mw()
     out = await mw.abefore_agent({}, None)
     assert "b" in _note(out)
-    assert await mw.abefore_agent({}, None) is None
+    assert _note(await mw.abefore_agent({}, None)) == ""

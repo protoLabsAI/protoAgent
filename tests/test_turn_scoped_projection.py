@@ -31,6 +31,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command, interrupt
 
 from graph import tool_delta
 from graph.context_frame import is_context_frame
@@ -81,7 +82,7 @@ class _TurnModel(BaseChatModel):
     def _reply(self, messages) -> AIMessage:
         turn = _turn_of(messages)
         self.log.append((turn, [str(m.content) for m in messages if is_context_frame(m)]))
-        if turn == "turn-A" and not any(isinstance(m, AIMessage) for m in messages):
+        if turn in ("turn-A", "turn-R") and not any(isinstance(m, AIMessage) for m in messages):
             self.first_call_a.set()
             return AIMessage(content="", tool_calls=[{"name": "hold", "args": {}, "id": "call-hold", "type": "tool_call"}])
         return AIMessage(content=f"done {turn}")
@@ -250,10 +251,10 @@ async def test_interleaved_async_turns_each_deliver_their_own_projection():
     _assert_turn_scoped(model_log, recorder, saver, graph)
 
 
-def test_a_resumed_run_starts_without_a_projection():
-    """The channel is one run long: a later run on the same thread whose newest
-    message is not fresh input (a resume / kicker re-entry) delivers nothing —
-    the previous run's projection is not replayed from anywhere."""
+def test_a_fresh_run_without_new_input_composes_nothing():
+    """A run that enters at the top with no fresh operator input (a kicker
+    retry) composes nothing and delivers no projection — the previous run's
+    projection is not replayed from anywhere."""
     model_log: list = []
     graph, _recorder, _saver = _build(
         StructuredTool.from_function(lambda: "x", name="hold", description="unused"),
@@ -266,6 +267,66 @@ def test_a_resumed_run_starts_without_a_projection():
     # Re-enter with no fresh human input (newest message is the AI reply).
     graph.invoke({"messages": []}, cfg)
     assert model_log[-1][1] == []
+
+
+def _ask() -> str:
+    """Ask the operator (HITL): parks the turn on an interrupt."""
+    return str(interrupt({"question": "proceed?"}))
+
+
+def _assert_resumed_turn_keeps_its_projection(model_log, recorder):
+    assert [t for t, _ in model_log] == ["turn-R", "turn-B", "turn-R"], model_log
+    for turn, frames in model_log:
+        text = _frame_text(frames)
+        other = "turn-B" if turn == "turn-R" else "turn-R"
+        assert f"RAG-HIT[{turn}]" in text, (turn, text)
+        assert f"RAG-HIT[{other}]" not in text, (turn, text)
+    # The resumed call still carries the toolset notice its turn took; B never does.
+    r_calls = [_frame_text(f) for t, f in model_log if t == "turn-R"]
+    assert all("tool-q7" in c for c in r_calls), r_calls
+    assert not any("tool-q7" in _frame_text(f) for t, f in model_log if t == "turn-B")
+    # Prompt capture records the resumed call's own projection too.
+    assert "RAG-HIT[turn-R]" in (recorder.rows[-1]["projected_context"] or "")
+
+
+def test_a_hitl_resume_keeps_the_turns_projection_sync():
+    """``Command(resume=…)`` continues the turn at the interrupted tool: before_agent
+    does not run again and the untracked channel starts empty after the checkpoint
+    load. The resumed model call must still deliver THIS turn's projection (and its
+    toolset notice) — even with another thread's turn run in between."""
+    model_log: list = []
+    graph, recorder, saver = _build(
+        StructuredTool.from_function(_ask, name="hold", description="Ask the operator."),
+        model_log=model_log,
+        first_call_a=threading.Event(),
+    )
+    cfg = {"configurable": {"thread_id": "R"}}
+    out = graph.invoke({"messages": [HumanMessage(content="turn-R question")]}, cfg)
+    assert out.get("__interrupt__"), out  # parked on the HITL question
+    graph.invoke({"messages": [HumanMessage(content="turn-B question")]}, {"configurable": {"thread_id": "B"}})
+    graph.invoke(Command(resume="yes"), cfg)
+
+    _assert_resumed_turn_keeps_its_projection(model_log, recorder)
+    blob = repr(saver.storage) + repr(saver.writes) + repr(dict(saver.blobs))
+    assert "RAG-HIT[" not in blob and HOT_MARKER not in blob
+
+
+async def test_a_hitl_resume_keeps_the_turns_projection_async():
+    model_log: list = []
+    graph, recorder, saver = _build(
+        StructuredTool.from_function(_ask, name="hold", description="Ask the operator."),
+        model_log=model_log,
+        first_call_a=threading.Event(),
+    )
+    cfg = {"configurable": {"thread_id": "R"}}
+    out = await graph.ainvoke({"messages": [HumanMessage(content="turn-R question")]}, cfg)
+    assert out.get("__interrupt__"), out
+    await graph.ainvoke({"messages": [HumanMessage(content="turn-B question")]}, {"configurable": {"thread_id": "B"}})
+    await graph.ainvoke(Command(resume="yes"), cfg)
+
+    _assert_resumed_turn_keeps_its_projection(model_log, recorder)
+    blob = repr(saver.storage) + repr(saver.writes) + repr(dict(saver.blobs))
+    assert "RAG-HIT[" not in blob and HOT_MARKER not in blob
 
 
 def test_a_nested_run_on_the_same_middleware_keeps_the_outer_projection():

@@ -22,6 +22,14 @@ reads it back off ``request.state``. Each run has its own channel values, so
 overlapping turns each deliver their own composed context; and an untracked
 channel is never written to a checkpoint (nor to pending writes), which keeps
 the ADR 0108 D2 contract — the projection never enters the checkpointer.
+
+A HITL resume (``Command(resume=…)`` after an ``interrupt()``) continues the turn
+from the interrupted node: ``before_agent`` does not run again, and the untracked
+channel starts empty after the checkpoint load. ``before_model`` covers that case —
+when the channel is ABSENT (``before_agent`` always writes it, even as an empty
+marker, on any run that enters at the top), the run is a resume of a turn already
+in progress, so the projection is composed once, lazily, and written back for the
+rest of the run's model calls.
 """
 
 import logging
@@ -63,8 +71,15 @@ class KnowledgeState(AgentState):
 
     ``UntrackedValue``: lives for one run only (a resume or the next turn starts
     without it) and is skipped by both checkpoint and pending-write persistence.
-    ``PrivateStateAttr``: absent from the graph's input and output schemas, so a
-    caller can neither supply a projection nor read one back from the result.
+    ``PrivateStateAttr``: omitted from the graph's input and output schemas, so
+    a caller cannot supply a projection, and it is absent from invoke results,
+    state snapshots and checkpoints. (It does appear in LangGraph's own
+    ``stream_mode="values"``/``"updates"`` frames and ``astream_events`` chain
+    payloads — none of which the server forwards or records.)
+
+    Value shape: ``{"text": str, "sections": list | None}``; ``{}`` is the marker
+    ``before_agent`` writes when it composed nothing, so the channel's PRESENCE
+    means "this run entered at the top" and its absence means "resumed run".
     """
 
     protoagent_turn_projection: NotRequired[Annotated[dict | None, UntrackedValue, PrivateStateAttr]]
@@ -383,22 +398,56 @@ class KnowledgeMiddleware(AgentMiddleware):
         (untracked — never checkpointed), and ``wrap_model_call`` delivers it via
         ``request.override(messages=…)``.
 
-        Guarded on the newest message being a FRESH human input: a HITL resume
-        (``Command(resume=…)``) or a kicker retry re-enters the graph without new
-        input, and must not recompose (that run starts with the channel empty,
-        so it delivers no projection — the same as before).
+        Guarded on the newest message being a FRESH human input: a run that
+        enters at the top without new input (a kicker retry) must not recompose,
+        and delivers no projection. Either way the channel is WRITTEN (``{}``
+        when nothing was composed): its presence tells ``before_model`` this run
+        entered here. A HITL resume (``Command(resume=…)``) never runs this hook
+        at all — ``before_model`` composes for it (see there).
         """
         from graph.context_frame import is_context_frame
 
         messages = state.get("messages") or []
         last = messages[-1] if messages else None
         if not isinstance(last, HumanMessage) or is_context_frame(last):
-            return None  # re-entry without fresh input — no recompose, no state churn
-        composed = self.compose_context(state, runtime, record=True)
+            return {TURN_PROJECTION_KEY: {}}  # re-entry without fresh input — no recompose
+        return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=True)}
+
+    def _projection_value(self, state, runtime, *, record: bool) -> dict:
+        composed = self.compose_context(state, runtime, record=record)
         ctx = (composed or {}).get("context") or ""
         if not ctx:
+            return {}
+        return {"text": ctx, "sections": (composed or {}).get("context_sections")}
+
+    def before_model(self, state, runtime) -> dict | None:
+        """Recompose for a RESUMED run — once, lazily.
+
+        ``Command(resume=…)`` (ask_human, fs approvals, request_user_input, and the
+        goal/scheduler auto-resume) continues the turn at the interrupted node, so
+        ``before_agent`` does not run and the untracked channel starts empty. An
+        absent channel therefore means "resume of a turn in progress" (a run that
+        entered at the top always wrote it): compose from this thread's state —
+        whose newest operator message is still the turn's input — and write the
+        channel, so every later model call of the run delivers it. A present
+        channel (the common case) is a no-op. ``record=False``: the turn's
+        injection-log row (ADR 0069 D6) was written when the turn entered.
+        """
+        if TURN_PROJECTION_KEY in (state or {}):
             return None
-        return {TURN_PROJECTION_KEY: {"text": ctx, "sections": (composed or {}).get("context_sections")}}
+        from graph.context_frame import is_context_frame
+
+        if not any(isinstance(m, HumanMessage) and not is_context_frame(m) for m in state.get("messages") or []):
+            return {TURN_PROJECTION_KEY: {}}
+        return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=False)}
+
+    async def abefore_model(self, state, runtime) -> dict | None:
+        """Async ``before_model`` — the (rare) resume compose runs off the loop."""
+        if TURN_PROJECTION_KEY in (state or {}):
+            return None
+        import asyncio
+
+        return await asyncio.to_thread(self.before_model, state, runtime)
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
         """The dynamic-context composer behind ``before_agent`` — the shared

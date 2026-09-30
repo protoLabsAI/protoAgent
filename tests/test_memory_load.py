@@ -625,7 +625,8 @@ def test_before_agent_returns_none_when_nothing_composes(tmp_path):
 
     state = {"messages": [HumanMessage(content="hello")]}
     result = mw.before_agent(state, runtime=None)
-    assert result is None
+    # Only the empty "entered at the top" marker — nothing to deliver.
+    assert result == {"protoagent_turn_projection": {}}
 
 
 def test_before_agent_skips_reentry_without_fresh_input(tmp_path):
@@ -642,11 +643,13 @@ def test_before_agent_skips_reentry_without_fresh_input(tmp_path):
     mw._prior_sessions_loaded_at = time.monotonic()
 
     # Last message is the assistant (mid-turn resume) → skip entirely.
-    assert mw.before_agent({"messages": [HumanMessage(content="q"), AIMessage(content="…")]}, None) is None
+    # (The update is only the empty "entered at the top" marker: nothing composed.)
+    empty = {"protoagent_turn_projection": {}}
+    assert mw.before_agent({"messages": [HumanMessage(content="q"), AIMessage(content="…")]}, None) == empty
     # Last message is already an injected frame → same.
-    assert mw.before_agent({"messages": [context_frame_message("ctx")]}, None) is None
+    assert mw.before_agent({"messages": [context_frame_message("ctx")]}, None) == empty
     # Empty thread → nothing to compose against.
-    assert mw.before_agent({"messages": []}, None) is None
+    assert mw.before_agent({"messages": []}, None) == empty
 
 
 def test_frame_message_is_tagged_and_enveloped(tmp_path):

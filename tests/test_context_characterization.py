@@ -162,7 +162,7 @@ class TestBeforeAgent:
         existing_frame = context_frame_message("prior context")
         state = {"messages": [HumanMessage(content="hi"), existing_frame]}
         result = mw.before_agent(state, runtime=None)
-        assert result is None
+        assert result == {TURN_PROJECTION_KEY: {}}  # entered-here marker, nothing composed
 
     def test_no_compose_on_ai_message_last(self, monkeypatch):
         """When the last message is an AI response (re-entry), no frame is composed."""
@@ -170,7 +170,7 @@ class TestBeforeAgent:
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         state = {"messages": [HumanMessage(content="hi"), AIMessage(content="sure")]}
         result = mw.before_agent(state, runtime=None)
-        assert result is None
+        assert result == {TURN_PROJECTION_KEY: {}}  # entered-here marker, nothing composed
 
     def test_incognito_suppresses_memory(self, monkeypatch):
         """Incognito threads get no memory injection (ADR 0069 D3b)."""
