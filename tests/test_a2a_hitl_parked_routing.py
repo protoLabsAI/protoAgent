@@ -98,8 +98,10 @@ def _handler(stream_fn, *, routing: bool = True):
 CALL = ServerCallContext()
 
 
-def _msg(text: str, *, mid: str, task_id: str = "", hitl_resume: bool = False) -> SendMessageRequest:
-    message = Message(message_id=mid, context_id=CTX, role=Role.ROLE_USER, parts=[Part(text=text)])
+def _msg(
+    text: str, *, mid: str, task_id: str = "", hitl_resume: bool = False, ctx: str = CTX
+) -> SendMessageRequest:
+    message = Message(message_id=mid, context_id=ctx, role=Role.ROLE_USER, parts=[Part(text=text)])
     if task_id:
         message.task_id = task_id
     if hitl_resume:
@@ -111,8 +113,8 @@ async def _get(handler, task_id: str) -> Task:
     return await handler.on_get_task(GetTaskRequest(id=task_id), CALL)
 
 
-async def _parked(handler) -> list[str]:
-    return [t.id for t in await hitl_routing.ParkedTaskRouter(handler).parked_tasks(CTX, CALL)]
+async def _parked(handler, ctx: str = CTX) -> list[str]:
+    return [t.id for t in await hitl_routing.ParkedTaskRouter(handler).parked_tasks(ctx, CALL)]
 
 
 def _form_stream(calls: list):
@@ -291,3 +293,108 @@ async def test_settling_a_superseded_task_closes_its_subscription():
     events = await asyncio.wait_for(rest(), 2)
     states = [getattr(getattr(e, "status", None), "state", None) for e in events]
     assert TaskState.TASK_STATE_COMPLETED in states
+
+
+# ── review round (M1, minors) ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attempt", range(5))
+async def test_a_settle_never_reaches_the_graph_when_it_races_an_answer(attempt):
+    """M1: P1 parks; a held message parks P2 (scheduling P1's settle) while an answer
+    naming P1 is in flight. Whatever the interleaving, the internal settle text must
+    never run as operator input — not as a resume, not as a fresh turn."""
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    p1 = await handler.on_message_send(_msg("first", mid="m1"), CALL)
+    held = asyncio.ensure_future(handler.on_message_send(_msg("held", mid="m2"), CALL))
+    answer = asyncio.ensure_future(
+        handler.on_message_send(_msg("banana", mid="m3", task_id=p1.id, hitl_resume=True), CALL)
+    )
+    await asyncio.gather(held, answer, return_exceptions=True)
+    await router.drain()
+    await asyncio.sleep(0.2)  # let any queued request on either task run
+    await router.drain()
+    assert not any("superseded" in c["text"] for c in calls), calls
+    # Every non-resume call is a message the operator sent — none reopened a task.
+    assert sorted(c["text"] for c in calls if not c["resume"]) == ["first", "held"]
+
+
+def test_settle_decision_only_applies_to_the_pause_it_was_scheduled_against():
+    task = Task(id="t1", context_id=CTX)
+    task.status.state = TaskState.TASK_STATE_INPUT_REQUIRED
+    task.status.message.message_id = "pause-1"
+
+    def settle_msg(mid: str) -> Message:
+        m = Message(message_id=mid, task_id="t1", context_id=CTX, role=Role.ROLE_USER, parts=[Part(text="x")])
+        m.metadata.update({hitl_routing.SETTLE_MARKER: True})
+        return m
+
+    # Forged: marked but never registered → a settle (never the graph), but a no-op.
+    assert hitl_routing.settle_decision(settle_msg("forged"), task) == (True, None)
+    # Registered against this pause → applies, and is consumed.
+    hitl_routing._register("s1", "t2", "pause-1")
+    assert hitl_routing.settle_decision(settle_msg("s1"), task) == (True, "t2")
+    assert "s1" not in hitl_routing._PENDING_SETTLES
+    # Registered against an EARLIER pause (the task was answered and re-paused) → no-op.
+    hitl_routing._register("s2", "t2", "pause-0")
+    assert hitl_routing.settle_decision(settle_msg("s2"), task) == (True, None)
+    # The task is no longer paused → no-op.
+    hitl_routing._register("s3", "t2", "pause-1")
+    task.status.state = TaskState.TASK_STATE_COMPLETED
+    assert hitl_routing.settle_decision(settle_msg("s3"), task) == (True, None)
+    # An unmarked message is not a settle at all.
+    plain = Message(message_id="s4", role=Role.ROLE_USER, parts=[Part(text="x")])
+    assert hitl_routing.settle_decision(plain, task) == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_routing_and_settling_stay_inside_their_context():
+    """Two sessions each parked: an answer in B continues B's task, and a re-park in B
+    never settles A's."""
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    a = await handler.on_message_send(_msg("ask A", mid="a1", ctx="ctx-a"), CALL)
+    b = await handler.on_message_send(_msg("ask B", mid="b1", ctx="ctx-b"), CALL)
+    b2 = await handler.on_message_send(_msg("held B", mid="b2", ctx="ctx-b"), CALL)
+    await router.drain()
+    assert await _parked(handler, "ctx-a") == [a.id]
+    assert await _parked(handler, "ctx-b") == [b2.id]
+    assert (await _get(handler, b.id)).status.state == TaskState.TASK_STATE_COMPLETED
+
+    answer = await handler.on_message_send(_msg("kiwi", mid="b3", hitl_resume=True, ctx="ctx-b"), CALL)
+    await router.drain()
+    assert answer.id == b2.id
+    assert await _parked(handler, "ctx-a") == [a.id]  # untouched
+
+
+@pytest.mark.asyncio
+async def test_a_message_naming_a_task_of_another_context_is_refused():
+    from a2a.utils.errors import InvalidParamsError
+
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    a = await handler.on_message_send(_msg("ask A", mid="a1", ctx="ctx-a"), CALL)
+    with pytest.raises(InvalidParamsError):
+        await handler.on_message_send(_msg("x", mid="b1", task_id=a.id, hitl_resume=True, ctx="ctx-b"), CALL)
+    assert [c["text"] for c in calls] == ["ask A"]
+    assert (await _get(handler, a.id)).status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_a_double_submitted_answer_never_reopens_the_completed_task():
+    """Two answers race onto the same parked task: the first continues it; the second
+    must not re-run the completed task as a fresh turn."""
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    p1 = await handler.on_message_send(_msg("ask", mid="m1"), CALL)
+    results = await asyncio.gather(
+        handler.on_message_send(_msg("one", mid="m2", task_id=p1.id, hitl_resume=True), CALL),
+        handler.on_message_send(_msg("two", mid="m3", task_id=p1.id, hitl_resume=True), CALL),
+        return_exceptions=True,
+    )
+    await router.drain()
+    await asyncio.sleep(0.2)
+    assert (await _get(handler, p1.id)).status.state == TaskState.TASK_STATE_COMPLETED
+    # Exactly one resume ran on p1, and no call reopened it as a fresh turn.
+    assert [c for c in calls if not c["resume"]] == [{"text": "ask", "resume": False}], (calls, results)

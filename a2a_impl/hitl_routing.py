@@ -30,9 +30,14 @@ This module keeps one parked task per context:
   row) finishes its in-memory ``ActiveTask`` too, so any ``SubscribeToTask`` still
   attached to it gets the terminal frame and closes.
 
-The internal settle message is recognised by its ``message_id`` alone, registered here a
-moment before it is sent: nothing a client can put on the wire marks a message as a
-settle. Contexts are the grouping key because a console session's LangGraph thread is its
+A settle message is marked (``SETTLE_MARKER`` metadata) and registered by ``message_id``
+before it is sent, with the id of the pause it was scheduled against. The executor never
+runs the graph for a marked message: it completes the task only when the registration is
+present AND the task is still paused on that same pause; anything else (a forged marker,
+a registration that aged out, or a task another request already answered or re-paused
+while the settle waited in its queue) is a no-op. A registration is consumed by the
+executor (or expires), never dropped when ``on_message_send`` returns: that call can
+return on another in-flight request's event while this one is still queued. Contexts are the grouping key because a console session's LangGraph thread is its
 context (``server.turn_control._resolve_thread_id``) — one thread has one pending interrupt.
 """
 
@@ -40,11 +45,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 from a2a.types.a2a_pb2 import ListTasksRequest
+from a2a.utils.errors import InvalidParamsError
 
 log = logging.getLogger(__name__)
 
@@ -53,18 +61,66 @@ log = logging.getLogger(__name__)
 # listed for the "is this task still paused" check.
 _PAUSED = (TaskState.TASK_STATE_INPUT_REQUIRED, TaskState.TASK_STATE_AUTH_REQUIRED)
 
-# message_id → the id of the task that superseded the one the message is sent to.
-_PENDING_SETTLES: dict[str, str] = {}
+# Metadata key marking a settle message. The executor never runs the graph for a message
+# carrying it (see settle_decision) — a forged one is a no-op, never an answer.
+SETTLE_MARKER = "protoagent_settle"
+# A registration outlives any plausible queue wait behind a running turn; past this it is
+# pruned, and its settle (if it ever runs) is a no-op.
+_SETTLE_TTL_S = 60 * 60
+
+
+@dataclass
+class _Settle:
+    superseded_by: str
+    pause_id: str  # the status message id of the pause the settle was scheduled against
+    registered_at: float
+
+
+# message_id → the settle registered for it.
+_PENDING_SETTLES: dict[str, _Settle] = {}
 
 _ROUTER: list[ParkedTaskRouter | None] = [None]
 
 
-def take_settle(message: Message | None) -> str | None:
-    """The superseding task id if ``message`` is one of this module's settle messages,
-    else ``None``. One-shot: the registration is consumed."""
-    if message is None or not message.message_id:
-        return None
-    return _PENDING_SETTLES.pop(message.message_id, None)
+def _pause_id(task: Any) -> str:
+    try:
+        return task.status.message.message_id or ""
+    except AttributeError:
+        return ""
+
+
+def _register(message_id: str, superseded_by: str, pause_id: str) -> None:
+    now = time.monotonic()
+    for key in [k for k, v in _PENDING_SETTLES.items() if now - v.registered_at > _SETTLE_TTL_S]:
+        _PENDING_SETTLES.pop(key, None)
+    _PENDING_SETTLES[message_id] = _Settle(superseded_by, pause_id, now)
+
+
+def is_settle_message(message: Message | None) -> bool:
+    return bool(
+        message is not None and message.HasField("metadata") and SETTLE_MARKER in message.metadata.fields
+    )
+
+
+def settle_decision(message: Message | None, current_task: Any) -> tuple[bool, str | None]:
+    """``(is_settle, superseded_by)`` for a message the executor is about to run.
+
+    ``is_settle`` is True for any message marked as a settle — the executor must then NOT
+    run the graph. ``superseded_by`` is set only when the settle is registered (consumed
+    here) AND ``current_task`` is still paused on the pause it was scheduled against;
+    otherwise the settle is stale or forged and the executor does nothing."""
+    if not is_settle_message(message):
+        return False, None
+    settle = _PENDING_SETTLES.pop(message.message_id, None) if message.message_id else None
+    if settle is None:
+        return True, None
+    try:
+        paused = current_task is not None and current_task.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    except AttributeError:
+        paused = False
+    if not paused or _pause_id(current_task) != settle.pause_id:
+        return True, None
+    return True, settle.superseded_by
 
 
 def _is_hitl_resume(message: Message) -> bool:
@@ -95,16 +151,31 @@ class ParkedTaskRouter:
         return list(page.tasks)
 
     async def route(self, params: SendMessageRequest, call_context: Any) -> None:
-        """Point a ``hitl_resume`` message at the context's parked task (in place)."""
+        """Point a ``hitl_resume`` message at the context's parked task (in place).
+
+        Also refuses a message naming a task of ANOTHER context: the SDK builds its request
+        context without the task and never compares the two, so the message would run
+        against that task under the wrong context's thread."""
         message = params.message
+        if is_settle_message(message) and message.message_id not in _PENDING_SETTLES:
+            # Only this module sends settles; a client's copy just loses the marker's meaning.
+            message.metadata.fields.pop(SETTLE_MARKER, None)
+        named = None
+        if message.task_id and message.context_id:
+            named = await self._handler.task_store.get(message.task_id, call_context)
+            if named is not None and named.context_id and named.context_id != message.context_id:
+                raise InvalidParamsError(
+                    message=f"Task {message.task_id} belongs to another context than {message.context_id}"
+                )
         if not _is_hitl_resume(message) or not message.context_id:
             return
         try:
-            if message.task_id:
-                named = await self._handler.task_store.get(message.task_id, call_context)
-                if named is not None and named.status.state in _PAUSED:
-                    return  # already continues a paused task — the spec's own path
             parked = await self.parked_tasks(message.context_id, call_context)
+            if named is not None and named.status.state in _PAUSED and (not parked or parked[0].id == named.id):
+                return  # continues THE paused task — the spec's own path
+            # Otherwise the named task ended, or is an OLDER pause a newer task took over
+            # (a held message re-parked): the newest parked task owns the interrupt, and
+            # the older one is about to be settled — answering it would race that.
         except Exception:  # noqa: BLE001 — routing is an improvement, never a new failure
             log.warning("[a2a] could not look up the parked task for a HITL answer", exc_info=True)
             return
@@ -128,8 +199,12 @@ class ParkedTaskRouter:
         for task in await self.parked_tasks(context_id, call_context):
             if task.id == keep_task_id:
                 continue
+            if await self._busy(task.id):
+                # A request is already running or queued on it (an answer that named it):
+                # that request owns the task's outcome. Never race it.
+                log.info("[a2a] not settling parked task %s — a request is in flight on it", task.id)
+                continue
             message_id = f"settle-{uuid.uuid4()}"
-            _PENDING_SETTLES[message_id] = keep_task_id
             message = Message(
                 message_id=message_id,
                 context_id=context_id,
@@ -138,16 +213,34 @@ class ParkedTaskRouter:
                 parts=[Part(text=f"[superseded by task {keep_task_id}]")],
             )
             # `hidden`: a chat rebuilt from this task's history draws no bubble for it.
-            message.metadata.update({"hidden": True})
+            message.metadata.update({"hidden": True, SETTLE_MARKER: True})
+            # Consumed by the executor (settle_decision) or pruned by age — NOT dropped when
+            # the send returns: the SDK can answer it off another request's event while
+            # this one is still queued on the task.
+            _register(message_id, keep_task_id, _pause_id(task))
             try:
                 await self._send(SendMessageRequest(message=message), call_context)
                 settled.append(task.id)
                 log.info("[a2a] settled parked task %s — superseded by %s", task.id, keep_task_id)
             except Exception:  # noqa: BLE001 — one stuck sibling must not block the rest
                 log.warning("[a2a] could not settle parked task %s", task.id, exc_info=True)
-            finally:
-                _PENDING_SETTLES.pop(message_id, None)
         return settled
+
+    async def _busy(self, task_id: str) -> bool:
+        """Whether a request is running or queued on the task's live ``ActiveTask``.
+
+        Reads a2a-sdk internals (``_request_lock`` / ``_request_queue``), guarded: if they
+        move, this answers False and the executor's settle_decision check still keeps a
+        settle from ever running as input."""
+        try:
+            active = await self._handler._active_task_registry.get(task_id)
+            if active is None:
+                return False
+            lock = getattr(active, "_request_lock", None)
+            queue = getattr(active, "_request_queue", None)
+            return bool((lock is not None and lock.locked()) or (queue is not None and queue.qsize() > 0))
+        except Exception:  # noqa: BLE001
+            return False
 
     def schedule_settle(self, context_id: str, keep_task_id: str, call_context: Any) -> asyncio.Task | None:
         """Run :meth:`settle_siblings` in the background (the caller is a turn's producer:

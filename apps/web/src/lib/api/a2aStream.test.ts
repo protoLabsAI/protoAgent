@@ -61,3 +61,27 @@ describe("makeA2ADispatcher: task state and identity (#3930)", () => {
     expect(onTaskId.mock.calls).toEqual([["t9"]]);
   });
 });
+
+describe("a task answered across legs (#3930)", () => {
+  it("each artifact opens its own paragraph; a single-artifact turn is unchanged", async () => {
+    const { joinArtifactTexts, textFromTerminalTask } = await import("./a2aStream");
+    expect(joinArtifactTexts(["Let me ask.", "You like banana."])).toBe("Let me ask.\n\nYou like banana.");
+    expect(joinArtifactTexts(["", "You like banana."])).toBe("You like banana.");
+    expect(
+      textFromTerminalTask({ artifacts: [{ parts: [{ text: "one " }, { text: "artifact" }] }] }),
+    ).toBe("one artifact");
+    const onText = vi.fn();
+    const dispatch = makeA2ADispatcher(CTX, { onText });
+    dispatch({
+      result: {
+        task: {
+          id: "t1",
+          contextId: CTX,
+          status: { state: "TASK_STATE_COMPLETED" },
+          artifacts: [{ parts: [{ text: "Let me ask." }] }, { parts: [{ text: "You like banana." }] }],
+        } as never,
+      },
+    });
+    expect(onText).toHaveBeenLastCalledWith("Let me ask.\n\nYou like banana.", false);
+  });
+});

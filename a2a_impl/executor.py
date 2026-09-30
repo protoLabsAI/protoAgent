@@ -485,12 +485,22 @@ class ProtoAgentExecutor(AgentExecutor):
         # working.
         resume = bool(context.current_task and _is_input_required(context.current_task))
         # A parked task another task superseded (#3930): its pause was answered, or re-parked,
-        # on that other task, so this one is over. Complete it with a pointer — no graph run.
-        superseded_by = hitl_routing.take_settle(context.message)
-        if superseded_by is not None:
-            await updater.complete(
-                message=updater.new_agent_message([_text_part(f"Continued in task {superseded_by}.")])
-            )
+        # on that other task, so this one is over. A settle message NEVER reaches the graph:
+        # it completes the task (with a pointer) only while the task is still paused on the
+        # pause it was scheduled against, and is a no-op otherwise (stale or forged).
+        is_settle, superseded_by = hitl_routing.settle_decision(context.message, context.current_task)
+        if is_settle:
+            if superseded_by is not None:
+                await updater.complete(
+                    message=updater.new_agent_message([_text_part(f"Continued in task {superseded_by}.")])
+                )
+            else:
+                logger.info("[a2a] stale settle for task %s ignored", context.task_id)
+            return
+        # A message reaching a task that has already ENDED (a double-submitted answer that
+        # queued behind the one that completed it) must not reopen it as a fresh turn.
+        if context.current_task is not None and _is_terminal(context.current_task):
+            logger.info("[a2a] message for ended task %s ignored — it does not reopen", context.task_id)
             return
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
@@ -1086,6 +1096,21 @@ class ProtoAgentExecutor(AgentExecutor):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_TERMINAL_STATES = (
+    TaskState.TASK_STATE_COMPLETED,
+    TaskState.TASK_STATE_FAILED,
+    TaskState.TASK_STATE_CANCELED,
+    TaskState.TASK_STATE_REJECTED,
+)
+
+
+def _is_terminal(task: Any) -> bool:
+    try:
+        return task.status.state in _TERMINAL_STATES
+    except AttributeError:
+        return False
 
 
 def _is_input_required(task: Any) -> bool:

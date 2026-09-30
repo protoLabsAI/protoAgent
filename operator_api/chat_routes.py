@@ -686,13 +686,19 @@ def register_chat_routes(app, ui: str) -> None:
             return {"turns": [], "reason": f"read failed: {type(exc).__name__}"}
 
         def _text(artifacts) -> str:
+            # One paragraph per artifact: a task resumed after a HITL pause answers in one
+            # artifact per leg (#3930), and the legs must not run together. An ordinary
+            # single-artifact turn is unchanged. Mirrors the console's joinArtifactTexts.
             out: list[str] = []
             for artifact in artifacts or []:
-                for part in (artifact or {}).get("parts") or []:
-                    t = part.get("text") if isinstance(part, dict) else None
-                    if t:
-                        out.append(t)
-            return "".join(out)
+                texts = [
+                    part.get("text")
+                    for part in (artifact or {}).get("parts") or []
+                    if isinstance(part, dict) and part.get("text")
+                ]
+                if texts:
+                    out.append("".join(texts))
+            return "\n\n".join(out)
 
         turns = [
             {

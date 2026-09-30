@@ -349,12 +349,17 @@ export function contextFromParts(parts?: RawPart[]): ContextWindow | null {
   };
 }
 
+/** A task's answer across its artifacts. A task resumed after a HITL pause answers in
+ *  one artifact per leg (#3930) — the text before the pause, then the text after — so
+ *  each artifact's text opens its own paragraph instead of running on from the last. A
+ *  single-artifact task (every ordinary turn) reads exactly as before. Mirrors the
+ *  server's durable-turn `text` (operator_api/chat_routes.py). */
+export function joinArtifactTexts(texts: string[]): string {
+  return texts.filter(Boolean).join("\n\n");
+}
+
 export function textFromTerminalTask(result: NonNullable<A2AFrame["result"]>) {
-  return (result.artifacts || [])
-    .flatMap((artifact) => artifact.parts || [])
-    .filter((part) => (part.kind === undefined || part.kind === "text") && part.text)
-    .map((part) => part.text)
-    .join("");
+  return joinArtifactTexts((result.artifacts || []).map((artifact) => textFromParts(artifact.parts)));
 }
 
 // Parse complete SSE events (blank-line-delimited) out of a buffer, dispatching
@@ -451,7 +456,7 @@ function replayTaskSnapshot(
   opts: { replaySteers?: boolean } = {},
 ): void {
   const arts = (task as { artifacts?: Array<{ parts?: RawPart[]; metadata?: ExtMetadata }> }).artifacts || [];
-  const accumulated = arts.map((a) => textFromParts(a.parts)).join("");
+  const accumulated = joinArtifactTexts(arts.map((a) => textFromParts(a.parts)));
   const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
     []) as Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }>;
   let openingSeen = false;
