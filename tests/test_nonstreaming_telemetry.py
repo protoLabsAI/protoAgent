@@ -129,6 +129,27 @@ def test_a_failed_turn_is_recorded_as_failed(wired):
     assert row["state"] == "failed" and row["success"] == 0
 
 
+def test_a_failed_turn_with_no_usage_is_still_recorded(wired):
+    # #3929: a provider 400/429 on the FIRST call leaves the usage callback empty.
+    # The turn still failed — it must show up in /api/telemetry/recent as `failed`,
+    # exactly like a failed A2A turn, not vanish from the success rate.
+    _record({"usage_cb": _FakeUsageCallback({})}, state="failed", origin="v1")
+    rows = wired.recent()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["state"] == "failed" and row["success"] == 0
+    assert row["task_id"].startswith("v1:")
+    assert (row["input_tokens"], row["output_tokens"], row["total_tokens"], row["cost_usd"]) == (0, 0, 0, 0.0)
+
+
+def test_a_failed_turn_that_died_before_the_graph_is_recorded(wired):
+    # The impl raised before handing over a usage callback (empty sink). Still a
+    # failed turn the caller saw — recorded with zero usage.
+    _record({}, state="failed", origin="api-chat")
+    rows = wired.recent()
+    assert len(rows) == 1 and rows[0]["state"] == "failed" and rows[0]["total_tokens"] == 0
+
+
 def test_a_control_plane_reply_gets_no_row(wired):
     # A turn that short-circuited before the graph — an unknown slash command,
     # "setup not complete", a HITL hold — never populates the sink. It spent
