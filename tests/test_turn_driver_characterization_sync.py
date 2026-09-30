@@ -524,6 +524,84 @@ async def test_goal_turn_gives_up_and_clears_after_the_auto_answer_budget(env, m
 
 
 @pytest.mark.asyncio
+async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_turn(env, monkeypatch):
+    """#3891 F4: an interrupt raised INSIDE a goal continuation gets the initial turn's
+    handling — auto-answered with the sentinel (keyed by id, on the continuation's config)
+    on an autonomous (goal-driven) turn. It used to be dropped: the continuation's
+    pre-interrupt text was verified and the ask left pending on the thread."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [
+            turn_result(AIMessage(content="draft")),
+            Invoke(turn_result(AIMessage(content="Checking.")), steps=[set_interrupt({"question": "Which env?"})]),
+            turn_result(AIMessage(content="Checking."), AIMessage(content="Deployed.")),
+        ]
+    )
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert out[0]["content"] == "Deployed.\n\n---\nmet"
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
+    assert isinstance(g.invoke_calls[2][0], Command) and g.invoke_calls[2][1] is g.invoke_calls[1][1]
+    assert goals.evals == ["draft", "Deployed."]
+    assert g.pending == []
+
+
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupts_share_the_turns_auto_answer_budget(env, monkeypatch):
+    """#3891 F4: ONE budget per turn — answers spent in the initial pass count against a
+    continuation's, and once it is spent the continuation's ask is cleared, never parked."""
+    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [Invoke(turn_result(), steps=[set_interrupt("q0")]), turn_result(AIMessage(content="draft"))]
+        + [Invoke(turn_result(AIMessage(content="asking")), steps=[set_interrupt("q1")])]
+        + [Invoke(turn_result(AIMessage(content="asking")), steps=[set_interrupt(f"q{i}")]) for i in range(2, cap + 1)]
+    )
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert len(g.resumes) == cap  # 1 in the initial pass + (cap - 1) in the continuation
+    assert len(g.updates) == 1 and g.updates[0][1] is None  # the continuation's ask, cleared
+    assert out[0]["content"] == "asking\n\n---\nmet"
+
+
+@pytest.mark.asyncio
+async def test_goal_continuation_interrupt_surfaces_the_ask_on_an_attended_turn(env, monkeypatch):
+    """#3891 F4: on an attended turn (no autonomous origin; the goal became active during
+    the turn) a continuation's ask stops the drive and is surfaced — the continuation's
+    text, then the echoed ask — instead of being silently dropped."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    goals.active = False
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [
+            Invoke(turn_result(AIMessage(content="draft")), usage=[("m1", 10, 1)]),
+            Invoke(
+                turn_result(AIMessage(content="One thing:")),
+                steps=[set_interrupt({"question": "Which env?"})],
+                usage=[("m1", 5, 1)],
+            ),
+        ]
+    )
+    g.on_call = lambda graph, config: setattr(goals, "active", True)
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert out == [
+        {
+            "role": "assistant",
+            "content": "One thing:\n\n🙋 **Input needed:** Which env?",
+            "usage": _usage(15, 2),
+        }
+    ]
+    assert goals.kickoffs == [] and goals.evals == ["draft"]
+    assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
+
+
+@pytest.mark.asyncio
 async def test_goal_continuations_hold_the_base_thread_lock(env, monkeypatch):
     goals = FakeGoals([("continue", "n", "more"), ("done", "d")], fresh=True, iteration=1)
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)

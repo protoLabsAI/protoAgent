@@ -86,6 +86,14 @@ def _last_ai(result) -> str:
     return ""
 
 
+def _input_needed(interrupt_val) -> str:
+    """The reply line for a turn parked at a HITL interrupt: this surface has no task to
+    park on, so it echoes the ask; the caller answers with a follow-up message."""
+    payload = _chat()._interrupt_payload(interrupt_val)
+    question = payload.get("question") or payload.get("title") or "The agent needs input to continue."
+    return f"🙋 **Input needed:** {question}"
+
+
 async def _native_turn(
     turn_message: str,
     turn_images: list[tuple[str, str]] | None,
@@ -215,14 +223,10 @@ async def _native_turn(
             # task to park on this non-streaming surface, so echo the
             # prompt; the caller answers with a follow-up message, which
             # continues the thread (the checkpointer kept the history).
-            payload = _chat()._interrupt_payload(interrupt_val)
-            question = (
-                payload.get("question") or payload.get("title") or "The agent needs input to continue."
-            )
             return [
                 {
                     "role": "assistant",
-                    "content": f"🙋 **Input needed:** {question}",
+                    "content": _input_needed(interrupt_val),
                     "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
                 }
             ]
@@ -252,6 +256,9 @@ async def _native_turn(
         async for step in _goal_steps:
             if isinstance(step, _goal_loop.GoalNote):
                 continue
+            # Fresh-context iterations get a scoped config without the turn's
+            # callbacks — re-attach usage_cb so their tokens count.
+            cont_config = {**step.config, "callbacks": [usage_cb]}
             # Lock the BASE thread (mirrors the streaming driver, which holds it
             # across the whole goal loop): same-session iterations write `config`'s
             # thread directly; fresh-context ones still exclude compact/rewind/
@@ -264,11 +271,26 @@ async def _native_turn(
                             "session_id": session_id,
                             **state_extra,
                         },
-                        # Fresh-context iterations get a scoped config without the
-                        # turn's callbacks — re-attach usage_cb so their tokens count.
-                        config={**step.config, "callbacks": [usage_cb]},
+                        config=cont_config,
                     )
+                    # An interrupt INSIDE a continuation gets the initial turn's handling
+                    # (#3891 F4) — it used to be dropped: the same policy and budget
+                    # auto-answer it when the turn is autonomous...
+                    result = await auto.settle(
+                        cont_config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=cont_config)
+                    )
+                    # ...and an attended turn stops the drive and surfaces the ask, as the
+                    # streaming driver parks on it.
+                    interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(cont_config)
             step.text = extract_output(_last_ai(result))
+            if interrupt_val is not None:
+                return [
+                    {
+                        "role": "assistant",
+                        "content": (f"{step.text}\n\n" if step.text else "") + _input_needed(interrupt_val),
+                        "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
+                    }
+                ]
     response = drive.text
 
     reply = {"role": "assistant", "content": response, "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata)}
