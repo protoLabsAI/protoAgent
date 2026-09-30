@@ -25,7 +25,7 @@ LEGIT_IDS = [
     "chat-zed-1727712345678-ab12",  # Zed ACP shim
     "api-1727712345678-q8w7e6",  # minted by POST /api/chat
     "openai-compat-first.last",  # /v1 pinned session
-    str(uuid.uuid4()),  # A2A SDK default contextId
+    "6f1c2a9e-3b7d-4e58-9a0c-1d2e3f4a5b6c",  # A2A SDK default contextId (a UUID4)
     "a2a:peer-agent:ctx-1",  # ':'-bearing A2A / room ids (memory encodes ':' as %3A)
     "system:activity",
     "tab-1",
@@ -335,7 +335,7 @@ async def test_a2a_stream_refuses_an_unusable_context_id_and_stores_no_task(_a2a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ctx", ["chat-1727712345678-k3j9x2", "a2a:peer-agent:ctx-1", str(uuid.uuid4())])
+@pytest.mark.parametrize("ctx", ["chat-1727712345678-k3j9x2", "a2a:peer-agent:ctx-1", "0b9e8d7c-6a5f-4e3d-8c2b-1a0f9e8d7c6b"])
 async def test_a2a_first_party_context_ids_still_run(_a2a_wiring, ctx):
     from a2a.server.context import ServerCallContext
     from a2a.types import TaskState
