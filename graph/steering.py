@@ -21,18 +21,26 @@ from __future__ import annotations
 
 import uuid
 
-# session_id -> [{"id": str, "text": str}], FIFO.
+# session_id -> [{"id": str, "text": str, "fence"?: [str]}], FIFO.
 _QUEUES: dict[str, list[dict]] = {}
 
 
-def enqueue(session_id: str, text: str, msg_id: str | None = None) -> str | None:
+def enqueue(session_id: str, text: str, msg_id: str | None = None, *, fence=None) -> str | None:
     """Queue a user message for ``session_id``'s running turn. Returns its id (the
-    client's if supplied, else a fresh one), or None on a blank message."""
+    client's if supplied, else a fresh one), or None on a blank message.
+
+    ``fence`` — the tool allowlist of the turn that sent this message (#2972), when it
+    was fenced. It travels WITH the message: the pass that folds it in is narrowed to it
+    (``SteeringMiddleware``), so a fenced message held behind a parked interrupt can never
+    be acted on by the wider toolset of the (possibly unfenced) turn it lands in."""
     text = (text or "").strip()
     if not session_id or not text:
         return None
     mid = msg_id or uuid.uuid4().hex
-    _QUEUES.setdefault(session_id, []).append({"id": mid, "text": text})
+    item: dict = {"id": mid, "text": text}
+    if fence:
+        item["fence"] = [str(t) for t in fence]
+    _QUEUES.setdefault(session_id, []).append(item)
     return mid
 
 

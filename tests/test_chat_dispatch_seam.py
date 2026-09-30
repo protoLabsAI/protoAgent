@@ -167,7 +167,10 @@ async def test_nonstreaming_driver_builds_the_pre_turn_through_chat_dispatch(qui
     await _chat()._chat_langgraph_impl("hello", "s-seam", tool_fence=["x"])
     [f async for f in _chat()._chat_langgraph_stream_impl("hello", "s-seam")]
 
-    assert built == [["x"], None]
+    # The streaming driver passes the fence too (an unfenced streaming turn → ``[]``):
+    # a fenced streaming turn skips the short-circuits and is refused on ACP, like the
+    # non-streaming one.
+    assert built == [["x"], []]
 
 
 # ── the moved chain reaches its collaborators through their owners ────────────

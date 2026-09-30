@@ -450,7 +450,9 @@ def _is_hitl_resume(request_metadata: dict | None) -> bool:
 _HITL_RESUME = object()
 
 
-async def _hold_if_hitl_pending(message: str, session_id: str, config: dict, *, request_metadata: dict | None):
+async def _hold_if_hitl_pending(
+    message: str, session_id: str, config: dict, *, request_metadata: dict | None, fence=None
+):
     """The HITL hold (#1560): decide what a FRESH message may do while this thread is
     parked at a ``request_user_input`` / ``ask_human`` / approval ``interrupt()``.
 
@@ -471,6 +473,12 @@ async def _hold_if_hitl_pending(message: str, session_id: str, config: dict, *, 
       pending-form state itself lives in the durable LangGraph checkpoint (re-read
       here every time), so a restart can't strand the hold.
 
+    A held message from a FENCED turn (``fence``, #2972) is queued WITH its fence, and the
+    pass that folds it in is narrowed to it (``SteeringMiddleware``; narrowest wins) — so it
+    can't be acted on by the wider toolset of an unfenced resumed pass. Carrying the fence
+    (rather than holding the message back for a narrow-enough pass) keeps it in arrival
+    order and never strands it: no such pass may ever come.
+
     Autonomous turns are exempt (they must never park — unchanged clobber semantics),
     and with no pending interrupt this returns ``None`` and the turn is untouched.
     Callers must hold the per-thread lock (the check must not race a parking turn)."""
@@ -483,7 +491,7 @@ async def _hold_if_hitl_pending(message: str, session_id: str, config: dict, *, 
         return _HITL_RESUME
     from graph import steering
 
-    steering.enqueue(session_id, message)
+    steering.enqueue(session_id, message, fence=fence)
     log.info("[hitl] holding operator message for session %s — form pending", session_id)
     return pending_val
 

@@ -80,7 +80,7 @@ The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ord
 **Gates** (block before execution)
 
 11. **EnforcementMiddleware** (optional) — disallowed tools + per-tool rate limits
-12. **SubagentFenceMiddleware** — per-turn tool fence for detached background subagent runs
+12. **SubagentFenceMiddleware** — per-turn tool fence (`subagent_fence` state) for detached background subagent runs and relayed peer turns (`tool_fence`). Every graph pass of a fenced turn carries it. Rules: a fenced turn skips the pre-turn slash/@ short-circuits and is refused on an ACP runtime on both drivers (the background manager's own detached jobs excepted, proven by a single-use in-process fire token — `background/fire_auth.py`); when two fences meet — a fenced resume of a parked fenced turn, or a fenced message held behind a parked interrupt folding into the resumed pass — the narrowest wins (their intersection; disjoint = no tools); an unfenced resume keeps the parked turn's fence; and a parked answer-type HITL call (`ask_human` / `request_user_input`) completes on its own resume even if the resumer's fence excludes it, while a parked approval-gated tool outside the resumer's fence is declined (not run)
 
 **Context & tools**
 

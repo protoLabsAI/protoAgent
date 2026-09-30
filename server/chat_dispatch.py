@@ -114,6 +114,9 @@ class _PreTurn:
     ``acp`` — not handled, and the configured runtime is ACP (ADR 0033): the
     driver runs its own ACP shape instead of the native loop.
     ``fenced`` — the turn carries a ``tool_fence`` (#2972): no short-circuit runs.
+    ``acp_exempt`` — a fenced turn the ACP refusal does NOT apply to: only the background
+    manager's own detached subagent job (#1639), proven by its single-use fire token
+    (``background/fire_auth.py``). It still skips every short-circuit. Default: refused.
     """
 
     message: str
@@ -121,6 +124,7 @@ class _PreTurn:
     acp: bool = False
     fenced: bool = False
     fence: list[str] | None = None
+    acp_exempt: bool = False
 
 
 async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: dict | None):
@@ -148,6 +152,16 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         # agent (claude-code, codex, …) runs its own toolset, which that list can't
         # describe or restrict — so running the untrusted text there would hand it the
         # external agent's full tools. Refuse the turn with a clear answer instead.
+        if is_acp_runtime(STATE.graph_config) and pre.acp_exempt:
+            # The background manager's own detached job keeps running on the ACP runtime
+            # (it did before fenced streaming turns were refused) — nothing else does.
+            log.info(
+                "[chat] fenced background job on session %s runs on the ACP runtime (tool_fence=%s)",
+                session_id,
+                list(pre.fence or []),
+            )
+            pre.acp = True
+            return
         if is_acp_runtime(STATE.graph_config):
             log.warning(
                 "[chat] refused a fenced turn (tool_fence=%s) on session %s: this agent runs on an "

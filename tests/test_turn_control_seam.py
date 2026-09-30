@@ -200,7 +200,7 @@ async def test_nonstreaming_driver_calls_turn_control_at_call_time(monkeypatch):
         seen["lock"].append(tid)
         return real_lock(tid)
 
-    async def _hold(message, session_id, config, *, request_metadata):
+    async def _hold(message, session_id, config, *, request_metadata, fence=None):
         seen["hold"].append(config["configurable"]["thread_id"])
         return None
 
@@ -357,7 +357,7 @@ async def test_streaming_driver_reads_beacon_priority_and_hitl_resume_from_turn_
         seen.append(("priority", origin))
         yield
 
-    async def _hold(message, session_id, config, *, request_metadata):
+    async def _hold(message, session_id, config, *, request_metadata, fence=None):
         return marker
 
     async def _native(message, session_id, config, *, request_metadata=None, resume=False, images=None):
@@ -403,7 +403,7 @@ async def test_nonstreaming_driver_reads_beacon_priority_and_hitl_constants_from
         seen.append(("priority", origin))
         yield
 
-    async def _hold(message, session_id, config, *, request_metadata):
+    async def _hold(message, session_id, config, *, request_metadata, fence=None):
         return marker
 
     async def _resume_payload(config, value):
@@ -472,7 +472,7 @@ async def test_streaming_overflow_retry_reads_priority_from_turn_control(monkeyp
         origins.append(origin)
         yield
 
-    async def _hold(message, session_id, config, *, request_metadata):
+    async def _hold(message, session_id, config, *, request_metadata, fence=None):
         return None
 
     async def _native(

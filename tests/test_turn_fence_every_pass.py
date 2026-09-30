@@ -285,5 +285,8 @@ async def test_e2e_fenced_resume_blocks_a_tool_outside_the_fence(env, monkeypatc
 
     tools = await _tool_messages(g, "a2a:sR")
     assert [t.tool_call_id for t in tools] == ["q1", "c1"]
+    # The parked call itself completes on its own resume (the operator's answer isn't
+    # dropped); only the rest of the pass is fenced.
+    assert tools[0].status == "success" and tools[0].content == "staging"
     assert tools[1].status == "error"
     assert "Blocked by policy" in tools[1].content and "current_time" in tools[1].content
