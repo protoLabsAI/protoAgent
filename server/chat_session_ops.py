@@ -363,8 +363,16 @@ async def aside_session(
         return {"found": False, "answer": "", "reason": "setup", "message": "Setup required — finish the setup wizard first."}
 
     from graph.aside_op import run_aside
+    from graph.fence_scope import normalize_fence
+    from server import goal_loop as _goal_loop
 
     tid = _turn_control._resolve_thread_id(request_metadata, session_id)
+    # The side turn runs the full graph over the session's context, so it runs under the
+    # fence the session's own turns would: the caller's (an unusable value fails closed),
+    # narrowed by the fence of an active goal a fenced turn set (disjoint → deny-all).
+    fence = _goal_loop.goal_fenced(
+        _goal_loop.active_goal(session_id), normalize_fence((request_metadata or {}).get("subagent_fence"))
+    )
     try:
         result = await run_aside(
             STATE.graph,
@@ -373,6 +381,7 @@ async def aside_session(
             question,
             session_id=session_id,
             db_path=getattr(STATE, "checkpoint_path", None),
+            subagent_fence=fence,
         )
     except Exception as exc:  # noqa: BLE001 — a provider/model error is a reported failure, not a crash
         # #3929: a provider 400/429 (or any model-side failure) used to propagate out of

@@ -155,14 +155,30 @@ _FENCED_ACP_REFUSAL = (
     "Ask the operator to handle it directly."
 )
 
-# The answer to a turn in a session whose active goal a fenced turn set, on an ACP
-# runtime: every turn there drives that goal, and the goal's fence can't be enforced on
-# the external runtime. `/goal clear` (never refused) returns the session to normal.
+# The answer to a turn in a session whose active goal carries a tool fence, on an ACP
+# runtime: every turn there drives that goal, and the fence can't be enforced on the
+# external runtime. `/goal clear` (never refused) returns the session to normal.
 _GOAL_FENCED_ACP_REFUSAL = (
-    "I can't run this here: this session's active goal came through a restricted channel, "
-    "and this agent runs on an external coding runtime that can't enforce that channel's "
-    "tool limits. Clear the goal with `/goal clear` to continue in this session."
+    "I can't run this here: this session's active goal runs with a restricted tool scope, "
+    "and this agent runs on an external coding runtime that can't enforce it. Clear the "
+    "goal with `/goal clear` to continue in this session."
 )
+
+# The status line a turn in such a session gets when its text looked like a command
+# (a `/command` or an `@`-mention): it isn't run — the text goes to the goal-driven turn.
+_GOAL_FENCED_COMMANDS_PAUSED = (
+    "⏸ Commands are paused while this goal runs with a restricted tool scope — "
+    "`/goal clear` to resume."
+)
+
+
+def _looks_like_command(message: str) -> bool:
+    """A `/command` (the same token shape the unknown-command hint uses) or a leading
+    `@`-mention — the text a short-circuit would have claimed."""
+    name, _rest = _chat_commands._parse_slash_command(message)
+    if name and _SLASH_TOKEN_RE.fullmatch(name) is not None:
+        return True
+    return (message or "").lstrip().startswith("@")
 
 
 def _active_goal_fence(session_id: str) -> list[str]:
@@ -211,7 +227,10 @@ class _PreTurn:
     (``done`` / ``input_required``) was the last one yielded.
     ``acp`` — not handled, and the configured runtime is ACP (ADR 0033): the
     driver runs its own ACP shape instead of the native loop.
-    ``fenced`` — the turn carries a ``tool_fence`` (#2972): no short-circuit runs.
+    ``fenced`` — the turn runs under a tool fence: the caller's own ``tool_fence``
+    (#2972), or — set by the chain itself — the fence of the session's active goal. No
+    short-circuit runs (a goal-fenced turn still runs ``/goal``).
+    ``fence`` — that fence (for logging).
     ``acp_exempt`` — a fenced turn the ACP refusal does NOT apply to: only the background
     manager's own detached subagent job (#1639), proven by its single-use fire token
     (``background/fire_auth.py``). It still skips every short-circuit. Default: refused.
@@ -298,6 +317,9 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
 
             pre.fenced = True
             pre.fence = _goal_fence
+            if not is_acp_runtime(STATE.graph_config) and _looks_like_command(message):
+                # Say so, rather than let the command silently become goal text.
+                yield ("tool_start", _GOAL_FENCED_COMMANDS_PAUSED)
             if is_acp_runtime(STATE.graph_config):
                 log.warning(
                     "[chat] refused a turn on session %s: its active goal is fenced (tool_fence=%s) "
@@ -311,7 +333,7 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
     # routes straight to that delegate, short-circuiting the LLM turn. Checked
     # BEFORE goal control (and every slash-command below) so an @-mention is
-    # never swallowed by an active goal; a no-op when the delegates plugin isn't
+    # never swallowed by an active goal (one with a tool fence gates it above); a no-op when the delegates plugin isn't
     # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
     # The exchange WRITES this session's checkpointer thread, so it takes the
     # same per-thread lock every other writer takes (see the turn lock below,

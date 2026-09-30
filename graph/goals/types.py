@@ -138,6 +138,9 @@ class GoalState:
         tag = ", fresh-context" if self.fresh_context else ""
         if self.has_contract:
             tag += ", contract"
+        if self.fence:
+            # Set by a turn with a tool fence: every turn that drives it runs under it.
+            tag += ", restricted tool scope"
         base = f"goal [{self.status}] via {vt}: {self.condition!r} ({progress}{tag})"
         if self.last_reason:
             base += f" — {self.last_reason}"

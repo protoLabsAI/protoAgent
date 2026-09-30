@@ -51,8 +51,13 @@ async def run_aside(
     *,
     session_id: str = "",
     db_path: str | None = None,
+    subagent_fence: list[str] | None = None,
 ) -> dict:
     """Run one incognito side turn seeded with ``thread_id``'s current context.
+
+    ``subagent_fence`` is the tool fence the side turn runs under (the caller resolves
+    it — e.g. a fenced goal's); stamped on every run, ``[]`` = none, so the ephemeral
+    thread never runs wider than the session's own turns would.
 
     Returns ``{found, answer, reason}``. ``found`` is false (no turn run) when there's no
     graph/checkpointer or the question is empty. **Never writes the main thread's
@@ -78,6 +83,7 @@ async def run_aside(
         "messages": [*context, HumanMessage(content=question)],
         "session_id": session_id,
         "incognito": True,  # no memory harvest/injection on top of the thread isolation
+        "subagent_fence": [str(t) for t in (subagent_fence or [])],
     }
     try:
         result = await graph.ainvoke(graph_input, config=aside_cfg)
