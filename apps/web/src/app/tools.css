@@ -18,7 +18,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--pl-space-3);
-  padding: 7px 2px;
+  padding: var(--pl-space-2) var(--pl-space-0_5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .tools-row:last-child {
@@ -56,7 +56,7 @@
    filtered + scrolled into view; a brief accent pulse points the eye at it in a long list.
    Self-clearing (JS drops the class at ~2.6s); the prefilled search keeps the row in view. */
 .tools-row--target {
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   animation: tools-row-target-pulse 2.6s ease-out;
 }
 @keyframes tools-row-target-pulse {
@@ -76,7 +76,7 @@
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
-  margin: 0 0 6px;
+  margin: 0 0 var(--pl-space-1_5);
 }
 
 /* Work-folder editor — the fenced fs roots (filesystem.projects, ADR 0007) */
@@ -89,7 +89,7 @@
 .fs-projects-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .fs-projects-row > :first-child {
   flex: 1;
@@ -97,7 +97,7 @@
 .fs-projects-write {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   color: var(--pl-color-fg-subtle);
   font-size: var(--pl-font-size-xs);
 }
@@ -113,8 +113,8 @@
   align-items: flex-start;
   gap: var(--pl-space-2);
   margin: 0;
-  padding: var(--pl-space-2) 10px;
-  border-radius: 8px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
+  border-radius: var(--pl-radius-lg);
   color: var(--pl-color-status-warning);
   background: color-mix(in srgb, var(--pl-color-status-warning) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-warning) 35%, transparent);
@@ -134,7 +134,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--pl-space-2);
-  margin: 2px 0 var(--pl-space-2);
+  margin: var(--pl-space-0_5) 0 var(--pl-space-2);
 }
 /* The group carries settings — a muted glyph on its header, next to the count. */
 .tools-group-cog {
