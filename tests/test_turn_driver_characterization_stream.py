@@ -874,6 +874,29 @@ async def test_goal_continuation_interrupt_parks_an_attended_turn_and_stops_the_
     assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("script", "answer"),
+    [
+        ([tool_start("t1", "wait"), tool_end("t1", "wait", tool_msg("Wait scheduled for 5m.", "tc1"))], "Wait scheduled for 5m."),
+        ([reasoning("r1", "hmm")], _EMPTY),
+    ],
+)
+async def test_goal_verifier_sees_the_answer_after_the_empty_reply_fallback(env, monkeypatch, script, answer):
+    """#3891 F5: the verifier judges the text the caller gets — the empty-reply fallback
+    (last tool output, else the placeholder) is applied BEFORE evaluation, and the goal
+    note after it, the non-streaming driver's order. It used to verify "" and end the turn
+    on a bare note (the note made the text non-empty, so the fallback never ran)."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    env.install(streams=[script])
+
+    frames = await _run()
+
+    assert goals.evals == [answer]
+    assert frames[-1] == ("done", f"{answer}\n\n---\nmet")
+
+
 # ── _chat_langgraph_stream_impl: setup, tracing, errors, overflow, cancel ─────
 
 

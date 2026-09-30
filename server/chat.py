@@ -981,6 +981,16 @@ async def _run_native_turn(
 
     final_text = extract_output(turn["raw"])
 
+    # Never end the stream on a silent empty answer (a native-reasoning model that emitted
+    # only reasoning, or an otherwise empty turn): surface the last tool result or a
+    # placeholder, matching the non-streaming path's _last_tool_text-or-placeholder. Applied
+    # BEFORE the goal drive, as the non-streaming driver does (#3891 F5): the verifier
+    # judges the answer the caller gets — it used to see "" here — and the terminal goal
+    # note is appended after evaluation, so an empty turn under a goal no longer ends as a
+    # bare note with the fallback skipped (the note made the text non-empty).
+    if not final_text:
+        final_text = turn["last_tool_out"] or "_(The agent ended the turn without a textual reply.)_"
+
     # Goal mode (shared drive, server/goal_loop.py): verify the outcome after the agent
     # stops; while not met, run the continuation it asks for. The 🎯 status frames are this
     # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
@@ -1005,12 +1015,6 @@ async def _run_native_turn(
                 return
             step.text = extract_output(cont["raw"])
     final_text = drive.text
-
-    # Never end the stream on a silent empty answer (a native-reasoning model that emitted
-    # only reasoning, or an otherwise empty turn): surface the last tool result or a
-    # placeholder, matching the non-streaming path's _last_tool_text-or-placeholder.
-    if not final_text:
-        final_text = turn["last_tool_out"] or "_(The agent ended the turn without a textual reply.)_"
 
     yield ("done", final_text)
 

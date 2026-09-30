@@ -602,6 +602,34 @@ async def test_goal_continuation_interrupt_surfaces_the_ask_on_an_attended_turn(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("msgs", "answer"),
+    [
+        (
+            (
+                AIMessage(content="", tool_calls=[{"id": "t", "name": "wait", "args": {}}]),
+                ToolMessage(content="Wait scheduled.", tool_call_id="t"),
+            ),
+            "Wait scheduled.",
+        ),
+        ((), _NO_REPLY),
+    ],
+)
+async def test_goal_verifier_sees_the_answer_after_the_empty_reply_fallback(env, monkeypatch, msgs, answer):
+    """#3891 F5 (pinned; this driver already had it): the verifier judges the text the
+    caller gets — the empty-reply fallback is applied BEFORE evaluation, the goal note
+    after it. The streaming driver now does the same."""
+    goals = FakeGoals([("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    env.install([turn_result(*msgs)])
+
+    out = await chat_mod.chat("go", "s1")
+
+    assert goals.evals == [answer]
+    assert out[0]["content"] == f"{answer}\n\n---\nmet"
+
+
+@pytest.mark.asyncio
 async def test_goal_continuations_hold_the_base_thread_lock(env, monkeypatch):
     goals = FakeGoals([("continue", "n", "more"), ("done", "d")], fresh=True, iteration=1)
     monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
