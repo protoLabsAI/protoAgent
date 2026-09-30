@@ -651,7 +651,7 @@ def test_shutdown_all_sigkills_straggler(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
     alive: set[int] = set()
     seq = {"n": 7000}
-    sigs: list[int] = []
+    sigs: list[tuple[int, bool]] = []
     monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
 
     class FakeProc:
@@ -669,18 +669,26 @@ def test_shutdown_all_sigkills_straggler(tmp_path, monkeypatch):
     monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
     monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
 
-    def stubborn_kill(pid, *, force):  # ignores the graceful ask; dies only on force
-        sigs.append(force)
-        if force:
+    stubborn: set[int] = set()
+
+    def kill(pid, *, force):  # a stubborn member ignores the graceful ask; dies only on force
+        sigs.append((int(pid), force))
+        if force or int(pid) not in stubborn:
             alive.discard(int(pid))
 
-    monkeypatch.setattr(supervisor, "signal_tree", stubborn_kill)
-    manager.create("a")
-    supervisor.start("a")
+    monkeypatch.setattr(supervisor, "signal_tree", kill)
+    for nm in ("a", "b"):
+        manager.create(nm)
+        supervisor.start(nm)
+    pid_a, pid_b = sorted(alive)
+    stubborn.add(pid_a)
 
-    assert supervisor.shutdown_all(timeout=0.2)  # returns the stopped member
-    assert not alive  # SIGKILL'd after the bounded wait
-    assert False in sigs and True in sigs  # graceful ask first, then the hard kill
+    assert len(supervisor.shutdown_all(timeout=0.2)) == 2  # both members reported stopped
+    assert not alive  # the straggler was hard-killed after the bounded wait
+    # Every member is asked gracefully (concurrently) before ANY hard kill, and only the
+    # straggler is forced — the cooperative member is never SIGKILLed.
+    assert sorted(sigs[:2]) == [(pid_a, False), (pid_b, False)]
+    assert sigs[2:] == [(pid_a, True)]
 
 
 # ── first-boot-after-update reconcile (version-coherence P2) ──────────────────

@@ -582,6 +582,7 @@ async def test_start_retries_owner_lock_then_polls(tmp_path):
             await asyncio.sleep(0.05)
         assert s._lock_fd is not None  # acquired after waiting → now polling
     finally:
+        sl._LOCKED_PATHS.discard(key)  # process-global: never leak the fake owner on failure
         await s.stop()
 
 
