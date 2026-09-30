@@ -485,7 +485,8 @@ def test_patch_remote_edits_and_reprobes(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True and body["agent"]["url"] == "http://100.64.1.4:7999" and body["reachable"] is True
-    assert "token" not in body["agent"]  # the bearer never comes back out
+    assert "token" not in body["agent"]  # the bearer never comes back out...
+    assert supervisor.remote_for_slug(rid)["token"] == "sek"  # ...but it WAS stored
     entry = next(a for a in client.get("/api/fleet").json()["agents"] if a.get("remote"))
     assert entry["id"] == rid and entry["url"] == "http://100.64.1.4:7999"  # same id, new url
 
