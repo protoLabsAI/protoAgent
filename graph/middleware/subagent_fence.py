@@ -17,11 +17,15 @@ Fence rules (one place, so the drivers and the steering fold agree):
   (:func:`intersect_fences`). An unfenced side adds no restriction. An empty
   intersection is :data:`FENCE_DENY_ALL` (every tool blocked), never ``[]`` — an empty
   list means "no fence" to this middleware, so it would fail OPEN.
-* **The parked call finishes on its own resume.** The tool call that parked the turn
-  (``ask_human``, an approval-gated tool) runs to completion on the pass that resumes it
-  even when the resumer's fence excludes it — only that call (the LangGraph task that
-  holds the resume value), only on that pass; every other call in the pass stays fenced.
-  Otherwise a fenced resumer silently drops the operator's answer.
+* **A parked ANSWER completes on its own resume; a parked APPROVAL does not.** When the
+  call that parked the turn is an answer-type HITL tool (``HITL_TOOL_NAMES`` —
+  ``ask_human`` / ``request_user_input``), it runs to completion on the pass that resumes
+  it even when the resumer's fence excludes it — only that call (the LangGraph task that
+  holds the resume value), only on that pass; every other call stays fenced. Otherwise a
+  fenced resumer silently drops the operator's answer. Any OTHER parked call is an
+  approval-gated tool (``run_command``, ``delete_file``, …): a resumer whose fence
+  excludes it cannot approve it — its resume is a DECLINE (the tool doesn't run; the
+  model reads a declined result, not an error).
 """
 
 from __future__ import annotations
@@ -78,6 +82,14 @@ def is_resumed_parked_call(request) -> bool:
         return False
 
 
+def _answer_tools() -> frozenset[str]:
+    """The answer-type HITL tools (their interrupt asks a question; the resume is an
+    ANSWER, not an approval) — the registry the subagent HITL deny uses too."""
+    from tools.lg_tools import HITL_TOOL_NAMES
+
+    return HITL_TOOL_NAMES
+
+
 class SubagentFenceMiddleware(AgentMiddleware):
     """Block tool calls outside the turn's stamped subagent allowlist."""
 
@@ -89,9 +101,9 @@ class SubagentFenceMiddleware(AgentMiddleware):
         name = request.tool_call.get("name", "")
         if name in fence:
             return None
-        if is_resumed_parked_call(request):
-            # The call that parked this turn completes on its own resume (see module doc).
-            logger.info("[subagent-fence] allowed the resumed parked call %s outside the fence", name)
+        if is_resumed_parked_call(request) and name in _answer_tools():
+            # A parked ANSWER completes on its own resume (see module doc).
+            logger.info("[subagent-fence] allowed the resumed parked answer %s outside the fence", name)
             return None
         allowed = [t for t in fence if t != FENCE_DENY_ALL]
         if not allowed:
@@ -103,6 +115,23 @@ class SubagentFenceMiddleware(AgentMiddleware):
             f"({', '.join(sorted(allowed))}) — work within the allowed tools."
         )
 
+    def _declined(self, request) -> ToolMessage | None:
+        """A resumed parked APPROVAL outside the fence → the declined outcome, else None."""
+        state = getattr(request, "state", None) or {}
+        fence = state.get("subagent_fence")
+        name = request.tool_call.get("name", "")
+        if not fence or name in fence or name in _answer_tools() or not is_resumed_parked_call(request):
+            return None
+        logger.info("[subagent-fence] declined the parked approval of %s: the resumer's fence excludes it", name)
+        # Not status="error": a decline is a normal outcome (as the gated tools return it).
+        return ToolMessage(
+            content=(
+                f"Declined — not run: {name!r}. It was approved from a channel whose tool allowlist "
+                "excludes this tool. Do not retry; wait for the operator's next instruction."
+            ),
+            tool_call_id=request.tool_call.get("id", ""),
+        )
+
     def _blocked(self, request, reason: str) -> ToolMessage:
         logger.info("[subagent-fence] blocked %s: %s", request.tool_call.get("name", "?"), reason)
         return ToolMessage(
@@ -112,12 +141,18 @@ class SubagentFenceMiddleware(AgentMiddleware):
         )
 
     def wrap_tool_call(self, request, handler):
+        declined = self._declined(request)
+        if declined is not None:
+            return declined
         reason = self._deny_reason(request)
         if reason:
             return self._blocked(request, reason)
         return handler(request)
 
     async def awrap_tool_call(self, request, handler):
+        declined = self._declined(request)
+        if declined is not None:
+            return declined
         reason = self._deny_reason(request)
         if reason:
             return self._blocked(request, reason)

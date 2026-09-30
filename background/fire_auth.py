@@ -8,12 +8,14 @@ caller can also send — so no metadata VALUE (``origin: background``, a job id,
 can mark a turn as ours. What a remote caller cannot produce is a secret that never left
 this process.
 
-So each fire mints a fresh 256-bit token bound to its job id, keeps it here (in-process
-memory only — never config, disk or logs), and sends it in the fire's metadata. The turn
-entry redeems it with :func:`redeem` — constant-time compare, bound to the job id AND the
-job's dedicated context, single use (removed on success), and dropped by the fire when
-its POST returns whatever happened — so a token seen later (a persisted task, a log line,
-a tool reading its request metadata) proves nothing. A process that didn't mint it (a
+So each fire mints a fresh 256-bit token bound to its job id, keeps the expected value
+here (in-process memory; this module never writes it to config, disk or logs), and sends
+it in the fire's metadata. The token does travel with that metadata — the A2A layer may
+persist the request, and the turn's tools can read it via ``request_metadata_scope`` —
+but by then it is already spent: the turn entry redeems it with :func:`redeem` BEFORE the
+turn runs — constant-time compare, bound to the job id AND the job's dedicated context,
+single use (removed on success) — and the fire drops it when its POST returns whatever
+happened. A token seen later proves nothing. A process that didn't mint it (a
 second worker, a restarted server) holds no entry and fails CLOSED: the turn is refused
 on ACP, exactly as an arbitrary fenced caller's is.
 

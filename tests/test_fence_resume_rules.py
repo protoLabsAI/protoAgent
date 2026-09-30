@@ -9,8 +9,9 @@ The per-turn tool allowlist rides the graph state as ``subagent_fence``;
    (``background/fire_auth.py``). Metadata alone (``origin``, a job id) proves nothing.
 2. A fenced RESUME runs under the intersection of its fence and the parked turn's
    (narrowest wins); an empty intersection blocks every tool rather than unfencing.
-3. The tool call that PARKED the turn completes on its own resume even when the
-   resumer's fence excludes it — only that call, only on that pass.
+3. A parked ANSWER-type call (``ask_human`` / ``request_user_input``) completes on its
+   own resume even when the resumer's fence excludes it — only that call, only on that
+   pass. A parked APPROVAL-gated tool outside the resumer's fence is declined, not run.
 4. A fenced message held behind a parked interrupt carries its fence: the pass that
    folds it in is narrowed to it, even when the resume itself is unfenced.
 
@@ -429,3 +430,78 @@ async def test_e2e_held_fenced_message_fences_the_unfenced_resume_that_reads_it(
     assert c1.status == "error" and "Blocked by policy" in c1.content
     snap = await g.aget_state({"configurable": {"thread_id": "a2a:sH"}})
     assert any("relayed: check the time" in str(m.content) for m in snap.values["messages"])
+
+
+# ── 3b. an APPROVAL is not an answer: a fenced resumer can't approve outside its fence ──
+
+
+def _fs_graph(monkeypatch, tmp_path, messages):
+    """The real graph with one writable project holding ``victim.txt`` — so the
+    approval-gated ``delete_file`` is bound and parks for approval."""
+    from unittest.mock import patch
+
+    import runtime.state as rs
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from graph.config import LangGraphConfig
+    from tests.test_turn_fence_every_pass import _ToolFake
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "victim.txt").write_text("keep me")
+    cfg = LangGraphConfig(
+        filesystem_enabled=True, filesystem_projects=[{"name": "p", "path": str(proj), "write": True}]
+    )
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    fake = _ToolFake(messages=iter(messages), disable_streaming=True)
+    with patch("graph.agent.create_llm", lambda *a, **k: fake):
+        from graph.agent import create_agent_graph
+
+        g = create_agent_graph(cfg, include_subagents=False, checkpointer=MemorySaver())
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    return g, proj / "victim.txt"
+
+
+def _delete_then_done():
+    return [_call("delete_file", "d1", {"project": "p", "path": "victim.txt"}), AIMessage(content="done")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_e2e_fenced_resume_approving_an_out_of_fence_tool_is_a_decline(env, monkeypatch, tmp_path):
+    g, victim = _fs_graph(monkeypatch, tmp_path, _delete_then_done())
+
+    parked = await _stream("clean up", "sA")
+    assert parked[-1][0] == "input_required"
+    assert parked[-1][1].get("kind") == "approval"
+
+    frames = await _stream("approve", "sA", resume=True, request_metadata={"subagent_fence": _FENCE})
+
+    assert frames[-1][0] == "done"
+    assert victim.exists()  # not executed
+    (d1,) = await _tool_messages(g, "a2a:sA")
+    assert d1.status != "error" and "declined" in d1.content.lower() and "not run" in d1.content.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_e2e_fenced_resume_approving_an_in_fence_tool_still_approves(env, monkeypatch, tmp_path):
+    g, victim = _fs_graph(monkeypatch, tmp_path, _delete_then_done())
+
+    await _stream("clean up", "sB")
+    await _stream("approve", "sB", resume=True, request_metadata={"subagent_fence": ["delete_file"]})
+
+    assert not victim.exists()
+    (d1,) = await _tool_messages(g, "a2a:sB")
+    assert d1.content == "Deleted victim.txt."
+
+
+@pytest.mark.asyncio
+@pytest.mark.platform_sensitive
+async def test_e2e_unfenced_resume_approving_still_approves(env, monkeypatch, tmp_path):
+    g, victim = _fs_graph(monkeypatch, tmp_path, _delete_then_done())
+
+    await _stream("clean up", "sC")
+    await _stream("approve", "sC", resume=True)
+
+    assert not victim.exists()
