@@ -1249,13 +1249,16 @@ async def settle_plugin_form_task(session_id: str) -> bool:
         from sqlalchemy import select, update
         from sqlalchemy.ext.asyncio import async_sessionmaker
 
+        from a2a_impl.stores import task_newest_first
+
         session_maker = async_sessionmaker(engine, expire_on_commit=False)
         async with session_maker() as session:
             row = (
                 await session.execute(
                     select(TaskModel.id, TaskModel.status)
                     .where(TaskModel.context_id == sid)
-                    .order_by(TaskModel.last_updated.desc())
+                    # The newest-CREATED turn, like the durable turns reader (#3963).
+                    .order_by(*task_newest_first(TaskModel, engine.dialect.name))
                     .limit(1)
                 )
             ).first()

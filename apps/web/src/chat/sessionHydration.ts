@@ -215,28 +215,34 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   return [...messages, ...settled, assistant];
 }
 
-/** The turns in the order the transcript draws them, with the LIVE one last (#3963).
+/** How the transcript draws a session's durable turns (#3963): `turns` in drawing order,
+ *  and the ids of the turns QUEUED behind the live one.
  *
  *  Everything downstream reads the session's LAST assistant bubble as its live turn: boot
  *  mounts the slot off it, the reattach resubscribes to its task, a HITL answer continues
- *  it. So the turn still in flight — working, or parked on the operator — must end the
- *  transcript, whatever order the rows arrived in. An older server ordered them by when
- *  each row last CHANGED, and a pause a plain message moved to a new task left the old task
- *  to complete ("Continued in task …") just AFTER the new one parked: the completion came
- *  last, the parked turn sat mid-transcript, nothing reattached, and no form came back.
+ *  it. So the turn running or waiting on the operator must own the last assistant bubble,
+ *  whatever order the rows arrived in:
+ *
+ *  - An older server ordered rows by when each last CHANGED, and a pause a plain message
+ *    moved to a new task left the old task to complete ("Continued in task …") just AFTER
+ *    the new one parked: the completion came last, and the parked turn sat mid-transcript.
+ *  - A turn queued behind the running one (a scheduled fire, a background nudge, another
+ *    client) is created — and marked working — before it waits for the session's lock, so
+ *    it is the NEWER row. It has produced nothing and will run after the live turn; it is
+ *    drawn after it as its prompt alone, so the running turn keeps the live bubble.
  *
  *  The live turn is the server's `live_task_id`. A server that predates it (the field is
- *  absent) gets the narrowest inference that covers the quirk: the last row not yet over,
- *  when every row after it is a task whose pause it took over (a completion pointing
+ *  absent) gets the narrowest inference that covers the first quirk: the last row not yet
+ *  over, when every row after it is a task whose pause it took over (a completion pointing
  *  elsewhere, supersededByFromStatus) — never an older orphan that merely never ended.
  *
  *  Once the live turn is known, a PARKED row that is not it lost its pause to a newer task
  *  (one pause per context, #3930): it is over, and renders so rather than as a second
  *  "waiting for your input". With nothing known, rows are drawn as they came. */
-export function orderDurableTurns(
+export function planDurableTurns(
   turns: DurableChatTurn[],
   liveTaskId?: string | null,
-): DurableChatTurn[] {
+): { turns: DurableChatTurn[]; queued: Set<string> } {
   let live: DurableChatTurn | undefined;
   if (liveTaskId !== undefined) {
     live = liveTaskId ? turns.find((turn) => turn.task_id === liveTaskId) : undefined;
@@ -245,10 +251,35 @@ export function orderDurableTurns(
     while (at >= 0 && TERMINAL.test(turns[at].state)) at -= 1;
     if (at >= 0 && turns.slice(at + 1).every((turn) => supersededByFromStatus(turn.status))) live = turns[at];
   }
-  if (!live && liveTaskId === undefined) return turns;
-  const ordered = live ? [...turns.filter((turn) => turn !== live), live] : turns;
-  return ordered.map((turn) =>
-    turn !== live && PAUSED.test(turn.state) ? { ...turn, state: "TASK_STATE_COMPLETED" } : turn,
+  if (!live && liveTaskId === undefined) return { turns, queued: new Set() };
+  // Only a marking server's order is creation order: its WORKING rows after the live one
+  // are queued behind it (a parked one there lost its pause, below).
+  const liveAt = live ? turns.indexOf(live) : -1;
+  const queued = live && liveTaskId !== undefined
+    ? turns.filter((turn, index) => index > liveAt && !TERMINAL.test(turn.state) && !PAUSED.test(turn.state))
+    : [];
+  const settled = turns
+    .filter((turn) => turn !== live && !queued.includes(turn))
+    .map((turn) => (PAUSED.test(turn.state) ? { ...turn, state: "TASK_STATE_COMPLETED" } : turn));
+  return {
+    turns: [...settled, ...(live ? [live] : []), ...queued],
+    queued: new Set(queued.map((turn) => turn.task_id)),
+  };
+}
+
+/** The drawing order alone (see planDurableTurns). */
+export function orderDurableTurns(turns: DurableChatTurn[], liveTaskId?: string | null): DurableChatTurn[] {
+  return planDurableTurns(turns, liveTaskId).turns;
+}
+
+/** The transcript messages for a session's durable turns, drawn per planDurableTurns: a
+ *  queued turn shows only its prompt (it has said nothing yet). */
+export function messagesFromDurableTurns(rows: DurableChatTurn[], liveTaskId?: string | null): ChatMessage[] {
+  const { turns, queued } = planDurableTurns(rows, liveTaskId);
+  return turns.flatMap((turn) =>
+    queued.has(turn.task_id)
+      ? messagesFromDurableTurn(turn).filter((message) => message.role === "user")
+      : messagesFromDurableTurn(turn),
   );
 }
 
@@ -260,7 +291,7 @@ export function sessionFromDurableTurns(
   liveTaskId?: string | null,
 ): ChatSession | null {
   const turns = orderDurableTurns(rows, liveTaskId);
-  const messages = turns.flatMap(messagesFromDurableTurn);
+  const messages = messagesFromDurableTurns(rows, liveTaskId);
   if (!messages.length) return null;
   const createdAt = timestamp(turns[0]?.last_updated ?? summary.last_updated);
   const updatedAt = timestamp(summary.last_updated);

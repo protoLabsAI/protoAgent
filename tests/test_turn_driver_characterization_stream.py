@@ -542,6 +542,22 @@ async def test_request_metadata_threads_into_the_graph_input(env):
 
 
 @pytest.mark.asyncio
+async def test_the_turn_holding_the_thread_lock_is_named_while_it_runs(env):
+    """#3963: a turn's task row is created (and marked working) BEFORE it waits for the
+    session's thread lock, so the durable turns reader cannot tell the running turn from one
+    queued behind it by row order. The turn names itself once it holds the lock."""
+    from runtime import turn_activity
+
+    env.install(streams=[[text("r1", "a")]])
+    gen = chat_mod._chat_langgraph_stream("hello", "s1", request_metadata={"a2a.task_id": "task-running"})
+    await gen.__anext__()
+    assert turn_activity.holding_task("s1") == "task-running"
+    async for _ in gen:
+        pass
+    assert turn_activity.holding_task("s1") is None
+
+
+@pytest.mark.asyncio
 async def test_a_non_list_fence_is_ignored(env):
     g = env.install(streams=[[text("r1", "a")]])
 

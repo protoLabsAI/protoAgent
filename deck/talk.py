@@ -325,7 +325,7 @@ class ConversationScreen(Screen):
         except Exception as exc:  # noqa: BLE001 — surfaced, never fatal
             self.app.call_from_thread(self.notify, f"could not load {session_id}: {exc}", severity="error", timeout=8)
             rows = []
-        exchanges = [Exchange(user=a2a.user_text_from_durable(r), turn=a2a.turn_from_durable(session_id, r)) for r in rows]
+        exchanges = [Exchange(user=a2a.user_text_from_durable(r), turn=a2a.turn_from_durable(session_id, r)) for r in a2a.live_row_last(rows)]
         self.app.call_from_thread(self._apply_session, session_id, exchanges, seq)
 
     @_ui_safe

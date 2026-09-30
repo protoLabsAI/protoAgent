@@ -342,6 +342,25 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
         await super().save(task, context)
 
 
+# ── Turn order ─────────────────────────────────────────────────────────────────
+
+
+def task_newest_first(task_model, dialect_name: str) -> tuple:
+    """ORDER BY clauses putting a context's most recently CREATED task first (#3963).
+
+    The task row keeps only ``last_updated`` — when it last CHANGED — which is not a turn's
+    place in the conversation: a pause a plain message moved to a new task leaves the old
+    task to be completed just AFTER the new one parks. On SQLite (the only store this
+    runtime builds) the ``rowid`` is the creation order: the SDK inserts a task once and
+    only ever merges it afterwards. Any other dialect has no such column, so it falls back
+    to last-change order rather than failing the read."""
+    if dialect_name == "sqlite":
+        from sqlalchemy import literal_column
+
+        return (literal_column(f"{task_model.__tablename__}.rowid").desc(),)
+    return (task_model.last_updated.desc().nulls_last(), task_model.id.desc())
+
+
 # ── Durable store construction (paths match the bespoke stores) ─────────────────
 
 

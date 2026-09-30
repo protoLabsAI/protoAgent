@@ -1303,8 +1303,19 @@ const server = createServer(async (req, res) => {
       }
       if (reparkSession && pathname === `/api/chat/sessions/${reparkSession}/turns`) {
         const rows = [...(durableTurns.get(reparkSession) ?? [])];
-        // Ordered by LAST CHANGE, no live marker: main's pre-#3963 shape (see durableTurns).
+        // Ordered by LAST CHANGE — main's pre-#3963 order, the parked task first. The
+        // "legacy" variant sends no live marker (a server that predates it); the "marker"
+        // variant names the live turn (the newest parked one), which must win over any order.
         rows.sort((a, b) => a.last_updated.localeCompare(b.last_updated));
+        if (req.headers["x-e2e-repark-variant"] === "marker") {
+          const live = [...(durableTurns.get(reparkSession) ?? [])]
+            .reverse()
+            .find((r) => r.state === "TASK_STATE_INPUT_REQUIRED");
+          return sendJson(res, {
+            turns: rows.map((r) => ({ ...r, live: r === live })),
+            live_task_id: live?.task_id ?? null,
+          });
+        }
         return sendJson(res, { turns: rows });
       }
       if (

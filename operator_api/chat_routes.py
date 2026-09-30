@@ -28,6 +28,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
+from a2a_impl.stores import task_newest_first
 from infra.publish import list_published_links
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
 from runtime.state import STATE
@@ -83,22 +84,36 @@ async def _ensure_chat_tombstones(conn) -> Any:
     return table
 
 
-def _task_creation_order(task_model) -> Any:
-    """The order a context's tasks were CREATED in: the task table's SQLite ``rowid``.
-
-    The A2A task row keeps only ``last_updated`` — when it last CHANGED — and that is not
-    a turn's place in the conversation (#3963). A pause the operator's plain message moved
-    to a new task leaves the old task to be completed ("Continued in task …") just after the
-    new one parks, so ordering by ``last_updated`` put the still-parked turn BEFORE the one it
-    superseded, and a reader taking the last turn as the live one lost the pause. The SDK
-    inserts a task once, when it is created, and only ever updates it afterwards
-    (``session.merge``), so the rowid is the creation order."""
-    from sqlalchemy import literal_column
-
-    return literal_column(f"{task_model.__tablename__}.rowid")
-
-
 _TERMINAL_TASK_STATE = re.compile(r"completed|failed|canceled|cancelled|rejected", re.IGNORECASE)
+_PAUSED_TASK_STATE = re.compile(r"input.required|auth.required", re.IGNORECASE)
+
+
+def _live_turn(turns: list[dict], holder: str | None) -> dict | None:
+    """The turn a reader should treat as LIVE among ``turns`` (creation order), or None
+    (#3963).
+
+    1. The task holding the session's thread lock right now (``turn_activity``), when it is
+       one of these rows and not over — the ground truth while a turn runs in this process.
+    2. Otherwise only the TRAILING run of unfinished rows can be live: turns on a session
+       are serialized (a FIFO lock), so a row older than a finished turn is an orphan, never
+       the live one. Within that run, the newest PAUSED row is live — a pause releases the
+       lock and one pause per context moves to whichever task last parked (#3930) — and
+       with none paused, the OLDEST row: a turn is created and marked working before it
+       waits for the lock, so the rows after the running one are queued behind it.
+    """
+    if holder:
+        held = next((t for t in turns if t["task_id"] == holder), None)
+        if held is not None and held["state"] and not _TERMINAL_TASK_STATE.search(held["state"]):
+            return held
+    trailing: list[dict] = []
+    for turn in reversed(turns):
+        if not turn["state"] or _TERMINAL_TASK_STATE.search(turn["state"]):
+            break
+        trailing.insert(0, turn)
+    paused = [t for t in trailing if _PAUSED_TASK_STATE.search(t["state"])]
+    if paused:
+        return paused[-1]
+    return trailing[0] if trailing else None
 
 
 async def _record_chat_tombstone(conn, session_id: str) -> None:
@@ -155,7 +170,7 @@ async def session_summary(session_id: str) -> dict | None:
                 await conn.execute(
                     select(TaskModel.status)
                     .where(TaskModel.context_id == session_id)
-                    .order_by(_task_creation_order(TaskModel).desc())
+                    .order_by(*task_newest_first(TaskModel, conn.dialect.name))
                     .limit(1)
                 )
             ).first()
@@ -681,9 +696,9 @@ def register_chat_routes(app, ui: str) -> None:
         Turns are keyed by ``context_id`` = the console session id; an in-flight
         turn appears with its accumulated pieces and a non-terminal state.
 
-        Turns are in CREATION order (when each began), and ``live_task_id`` names the
-        newest one while it is not over — working, or parked on the operator — or is null
-        (#3963).
+        Turns are in CREATION order (when each began), and ``live_task_id`` names the one
+        running or waiting on the operator, or is null; each row carries ``live`` to match
+        (#3963, ``_live_turn``).
 
         **Read-only** over the store the SDK already persists; no checkpoint
         access, no flag gate (the export sibling's rule)."""
@@ -720,7 +735,7 @@ def register_chat_routes(app, ui: str) -> None:
                         # Newest = most recently CREATED, never most recently updated: a
                         # superseded pause completes after the task that took it over
                         # (#3963), and a turn's place in the chat is when it began.
-                        .order_by(_task_creation_order(TaskModel).desc())
+                        .order_by(*task_newest_first(TaskModel, conn.dialect.name))
                         .limit(limit)
                     )
                 ).fetchall()
@@ -756,14 +771,15 @@ def register_chat_routes(app, ui: str) -> None:
             }
             for r in rows
         ]
-        # The turn a reader should treat as LIVE: the newest-created one while it is not over
-        # (working, or parked on the operator), else null. Only the newest can be live — turns
-        # on a session are serialized, and a pause moves to whichever task last parked
-        # (#3930) — so an older row still marked working or parked is an orphan, never the
-        # live turn. A reader resolving "which turn is waiting" reads this, not list position
-        # (#3963).
-        newest = turns[-1] if turns else None
-        live = newest if newest and newest["state"] and not _TERMINAL_TASK_STATE.search(newest["state"]) else None
+        # The turn a reader should treat as LIVE (see _live_turn), named outright — list
+        # position alone cannot say it: a turn queued behind the running one is a newer row,
+        # and a superseded pause can be the row that changed last (#3963). Each row also says
+        # whether it is the one, for readers that walk rows (the deck).
+        from runtime import turn_activity
+
+        live = _live_turn(turns, turn_activity.holding_task(session_id))
+        for turn in turns:
+            turn["live"] = turn is live
         return {"turns": turns, "live_task_id": live["task_id"] if live else None}
 
     @app.get("/api/chat/sessions/{session_id}/publish/preview")

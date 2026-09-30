@@ -37,6 +37,7 @@ from typing import Any
 from graph.fence_scope import fence_scope
 from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
+from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
 from server import turn_telemetry as _turn_telemetry
 
@@ -1471,7 +1472,12 @@ async def _chat_langgraph_stream_impl(
             # per-thread async lock runs them one-at-a-time (mirrors the console steering
             # queue; different contexts never block each other). The turn body lives in
             # _run_native_turn so the lock wraps it without a deep in-line reindent.
-            async with _turn_control._thread_lock(_tid):
+            async with (
+                _turn_control._thread_lock(_tid),
+                # Which task is RUNNING, not merely created (#3963): a turn queued behind
+                # this lock is already a working task row, and a newer one.
+                _turn_activity.holding(session_id, str((request_metadata or {}).get("a2a.task_id") or "")),
+            ):
                 # HITL hold (#1560): while this thread is parked at a form/question/
                 # approval interrupt, a fresh operator message is HELD in the steering
                 # queue (it folds in right after the form response) and the turn re-parks

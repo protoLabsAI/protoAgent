@@ -39,7 +39,7 @@ import { api, supersededByFromStatus, type DurableChatTurn, type TurnStreamHandl
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
-import { messagesFromDurableTurn, orderDurableTurns } from "./sessionHydration";
+import { messagesFromDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
 import {
   applyComponent,
@@ -260,7 +260,7 @@ export function appendSuccessorTurns(sessionId: string, turns: DurableChatTurn[]
   const shown = new Set(cur.messages.map((m) => m.taskId).filter(Boolean));
   const fresh = turns.filter((turn) => !shown.has(turn.task_id));
   if (!fresh.length) return;
-  chatStore.updateMessages(sessionId, [...cur.messages, ...orderDurableTurns(fresh).flatMap(messagesFromDurableTurn)]);
+  chatStore.updateMessages(sessionId, [...cur.messages, ...messagesFromDurableTurns(fresh)]);
 }
 
 /** Reattach the stuck assistant message to its server-owned task. Returns a

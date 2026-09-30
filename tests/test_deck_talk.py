@@ -279,6 +279,43 @@ async def test_session_picker_replays_durable_turns_with_tool_cards():
 
 
 @pytest.mark.asyncio
+async def test_opening_a_session_attaches_to_the_running_turn_not_one_queued_behind_it():
+    """#3963: a turn queued behind the running one is the NEWER working row (it is created
+    before it waits for the session's lock). The server marks the running one live; opening
+    the session attaches to IT."""
+
+    def row(task_id, text, live):
+        return {
+            "task_id": task_id, "live": live, "status": {"state": "TASK_STATE_WORKING"}, "artifacts": [],
+            "history": [{"role": "ROLE_USER", "parts": [{"text": text}]}],
+        }
+
+    fake = FakeA2A()
+    be = TalkBackend(
+        a2a_client=fake,
+        sessions=[{"session_id": "chat-1-busy", "turn_count": 2, "last_updated": "2026-09-30T12:00:00"}],
+        turns={"chat-1-busy": [row("running", "the running question", True), row("queued", "a queued nudge", False)]},
+    )
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(120, 36)) as pilot:
+        await _open_talk(be, pilot, app)
+        await pilot.press("ctrl+s")
+        await _settle(app, pilot)
+        await pilot.press("enter")
+        await _settle(app, pilot)
+        assert await _until(pilot, lambda: fake.subscribed == ["running"])
+
+
+def test_live_row_last_keeps_an_unmarked_order():
+    from deck import a2a as deck_a2a
+
+    rows = [{"task_id": "a"}, {"task_id": "b", "live": True}, {"task_id": "c"}]
+    assert [r["task_id"] for r in deck_a2a.live_row_last(rows)] == ["a", "c", "b"]
+    plain = [{"task_id": "a"}, {"task_id": "b"}]
+    assert deck_a2a.live_row_last(plain) is plain
+
+
+@pytest.mark.asyncio
 async def test_reasoning_fold_toggles_the_thinking_text():
     be = TalkBackend()
     app = FleetDeck(be, poll_s=0)

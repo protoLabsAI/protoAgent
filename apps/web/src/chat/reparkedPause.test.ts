@@ -130,6 +130,37 @@ describe("hydration draws the re-parked pause as the live turn (#3963)", () => {
     expect(orderDurableTurns([superseded(), done], null).map((t) => t.task_id)).toEqual([OLD, NEW]);
   });
 
+  it("keeps the RUNNING turn live when a newer turn is queued behind it", () => {
+    // A turn is created (and marked working) before it waits for the session's lock, so a
+    // queued one is the newer row; the server names the running one live.
+    const done = superseded({ task_id: "task-done", status: { state: "TASK_STATE_COMPLETED" }, history: [{ role: "ROLE_USER", parts: [{ text: "earlier" }] }] });
+    const running = reparked({
+      task_id: "task-running",
+      state: "TASK_STATE_WORKING",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [{ parts: [{ text: "half an answer" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "the running question" }] }],
+    });
+    const queued = reparked({
+      task_id: "task-queued",
+      state: "TASK_STATE_WORKING",
+      status: { state: "TASK_STATE_WORKING" },
+      history: [{ role: "ROLE_USER", parts: [{ text: "a queued nudge" }] }],
+    });
+    const session = sessionFromDurableTurns(summary("chat-q"), [done, running, queued], "task-running");
+    if (!session) throw new Error("expected a session");
+    // Chronology kept: the queued prompt comes after the running turn…
+    expect(session.messages.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "earlier",
+      "the running question",
+      "a queued nudge",
+    ]);
+    // …but it has said nothing, so the running turn owns the live bubble the reattach follows.
+    expect(session.messages.filter((m) => m.taskId === "task-queued")).toHaveLength(0);
+    expect(lastAssistant(session.messages)).toMatchObject({ taskId: "task-running", status: "streaming" });
+    expect(reattachKeyForMessages(session.messages)).toBe("durable-task-running-assistant:task-running");
+  });
+
   it("without a marker, never moves an older orphan that merely never ended", () => {
     // An older server, and a row left working under a completed turn that is NOT a
     // superseded pause: nothing says it is live, so the chat keeps its order.

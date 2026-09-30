@@ -117,33 +117,37 @@ test("warm profile: a pause re-parked by a plain message comes back after a relo
   await answerResumes(page, bodies, sessionId, successor, "pear");
 });
 
-test("fresh profile: a pause re-parked by a plain message comes back from the durable turns and the answer resumes it (#3963)", async ({
-  page,
-  browser,
-}) => {
-  const first = a2aLog(page);
-  await page.goto("/app/", { waitUntil: "load" });
-  const sessionId = await park(page, first, "papaya");
-  const successor = await plainMessage(page.request, sessionId);
+// Both server shapes: "marker" names the live turn (live_task_id), "legacy" does not and the
+// console must infer it. Either way the rows arrive parked-task FIRST.
+for (const variant of ["marker", "legacy"] as const) {
+  test(`fresh profile (${variant}): a pause re-parked by a plain message comes back from the durable turns and the answer resumes it (#3963)`, async ({
+    page,
+    browser,
+  }) => {
+    const first = a2aLog(page);
+    await page.goto("/app/", { waitUntil: "load" });
+    const sessionId = await park(page, first, `papaya-${variant}`);
+    const successor = await plainMessage(page.request, sessionId);
 
-  // A brand-new profile: nothing local, the chat is rebuilt from GET …/turns — served
-  // parked-task FIRST, the superseded completion last.
-  const context = await browser.newContext({ baseURL: test.info().project.use.baseURL });
-  try {
-    const fresh = await context.newPage();
-    await fresh.setExtraHTTPHeaders({ "x-e2e-repark-session": sessionId });
-    const bodies = a2aLog(fresh);
-    const subscribed = fresh.waitForRequest(
-      (req) =>
-        req.url().endsWith("/a2a") &&
-        (req.postData() ?? "").includes("SubscribeToTask") &&
-        (req.postData() ?? "").includes(successor),
-    );
-    await fresh.goto("/app/", { waitUntil: "load" });
-    await subscribed;
-    await expectReparkedForm(fresh, "papaya");
-    await answerResumes(fresh, bodies, sessionId, successor, "fig");
-  } finally {
-    await context.close();
-  }
-});
+    // A brand-new profile: nothing local, the chat is rebuilt from GET …/turns — served
+    // parked-task FIRST, the superseded completion last.
+    const context = await browser.newContext({ baseURL: test.info().project.use.baseURL });
+    try {
+      const fresh = await context.newPage();
+      await fresh.setExtraHTTPHeaders({ "x-e2e-repark-session": sessionId, "x-e2e-repark-variant": variant });
+      const bodies = a2aLog(fresh);
+      const subscribed = fresh.waitForRequest(
+        (req) =>
+          req.url().endsWith("/a2a") &&
+          (req.postData() ?? "").includes("SubscribeToTask") &&
+          (req.postData() ?? "").includes(successor),
+      );
+      await fresh.goto("/app/", { waitUntil: "load" });
+      await subscribed;
+      await expectReparkedForm(fresh, `papaya-${variant}`);
+      await answerResumes(fresh, bodies, sessionId, successor, "fig");
+    } finally {
+      await context.close();
+    }
+  });
+}
