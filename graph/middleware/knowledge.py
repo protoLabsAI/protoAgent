@@ -29,7 +29,9 @@ channel starts empty after the checkpoint load. ``before_model`` covers that cas
 when the channel is ABSENT (``before_agent`` always writes it, even as an empty
 marker, on any run that enters at the top), the run is a resume of a turn already
 in progress, so the projection is composed once, lazily, and written back for the
-rest of the run's model calls.
+rest of the run's model calls. Its retrieval query is the turn's newest OPERATOR
+input (:func:`is_turn_input`), skipping the guard notes and summaries the runtime may
+have written above it, and it writes its own injection-log row (ADR 0069 D6).
 """
 
 import logging
@@ -83,6 +85,45 @@ class KnowledgeState(AgentState):
     """
 
     protoagent_turn_projection: NotRequired[Annotated[dict | None, UntrackedValue, PrivateStateAttr]]
+
+
+# ``additional_kwargs["lc_source"]`` values that mark a conversation summary written
+# over the thread: langchain's SummarizationMiddleware (``graph/middleware/compaction.py``)
+# and the operator-triggered compaction op (``graph/compaction_op.py``).
+_SUMMARY_SOURCES = frozenset({"summarization", "compaction"})
+
+
+def is_turn_input(message: Any) -> bool:
+    """Is ``message`` operator input — a message that may stand for the turn's ask?
+
+    A ``HumanMessage`` that the runtime did NOT write onto the thread itself. Excluded:
+    context frames (``graph.context_frame``), guard notes (round governor, stall guard,
+    completion guard — recognised by tag, ``guard_notes``) and conversation summaries
+    (``lc_source`` in :data:`_SUMMARY_SOURCES`). A folded steer (``SteeringMiddleware``)
+    COUNTS: it is the operator's own text, typed mid-turn to redirect it, so it is the
+    freshest statement of what the turn is for — the same line the round governor draws
+    for its turn boundary.
+    """
+    if not isinstance(message, HumanMessage):
+        return False
+    from graph.context_frame import is_context_frame
+    from graph.middleware.guard_notes import is_guard_note
+
+    if is_context_frame(message) or is_guard_note(message):
+        return False
+    return (getattr(message, "additional_kwargs", None) or {}).get("lc_source") not in _SUMMARY_SOURCES
+
+
+def turn_query(messages: Any) -> str:
+    """The retrieval query for a turn: the newest operator input's text (a folded steer
+    without its model-facing frame), or ``""`` when the thread has none."""
+    from graph.middleware.steering import strip_interjection
+
+    for msg in reversed(messages or []):
+        if is_turn_input(msg):
+            text = msg.content if isinstance(msg.content, str) else str(msg.content)
+            return strip_interjection(text)
+    return ""
 
 
 def turn_projection(state_or_update: Any) -> tuple[str, list[dict] | None]:
@@ -398,18 +439,16 @@ class KnowledgeMiddleware(AgentMiddleware):
         (untracked — never checkpointed), and ``wrap_model_call`` delivers it via
         ``request.override(messages=…)``.
 
-        Guarded on the newest message being a FRESH human input: a run that
-        enters at the top without new input (a kicker retry) must not recompose,
-        and delivers no projection. Either way the channel is WRITTEN (``{}``
+        Guarded on the newest message being FRESH operator input
+        (:func:`is_turn_input` — not a context frame, guard note or summary): a run
+        that enters at the top without new input (a kicker retry) must not
+        recompose, and delivers no projection. Either way the channel is WRITTEN (``{}``
         when nothing was composed): its presence tells ``before_model`` this run
         entered here. A HITL resume (``Command(resume=…)``) never runs this hook
         at all — ``before_model`` composes for it (see there).
         """
-        from graph.context_frame import is_context_frame
-
         messages = state.get("messages") or []
-        last = messages[-1] if messages else None
-        if not isinstance(last, HumanMessage) or is_context_frame(last):
+        if not messages or not is_turn_input(messages[-1]):
             return {TURN_PROJECTION_KEY: {}}  # re-entry without fresh input — no recompose
         return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=True)}
 
@@ -427,19 +466,23 @@ class KnowledgeMiddleware(AgentMiddleware):
         goal/scheduler auto-resume) continues the turn at the interrupted node, so
         ``before_agent`` does not run and the untracked channel starts empty. An
         absent channel therefore means "resume of a turn in progress" (a run that
-        entered at the top always wrote it): compose from this thread's state —
-        whose newest operator message is still the turn's input — and write the
-        channel, so every later model call of the run delivers it. A present
-        channel (the common case) is a no-op. ``record=False``: the turn's
-        injection-log row (ADR 0069 D6) was written when the turn entered.
+        entered at the top always wrote it): compose from this thread's state and
+        write the channel, so every later model call of the run delivers it. A
+        present channel (the common case) is a no-op.
+
+        The query is the newest OPERATOR input (:func:`turn_query`), never merely the
+        newest ``HumanMessage``: by the time a turn is resumed, a guard note or a
+        conversation summary may sit above the turn's own input.
+
+        ``record=True``: this compose is what the resumed run's model calls actually
+        receive, so it writes its own injection-log row (ADR 0069 D6) — the log holds
+        one row per compose, so a turn resumed N times has N + 1 rows.
         """
         if TURN_PROJECTION_KEY in (state or {}):
             return None
-        from graph.context_frame import is_context_frame
-
-        if not any(isinstance(m, HumanMessage) and not is_context_frame(m) for m in state.get("messages") or []):
+        if not any(is_turn_input(m) for m in state.get("messages") or []):
             return {TURN_PROJECTION_KEY: {}}
-        return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=False)}
+        return {TURN_PROJECTION_KEY: self._projection_value(state, runtime, record=True)}
 
     async def abefore_model(self, state, runtime) -> dict | None:
         """Async ``before_model`` — the (rare) resume compose runs off the loop."""
@@ -452,8 +495,8 @@ class KnowledgeMiddleware(AgentMiddleware):
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
         """The dynamic-context composer behind ``before_agent`` — the shared
         :func:`graph.projection.compose_projected_context` (ADR 0108 D8) fed
-        this graph turn's inputs: the last human message as the retrieval
-        query, ``state["incognito"]`` (ADR 0069 D3b), the TTL-cached digest,
+        this graph turn's inputs: the newest operator input (:func:`turn_query`) as
+        the retrieval query, ``state["incognito"]`` (ADR 0069 D3b), the TTL-cached digest,
         and this middleware's delivery knobs.
 
         ``record=False`` is the SPECULATIVE path (#2388 P3 next-call preview): it
@@ -466,13 +509,8 @@ class KnowledgeMiddleware(AgentMiddleware):
         summary (``{"chars", "used", "overflow"}``) when a projected-context
         budget is configured (ADR 0108 D6).
         """
-        last_human: str | None = None
-        for msg in reversed(state.get("messages") or []):
-            if isinstance(msg, HumanMessage):
-                last_human = msg.content if isinstance(msg.content, str) else str(msg.content)
-                break
         projected = compose_projected_context(
-            last_human or "",
+            turn_query(state.get("messages")),
             self._store,
             self._skills_index,
             state,
