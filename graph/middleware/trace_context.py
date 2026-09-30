@@ -23,7 +23,10 @@ including per-tab overridden models — and stamps a fresh trace context onto a
 cheap ``model_copy`` of the request's model right before the call.
 
 No-op (one function call returning None) when tracing is disabled or no trace
-is active, and for models without an ``extra_body`` slot (e.g. ACP aux models).
+is active, and for any model not built for an OpenAI-compatible connection
+(``model_provider_type`` != ``openai-compat``): native OAuth clients (Codex,
+Claude), ACP aux models, and untagged models. The native ChatGPT Codex backend
+rejects ``metadata`` outright (#3928), so the stamp is gateway-lane only.
 Never raises — a tracing failure must not break a turn.
 """
 
@@ -34,6 +37,8 @@ import os
 import time
 
 from langchain.agents.middleware import AgentMiddleware
+
+from graph.providers.identity import model_provider_type
 
 log = logging.getLogger(__name__)
 
@@ -116,15 +121,24 @@ class TraceContextMiddleware(AgentMiddleware):
 
     def _with_trace(self, request):
         try:
+            from graph.config import PROVIDER_TYPE_OPENAI_COMPAT
             from observability import tracing
 
             ctx = tracing.current_trace_context()
             if not ctx:
                 return request
             model = getattr(request, "model", None)
-            # Only OpenAI-compatible clients carry extra_body; anything else
-            # (ACP aux models, fakes) is left untouched.
+            # Only clients built for an OpenAI-compatible connection (the LiteLLM
+            # gateway lane) get the stamp — keyed on the routing identity
+            # ``create_llm`` tags every client with, not on "has an extra_body
+            # slot". The native Codex client IS a ChatOpenAI with extra_body, and
+            # the ChatGPT Responses backend 400s on ``metadata`` ("Unsupported
+            # parameter: metadata", #3928). Native OAuth, ACP and untagged models
+            # are left untouched; their generations are still recorded by
+            # ``_emit_fleet_generation`` below, which needs no gateway.
             if model is None or not hasattr(model, "extra_body"):
+                return request
+            if model_provider_type(model) != PROVIDER_TYPE_OPENAI_COMPAT:
                 return request
             meta = {
                 "existing_trace_id": ctx["trace_id"],
