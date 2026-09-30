@@ -951,6 +951,14 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
     A2A task id on the job row (the handle ``stop_task`` needs); on tool frames it
     republishes ``background.progress`` for the console's live job card.
     Best-effort — never raises into the executor."""
+    if frame.get("phase") == "turn_ended":
+        # The executor's guaranteed exit signal (#3933): whatever path the turn took out —
+        # including a crash before its terminal hook fired — forget its control entry.
+        # Nothing is published: the terminal / park frames already told every consumer.
+        from server.chat import finish_live_server_turn
+
+        finish_live_server_turn(context_id, task_id)
+        return
     if frame.get("phase") == "input_required":
         from server.chat import finish_live_server_turn
 
@@ -1344,10 +1352,12 @@ def _a2a_terminal(outcome) -> None:
     peer-delegation outcome (``origin=a2a``) on the Activity feed. The peer keeps
     its real A2A context/task identity; ordinary operator chat still returns through
     its own stream and is never duplicated here. Best-effort — never raises."""
-    _record_a2a_telemetry(outcome)
     from server.chat import finish_live_server_turn
 
+    # First, so a telemetry failure below can't skip it (#3933); the executor's
+    # `turn_ended` progress frame is the backstop for paths that never reach this hook.
     finish_live_server_turn(getattr(outcome, "context_id", "") or "", getattr(outcome, "task_id", "") or "")
+    _record_a2a_telemetry(outcome)
     # Scheduled fires (#2990): deliver the result back to the chat that created the
     # schedule as a ScheduledReportCard, whichever thread the fire actually ran in. A
     # no-op for every non-scheduled turn (guarded inside _scheduled_delivery_payload).

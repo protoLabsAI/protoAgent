@@ -19,10 +19,54 @@ can import it without crossing an import layer.
 
 from __future__ import annotations
 
+import logging
+import time
 import uuid
+
+log = logging.getLogger(__name__)
 
 # session_id -> [{"id": str, "text": str, "fence"?: [str]}], FIFO.
 _QUEUES: dict[str, list[dict]] = {}
+
+# Eviction (#3933). A queue normally empties itself — the turn's next model step drains
+# it, the console's ✕ dequeues it, a deleted chat ``forget``s it — but a session whose
+# turn never reaches another model step (abandoned while parked, or a server-fired turn
+# that ended between the interjection and its next step) kept its entry for the life of
+# the process. So each queue remembers when it was last written, and every ``enqueue``
+# first evicts queues untouched for ``_QUEUE_TTL_S`` and, for a NEW session at
+# ``_QUEUES_MAX`` sessions, the least recently written one. The TTL is deliberately long:
+# a message held behind a parked HITL form (``fence`` above) legitimately waits for the
+# operator to answer it, which can be overnight — only input nobody has touched for days
+# is dropped, and it is logged when it is.
+_QUEUE_TTL_S = 7 * 24 * 3600.0
+_QUEUES_MAX = 1024
+# session_id -> monotonic time of its last enqueue, least recently written FIRST (a write
+# re-inserts the key), so both evictions only ever look at the front.
+_QUEUE_TOUCHED: dict[str, float] = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _evict(session_id: str, why: str) -> None:
+    _QUEUE_TOUCHED.pop(session_id, None)
+    dropped = _QUEUES.pop(session_id, None)
+    if dropped:
+        log.warning("[steering] dropped %d undelivered message(s) for session %s (%s)", len(dropped), session_id, why)
+
+
+def _evict_stale(incoming: str) -> None:
+    now = _now()
+    while _QUEUE_TOUCHED:
+        sid, touched = next(iter(_QUEUE_TOUCHED.items()))
+        if now - touched < _QUEUE_TTL_S:
+            break
+        _evict(sid, f"no activity for {_QUEUE_TTL_S / 3600:g}h")
+    if incoming in _QUEUES:
+        return
+    while len(_QUEUES) >= _QUEUES_MAX and _QUEUE_TOUCHED:
+        _evict(next(iter(_QUEUE_TOUCHED)), f"queue registry at cap ({_QUEUES_MAX})")
 
 
 def enqueue(session_id: str, text: str, msg_id: str | None = None, *, fence=None) -> str | None:
@@ -40,7 +84,10 @@ def enqueue(session_id: str, text: str, msg_id: str | None = None, *, fence=None
     item: dict = {"id": mid, "text": text}
     if fence:
         item["fence"] = [str(t) for t in fence]
+    _evict_stale(session_id)
     _QUEUES.setdefault(session_id, []).append(item)
+    _QUEUE_TOUCHED.pop(session_id, None)
+    _QUEUE_TOUCHED[session_id] = _now()
     return mid
 
 
@@ -56,6 +103,7 @@ def drain(session_id: str) -> list[dict]:
     if not session_id:
         return []
     items = _QUEUES.pop(session_id, [])
+    _QUEUE_TOUCHED.pop(session_id, None)
     if items:
         _note_drained(session_id, [str(item.get("id") or "") for item in items])
     return items
@@ -94,6 +142,7 @@ def forget(session_id: str) -> None:
     if not sid:
         return
     _QUEUES.pop(sid, None)
+    _QUEUE_TOUCHED.pop(sid, None)
     _DRAINED.pop(sid, None)
 
 
@@ -113,6 +162,7 @@ def dequeue(session_id: str, msg_id: str) -> bool:
             del q[i]
             if not q:
                 _QUEUES.pop(session_id, None)  # match drain(): no empty lists linger
+                _QUEUE_TOUCHED.pop(session_id, None)
             return True
     return False
 
