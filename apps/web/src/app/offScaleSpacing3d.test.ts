@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 // tokens. A raw exact-scale px that comes back is a site that no longer tracks the operator's
 // chosen density (the tokens can be rescaled at the DS root; a hardcoded px cannot). Off-scale
 // half-steps (2/6/10/11/14/28px, …) are NOT swept by this exact-scale guard: the fleet-room /
-// fleet-activity half-steps have since moved onto the DS half-step scale under protoContent#547
-// (step 3), while work.css / app-drawer.css still await the sibling #547 card — either way that
+// fleet-activity half-steps moved onto the DS half-step scale under protoContent#547 (step 3),
+// and work.css / app-drawer.css followed in the sibling #547 card — either way that
 // half-step migration is pinned below, not swept here. So this guard flags ONLY the five
 // exact-scale values, and only when they sit in a spacing declaration (a `left: 8px` /
 // `inset: -4px` is not spacing).
@@ -138,16 +138,18 @@ describe("no exact-scale px spacing literal in the fleet/work/drawer CSS (DS aud
     expect(offendersIn("./work.css", commented)).toEqual([]);
   });
 
-  it("pins the #547 half-step migration: fleet CSS tokenized, sibling files still literal", () => {
-    // r2, step 3 (protoContent#547): the fleet-room / fleet-activity half-steps now read DS
+  it("pins the #547 half-step migration: all four surfaces now read DS half-step tokens", () => {
+    // r2, step 3 (protoContent#547): the fleet-room / fleet-activity half-steps read DS
     // half-step tokens — pin a representative migrated declaration in each (was `padding: 10px …`
     // in fleet-room, `padding: 20px 2px` in fleet-activity).
     expect(CSS_SOURCES["./fleet-room.css"]).toContain("padding: var(--pl-space-2_5) var(--pl-space-3)");
     expect(CSS_SOURCES["./fleet-activity.css"]).toContain("padding: var(--pl-space-5) var(--pl-space-0_5)");
     // Genuinely off-scale values (uncovered by the DS scale, e.g. 28px) stay literals by design.
     expect(CSS_SOURCES["./fleet-room.css"]).toContain("padding: 28px var(--pl-space-3)");
-    // work.css / app-drawer.css belong to the sibling card; their half-steps still wait on #547.
-    expect(CSS_SOURCES["./work.css"]).toContain("gap: 7px");
-    expect(CSS_SOURCES["./app-drawer.css"]).toContain("padding: 9px 10px");
+    // work.css / app-drawer.css followed in this sibling #547 card — their half-steps now read DS
+    // half-step tokens too (was `gap: 7px` in work snapped to -2, `padding: 9px 10px` in app-drawer
+    // snapped to -2 / -2_5).
+    expect(CSS_SOURCES["./work.css"]).toContain("gap: var(--pl-space-2)");
+    expect(CSS_SOURCES["./app-drawer.css"]).toContain("padding: var(--pl-space-2) var(--pl-space-2_5)");
   });
 });
