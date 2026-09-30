@@ -10,7 +10,9 @@ from typing import Any
 
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from runtime.session_ids import SessionId, optional_session_id
 
 log = logging.getLogger(__name__)
 
@@ -21,10 +23,16 @@ class SubagentRunRequest(BaseModel):
     description: str = ""
     prompt: str
 
+    # A caller-chosen session id: same shape rule as every chat entry point. Blank is
+    # passed through unchanged (it has always meant "no parent session").
+    _check_session_id = field_validator("session_id")(optional_session_id)
+
 
 class SubagentBatchRequest(BaseModel):
     session_id: str = "manual-subagent"
     tasks: list[dict[str, Any]]
+
+    _check_session_id = field_validator("session_id")(optional_session_id)
 
 
 class ScheduleAddRequest(BaseModel):
@@ -467,7 +475,7 @@ def register_operator_routes(
         # `?close_tasks=true` also closes the goal's session-scoped task backlog (ADR 0079) —
         # used by the "Stop goal" action so a stopped goal leaves no orphaned open tasks.
         @app.delete("/api/goals/{session_id}")
-        async def _goal_clear(session_id: str, close_tasks: bool = False):
+        async def _goal_clear(session_id: SessionId, close_tasks: bool = False):
             try:
                 return await goal_clear(session_id, close_tasks)
             except Exception as exc:
@@ -480,7 +488,7 @@ def register_operator_routes(
     # (its "orient" world-model, ADR 0079) — "" when the goal hasn't recorded one. Powers
     # the console goal detail drawer; additive, so pre-existing callers are unaffected.
     @app.get("/api/goals/{session_id}")
-    async def _goal_status(session_id: str):
+    async def _goal_status(session_id: SessionId):
         from runtime.state import STATE
 
         if STATE.goal_controller is None:
@@ -510,7 +518,7 @@ def register_operator_routes(
     if goal_rearm is not None:
 
         @app.post("/api/goals/{session_id}/rearm")
-        async def _goal_rearm(session_id: str, body: dict | None = Body(default=None)):
+        async def _goal_rearm(session_id: SessionId, body: dict | None = Body(default=None)):
             try:
                 res = await goal_rearm(session_id, body or {})
             except Exception as exc:
@@ -524,7 +532,7 @@ def register_operator_routes(
     if goal_resume is not None:
 
         @app.post("/api/goals/{session_id}/resume")
-        async def _goal_resume(session_id: str):
+        async def _goal_resume(session_id: SessionId):
             try:
                 res = await goal_resume(session_id)
             except Exception as exc:

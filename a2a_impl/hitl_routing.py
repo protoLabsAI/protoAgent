@@ -71,6 +71,8 @@ from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 from a2a.types.a2a_pb2 import ListTasksRequest
 from a2a.utils.errors import InvalidParamsError
 
+from runtime.session_ids import session_id_problem
+
 log = logging.getLogger(__name__)
 
 # The states a task waits in for its client. Only input-required is ever produced by this
@@ -444,6 +446,21 @@ def schedule_settle_siblings(context_id: str, keep_task_id: str, call_context: A
         return None
 
 
+def check_context_id(params: SendMessageRequest) -> None:
+    """Refuse a message whose ``contextId`` fails the shared session-id shape rule
+    (``runtime.session_ids``) with ``InvalidParamsError`` (JSON-RPC -32602).
+
+    The contextId IS the chat session id downstream, so it takes the same rule as every
+    HTTP chat entry point. It must run BEFORE the SDK handler: once the SDK has the
+    message it creates the task, and an error raised from the executor is saved as a
+    FAILED task under that context — a session row no per-session route can open or
+    delete. An absent contextId is left to the SDK (it assigns a UUID)."""
+    ctx = str(getattr(getattr(params, "message", None), "context_id", "") or "")
+    problem = session_id_problem(ctx) if ctx else None
+    if problem is not None:
+        raise InvalidParamsError(message=f"Invalid contextId: {problem}")
+
+
 def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
     """Wrap ``handler``'s message-send entry points with :meth:`ParkedTaskRouter.route`
     and register the router the executor settles through. Returns the router, or
@@ -458,6 +475,7 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
         return None
 
     async def on_message_send(params: SendMessageRequest, context: Any):
+        check_context_id(params)  # before the SDK creates a task for it
         ctx = router.begin_answer(params.message)  # before any await
         try:
             await router.wait_for_settles(ctx)
@@ -480,6 +498,7 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
             router.end_answer(ctx)
 
     async def on_message_send_stream(params: SendMessageRequest, context: Any):
+        check_context_id(params)  # before the SDK creates a task for it
         ctx = router.begin_answer(params.message)  # before any await
         try:
             await router.wait_for_settles(ctx)

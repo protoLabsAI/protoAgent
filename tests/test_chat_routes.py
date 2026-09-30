@@ -312,6 +312,150 @@ def test_delete_session_forget_is_opt_in_and_runs_before_retirement(monkeypatch)
     assert order[0][:3] == ("forget", True, "s3")
 
 
+def _seeded_task_engine(tmp_path, name, rows):
+    """A real SQLite A2A task store holding ``rows`` ({id, context_id, state, at})."""
+    import asyncio
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/{name}.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for row in rows:
+                await conn.execute(
+                    TaskModel.__table__.insert(),
+                    {
+                        "id": row["id"],
+                        "context_id": row["context_id"],
+                        "kind": "task",
+                        "status": {"state": row["state"]},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": row["at"],
+                    },
+                )
+
+    asyncio.run(_seed())
+    return engine
+
+
+def _tombstoned_ids(engine) -> list[str]:
+    import asyncio
+
+    import operator_api.chat_routes as cr
+    from sqlalchemy import select
+
+    async def _read():
+        async with engine.begin() as conn:
+            table = await cr._ensure_chat_tombstones(conn)
+            return [r[0] for r in (await conn.execute(select(table.c.context_id))).fetchall()]
+
+    return asyncio.run(_read())
+
+
+def test_delete_session_retire_false_records_no_tombstone(monkeypatch, tmp_path):
+    """`retire=false` is clear-but-keep-tab: today's durable turns go, but NO tombstone is
+    written — the tab stays live, so its next turn must reappear in discovery. The default
+    (`retire=true`) is the one that records durable retirement."""
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    at = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    engine = _seeded_task_engine(
+        tmp_path,
+        "retire-false",
+        [
+            {"id": "t-keep", "context_id": "chat-keep", "state": "TASK_STATE_COMPLETED", "at": at},
+            {"id": "t-gone", "context_id": "chat-gone", "state": "TASK_STATE_COMPLETED", "at": at},
+        ],
+    )
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    assert client.delete("/api/chat/sessions/chat-keep?retire=false").json()["deleted"] is True
+    assert _tombstoned_ids(engine) == []  # cleared, NOT retired
+    assert client.get("/api/chat/sessions/chat-keep/turns").json()["turns"] == []  # history wiped
+
+    assert client.delete("/api/chat/sessions/chat-gone").json()["deleted"] is True
+    assert _tombstoned_ids(engine) == ["chat-gone"]  # the default does retire
+
+
+def test_session_summary_route_reports_known_unknown_and_deleted(monkeypatch, tmp_path):
+    """GET /api/chat/sessions/{id} (the Zed shim's busy poll): a known session reports its
+    turn count, newest update and newest state; an unknown id and a tombstoned one are 404
+    ``not_found``; a turn running on a session with no stored rows yet still reports it,
+    ``active: true``."""
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from runtime import turn_activity
+
+    early = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    late = datetime(2026, 9, 1, 12, 5, tzinfo=timezone.utc)
+    engine = _seeded_task_engine(
+        tmp_path,
+        "summary",
+        [
+            {"id": "t1", "context_id": "chat-sum", "state": "TASK_STATE_COMPLETED", "at": early},
+            {"id": "t2", "context_id": "chat-sum", "state": "TASK_STATE_INPUT_REQUIRED", "at": late},
+            {"id": "t3", "context_id": "chat-del", "state": "TASK_STATE_COMPLETED", "at": early},
+        ],
+    )
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    body = client.get("/api/chat/sessions/chat-sum").json()
+    assert body["session_id"] == "chat-sum"
+    assert body["active"] is False
+    assert body["turn_count"] == 2
+    assert body["last_state"] == "TASK_STATE_INPUT_REQUIRED"  # the NEWEST turn's state
+    assert body["last_updated"].startswith("2026-09-01T12:05")
+
+    missing = client.get("/api/chat/sessions/chat-never")
+    assert missing.status_code == 404 and missing.json()["detail"]["code"] == "not_found"
+
+    assert client.delete("/api/chat/sessions/chat-del").json()["deleted"] is True
+    gone = client.get("/api/chat/sessions/chat-del")
+    assert gone.status_code == 404 and gone.json()["detail"]["code"] == "not_found"
+
+    turn_activity.begin("chat-running")
+    try:
+        running = client.get("/api/chat/sessions/chat-running").json()
+    finally:
+        turn_activity.end("chat-running")
+    assert running["active"] is True and running["turn_count"] == 0
+
+
+def test_session_summary_route_without_a_task_store_reports_known(monkeypatch):
+    import runtime.state as rs
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    assert client.get("/api/chat/sessions/chat-x").json() == {
+        "session_id": "chat-x",
+        "active": False,
+        "turn_count": None,
+        "last_updated": None,
+        "last_state": None,
+    }
+
+
 def test_delete_session_forget_failure_fails_the_delete(monkeypatch):
     """A forget that fails must not report success: the delete fails before anything is
     retired, so the console keeps the tab and the operator can retry."""

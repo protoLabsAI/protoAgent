@@ -50,6 +50,7 @@ from google.protobuf import json_format, struct_pb2
 import protolabs_a2a as pa
 
 from a2a_impl import hitl_routing
+from runtime.session_ids import session_id_problem
 
 logger = logging.getLogger(__name__)
 
@@ -506,6 +507,14 @@ class ProtoAgentExecutor(AgentExecutor):
         # refused HITL answer to the context's current pause.)
         if context.current_task is not None and _is_terminal(context.current_task):
             raise InvalidParamsError(message=f"Task {context.task_id} has already ended")
+        # Backstop only: the entry-point check (hitl_routing.check_context_id, installed on
+        # the handler's send methods) refuses an unusable contextId before the SDK creates a
+        # task. Reaching here means a handler without that wrapper — the turn is still
+        # refused, but the SDK records the raise as a FAILED task under this context.
+        _ctx = str(context.context_id or "")
+        _ctx_problem = session_id_problem(_ctx) if _ctx else None
+        if _ctx_problem is not None:
+            raise InvalidParamsError(message=f"Invalid contextId: {_ctx_problem}")
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
         # One parked task per context (#3930). A turn that ANSWERED the pause (a resume, or
