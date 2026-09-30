@@ -1127,6 +1127,22 @@ async def test_overflow_compacts_then_retries_once_with_the_recovery_prompt(env,
 
 
 @pytest.mark.asyncio
+async def test_the_overflow_retry_still_names_the_turn_holding_the_lock(env, compaction):
+    """#3963: the retry re-takes the thread lock for the same task, so it names itself as the
+    holder again — otherwise the durable turns reader falls back to row order mid-retry."""
+    from runtime import turn_activity
+
+    env.install(streams=[[Raise(ValueError(_OVERFLOW))], [text("r1", "recovered")]])
+    gen = chat_mod._chat_langgraph_stream("big ask", "s-ovf", request_metadata={"a2a.task_id": "task-ovf"})
+    seen = []
+    async for frame in gen:
+        if frame[0] == "text":
+            seen.append(turn_activity.holding_task("s-ovf"))
+    assert seen == ["task-ovf"]
+    assert turn_activity.holding_task("s-ovf") is None
+
+
+@pytest.mark.asyncio
 async def test_goal_overflow_retry_runs_the_bare_recovery_prompt_not_a_second_kickoff(env, compaction, monkeypatch):
     """#3891 F1: on the first goal turn the kickoff wraps the OPERATOR's message; the
     overflow retry re-runs that same turn with the recovery prompt, unwrapped."""

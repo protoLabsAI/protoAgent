@@ -1541,7 +1541,11 @@ async def _chat_langgraph_stream_impl(
                     # The retry is the same turn: it keeps the fence the failed pass ran
                     # under, narrowed by anything it folded in — never a wider one.
                     _retry_fence = await _turn_stream._carried_fence(config, _metadata_fence(request_metadata))
-                    async with _turn_control._thread_lock(_tid):
+                    async with (
+                        _turn_control._thread_lock(_tid),
+                        # The retry is still this task holding the lock (#3963).
+                        _turn_activity.holding(session_id, str((request_metadata or {}).get("a2a.task_id") or "")),
+                    ):
                         # Same class as the initial turn (ADR 0115 D6) — the retry is the
                         # same operator/A2A turn, just after a force-compact.
                         with _turn_control._interactive_turn_priority((request_metadata or {}).get("origin")):
