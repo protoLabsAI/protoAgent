@@ -117,6 +117,38 @@ def test_checks_workflow_preserves_stable_gate_and_full_suite_shards() -> None:
     assert "web_tests: ${{ steps.scope.outputs.web_tests }}" in workflow
 
 
+def test_duration_seed_is_regenerated_on_windows_like_the_shards_run() -> None:
+    """#3892: the pytest-split seed must come from a Windows run that mirrors the shards."""
+
+    import yaml
+
+    text = (ROOT / ".github" / "workflows" / "windows-test-durations.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    triggers = workflow[True]  # YAML 1.1 reads the bare `on:` key as a boolean
+    assert "workflow_dispatch" in triggers
+    assert workflow["permissions"] == {"contents": "read"}
+
+    measure = workflow["jobs"]["measure"]
+    assert measure["runs-on"] == "windows-latest"
+    assert measure["env"]["PYTHONUTF8"] == "1"
+    assert "permissions" not in measure  # the test run never holds a write token
+    steps = "\n".join(str(step.get("run", "")) for step in measure["steps"])
+    assert "uv sync --frozen --python 3.12" in steps
+    assert "uv pip install pytest pytest-asyncio pytest-split==0.11.0" in steps
+    assert "tests/windows_native_exclusions.txt" in steps
+    assert "--store-durations --clean-durations" in steps
+    assert "--durations-path tests/windows_test_durations.json" in steps
+    assert "platform_sensitive" not in steps  # the seed covers the nightly full suite too
+    uv_pins = [s["with"]["version"] for s in measure["steps"] if "setup-uv" in s.get("uses", "")]
+    checks = (ROOT / ".github" / "workflows" / "checks.yml").read_text(encoding="utf-8")
+    assert uv_pins and all(f'version: "{pin}"' in checks for pin in uv_pins)
+
+    assert workflow["jobs"]["open-pr"]["permissions"] == {"contents": "write", "pull-requests": "write"}
+    for line in text.splitlines():
+        if line.strip().startswith("runs-on:"):
+            assert "# workspace-config: allow-hosted-runner" in line
+
+
 def test_web_gate_runs_only_for_paths_the_web_job_consumes() -> None:
     """Python-only PRs skip the web job; anything it reads keeps it."""
 
