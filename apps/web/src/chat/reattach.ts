@@ -21,6 +21,17 @@
 //      (or holding the session "streaming" while the poller spins) would leave
 //      the form's buttons dead (#3082).
 //
+//      The server does NOT close `SubscribeToTask` for a paused task, and must not:
+//      input-required is an INTERRUPTED state, not a terminal one, and the stream
+//      ends only at a terminal state (A2A §3.1.6) — the same task continues when
+//      the operator answers (§3.4.3). So "stream closed" can never be how a
+//      reattach learns a turn is paused. The moment the stream reports a paused
+//      state — the opening snapshot, or a live status update when the turn parks
+//      while we're attached — the reattach settles as paused and lets go of the
+//      stream. Waiting for the close held the session "streaming" (Stop up, the
+//      form's Send/Dismiss disabled) for as long as the operator didn't answer
+//      the form they couldn't answer (#3930).
+//
 // Kept store-only (no component state) so any surface can mount it; HITL and
 // transient-status hooks are injected by the caller.
 
@@ -111,6 +122,27 @@ export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatM
     );
 }
 
+/** The paused bubble a HITL answer just answered, settled. A reattach that found its turn
+ *  PAUSED leaves the bubble `streaming` on purpose — the turn was not over — and the answer
+ *  then continues the task in a NEW bubble (a form/question answer), so nothing else would
+ *  ever settle the old one: it spun its `ask_human` card and its spinner for good (#3930).
+ *  Marks `messageId` done, with any still-running tool card done too (the answer's own
+ *  stream closes that card in the new bubble). A bubble that is not streaming is left
+ *  alone. */
+export function settleAnsweredPause(messages: ChatMessage[], messageId: string | undefined): ChatMessage[] {
+  if (!messageId) return messages;
+  return messages.map((m) =>
+    m.id === messageId && m.status === "streaming"
+      ? {
+          ...m,
+          status: "done",
+          durableSnapshotFallback: undefined,
+          toolCalls: m.toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" as const } : c)),
+        }
+      : m,
+  );
+}
+
 /** Stable dependency key for the session slot's reattach effect. Hydration can
  * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
  * to trigger the effect when its durable streaming assistant appears later. */
@@ -190,6 +222,17 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     endClaim();
     reconcileSessionStatus(sessionId);
   }
+
+  // Set once the subscription reports the task PAUSED on the operator (step 4 above).
+  // `detached` then mutes whatever the dropped stream still delivers: the desktop relay
+  // cannot be aborted, and an answer continuing this task must not be written into the
+  // bubble by a producer that already let go of it.
+  let paused = false;
+  let detached = false;
+  let onPaused: () => void = () => {};
+  const pausedSignal = new Promise<"paused">((resolve) => {
+    onPaused = () => resolve("paused");
+  });
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
@@ -271,32 +314,71 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     }
   }
 
+  // The subscription's handlers: the shared ones, muted once the stream is let go, plus the
+  // paused-state watch.
+  const streamHandlers: TurnStreamHandlers = {
+    ...(Object.fromEntries(
+      Object.entries(handlers).map(([key, value]) => [
+        key,
+        typeof value === "function"
+          ? (...args: unknown[]) => {
+              if (!detached) (value as (...a: unknown[]) => void)(...args);
+            }
+          : value,
+      ]),
+    ) as TurnStreamHandlers),
+    onTaskState: (state) => {
+      if (detached || !PAUSED.test(state)) return;
+      paused = true;
+      detached = true;
+      onPaused();
+      controller.abort(); // release the socket the server keeps open for the answer
+    },
+  };
+
+  /** Paused on the operator: un-busy the session so the re-rendered form's buttons work,
+   *  but DON'T finalize — stamping the message "done" would misrepresent a turn the
+   *  server still owns. Mirrors the live path, where a stream ending on input-required
+   *  lands on idle without touching the message. */
+  function settlePaused() {
+    chatStore.setSessionStatus(sessionId, "idle");
+  }
+
   async function run() {
     chatStore.setSessionStatus(sessionId, "streaming");
     for (let attempt = 0; attempt < MAX_ATTEMPTS && !cancelled; attempt++) {
       try {
-        await api.resumeTask(taskId, sessionId, handlers);
+        const subscription = Promise.resolve(api.resumeTask(taskId, sessionId, streamHandlers));
+        // Once paused, the subscription's own end (an abort error, or never on desktop)
+        // is no longer anyone's business.
+        subscription.catch(() => {});
+        const outcome = await Promise.race([subscription.then(() => "closed" as const), pausedSignal]);
+        if (cancelled) return;
+        if (outcome === "paused") {
+          settlePaused();
+          return;
+        }
         // Stream closed = the turn is over (terminal-by-state, A2A 1.0). Confirm
         // and finalize off the durable task.
-        if (cancelled) return;
         const { state, text } = await api.getTask(taskId).catch(() => ({ state: "completed", text: "" }));
         // Cancelled while GetTask was out: the cancel already handed the session back, and a
         // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
         // Send live), inviting a second concurrent turn into this slot.
         if (cancelled) return;
         if (PAUSED.test(state)) {
-          // Waiting on the operator (HITL / auth): un-busy the session so the
-          // re-rendered form's buttons work, but DON'T finalize — stamping the
-          // message "done" would misrepresent a turn the server still owns.
-          // Mirrors the live path, where the stream closing on input-required
-          // lands on idle without touching the message.
-          chatStore.setSessionStatus(sessionId, "idle");
+          // Paused with no paused frame on the stream (an older server, or a stream that
+          // closed as the task parked): same settle.
+          settlePaused();
           return;
         }
         finalize(sessionId, assistantId, state || "completed", text);
         return;
       } catch (err) {
         if (cancelled) return;
+        if (paused) {
+          settlePaused();
+          return;
+        }
         if (COLD.test(String(err))) {
           await new Promise((r) => setTimeout(r, BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)]));
           continue;

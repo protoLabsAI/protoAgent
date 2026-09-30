@@ -1145,6 +1145,7 @@ def _main():
 
     from a2a_impl import auth
     from a2a_impl.executor import set_progress_hook, set_terminal_hook
+    from a2a_impl.hitl_routing import install_parked_task_routing
     from a2a_impl.registry import harden_active_task_registry
     from a2a_impl.stores import (
         build_a2a_stores,
@@ -1344,6 +1345,10 @@ def _main():
     # flush) or cancelled+awaited before the last reference drops. Remove once the
     # SDK ships the fix and the pin moves past 1.1.0 (see a2a_impl/registry.py).
     harden_active_task_registry(a2a_request_handler)
+    # One parked HITL task per context (#3930): a console form answer sent without the
+    # parked task's id continues THAT task (A2A §3.4.3), and a pause re-raised on a newer
+    # task settles the older one — no input-required task is left orphaned.
+    install_parked_task_routing(a2a_request_handler)
     # The handler captured the card at construction; register it so a hot reload
     # that changes the skill set (server.a2a.refresh_served_card) updates its
     # copy in lockstep with the served route (#2754).

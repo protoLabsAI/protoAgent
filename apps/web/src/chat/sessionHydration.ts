@@ -132,6 +132,29 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
       );
       assistant = fresh();
     },
+    onContinuationMessage: (message) => {
+      // The operator's answer to a paused turn, sent on the SAME task (#3930): the turn
+      // splits there, exactly as it did live — the work before the pause, the answer
+      // bubble, then the work after. A hidden send (an approval, a dismissal, a settle)
+      // continued the bubble without one, so it splits nothing.
+      if (!isOperatorMessage(message) || message.metadata?.hidden === true) return;
+      const display = message.metadata?.display;
+      const text = typeof display === "string" ? display : textFromParts(message.parts);
+      if (!text) return;
+      if (!isEmptyPlaceholder(assistant)) {
+        settled.push({
+          ...assistant,
+          id: `${anchorId}-${settled.length}`,
+          status: "done",
+          splitOf: anchorId,
+          toolCalls: assistant.toolCalls?.map((call) =>
+            call.status === "running" ? { ...call, status: "done" as const } : call,
+          ),
+        });
+      }
+      settled.push({ id: `${anchorId}-answer-${settled.length}`, role: "user", content: text, status: "done" });
+      assistant = fresh();
+    },
     onReasoning: (delta) => {
       assistant = applyReasoning(assistant, delta);
     },

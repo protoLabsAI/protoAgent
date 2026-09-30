@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,6 +47,8 @@ from a2a.types import Message, Part, Task, TaskState, TaskStatus
 from google.protobuf import json_format, struct_pb2
 
 import protolabs_a2a as pa
+
+from a2a_impl import hitl_routing
 
 logger = logging.getLogger(__name__)
 
@@ -481,8 +484,22 @@ class ProtoAgentExecutor(AgentExecutor):
         # initial Task before any TaskStatusUpdateEvent), then transitioned to
         # working.
         resume = bool(context.current_task and _is_input_required(context.current_task))
+        # A parked task another task superseded (#3930): its pause was answered, or re-parked,
+        # on that other task, so this one is over. Complete it with a pointer — no graph run.
+        superseded_by = hitl_routing.take_settle(context.message)
+        if superseded_by is not None:
+            await updater.complete(
+                message=updater.new_agent_message([_text_part(f"Continued in task {superseded_by}.")])
+            )
+            return
         # Provenance for the Activity feed (ADR 0022): what triggered this turn.
         _md = _request_metadata(context)
+        if resume or _md.get("hitl_resume"):
+            # This turn answers the context's pending interrupt: any OTHER task still
+            # parked in the context waited on that same pause and is now answered (#3930).
+            hitl_routing.schedule_settle_siblings(
+                context.context_id, context.task_id, getattr(context, "call_context", None)
+            )
         _origin = str(_md.get("origin", "") or "")
         if not resume:
             await event_queue.enqueue_event(
@@ -580,7 +597,12 @@ class ProtoAgentExecutor(AgentExecutor):
         # final text + the cost/context DataParts — so the durable task and any
         # re-fetch carry the answer exactly once (and a goal retry that changed the
         # text still finalizes correctly).
+        # A resumed leg (a HITL answer continuing its parked task, #3930) streams into an
+        # artifact of its own: reusing the first leg's id would REPLACE the answer text the
+        # task streamed before it paused, and the durable task would lose it.
         answer_aid = f"{context.task_id or 'turn'}-answer"
+        if resume:
+            answer_aid = f"{answer_aid}-resumed-{uuid.uuid4().hex[:8]}"
         _text_buf = ""
         _answer_started = False  # first chunk creates the artifact (append=False); rest append
         # Batched by a char threshold OR an elapsed-time floor, whichever trips
@@ -976,6 +998,12 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         parts.append(_data_part_proto(payload, HITL_MIME))
                     await updater.requires_input(message=updater.new_agent_message(parts))
+                    # One parked task per context (#3930): a pause re-raised here (a
+                    # composer message held behind the pending form re-parks on the same
+                    # interrupt) supersedes any older task still parked on it.
+                    hitl_routing.schedule_settle_siblings(
+                        context.context_id, context.task_id, getattr(context, "call_context", None)
+                    )
                     # The park leg is a real turn with real spend (#2943): every model
                     # call made before the pause belongs to a row of its own, or HITL
                     # flows — the expensive turn class — vanish from telemetry. The
