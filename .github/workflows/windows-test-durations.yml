@@ -134,7 +134,7 @@ jobs:
             echo "Seed unchanged — no PR."
             exit 0
           fi
-          BRANCH="ci/windows-test-durations-${GITHUB_RUN_ID}"
+          BRANCH="ci/windows-test-durations-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
