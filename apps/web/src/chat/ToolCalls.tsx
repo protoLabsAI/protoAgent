@@ -6,6 +6,7 @@ import {
   Globe,
   Hourglass,
   Network,
+  PauseCircle,
   Search,
   SlidersHorizontal,
   Square,
@@ -434,7 +435,10 @@ function ToolGroup({
   // It reports AGE, not liveness: the value is `now - startedAt`, so it climbs the same
   // whether the call is working or wedged. Nothing client-side can tell those apart —
   // that is the server's job (a wedged turn is failed by the stall watchdog, #2349).
-  const elapsedMs = useElapsed(call.status === "running" ? call.startedAt : undefined);
+  // A call whose turn PARKED on the operator (#3946 — an `ask_human` waiting on its form)
+  // isn't working: no spinner, no climbing timer, just "waiting for you".
+  const waiting = call.status === "running" && call.paused === true;
+  const elapsedMs = useElapsed(call.status === "running" && !waiting ? call.startedAt : undefined);
   const showElapsed = elapsedMs !== undefined && elapsedMs >= SHOW_ELAPSED_AFTER_MS;
 
   // Context cost of the result, estimated from its size (#2282). Only on settled calls
@@ -455,6 +459,12 @@ function ToolGroup({
         <span className="tool-elapsed" title="How long this call has been running">
           {" · "}
           {formatElapsed(elapsedMs)}
+        </span>
+      ) : null}
+      {waiting ? (
+        <span className="tool-waiting" title="The turn is paused until you answer">
+          {" · "}
+          <PauseCircle size={11} aria-hidden /> waiting for you
         </span>
       ) : null}
       {costTokens !== null ? (
@@ -478,7 +488,10 @@ function ToolGroup({
   return (
     <ToolCard
       name={name}
-      status={call.status}
+      // The DS has no paused glyph: a waiting card drops the spinner (done frame, glyph
+      // hidden by .tool-paused) and says "waiting for you" in its header instead.
+      status={waiting ? "done" : call.status}
+      className={waiting ? "tool-paused" : undefined}
       icon={<Icon size={13} />}
       duration={call.durationMs}
       actions={actions}

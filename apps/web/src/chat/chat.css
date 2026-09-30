@@ -650,6 +650,16 @@
   opacity: 0.45;
 }
 
+/* A turn PAUSED on the operator (#3946): a quiet, static cue where the streaming spinner
+   would be. The turn is waiting on the HITL form, not working. */
+.chat-paused-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  margin-top: var(--pl-space-1_5);
+  color: var(--pl-color-fg-subtle);
+}
+
 /* Stop (while streaming) and the queued-steer bubble are now the DS busy mode +
    <Message queued> (0.42.0) — see ChatSurface. No bespoke CSS needed here. */
 

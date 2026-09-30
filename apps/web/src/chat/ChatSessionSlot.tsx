@@ -55,7 +55,13 @@ import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./tur
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
-import { leadAssistantMessage, reattachKeyForMessages, reattachOrReconcile, settleAnsweredPause } from "./reattach";
+import {
+  leadAssistantMessage,
+  reattachKeyForMessages,
+  reattachOrReconcile,
+  settleAnsweredPause,
+  unpauseBubble,
+} from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { loadDraft, loadScroll, saveDraft, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
@@ -993,7 +999,7 @@ export function ChatSessionSlot({
     chatStore.updateMessages(
       session.id,
       resuming
-        ? base.map((m) => (m.id === assistantId ? { ...m, status: "streaming" } : m))
+        ? base.map((m) => (m.id === assistantId ? { ...unpauseBubble(m), status: "streaming" } : m))
         : opts.hidden
           ? [...base, assistant]
           : [

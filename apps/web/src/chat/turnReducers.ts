@@ -70,7 +70,7 @@ export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessag
     const durationMs = startedAt !== undefined ? now - startedAt : undefined;
     const endStatus = evt.error ? ("error" as const) : ("done" as const);
     if (idx >= 0) {
-      calls[idx] = { ...calls[idx], output: evt.output, outputChars: evt.outputChars, status: endStatus, durationMs };
+      calls[idx] = { ...calls[idx], output: evt.output, outputChars: evt.outputChars, status: endStatus, durationMs, paused: undefined };
     } else {
       // Missed start — treat as a fresh top-level call so it still renders.
       calls.push({ id: evt.id, name: evt.name, output: evt.output, outputChars: evt.outputChars, status: endStatus });
@@ -93,4 +93,23 @@ export function applyComponent(message: ChatMessage, spec: ComponentSpec): ChatM
 
 export function applyUsage(message: ChatMessage, usage: TurnUsage): ChatMessage {
   return { ...message, usage };
+}
+
+/** One bubble, paused: the flag, and its running cards marked waiting. */
+export function pauseBubble(m: ChatMessage): ChatMessage {
+  return {
+    ...m,
+    paused: true,
+    toolCalls: m.toolCalls?.map((c) => (c.status === "running" ? { ...c, paused: true } : c)),
+  };
+}
+
+/** One bubble, resumed: the pause cleared off it and its cards (the turn continues). */
+export function unpauseBubble(m: ChatMessage): ChatMessage {
+  if (!m.paused && !m.toolCalls?.some((c) => c.paused)) return m;
+  return {
+    ...m,
+    paused: undefined,
+    toolCalls: m.toolCalls?.map((c) => (c.paused ? { ...c, paused: undefined } : c)),
+  };
 }

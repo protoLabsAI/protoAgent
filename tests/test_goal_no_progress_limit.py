@@ -25,13 +25,15 @@ async def test_parse_control_accepts_no_progress_limit(tmp_path):
     assert g.no_progress_limit == 5
 
 
-def test_set_goal_safe_accepts_no_progress_limit(tmp_path):
+def test_set_goal_safe_accepts_no_progress_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"x:y": object()})
     c = _ctrl(tmp_path)
     ok, _ = c.set_goal_safe("s", "cond", {"type": "plugin", "check": "x:y"}, no_progress_limit=7)
     assert ok and c.active_goal("s").no_progress_limit == 7
 
 
-def test_default_is_none(tmp_path):
+def test_default_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"x:y": object()})
     c = _ctrl(tmp_path)
     c.set_goal_safe("s", "cond", {"type": "plugin", "check": "x:y"})
     assert c.active_goal("s").no_progress_limit is None  # → config fallback

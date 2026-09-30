@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, Timer, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Timer, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -80,7 +80,11 @@ export function ChatMessageView({
    *  live message's own activity spinner — so the turn has ONE cue, not two. */
   activityLabel?: string | null;
 }) {
-  const streaming = message.status === "streaming";
+  // A turn PAUSED on the operator (#3946) keeps status "streaming" — the server still owns
+  // it — but nothing is producing, so it renders settled-and-waiting, not live: no
+  // spinner, no streaming placeholder, and a "waiting for your input" cue instead.
+  const paused = message.status === "streaming" && message.paused === true;
+  const streaming = message.status === "streaming" && !paused;
   // Per-turn token/cost footer is an opt-out display pref (Settings ▸ Chat, #1372).
   const showChatUsage = useUI((s) => s.showChatUsage);
   // An issued slash command (/goal …) renders as a distinct user bubble (subtle tint /
@@ -264,6 +268,12 @@ export function ChatMessageView({
         <div className="chat-streaming-indicator">
           <Spinner size={12} />
           {activityLabel ? <span className="chat-streaming-label">{activityLabel}</span> : null}
+        </div>
+      ) : null}
+      {paused ? (
+        <div className="chat-paused-indicator" role="status">
+          <PauseCircle size={13} aria-hidden />
+          <span>Waiting for your input</span>
         </div>
       ) : null}
       {/* Footer meta row (#3458): usage stats and the sent time on one line (see showUsage and
