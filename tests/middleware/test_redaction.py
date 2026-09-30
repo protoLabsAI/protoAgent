@@ -366,3 +366,45 @@ def test_redact_does_not_mutate_original():
     original = {"OPENAI_API_KEY": "sk-real-key-1234567890abcdef"}
     _ = redact(original)
     assert original["OPENAI_API_KEY"] == "sk-real-key-1234567890abcdef"
+
+
+# ---------------------------------------------------------------------------
+# #3816: env-var assignment redaction keeps the surrounding source parseable
+# ---------------------------------------------------------------------------
+#
+# Fixtures are assembled from pieces so no key-shaped literal sits in this file.
+_K = "OPENAI_" + "API_KEY"
+_V = "sk-" + "Z" * 40
+
+
+def test_env_var_redaction_keeps_a_python_string_literals_closing_quote():
+    src = '"entries": [{"content": "rotate ' + _K + "=" + _V + '" + "Z" * 40 + " for acme"}]'
+    out = redact(src)
+    assert _V not in out
+    assert out == '"entries": [{"content": "rotate ' + _K + '=[REDACTED]" + "Z" * 40 + " for acme"}]'
+
+
+def test_env_var_redaction_keeps_a_json_values_closing_quote():
+    out = redact('{"env": "' + _K + "=" + _V + '", "n": 1}')
+    assert _V not in out and out == '{"env": "' + _K + '=[REDACTED]", "n": 1}'
+
+
+def test_env_var_redaction_keeps_a_markdown_code_spans_closing_backtick():
+    out = redact("(`export " + _K + "=" + _V + "`) then restart")
+    assert _V not in out and out == "(`export " + _K + "=[REDACTED]`) then restart"
+
+
+def test_env_var_redaction_still_covers_a_quoted_value():
+    """The value class stops at quotes, so a value that STARTS with one must still be
+    redacted — keep the opening quote, redact what it wraps, keep the closing one."""
+    for q in ('"', "'", "`"):
+        out = redact(_K + "=" + q + _V + q)
+        assert _V not in out and out == _K + "=" + q + "[REDACTED]" + q
+    assert redact("A2A_AUTH_" + "TOKEN: 'abc123def456'") == "A2A_AUTH_" + "TOKEN: '[REDACTED]'"
+
+
+def test_env_var_redaction_does_not_rewrap_an_already_redacted_value():
+    # generic_api_key runs first and leaves `api_key=[REDACTED]`; the env-var pass must
+    # not turn that into `[REDACTED]]`.
+    out = redact("api_" + "key=" + "abcdefghijklmnop1234")
+    assert out.count("[REDACTED]") == 1 and "]]" not in out

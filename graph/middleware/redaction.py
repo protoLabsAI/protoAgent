@@ -41,7 +41,13 @@ PATTERNS: dict[str, re.Pattern] = {
         r"(?i)\b(OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
         r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|PUBLIC_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
         r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
-        r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET)\s*[=:]\s*\S+",
+        r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET)\s*[=:]\s*"
+        # The value, format-preserving (#3816): an optional opening quote, then up to the
+        # first whitespace or closing delimiter. `\S+` swallowed a closing quote/backtick
+        # too, so redacted source stopped parsing and a reviewer reading through this
+        # layer FAILed a PR on a syntax error that wasn't on disk. Already-redacted values
+        # (an earlier pattern got there first) are left alone rather than re-wrapped.
+        r"[\"'`]?(?!\[REDACTED\])[^\s\"'`)\]}>]+",
     ),
 }
 
@@ -121,7 +127,7 @@ def _redact_string_simple(value: str) -> str:
         key = m.group(1)
         # find the separator and everything after
         rest = full[len(key) :]
-        sep_match = re.match(r"\s*[=:]\s*", rest)
+        sep_match = re.match(r"\s*[=:]\s*[\"'`]?", rest)  # keep an opening quote too
         if sep_match:
             return key + sep_match.group(0) + _PLACEHOLDER
         return key + _PLACEHOLDER
