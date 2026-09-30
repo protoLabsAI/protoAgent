@@ -56,7 +56,7 @@ import {
   applyReasoning,
   applyText,
   applyToolEvent,
-  isParkedState,
+  createParkTracker,
   settleStreamEnd,
 } from "./turnReducers";
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
@@ -1044,8 +1044,7 @@ export function ChatSessionSlot({
     // leaves the bubble streaming + paused rather than settling it done. A plugin composer
     // form rides the same frame but parks no graph (its redeem completes the task
     // server-side), so it settles as before.
-    let parkedOnOperator = false;
-    let pluginForm = false;
+    const park = createParkTracker();
 
     // Reveal queue (#2993): streamed answer deltas don't render the instant
     // their frame arrives — they drip out at a steady ~word cadence. Diagnosis
@@ -1181,7 +1180,7 @@ export function ChatSessionSlot({
           }
         },
         onInputRequired: (payload) => {
-          if (payload.plugin_callback_id) pluginForm = true;
+          park.inputRequired(payload);
           updateHitl(payload);
           // Alert natively if the window is hidden/unfocused (menu-bar-only
           // desktop, or a backgrounded tab) so the form isn't missed.
@@ -1193,16 +1192,17 @@ export function ChatSessionSlot({
         onTaskState: (state) => {
           // The latest state wins: a turn that parks is marked paused at once, so its
           // in-flight card reads "waiting for you" while the form is up (#3956).
-          const parked = isParkedState(state) && !pluginForm;
-          if (parked === parkedOnOperator) return;
-          parkedOnOperator = parked;
-          if (!parked) return;
-          reveal.flush();
+          // A working state after a park un-parks the bubble (the turn is producing again).
+          const transition = park.taskState(state);
+          if (!transition) return;
+          if (transition === "parked") reveal.flush();
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
             session.id,
-            latest.messages.map((m) => (m.id === assistantId ? settleStreamEnd(m, { parked: true }) : m)),
+            latest.messages.map((m) =>
+              m.id !== assistantId ? m : transition === "parked" ? settleStreamEnd(m, { parked: true }) : unpauseBubble(m),
+            ),
           );
         },
         onText: (text, append) => {
@@ -1399,7 +1399,7 @@ export function ChatSessionSlot({
           }
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          if (parkedOnOperator) {
+          if (park.parked) {
             // Parked, not over (#3956): the bubble stays streaming + paused — waiting now,
             // and the bubble a reload's reattach resubscribes to its own task through.
             chatStore.updateMessages(
@@ -1483,7 +1483,7 @@ export function ChatSessionSlot({
       // the durable task — the server's artifact is the source of truth and a
       // straight REPLACE collapses any doubled/lost-chunk divergence. Skipped on
       // every healthy turn (the terminal frame sets sawAuthoritativeText).
-      if (!sawAuthoritativeText && turnTaskId && !parkedOnOperator) {
+      if (!sawAuthoritativeText && turnTaskId && !park.parked) {
         try {
           const res = await api.getTask(turnTaskId);
           if (/completed/i.test(res.state) && res.text) {
@@ -1512,6 +1512,21 @@ export function ChatSessionSlot({
           setStatusMessage("stopped");
           chatStore.setSessionStatus(session.id, "idle");
         }
+      } else if (park.parked) {
+        // The stream failed AFTER the turn parked (#3956 review): a dropped socket or an
+        // error frame behind the input-required one. The turn is still parked server-side —
+        // the form is up and its answer continues the task — so settle it as parked, not as
+        // an error: streaming + paused with its task id, which a reload reattaches through.
+        reveal.flush();
+        const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+        if (latest) {
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((m) => (m.id === assistantId ? settleStreamEnd(m, { parked: true }) : m)),
+          );
+        }
+        chatStore.setSessionStatus(session.id, "idle");
+        setStatusMessage("idle");
       } else {
         const message = errMsg(exc);
         onError(message);

@@ -849,6 +849,25 @@ async function handleLivePark(res, body, prompt, sessionId) {
   }
   const taskId = `task-paused-ask_human-live-${sessionId}`;
   const question = `Which fruit goes with ${park[1]}?`;
+  // "PARK_ASK_HUMAN PLUGINFORM": a plugin composer form (#1701) on the same input-required
+  // frame. It parks no graph (its redeem completes the task server-side), so the console
+  // must NOT leave the turn paused.
+  if (park[1] === "PLUGINFORM") {
+    const formTask = `task-plugin-form-${sessionId}`;
+    await send(wrap({ kind: "task", id: formTask, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+    await send(status(formTask, "input-required", {
+      message: {
+        role: "agent",
+        parts: [{
+          kind: "data",
+          data: { question: "Plugin form question?", plugin_callback_id: "cb-e2e-1" },
+          metadata: { mimeType: HITL_MIME },
+        }],
+      },
+    }));
+    res.end();
+    return true;
+  }
   liveParks.set(taskId, { sessionId, question });
   await send(wrap({ kind: "task", id: taskId, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
   await send(status(taskId, "working", {
@@ -861,6 +880,15 @@ async function handleLivePark(res, body, prompt, sessionId) {
   await send(status(taskId, "input-required", {
     message: { role: "agent", parts: [{ kind: "data", data: { question }, metadata: { mimeType: HITL_MIME } }] },
   }));
+  // The stream fails AFTER the park (#3956 review): "DROPNET" drops the socket, "ERRFRAME"
+  // sends a JSON-RPC error frame. The task is still parked server-side either way.
+  if (park[1] === "DROPNET") {
+    res.destroy();
+    return true;
+  }
+  if (park[1] === "ERRFRAME") {
+    await send({ jsonrpc: "2.0", id: rpcId, error: { code: -32000, message: "stream failed after the park" } });
+  }
   res.end();
   return true;
 }

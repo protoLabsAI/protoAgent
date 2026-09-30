@@ -137,14 +137,46 @@ export function isParkedState(state: string | undefined): boolean {
 export function settleStreamEnd(message: ChatMessage, opts: { parked: boolean; now?: number }): ChatMessage {
   if (opts.parked) return message.status === "streaming" ? pauseBubble(message) : message;
   const now = opts.now ?? Date.now();
+  // Done clears any pause too: a settled bubble never reads as waiting.
   const toolCalls = message.toolCalls?.map((c) =>
     c.status === "running"
       ? {
           ...c,
           status: "done" as const,
+          paused: undefined,
           durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
         }
-      : c,
+      : c.paused
+        ? { ...c, paused: undefined }
+        : c,
   );
-  return { ...message, status: "done", toolCalls };
+  return { ...message, status: "done", paused: undefined, toolCalls };
+}
+
+/** Tracks whether a LIVE stream's turn is parked on the operator (#3956), off the frame
+ *  dispatcher's `onInputRequired` / `onTaskState`.
+ *
+ *  A plugin composer form (#1701) rides the same input-required frame but parks no graph —
+ *  its redeem completes the task server-side — so it never counts as parked. That exclusion
+ *  leans on the dispatcher's order within one status frame: `onInputRequired` (which carries
+ *  the payload, and so the `plugin_callback_id`) fires BEFORE `onTaskState` (lib/api/
+ *  a2aStream.ts, pinned by turnReducers.test.ts). The latest state wins: a working state
+ *  after a park un-parks. `taskState` returns the transition, or null for none. */
+export function createParkTracker() {
+  let parked = false;
+  let pluginForm = false;
+  return {
+    get parked() {
+      return parked;
+    },
+    inputRequired(payload: { plugin_callback_id?: string }) {
+      if (payload.plugin_callback_id) pluginForm = true;
+    },
+    taskState(state: string): "parked" | "unparked" | null {
+      const next = isParkedState(state) && !pluginForm;
+      if (next === parked) return null;
+      parked = next;
+      return next ? "parked" : "unparked";
+    },
+  };
 }

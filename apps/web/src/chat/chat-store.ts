@@ -450,7 +450,8 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   for (const session of sessions) {
     if (!hydratedIds.has(session.id)) continue;
     const last = [...session.messages].reverse().find((message) => message.role === "assistant");
-    if (last?.status === "streaming" && last.taskId) sessionStatusMap[session.id] = "streaming";
+    // A parked (paused) turn is not producing — same rule as bootLiveTurns (#3956).
+    if (last?.status === "streaming" && last.taskId && !last.paused) sessionStatusMap[session.id] = "streaming";
     else if (last?.status === "error") sessionStatusMap[session.id] = "error";
   }
   return { ...current, sessions, currentSessionId, activeSessions, sessionStatusMap };
@@ -655,23 +656,36 @@ let initial = loadPersisted();
 // persistence: the transcript is already the durable truth, and a persisted
 // status map could lie about a turn that ended while the tab was closed —
 // the reattach settles each derived `streaming` to idle/error from the task.
-function sessionsWithLiveTurns(persisted: PersistedChatState): string[] {
-  return persisted.sessions
-    .filter((session) => {
-      const last = [...session.messages].reverse().find((m) => m.role === "assistant");
-      return last?.status === "streaming" && !!last.taskId;
-    })
-    .map((session) => session.id);
+//
+// A turn PARKED on the operator (its bubble paused — an `ask_human` question, a form, an
+// approval, #3956) is in flight too, and still comes back active so its reattach brings the
+// form back — but it is NOT marked `streaming`: nothing is producing into it. Only
+// MAX_ACTIVE_SESSIONS slots mount, and a parked session past that cap would otherwise hold
+// a streaming tab dot, the rail's any-streaming dot and a retirement block until opened.
+// Opening it mounts its slot, and the reattach runs off the bubble, not the status.
+export function bootLiveTurns(
+  persisted: PersistedChatState,
+): Pick<ChatState, "activeSessions" | "sessionStatusMap"> {
+  const working: string[] = [];
+  const parked: string[] = [];
+  for (const session of persisted.sessions) {
+    const last = [...session.messages].reverse().find((m) => m.role === "assistant");
+    if (last?.status !== "streaming" || !last.taskId) continue;
+    (last.paused ? parked : working).push(session.id);
+  }
+  // Mount order: the focused tab, then turns still producing, then parked ones.
+  const activeSessions = [
+    ...new Set([...(persisted.currentSessionId ? [persisted.currentSessionId] : []), ...working, ...parked]),
+  ].slice(0, MAX_ACTIVE_SESSIONS);
+  return {
+    activeSessions,
+    sessionStatusMap: Object.fromEntries(working.map((id) => [id, "streaming" as SessionStatus])),
+  };
 }
 
-const resumeIds = sessionsWithLiveTurns(initial);
 let state: ChatState = {
   ...initial,
-  activeSessions: [
-    ...(initial.currentSessionId ? [initial.currentSessionId] : []),
-    ...resumeIds.filter((id) => id !== initial.currentSessionId),
-  ].slice(0, MAX_ACTIVE_SESSIONS),
-  sessionStatusMap: Object.fromEntries(resumeIds.map((id) => [id, "streaming" as SessionStatus])),
+  ...bootLiveTurns(initial),
   pendingDeleteRequest: null,
   pendingClearRequest: null,
   serverTurnControls: {},

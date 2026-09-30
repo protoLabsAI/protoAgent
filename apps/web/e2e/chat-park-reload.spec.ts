@@ -155,3 +155,60 @@ test("two sessions parked at once each reattach to their own task after a reload
     `You like grape. (resumed ${taskFor(first)} in ${first})`,
   );
 });
+
+// #3956 review: the stream can fail AFTER the park — a dropped socket, or an error frame
+// behind the input-required one. The task is still parked server-side, so the turn must
+// settle as parked (not as an error): waiting now, the form back after a reload, and the
+// answer continuing the parked task with no card left waiting behind it.
+for (const mode of ["DROPNET", "ERRFRAME"]) {
+  test(`a stream that fails after the park (${mode}) still settles as parked (#3956)`, async ({ page }) => {
+    const bodies = a2aLog(page);
+    await page.goto("/app/", { waitUntil: "load" });
+    const sessionId = await park(page, bodies, mode);
+    await expectWaiting(page, mode);
+    // Not an error: no error bubble, the session is not in its error state.
+    await expect(page.locator(`${SLOT} .pl-message--assistant`).last()).not.toContainText("stream failed");
+    // Persisted as parked — the shape a reload reattaches through (the store writes on a
+    // debounce, so poll until the settle lands).
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (id) =>
+            JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}")
+              .sessions.find((s: { id: string }) => s.id === id)
+              .messages.filter((m: { role: string }) => m.role === "assistant")
+              .map((m: { status: string; paused?: boolean; taskId?: string }) => [m.status, m.paused, m.taskId]),
+          sessionId,
+        ),
+      )
+      .toEqual([["streaming", true, taskFor(sessionId)]]);
+
+    await page.reload({ waitUntil: "load" });
+    await expectWaiting(page, mode);
+    const sent = await answer(page, bodies, "kiwi");
+    expect(sent.params.message.taskId).toBe(taskFor(sessionId));
+    await expect(page.locator(`${SLOT} .pl-message--assistant`).last()).toContainText("You like kiwi.");
+    await expect(page.locator(`${SLOT} .tool-waiting`)).toHaveCount(0);
+    await expect(page.locator(`${SLOT} .chat-paused-indicator`)).toHaveCount(0);
+  });
+}
+
+test("a plugin composer form on the stream does not leave the turn paused (#3956)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await send(page, "PARK_ASK_HUMAN PLUGINFORM");
+  await expect(page.locator(`${SLOT} .hitl-float .hitl-card`)).toContainText("Plugin form question?");
+  // It parks no graph: the bubble settles as before — no waiting cue, nothing to reattach.
+  await expect(page.locator(`${SLOT} .chat-streaming-indicator`)).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .chat-paused-indicator`)).toHaveCount(0);
+  // The store persists on a debounce: poll until the settled bubble lands.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        JSON.parse(localStorage.getItem("protoagent.chat.sessions") || "{}")
+          .sessions.flatMap((s: { messages: { role: string; status: string; paused?: boolean }[] }) => s.messages)
+          .filter((m: { role: string }) => m.role === "assistant")
+          .map((m: { status: string; paused?: boolean }) => [m.status, m.paused ?? null]),
+      ),
+    )
+    .toEqual([["done", null]]);
+});

@@ -10,7 +10,8 @@ import type { DurableChatTurn } from "../lib/api";
 import type { ChatMessage } from "../lib/types";
 import { reattachKeyForMessages, settleAnsweredPause, shouldReattach } from "./reattach";
 import { messagesFromDurableTurn } from "./sessionHydration";
-import { applyToolEvent, isParkedState, settleStreamEnd, unpauseBubble } from "./turnReducers";
+import { makeA2ADispatcher } from "../lib/api/a2aStream";
+import { applyToolEvent, createParkTracker, isParkedState, settleStreamEnd, unpauseBubble } from "./turnReducers";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
 
@@ -108,5 +109,82 @@ describe("settleStreamEnd — the bubble a live stream leaves when it closes (#3
     expect(settled.status).toBe("done");
     expect(settled.paused).toBeUndefined();
     expect(settled.toolCalls?.[0]).toMatchObject({ status: "done", durationMs: 250 });
+  });
+
+  it("a done close clears a pause the bubble or its cards still carried", () => {
+    const parked = settleStreamEnd(parkedLive(), { parked: true });
+    const settled = settleStreamEnd(parked, { parked: false });
+    expect(settled.status).toBe("done");
+    expect(settled.paused).toBeUndefined();
+    expect(settled.toolCalls?.[0].paused).toBeUndefined();
+  });
+});
+
+describe("createParkTracker over the real frame dispatcher (#3956)", () => {
+  const SESSION = "s-park";
+  const HITL = "application/vnd.protolabs.hitl-v1+json";
+  /** An input-required status frame carrying this hitl-v1 payload. */
+  const parkFrame = (data: Record<string, unknown>) => ({
+    jsonrpc: "2.0",
+    id: "1",
+    result: {
+      statusUpdate: {
+        taskId: "t1",
+        contextId: SESSION,
+        status: {
+          state: "TASK_STATE_INPUT_REQUIRED",
+          message: { parts: [{ data, metadata: { mimeType: HITL } }] },
+        },
+      },
+    },
+  });
+  const workingFrame = {
+    jsonrpc: "2.0",
+    id: "1",
+    result: { statusUpdate: { taskId: "t1", contextId: SESSION, status: { state: "TASK_STATE_WORKING" } } },
+  };
+
+  /** A tracker wired exactly as the slot wires it: payload first, then state. */
+  function wired() {
+    const park = createParkTracker();
+    const order: string[] = [];
+    const transitions: (string | null)[] = [];
+    const dispatch = makeA2ADispatcher(SESSION, {
+      onInputRequired: (payload) => {
+        order.push("inputRequired");
+        park.inputRequired(payload);
+      },
+      onTaskState: (state) => {
+        order.push("taskState");
+        transitions.push(park.taskState(state));
+      },
+    });
+    return { park, order, transitions, dispatch: (frame: unknown) => dispatch(frame as never) };
+  }
+
+  it("the dispatcher reports the payload BEFORE the state — the plugin-form exclusion depends on it", () => {
+    const { order, dispatch } = wired();
+    dispatch(parkFrame({ question: "Which fruit?" }));
+    expect(order).toEqual(["inputRequired", "taskState"]);
+  });
+
+  it("a plugin composer form never parks the turn; an agent question does", () => {
+    const form = wired();
+    form.dispatch(parkFrame({ question: "Plugin form?", plugin_callback_id: "cb-1" }));
+    expect(form.park.parked).toBe(false);
+    expect(form.transitions).toEqual([null]);
+
+    const ask = wired();
+    ask.dispatch(parkFrame({ question: "Which fruit?" }));
+    expect(ask.park.parked).toBe(true);
+    expect(ask.transitions).toEqual(["parked"]);
+  });
+
+  it("a working state after a park un-parks (the latest state wins)", () => {
+    const { park, transitions, dispatch } = wired();
+    dispatch(parkFrame({ question: "Which fruit?" }));
+    dispatch(workingFrame);
+    expect(park.parked).toBe(false);
+    expect(transitions).toEqual(["parked", "unparked"]);
   });
 });
