@@ -12,10 +12,11 @@ jobs and flips it atomically, so a completion is announced to the model exactly 
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -67,6 +68,10 @@ class BackgroundJob:
     # Background ``delegate_to`` stamps the target here; ingest and other work leave it
     # blank. The drain uses this explicit identity instead of parsing ``description``.
     result_author: str = ""
+    # The tool fence of the turn that spawned the job (#1639/#2972): its push-resume nudge
+    # into the origin session runs under it, so work a fenced turn left behind never
+    # comes back as an unfenced turn. ``[]`` = the spawning turn was unfenced.
+    origin_fence: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -109,7 +114,26 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         dismissed=bool(row["dismissed"] if "dismissed" in keys else 0),
         deterministic=bool(row["deterministic"] if "deterministic" in keys else 0),
         result_author=(row["result_author"] if "result_author" in keys else "") or "",
+        origin_fence=_load_fence(row["origin_fence"] if "origin_fence" in keys else ""),
     )
+
+
+def _load_fence(raw) -> list[str]:
+    """A stored ``origin_fence`` (JSON list) → list; empty → ``[]`` (unfenced). A value
+    that can't be read fails CLOSED — the nudge runs with no tools, never unfenced."""
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        value = None
+    if not isinstance(value, list):
+        log.warning("[background] unreadable origin_fence %r — the nudge runs with no tools", raw)
+        return [_DENY_ALL]
+    return [str(t) for t in value]
+
+
+# ``graph.middleware.subagent_fence.FENCE_DENY_ALL`` — spelled here so reading a row
+# never imports the middleware stack.
+_DENY_ALL = "<no tools>"
 
 
 class BackgroundStore:
@@ -150,7 +174,8 @@ class BackgroundStore:
                     batch_id       TEXT,
                     dismissed      INTEGER NOT NULL DEFAULT 0,
                     deterministic  INTEGER NOT NULL DEFAULT 0,
-                    result_author  TEXT NOT NULL DEFAULT ''
+                    result_author  TEXT NOT NULL DEFAULT '',
+                    origin_fence   TEXT NOT NULL DEFAULT '[]'
                 )
                 """
             )
@@ -176,6 +201,9 @@ class BackgroundStore:
             # stay ordinary task notifications; only newly spawned delegate work sets it.
             if "result_author" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN result_author TEXT NOT NULL DEFAULT ''")
+            # Migrate a pre-origin-fence DB: existing rows were spawned unfenced-recorded → [].
+            if "origin_fence" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN origin_fence TEXT NOT NULL DEFAULT '[]'")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -199,6 +227,7 @@ class BackgroundStore:
         batch_id: str | None = None,
         deterministic: bool = False,
         result_author: str = "",
+        origin_fence: list[str] | None = None,
         now: datetime | None = None,
     ) -> str:
         """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``).
@@ -207,7 +236,8 @@ class BackgroundStore:
         the completions coalesce into ONE push-resume; ``None`` (the default) is a
         singleton spawn. ``deterministic`` (#2363) marks a ``spawn_work`` job — its result
         is a deliverable, not a report, and the drain delivers it whole. ``result_author``
-        stamps deliverables that are another room participant's own words (#3051)."""
+        stamps deliverables that are another room participant's own words (#3051).
+        ``origin_fence`` is the spawning turn's tool fence (``[]`` = unfenced)."""
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
         created = (now or datetime.now(UTC)).isoformat()
         db = self._connect()
@@ -216,8 +246,8 @@ class BackgroundStore:
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
                 " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, "
-                " batch_id, deterministic, result_author) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?)",
+                " batch_id, deterministic, result_author, origin_fence) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?, ?)",
                 (
                     job_id,
                     agent_name,
@@ -230,6 +260,7 @@ class BackgroundStore:
                     batch_id or None,
                     1 if deterministic else 0,
                     result_author or "",
+                    json.dumps([str(t) for t in (origin_fence or [])]),
                 ),
             )
             db.commit()
@@ -356,6 +387,18 @@ class BackgroundStore:
                 "SELECT COUNT(*) AS n FROM background_jobs WHERE batch_id = ?", (batch_id,)
             ).fetchone()
             return int(row["n"]) if row else 0
+        finally:
+            db.close()
+
+    def batch_origin_fences(self, batch_id: str) -> list[list[str]]:
+        """Every member's ``origin_fence`` in a fan-out batch (one spawning turn, so
+        normally all equal) — the batch nudge runs under their intersection."""
+        if not batch_id:
+            return []
+        db = self._connect()
+        try:
+            rows = db.execute("SELECT origin_fence FROM background_jobs WHERE batch_id = ?", (batch_id,)).fetchall()
+            return [_load_fence(r["origin_fence"]) for r in rows]
         finally:
             db.close()
 

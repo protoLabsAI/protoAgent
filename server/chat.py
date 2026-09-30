@@ -858,12 +858,22 @@ def _metadata_fence(request_metadata: dict | None) -> list | None:
 
 
 async def _run_native_turn(
-    message, session_id, config, *, request_metadata=None, resume=False, images=None, overflow_retry=False
+    message,
+    session_id,
+    config,
+    *,
+    request_metadata=None,
+    resume=False,
+    images=None,
+    overflow_retry=False,
+    fence=None,
 ):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
     lock around the whole turn without a deep in-line reindent. ``overflow_retry`` marks
-    the context-overflow re-run, whose recovery prompt is never goal-kicked-off (#3891 F1)."""
+    the context-overflow re-run, whose recovery prompt is never goal-kicked-off (#3891 F1).
+    ``fence`` (the overflow retry's) replaces the request metadata's fence: the retry
+    keeps the fence the failed pass narrowed to (``_turn_stream._carried_fence``)."""
     from graph.goals.goal_turn import goal_turn
 
     # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
@@ -876,7 +886,11 @@ async def _run_native_turn(
     _incognito = bool((request_metadata or {}).get("incognito"))
     # Detached background runs of a registry subagent carry the resolved tool
     # allowlist in the fire metadata (#1639) — stamped onto the turn's state below.
-    _fence = _metadata_fence(request_metadata)
+    _fence = _metadata_fence(request_metadata) if fence is None else fence
+    # The fence every later pass of this turn runs under: the turn's own, narrowed by any
+    # fenced message a pass folds in (steering, #2972) — refreshed from the checkpoint
+    # before each goal continuation (``_carried_fence``), as the non-streaming driver does.
+    _turn_fence = {"fence": list(_fence or [])}
     # When a goal is already active, the whole turn is goal-driven (suppress cross-session
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     _goal_state = _goal_loop.active_goal(session_id)
@@ -919,11 +933,12 @@ async def _run_native_turn(
                     model=_model,
                     reasoning_effort=_effort,
                     incognito=_incognito,
-                    # Every pass of a fenced turn is fenced — a continuation too. A
+                    # Every pass stamps the turn's fence — a continuation too. A
                     # fresh-context goal runs on a new thread with no checkpointed state to
                     # inherit, so the fence is stamped on every pass explicitly, as the
-                    # non-streaming driver stamps ``_state_extra`` on its own.
-                    subagent_fence=_fence,
+                    # non-streaming driver stamps ``_state_extra`` on its own; ``[]`` on an
+                    # unfenced turn, so no pass inherits a fence the thread held before.
+                    subagent_fence=_turn_fence["fence"],
                 )
             ) as _turn_frames:
                 async for kind, payload in _turn_frames:
@@ -1014,11 +1029,15 @@ async def _run_native_turn(
     # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
     # it (the status frames are transient and can coalesce).
     drive = _goal_loop.GoalDrive(session_id, config, final_text)
+    _last_config = config
     async with contextlib.aclosing(drive.steps()) as _goal_steps:
         async for step in _goal_steps:
             if isinstance(step, _goal_loop.GoalNote):
                 yield ("tool_start", f"🎯 {step.note}")
                 continue
+            # Keep any narrowing the previous pass folded in (narrowest wins).
+            _turn_fence["fence"] = await _turn_stream._carried_fence(_last_config, _turn_fence["fence"])
+            _last_config = step.config
             cont: dict = {"raw": "", "paused": False, "last_tool_out": ""}
             with goal_turn():
                 async with contextlib.aclosing(
@@ -1472,6 +1491,9 @@ async def _chat_langgraph_stream_impl(
             if await _overflow_compacted(e, _tid, session_id):
                 yield ("tool_start", _OVERFLOW_NOTICE)
                 try:
+                    # The retry is the same turn: it keeps the fence the failed pass ran
+                    # under, narrowed by anything it folded in — never a wider one.
+                    _retry_fence = await _turn_stream._carried_fence(config, _metadata_fence(request_metadata))
                     async with _turn_control._thread_lock(_tid):
                         # Same class as the initial turn (ADR 0115 D6) — the retry is the
                         # same operator/A2A turn, just after a force-compact.
@@ -1485,6 +1507,7 @@ async def _chat_langgraph_stream_impl(
                                     resume=False,
                                     images=None,
                                     overflow_retry=True,
+                                    fence=_retry_fence,
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:

@@ -95,6 +95,10 @@ class GoalState:
     # ("continue" | terminal), reason, evidence}. Survives re-arms so the timeline shows
     # the whole journey. Plain dicts (not a dataclass) so to_dict/from_dict round-trip it.
     history: list[dict] = field(default_factory=list)
+    # The tool fence of the turn that set the goal (#1639/#2972) — its completion hooks
+    # (plugin ``on_achieved``/``on_failed`` reactions, the self-improvement review) run
+    # under it, so a goal a fenced turn set never reacts unfenced. ``[]`` = unfenced.
+    fence: list[str] = field(default_factory=list)
     started_at: float = field(default_factory=time)
     finished_at: float | None = None
 

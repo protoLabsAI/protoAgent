@@ -62,6 +62,10 @@ class Job:
     consecutive_failures: int = 0
     last_error: str | None = None
     last_ok: str | None = None
+    # The tool fence of the turn that created the job (#1639/#2972), recorded from the
+    # calling tool's scope (``graph.fence_scope``) — a fire is a server-fired turn and
+    # runs under it, so work a fenced turn scheduled never runs unfenced. ``[]`` = none.
+    fence: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)

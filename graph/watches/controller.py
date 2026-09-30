@@ -116,6 +116,8 @@ class WatchController:
             run_session=run_session or "",
             trigger=trigger,
             repeat=bool(repeat),
+            # The creating turn's tool fence (``[]`` outside a turn) — see ``_react``.
+            fence=_calling_fence(),
         )
         self._store.set(watch)
         return (True, f"Watch created. {watch.status_line()}", watch)
@@ -220,6 +222,11 @@ class WatchController:
                 watch.trigger = tg
             if not isinstance(repeat, _Unset):
                 watch.repeat = bool(repeat)
+            # An edit from a fenced turn narrows the watch's fence (narrowest wins): a
+            # fenced turn can't re-aim an unfenced watch's reaction and have it run wide.
+            from graph.middleware.subagent_fence import intersect_fences
+
+            watch.fence = intersect_fences(watch.fence, _calling_fence())
             self._store.set(watch)
             return (True, f"Watch updated. {watch.status_line()}", watch)
 
@@ -514,7 +521,12 @@ class WatchController:
                 if (watch.last_evidence or "").strip():
                     context += f"\nEvidence: {watch.last_evidence.strip()}"
                 reaction_prompt = f"{context}\n\n{watch.run_prompt}"
-                run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
+                # The reaction is a server-fired turn: it runs under the fence of the turn
+                # that armed the watch (the scheduler records the enqueuing scope's fence).
+                from graph.fence_scope import fence_scope
+
+                with fence_scope(watch.fence):
+                    run_in_session(watch.run_session, reaction_prompt, job_id=f"watch-{watch.id}")
             except Exception:  # noqa: BLE001 — a reaction failure must not break the tick
                 log.exception("[watch] run_in_session reaction failed for %s", watch.id)
 
@@ -566,3 +578,10 @@ class WatchController:
                 )
         except Exception:  # noqa: BLE001
             pass
+
+
+def _calling_fence() -> list[str]:
+    """The tool fence of the turn calling into the controller (``graph.fence_scope``)."""
+    from graph.fence_scope import current_fence
+
+    return current_fence()

@@ -608,6 +608,27 @@ async def _resume_fence_update(config: dict, fence) -> dict:
     return _fence_update(intersect_fences(parked, fence))
 
 
+async def _carried_fence(config: dict, fence) -> list[str]:
+    """The fence the NEXT fresh pass of this turn runs under, after a pass on ``config``.
+
+    Every fresh pass stamps its fence explicitly (an unfenced one stamps ``[]``), so a
+    later pass of the SAME turn — a goal continuation, the context-overflow retry — must
+    not re-stamp the turn's ORIGINAL fence: a fenced message folded into the earlier
+    pass (steering, #2972) narrowed that pass's fence on the checkpoint, and the rest of
+    the turn keeps the narrowing (narrowest wins — ``intersect_fences``). ``[]`` = no
+    fence. An unreadable checkpoint fails CLOSED (deny-all), as a fenced resume does."""
+    from graph.middleware.subagent_fence import FENCE_DENY_ALL, intersect_fences
+
+    try:
+        snapshot = await STATE.graph.aget_state(config)
+        values = getattr(snapshot, "values", None) or {}
+        current = values.get("subagent_fence") if isinstance(values, dict) else None
+    except Exception:  # noqa: BLE001 — can't see the narrowed fence: fail closed
+        log.warning("[fence] could not read the pass's fence; the rest of the turn runs with no tools", exc_info=True)
+        return [FENCE_DENY_ALL]
+    return intersect_fences(current, fence)
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -664,10 +685,13 @@ async def _run_turn_stream(
             # both); omit each key when unset so the configured default applies.
             **({"model": model} if model else {}),
             **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
-            # Per-subagent tool fence for a detached background run (#1639) —
-            # SubagentFenceMiddleware blocks tool calls outside it. Omitted (not
-            # empty) when unset so ordinary turns carry no fence channel.
-            **({"subagent_fence": [str(t) for t in subagent_fence]} if subagent_fence else {}),
+            # Per-turn tool fence (#1639/#2972) — SubagentFenceMiddleware blocks tool
+            # calls outside it. Always stamped, like incognito: the channel persists in
+            # the checkpointer, so an omitted key would inherit whatever fence the
+            # thread last held (a fenced turn, or a fenced message folded into one) and
+            # leave an ordinary operator turn fenced. ``[]`` = no fence. A server-fired
+            # turn that must keep its origin's fence carries it in its metadata.
+            "subagent_fence": [str(t) for t in (subagent_fence or [])],
         }
     )
     from observability import metrics

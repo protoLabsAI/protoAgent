@@ -95,6 +95,10 @@ class Watch:
     # ``run_session`` via sdk.run_in_session. Both empty → the watch reacts via hooks only.
     run_prompt: str = ""
     run_session: str = ""
+    # The tool fence of the turn that created (or last edited) the watch (#1639/#2972):
+    # the reaction turn runs under it, so a watch a fenced turn armed never reacts
+    # unfenced. ``[]`` = unfenced (the operator, or an unfenced turn).
+    fence: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time)
     last_checked: float | None = None
     last_reason: str = ""

@@ -35,6 +35,8 @@ import logging
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
+from graph.fence_scope import fence_scope
+
 logger = logging.getLogger(__name__)
 
 # A fence that allows nothing: the intersection of two disjoint fences. Not a tool name
@@ -80,6 +82,15 @@ def is_resumed_parked_call(request) -> bool:
         return bool(getattr(scratchpad, "resume", None))
     except Exception:  # noqa: BLE001 — fail closed
         return False
+
+
+def _state_fence(request) -> list:
+    """The fence on the tool call's graph state (``[]`` when none)."""
+    state = getattr(request, "state", None) or {}
+    try:
+        return list(state.get("subagent_fence") or [])
+    except Exception:  # noqa: BLE001 — an unreadable state adds no scope
+        return []
 
 
 def _answer_tools() -> frozenset[str]:
@@ -147,7 +158,8 @@ class SubagentFenceMiddleware(AgentMiddleware):
         reason = self._deny_reason(request)
         if reason:
             return self._blocked(request, reason)
-        return handler(request)
+        with fence_scope(_state_fence(request)):
+            return handler(request)
 
     async def awrap_tool_call(self, request, handler):
         declined = self._declined(request)
@@ -156,4 +168,8 @@ class SubagentFenceMiddleware(AgentMiddleware):
         reason = self._deny_reason(request)
         if reason:
             return self._blocked(request, reason)
-        return await handler(request)
+        # The tool body runs as code of THIS turn's fence: anything it leaves behind to
+        # run later as its own turn (a background job's nudge, a scheduled resume, a
+        # watch reaction, a goal's hooks) records it and stays fenced (graph/fence_scope).
+        with fence_scope(_state_fence(request)):
+            return await handler(request)

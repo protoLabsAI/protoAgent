@@ -22,6 +22,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from graph.fence_scope import current_fence, fence_scope
 from graph.goals.store import GoalStore
 from graph.goals.types import GoalState
 from graph.goals.verifiers import (
@@ -268,6 +269,8 @@ class GoalController:
             constraints=_coerce_str_list(constraints),
             boundaries=_coerce_str_list(boundaries),
             stop_when=stop_when or "",
+            # The setting turn's tool fence (``[]`` outside a turn) — see ``_finish``.
+            fence=current_fence(),
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -534,12 +537,15 @@ class GoalController:
         state.finished_at = time()
         self._record_history(state, status, reason, evidence or state.last_evidence)
         self._store.set(state)
-        # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
-        await fire_goal_hooks(status, state)
-        if status == "achieved":
-            from graph.self_improvement import schedule_review
+        # The reactions below may enqueue turns (``run_in_session``, the review job): they
+        # run under the fence of the turn that SET the goal (graph/fence_scope).
+        with fence_scope(getattr(state, "fence", None)):
+            # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
+            await fire_goal_hooks(status, state)
+            if status == "achieved":
+                from graph.self_improvement import schedule_review
 
-            schedule_review(self._config, self._scheduler, state)
+                schedule_review(self._config, self._scheduler, state)
         # Broadcast on the event bus (ADR 0039) so ANY plugin or the console can react to a terminal
         # goal — no goal_hook plugin required, no cross-dependency. `goal.achieved` on success;
         # `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must never break finish.
