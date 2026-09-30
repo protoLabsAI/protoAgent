@@ -183,7 +183,7 @@
   flex: 1;
   min-width: 0;
   justify-content: flex-start;
-  gap: 9px;
+  gap: var(--pl-space-2);
   /* 44px hard minimum — the HIG / ADR 0086 touch target. */
   min-height: 44px;
 }
@@ -209,8 +209,8 @@
 @media (max-width: 767px) {
   .pl-toast-stack[data-position="top-right"] {
     top: calc(52px + env(safe-area-inset-top) + 8px);
-    left: 8px;
-    right: 8px;
+    left: var(--pl-space-2);
+    right: var(--pl-space-2);
     max-width: none;
   }
 }

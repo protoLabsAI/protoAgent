@@ -16,14 +16,14 @@
 
 /* Per-delegate env editor (#2114): key/value rows + a secret toggle + delete. */
 .delegate-envmap { display: grid; gap: var(--pl-space-2); }
-.delegate-env-rows { display: grid; gap: 6px; }
+.delegate-env-rows { display: grid; gap: var(--pl-space-1_5); }
 .delegate-env-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   align-items: center;
 }
-.delegate-env-add { display: flex; align-items: center; gap: 6px; }
+.delegate-env-add { display: flex; align-items: center; gap: var(--pl-space-1_5); }
 .delegate-env-remove { margin-top: var(--pl-space-1); }
 
 /* Advanced field group — fields the backend marks `advanced` collapse behind a chevron so
@@ -33,9 +33,9 @@
 .delegate-advanced {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   margin-top: var(--pl-space-1);
-  padding-top: 10px;
+  padding-top: var(--pl-space-2_5);
   border-top: 1px solid var(--pl-color-border);
 }
 
