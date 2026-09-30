@@ -268,6 +268,8 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
     room_replies: list[dict] = []
     for j in jobs:
         result = j.result or ""
+        # Why a non-completed job ended (#3945) — surfaced wherever the job is briefed.
+        _err = "" if j.status == "completed" else str(getattr(j, "error", "") or "")
         author = str(getattr(j, "result_author", "") or "")
         if author:
             # Persist the same envelope as foreground/direct addressing so the lead,
@@ -277,7 +279,13 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             from graph.mention_op import _envelope
 
             ok = j.status == "completed"
-            text = result.strip() or ("(replied with nothing)" if ok else f"({j.status})")
+            _note = f"({j.status}: {_err})" if _err else f"({j.status})"
+            if ok:
+                text = result.strip() or "(replied with nothing)"
+            else:
+                # A failed delegate's partial reply still gets the status + cause appended,
+                # so neither the lead nor the console mistakes it for a finished answer.
+                text = f"{result.strip()}\n\n{_note}" if result.strip() else _note
             msgs.append(
                 HumanMessage(
                     content=_envelope(author, text),
@@ -316,7 +324,10 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             f"<subagent>{j.subagent_type}</subagent>\n"
             f"<description>{j.description}</description>\n"
             f"<status>{j.status}</status>\n"
-            "<result>\n"
+            # Why it failed (#3945), so the agent reports the real cause to the operator
+            # instead of guessing from an empty result.
+            + (f"<error>{_err}</error>\n" if _err else "")
+            + "<result>\n"
             f"{result}\n"
             "</result>\n"
             "</task-notification>"
@@ -1685,7 +1696,12 @@ async def _chat_langgraph(
         # The impl catches its own exceptions and reports them as an assistant
         # bubble carrying a structured `error` (server.chat.turn_error), so the
         # error key — not an exception — is what distinguishes a failed turn.
-        state = "failed" if any(isinstance(m, dict) and m.get("error") for m in result) else "completed"
+        # A turn parked at a HITL ask is neither — the impl stamps `input_required` on
+        # the sink, the state the A2A surface records for the same park (#3945).
+        if any(isinstance(m, dict) and m.get("error") for m in result):
+            state = "failed"
+        else:
+            state = sink.get("state") or "completed"
         return result
     finally:
         _turn_control._turn_ended(session_id)
