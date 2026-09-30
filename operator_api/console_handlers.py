@@ -487,6 +487,11 @@ async def _operator_goals_set(body: dict) -> dict:
     sid = str(body.get("session_id") or "").strip()
     if not sid:
         return {"ok": False, "error": "session_id is required"}
+    from runtime.session_ids import session_id_problem
+
+    problem = session_id_problem(sid)
+    if problem is not None:
+        return {"ok": False, "error": problem}
     # Optional completion-contract fields (ADR 0073). Backward-compatible: a body
     # with only {session_id, condition, verifier} still works. A string sent where
     # a list is expected is coerced to a 1-element list; anything else is ignored

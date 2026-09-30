@@ -26,9 +26,10 @@ from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from infra.publish import list_published_links
+from runtime.session_ids import SessionId, require_session_id, session_id_problem
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
@@ -167,6 +168,14 @@ class ChatRequest(BaseModel):
     # desktop /api/chat fallback — the streaming path carries the same flag as
     # A2A message metadata (`hitl_resume`). Additive, default False.
     hitl_resume: bool = False
+
+    @field_validator("session_id")
+    @classmethod
+    def _check_session_id(cls, value: str) -> str:
+        # Blank (after strip) still means "mint one" in the route; anything else must
+        # pass the same shape rule every other chat entry point applies.
+        value = value.strip()
+        return require_session_id(value) if value else value
 
 
 _B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
@@ -414,7 +423,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
     @app.delete("/api/chat/sessions/{session_id}")
-    async def _api_delete_session(session_id: str, harvest: bool = False, retire: bool = True, forget: bool = False):
+    async def _api_delete_session(session_id: SessionId, harvest: bool = False, retire: bool = True, forget: bool = False):
         """Purge a chat session's checkpoints for both the A2A and chat prefix,
         optionally harvesting the conversation into the knowledge base first.
         The default ``retire=true`` permanently hides the id from durable
@@ -535,7 +544,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
-    async def _api_compact_session(session_id: str):
+    async def _api_compact_session(session_id: SessionId):
         """Compact a chat session's live context (#1527): archive the raw history
         into searchable memory, summarize it, and rewrite the LangGraph checkpoint
         to ``[summary, recent tail]`` so the agent keeps context at lower token
@@ -552,7 +561,7 @@ def register_chat_routes(app, ui: str) -> None:
         return await compact_session(session_id)
 
     @app.get("/api/chat/sessions/{session_id}/export")
-    async def _api_export_session(session_id: str, title: str | None = None):
+    async def _api_export_session(session_id: SessionId, title: str | None = None):
         """Export a chat session's conversation as Markdown (#2158 P1) — the
         "share this thread" gesture.
 
@@ -626,7 +635,7 @@ def register_chat_routes(app, ui: str) -> None:
         }
 
     @app.get("/api/chat/sessions/{session_id}")
-    async def _api_chat_session(session_id: str):
+    async def _api_chat_session(session_id: SessionId):
         """One session's summary + BUSY SIGNAL: ``{session_id, active, turn_count,
         last_updated, last_state}``. ``active`` is true while a turn is running on the
         session (any surface). Unknown or deleted → 404 ``{detail: {code: "not_found"}}``.
@@ -647,7 +656,7 @@ def register_chat_routes(app, ui: str) -> None:
         return summary
 
     @app.get("/api/chat/sessions/{session_id}/turns")
-    async def _api_session_turns(session_id: str, limit: int = 50):
+    async def _api_session_turns(session_id: SessionId, limit: int = 50):
         """The session's durable turns from the A2A task store (ADR 0104, Swap &
         Resume S5) — status/artifacts/history untransformed (the same wire shapes
         the console's frame dispatcher replays) plus a joined ``text`` convenience.
@@ -728,7 +737,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"turns": turns}
 
     @app.get("/api/chat/sessions/{session_id}/publish/preview")
-    async def _api_publish_preview(session_id: str, title: str | None = None):
+    async def _api_publish_preview(session_id: SessionId, title: str | None = None):
         """Build the structured chat-bundle for the pre-publish review (#2179 P2, #2682)
         — **read-only**, sends nothing anywhere. The operator reviews this before
         deciding to publish. Returns
@@ -748,7 +757,7 @@ def register_chat_routes(app, ui: str) -> None:
         return await publish_preview(session_id, title=title)
 
     @app.post("/api/chat/sessions/{session_id}/publish")
-    async def _api_publish_session(session_id: str, body: dict | None = None):
+    async def _api_publish_session(session_id: SessionId, body: dict | None = None):
         """Publish a chat thread to the hosted viewer (#2179 P2, #2683).
 
         Builds the bundle server-side, fresh — never accepts a client-supplied bundle —
@@ -814,7 +823,7 @@ def register_chat_routes(app, ui: str) -> None:
         return await revoke_published_link(link_id)
 
     @app.post("/api/chat/sessions/{session_id}/aside")
-    async def _api_aside_session(session_id: str, body: dict | None = None):
+    async def _api_aside_session(session_id: SessionId, body: dict | None = None):
         """`/btw` (#2180) — answer a side question about this session's context WITHOUT
         touching it. The turn runs incognito on a fresh EPHEMERAL thread seeded with the
         main thread's messages; the main thread's checkpoint is never written (the
@@ -831,7 +840,7 @@ def register_chat_routes(app, ui: str) -> None:
         return result
 
     @app.post("/api/chat/sessions/{session_id}/rewind")
-    async def _api_rewind_session(session_id: str, body: dict | None = None):
+    async def _api_rewind_session(session_id: SessionId, body: dict | None = None):
         """Rewind a chat session to a target message (#1535): discard everything
         AFTER it and rewrite the LangGraph checkpoint IN PLACE. Runs SERVER-SIDE —
         the checkpoint is the agent's real context, so a client-only truncate would
@@ -857,7 +866,7 @@ def register_chat_routes(app, ui: str) -> None:
         )
 
     @app.post("/api/chat/sessions/{session_id}/fork")
-    async def _api_fork_session(session_id: str, body: dict | None = None):
+    async def _api_fork_session(session_id: SessionId, body: dict | None = None):
         """Fork a chat session at a target message (#2803): copy the checkpoint
         prefix through the target onto ``new_session_id``'s (fresh) thread. The
         SOURCE is untouched — this is rewind's non-destructive sibling, and it is
@@ -867,9 +876,17 @@ def register_chat_routes(app, ui: str) -> None:
         body = body or {}
         idx = body.get("index")
         occ = body.get("occurrence")
+        new_session_id = str(body.get("new_session_id") or "").strip()
+        # The fork's TARGET is a caller-chosen id too: same shape rule as the path's.
+        # (Blank falls through to fork_session's own ``no_target`` answer.)
+        problem = session_id_problem(new_session_id) if new_session_id else None
+        if problem is not None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=422, detail={"code": "invalid_session_id", "reason": problem})
         return await fork_session(
             session_id,
-            str(body.get("new_session_id") or ""),
+            new_session_id,
             message_id=body.get("message_id"),
             index=int(idx) if idx is not None else None,
             content=body.get("content"),
@@ -877,7 +894,7 @@ def register_chat_routes(app, ui: str) -> None:
         )
 
     @app.post("/api/chat/sessions/{session_id}/steer")
-    async def _api_steer(session_id: str, body: dict | None = None):
+    async def _api_steer(session_id: SessionId, body: dict | None = None):
         """Queue a user message into a RUNNING turn (mid-turn steering).
 
         The next model call folds it in via ``SteeringMiddleware``, so the user
@@ -897,7 +914,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"ok": True, "id": mid, "pending": steering.pending(session_id)}
 
     @app.get("/api/chat/sessions/{session_id}/steer")
-    async def _api_steer_pending(session_id: str):
+    async def _api_steer_pending(session_id: SessionId):
         """Items still queued for ``session_id`` — i.e. steering messages that
         arrived after the turn's last model call and weren't folded in. The
         console reads this at turn-end: it settles the consumed ones into the
@@ -916,7 +933,7 @@ def register_chat_routes(app, ui: str) -> None:
         }
 
     @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")
-    async def _api_server_turn_interject(session_id: str, task_id: str, body: dict | None = None):
+    async def _api_server_turn_interject(session_id: SessionId, task_id: str, body: dict | None = None):
         """Queue a normal operator interjection into an attended server-originated turn.
 
         The addressed turn is identified by its durable A2A task id plus the origin chat
@@ -935,7 +952,7 @@ def register_chat_routes(app, ui: str) -> None:
         return submit_server_turn_interjection(session_id, task_id, text, msg_id=msg_id)
 
     @app.delete("/api/chat/sessions/{session_id}/steer/{msg_id}")
-    async def _api_steer_cancel(session_id: str, msg_id: str):
+    async def _api_steer_cancel(session_id: SessionId, msg_id: str):
         """Cancel a still-queued steer before it folds into the turn (the ✕ on a
         pending bubble). ``removed: true`` means it was dropped from the queue and
         the agent never sees it; ``removed: false`` means it had already been
@@ -948,7 +965,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"removed": removed, "pending": steering.pending(session_id)}
 
     @app.get("/api/chat/sessions/{session_id}/delegations")
-    async def _api_delegations(session_id: str):
+    async def _api_delegations(session_id: SessionId):
         """In-flight foreground subagent delegations for ``session_id`` —
         ``[{"id", "label"}]``. ``id`` is the running ``task`` tool-call id; the
         console surfaces a Cancel affordance on each running ``task`` card and this
@@ -958,7 +975,7 @@ def register_chat_routes(app, ui: str) -> None:
         return {"running": delegations.running_items(session_id)}
 
     @app.post("/api/chat/sessions/{session_id}/delegations/{delegation_id}/cancel")
-    async def _api_delegation_cancel(session_id: str, delegation_id: str):
+    async def _api_delegation_cancel(session_id: SessionId, delegation_id: str):
         """Abort ONE running foreground delegation (the Stop on a running ``task``
         card) — cancels just that subagent, NOT the whole turn: the lead continues
         with a 'cancelled' result. Contrast the composer Stop, which A2A-CancelTasks

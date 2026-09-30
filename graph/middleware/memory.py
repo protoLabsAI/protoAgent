@@ -76,9 +76,16 @@ def contained_in(base: str, path: str) -> bool:
     had to remember :func:`is_safe_session_id` by hand.
 
     Uses ``realpath`` on both sides so a symlinked memory dir compares correctly.
+
+    Never raises: a path the OS cannot even resolve (``realpath`` rejects an embedded NUL
+    with ``ValueError``) is answered ``False``, so every caller — including the after-turn
+    persist, which must not fail the turn — treats it as "not under the base".
     """
-    root = os.path.realpath(base)
-    resolved = os.path.realpath(path)
+    try:
+        root = os.path.realpath(base)
+        resolved = os.path.realpath(path)
+    except (ValueError, OSError):
+        return False
     return resolved == root or resolved.startswith(root + os.sep)
 
 
