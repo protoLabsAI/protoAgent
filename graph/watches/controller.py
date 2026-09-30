@@ -116,6 +116,8 @@ class WatchController:
             run_session=run_session or "",
             trigger=trigger,
             repeat=bool(repeat),
+            # The creating turn's tool fence (``[]`` outside a turn) — see ``_react``.
+            fence=_calling_fence(),
         )
         self._store.set(watch)
         return (True, f"Watch created. {watch.status_line()}", watch)
@@ -220,6 +222,11 @@ class WatchController:
                 watch.trigger = tg
             if not isinstance(repeat, _Unset):
                 watch.repeat = bool(repeat)
+            # An edit from a fenced turn narrows the watch's fence (narrowest wins): a
+            # fenced turn can't re-aim an unfenced watch's reaction and have it run wide.
+            from graph.middleware.subagent_fence import intersect_fences
+
+            watch.fence = intersect_fences(watch.fence, _calling_fence())
             self._store.set(watch)
             return (True, f"Watch updated. {watch.status_line()}", watch)
 
@@ -502,7 +509,17 @@ class WatchController:
 
         The hook and topic name the trigger honestly: a `change` fire is NOT `on_met` — a
         plugin subscribed to `on_met` is told the condition is satisfied, which a mere value
-        move doesn't mean."""
+        move doesn't mean.
+
+        Every reaction runs under the fence of the turn that armed the watch
+        (``graph.fence_scope``): anything it enqueues — the run_prompt turn, a turn a hook
+        or bus subscriber schedules — records that fence and fires under it."""
+        from graph.fence_scope import fence_scope
+
+        with fence_scope(watch.fence):
+            await self._react_in_scope(watch, reason, flapping=flapping)
+
+    async def _react_in_scope(self, watch: Watch, reason: str, *, flapping: bool) -> None:
         if (watch.run_prompt or "").strip() and (watch.run_session or "").strip():
             try:
                 from graph.sdk import run_in_session
@@ -539,6 +556,7 @@ class WatchController:
     async def _finish(self, watch: Watch, status: str, reason: str, evidence: str = "") -> str:
         from time import time
 
+        from graph.fence_scope import fence_scope
         from graph.watches.hooks import fire_watch_hook
 
         watch.status = status
@@ -551,8 +569,9 @@ class WatchController:
         if status == "met":
             await self._react(watch, reason)
         else:
-            await fire_watch_hook("on_expired", watch)
-            self._publish("watch.expired", watch, reason)
+            with fence_scope(watch.fence):  # same scope as a reaction (see `_react`)
+                await fire_watch_hook("on_expired", watch)
+                self._publish("watch.expired", watch, reason)
         return status
 
     def _publish(self, topic: str, watch: Watch, reason: str = "") -> None:
@@ -566,3 +585,10 @@ class WatchController:
                 )
         except Exception:  # noqa: BLE001
             pass
+
+
+def _calling_fence() -> list[str]:
+    """The tool fence of the turn calling into the controller (``graph.fence_scope``)."""
+    from graph.fence_scope import current_fence
+
+    return current_fence()

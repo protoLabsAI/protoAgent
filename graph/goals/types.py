@@ -95,6 +95,10 @@ class GoalState:
     # ("continue" | terminal), reason, evidence}. Survives re-arms so the timeline shows
     # the whole journey. Plain dicts (not a dataclass) so to_dict/from_dict round-trip it.
     history: list[dict] = field(default_factory=list)
+    # The tool fence of the turn that set the goal (#1639/#2972) — its completion hooks
+    # (plugin ``on_achieved``/``on_failed`` reactions, the self-improvement review) run
+    # under it, so a goal a fenced turn set never reacts unfenced. ``[]`` = unfenced.
+    fence: list[str] = field(default_factory=list)
     started_at: float = field(default_factory=time)
     finished_at: float | None = None
 
@@ -120,7 +124,12 @@ class GoalState:
     def from_dict(cls, data: dict) -> "GoalState":
         # Tolerate unknown/missing keys so older files load forward-compatibly.
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in data.items() if k in known})
+        fields = {k: v for k, v in data.items() if k in known}
+        if "fence" in fields:
+            # A missing key (a pre-fence file) is unfenced; a PRESENT fence that isn't a
+            # list (``null``, a hand-edit) fails CLOSED — deny-all, never unfenced.
+            fields["fence"] = _stored_fence(fields["fence"])
+        return cls(**fields)
 
     def status_line(self) -> str:
         """One-line human summary for /goal status + continuation footers."""
@@ -133,3 +142,12 @@ class GoalState:
         if self.last_reason:
             base += f" — {self.last_reason}"
         return base
+
+
+def _stored_fence(value) -> list[str]:
+    """A persisted ``fence`` → list of tool names; anything but a list → deny-all."""
+    if isinstance(value, list):
+        return [str(t) for t in value]
+    from graph.middleware.subagent_fence import FENCE_DENY_ALL
+
+    return [FENCE_DENY_ALL]

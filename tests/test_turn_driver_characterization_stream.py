@@ -183,12 +183,17 @@ async def test_golden_answer_with_a_tool_round_trip(env):
             {"tokens_input": 150, "tokens_output": 5, "cache_read": 0, "cache_creation": 0, "cost_usd": 0.15},
         ),
     ]
-    # One graph call: the fresh user message, session id, explicit incognito=False, on the
-    # a2a thread with the configured recursion limit.
+    # One graph call: the fresh user message, session id, explicit incognito=False and an
+    # explicit empty fence (an unfenced pass must not inherit the thread's last fence), on
+    # the a2a thread with the configured recursion limit.
     ((graph_input, config),) = g.stream_calls
     assert [type(m) for m in graph_input["messages"]] == [HumanMessage]
     assert graph_input["messages"][0].content == "what time is it?"
-    assert {k: v for k, v in graph_input.items() if k != "messages"} == {"session_id": "s-golden", "incognito": False}
+    assert {k: v for k, v in graph_input.items() if k != "messages"} == {
+        "session_id": "s-golden",
+        "incognito": False,
+        "subagent_fence": [],
+    }
     assert config == {
         "configurable": {"thread_id": "a2a:s-golden"},
         "recursion_limit": LangGraphConfig().max_iterations,
@@ -542,7 +547,8 @@ async def test_a_non_list_fence_is_ignored(env):
 
     await _run(request_metadata={"subagent_fence": "read_file"})
 
-    assert "subagent_fence" not in g.stream_calls[0][0]
+    # Ignored = unfenced, stamped explicitly as ``[]`` like every unfenced pass.
+    assert g.stream_calls[0][0]["subagent_fence"] == []
 
 
 @pytest.mark.asyncio

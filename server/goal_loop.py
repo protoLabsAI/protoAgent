@@ -69,6 +69,19 @@ def active_goal(session_id: str):
     return ctrl.active_goal(session_id) if ctrl is not None else None
 
 
+def goal_fenced(goal_state, fence) -> list[str]:
+    """The fence a GOAL-DRIVEN pass runs under: the turn's ``fence`` intersected with the
+    fence of the turn that SET the goal (``GoalState.fence``, narrowest wins). A goal a
+    fenced turn set is pursued fenced by every later turn that drives it — even a plain
+    operator turn — on both drivers. No goal / an unfenced goal → ``fence`` unchanged."""
+    from graph.fence_scope import normalize_fence
+    from graph.middleware.subagent_fence import intersect_fences
+
+    if goal_state is None:
+        return list(fence or [])
+    return intersect_fences(list(fence or []), normalize_fence(getattr(goal_state, "fence", None)))
+
+
 def kickoff_message(goal_state, message: str, *, resume: bool, overflow_retry: bool = False) -> str:
     """Kickoff injection (#1910): the FIRST goal-driven turn (iteration 0, not a HITL
     resume) carries the goal condition — the raw user text folded into the kickoff prompt —

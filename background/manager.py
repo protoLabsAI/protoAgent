@@ -130,6 +130,7 @@ class BackgroundManager:
         prompt: str,
         origin_incognito: bool = False,
         batch_id: str | None = None,
+        origin_fence: list[str] | None = None,
     ) -> str:
         """Register a job and fire it detached. Returns the opaque job id immediately.
 
@@ -141,7 +142,11 @@ class BackgroundManager:
         ``batch_id`` (#1766) tags the job as a member of a fan-out spawned by one turn
         (task_batch's specs, or several ``task(run_in_background=True)`` in a turn — all
         stamp the emitting turn's id), so the completions coalesce into ONE push-resume
-        when the last member settles. ``None`` for a lone spawn (a singleton)."""
+        when the last member settles. ``None`` for a lone spawn (a singleton).
+
+        ``origin_fence`` is the spawning turn's tool fence; ``None`` reads it from the
+        calling tool's scope (``graph.fence_scope``) — the push-resume nudge runs under it."""
+        spawning_fence = _origin_fence(origin_fence)
         job_id = self.store.create(
             agent_name=self.agent_name,
             origin_session=origin_session or "",
@@ -150,9 +155,14 @@ class BackgroundManager:
             prompt=prompt,
             origin_incognito=origin_incognito,
             batch_id=batch_id,
+            origin_fence=spawning_fence,
         )
         fired_prompt = _build_fired_prompt(subagent_type, description, prompt)
-        fence = _subagent_fence(subagent_type)
+        # The job runs under its subagent's allowlist AND the spawning turn's fence
+        # (narrowest wins): a fenced turn can't reach a wider toolset by delegating.
+        from graph.middleware.subagent_fence import intersect_fences
+
+        fence = intersect_fences(_subagent_fence(subagent_type), spawning_fence)
         t = asyncio.create_task(self._fire(job_id, fired_prompt, fence), name=f"background.fire.{job_id}")
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
@@ -198,6 +208,7 @@ class BackgroundManager:
         origin_incognito: bool = False,
         batch_id: str | None = None,
         result_author: str = "",
+        origin_fence: list[str] | None = None,
     ) -> str:
         """Register and run a deterministic background job — a plain coroutine, NOT an
         LLM subagent turn — through the same durable store + concurrency cap + event
@@ -225,6 +236,9 @@ class BackgroundManager:
             batch_id=batch_id,
             deterministic=True,
             result_author=result_author,
+            # The spawning turn's fence (from the calling tool's scope unless given): the
+            # push-resume nudge that delivers the result runs under it — see ``spawn``.
+            origin_fence=_origin_fence(origin_fence),
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
@@ -566,6 +580,11 @@ class BackgroundManager:
                     # the existing no-deadlock autonomous auto-answer.
                     "attended": attended,
                     "operator_controllable": attended,
+                    # The spawning turn's tool fence: the nudge is a server-fired turn
+                    # into the origin context, and every fresh pass stamps its own fence
+                    # (an unfenced one stamps ``[]``), so a job a fenced turn left behind
+                    # must carry that fence here or its briefing would run unfenced.
+                    **_fence_metadata(getattr(job, "origin_fence", None)),
                 },
             )
             ok = True
@@ -590,6 +609,16 @@ class BackgroundManager:
             )
 
     # ── fan-out batch-join (#1766) ────────────────────────────────────────────
+
+    def _batch_fence(self, batch_id: str) -> list[str]:
+        """The fence a batch's coalesced nudge runs under: the intersection of every
+        member's ``origin_fence`` (narrowest wins; normally one spawning turn's)."""
+        from graph.middleware.subagent_fence import intersect_fences
+
+        fence: list[str] = []
+        for member in self.store.batch_origin_fences(batch_id):
+            fence = intersect_fences(fence, member)
+        return fence
 
     def _claim_batch(self, batch_id: str) -> bool:
         """Atomically claim a batch for its single join nudge. Returns ``True`` if THIS
@@ -718,6 +747,9 @@ class BackgroundManager:
                     # Live operator attendance at resume time (#3110) — see resume_origin.
                     "attended": attended,
                     "operator_controllable": attended,
+                    # The spawning turn's fence (see resume_origin) — the intersection of
+                    # every member's, which all came from the one spawning turn.
+                    **_fence_metadata(self._batch_fence(batch_id)),
                 },
             )
             ok = True
@@ -740,6 +772,23 @@ class BackgroundManager:
                 ok=ok,
                 task_id=task_id,
             )
+
+
+def _origin_fence(fence: list[str] | None) -> list[str]:
+    """The spawning turn's fence: the explicit one, else the calling tool's scope
+    (``graph.fence_scope`` — ``[]`` outside a turn)."""
+    if fence is not None:
+        return [str(t) for t in fence]
+    from graph.fence_scope import current_fence
+
+    return current_fence()
+
+
+def _fence_metadata(fence) -> dict:
+    """Request metadata that fences a server-fired turn (``{}`` when unfenced — the
+    turn then stamps no fence explicitly)."""
+    fence = [str(t) for t in (fence or [])]
+    return {"subagent_fence": fence} if fence else {}
 
 
 def _subagent_fence(subagent_type: str) -> list[str]:

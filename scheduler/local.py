@@ -27,6 +27,7 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
@@ -277,7 +278,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- and a failed turn answers 200 with a failed task in the body.
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     last_error  TEXT,
-    last_ok     TEXT
+    last_ok     TEXT,
+    -- The creating turn's tool fence (JSON list; NULL/'[]' = unfenced) — the fire
+    -- carries it so a job a fenced turn scheduled runs fenced.
+    fence       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_next_fire   ON jobs(next_fire);
@@ -386,6 +390,11 @@ class LocalScheduler:
                     db.execute(ddl)
                 except sqlite3.OperationalError:
                     pass  # column already present
+            # …and before the creating turn's tool fence (existing rows → unfenced).
+            try:
+                db.execute("ALTER TABLE jobs ADD COLUMN fence TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already present
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
             # single-agent by construction — the path carries either the constant segment or
             # the agent's own name segment — so every row in THIS file is ours, whatever name
@@ -445,14 +454,18 @@ class LocalScheduler:
             origin_session=origin_session,
             ttl=ttl,
             max_fires=max_fires,
+            # The creating turn's tool fence, read from the calling tool's scope: a
+            # `wait` resume, a scheduled one-shot, a watch reaction or a goal hook
+            # enqueued by a fenced turn fires fenced (``[]`` outside a turn).
+            fence=_creating_fence(),
         )
         db = self._connect()
         try:
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id, origin_session, "
-                "ttl, max_fires, fire_count) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ttl, max_fires, fire_count, fence) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.prompt,
@@ -468,6 +481,7 @@ class LocalScheduler:
                     job.ttl,
                     job.max_fires,
                     job.fire_count,
+                    json.dumps(job.fence),
                 ),
             )
             db.commit()
@@ -1046,6 +1060,10 @@ class LocalScheduler:
                         "scheduler_job_id": job.id,
                         "scheduler_kind": "local",
                         "origin": fire_origin,
+                        # The creating turn's tool fence: every fresh pass stamps its own
+                        # fence (an unfenced one stamps ``[]``), so a fire into a chat
+                        # context no longer inherits one — it must carry its creator's.
+                        **({"subagent_fence": list(job.fence)} if job.fence else {}),
                     },
                 },
             },
@@ -1142,4 +1160,35 @@ def _row_to_job(row: Any) -> Job:
         ),
         last_error=row["last_error"] if "last_error" in keys else None,
         last_ok=row["last_ok"] if "last_ok" in keys else None,
+        fence=_load_fence(row["fence"] if "fence" in keys else None),
     )
+
+
+def _creating_fence() -> list[str]:
+    """The tool fence of the turn creating a job (``graph.fence_scope``; ``[]`` outside
+    a turn). Best-effort import: an unavailable scope is "no turn"."""
+    try:
+        from graph.fence_scope import current_fence
+    except Exception:  # noqa: BLE001
+        return []
+    return current_fence()
+
+
+def _load_fence(raw) -> list[str]:
+    """A stored ``fence`` (JSON list) → list; NULL → ``[]`` (unfenced). A value that
+    can't be read fails CLOSED — the fire runs with no tools, never unfenced."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        value = None
+    if not isinstance(value, list):
+        log.warning("[scheduler] unreadable job fence %r — the fire runs with no tools", raw)
+        return [_DENY_ALL]
+    return [str(t) for t in value]
+
+
+# ``graph.middleware.subagent_fence.FENCE_DENY_ALL`` — spelled here so reading a row
+# never imports the middleware stack.
+_DENY_ALL = "<no tools>"

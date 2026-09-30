@@ -22,6 +22,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from graph.fence_scope import current_fence, fence_scope
 from graph.goals.store import GoalStore
 from graph.goals.types import GoalState
 from graph.goals.verifiers import (
@@ -268,6 +269,8 @@ class GoalController:
             constraints=_coerce_str_list(constraints),
             boundaries=_coerce_str_list(boundaries),
             stop_when=stop_when or "",
+            # The setting turn's tool fence (``[]`` outside a turn) — see ``_finish``.
+            fence=current_fence(),
         )
         self._store.set(state)
         return (True, f"Goal set. {state.status_line()}")
@@ -534,31 +537,40 @@ class GoalController:
         state.finished_at = time()
         self._record_history(state, status, reason, evidence or state.last_evidence)
         self._store.set(state)
-        # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
-        await fire_goal_hooks(status, state)
-        if status == "achieved":
-            from graph.self_improvement import schedule_review
+        # The reactions below may enqueue turns (``run_in_session`` from a hook or a bus
+        # subscriber): they run under the fence of the turn that SET the goal (graph/fence_scope).
+        goal_fence = getattr(state, "fence", None)
+        with fence_scope(goal_fence):
+            # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
+            await fire_goal_hooks(status, state)
+            # The self-improvement review (`/self-improve`, a bounded reviewer with its own
+            # tool policy that may edit SOUL/skills) is skipped for a goal a FENCED turn set:
+            # its work was steered by a party the operator fenced, and a fenced turn can't
+            # run the slash command anyway — the review would only fail closed.
+            if status == "achieved" and not goal_fence:
+                from graph.self_improvement import schedule_review
 
-            schedule_review(self._config, self._scheduler, state)
-        # Broadcast on the event bus (ADR 0039) so ANY plugin or the console can react to a terminal
-        # goal — no goal_hook plugin required, no cross-dependency. `goal.achieved` on success;
-        # `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must never break finish.
-        try:
-            from graph.plugins.host import HOST
+                schedule_review(self._config, self._scheduler, state)
+            # Broadcast on the event bus (ADR 0039) so ANY plugin or the console can react to a
+            # terminal goal — no goal_hook plugin required, no cross-dependency. `goal.achieved`
+            # on success; `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must
+            # never break finish.
+            try:
+                from graph.plugins.host import HOST
 
-            if HOST.publish:
-                HOST.publish(
-                    "goal.achieved" if status == "achieved" else "goal.failed",
-                    {
-                        "session_id": state.session_id,
-                        "condition": state.condition,
-                        "status": status,
-                        "reason": reason,
-                        "evidence": evidence or state.last_evidence or "",
-                    },
-                )
-        except Exception:  # noqa: BLE001
-            log.debug("[goals] goal.* bus emit failed", exc_info=True)
+                if HOST.publish:
+                    HOST.publish(
+                        "goal.achieved" if status == "achieved" else "goal.failed",
+                        {
+                            "session_id": state.session_id,
+                            "condition": state.condition,
+                            "status": status,
+                            "reason": reason,
+                            "evidence": evidence or state.last_evidence or "",
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                log.debug("[goals] goal.* bus emit failed", exc_info=True)
         glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗", "expired": "⌛"}.get(status, "•")
         return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
 

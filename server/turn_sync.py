@@ -132,6 +132,10 @@ async def _native_turn(
     # suppress cross-session prior_sessions on the initial turn too.
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
+    if goal_active:
+        # A goal-driven turn also runs under the fence of the turn that SET the goal.
+        tool_fence = _goal_loop.goal_fenced(_goal_state, tool_fence)
+        state_extra = {**state_extra, "subagent_fence": tool_fence}
     # The streaming driver's request metadata, as far as this surface has it (#3891 F2):
     # the origin (autonomy) and the operator's HITL-answer marker.
     turn_metadata: dict[str, Any] = {"origin": origin}
@@ -259,13 +263,23 @@ async def _native_turn(
     # stops; run each continuation it asks for. No status surface here — the
     # verifier notes are skipped and only the terminal note reaches the reply.
     drive = _goal_loop.GoalDrive(session_id, config, response)
+    # The fence each continuation runs under: the turn's own, narrowed by any fenced
+    # message an earlier pass folded in (steering, #2972) — refreshed from the previous
+    # pass's checkpoint, never the turn's original (wider) one. Same as the streaming driver.
+    cont_fence = list(state_extra.get("subagent_fence") or [])
+    last_config = config
     async with contextlib.aclosing(drive.steps()) as _goal_steps:
         async for step in _goal_steps:
             if isinstance(step, _goal_loop.GoalNote):
                 continue
+            # ...and a continuation always drives the (possibly just-set) goal: its fence too.
+            cont_fence = _goal_loop.goal_fenced(
+                _goal_loop.active_goal(session_id), await _turn_stream._carried_fence(last_config, cont_fence)
+            )
             # Fresh-context iterations get a scoped config without the turn's
             # callbacks — re-attach usage_cb so their tokens count.
             cont_config = {**step.config, "callbacks": [usage_cb]}
+            last_config = cont_config
             # Lock the BASE thread (mirrors the streaming driver, which holds it
             # across the whole goal loop): same-session iterations write `config`'s
             # thread directly; fresh-context ones still exclude compact/rewind/
@@ -277,6 +291,7 @@ async def _native_turn(
                             "messages": [HumanMessage(content=step.message)],
                             "session_id": session_id,
                             **state_extra,
+                            "subagent_fence": cont_fence,
                         },
                         config=cont_config,
                     )
@@ -427,6 +442,9 @@ async def _chat_langgraph_impl(
             # retry a single time; a second failure surfaces honestly below.
             if await _chat()._overflow_compacted(e, native_tid, session_id):
                 try:
+                    # The retry is the same turn: it keeps the fence the failed pass ran
+                    # under, narrowed by anything it folded in — never a wider one.
+                    retry_fence = await _turn_stream._carried_fence(config, tool_fence)
                     return _traced(
                         await _native_turn(
                             _chat()._OVERFLOW_RETRY_PROMPT,
@@ -434,8 +452,8 @@ async def _chat_langgraph_impl(
                             session_id=session_id,
                             config=config,
                             usage_cb=usage_cb,
-                            state_extra=_state_extra,
-                            tool_fence=tool_fence,
+                            state_extra={**_state_extra, "subagent_fence": retry_fence},
+                            tool_fence=retry_fence,
                             hitl_resume=hitl_resume,
                             incognito=incognito,
                             overflow_retry=True,

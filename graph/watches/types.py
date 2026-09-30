@@ -95,6 +95,10 @@ class Watch:
     # ``run_session`` via sdk.run_in_session. Both empty → the watch reacts via hooks only.
     run_prompt: str = ""
     run_session: str = ""
+    # The tool fence of the turn that created (or last edited) the watch (#1639/#2972):
+    # the reaction turn runs under it, so a watch a fenced turn armed never reacts
+    # unfenced. ``[]`` = unfenced (the operator, or an unfenced turn).
+    fence: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time)
     last_checked: float | None = None
     last_reason: str = ""
@@ -114,7 +118,12 @@ class Watch:
     def from_dict(cls, data: dict) -> "Watch":
         # Tolerate unknown/missing keys so older files load forward-compatibly.
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in data.items() if k in known})
+        fields = {k: v for k, v in data.items() if k in known}
+        if "fence" in fields:
+            # A missing key (a pre-fence file) is unfenced; a PRESENT fence that isn't a
+            # list (``null``, a hand-edit) fails CLOSED — deny-all, never unfenced.
+            fields["fence"] = _stored_fence(fields["fence"])
+        return cls(**fields)
 
     @property
     def repeating(self) -> bool:
@@ -162,3 +171,12 @@ def _duration(seconds: float) -> str:
         if seconds < limit:
             return f"{round(seconds / div)}{unit}"
     return f"{round(seconds / 86400)}d"
+
+
+def _stored_fence(value) -> list[str]:
+    """A persisted ``fence`` → list of tool names; anything but a list → deny-all."""
+    if isinstance(value, list):
+        return [str(t) for t in value]
+    from graph.middleware.subagent_fence import FENCE_DENY_ALL
+
+    return [FENCE_DENY_ALL]
