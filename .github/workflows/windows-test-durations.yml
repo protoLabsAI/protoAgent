@@ -1,0 +1,150 @@
+name: Windows test durations
+
+# Regenerates tests/windows_test_durations.json — the pytest-split seed that balances
+# checks.yml's two `windows-python-tests` shards — FROM A WINDOWS RUNNER, then opens a
+# PR with the result (#3892). The seed was once regenerated on macOS (#3889), and since
+# Windows timings don't track macOS proportionally (process/subprocess-heavy tests are
+# far slower there) the imbalance just flipped from shard 2 to shard 1.
+#
+# One serial run over the WHOLE suite (minus tests/windows_native_exclusions.txt), not
+# just `-m platform_sensitive`: the seed serves both selections the shards run — the
+# marked subset on PRs/main and the full suite nightly — and pytest-split looks tests
+# up by node id, so a full-suite seed covers both. `--clean-durations` drops entries
+# for tests that no longer exist.
+#
+# Trigger: Actions → "Windows test durations" → Run workflow (or
+# `gh workflow run windows-test-durations.yml`), plus a monthly schedule. Run it by
+# hand when a Windows shard drifts well past the other or nears the 35-min cap.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 8 3 * *"  # 08:41 UTC on the 3rd of each month
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-test-durations
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure Windows test durations
+    runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    # Serial full suite: the nightly full run takes up to ~35 min per shard across two
+    # shards, so one runner needs roughly double plus headroom.
+    timeout-minutes: 120
+    env:
+      # Same as checks.yml's Windows lane: cp1252 test-output encoding errors aren't defects.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: astral-sh/setup-uv@v7
+        with:
+          # Must match checks.yml (lint/tests/windows-python-tests) and prepare-release.yml.
+          version: "0.11.29"
+      - name: Install dependencies (from uv.lock)
+        # Identical to checks.yml windows-python-tests, so the measured environment is
+        # the one the shards run in.
+        shell: bash
+        run: |
+          uv sync --frozen --python 3.12
+          uv pip install pytest pytest-asyncio pytest-split==0.11.0
+      - name: Run the full suite and store durations
+        # Same selection as the nightly full-suite shards (no `-m`, same exclusions), run
+        # unsplit. pytest-split writes the file at session end whether or not tests
+        # failed, and a failing test's timing is still a valid timing — so exit 1 (test
+        # failures) only warns; anything else (interrupted, internal/usage error, no
+        # tests collected) fails the run.
+        shell: bash
+        run: |
+          source .venv/Scripts/activate
+          IGNORE_ARGS=()
+          while IFS= read -r path; do
+            if [[ -n "${path}" && ! "${path}" =~ ^[[:space:]]*# ]]; then
+              IGNORE_ARGS+=("--ignore=${path}")
+            fi
+          done < tests/windows_native_exclusions.txt
+          set +e
+          python -m pytest tests/ -q "${IGNORE_ARGS[@]}" \
+            --store-durations --clean-durations \
+            --durations-path tests/windows_test_durations.json
+          status=$?
+          set -e
+          if [ "${status}" -eq 1 ]; then
+            echo "::warning::Some tests failed on Windows; their durations were still recorded."
+          elif [ "${status}" -ne 0 ]; then
+            echo "::error::pytest exited ${status}; not publishing a partial duration seed."
+            exit "${status}"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-test-durations
+          path: tests/windows_test_durations.json
+          if-no-files-found: error
+          retention-days: 30
+
+  open-pr:
+    name: Open PR with the new seed
+    # Separate job so the write-scoped token never shares a runner with the test suite.
+    needs: measure
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          # GH_PAT (like prepare-release.yml) so the pushed branch fires the PR's CI —
+          # pushes made with the default token don't trigger workflows. Forks without
+          # the secret fall back to GITHUB_TOKEN (PR opens; re-run/push to get checks).
+          token: ${{ secrets.GH_PAT || github.token }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-test-durations
+          path: ${{ runner.temp }}/durations
+      - name: Normalize and install the new seed
+        # pytest-split opens the file in text mode, so on Windows it's written with CRLF
+        # line endings; re-dump in its own format (sorted keys, indent 4, LF, no trailing
+        # newline) so the diff is only the timings.
+        run: |
+          python3 - "${RUNNER_TEMP}/durations/windows_test_durations.json" <<'EOF'
+          import json, pathlib, sys
+          data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if not data:
+              sys.exit("empty duration seed — refusing to publish")
+          out = pathlib.Path("tests/windows_test_durations.json")
+          out.write_text(json.dumps(data, sort_keys=True, indent=4), encoding="utf-8", newline="\n")
+          print(f"{len(data)} test durations")
+          EOF
+      - name: Create branch + PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          BASE_REF: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if git diff --quiet -- tests/windows_test_durations.json; then
+            echo "Seed unchanged — no PR."
+            exit 0
+          fi
+          BRANCH="ci/windows-test-durations-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+          git add tests/windows_test_durations.json
+          git commit -m "ci: refresh Windows pytest-split duration seed"
+          git push origin "${BRANCH}"
+          PR_URL=$(gh pr create \
+            --base "${BASE_REF}" \
+            --head "${BRANCH}" \
+            --label skip-changelog \
+            --title "ci: refresh Windows pytest-split duration seed" \
+            --body "Regenerated \`tests/windows_test_durations.json\` from a serial full-suite run on \`windows-latest\` (${RUN_URL}), so checks.yml's two Windows shards are balanced by Windows timings. Timings only — no test or code changes. Opened by .github/workflows/windows-test-durations.yml.")
+          echo "Opened: ${PR_URL}"

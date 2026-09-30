@@ -304,8 +304,11 @@ jobs:
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # 35, not 25: shard 2 ran 17–25 min and was cancelled at the cap on 3 of 12 main
     # commits (2026-09-29) — the duration seed was a month stale, so ~4.5k newer tests
-    # were unmeasured and piled onto one shard. Regenerate the seed when that recurs:
-    #   pytest tests/ --store-durations --durations-path tests/windows_test_durations.json
+    # were unmeasured and piled onto one shard. Regenerate the seed ON WINDOWS when that
+    # recurs (a macOS seed skews the split — #3892): run windows-test-durations.yml
+    # (`gh workflow run windows-test-durations.yml`, also monthly), which opens a PR.
+    # By hand, on a Windows box only:
+    #   uv run --with pytest-split==0.11.0 --with pytest --with pytest-asyncio python -m pytest tests/ -q --store-durations --clean-durations --durations-path tests/windows_test_durations.json
     timeout-minutes: 35
     strategy:
       fail-fast: false
