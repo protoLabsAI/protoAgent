@@ -219,6 +219,29 @@ async def test_a_turn_parked_on_hitl_echoes_the_question(env, value, expected):
 
 
 @pytest.mark.asyncio
+async def test_a_turn_with_text_that_parks_on_hitl_surfaces_the_question_after_the_text(env):
+    """#3931 (2): the pending-interrupt check runs whether or not the turn wrote text. A
+    turn that says "Let me check." and then asks used to return the text alone — the
+    question never reached the caller (the streaming driver parks on it)."""
+    g = env.install(
+        [
+            Invoke(
+                turn_result(AIMessage(content="Let me check.")),
+                steps=[set_interrupt({"question": "Which env?"})],
+                usage=[("m1", 5, 1)],
+            )
+        ]
+    )
+
+    out = await chat_mod.chat("deploy", "s1")
+
+    assert out == [
+        {"role": "assistant", "content": "Let me check.\n\n🙋 **Input needed:** Which env?", "usage": _usage(5, 1)}
+    ]
+    assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("origin", ["scheduler", "watch", "webhook", "background"])
 async def test_an_autonomous_origin_auto_answers_a_hitl_park_like_streaming(env, origin):
     """#3891 F2: ``chat()`` threads its ``origin`` to the driver, so a turn from an
@@ -598,6 +621,31 @@ async def test_goal_continuation_interrupt_surfaces_the_ask_on_an_attended_turn(
         }
     ]
     assert goals.kickoffs == [] and goals.evals == ["draft"]
+    assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
+
+
+@pytest.mark.asyncio
+async def test_a_goal_set_during_a_turn_that_parks_is_not_driven_past_the_interrupt(env, monkeypatch):
+    """#3931 (2): an attended turn that writes text AND parks stops at the park, as the
+    streaming driver stops at ``turn["paused"]`` — a goal set during that turn is neither
+    verified nor driven: no continuation's new input reaches a thread still waiting for
+    its answer, and the ask is surfaced after the turn's text."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    goals.active = False
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        [
+            Invoke(turn_result(AIMessage(content="Let me check.")), steps=[set_interrupt({"question": "Which env?"})]),
+            # Scripted so the pre-#3931 drive shows up as a failed assertion, not an overrun.
+            turn_result(AIMessage(content="kept going")),
+        ]
+    )
+    g.on_call = lambda graph, config: setattr(goals, "active", True)
+
+    out = await chat_mod.chat("ship it", "s1")
+
+    assert out[0]["content"] == "Let me check.\n\n🙋 **Input needed:** Which env?"
+    assert goals.evals == [] and len(g.invoke_calls) == 1
     assert g.resumes == [] and g.updates == [] and g.pending == [{"question": "Which env?"}]
 
 

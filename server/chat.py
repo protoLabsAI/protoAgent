@@ -343,6 +343,17 @@ def _goal_continuation_config(config: dict, goal_state) -> dict:
     it. (They had drifted: the two paths re-derived the base thread_id differently and
     only the streaming one set ``recursion_limit`` — this unifies both.) Durable state
     lives in the goal's plan artifact on disk, not the thread.
+
+    Known gap (#3931, rare): a goal-driven turn is autonomous and never parks, but a
+    fresh-context goal the operator SETS mid-turn leaves that turn attended — so if one of
+    its continuations asks (``ask_human`` / a form / an approval), both drivers park it on
+    THIS scoped ``…:goal-iter-N`` thread. The operator's answer, though, is routed by the
+    session's BASE thread id (the HITL hold / resume read the base thread's pending
+    interrupt), so it doesn't resume the parked continuation: it runs as a fresh turn on the
+    base thread, and the ``…:goal-iter-N`` interrupt is left stranded (the next iteration
+    gets ``…:goal-iter-N+1``). Durable goal state is the plan artifact, so nothing is lost
+    beyond that one ask; routing the answer here would need the parked thread id persisted
+    per session.
     """
     if not (goal_state and getattr(goal_state, "fresh_context", False)):
         return config
