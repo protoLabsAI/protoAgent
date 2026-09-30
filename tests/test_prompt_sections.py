@@ -75,8 +75,9 @@ def test_before_agent_none_without_fresh_input(tmp_path):
     from knowledge.store import KnowledgeStore
 
     km = KnowledgeMiddlewareFactory(KnowledgeStore(tmp_path / "kb.db"))
-    # #2776: no fresh human input → no recompose, no state churn at all.
-    assert km.before_agent({"messages": []}, runtime=None) is None
+    # #2776: no fresh human input → no recompose. The only update is the empty
+    # "entered at the top" marker on the run's untracked projection channel.
+    assert km.before_agent({"messages": []}, runtime=None) == {"protoagent_turn_projection": {}}
 
 
 # --- capture threading --------------------------------------------------------
