@@ -105,69 +105,85 @@ def _mw():
     return ToolDeltaMiddleware()
 
 
+def _note(update) -> str | None:
+    from graph.middleware.tool_delta import TOOL_DELTA_NOTE_KEY
+
+    return (update or {}).get(TOOL_DELTA_NOTE_KEY)
+
+
 def test_no_change_injects_nothing():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a"])
     mw = _mw()
-    mw.before_agent({}, None)
-    assert mw._pending_note is None
+    assert mw.before_agent({}, None) is None
 
 
-def test_a_change_is_stashed_for_wrap_model_call():
-    """ADR 0108 D2: the delta is no longer returned as a state update — it is
-    stashed on the middleware for ephemeral delivery via wrap_model_call."""
+def test_a_change_is_carried_in_run_state_for_wrap_model_call():
+    """ADR 0108 D2: the delta is never a ``messages`` update — it rides the run's
+    private, never-checkpointed channel to wrap_model_call (turn-scoped: the
+    middleware instance is shared by concurrent turns)."""
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "board_register_project"])
     mw = _mw()
     out = mw.before_agent({}, None)
-    assert out is None  # no state update
-    assert mw._pending_note is not None
-    assert "board_register_project" in mw._pending_note
+    assert "messages" not in out  # nothing enters the message log
+    assert "board_register_project" in _note(out)
+    assert not hasattr(mw, "_pending_note")  # never held on the shared instance
+
+
+def test_the_note_channel_is_untracked_and_private():
+    """Never checkpointed (ADR 0108 D2) and absent from the input/output schemas."""
+    import typing
+
+    from langchain.agents.middleware.types import PrivateStateAttr
+    from langgraph.channels.untracked_value import UntrackedValue
+
+    from graph.middleware.tool_delta import TOOL_DELTA_NOTE_KEY, ToolDeltaState
+
+    hint = typing.get_type_hints(ToolDeltaState, include_extras=True)[TOOL_DELTA_NOTE_KEY]
+    meta = typing.get_args(typing.get_args(hint)[0])[1:]  # NotRequired[Annotated[...]]
+    assert UntrackedValue in meta and PrivateStateAttr in meta
 
 
 def test_wrap_model_call_delivers_the_tagged_frame():
     """The frame reaches the model via request.override(messages=...), never the
     checkpointer."""
-    from dataclasses import dataclass
+    from dataclasses import dataclass, field
 
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "board_register_project"])
     mw = _mw()
-    mw.before_agent({}, None)
+    update = mw.before_agent({}, None)
 
     @dataclass
     class _Req:
         messages: list
+        state: dict = field(default_factory=dict)
         def override(self, **kw):
-            return _Req(**{**{"messages": self.messages}, **kw})
+            return _Req(**{**{"messages": self.messages, "state": self.state}, **kw})
 
     captured = []
     def handler(req):
         captured.append(req)
         return "ok"
 
-    mw.wrap_model_call(_Req(messages=[]), handler)
+    mw.wrap_model_call(_Req(messages=[], state=dict(update)), handler)
     frame = captured[0].messages[-1]
     assert "board_register_project" in frame.content
     assert frame.additional_kwargs["protoagent_injected_context"] is True
 
-
-def test_before_agent_returns_no_state_update():
-    """Delivery is ephemeral (ADR 0108 D2) — before_agent returns None."""
-    tool_delta.record_toolset(["a"])
-    tool_delta.record_toolset(["a", "b"])
-    out = _mw().before_agent({}, None)
-    assert out is None  # no state update at all
+    # A request from a run that took no note (another turn) gets nothing.
+    captured.clear()
+    mw.wrap_model_call(_Req(messages=[], state={}), handler)
+    assert captured[0].messages == []
 
 
 def test_the_injection_is_one_shot_across_turns():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
     mw = _mw()
-    mw.before_agent({}, None)
-    assert mw._pending_note is not None
-    mw.before_agent({}, None)
-    assert mw._pending_note is None
+    assert _note(mw.before_agent({}, None))
+    assert mw.before_agent({}, None) is None
 
 
 async def test_the_async_hook_behaves_identically():
@@ -175,8 +191,5 @@ async def test_the_async_hook_behaves_identically():
     tool_delta.record_toolset(["a", "b"])
     mw = _mw()
     out = await mw.abefore_agent({}, None)
-    assert out is None
-    assert mw._pending_note is not None
-    assert "b" in mw._pending_note
-    await mw.abefore_agent({}, None)
-    assert mw._pending_note is None
+    assert "b" in _note(out)
+    assert await mw.abefore_agent({}, None) is None

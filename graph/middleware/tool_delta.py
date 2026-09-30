@@ -20,18 +20,43 @@ was to mid-thread *system* messages, which this is not.
 Delivered at ``before_agent`` (turn entry): a mid-turn change can't reach the running
 graph anyway (hot reload rebuilds the graph; the old one keeps executing), so the next
 turn was always the earliest a delta could land.
+
+The note is carried in the RUN's state (a private ``UntrackedValue`` channel,
+:data:`TOOL_DELTA_NOTE_KEY`), not on this instance: one compiled graph serves every
+concurrent turn, so an instance attribute would hand one turn's notice to whichever
+turn's model calls ran next (and drop it from the turn that took it). An untracked
+channel is never checkpointed, so ADR 0108 D2 holds.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Annotated, NotRequired
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.agents.middleware.types import PrivateStateAttr
+from langgraph.channels.untracked_value import UntrackedValue
 
 from graph.context_frame import context_frame_message
 from graph.tool_delta import format_delta, take_pending_delta
 
 log = logging.getLogger(__name__)
+
+# Run-scoped channel carrying this turn's one-shot toolset notice (a str).
+TOOL_DELTA_NOTE_KEY = "protoagent_tool_delta_note"
+
+
+class ToolDeltaState(AgentState):
+    """Private, never-checkpointed, one-run channel for the toolset notice."""
+
+    protoagent_tool_delta_note: NotRequired[Annotated[str | None, UntrackedValue, PrivateStateAttr]]
+
+
+def _note_of(request) -> str:
+    try:
+        return str((getattr(request, "state", None) or {}).get(TOOL_DELTA_NOTE_KEY) or "")
+    except AttributeError:  # state not a mapping
+        return ""
 
 
 class ToolDeltaMiddleware(AgentMiddleware):
@@ -39,41 +64,36 @@ class ToolDeltaMiddleware(AgentMiddleware):
 
     ADR 0108 D2 (#3188): the notice is composed in ``before_agent`` (once per
     turn) and delivered ephemerally via ``wrap_model_call`` so it never enters
-    the checkpointer.
+    the checkpointer. It rides the run's own state (turn-scoped), never this
+    shared instance.
     """
 
-    def __init__(self):
-        super().__init__()
-        self._pending_note: str | None = None
+    state_schema = ToolDeltaState
 
     def before_agent(self, state, runtime) -> dict | None:  # type: ignore[override]
         delta = take_pending_delta()
         if delta is None:
-            self._pending_note = None
             return None
         note = format_delta(delta)
-        self._pending_note = note or None
-        return None
+        return {TOOL_DELTA_NOTE_KEY: note} if note else None
 
     async def abefore_agent(self, state, runtime) -> dict | None:  # type: ignore[override]
         return self.before_agent(state, runtime)
 
-    def wrap_model_call(self, request, handler):
-        if self._pending_note:
-            from graph.context_frame import stash_projected_context
+    @staticmethod
+    def _with_note(request):
+        note = _note_of(request)
+        if not note:
+            return request
+        from graph.context_frame import stash_projected_context
 
-            msgs = list(getattr(request, "messages", None) or [])
-            msgs.append(context_frame_message(self._pending_note))
-            stash_projected_context(self._pending_note)
-            return handler(request.override(messages=msgs))
-        return handler(request)
+        msgs = list(getattr(request, "messages", None) or [])
+        msgs.append(context_frame_message(note))
+        stash_projected_context(note)
+        return request.override(messages=msgs)
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._with_note(request))
 
     async def awrap_model_call(self, request, handler):
-        if self._pending_note:
-            from graph.context_frame import stash_projected_context
-
-            msgs = list(getattr(request, "messages", None) or [])
-            msgs.append(context_frame_message(self._pending_note))
-            stash_projected_context(self._pending_note)
-            return await handler(request.override(messages=msgs))
-        return await handler(request)
+        return await handler(self._with_note(request))

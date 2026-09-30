@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 from langchain_core.messages import HumanMessage
 
-from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.knowledge import KnowledgeMiddleware, turn_projection
 from knowledge.store import KnowledgeStore
 from knowledge.trust import DEFAULT_TRUST_TIER, tier_label, trust_label, trust_tier
 from tools.lg_tools import _build_memory_tools
@@ -99,10 +99,10 @@ def _seed_three_tiers(store: KnowledgeStore) -> None:
 
 
 def _context(mw, query="gravity fact"):
-    # ADR 0108 D2 (#3188): before_agent stashes the projection on the
-    # middleware instance; it is delivered ephemerally via wrap_model_call.
-    mw.before_agent({"messages": [HumanMessage(content=query)]}, runtime=None)
-    return mw._turn_projection or ""
+    # ADR 0108 D2 (#3188): before_agent hands the projection to the run's
+    # private channel; it is delivered ephemerally via wrap_model_call.
+    _upd = mw.before_agent({"messages": [HumanMessage(content=query)]}, runtime=None)
+    return turn_projection(_upd)[0] or ""
 
 
 def test_injection_down_weights_low_tiers(tmp_path):

@@ -95,6 +95,11 @@ seam), not via state updates that enter the checkpointer. The projection:
 3. Is NOT returned as a `messages` state update.
 4. Is NOT checkpointed.
 5. IS captured by prompt observability (D5) for after-the-fact inspection.
+6. Is turn-scoped: it travels from `before_agent()` to that run's model calls
+   in a private, untracked state channel (`UntrackedValue` + `PrivateStateAttr`
+   — never checkpointed, never in the graph's input/output), not on the
+   middleware instance, which one compiled graph shares across every
+   concurrent turn. The same holds for the one-shot toolset notice.
 
 **Migration.** Existing checkpoints with stored context frames continue to
 work: the projection layer detects frames already in the checkpoint
