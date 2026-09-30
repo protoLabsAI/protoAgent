@@ -215,27 +215,31 @@ async def _native_turn(
     raw = _last_ai(result)
     response = extract_output(raw)
 
-    # Robustness parity with the streaming path (bd-2qy): a turn can end
-    # with no assistant text — at an ask_human interrupt, after a `wait`
-    # yield, or on a scratch-only turn. Returning "" gives /api/chat +
-    # OpenAI-compat callers a silent empty 200; surface something useful.
-    if not response:
-        interrupt_val = await _chat()._pending_interrupt_value(config)
-        if interrupt_val is not None:
-            # ask_human / HITL — the graph paused for input. There's no
-            # task to park on this non-streaming surface, so echo the
-            # prompt; the caller answers with a follow-up message, which
-            # continues the thread (the checkpointer kept the history).
-            return [
-                {
-                    "role": "assistant",
-                    "content": _input_needed(interrupt_val),
-                    "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
-                }
-            ]
+    # A turn parked at a HITL interrupt (ask_human / a form / an approval) — checked
+    # whether or not the turn also produced text (#3931). There's no task to park on
+    # this non-streaming surface, so echo the ask after any text the turn wrote; the
+    # caller answers with a follow-up message, which resumes the thread (the
+    # checkpointer kept the history). It used to be checked only for an EMPTY reply: a
+    # turn that wrote "Let me check…" and then asked returned the text alone, the
+    # question never reached the caller, and a goal set during that turn was then
+    # driven (below) into a thread still waiting for its answer. Returning here is the
+    # streaming driver's `turn["paused"]` stop: no goal drive past a parked interrupt.
+    # An autonomous turn never parks — ``auto.settle`` above answered or cleared its
+    # asks — so, as for a continuation, only an attended turn is checked.
+    interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(config)
+    if interrupt_val is not None:
+        return [
+            {
+                "role": "assistant",
+                "content": (f"{response}\n\n" if response else "") + _input_needed(interrupt_val),
+                "usage": _turn_telemetry.sum_usage(usage_cb.usage_metadata),
+            }
+        ]
 
-    # Still nothing (e.g. a `wait` yield, or a tool-only turn): fall back
-    # to the last tool result so the caller gets a signal, not a blank.
+    # Robustness parity with the streaming path (bd-2qy): a turn can end
+    # with no assistant text — after a `wait` yield, or on a scratch-only turn.
+    # Returning "" gives /api/chat + OpenAI-compat callers a silent empty 200;
+    # surface something useful: fall back to the last tool result so the caller gets a signal, not a blank.
     # Both lookups are scoped to THIS turn, so reaching the final string means
     # the turn genuinely produced nothing — most likely it died mid-stream. Say
     # that plainly: the whole point of #2300 is that a caller must be able to

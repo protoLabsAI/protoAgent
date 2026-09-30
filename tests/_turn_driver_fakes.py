@@ -48,7 +48,8 @@ class ScriptedGraph:
       return value used, anything else is returned. ``usage`` outcomes fire the config's
       callbacks' ``on_llm_end`` so the non-streaming usage collector sees a model call.
     * interrupts are graph state: a ``Command(resume=…)`` input answers the first pending
-      one; ``aupdate_state(config, None)`` discards them all (the autonomous give-up).
+      one; a fresh ``{"messages": …}`` input supersedes them all (a new run);
+      ``aupdate_state(config, None)`` discards them all (the autonomous give-up).
     """
 
     def __init__(self, streams=(), invokes=()):
@@ -69,6 +70,10 @@ class ScriptedGraph:
             self.resumes.append(graph_input.resume)
             if self.pending:
                 self.pending.pop(0)
+        elif isinstance(graph_input, dict) and graph_input.get("messages"):
+            # LangGraph: fresh input on a parked thread starts a new run — the stale
+            # interrupt is superseded, not left pending behind the new turn's answer.
+            self.pending.clear()
 
     async def astream_events(self, graph_input, config=None, version=None):
         self.stream_calls.append((graph_input, config))

@@ -852,6 +852,79 @@ async def test_goal_continuation_interrupts_share_the_turns_auto_answer_budget(e
 
 
 @pytest.mark.asyncio
+async def test_fresh_context_continuation_gives_up_on_its_own_scoped_thread(env, monkeypatch):
+    """#3931 (1a): a fresh-context continuation runs on a scoped ``…:goal-iter-N`` thread,
+    so when its ask outlives the auto-answer budget the give-up must clear THAT thread's
+    interrupt — clearing the base thread (the turn's ``config``) leaves the continuation's
+    checkpoint dangling on an un-answered ask."""
+    cap = turn_control._MAX_AUTONOMOUS_AUTOANSWERS
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")], iteration=1, fresh=True)
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        streams=[[text("r1", "draft")], [text("r2", "asking"), set_interrupt("q1")]]
+        + [[set_interrupt(f"q{i}")] for i in range(2, cap + 2)]
+    )
+
+    frames = await _run("ship it")
+
+    scoped = {"configurable": {"thread_id": "a2a:s1:goal-iter-2"}, "recursion_limit": LangGraphConfig().max_iterations}
+    assert not any(k == "input_required" for k, _ in frames)
+    assert all(cfg == scoped for _, cfg in g.stream_calls[1:])  # every continuation pass is scoped
+    assert len(g.resumes) == cap
+    assert g.updates == [(scoped, None)]  # the give-up cleared the continuation's thread
+    assert frames[-1] == ("done", "asking\n\n---\nmet")
+
+
+@pytest.mark.asyncio
+async def test_initial_passes_carried_text_does_not_leak_into_a_continuation(env, monkeypatch):
+    """#3931 (1b): the text carried across an auto-answered interrupt belongs to ITS turn.
+    The initial turn's carried "Checking." must not open the continuation's text with a
+    paragraph break, nor prefix the continuation's answer (what the verifier sees and what
+    `done` carries)."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(
+        streams=[
+            [text("r1", "Checking."), set_interrupt({"question": "Which env?"})],
+            [text("r2", "Deployed.")],
+            [text("r3", "Verified.")],
+        ]
+    )
+
+    frames = await _run("ship it")
+
+    assert frames == [
+        ("text", "Checking."),
+        ("text", "\n\nDeployed."),
+        ("tool_start", "🎯 not yet"),
+        ("text", "Verified."),
+        ("tool_start", "🎯 met"),
+        ("done", "Verified.\n\n---\nmet"),
+    ]
+    assert goals.evals == ["Checking.\n\nDeployed.", "Verified."]
+    assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_with_text_that_parks_stops_before_a_goal_set_during_it(env, monkeypatch):
+    """#3931 (2), the streaming reference the non-streaming driver is aligned to: an
+    attended turn that writes text AND parks at an ask stops at the park — the ask is the
+    last frame, and a goal set during the turn is neither verified nor driven into the
+    thread that is still waiting for its answer."""
+    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")])
+    goals.active = False
+    monkeypatch.setattr(env.state, "goal_controller", goals, raising=False)
+    g = env.install(streams=[[text("r1", "Let me check."), set_interrupt({"question": "Which env?"})]])
+    g.on_call = lambda graph, config: setattr(goals, "active", True)
+
+    frames = await _run("ship it")
+
+    assert frames == [("text", "Let me check."), ("input_required", {"question": "Which env?"})]
+    assert goals.evals == [] and len(g.stream_calls) == 1
+    assert g.pending == [{"question": "Which env?"}]
+
+
+@pytest.mark.asyncio
 async def test_goal_continuation_interrupt_parks_an_attended_turn_and_stops_the_drive(env, monkeypatch):
     """#3891 F4: on an attended turn (no autonomous origin; the goal became active during
     the turn, so the turn didn't start goal-driven) a continuation's ask PARKS the turn:
