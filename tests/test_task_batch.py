@@ -160,7 +160,7 @@ class _RecordingBG:
         self.calls: list[dict] = []
 
     async def spawn(
-        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None
+        self, *, origin_session, subagent_type, description, prompt, origin_incognito=False, batch_id=None, **_kw
     ):
         self.calls.append(
             {

@@ -485,7 +485,14 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             return
         sub_tool_id = f"subagent:{sub_type}"
         yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
-        sub_out = await _chat_commands._run_parsed_subagent(sub_type, sub_prompt, session_id=session_id)
+        # The turn's model override (metadata.model — the console tab's pick) reaches the
+        # slash run under the one subagent precedence: its own pin wins over it (#3944).
+        sub_out = await _chat_commands._run_parsed_subagent(
+            sub_type,
+            sub_prompt,
+            session_id=session_id,
+            turn_model=str((request_metadata or {}).get("model") or ""),
+        )
         yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
         pre.handled = True
         yield ("done", sub_out)

@@ -124,8 +124,11 @@ def _parse_subagent_command(message: str):
     return name, rest.strip()
 
 
-async def _run_parsed_subagent(subagent_type: str, prompt: str, *, session_id: str = "") -> str:
-    """Run one subagent from a chat slash command, formatted as the reply."""
+async def _run_parsed_subagent(subagent_type: str, prompt: str, *, session_id: str = "", turn_model: str = "") -> str:
+    """Run one subagent from a chat slash command, formatted as the reply.
+
+    ``turn_model`` is the turn's model override (request ``metadata.model``); the run
+    resolves pin > override > default (#3944, ``graph/subagent_model.py``)."""
     from graph.agent import run_manual_subagent
 
     reload_callback = None
@@ -147,6 +150,7 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str, *, session_id: s
             subagent_type=subagent_type,
             reload_callback=reload_callback,
             session_id=session_id,
+            turn_model=turn_model,
         )
     except ValueError as exc:
         return f"⚠️ {exc}"

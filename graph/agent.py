@@ -690,6 +690,7 @@ async def _run_subagent(
     parent_task_id: str | None = None,
     usage_sink: list[dict] | None = None,
     session_id: str = "",
+    turn_model: str = "",
 ) -> str:
     """Run a subagent delegation, recording the edge in the delegation ledger.
 
@@ -737,6 +738,7 @@ async def _run_subagent(
                 parent_task_id=parent_task_id,
                 usage_sink=rows,
                 session_id=session_id,
+                turn_model=turn_model,
             )
         finally:
             if usage_sink is not None:
@@ -767,6 +769,7 @@ async def _run_subagent_inner(
     parent_task_id: str | None = None,
     usage_sink: list[dict] | None = None,
     session_id: str = "",
+    turn_model: str = "",
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
@@ -806,8 +809,13 @@ async def _run_subagent_inner(
     # (e.g. a creative-tuned vLLM lane with supports_function_calling: false).
     # The agent below runs with an empty toolset: one model call, text out.
 
-    # Subagent model: per-subagent override → routing.aux_model → main model.
-    sub_model = _resolve_aux_model(config, getattr(sub_config, "model", ""))
+    # Subagent model (#3944, graph/subagent_model.py): the subagent's own pinned
+    # model → the delegating turn's model override → routing.aux_model → main model.
+    from graph.subagent_model import resolve_subagent_model
+
+    sub_model = resolve_subagent_model(
+        config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or ""
+    )
     sub_llm = create_llm(config, model_name=sub_model)
 
     # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
@@ -1093,6 +1101,7 @@ async def run_manual_subagent(
     extra_tools=None,
     reload_callback=None,
     session_id: str = "",
+    turn_model: str = "",
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
 
@@ -1105,6 +1114,9 @@ async def run_manual_subagent(
     out-of-graph runner would otherwise miss. Without them a subagent whose
     allowlist names a plugin tool (e.g. a finance ``backtest_strategy``) sees
     "not a valid tool" and silently degrades. Mirrors the lead graph's tool set.
+
+    ``turn_model`` is the calling turn's model override (a ``/<subagent>`` slash run's
+    request ``metadata.model``); the subagent's own pinned model still wins (#3944).
     """
     # Mirror the lead graph's tool set so a subagent run OUTSIDE the lead's
     # `task` tool (slash `/distill`, scheduled `/dream`, the console fan-out) sees
@@ -1154,6 +1166,7 @@ async def run_manual_subagent(
         subagent_type=subagent_type,
         truncate=truncate,
         session_id=session_id,
+        turn_model=turn_model,
     )
 
 
@@ -1227,6 +1240,8 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
 
     from langchain_core.tools import InjectedToolCallId, tool
 
+    from graph.subagent_model import turn_model_from
+
     tool_map = {t.name: t for t in all_tools}
     subagent_names = list(SUBAGENT_REGISTRY.keys())
     available_subagents = ", ".join(subagent_names) or "(none configured)"
@@ -1286,6 +1301,9 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 # task(run_in_background=True) in one turn — coalesces into one push-resume.
                 # A lone task → batch_size 1 → the unchanged singleton path.
                 batch_id=_turn_id_from(state),
+                # The turn's model override (#3944): the manager resolves the job's
+                # model as the subagent's pin > this override and carries it in the fire.
+                turn_model=turn_model_from(state),
             )
             return job_id
 
@@ -1320,6 +1338,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                     truncate=None,
                     parent_task_id=tool_call_id,
                     usage_sink=usage_rows,
+                    turn_model=turn_model_from(state),
                 )
             )
             done, _pending = await asyncio.wait({inline}, timeout=auto_s)
@@ -1365,6 +1384,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 truncate=None,
                 parent_task_id=tool_call_id,
                 usage_sink=usage_rows,
+                turn_model=turn_model_from(state),
             )
         )
         delegations.register(session_id, tool_call_id, deleg, label=description)
@@ -1472,6 +1492,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                     prompt=prm,
                     origin_incognito=incognito,
                     batch_id=batch_id,
+                    turn_model=turn_model_from(state),
                 )
                 started += 1
                 lines.append(f"Task {i}: {job_id} ({st}: {desc})")
@@ -1508,6 +1529,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                         truncate=truncate,
                         parent_task_id=tool_call_id,
                         usage_sink=usage_rows,
+                        turn_model=turn_model_from(state),
                     )
                 except SubagentError as e:
                     # One failed delegation is reported inline; the batch goes on.

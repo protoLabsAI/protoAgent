@@ -185,7 +185,7 @@ async def _drain(message: str, **pre_kw):
 async def test_subagent_runner_is_reached_through_chat_commands(quiet_state, monkeypatch):
     ran: list = []
 
-    async def _run(sub_type, prompt, *, session_id=""):
+    async def _run(sub_type, prompt, *, session_id="", turn_model=""):
         ran.append((sub_type, prompt, session_id))
         return "via-chat-commands"
 
