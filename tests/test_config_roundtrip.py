@@ -152,6 +152,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_max_iterations": 8,
     "goal_no_progress_limit": 3,
     "goal_verify_timeout": 120.0,
+    "goal_max_rounds_per_turn": 50,
     "watches_enabled": True,  # #2020 flag, back ON now the feature settled (example sets it)
     "watch_interval": 30.0,  # ADR 0067 global poll cadence (example keeps `interval:` commented)
     "watch_keep_terminal_h": 24.0,  # terminal-watch retention (example keeps it commented)

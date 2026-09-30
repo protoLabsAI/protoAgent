@@ -158,13 +158,15 @@ def _build_middleware(
     # Round governance (#2710, ADR 0101 D8) — the stall guard's sibling for a
     # different failure: not a stuck loop, a LONG one. One re-grounding nudge at
     # N rounds (adherence decays with round count — the duplicate-card incident),
-    # optional hard cap. No-op until the soft threshold.
+    # optional hard cap, and a goal-turn-only cap (#3957: an unsatisfiable goal spun
+    # one turn for 130+ model calls). No-op until the soft threshold / a cap.
     from graph.middleware.round_governor import RoundGovernorMiddleware
 
     middleware.append(
         RoundGovernorMiddleware(
             nudge_after=getattr(config, "round_nudge_after", 25),
             hard_cap=getattr(config, "round_hard_cap", 0),
+            goal_cap=getattr(config, "goal_max_rounds_per_turn", 0),
         )
     )
 

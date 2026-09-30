@@ -233,7 +233,8 @@ FIELDS: list[Field] = [
         "number",
         "Model & runtime",
         "End the turn with an honest hand-back at this many model rounds. 0 (default) = "
-        "off; max_iterations remains the runaway backstop.",
+        "off; max_iterations remains the runaway backstop. Goal-driven turns also have "
+        "their own cap (Goal mode ▸ Max rounds per goal turn) — the smaller wins.",
         minimum=0,
     ),
     # ── In-flight limiter (ADR 0115 D2, #3760) ────────────────────────────────
@@ -389,6 +390,18 @@ FIELDS: list[Field] = [
     # YAML value (if any) is still honored. Tuning knobs below remain user-editable.
     Field("goal.enabled", "goal_enabled", "Enable goal mode", "bool", "Goal mode", ui_hidden=True),
     Field("goal.max_iterations", "goal_max_iterations", "Max continuations", "number", "Goal mode", minimum=1),
+    Field(
+        "goal.max_rounds_per_turn",
+        "goal_max_rounds_per_turn",
+        "Max rounds per goal turn",
+        "number",
+        "Goal mode",
+        "Model rounds one goal-driven turn may run before it ends with a hand-back and the "
+        "goal pauses (it stays active — send a message to continue). Bounds a runaway turn "
+        "on a goal that can't be met. 0 = unlimited (Round hard cap still applies if set); "
+        "with both set, the smaller wins.",
+        minimum=0,
+    ),
     Field(
         "goal.eval_model",
         "goal_eval_model",

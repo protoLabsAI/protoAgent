@@ -17,6 +17,7 @@ DECISIONS and leave the running of a graph pass to the driver:
   :meth:`GoalDrive.steps` is an async generator of :class:`GoalNote` (a status line; the
   streaming driver shows it, the other has no status surface) and
   :class:`GoalContinuation` (run this continuation, then set ``step.text`` to its output).
+  A pass the round governor ended at its round cap pauses the drive (#3957).
 * :class:`HitlAutoAnswer` — the autonomous no-deadlock policy (#1911): park / answer with
   the no-operator sentinel / give up and clear, within the ``_MAX_AUTONOMOUS_AUTOANSWERS``
   budget. Every resume is keyed by interrupt id through ``server.chat._resume_payload``
@@ -46,6 +47,18 @@ from server import turn_control as _turn_control
 
 # The note the drive ends on when the agent handed the goal to a watch/schedule (ADR 0079).
 PAUSE_NOTE = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
+
+
+def round_cap_note(marker) -> str:
+    """The note the drive ends on when the round governor ended a goal-driven turn at its
+    round cap (#3957). The goal stays ACTIVE — the next operator message (or a watch /
+    schedule fire) drives it again — but the drive does not immediately re-run a turn
+    that just ran away: each re-drive then costs at most one capped turn."""
+    return (
+        f"⏸ goal paused — round cap reached ({marker.rounds} model rounds in one turn; "
+        f"{marker.cap_key}: {marker.round_cap}). The goal stays active: send a message to continue."
+    )
+
 
 # HitlAutoAnswer.on_interrupt verdicts.
 PARK = "park"
@@ -113,11 +126,14 @@ class GoalNote:
 class GoalContinuation:
     """Run one continuation turn: ``message`` on ``config`` (fresh-context goals get a
     scoped per-iteration thread). The driver sets ``text`` to the continuation's extracted
-    output before asking for the next step; an empty ``text`` keeps the previous answer."""
+    output before asking for the next step; an empty ``text`` keeps the previous answer. It also sets
+    ``goal_pass`` to the continuation's ``goal_turn()`` marker, so a pass the round governor
+    capped pauses the drive (#3957)."""
 
     message: str
     config: dict
     text: str = ""
+    goal_pass: Any = None
 
 
 class GoalDrive:
@@ -134,6 +150,9 @@ class GoalDrive:
         self.session_id = session_id
         self.config = config
         self.text = text
+        # The ``goal_turn()`` marker of the pass just run (graph.goals.goal_turn.GoalTurn).
+        # The driver sets it after the initial pass; each continuation's rides the step.
+        self.last_pass = None
 
     async def steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
         if STATE.goal_controller is None or not STATE.goal_controller.active_goal(self.session_id):
@@ -156,8 +175,19 @@ class GoalDrive:
                 note = PAUSE_NOTE
                 yield GoalNote(note)
                 break
+            if self.last_pass is not None and self.last_pass.capped:
+                # The pass just run hit the per-turn round cap (#3957): don't re-drive a
+                # turn that ran away — pause (goal stays active) and say why. The verifier
+                # already ran above, so a capped turn that MET the goal still finishes.
+                note = round_cap_note(self.last_pass)
+                _record = getattr(STATE.goal_controller, "note_round_cap", None)
+                if _record is not None:
+                    _record(self.session_id, note)
+                yield GoalNote(note)
+                break
             step = GoalContinuation(decision.message, _chat()._goal_continuation_config(self.config, decision.state))
             yield step
+            self.last_pass = step.goal_pass
             if step.text:
                 self.text = step.text
         if note:

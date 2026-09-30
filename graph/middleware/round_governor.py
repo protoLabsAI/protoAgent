@@ -18,6 +18,13 @@ Two thresholds over the model rounds since the last REAL operator input:
   running to the recursion limit — same ``jump_to: end`` mechanism as the stall
   guard. Deliberately OFF by default: ``max_iterations`` already bounds the
   loop; the hard cap is for operators who want a tighter, message-level budget.
+- ``goal_cap`` (0 = no goal-specific cap): the same hand-back, but only on a
+  GOAL-DRIVEN turn (``graph.goals.goal_turn``) — a goal turn runs unsupervised by
+  definition, and an unsatisfiable goal once spun one turn for 130+ model calls
+  (#3957). ON by default (``goal.max_rounds_per_turn``). The effective cap on a goal
+  turn is the smaller of the non-zero ``goal_cap`` / ``hard_cap``; a non-goal turn
+  sees only ``hard_cap``. When a goal turn is ended at a cap the pass's goal marker
+  records it, and the goal drive pauses rather than re-driving (server/goal_loop.py).
 
 "Real operator input" excludes machinery: injected context frames (#2776),
 stall-guard / round-governor notes, and compaction summaries do not reset the
@@ -32,6 +39,7 @@ import logging
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import AIMessage, HumanMessage
 
+from graph.goals.goal_turn import in_goal_turn, record_round_cap
 from graph.middleware.guard_notes import guard_note, is_guard_note
 
 log = logging.getLogger(__name__)
@@ -70,25 +78,50 @@ def rounds_since_last_input(messages) -> tuple[int, bool]:
 
 
 class RoundGovernorMiddleware(AgentMiddleware):
-    """Soft re-grounding nudge at ``nudge_after`` rounds; optional hard cap."""
+    """Soft re-grounding nudge at ``nudge_after`` rounds; optional hard cap; a
+    goal-turn-only cap (``goal_cap``)."""
 
-    def __init__(self, *, nudge_after: int = 25, hard_cap: int = 0):
+    def __init__(self, *, nudge_after: int = 25, hard_cap: int = 0, goal_cap: int = 0):
         super().__init__()
         self._nudge_after = max(0, int(nudge_after))
         self._hard_cap = max(0, int(hard_cap))
+        self._goal_cap = max(0, int(goal_cap))
+
+    def effective_cap(self) -> tuple[int, str]:
+        """``(cap, config key)`` for the turn running now; ``(0, "")`` = uncapped.
+        Every turn gets ``hard_cap``; a goal-driven one also ``goal_cap`` — the smaller
+        non-zero value wins (0 on both = unlimited)."""
+        caps = []
+        if self._hard_cap:
+            caps.append((self._hard_cap, "model.round_hard_cap"))
+        if self._goal_cap and in_goal_turn():
+            caps.append((self._goal_cap, "goal.max_rounds_per_turn"))
+        return min(caps) if caps else (0, "")
 
     def _intervene(self, state) -> dict | None:
-        if not self._nudge_after and not self._hard_cap:
+        cap, cap_key = self.effective_cap()
+        if not self._nudge_after and not cap:
             return None
         rounds, nudged = rounds_since_last_input(state.get("messages") or [])
-        if self._hard_cap and rounds >= self._hard_cap:
-            text = (
-                f"I'm pausing here: this turn has run {rounds} model rounds, which is the "
-                f"configured budget (model.round_hard_cap: {self._hard_cap}). Rather than keep "
-                "going unsupervised, here's where things stand — tell me to continue (or "
-                "narrow the task) and I'll pick up exactly where I left off."
-            )
-            log.warning("[round-governor] hard cap: ending the turn at %d rounds", rounds)
+        if cap and rounds >= cap:
+            if in_goal_turn():
+                text = (
+                    f"I'm pausing here: this goal-driven turn has run {rounds} model rounds, "
+                    f"which is the configured per-turn budget ({cap_key}: {cap}). Rather than "
+                    "keep going unsupervised, here's where things stand — the goal stays "
+                    "active; tell me to continue (or narrow the task) and I'll pick up where "
+                    "I left off."
+                )
+                # The goal drive reads this and pauses instead of re-driving at once.
+                record_round_cap(rounds, cap, cap_key)
+            else:
+                text = (
+                    f"I'm pausing here: this turn has run {rounds} model rounds, which is the "
+                    f"configured budget ({cap_key}: {cap}). Rather than keep "
+                    "going unsupervised, here's where things stand — tell me to continue (or "
+                    "narrow the task) and I'll pick up exactly where I left off."
+                )
+            log.warning("[round-governor] %s: ending the turn at %d rounds", cap_key, rounds)
             return {"jump_to": "end", "messages": [AIMessage(content=text)]}
         if self._nudge_after and rounds >= self._nudge_after and not nudged:
             note = (

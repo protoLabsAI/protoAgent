@@ -879,6 +879,15 @@ class LangGraphConfig:
     goal_no_progress_limit: int = 3  # identical verifier evidence N times -> unachievable
     goal_eval_model: str = ""  # blank = main model (llm verifier / fuzzy goals)
     goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
+    # Per-TURN model-round cap for goal-driven turns (#3957) — ``max_iterations`` bounds the
+    # continuations, this bounds each one. A goal turn runs unsupervised, and an
+    # unsatisfiable goal once spun a single turn for 130+ model calls because
+    # ``model.round_hard_cap`` is off by default. At the cap the round governor ends the
+    # turn with a hand-back and the goal drive PAUSES (goal stays active) instead of
+    # re-driving. 0 = unlimited (no goal-specific cap; ``model.round_hard_cap`` still
+    # applies if set). Effective cap on a goal turn = min of the non-zero two. 50 = twice
+    # the re-grounding nudge (``round_nudge_after``), well above legitimate goal turns.
+    goal_max_rounds_per_turn: int = 50
 
     # Watches (ADR 0067) — agent-held supervised conditions (a deploy, CI, a metric),
     # polled out-of-band; when one trips the agent is resumed to react. `enabled` gates
@@ -1965,6 +1974,7 @@ class LangGraphConfig:
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
+            goal_max_rounds_per_turn=data.get("goal", {}).get("max_rounds_per_turn", cls.goal_max_rounds_per_turn),
             watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
             watch_interval=float(data.get("watches", {}).get("interval", cls.watch_interval) or cls.watch_interval),
             watch_keep_terminal_h=float(
