@@ -377,12 +377,20 @@ async def _chat_langgraph_impl(
         _trace_reply_output(reply)
         return reply
 
-    async with tracing.trace_session(
-        session_id=session_id,
-        name="chat",
-        metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": _redact(message[:100])})},
-        input=_redact(message),
-        incognito=bool(incognito),
+    from graph.subagent_model import turn_model_scope
+
+    # The turn's model override is bound for the whole turn (#3955): the pre-turn chain's
+    # `/<workflow>` steps and any plugin tool reaching `graph.sdk.run_subagent` /
+    # `spawn_background` read it there — they never see `state["model"]`.
+    async with (
+        tracing.trace_session(
+            session_id=session_id,
+            name="chat",
+            metadata={"soul_rev": soul_revision(), **({} if incognito else {"message_preview": _redact(message[:100])})},
+            input=_redact(message),
+            incognito=bool(incognito),
+        ),
+        turn_model_scope(model),
     ):
         if _telemetry_sink is not None:
             # The trace id, read HERE while the scope is open (#3945): the wrapper writes
@@ -400,8 +408,12 @@ async def _chat_langgraph_impl(
             # (work cards, room replies, a /goal SET ack — that one is folded into the
             # turn's terminal goal note), so only the terminal frame becomes the reply.
             # No request_metadata on this driver — the thread resolves from the session
-            # id alone, as it does everywhere else in this function.
-            pre = _chat_dispatch._PreTurn(message, fenced=bool(tool_fence), fence=list(tool_fence or []))
+            # id alone, as it does everywhere else in this function. The model override
+            # rides `turn_model` instead, so a `/<subagent>` or `/<workflow>` run follows
+            # it here as it does on the streaming driver (#3955).
+            pre = _chat_dispatch._PreTurn(
+                message, fenced=bool(tool_fence), fence=list(tool_fence or []), turn_model=(model or "").strip()
+            )
             last_frame: tuple | None = None
             async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
                 async for frame in _pre_frames:

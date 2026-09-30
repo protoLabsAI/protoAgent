@@ -1358,6 +1358,7 @@ async def _chat_langgraph_stream_impl(
     from observability import tracing
 
     from graph.middleware.request_context import request_metadata_scope
+    from graph.subagent_model import turn_model_scope
 
     from graph.config_io import soul_revision
 
@@ -1392,6 +1393,9 @@ async def _chat_langgraph_stream_impl(
             incognito=_trace_incognito,
         ),
         request_metadata_scope(request_metadata),
+        # The turn's model override for the paths outside the lead graph's state — a
+        # `/<workflow>` step, a plugin tool's `sdk.run_subagent` / `spawn_background` (#3955).
+        turn_model_scope((request_metadata or {}).get("model")),
     ):
         # Set only once the NATIVE turn is about to run: the overflow recovery in the
         # handler below compacts + retries that thread, and must not fire for a failure

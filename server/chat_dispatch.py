@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from graph.output_format import extract_output
+from graph.subagent_model import turn_model_scope
 
 # Bound at import, exactly as ``server.chat`` binds them: the plugin chat-command
 # dispatch and the shared slash resolver (``graph.slash_commands`` is re-imported on a
@@ -166,6 +167,10 @@ class _PreTurn:
     ``acp_exempt`` — a fenced turn the ACP refusal does NOT apply to: only the background
     manager's own detached subagent job (#1639), proven by its single-use fire token
     (``background/fire_auth.py``). It still skips every short-circuit. Default: refused.
+    ``turn_model`` — the turn's model override, for a driver that has it outside
+    ``request_metadata`` (the non-streaming ``/api/chat`` + ``/v1`` driver, which passes
+    no metadata). Blank → ``request_metadata["model"]``. A ``/<subagent>`` or
+    ``/<workflow>`` short-circuit runs under it (#3955).
     """
 
     message: str
@@ -174,6 +179,7 @@ class _PreTurn:
     fenced: bool = False
     fence: list[str] | None = None
     acp_exempt: bool = False
+    turn_model: str = ""
 
 
 async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: dict | None):
@@ -187,6 +193,9 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     propagate to the driver's turn-level handler.
     """
     message = pre.message
+    # The turn's model override (the console tab's pick / the /v1 `model`), from whichever
+    # form the driver has it in (#3955): the non-streaming driver passes no metadata.
+    turn_model = (pre.turn_model or "").strip() or str((request_metadata or {}).get("model") or "").strip()
     # A FENCED turn (#2972 — an untrusted party's message relayed by a plugin
     # surface) runs none of the short-circuits below: each one does work outside
     # the lead turn — a subagent (`/self-improve` can edit the SOUL), a workflow, a
@@ -417,8 +426,13 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             await step_q.put(event)
 
         async def _runner() -> str:
+            # Each step runs through `graph.sdk.run_subagent`, which reads the turn's model
+            # override from this scope — steps follow the turn's model like a `/<subagent>`
+            # run does, under the same pin > override > aux > main precedence (#3955).
+            # Bound inside the task: it runs in its own copied context.
             try:
-                return await _chat_commands._run_parsed_workflow(wf_name, wf_inputs, on_step=_on_step)
+                with turn_model_scope(turn_model):
+                    return await _chat_commands._run_parsed_workflow(wf_name, wf_inputs, on_step=_on_step)
             finally:
                 await step_q.put(_WF_DONE)
 
@@ -485,13 +499,13 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             return
         sub_tool_id = f"subagent:{sub_type}"
         yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
-        # The turn's model override (metadata.model — the console tab's pick) reaches the
-        # slash run under the one subagent precedence: its own pin wins over it (#3944).
+        # The turn's model override reaches the slash run under the one subagent
+        # precedence: its own pin wins over it (#3944) — on every driver (#3955).
         sub_out = await _chat_commands._run_parsed_subagent(
             sub_type,
             sub_prompt,
             session_id=session_id,
-            turn_model=str((request_metadata or {}).get("model") or ""),
+            turn_model=turn_model,
         )
         yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
         pre.handled = True
