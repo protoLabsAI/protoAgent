@@ -8,13 +8,14 @@
 3. The default: ``routing.aux_model`` (the fast helper alias), else the main model.
 
 Used by in-graph ``task`` / ``task_batch`` delegations, ``/<subagent>`` slash runs,
-and background jobs. A background job runs the full lead graph as a detached turn,
+workflow steps (``graph.sdk.run_subagent``), and background jobs. A background job runs the full lead graph as a detached turn,
 so it only needs levels 1-2 carried in its fire metadata — with neither, the fire
 carries no model and the turn runs on the configured default, exactly as before.
 """
 
 from __future__ import annotations
 
+import contextvars
 from typing import Any
 
 
@@ -31,6 +32,50 @@ def pinned_subagent_model(subagent_type: str) -> str:
         return _clean(getattr(SUBAGENT_REGISTRY.get(subagent_type), "model", ""))
     except Exception:  # noqa: BLE001 — a lookup failure means "no pin", never a failed run
         return ""
+
+
+# The in-flight turn's model override, for dispatch paths that run OUTSIDE the lead
+# graph's state (#3955): a workflow step (``graph.sdk.run_subagent``, reached from the
+# ``/<workflow>`` slash run or a plugin tool) and ``graph.sdk.spawn_background`` never
+# see ``state["model"]``. Both chat drivers bind it for the whole turn — pre-turn
+# dispatch and the graph run — so those paths resolve the same precedence as ``task``.
+_turn_model_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("protoagent_turn_model", default="")
+
+
+def current_turn_model() -> str:
+    """The in-flight turn's model override (``""`` outside a turn or with none)."""
+    return _turn_model_ctx.get()
+
+
+class turn_model_scope:
+    """Bind ``model`` as the current turn's model override for the enclosed block.
+
+    Sync (``with``) and async (``async with``) — same shape as
+    ``graph.middleware.request_context.request_metadata_scope``, including its
+    best-effort reset when the body crossed a context boundary."""
+
+    def __init__(self, model: Any):
+        self._model = _clean(model)
+        self._token: contextvars.Token | None = None
+
+    def __enter__(self):
+        self._token = _turn_model_ctx.set(self._model)
+        return self
+
+    def __exit__(self, *_exc):
+        if self._token is not None:
+            try:
+                _turn_model_ctx.reset(self._token)
+            except ValueError:
+                _turn_model_ctx.set("")
+            self._token = None
+        return False
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    async def __aexit__(self, *exc):
+        return self.__exit__(*exc)
 
 
 def turn_model_from(state: Any) -> str:
