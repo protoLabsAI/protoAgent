@@ -191,6 +191,7 @@ async def test_golden_answer_with_a_tool_round_trip(env):
     assert graph_input["messages"][0].content == "what time is it?"
     assert {k: v for k, v in graph_input.items() if k != "messages"} == {
         "session_id": "s-golden",
+        "model": "",  # stamped every turn: "" = the default, never the thread's last pick (#3957)
         "incognito": False,
         "subagent_fence": [],
     }

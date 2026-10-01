@@ -777,6 +777,8 @@ def _record_a2a_telemetry(outcome) -> None:
         # getattr-guarded like trace_id: an older/alternate producer's outcome object
         # may predate the field.
         context_tokens=int(getattr(outcome, "context_tokens", 0) or 0),
+        # What the caller asked for — the row's model when no call reported one (#3957).
+        requested_model=str(getattr(outcome, "requested_model", "") or ""),
     )
 
     # Fleet trace export → lab (the flywheel Observe, #1897). Off unless

@@ -405,6 +405,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 from server.maintenance_loops import (  # noqa: E402,F401 — re-export of the extracted maintenance loops
     _a2a_reaper_loop,
     _checkpoint_prune_loop,
+    _start_forget_sweep_once,
     _memory_guard_loop,
     _plugin_autoupdate_loop,
     _retire_thread,
@@ -728,6 +729,10 @@ def _main():
             import asyncio
 
             STATE.checkpoint_prune_task = asyncio.create_task(_checkpoint_prune_loop())
+        else:
+            # The prune loop also settles interrupted chat-delete forgets (#3957); with it
+            # off, still do that once after boot so hidden rows don't stay in limbo.
+            _start_forget_sweep_once()
 
         # Watch cadence (ADR 0067) — out-of-band verifier ticks so a met watch reacts
         # without waiting for a session turn. Started UNCONDITIONALLY: it used to ride

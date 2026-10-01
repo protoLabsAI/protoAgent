@@ -34,6 +34,7 @@ import logging
 import time
 from typing import Any
 
+from graph import upstream_errors as _upstream_errors
 from graph.fence_scope import fence_scope
 from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
@@ -880,6 +881,7 @@ async def _run_native_turn(
     images=None,
     overflow_retry=False,
     fence=None,
+    model_notice="",
 ):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
@@ -892,7 +894,7 @@ async def _run_native_turn(
     # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
     # the /effort level in the A2A request metadata). Threaded into every turn this stream
     # runs — initial, kicker, goal continuation. Unset → the configured default.
-    _model = ((request_metadata or {}).get("model") or "").strip() or None
+    _model = ((request_metadata or {}).get("model") or "").strip()
     _effort = ((request_metadata or {}).get("reasoning_effort") or "").strip() or None
     # Incognito thread (ADR 0069 D3b): the console/A2A caller sets metadata
     # `incognito: true` per message — no session persistence, no memory injection.
@@ -907,6 +909,9 @@ async def _run_native_turn(
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
+    # The metadata's model is already the turn's EFFECTIVE pick — the request's own, or
+    # the goal's inherited one (``_goal_loop.resolve_turn_model``, run by the caller).
+    _model = _model or None
     # A goal-driven turn also runs under the fence of the turn that SET the goal.
     _turn_fence = {"fence": _goal_loop.goal_fenced(_goal_state, _fence)}
     # Kickoff injection (#1910) — shared with the non-streaming driver (server/goal_loop.py).
@@ -1043,6 +1048,7 @@ async def _run_native_turn(
     # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
     # it (the status frames are transient and can coalesce).
     drive = _goal_loop.GoalDrive(session_id, config, final_text)
+    drive.notice = model_notice  # the goal's model fell back to the default (#3957)
     drive.last_pass = _goal_pass  # a round-capped pass pauses the drive (#3957)
     _last_config = config
     async with contextlib.aclosing(drive.steps()) as _goal_steps:
@@ -1304,6 +1310,18 @@ async def _force_compact_for_overflow(thread_id: str, session_id: str) -> bool:
         return False
 
 
+def _operator_caller() -> bool:
+    """True when the request was authenticated at the OPERATOR tier (ADR 0066) — the
+    console, ``/api/chat``. A federation-tier peer, and an unclassified (in-process)
+    caller, are not."""
+    try:
+        from observability import tracing
+
+        return tracing.current_trust_tier() == "operator"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id: str | None = None) -> str:
     """Log, record (#2593) and describe a failed turn — ONE classifier for both drivers,
     so the two surfaces leave the SAME transcript and the same log shape. Returns the
@@ -1312,6 +1330,16 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id
 
     ``thread_id`` is the thread the turn ran on, as the driver resolved it — the record
     must land THERE, not on a re-resolution without the turn's request metadata (#3871)."""
+    pick_failure = _model_pick_failure(exc)
+    if pick_failure is not None:
+        # The turn's model pick could not be used (#3957; the middleware logged the cause).
+        # Callers get the short message; the fix-it hint ("Run `codex login`", "Sign in
+        # again") goes to the operator's transcript always, and to the live reply only for
+        # an operator-tier caller (the console, /api/chat) — never a federation peer.
+        msg = str(pick_failure)
+        hint = getattr(pick_failure, "hint", "") or ""
+        await record_failed_turn(session_id, f"**Error:** {msg} {hint}".rstrip(), thread_id=thread_id)
+        return f"{msg} {hint}".rstrip() if hint and _operator_caller() else msg
     if _is_provider_stream_drop(exc):
         log.warning(
             "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
@@ -1360,7 +1388,7 @@ async def _chat_langgraph_stream_impl(
     from observability import tracing
 
     from graph.middleware.request_context import request_metadata_scope
-    from graph.subagent_model import turn_model_scope
+    from graph.subagent_model import inherited_pick_scope, turn_model_scope
 
     from graph.config_io import soul_revision
 
@@ -1386,6 +1414,14 @@ async def _chat_langgraph_stream_impl(
             yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
+    # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
+    # test-built, falling back to the default with a notice when it can't be. Everything
+    # below reads it from the metadata: the lead graph's stamp, the pre-turn chain's
+    # `/<workflow>` / `/<subagent>` runs, and `turn_model_scope` (sdk.run_subagent).
+    _req_model = str((request_metadata or {}).get("model") or "").strip()
+    _eff_model, _model_notice = await _goal_loop.resolve_turn_model(session_id, _req_model)
+    if _eff_model != _req_model:
+        request_metadata = {**(request_metadata or {}), "model": _eff_model}
     async with (
         tracing.trace_session(
             session_id=session_id,
@@ -1398,6 +1434,9 @@ async def _chat_langgraph_stream_impl(
         # The turn's model override for the paths outside the lead graph's state — a
         # `/<workflow>` step, a plugin tool's `sdk.run_subagent` / `spawn_background` (#3955).
         turn_model_scope((request_metadata or {}).get("model")),
+        # An INHERITED pick (the goal's, not this request's) falls back to the default if
+        # its provider rejects it mid-turn, instead of failing every re-drive (#3957).
+        inherited_pick_scope(_eff_model if _eff_model != _req_model else ""),
     ):
         # Set only once the NATIVE turn is about to run: the overflow recovery in the
         # handler below compacts + retries that thread, and must not fire for a failure
@@ -1516,7 +1555,14 @@ async def _chat_langgraph_stream_impl(
                     # before aclose() returns rather than at GC.
                     async with contextlib.aclosing(
                         _run_native_turn(
-                            message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
+                            message,
+                            session_id,
+                            config,
+                            request_metadata=request_metadata,
+                            resume=resume,
+                            images=images,
+                            # Only when there is one: keeps the call shape the seam fakes pin.
+                            **({"model_notice": _model_notice} if _model_notice else {}),
                         )
                     ) as _native_frames:
                         async for frame in _native_frames:
@@ -1559,6 +1605,8 @@ async def _chat_langgraph_stream_impl(
                                     images=None,
                                     overflow_retry=True,
                                     fence=_retry_fence,
+                                    # Only when there is one: keeps the call shape the seam fakes pin.
+                            **({"model_notice": _model_notice} if _model_notice else {}),
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:
@@ -1589,49 +1637,26 @@ _ERROR_TYPE_BY_STATUS = {
 }
 
 
-def _upstream_status(exc: BaseException | None) -> int | None:
-    """The HTTP status an upstream provider returned, if the exception carries one.
-
-    Covers the openai SDK (``status_code``), older/alternate clients (``http_status``),
-    and anything wrapping an httpx/requests response.
-    """
-    for attr in ("status_code", "http_status"):
-        code = getattr(exc, attr, None)
-        if isinstance(code, int) and 400 <= code < 600:
-            return code
-    code = getattr(getattr(exc, "response", None), "status_code", None)
-    return code if isinstance(code, int) and 400 <= code < 600 else None
+# Moved to graph/upstream_errors.py so the operator API (which may not import server)
+# classifies a failed subagent run the same way /v1 classifies a failed turn (#3957).
+_upstream_status = _upstream_errors.upstream_status
+_upstream_unreachable = _upstream_errors.upstream_unreachable
 
 
-def _upstream_unreachable(exc: BaseException | None) -> bool:
-    """True when the turn failed because the model gateway could not be REACHED at all —
-    connection refused, DNS failure, a connect/read timeout (#3946). No HTTP status comes
-    back in that case, so :func:`_upstream_status` is ``None`` and ``/v1`` used to call it
-    an internal 500; it is a failed proxy hop and belongs with the other 502s.
+def _model_pick_failure(exc: BaseException | None) -> BaseException | None:
+    """The per-turn model pick's own failure (#3957) — ``ModelOverrideError`` (an unknown
+    connection) or ``ModelUnavailableError`` (a known one that could not be built right
+    now) — found on ``exc`` or its explicit ``__cause__`` chain (a framework layer may
+    re-raise it ``from`` the original), else ``None``."""
+    from graph.middleware.model_override import ModelOverrideError, ModelUnavailableError
 
-    Walks the ``__cause__``/``__context__`` chain, since the openai SDK's
-    ``APIConnectionError`` wraps the underlying ``httpx`` transport error (and a
-    framework layer may wrap it again). Bounded, so a cyclic chain can't spin."""
-    transport: tuple[type[BaseException], ...] = (ConnectionError,)
-    try:
-        import httpx
-
-        transport += (httpx.TransportError,)
-    except ImportError:  # pragma: no cover — httpx ships with the openai SDK
-        pass
-    try:
-        import openai
-
-        transport += (openai.APIConnectionError,)  # APITimeoutError subclasses it
-    except ImportError:  # pragma: no cover
-        pass
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen and len(seen) < 16:
-        if isinstance(exc, transport):
-            return True
+        if isinstance(exc, (ModelOverrideError, ModelUnavailableError)):
+            return exc
         seen.add(id(exc))
-        exc = exc.__cause__ or exc.__context__
-    return False
+        exc = exc.__cause__
+    return None
 
 
 async def record_failed_turn(session_id: str, text: str, *, thread_id: str | None = None) -> bool:
@@ -1692,6 +1717,23 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
         # None for a failure with no exception behind it (a turn that produced no reply, #3873).
         "exception": type(exc).__name__ if exc is not None else None,
     }
+    pick_failure = _model_pick_failure(exc)
+    if pick_failure is not None:
+        from graph.middleware.model_override import ModelOverrideError
+
+        # The turn's model pick failed to build (#3957). An unknown connection is the
+        # caller's input — /v1 answers 400; a known one that could not be built right now
+        # (a sign-in refresh, a network blip) is not their fault — /v1 answers 503. Either
+        # way the short message is the one shown; the cause is in the server log.
+        err["message"] = str(pick_failure)
+        err["param"] = "model"
+        if isinstance(pick_failure, ModelOverrideError):
+            err["type"] = "invalid_request_error"
+        else:
+            err["type"] = "server_error"
+            err["model_unavailable"] = True
+            err["retry_after"] = int(getattr(pick_failure, "RETRY_AFTER_S", 30))
+        return err
     if err["upstream_status"] is None and _upstream_unreachable(exc):
         # The gateway never answered (connection refused / DNS / timeout) — no status to
         # carry, but still a failed upstream hop: /v1 maps it to 502, not 500 (#3946).

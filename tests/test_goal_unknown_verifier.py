@@ -97,3 +97,31 @@ def test_post_api_goals_unknown_verifier_is_400_and_not_kicked(ctrl, monkeypatch
     good = client.post("/api/goals", json={"session_id": "s", "condition": "x", "verifier": {"type": "plugin", "check": _KNOWN}})
     assert good.status_code == 200 and good.json()["kicked"] is True
     assert kicks == ["s"]
+
+
+@pytest.mark.asyncio
+async def test_chat_goal_unknown_verifier_type_says_so_not_safety_refusal(ctrl):
+    """#3957: an unknown verifier TYPE from chat used to hit the trust-gate first and come
+    back as the "For safety, a command/test/ci…" refusal — misleading for a typo."""
+    reply = await ctrl.parse_control('/goal {"condition": "x", "verifier": {"type": "comand", "command": "true"}}', "s", trusted=False)
+    assert "unknown verifier type 'comand'" in reply
+    assert "For safety" not in reply
+    assert not GoalController.is_set_ack(reply)
+    assert ctrl.active_goal("s") is None
+
+
+@pytest.mark.asyncio
+async def test_chat_goal_known_unsafe_type_still_hits_trust_gate(ctrl):
+    reply = await ctrl.parse_control('/goal {"condition": "x", "verifier": {"type": "command", "command": "true"}}', "s", trusted=False)
+    assert "For safety" in reply
+    assert ctrl.active_goal("s") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vtype", ['["command"]', '{"x": 1}', "7", "null"])
+async def test_chat_goal_non_string_verifier_type_is_refused_not_a_crash(ctrl, vtype):
+    """CodeRabbit (controller): a JSON verifier may carry any value as its type; a list
+    is unhashable, so the membership check raised TypeError instead of refusing."""
+    reply = await ctrl.parse_control(f'/goal {{"condition": "x", "verifier": {{"type": {vtype}}}}}', "s", trusted=False)
+    assert "unknown verifier type" in reply
+    assert ctrl.active_goal("s") is None

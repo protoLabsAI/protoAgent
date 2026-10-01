@@ -717,7 +717,7 @@ async def _run_subagent(
     passed no ``usage_sink``, and the cost is recorded on the failure path too — rows are
     extracted in place, so a salvaged or raising run still bills what it spent.
     """
-    from graph import ledger
+    from graph import delegation_usage, ledger
 
     rows: list[dict] = []
     with ledger.dispatch(
@@ -745,6 +745,9 @@ async def _run_subagent(
         finally:
             if usage_sink is not None:
                 usage_sink.extend(rows)
+            # A short-circuit `/<subagent>` / `/<workflow>` run has no lead-graph stream to
+            # carry these rows to its turn's telemetry — it binds a collector instead (#3957).
+            delegation_usage.note(rows)
             edge.cost_usd = _delegation_cost_usd(rows)
 
 

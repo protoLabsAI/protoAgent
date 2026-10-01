@@ -26,11 +26,13 @@ from graph.fence_scope import current_fence, fence_scope
 from graph.goals.store import GoalStore
 from graph.goals.types import GoalState
 from graph.goals.verifiers import (
+    VERIFIERS,
     VerifierInvoker,
     VerifyContext,
     is_safe_workspace_relative_data_path,
     run_verifier,
 )
+from graph.subagent_model import current_turn_model
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +130,14 @@ class GoalController:
                 '`/goal {"condition": "...", "verifier": {"type": "command", '
                 '"command": "pytest -q"}}`.'
             )
+        # Validate the verifier TYPE before the trust-gate (#3957): an unknown type is a
+        # typo, not a safety question — answering it with the "for safety…" refusal sent
+        # the operator looking for a trust problem that wasn't there.
+        # Shape-guarded: a JSON verifier can carry any value as its type (a list is
+        # unhashable, and `in` on the dict would raise rather than refuse it).
+        vtype = (spec or {}).get("type", "llm") if isinstance(spec, dict) else None
+        if not isinstance(vtype, str) or vtype not in VERIFIERS:
+            return f"Could not set goal: unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}."
         # Phase 1 trust-gate (#1407): a /goal CHAT message is untrusted — both server call
         # sites pass trusted=False, because a federation peer / API client shares the
         # operator bearer today, so we can't tell them apart. Refuse the code-exec verifiers
@@ -152,6 +162,8 @@ class GoalController:
             spec = {**spec, "workspace_relative": True}
         state = GoalState(
             session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
             condition=condition,
             verifier=spec,
             fresh_context=fresh_context,
@@ -283,6 +295,8 @@ class GoalController:
             return (False, err)
         state = GoalState(
             session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
             condition=condition,
             verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
@@ -331,6 +345,8 @@ class GoalController:
             return (False, err)
         state = GoalState(
             session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
             condition=condition,
             verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
@@ -511,6 +527,15 @@ class GoalController:
             "evidence": (evidence or "")[:500],
         }
         state.history = (list(state.history) + [event])[-_HISTORY_CAP:]
+
+    def remember_model(self, session_id: str, model: str) -> None:
+        """An explicit pick on a turn that drives this goal becomes the goal's model
+        (#3957), so the next re-drive without a pick (a watch / schedule fire) uses it."""
+        state = self.active_goal(session_id)
+        if state is None or state.model == (model or ""):
+            return
+        state.model = model or ""
+        self._store.set(state)
 
     def note_round_cap(self, session_id: str, reason: str) -> None:
         """Record on the goal's timeline that the drive paused because a goal-driven turn hit

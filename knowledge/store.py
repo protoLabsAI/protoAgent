@@ -270,6 +270,29 @@ def _source_clause(source: str, source_types=None, prefix: bool = False) -> tupl
     return " AND ".join(clauses), params
 
 
+# ``invalidation_reason`` of a row the chat delete's forget holds (#3957): exactly
+# ``forget_pending:<session>`` for a row it hid, ``forget_pending:<session>|prev:<reason>``
+# for one that was already invalidated (its own reason kept for a restore).
+FORGET_PENDING_PREFIX = "forget_pending:"
+FORGET_PREV_SEP = "|prev:"
+
+
+def _forget_selection(namespace: str, sources, source_types) -> tuple[str, list]:
+    """``OR`` of ``namespace = ?`` and each ``(source, prefix)`` source clause (see
+    :func:`_source_clause`); ``("", [])`` when nothing is selected."""
+    clauses: list[str] = []
+    params: list = []
+    if namespace and str(namespace).strip():
+        clauses.append("namespace = ?")
+        params.append(str(namespace))
+    for source, prefix in sources or ():
+        where, p = _source_clause(source, source_types, prefix)
+        if where:
+            clauses.append(f"({where})")
+            params.extend(p)
+    return " OR ".join(clauses), params
+
+
 def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace") -> tuple[str, list[str]]:
     """SQL predicate + params for a namespace filter (ADR 0069 D3a).
 
@@ -1639,6 +1662,130 @@ class KnowledgeStore:
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] delete_by_source failed: %s", exc)
             return 0
+        finally:
+            db.close()
+
+    # ── forget-on-delete, in two phases (#3957) ──────────────────────────────────
+    # The chat delete's "forget what this chat saved" must neither lose memory when the
+    # chat's retirement fails nor delete what a harvest ticked alongside it produces. So
+    # the rows are first HIDDEN (stamped ``invalidated_at`` with a per-session marker —
+    # recall and fact dedupe skip invalidated rows, so the harvest re-derives against a
+    # store that no longer holds them), the chat is retired, and only then are exactly the
+    # hidden rows hard-deleted. A failed retirement restores them.
+
+    def mark_forget_pending(self, marker: str, *, namespace: str = "", sources=(), source_types=None) -> int:
+        """Phase 1: hide every VALID chunk in ``namespace`` or matching one of
+        ``sources`` (``(source, prefix)`` pairs, narrowed to ``source_types``) by stamping
+        ``invalidated_at`` + ``invalidation_reason = marker``. Rows in that selection that
+        are already invalidated (supersession history, a pending bulk delete) keep their
+        ``invalidated_at`` and get ``marker|prev:<their reason>``: nothing is deleted here,
+        so a restore puts every row back exactly as it was (review #3957 B2). Returns the
+        count hidden. An empty marker or selection does nothing."""
+        where, params = _forget_selection(namespace, sources, source_types)
+        if not marker or not where:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            now = _now_iso()
+            db.execute(
+                "UPDATE chunks SET invalidation_reason = ? || COALESCE(invalidation_reason, ''), updated_at = ? "
+                f"WHERE ({where}) AND invalidated_at IS NOT NULL "
+                f"AND substr(COALESCE(invalidation_reason, ''), 1, {len(FORGET_PENDING_PREFIX)}) != '{FORGET_PENDING_PREFIX}'",
+                [marker + FORGET_PREV_SEP, now, *params],
+            )
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
+                f"WHERE ({where}) AND invalidated_at IS NULL",
+                [now, marker, now, *params],
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def count_forget_pending(self, marker: str) -> int:
+        """How many chunks are still held under ``marker`` (a previous attempt's)."""
+        return self._forget_pending_exec("SELECT COUNT(*) FROM chunks WHERE {held}", marker, count=True)
+
+    def restore_forget_pending(self, marker: str) -> int:
+        """Undo phase 1 — the retirement failed: un-hide every chunk ``marker`` hid, and
+        give the already-invalidated ones their own reason back. ONE transaction: a
+        half-applied restore would leave a marker that a later forget resumes without
+        hiding the rows the first half already un-hid. Raises on a database error."""
+        if not marker:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        n = len(marker + FORGET_PREV_SEP)
+        try:
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
+                (marker,),
+            )
+            restored = int(cur.rowcount)
+            db.execute(
+                f"UPDATE chunks SET invalidation_reason = NULLIF(substr(invalidation_reason, {n + 1}), '') "
+                f"WHERE substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
+                (marker,),
+            )
+            db.commit()
+            return restored
+        except sqlite3.DatabaseError:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def delete_forget_pending(self, marker: str) -> int:
+        """Phase 2 — the chat is retired: HARD-delete exactly the chunks ``marker`` holds
+        (the hidden ones and the already-invalidated ones it tagged)."""
+        return self._forget_pending_exec("DELETE FROM chunks WHERE {held}", marker)
+
+    def forget_pending_markers(self) -> dict[str, str]:
+        """Every marker still holding rows → when it was stamped (the earliest
+        ``updated_at`` among them, UTC ISO). Feeds the orphan sweep."""
+        db = self._get_db()
+        if db is None:
+            return {}
+        try:
+            rows = db.execute(
+                "SELECT invalidation_reason, MIN(updated_at) FROM chunks "
+                f"WHERE substr(invalidation_reason, 1, {len(FORGET_PENDING_PREFIX)}) = '{FORGET_PENDING_PREFIX}' "
+                "GROUP BY invalidation_reason"
+            ).fetchall()
+        finally:
+            db.close()
+        out: dict[str, str] = {}
+        for reason, at in rows:
+            marker = str(reason).split(FORGET_PREV_SEP, 1)[0]
+            if marker not in out or (at and str(at) < out[marker]):
+                out[marker] = str(at or "")
+        return out
+
+    def _forget_pending_exec(self, sql: str, marker: str, *, count: bool = False) -> int:
+        """Run one marker-scoped statement. ``{held}`` in ``sql`` expands to "held by
+        ``marker``": exactly it, or ``marker|prev:…``. Raises on a database error: these
+        back an explicit delete that must fail loudly rather than report memory gone (or
+        kept) when it isn't."""
+        if not marker:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            n = len(marker + FORGET_PREV_SEP)
+            held = f"(invalidation_reason = ? OR substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}')"
+            cur = db.execute(sql.format(held=held), (marker, marker))
+            if count:
+                return int(cur.fetchone()[0])
+            db.commit()
+            return int(cur.rowcount)
         finally:
             db.close()
 

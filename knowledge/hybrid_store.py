@@ -419,6 +419,29 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().delete_by_namespace(namespace)
 
+    def delete_forget_pending(self, marker: str) -> int:
+        """Drop the held rows' vectors first (no FK cascade on the side table)."""
+        if marker:
+            from knowledge.store import FORGET_PREV_SEP
+
+            n = len(marker + FORGET_PREV_SEP)
+            self._drop_vectors(
+                "SELECT id FROM chunks WHERE invalidation_reason = ? "
+                f"OR substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
+                [marker, marker],
+            )
+        return super().delete_forget_pending(marker)
+
+    def _drop_vectors(self, id_select: str, params) -> None:
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            db.execute(f"DELETE FROM chunk_vectors WHERE chunk_id IN ({id_select})", params)
+            db.commit()
+        finally:
+            db.close()
+
     def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False) -> int:
         """Drop the matching chunks AND their vectors (no FK cascade on the side
         table) — the :meth:`delete_by_namespace` pattern, same predicate for both."""

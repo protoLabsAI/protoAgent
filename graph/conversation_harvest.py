@@ -18,6 +18,7 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.output_format import extract_output
+from knowledge.store import FORGET_PENDING_PREFIX  # the store owns the marker format
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +196,176 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
         log.warning("[forget] knowledge store has no delete_by_source — harvested rows of %s kept", session_id)
     log.info("[forget] removed %d knowledge row(s) written by session %s", removed, session_id)
     return removed
+
+
+# ── the chat delete's forget, in two phases (#3957) ─────────────────────────────────
+# ``forget_conversation_memory`` deletes in one step, so the delete route had to pick an
+# order and lose something either way: forget BEFORE retiring and a failed retirement
+# leaves the chat with its memory already gone; forget AFTER and a harvest ticked
+# alongside dedupes its facts against the chat's own older rows — which the forget then
+# deletes, so the re-derived facts vanish with them (and a retried forget, with a fresh
+# cutoff, took the first attempt's summary too). Hiding the rows first resolves both: the
+# harvest runs against a store that no longer shows them (it writes everything it derives
+# afresh), a failed retirement un-hides them, and the final delete removes exactly the
+# hidden rows — never anything the harvest wrote.
+
+
+# Sessions whose delete-with-forget is running in THIS process right now — the orphan
+# sweep must never touch their marker (it would restore rows mid-retirement).
+FORGETS_IN_FLIGHT: set[str] = set()
+
+
+def forget_marker(session_id: str) -> str:
+    """The per-session ``invalidation_reason`` the hidden rows carry. Per SESSION, not per
+    attempt, so a retried delete finds what an earlier attempt hid."""
+    return f"{FORGET_PENDING_PREFIX}{session_id}"
+
+
+def _forget_selection_kwargs(session_id: str, thread_ids) -> dict:
+    sources = []
+    for tid in dict.fromkeys(str(t) for t in thread_ids if t):
+        sources += [(tid, False), (f"{tid}:goal-iter-", True)]
+    return {"namespace": f"chat-archive:{session_id}", "sources": sources, "source_types": _FORGET_SOURCE_TYPES}
+
+
+def begin_forget(knowledge_store, session_id: str, thread_ids) -> str | None:
+    """Phase 1 — before the chat is retired: hide exactly the rows
+    :func:`forget_conversation_memory` would delete. Returns the marker to finish or
+    abort with, or ``None`` when the store can't do it in two phases (a plugin backend):
+    the caller then falls back to the one-step delete after retirement.
+
+    A RETRY (rows still hidden under this session's marker — an earlier attempt retired
+    the chat but did not finish) hides nothing new: everything the chat wrote before that
+    attempt is already hidden, and what was written since is that attempt's harvest,
+    which must survive. Raises on a store error — nothing has been retired yet."""
+    mark = getattr(knowledge_store, "mark_forget_pending", None)
+    count = getattr(knowledge_store, "count_forget_pending", None)
+    if knowledge_store is None or not session_id or not callable(mark) or not callable(count):
+        return None
+    marker = forget_marker(session_id)
+    if count(marker):
+        log.info("[forget] resuming an earlier forget of session %s", session_id)
+        return marker
+    hidden = mark(marker, **_forget_selection_kwargs(session_id, thread_ids))
+    log.info("[forget] hid %d knowledge row(s) of session %s pending retirement", hidden, session_id)
+    return marker
+
+
+def abort_forget(knowledge_store, marker: str | None) -> int:
+    """The retirement failed: un-hide the rows (nothing is forgotten). Never raises — it
+    runs on the failure path and must not mask the retirement's own error."""
+    restore = getattr(knowledge_store, "restore_forget_pending", None)
+    if not marker or not callable(restore):
+        return 0
+    try:
+        return int(restore(marker) or 0)
+    except Exception:  # noqa: BLE001 — the retry finds the rows still hidden and finishes
+        log.warning("[forget] could not un-hide rows under %s", marker, exc_info=True)
+        return 0
+
+
+def finish_forget(knowledge_store, marker: str) -> int:
+    """Phase 2 — the chat is retired: hard-delete exactly the hidden rows. Raises on a
+    store error (the delete fails and can be retried; the rows stay hidden meanwhile)."""
+    removed = int(knowledge_store.delete_forget_pending(marker) or 0)
+    log.info("[forget] removed %d knowledge row(s) under %s", removed, marker)
+    return removed
+
+
+def forget_retirement_incomplete(
+    marked_at: str, *, thread_ids, checkpoint_path: str | None = None, checkpointer=None
+) -> bool:
+    """Did the retirement of a forgotten chat NOT complete? True iff one of its
+    ``thread_ids`` still holds a checkpoint written BEFORE the forget hid its rows
+    (``marked_at``, the marker's UTC-ISO stamp). The ONE rule both the delete route (on a
+    failed retirement) and the orphan sweep settle a marker by (#3957): incomplete →
+    restore the rows; complete → the hidden rows are the chat's to delete, and anything
+    written since is its harvest. A resumed marker proves nothing either way — a retried
+    delete can fail before, or after, the checkpoints are gone.
+
+    Reads the SQLite checkpoint file when there is one, else the checkpointer's ``list``.
+    A checkpoint that can't be dated counts as "before" (the conservative answer). Raises
+    when there is nothing to consult; callers then keep the marker as it is."""
+    from datetime import datetime
+
+    before = datetime.fromisoformat(marked_at).timestamp() if marked_at else None
+    tids = [t for t in dict.fromkeys(str(t) for t in thread_ids or ()) if t]
+    if checkpoint_path:
+        from graph.checkpoint_prune import thread_has_checkpoints_before
+
+        return any(thread_has_checkpoints_before(checkpoint_path, t, before) for t in tids)
+    lister = getattr(checkpointer, "list", None)
+    if not callable(lister):
+        raise RuntimeError("no checkpoint store to consult")
+    for tid in tids:
+        for tup in lister({"configurable": {"thread_id": tid}}):
+            ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
+            if not ts or before is None or datetime.fromisoformat(ts).timestamp() < before:
+                return True
+    return False
+
+
+def settle_failed_retirement(
+    knowledge_store, marker: str, *, thread_ids, checkpoint_path: str | None = None, checkpointer=None
+) -> str:
+    """The delete route's retirement raised with ``marker`` held: restore the rows when
+    the retirement never completed, else KEEP the marker so no later attempt hides (and
+    deletes) what this chat's harvest wrote. Undecidable ⇒ keep — hidden rows are never
+    lost, and the sweep decides later. Returns ``"restored"`` or ``"kept"``. Never raises:
+    it runs on the failure path."""
+    try:
+        marked_at = (knowledge_store.forget_pending_markers() or {}).get(marker, "")
+        incomplete = forget_retirement_incomplete(
+            marked_at, thread_ids=thread_ids, checkpoint_path=checkpoint_path, checkpointer=checkpointer
+        )
+    except Exception:  # noqa: BLE001 — keep: the sweep settles it once it can tell
+        log.warning("[forget] could not tell whether %s's retirement completed — keeping it", marker, exc_info=True)
+        return "kept"
+    if incomplete:
+        abort_forget(knowledge_store, marker)
+        return "restored"
+    log.info("[forget] retirement of %s had completed — keeping its hidden rows for the retry", marker)
+    return "kept"
+
+
+def sweep_orphaned_forgets(knowledge_store, *, retirement_incomplete) -> dict[str, int]:
+    """Settle forgets a crash (or a failed final delete nobody retried) left behind
+    (review #3957 B1): rows hidden under a ``forget_pending:<session>`` marker that no
+    running delete owns. For each such marker:
+
+    - ``retirement_incomplete(session_id, marked_at)`` is True — the session still has
+      checkpoints written BEFORE the rows were hidden, so its retirement never completed:
+      the delete did not happen, so its forget must not either — RESTORE the rows;
+    - otherwise the conversation was retired (it has no checkpoints, or only ones written
+      after the forget began — the same id reused by a kept tab): FINISH the delete.
+
+    A predicate that raises leaves the marker alone for the next sweep. Returns
+    ``{"finished": n, "restored": n}`` (markers, not rows). Never raises."""
+    out = {"finished": 0, "restored": 0}
+    markers = getattr(knowledge_store, "forget_pending_markers", None)
+    if not callable(markers):
+        return out
+    try:
+        pending = markers() or {}
+    except Exception:  # noqa: BLE001 — the next sweep retries
+        log.warning("[forget] could not list pending forgets", exc_info=True)
+        return out
+    for marker, marked_at in pending.items():
+        session_id = marker[len(FORGET_PENDING_PREFIX) :]
+        if not session_id or session_id in FORGETS_IN_FLIGHT:
+            continue
+        try:
+            if retirement_incomplete(session_id, marked_at):
+                abort_forget(knowledge_store, marker)
+                out["restored"] += 1
+                log.warning("[forget] restored rows of an interrupted forget (session %s never retired)", session_id)
+            else:
+                finish_forget(knowledge_store, marker)
+                out["finished"] += 1
+                log.warning("[forget] finished an interrupted forget of retired session %s", session_id)
+        except Exception:  # noqa: BLE001 — leave it for the next sweep
+            log.warning("[forget] could not settle the pending forget of session %s", session_id, exc_info=True)
+    return out
 
 
 _SUMMARY_PROMPT = (

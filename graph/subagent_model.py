@@ -106,3 +106,59 @@ def resolve_subagent_model(
         if aux:
             return aux
     return None
+
+
+# ── an INHERITED pick (#3957 review) ────────────────────────────────────────────────
+# A turn's pick is either carried by the request (it may hard-fail the turn) or
+# inherited from the goal the turn drives (``GoalState.model``) — and an inherited pick
+# must never lock the goal into failing. The drivers bind this marker for a turn whose
+# pick is inherited; the model middleware falls back to the default when the provider
+# rejects it at call time and flags the marker, so the driver can say so.
+
+
+class InheritedPick:
+    """The turn's inherited model pick; ``fell_back`` is set once a call on it was
+    rejected and the turn moved to the default model. Mutable on purpose: LangGraph runs
+    nodes in a COPY of the invoking context — the copy holds this same object."""
+
+    def __init__(self, model: str):
+        self.model = _clean(model)
+        self.fell_back = False
+
+
+_inherited_ctx: contextvars.ContextVar[InheritedPick | None] = contextvars.ContextVar(
+    "protoagent_inherited_pick", default=None
+)
+
+
+def current_inherited_pick() -> InheritedPick | None:
+    return _inherited_ctx.get()
+
+
+class inherited_pick_scope:
+    """Bind ``model`` as the turn's INHERITED pick (``""`` binds nothing). Sync and async,
+    like :class:`turn_model_scope`; yields the marker (or ``None``)."""
+
+    def __init__(self, model: Any):
+        self._pick = InheritedPick(model) if _clean(model) else None
+        self._token: contextvars.Token | None = None
+
+    def __enter__(self):
+        if self._pick is not None:
+            self._token = _inherited_ctx.set(self._pick)
+        return self._pick
+
+    def __exit__(self, *_exc):
+        if self._token is not None:
+            try:
+                _inherited_ctx.reset(self._token)
+            except ValueError:
+                _inherited_ctx.set(None)
+            self._token = None
+        return False
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    async def __aexit__(self, *exc):
+        return self.__exit__(*exc)

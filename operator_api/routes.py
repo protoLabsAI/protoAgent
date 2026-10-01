@@ -146,6 +146,48 @@ def _http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
+def _subagent_http_error(exc: Exception) -> HTTPException:
+    """``_http_error`` for a subagent run, which fails on the MODEL hop more than anywhere
+    else (#3957). A provider 429 used to come back as a 500 — "protoAgent is broken" —
+    when it means "back off and retry"; a client's backoff only keys on the real status.
+    Same mapping as ``/v1``: 429 mirrored (with ``Retry-After`` when the provider sent
+    one), any other upstream failure or an unreachable gateway a 502; everything else
+    keeps ``_http_error``'s 400/409/500."""
+    from graph.upstream_errors import upstream_http_status, upstream_status_in_chain
+
+    status = upstream_http_status(exc)
+    if status is None:
+        return _http_error(exc)
+    upstream = upstream_status_in_chain(exc)
+    if status == 429:
+        detail = f"The model provider rate-limited this subagent run (upstream HTTP 429) — retry later. {exc}"
+    elif upstream is not None:
+        detail = f"The model provider rejected this subagent run (upstream HTTP {upstream}). {exc}"
+    else:
+        detail = f"The model gateway could not be reached for this subagent run. {exc}"
+    headers = None
+    retry_after = _retry_after(exc) if status == 429 else None
+    if retry_after:
+        headers = {"Retry-After": retry_after}
+    return HTTPException(status_code=status, detail=detail, headers=headers)
+
+
+def _retry_after(exc: BaseException | None) -> str | None:
+    """The provider's ``Retry-After`` header off the first exception in the explicit
+    ``__cause__`` chain whose ``response`` carries one, else ``None``. Best-effort."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        try:
+            value = getattr(getattr(exc, "response", None), "headers", {}).get("retry-after")
+        except Exception:  # noqa: BLE001 — a header we can't read is just absent
+            value = None
+        if value:
+            return str(value)
+        seen.add(id(exc))
+        exc = exc.__cause__
+    return None
+
+
 def _model_payload(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
@@ -355,7 +397,7 @@ def register_operator_routes(
             output = await subagent_run(_model_payload(req))
             return {"ok": True, "session_id": req.session_id, "output": output}
         except Exception as exc:
-            raise _http_error(exc) from exc
+            raise _subagent_http_error(exc) from exc
 
     @app.post("/api/subagents/batch")
     async def _subagent_batch(req: SubagentBatchRequest):
@@ -363,7 +405,7 @@ def register_operator_routes(
             output = await subagent_batch(_model_payload(req))
             return {"ok": True, "session_id": req.session_id, "output": output}
         except Exception as exc:
-            raise _http_error(exc) from exc
+            raise _subagent_http_error(exc) from exc
 
     @app.get("/api/tasks/status")
     async def _tasks_status(project_path: str = ""):

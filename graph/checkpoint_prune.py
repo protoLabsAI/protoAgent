@@ -67,6 +67,24 @@ def find_aged_threads(db_path: str, max_age_seconds: float, *, now: float | None
         conn.close()
 
 
+def thread_has_checkpoints_before(db_path: str, thread_id: str, before: float | None) -> bool:
+    """Does ``thread_id`` hold a checkpoint written before ``before`` (unix seconds;
+    ``None`` = any)? A checkpoint whose id isn't a datable UUIDv6 counts as before —
+    the conservative answer for the forget sweep, whose "yes" restores rows."""
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        rows = conn.execute("SELECT checkpoint_id FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchall()
+    finally:
+        conn.close()
+    for (cid,) in rows:
+        if before is None:
+            return True
+        ts = uuidv6_unix_seconds(cid)
+        if ts is None or ts < before:
+            return True
+    return False
+
+
 def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
     """Delete all checkpoints + writes for a thread. Returns checkpoints removed.
 

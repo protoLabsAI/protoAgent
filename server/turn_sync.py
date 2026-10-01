@@ -108,6 +108,7 @@ async def _native_turn(
     overflow_retry: bool = False,
     origin: str = "local",
     telemetry_sink: dict[str, Any] | None = None,
+    model_notice: str = "",
 ) -> list[dict[str, Any]]:
     """One native turn on this session's thread, as the reply list. Run once
     for the operator's message and, after a context-overflow compaction, once
@@ -275,7 +276,11 @@ async def _native_turn(
     # stops; run each continuation it asks for. No status surface here — the
     # verifier notes are skipped and only the terminal note reaches the reply.
     drive = _goal_loop.GoalDrive(session_id, config, response)
+    drive.notice = model_notice  # the goal's model fell back to the default (#3957)
     drive.last_pass = goal_pass  # a round-capped pass pauses the drive (#3957)
+    # This driver locks the thread per pass, not across the drive: the pause note's
+    # checkpoint write takes the lock itself, like any other writer to the thread.
+    drive.note_lock = lambda: _turn_control._thread_lock(config["configurable"]["thread_id"])
     # The fence each continuation runs under: the turn's own, narrowed by any fenced
     # message an earlier pass folded in (steering, #2972) — refreshed from the previous
     # pass's checkpoint, never the turn's original (wider) one. Same as the streaming driver.
@@ -359,10 +364,20 @@ async def _chat_langgraph_impl(
     ``origin`` (the ``chat()`` surface) decides whether the turn is autonomous (#3891 F2).
     """
     from observability import tracing
+
+    # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
+    # test-built, falling back to the default with a notice when it can't be. The lead
+    # graph's stamp, the pre-turn chain and `turn_model_scope` all use it.
+    requested_model = (model or "").strip()
+    model, model_notice = await _goal_loop.resolve_turn_model(session_id, requested_model)
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
     # Incognito is stamped explicitly every turn (the channel persists in the
     # checkpointer — an omitted key would inherit the previous turn's value).
-    _state_extra = {"model": model} if (model or "").strip() else {}
+    # Stamped EVERY turn, like incognito below (#3957): `model` is a checkpointed channel,
+    # so omitting it on a no-pick turn inherited the previous turn's pick — and a pick that
+    # can no longer be built then failed every later turn on the chat, with no way back
+    # ("Default" sends nothing). "" = the configured default.
+    _state_extra: dict[str, Any] = {"model": (model or "").strip()}
     _state_extra["incognito"] = bool(incognito)
     # The tool fence (#2972) is stamped every turn for the same reason: a fenced
     # turn on a session must not leave the NEXT (unfenced) turn on that session
@@ -378,7 +393,7 @@ async def _chat_langgraph_impl(
         _trace_reply_output(reply)
         return reply
 
-    from graph.subagent_model import turn_model_scope
+    from graph.subagent_model import inherited_pick_scope, turn_model_scope
 
     # The turn's model override is bound for the whole turn (#3955): the pre-turn chain's
     # `/<workflow>` steps and any plugin tool reaching `graph.sdk.run_subagent` /
@@ -392,6 +407,9 @@ async def _chat_langgraph_impl(
             incognito=bool(incognito),
         ),
         turn_model_scope(model),
+        # An INHERITED pick (the goal's, not this request's) falls back to the default if
+        # its provider rejects it mid-turn, instead of failing every re-drive (#3957).
+        inherited_pick_scope(model if model != requested_model else ""),
     ):
         if _telemetry_sink is not None:
             # The trace id, read HERE while the scope is open (#3945): the wrapper writes
@@ -400,6 +418,10 @@ async def _chat_langgraph_impl(
             # row lost its link to its Langfuse trace. Same capture-during-the-turn rule
             # as the A2A executor's `_capture_trace_id`.
             _telemetry_sink["trace_id"] = tracing.current_trace_id() or ""
+            # The model the caller asked for (#3957): what the row names when no model call
+            # reported one — a failed turn, a short-circuit — instead of the configured
+            # default, which is what ran only when nothing was requested.
+            _telemetry_sink["requested_model"] = requested_model
         # Set only once the NATIVE turn is about to run — the overflow recovery below
         # compacts + retries that thread (same contract as the streaming driver, #3805).
         native_tid: str | None = None
@@ -416,9 +438,23 @@ async def _chat_langgraph_impl(
                 message, fenced=bool(tool_fence), fence=list(tool_fence or []), turn_model=(model or "").strip()
             )
             last_frame: tuple | None = None
-            async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
-                async for frame in _pre_frames:
-                    last_frame = frame
+            delegated_usage: list[dict] = []
+            try:
+                async with contextlib.aclosing(
+                    _chat_dispatch._pre_turn_dispatch(pre, session_id, None)
+                ) as _pre_frames:
+                    async for frame in _pre_frames:
+                        if frame and frame[0] == "usage":
+                            # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this
+                            # surface renders no frames, but its telemetry row bills them.
+                            delegated_usage.append(frame[1])
+                            continue
+                        last_frame = frame
+            finally:
+                # Handed over even when the dispatch raised: a failed slash run's row
+                # still bills what it spent before it failed.
+                if _telemetry_sink is not None and delegated_usage:
+                    _telemetry_sink["delegated_usage"] = delegated_usage
             if pre.handled:
                 if _telemetry_sink is not None:
                     # A short-circuit (slash command, @-address, /goal control…) is a turn
@@ -475,6 +511,7 @@ async def _chat_langgraph_impl(
                     incognito=incognito,
                     origin=origin,
                     telemetry_sink=_telemetry_sink,
+                    model_notice=model_notice,
                 )
             )
         except Exception as e:
@@ -500,6 +537,7 @@ async def _chat_langgraph_impl(
                             overflow_retry=True,
                             origin=origin,
                             telemetry_sink=_telemetry_sink,
+                            model_notice=model_notice,
                         )
                     )
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly

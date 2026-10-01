@@ -108,9 +108,11 @@ async def test_golden_plain_answer(env):
     assert out == [{"role": "assistant", "content": "The answer.", "usage": _usage(100, 20)}]
     ((graph_input, config),) = g.invoke_calls
     assert [(type(m), m.content) for m in graph_input["messages"]] == [(HumanMessage, "hello")]
-    # incognito + fence are stamped EVERY turn (the channels persist); model only when set.
+    # incognito + fence + model are stamped EVERY turn (the channels persist; #3957: an
+    # unstamped model inherited the previous turn's pick — "" is the configured default).
     assert {k: v for k, v in graph_input.items() if k != "messages"} == {
         "session_id": "s1",
+        "model": "",
         "incognito": False,
         "subagent_fence": [],
     }
@@ -145,7 +147,7 @@ async def test_overrides_are_stamped_into_the_graph_input(env):
         "incognito": True,
         "subagent_fence": ["read_file"],
     }
-    assert "model" not in second  # a blank override is no override
+    assert second["model"] == ""  # a blank override is no override — stamped, not inherited (#3957)
     assert "message_preview" not in env.trace.sessions[0]["metadata"]  # incognito trace
 
 
@@ -365,6 +367,7 @@ async def test_goal_kickoff_continuation_and_done_note(env, monkeypatch):
     assert [m.content for m in cont_input["messages"]] == ["keep going"]
     assert {k: v for k, v in cont_input.items() if k != "messages"} == {
         "session_id": "s1",
+        "model": "",
         "incognito": False,
         "subagent_fence": [],
     }
