@@ -914,7 +914,10 @@ FIELDS: list[Field] = [
         "History: reclaim disk after prune",
         "bool",
         "Knowledge",
-        "After a prune frees rows, VACUUM + truncate the WAL so the DB file shrinks instead of holding the freed space.",
+        "After a prune frees rows, truncate the WAL and incrementally vacuum so the DB file shrinks instead of "
+        "holding the freed space. A DB created before incremental vacuum (auto_vacuum=NONE) isn't fully "
+        "VACUUMed while the server runs (it would lock out writes): its freed space is reused, and it shrinks "
+        "after a one-time `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` with the server stopped.",
     ),
     Field(
         "knowledge.facts",

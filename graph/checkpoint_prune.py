@@ -96,11 +96,6 @@ def thread_has_checkpoints_before(db_path: str, thread_id: str, before: float | 
     return False
 
 
-def _like_escape(text: str) -> str:
-    """``text`` as a literal LIKE prefix under ``ESCAPE '\\'``."""
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
     """Delete all checkpoints + writes for a thread. Returns checkpoints removed.
 
@@ -110,10 +105,12 @@ def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int
     conn.execute("PRAGMA busy_timeout=5000")
     try:
         if cascade:
-            # ``%`` / ``_`` in the id are literals, not wildcards (#3973): an unescaped
-            # ``a_b`` would also cascade into ``aXb:goal-iter-*``.
-            where = "thread_id=? OR thread_id LIKE ? ESCAPE '\\'"
-            args = (thread_id, _like_escape(thread_id) + ":goal-iter-%")
+            # An exact, case-sensitive prefix match (#3973) — not LIKE, whose ``%`` / ``_``
+            # wildcards and ASCII case-folding made deleting ``a_b`` also take
+            # ``aXb:goal-iter-*`` and ``chat-1`` take ``CHAT-1:goal-iter-*``.
+            prefix = thread_id + ":goal-iter-"
+            where = "thread_id=? OR substr(thread_id, 1, ?) = ?"
+            args = (thread_id, len(prefix), prefix)
             n = conn.execute(f"SELECT COUNT(*) FROM checkpoints WHERE {where}", args).fetchone()[0]
             conn.execute(f"DELETE FROM checkpoints WHERE {where}", args)
             conn.execute(f"DELETE FROM writes WHERE {where}", args)
@@ -153,14 +150,22 @@ def prune_checkpoints(
             import time as _time
 
             cutoff = (now if now is not None else _time.time()) - max_age_seconds
+            # Take the write lock BEFORE the scan (#3973): otherwise a chat reopened
+            # mid-scan writes a new turn that the delete below then removes with the
+            # thread it judged idle. Scan + delete are one short transaction; live
+            # writers wait on their busy_timeout, readers (WAL) aren't blocked.
+            conn.execute("BEGIN IMMEDIATE")
             # Only TTL threads we can date *and* that are entirely old.
             aged = [(tid,) for tid, ts in _newest_stamps(conn).items() if ts is not None and ts < cutoff]
             conn.executemany("DELETE FROM checkpoints WHERE thread_id=?", aged)
             conn.executemany("DELETE FROM writes WHERE thread_id=?", aged)
+            conn.commit()
             threads_deleted = len(aged)
 
         # 2. Per-thread cap — keep the latest N checkpoints per namespace, found in ONE
-        #    windowed query (#3973 — was a query per thread and per namespace).
+        #    windowed query (#3973 — was a query per thread and per namespace). Its own
+        #    transaction: it deletes only the ids it listed, so a turn written meanwhile
+        #    is never among them.
         #    Background threads get a tighter cap (resume-from-latest only).
         keep = max(1, keep_per_thread)
         bg_keep = keep if background_keep is None else max(1, background_keep)
@@ -200,9 +205,11 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
       live checkpoint write for its duration — too costly for a periodic sweep on
       a running server. Left alone, the freed pages stay on the freelist and are
       reused by later writes, so the file stops growing; it just doesn't shrink.
-      ``full_vacuum=True`` is for an offline / maintenance caller (or run
-      ``VACUUM`` with the server stopped), which also leaves the file at whatever
-      ``auto_vacuum`` mode was last set.
+      ``full_vacuum=True`` (an offline / maintenance caller) sets
+      ``auto_vacuum=INCREMENTAL`` and then VACUUMs — the one-time migration, so
+      every later reclaim is the cheap incremental kind. By hand, with the server
+      stopped: ``PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`` (a bare ``VACUUM``
+      shrinks once but leaves the mode NONE).
 
     Returns ``{"wal_truncated": int, "pages_reclaimed": int}``.
     Best-effort: any error is caught and logged; the returned counts are zero
@@ -232,12 +239,17 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
         if av_mode == 2:  # INCREMENTAL
             conn.execute("PRAGMA incremental_vacuum")
         elif full_vacuum:
+            # The mode change only takes effect through the VACUUM that follows it —
+            # together they migrate the DB, so later reclaims shrink it incrementally.
+            conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             conn.execute("VACUUM")
         else:
             _log.info(
                 "[checkpoint-prune] %s predates auto_vacuum=INCREMENTAL — skipping the full "
-                "VACUUM (it would lock out live writes); freed pages are reused. Run VACUUM "
-                "with the server stopped to shrink the file.",
+                "VACUUM (it would lock out live writes); freed pages are reused. To migrate "
+                "it so later prunes shrink the file, run with the server stopped: "
+                "sqlite3 %s 'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'",
+                db_path,
                 db_path,
             )
 

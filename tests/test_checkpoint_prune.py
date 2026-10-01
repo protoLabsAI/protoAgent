@@ -296,11 +296,39 @@ def test_reclaim_skips_full_vacuum_on_a_legacy_db_by_default(tmp_path, monkeypat
     assert _page_count(db) == before
 
 
-def test_reclaim_full_vacuum_is_opt_in(tmp_path):
-    """An offline / maintenance caller can still opt in to the full VACUUM."""
+def test_reclaim_full_vacuum_is_opt_in_and_migrates_to_incremental(tmp_path):
+    """An offline / maintenance caller can opt in to the full VACUUM — and it MIGRATES the
+    DB to auto_vacuum=INCREMENTAL (#3973), so every later reclaim shrinks it cheaply. A
+    bare VACUUM shrank it once and left it NONE, never to shrink again."""
     db = _legacy_db_with_free_pages(tmp_path)
     res = reclaim(db, full_vacuum=True)
     assert res["pages_reclaimed"] > 0, "full VACUUM should reduce page_count after deletions on auto_vacuum=NONE"
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2  # INCREMENTAL
+        conn.execute("DELETE FROM t WHERE id > 1")
+        conn.commit()
+    finally:
+        conn.close()
+    assert reclaim(db)["pages_reclaimed"] > 0  # the periodic (non-opt-in) reclaim now shrinks it
+
+
+def test_reclaim_legacy_skip_hint_names_the_migrating_command(tmp_path, caplog):
+    """The skip's hint must name the command that actually fixes it — the mode switch AND
+    the VACUUM — not a bare VACUUM that leaves the DB unable to shrink (#3973)."""
+    import logging
+
+    db = _legacy_db_with_free_pages(tmp_path)
+    with caplog.at_level(logging.INFO, logger="protoagent.checkpoint_prune"):
+        reclaim(db)
+    assert "PRAGMA auto_vacuum=INCREMENTAL; VACUUM;" in caplog.text
+
+
+def test_vacuum_setting_help_does_not_promise_a_full_vacuum():
+    from graph.settings_schema import FIELDS
+
+    (field,) = [f for f in FIELDS if f.attr == "checkpoint_vacuum"]
+    assert "PRAGMA auto_vacuum=INCREMENTAL; VACUUM;" in field.description
 
 
 def _insert_cp(conn, thread_id, checkpoint_id, ns=""):
@@ -322,19 +350,49 @@ def test_delete_thread_cascade_treats_like_wildcards_in_the_id_literally(tmp_pat
     db = str(tmp_path / "c.db")
     _seed(db, threads=("seed",), turns=1)
     conn = sqlite3.connect(db)
-    for i, tid in enumerate(
-        ("a2a:s_1", "a2a:s_1:goal-iter-1", "a2a:sX1:goal-iter-1", "a2a:p%", "a2a:p%:goal-iter-1", "a2a:pZZ:goal-iter-1")
-    ):
-        _insert_cp(conn, tid, f"00000000-0000-6000-8000-00000000000{i}")
+    tids = (
+        "a2a:s_1",
+        "a2a:s_1:goal-iter-1",
+        "a2a:sX1:goal-iter-1",
+        "a2a:p%",
+        "a2a:p%:goal-iter-1",
+        "a2a:pZZ:goal-iter-1",
+        # LIKE folds ASCII case: deleting chat-1 must not take CHAT-1's iterations.
+        "chat-1",
+        "chat-1:goal-iter-2",
+        "CHAT-1:goal-iter-3",
+        # A backslash is a literal too (the old escape char).
+        "a2a:b\\x",
+        "a2a:b\\x:goal-iter-1",
+        "a2a:b\\\\x:goal-iter-1",
+        "a2a:bx:goal-iter-1",
+    )
+    for i, tid in enumerate(tids):
+        _insert_cp(conn, tid, f"00000000-0000-6000-8000-{i:012x}")
     conn.commit()
     conn.close()
 
-    delete_thread(db, "a2a:s_1", cascade=True)
-    delete_thread(db, "a2a:p%", cascade=True)
+    for tid in ("a2a:s_1", "a2a:p%", "chat-1", "a2a:b\\x"):
+        delete_thread(db, tid, cascade=True)
 
-    for gone in ("a2a:s_1", "a2a:s_1:goal-iter-1", "a2a:p%", "a2a:p%:goal-iter-1"):
+    for gone in (
+        "a2a:s_1",
+        "a2a:s_1:goal-iter-1",
+        "a2a:p%",
+        "a2a:p%:goal-iter-1",
+        "chat-1",
+        "chat-1:goal-iter-2",
+        "a2a:b\\x",
+        "a2a:b\\x:goal-iter-1",
+    ):
         assert _count(db, "checkpoints", gone) == 0 and _count(db, "writes", gone) == 0, gone
-    for kept in ("a2a:sX1:goal-iter-1", "a2a:pZZ:goal-iter-1"):
+    for kept in (
+        "a2a:sX1:goal-iter-1",
+        "a2a:pZZ:goal-iter-1",
+        "CHAT-1:goal-iter-3",
+        "a2a:b\\\\x:goal-iter-1",
+        "a2a:bx:goal-iter-1",
+    ):
         assert _count(db, "checkpoints", kept) == 1 and _count(db, "writes", kept) == 1, kept
 
 
@@ -396,3 +454,49 @@ def test_aged_lookup_and_prune_are_single_queries_not_n_plus_1(tmp_path, monkeyp
         assert _count(db, "checkpoints", f"a2a:background:{t}") == 1
         assert _count(db, "writes", f"live{t}") == 4
     assert _count(db, "checkpoints", "undatable") == 1
+
+
+def test_age_ttl_scan_and_delete_are_one_write_transaction(tmp_path, monkeypatch):
+    """#3973: the TTL scan holds the write lock through its delete. A chat reopened while
+    the scan runs (a new turn on a thread the scan has judged idle) must either be held
+    off until the prune commits, or survive it — never be written and then deleted."""
+    from graph import checkpoint_prune as cp
+
+    now = time.time()
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("seed",), turns=1)
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM checkpoints")
+    conn.execute("DELETE FROM writes")
+    for i in range(3):
+        _insert_cp(conn, "old", _uuid6(now - 40 * 86400 + i, i))
+    conn.commit()
+    conn.close()
+
+    new_turn = _uuid6(now, 99)
+    outcome: list[str] = []
+    real = cp.uuidv6_unix_seconds
+
+    def _reopen_mid_scan(cid):
+        if not outcome:  # the live saver writes a new turn while the scan runs
+            live = sqlite3.connect(db, timeout=0)
+            try:
+                _insert_cp(live, "old", new_turn)
+                live.commit()
+                outcome.append("written")
+            except sqlite3.OperationalError as exc:
+                assert "locked" in str(exc)
+                outcome.append("held off")
+            finally:
+                live.close()
+        return real(cid)
+
+    monkeypatch.setattr(cp, "uuidv6_unix_seconds", _reopen_mid_scan)
+    prune_checkpoints(db, keep_per_thread=10, max_age_seconds=30 * 86400, now=now)
+
+    conn = sqlite3.connect(db)
+    try:
+        survived = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE checkpoint_id=?", (new_turn,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert outcome == ["held off"] or survived == 1, (outcome, survived)
