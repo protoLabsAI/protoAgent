@@ -173,6 +173,73 @@ def test_two_phase_forget_drops_hybrid_vectors(tmp_path):
     assert _contents(store) == ["kept"]
 
 
+def test_forget_delete_degrades_to_chunk_only_on_a_vector_table_error(tmp_path):
+    """#3973: a vector-table error in ``_drop_vectors`` (the forget-delete's vector
+    cleanup) must degrade like the sibling cleanups — chunk-only delete — not abort."""
+    from graph.conversation_harvest import begin_forget
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    db = tmp_path / "kb.db"
+    store = HybridKnowledgeStore(db, embed_fn=lambda t: [1.0, 0.0])
+    store.add_chunk("gone", domain="fact", source="a2a:s1", source_type="extracted")
+    store.add_chunk("kept", domain="fact", source="a2a:s2", source_type="extracted")
+    marker = begin_forget(store, "s1", ["a2a:s1"])
+
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("DROP TABLE chunk_vectors")  # any vector-table DatabaseError
+        conn.commit()
+    finally:
+        conn.close()
+
+    store.delete_forget_pending(marker)
+    assert _contents(store) == ["kept"]
+
+
+def test_forget_delete_raises_on_a_transient_vector_error_and_keeps_the_rows(tmp_path, monkeypatch):
+    """#3973: only the permanent "no such table" degrades. A transient error (database is
+    locked) must raise — finish_forget fails and is retried with the marker kept — not
+    delete the chunks and orphan their embeddings for good."""
+    import pytest
+
+    from graph.conversation_harvest import begin_forget, finish_forget
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    db = tmp_path / "kb.db"
+    store = HybridKnowledgeStore(db, embed_fn=lambda t: [1.0, 0.0])
+    store.add_chunk("gone", domain="fact", source="a2a:s1", source_type="extracted")
+    store.add_chunk("kept", domain="fact", source="a2a:s2", source_type="extracted")
+    marker = begin_forget(store, "s1", ["a2a:s1"])
+
+    real_get_db = store._get_db
+
+    class _Locked:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *a):
+            if "chunk_vectors" in sql:
+                raise sqlite3.OperationalError("database is locked")
+            return self._conn.execute(sql, *a)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr(store, "_get_db", lambda: _Locked(real_get_db()))
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        finish_forget(store, marker)
+    monkeypatch.undo()
+
+    assert _contents(store) == ["gone", "kept"]  # nothing deleted: the retry can finish it
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM chunk_vectors").fetchone()[0] == 2
+    finally:
+        conn.close()
+    finish_forget(store, marker)  # the retry
+    assert _contents(store) == ["kept"]
+
+
 def test_begin_forget_declines_a_store_without_the_primitives():
     from graph.conversation_harvest import begin_forget
 

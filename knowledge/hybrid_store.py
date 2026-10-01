@@ -439,6 +439,15 @@ class HybridKnowledgeStore(KnowledgeStore):
         try:
             db.execute(f"DELETE FROM chunk_vectors WHERE chunk_id IN ({id_select})", params)
             db.commit()
+        except sqlite3.OperationalError as exc:
+            # Only the PERMANENT case degrades to a chunk-only delete (#3973): with no
+            # vector table there is nothing to orphan. Anything else (e.g. a transient
+            # "database is locked") raises, so finish_forget fails and is retried with
+            # the marker kept — swallowing it would delete the chunks and orphan their
+            # embeddings for good.
+            if "no such table" not in str(exc):
+                raise
+            log.warning("[knowledge] drop vectors skipped: %s", exc)
         finally:
             db.close()
 

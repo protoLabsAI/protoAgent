@@ -628,6 +628,28 @@ async def test_goal_continuation_interrupt_surfaces_the_ask_on_an_attended_turn(
 
 
 @pytest.mark.asyncio
+async def test_every_pending_interrupt_read_is_under_the_thread_lock(env, monkeypatch):
+    """#3973: the post-turn pending-interrupt read happens while this turn still holds the
+    per-thread lock — as the streaming driver's and the continuation's checks do. Read after
+    release, a queued writer on the thread (a resume, or a turn that parks its own ask)
+    could run in between and the turn would report a state it didn't leave."""
+    env.install([Invoke(turn_result(AIMessage(content="Let me check.")), steps=[set_interrupt({"question": "Q?"})])])
+    real = chat_mod._pending_interrupt_value
+    held: list[bool] = []
+
+    async def _spy(config):
+        held.append(turn_control._thread_lock(config["configurable"]["thread_id"]).locked())
+        return await real(config)
+
+    monkeypatch.setattr(chat_mod, "_pending_interrupt_value", _spy)
+
+    out = await chat_mod.chat("deploy", "s1")
+
+    assert out[0]["content"] == "Let me check.\n\n🙋 **Input needed:** Q?"
+    assert held and all(held), held
+
+
+@pytest.mark.asyncio
 async def test_a_goal_set_during_a_turn_that_parks_is_not_driven_past_the_interrupt(env, monkeypatch):
     """#3931 (2): an attended turn that writes text AND parks stops at the park, as the
     streaming driver stops at ``turn["paused"]`` — a goal set during that turn is neither

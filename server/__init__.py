@@ -515,7 +515,9 @@ def _main():
         "--headless",
         action="store_true",
         default=os.environ.get("PROTOAGENT_HEADLESS", "").lower() in ("1", "true", "yes"),
-        help="DEPRECATED alias for --ui console.",
+        help="DEPRECATED alias for --ui console (NOT --ui none, despite the name — it "
+        "predates the tiers and meant 'no Gradio, keep the React console'; ADR 0010 "
+        "§2.1). For no UI at all use --ui none. Env: PROTOAGENT_HEADLESS.",
     )
     parser.add_argument(
         "--setup",
@@ -538,6 +540,11 @@ def _main():
     # Resolve the UI tier: explicit --ui/PROTOAGENT_UI wins; else the deprecated
     # --headless/PROTOAGENT_HEADLESS maps to 'console'; else default 'console' (the
     # React console — the old 'full' Gradio default was removed).
+    # 'console', not 'none', is deliberate (#3973): before ADR 0010 `--headless` meant
+    # "skip Gradio, still serve the React console" (it was the desktop sidecar's flag),
+    # and the ADR kept it as a back-compatible alias for exactly that. Remapping it to
+    # 'none' would silently drop the console for any old launcher/script still passing
+    # it. Callers wanting no UI use --ui none / PROTOAGENT_UI=none.
     if args.ui:
         ui = args.ui
     elif args.headless:
