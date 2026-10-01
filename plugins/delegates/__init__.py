@@ -152,7 +152,7 @@ def _build_delegate_to(registry: DelegateRegistry):
 
         try:
             # A coding delegate reports its live progress into this delegation's ask row
-            # (#3975) — a LangChain custom event under THIS tool's run, which the turn
+            # (#3979) — a LangChain custom event under THIS tool's run, which the turn
             # stream keys to the row by run id. Foreground only: the background branch
             # above returned already, and reports through its job instead.
             with progress_sink(_tool_progress_sink()):

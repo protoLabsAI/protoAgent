@@ -820,12 +820,12 @@ export type ToolCall = {
   durationMs?: number;
   /** id of the enclosing `task` tool, if this call ran inside a subagent. */
   parentId?: string;
-  /** An `@`-mention card's addressed coding agents' live state (#3975), keyed by
+  /** An `@`-mention card's addressed coding agents' live state (#3979), keyed by
    *  participant name — `@a @b` is one card over two delegates. */
   delegateProgress?: Record<string, DelegateProgress>;
 };
 
-/** A tool call a coding-agent delegate is making, as its live view shows it (#3975). */
+/** A tool call a coding-agent delegate is making, as its live view shows it (#3979). */
 export type DelegateTool = {
   id?: string;
   name: string;
@@ -839,7 +839,7 @@ export type DelegateTool = {
 export type DelegatePlanEntry = { content: string; status: "pending" | "in_progress" | "completed" | string };
 
 /** A coding-agent delegation's live state — a WHOLE snapshot (latest wins), bounded
- *  server-side (graph/delegate_progress.py), on the delegate-progress-v1 frame (#3975). */
+ *  server-side (graph/delegate_progress.py), on the delegate-progress-v1 frame (#3979). */
 export type DelegateProgress = {
   target: string;
   plan?: DelegatePlanEntry[];
@@ -1122,7 +1122,7 @@ export type Delegation = {
   error?: string;
   /** The ask's id on the wire (the delegation's run) — what its live progress is keyed by. */
   id?: string;
-  /** A coding delegate's live state while it works, and its final state after (#3975). */
+  /** A coding delegate's live state while it works, and its final state after (#3979). */
   progress?: DelegateProgress;
 };
 

@@ -1,4 +1,4 @@
-"""A coding-agent delegation's LIVE progress reaches the console's delegation card (#3975).
+"""A coding-agent delegation's LIVE progress reaches the console's delegation card (#3979).
 
 Before this, an `@claude-code <task>` showed a spinner and a clock for the whole run:
 the ACP adapter awaited ``client.prompt()`` with no callbacks, so the coder's plan, tool
@@ -194,7 +194,7 @@ async def test_tool_refinement_renames_in_place_and_end_settles_it():
 
 
 async def test_client_drops_the_replayed_block_and_reports_plan_kind_and_locations(coder, tmp_path):
-    """The doubled first sentence (#3975): claude-agent-acp streams a text block as
+    """The doubled first sentence (#3979): claude-agent-acp streams a text block as
     deltas, then re-sends the whole block as one chunk. Neither the adjacent-chunk guard
     nor the whole-reply halving could see it, so the reply opened with its first
     sentence twice — in the stream AND the stored reply."""

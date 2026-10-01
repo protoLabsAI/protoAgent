@@ -154,7 +154,7 @@ const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 // BEFORE the answer artifact, so the answer can be attributed as it is drawn.
 const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
 const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
-// A coding-agent delegation's live state (#3975) — a whole, bounded snapshot keyed by
+// A coding-agent delegation's live state (#3979) — a whole, bounded snapshot keyed by
 // the card it belongs to (an `@` mention card, or a `delegate_to` ask).
 const DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json";
 
@@ -291,7 +291,7 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
 }
 
 
-/** Decode a coding delegate's live-progress snapshot (#3975), or null. */
+/** Decode a coding delegate's live-progress snapshot (#3979), or null. */
 export function delegateProgressFromParts(parts?: RawPart[]): DelegateProgressEvent | null {
   return delegateProgressFromWire(dataByMime(parts, DELEGATE_PROGRESS_MIME));
 }
@@ -464,7 +464,7 @@ export type TurnStreamHandlers = {
    *  is a participant speaking, so each becomes its own authored message. */
   onRoomReply?: (reply: RoomReply) => void;
   onSteerConsumed?: (items: ConsumedSteer[]) => void;
-  /** A coding delegate's live state (#3975) — a whole snapshot for the card `evt.id`. */
+  /** A coding delegate's live state (#3979) — a whole snapshot for the card `evt.id`. */
   onDelegateProgress?: (evt: DelegateProgressEvent) => void;
   /** A durable rebuild only (`replaySteers`): an operator message that arrived MID-task —
    *  the answer that continued a paused task on its own id (A2A §3.4.3, #3930). The
@@ -504,7 +504,7 @@ function replayTaskSnapshot(
     if (reasoning) handlers.onReasoning?.(reasoning);
     const component = componentFromParts(msg.parts);
     if (component) handlers.onComponent?.(component);
-    // A delegate's progress snapshot (#3975): the durable store keeps the LATEST per
+    // A delegate's progress snapshot (#3979): the durable store keeps the LATEST per
     // delegation, so a reattach or reload lands the run's final state on its card.
     const progress = delegateProgressFromParts(msg.parts);
     if (progress) handlers.onDelegateProgress?.(progress);

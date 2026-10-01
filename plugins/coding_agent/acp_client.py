@@ -49,7 +49,7 @@ from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
 _DUPLICATE_CHUNK_FLOOR = 24
 
-# The SEGMENT replay (#3975): claude-agent-acp streams a text block as deltas, then can
+# The SEGMENT replay (#3979): claude-agent-acp streams a text block as deltas, then can
 # re-send the whole block as ONE more chunk — "I'll look at calc.py first.I'll look at
 # calc.py first." Shorter than this, a segment that equals the next chunk is left alone.
 _SEGMENT_REPLAY_FLOOR = 8
@@ -600,7 +600,7 @@ class AcpClient:
         # The previous chunk verbatim, for the adjacent-duplicate guard (#3407).
         self._last_chunk = ""
         # The narration since the last tool call (or turn start) and how many chunks
-        # built it, for the segment-replay guard (#3975).
+        # built it, for the segment-replay guard (#3979).
         self._segment = ""
         self._segment_chunks = 0
         # How many tool calls the coder made this turn — counted in ``_handle_update``
@@ -1076,7 +1076,7 @@ class AcpClient:
                         text[:48],
                     )
                     return
-                # The SEGMENT replay (#3975): the agent streamed a text block as deltas and
+                # The SEGMENT replay (#3979): the agent streamed a text block as deltas and
                 # then re-sent the WHOLE block as one more chunk. The adjacent guard above
                 # cannot see it (no single delta equals the block), and the halving collapse
                 # only catches a reply that is ONE block — so a reply that narrates, calls a

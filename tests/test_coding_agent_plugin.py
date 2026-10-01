@@ -1729,7 +1729,7 @@ async def test_a_repeat_across_a_tool_call_survives():
 
 @pytest.mark.asyncio
 async def test_a_streamed_block_replayed_whole_is_dropped():
-    """The doubled FIRST sentence (#3975, captured live from claude-agent-acp on
+    """The doubled FIRST sentence (#3979, captured live from claude-agent-acp on
     2026-10-01): the block streams as deltas, then arrives AGAIN as one chunk before the
     tool call. No single delta equals it (the adjacent guard misses it) and the reply is
     not one block (the halving collapse misses it) — so the reply read "I'll look at the

@@ -83,7 +83,7 @@ ROOM_MIME = "application/vnd.protolabs.room-v1+json"
 # Mid-turn operator input consumed at a model-call boundary (#2959). The payload is
 # {items:[{id,text}]}; its position among working frames is the chronology contract.
 STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
-# A running coding-agent delegation's live state (#3975) — a bounded WHOLE snapshot
+# A running coding-agent delegation's live state (#3979) — a bounded WHOLE snapshot
 # ({id, target, plan, current_tool, recent_tools, tool_count, text, done, ok}; see
 # graph/delegate_progress.py), keyed by the card it belongs to: the `@` mention card's
 # tool-call id, or a `delegate_to` ask's id. Latest wins, so a consumer that ignores or
@@ -974,7 +974,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         )
 
                 elif event_type == "delegate_progress":
-                    # A coding-agent delegation's live state (#3975): its plan, current
+                    # A coding-agent delegation's live state (#3979): its plan, current
                     # tool, recent tools. One bounded, throttled snapshot per frame — the
                     # producer (graph/delegate_progress.py) caps both size and rate.
                     if isinstance(payload, dict) and payload.get("id"):

@@ -337,7 +337,7 @@ def prune_superseded_progress(task: Task) -> int:
     """Keep only the LATEST delegate-progress Message per delegation in ``task.history``,
     in place. Returns the number of messages removed.
 
-    A coding delegate's live progress (#3975) streams as whole-state snapshots on WORKING
+    A coding delegate's live progress (#3979) streams as whole-state snapshots on WORKING
     frames, and the SDK moves every one into durable history — a long coder run would
     persist hundreds of rows that each restate the last. A snapshot supersedes every
     earlier one for the same card (it is the whole state, not a delta), so dropping them
@@ -380,7 +380,7 @@ def prune_superseded_progress(task: Task) -> int:
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     """Durable task store that coalesces contiguous reasoning-v1 history runs
     into one Message per run on every save (#1710), and keeps only the latest
-    delegate-progress snapshot per delegation (#3975). Streaming frames are
+    delegate-progress snapshot per delegation (#3979). Streaming frames are
     untouched — this is persistence-shape only, so the wire contract and the
     live thinking bubble are unchanged."""
 

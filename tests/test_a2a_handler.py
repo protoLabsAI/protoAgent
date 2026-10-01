@@ -807,7 +807,7 @@ def _reasoning_texts_from_history(history: list[dict]) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_delegate_progress_rides_a_dataframe_and_persists_once_per_delegation(tmp_path):
-    """#3975: a coding delegate's live snapshots reach the console as delegate-progress-v1
+    """#3979: a coding delegate's live snapshots reach the console as delegate-progress-v1
     DataParts on WORKING frames — and the durable store keeps only the LATEST one per
     delegation, so a reload replays the final state without a row per frame."""
     from a2a_impl.executor import DELEGATE_PROGRESS_MIME

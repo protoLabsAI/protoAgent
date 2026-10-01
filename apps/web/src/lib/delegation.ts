@@ -10,7 +10,7 @@ export function delegationFromFrame(d: {
   id?: unknown;
 }): Delegation | undefined {
   const out: Delegation = {};
-  // The ask's own id keys its live progress (#3975); a foreground delegation has one.
+  // The ask's own id keys its live progress (#3979); a foreground delegation has one.
   if (typeof d.id === "string" && d.id) out.id = d.id;
   if (typeof d.summary === "string" && d.summary.trim()) out.summary = d.summary.trim();
   if (d.background === true) out.background = true;

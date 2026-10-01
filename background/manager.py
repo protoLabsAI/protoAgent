@@ -270,7 +270,7 @@ class BackgroundManager:
         async with self._sem:  # same cap as background turns — one fan-out can't swamp the gateway
             try:
                 # A coding delegate this job dispatches reports its live progress onto the
-                # job's own `background.progress` lane (#3975) — never into the card of the
+                # job's own `background.progress` lane (#3979) — never into the card of the
                 # foreground turn that spawned it, whose context this task copied.
                 with progress_sink(self._progress_sink(job_id, origin_session)):
                     result = await work()

@@ -547,7 +547,7 @@ def _on_custom_steer_consumed(st: _TurnStreamState, event: dict, name: str, pare
 
 
 def _on_custom_delegate_progress(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
-    # A foreground `delegate_to`'s coding agent reporting while it works (#3975). The
+    # A foreground `delegate_to`'s coding agent reporting while it works (#3979). The
     # tool body dispatches this under its own run (graph/delegate_progress.py via the
     # delegates plugin), so the event's `run_id` IS the delegation's run — the same key
     # the outgoing ask's room_reply `id` carries, which is how the console finds the row.

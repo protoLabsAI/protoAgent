@@ -1,4 +1,4 @@
-// A coding delegate's live progress on its delegation card (#3975). Before this the `@`
+// A coding delegate's live progress on its delegation card (#3979). Before this the `@`
 // mention card was a spinner and a clock for the whole run. Pinned here: the wire decoder
 // (bounded, defensive), the dispatcher routing a delegate-progress-v1 frame — live AND on
 // a durable replay — the reducer landing it on the right card, and the render: plan

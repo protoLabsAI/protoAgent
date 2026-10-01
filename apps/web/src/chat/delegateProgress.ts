@@ -1,6 +1,6 @@
 import type { ChatMessage, DelegateProgress, DelegateProgressEvent, DelegateTool } from "../lib/types";
 
-// Landing a coding delegate's live-progress snapshot (#3975) on the card it belongs to.
+// Landing a coding delegate's live-progress snapshot (#3979) on the card it belongs to.
 // Pure — the live stream, the reattach stream and durable hydration all apply it the same
 // way. A snapshot is the WHOLE state (latest wins), so applying one is a replace, never a
 // merge, and a missed frame costs nothing but latency.

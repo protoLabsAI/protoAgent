@@ -715,7 +715,7 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
 async def _mention_exchange_with_progress(
     message: str, session_id: str, request_metadata: dict | None, mention_tool: dict | None
 ):
-    """Run the ``@`` exchange, yielding the addressed coder's live progress meanwhile (#3975).
+    """Run the ``@`` exchange, yielding the addressed coder's live progress meanwhile (#3979).
 
     The exchange awaits the delegate inline, so nothing could reach the operator until it
     returned: the mention card was a spinner and a clock for the whole run. An ACP coder

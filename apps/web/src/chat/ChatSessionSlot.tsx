@@ -1354,7 +1354,7 @@ export function ChatSessionSlot({
           );
         },
         onDelegateProgress: (evt) => {
-          // A coding delegate's live state (#3975) lands on its card — the `@` mention
+          // A coding delegate's live state (#3979) lands on its card — the `@` mention
           // card, or the `delegate_to` ask row — wherever the split put it. Not a
           // chronology frame: nothing is inserted, so no reveal flush.
           bumpWatchdog();
@@ -1462,7 +1462,7 @@ export function ChatSessionSlot({
             // the same tick) would otherwise leave the card spinning forever —
             // settleStreamEnd flips any lingering `running` card to `done`.
             // …and a delegation row whose delegate never sent its final snapshot (a
-            // stopped turn) stops reading as live (#3975).
+            // stopped turn) stops reading as live (#3979).
             settleTurnBubbles(
               settleDelegateProgress(
                 latest.messages.map((message) =>

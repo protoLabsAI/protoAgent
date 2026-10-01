@@ -5,7 +5,7 @@ import { Check, Circle, CircleDot, X } from "lucide-react";
 import type { DelegateProgress, DelegatePlanEntry, DelegateTool } from "../lib/types";
 import { planProgress, toolLine } from "./delegateProgress";
 
-// A coding delegate's live view on its delegation card (#3975): its own plan as a
+// A coding delegate's live view on its delegation card (#3979): its own plan as a
 // checklist, the tool it is running now, the last few it ran, and the tail of what it is
 // saying. The same shape the Project Board drawer shows for a board coder — this is that
 // view for a delegation the operator or the lead asked for in chat. Everything here is

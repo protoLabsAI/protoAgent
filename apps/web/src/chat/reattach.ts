@@ -350,7 +350,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       updateMessage(sessionId, assistantId, (m) => applyToolEvent(m, evt));
     },
     onComponent: (spec) => updateMessage(sessionId, assistantId, (m) => applyComponent(m, spec)),
-    // A coding delegate's live state (#3975) — on its mention card or ask row, wherever it is.
+    // A coding delegate's live state (#3979) — on its mention card or ask row, wherever it is.
     onDelegateProgress: (evt) => {
       const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
       if (!cur) return;

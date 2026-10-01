@@ -165,7 +165,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
       assistant = applyComponent(assistant, spec);
     },
     onDelegateProgress: (evt) => {
-      // An `@` mention card's coding delegate, at its final (durably kept) state (#3975).
+      // An `@` mention card's coding delegate, at its final (durably kept) state (#3979).
       assistant = applyDelegateProgressTo(assistant, evt);
     },
     onCost: (usage) => {

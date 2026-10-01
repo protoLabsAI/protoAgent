@@ -1,4 +1,4 @@
-/* A coding delegate's live view on its delegation card (#3975, DelegateProgressView.tsx):
+/* A coding delegate's live view on its delegation card (#3979, DelegateProgressView.tsx):
    its plan checklist, the tool it is running, its last few tools, a narration tail.
    Quiet by design — it sits under a card the operator is already watching, so it reads as
    detail, not as a second message. Every list is capped server-side, so no max-height. */

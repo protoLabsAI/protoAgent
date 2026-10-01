@@ -277,7 +277,7 @@ class AcpAdapter(Adapter):
         spec = self._spec(d)
         client = _client_for(spec)
         client._permission = _make_permission(spec)
-        # Live progress for the delegation card (#3975) — only when the caller that owns
+        # Live progress for the delegation card (#3979) — only when the caller that owns
         # a card bound a sink. Read HERE, in the dispatching task: the callbacks fire on
         # the client's reader task, whose context predates this turn.
         sink = current_sink()

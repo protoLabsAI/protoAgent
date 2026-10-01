@@ -16,7 +16,7 @@ import type { BackgroundJobDTO, DelegateProgress } from "../lib/types";
 
 export type JobStatus = BackgroundJobDTO["status"];
 export type JobLite = Pick<BackgroundJobDTO, "id" | "status" | "subagent_type" | "description" | "origin_session"> & {
-  /** A background delegation's coding agent, live (#3975) — from `background.progress`
+  /** A background delegation's coding agent, live (#3979) — from `background.progress`
    *  frames with phase `delegate_progress`. Live-only: a reload shows it again on the
    *  next frame, and the job's reply arrives as its own message when it lands. */
   progress?: DelegateProgress;

@@ -335,7 +335,7 @@ function ToolGroup({
   // tools (the `.pl-toolcard__children` indented rail, but here gated by the card's open
   // state instead of always-on — so the header row stays a stable height as kids stream in).
   const Icon = iconFor(call.name);
-  // A coding delegate's live view (#3975) — on an `@` mention card. While the card runs it
+  // A coding delegate's live view (#3979) — on an `@` mention card. While the card runs it
   // renders OUTSIDE the collapsed body, under the header, so the plan and current tool are
   // visible without expanding (the whole point: the card used to be a bare spinner); once
   // the card settles it moves INTO the body, the run's final state one click away.

@@ -1,4 +1,4 @@
-"""Live progress of a running delegation, for the console's delegation card (#3975).
+"""Live progress of a running delegation, for the console's delegation card (#3979).
 
 Delegate-type agnostic. A delegate that reports while it works — an ACP coder
 (claude-agent-acp, codex-acp, protoCLI…) over ``session/update``, and next an A2A peer

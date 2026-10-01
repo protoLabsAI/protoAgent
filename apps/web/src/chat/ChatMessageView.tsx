@@ -399,7 +399,7 @@ function DelegationRow({ message }: { message: ChatMessage }) {
         ) : null}
       </div>
       {d?.error ? <p className="chat-delegation-error">{d.error}</p> : null}
-      {/* A coding delegate's live view (#3975): a foreground delegation's own snapshots,
+      {/* A coding delegate's live view (#3979): a foreground delegation's own snapshots,
           or a background one's job progress while it runs. Once a foreground run is over
           its final state stays one toggle away rather than under every finished row. */}
       {progress && (progressLive || showWork) ? <DelegateProgressView progress={progress} live={progressLive} /> : null}

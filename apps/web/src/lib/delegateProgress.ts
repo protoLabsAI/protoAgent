@@ -1,6 +1,6 @@
 import type { DelegatePlanEntry, DelegateProgress, DelegateProgressEvent, DelegateTool } from "./types";
 
-// Wire decoding for a coding delegate's live-progress snapshot (#3975). The server
+// Wire decoding for a coding delegate's live-progress snapshot (#3979). The server
 // (graph/delegate_progress.py) sends snake_case and already bounds every list; this
 // re-checks every field anyway — a frame is untrusted input to the renderer, and an older
 // or forked producer may send less. Re-capped here too, so a misbehaving producer can't
