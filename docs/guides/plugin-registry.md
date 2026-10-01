@@ -76,9 +76,9 @@ version —
 
 Clicking **Update** pulls the latest code at the plugin's recorded ref, rewrites
 the lock with the new SHA, and — if the plugin is enabled — hot-reloads it in
-place. A plugin that contributes a **console view or background surface** can't
-swap its already-mounted router live, so updating it recommends a restart to
-finish loading the new view (the UI tells you when).
+place: its router re-mounts with the new code and its surfaces reconcile. For a
+plugin with a **console view, route or background surface**, the Update toast
+still recommends a restart (a conservative flag that predates live re-mounting).
 
 The freshness check runs `git ls-remote` against the recorded `source_url` and is
 timeout-bounded + briefly cached, so it never hangs the panel. Pinned plugins skip

@@ -19,8 +19,8 @@ plugins:
   enabled: [artifact]
 ```
 
-then install `https://github.com/protoLabsAI/artifact-plugin` (ADR 0027). Restart to mount its
-console view.
+then install `https://github.com/protoLabsAI/artifact-plugin` (ADR 0027). Installing enables it
+and mounts its console view live, with no restart.
 
 ## What it adds
 

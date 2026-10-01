@@ -8,6 +8,7 @@ import {
   depsInstallBusyId,
   filterInstalled,
   needsAttention,
+  PLUGIN_RESTART_HINT,
   sortInstalled,
   statusCounts,
   toggleToast,
@@ -214,6 +215,23 @@ describe("Install deps while an install is running (one pip per environment)", (
     expect(depsButtonState("cowork", "cowork")).toBe("installing");
     expect(depsButtonState("notes", "cowork")).toBe("blocked");
     expect(depsButtonState("notes", null)).toBe("idle");
+  });
+});
+
+describe("PLUGIN_RESTART_HINT", () => {
+  // Install / enable / disable hot-mount (and unmount) views, routes and surfaces — the
+  // hint once claimed a view or surface needed a restart, which was stale (ADR 0096).
+  it("says install / enable / disable apply live, views and surfaces included", () => {
+    expect(PLUGIN_RESTART_HINT).toMatch(/^Installing, enabling or disabling a plugin applies live/);
+    expect(PLUGIN_RESTART_HINT).toContain("console view");
+    expect(PLUGIN_RESTART_HINT).toContain("background surface");
+    expect(PLUGIN_RESTART_HINT).toContain("no restart");
+  });
+
+  it("names only env / launch flags and a flagged update or uninstall as restart cases", () => {
+    expect(PLUGIN_RESTART_HINT).toContain("env / launch-flag changes");
+    expect(PLUGIN_RESTART_HINT).toContain("update or uninstall whose toast asks for one");
+    expect(PLUGIN_RESTART_HINT).not.toMatch(/view or background surface[^.]*need a\s+server restart/);
   });
 });
 

@@ -541,9 +541,10 @@ def register_plugin_routes(app) -> None:
         points at a router route) is hot-mounted on the same reload (#822). So a freshly
         enabled view-contributing plugin works immediately; ``restart_recommended`` is False.
 
-        DISABLE can't tear a router back down (FastAPI has no route-removal API), so a
-        disabled plugin's view/route/surface lingers until a process restart — only that
-        path flags ``restart_recommended`` so the UI can say so.
+        DISABLE is live too: the reload unmounts the plugin's router (``_mount_plugin_routers``
+        removes a roster-absent plugin's routes, ADR 0096) and stops its surfaces (ADR 0018),
+        so ``restart_recommended`` is False here as well. ``_lingers_on_disable`` stays the
+        one seam that would set it if a future contribution outlived the reload.
         """
         want = bool((body or {}).get("enabled"))
         # Snapshot the plugin's pre-reload meta — on DISABLE the reload clears its views
@@ -574,10 +575,10 @@ def register_plugin_routes(app) -> None:
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
 
-        # Enabling hot-mounts the router that serves the view (#822) — fully live, no
-        # restart. Only DISABLE leaves something behind: a view/router route lingers
-        # (no FastAPI unmount) → recommend a restart. A surface no longer does — it stops
-        # on the reload reconcile (ADR 0018) — so a surface-ONLY plugin turns off cleanly.
+        # Enabling hot-mounts the router that serves the view (#822); disabling unmounts it
+        # (ADR 0096) and the reconcile stops its surfaces (ADR 0018) — live both ways.
+        # Only a contribution that outlives the reload would recommend a restart, and
+        # _lingers_on_disable says none does today.
         restart = bool(not want and _lingers_on_disable(prev_meta))
         out: dict = {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
         if want:

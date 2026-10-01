@@ -2049,9 +2049,9 @@ const server = createServer(async (req, res) => {
       if (m) {
         return sendJson(res, {
           ok: true, enabled: !!body.enabled, reloaded: true,
-          // Enable hot-mounts the view router live (#822) → no restart. Only DISABLE of a
-          // view plugin (boardy) leaves a stale route → restart recommended.
-          restart_recommended: !body.enabled && m[1] === "boardy",
+          // Mirrors the server: enable hot-mounts the view router (#822) and disable
+          // unmounts it (ADR 0096) → no restart either way.
+          restart_recommended: false,
         });
       }
     }
