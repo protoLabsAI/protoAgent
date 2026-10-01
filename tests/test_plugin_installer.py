@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -1491,6 +1493,104 @@ def test_stale_backup_from_an_interrupted_swap_is_cleared(env):
     installer.install(str(repo))
     assert not stale.exists()
     assert (installer.live_plugins_dir() / "demo_ext" / "extra.py").exists()
+
+
+def _windows_rename(real_rename):
+    """``os.rename`` with Windows semantics on every platform: an existing destination is
+    refused (WinError 183) instead of replaced (POSIX replaces an empty dir silently)."""
+
+    def _rename(src, dst, *a, **k):
+        if os.path.lexists(dst):
+            raise FileExistsError(183, "Cannot create a file when that file already exists", str(dst))
+        return real_rename(src, dst, *a, **k)
+
+    return _rename
+
+
+def test_a_backup_that_cannot_be_deleted_never_blocks_update_or_uninstall(env, monkeypatch):
+    """#3990 Windows CI: a `<id>.bak` an earlier swap couldn't delete (a read-only git
+    object, a file another process held open) made Windows `os.rename` refuse the next
+    set-aside — so the 2nd update of a plugin, and an uninstall after an update, 400'd.
+    With Windows rename semantics and a leftover that will NOT delete, update twice +
+    uninstall must all still succeed; the leftover just stays inert (`*.bak`)."""
+    live = installer.live_plugins_dir()
+    stuck = live / "demo_ext.bak"
+    real_rmtree = installer._force_rmtree
+
+    def _locked(path):  # this one leftover is "in use": it never deletes
+        if Path(path) == stuck:
+            return False
+        return real_rmtree(path)
+
+    monkeypatch.setattr(os, "rename", _windows_rename(os.rename))
+    monkeypatch.setattr(installer, "_force_rmtree", _locked)
+
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    stuck.mkdir()
+    (stuck / "locked.pyd").write_text("in use")
+
+    _commit_update(repo)
+    installer.install(str(repo))  # 1st update
+    (repo / "more.py").write_text("y = 2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "again")
+    second = installer.install(str(repo))  # 2nd update
+    target = live / "demo_ext"
+    assert (target / "extra.py").exists() and (target / "more.py").exists()
+    assert installer._read_lock()["plugins"][0]["resolved_sha"] == second["resolved_sha"]
+
+    installer.uninstall("demo_ext")
+    assert not target.exists()
+    # Only the undeletable leftover remains — inert, never discovered as a plugin.
+    assert sorted(p.name for p in live.iterdir()) == ["demo_ext.bak"]
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permission bits")
+def test_a_read_only_leftover_is_cleared(env):
+    """A plain `rmtree(ignore_errors=True)` silently left a tree with read-only entries
+    (Windows: read-only files, e.g. git objects; POSIX: a read-only directory) — the
+    leftover the 2nd swap then tripped over. It's cleared now."""
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    stale = installer.live_plugins_dir() / "demo_ext.bak"
+    sub = stale / "objects" / "ab"
+    sub.mkdir(parents=True)
+    (sub / "cdef").write_text("blob")
+    os.chmod(sub / "cdef", stat.S_IREAD)
+    os.chmod(sub, stat.S_IREAD | stat.S_IEXEC)
+    try:
+        _commit_update(repo)
+        installer.install(str(repo))
+        assert not stale.exists()
+        installer.uninstall("demo_ext")
+        assert list(installer.live_plugins_dir().iterdir()) == []
+    finally:
+        if sub.exists():
+            os.chmod(sub, stat.S_IRWXU)
+
+
+def test_force_rmtree_retries_a_transient_failure(tmp_path, monkeypatch):
+    """A file another process holds for a moment (an AV scan on Windows) fails one
+    pass; the next pass, after a short wait, removes the tree."""
+    import shutil
+
+    tree = tmp_path / "t"
+    (tree / "d").mkdir(parents=True)
+    (tree / "d" / "f").write_text("x")
+    real = shutil.rmtree
+    calls: list[int] = []
+
+    def flaky(path, *a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            return None  # the first pass leaves everything (the file was "busy")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(shutil, "rmtree", flaky)
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    assert installer._force_rmtree(tree) is True
+    assert not tree.exists() and len(calls) == 2
 
 
 def test_uninstall_removes_via_rename_aside_and_leaves_no_backup(env):
