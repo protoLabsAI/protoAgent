@@ -71,6 +71,12 @@ async def _stop_abandoned_workflow(runner: asyncio.Task, wf_name: str) -> None:
     dispatch generator's close returns only once the workflow has actually ended. Never
     raises for the runner's own outcome; a cancel of the CALLER while waiting propagates.
     Mirrors ``server.chat_acp._stop_abandoned_driver`` (#3837)."""
+    await _stop_abandoned_runner(runner, "workflow", wf_name)
+
+
+async def _stop_abandoned_runner(runner: asyncio.Task, kind: str, name: str) -> None:
+    """:func:`_stop_abandoned_workflow` for any short-circuit runner — a ``/<workflow>``
+    or a ``/<subagent>`` run (#3977). ``kind`` labels the log lines."""
     runner.cancel()
     # Retrieve the runner's eventual outcome whatever happens to THIS wait, so a late
     # failure never surfaces as asyncio's "Task exception was never retrieved" at GC.
@@ -82,15 +88,16 @@ async def _stop_abandoned_workflow(runner: asyncio.Task, wf_name: str) -> None:
     done, _ = await asyncio.wait({runner}, timeout=_WORKFLOW_CANCEL_SETTLE_S)
     if not done:
         log.warning(
-            "[workflow] abandoned /%s run did not stop within %gs of cancel — releasing anyway",
-            wf_name,
+            "[%s] abandoned /%s run did not stop within %gs of cancel — releasing anyway",
+            kind,
+            name,
             _WORKFLOW_CANCEL_SETTLE_S,
         )
         return
     if runner.cancelled():
-        log.info("[workflow] abandoned /%s run cancelled (its turn ended early)", wf_name)
+        log.info("[%s] abandoned /%s run cancelled (its turn ended early)", kind, name)
     elif runner.exception() is not None:
-        log.debug("[workflow] abandoned /%s run ended with: %r", wf_name, runner.exception())
+        log.debug("[%s] abandoned /%s run ended with: %r", kind, name, runner.exception())
 
 
 def _retrieve_outcome(task: asyncio.Task) -> None:
@@ -99,10 +106,45 @@ def _retrieve_outcome(task: asyncio.Task) -> None:
         task.exception()
 
 
-# The least time between two liveness frames a running ``/workflow`` step emits (#3940).
-# Each frame resets the A2A stall guard; one every few seconds is plenty against a
-# 900s window, and a chatty sub-graph must not turn into a frame per super-step.
-_WORKFLOW_PROGRESS_MIN_INTERVAL_S = 5.0
+# The least time between two liveness frames a running ``/workflow`` step (#3940) or
+# ``/<subagent>`` run (#3977) emits. Each frame resets the A2A stall guard; one every
+# few seconds is plenty against a 900s window, and a chatty sub-graph must not turn
+# into a frame per super-step.
+_PROGRESS_MIN_INTERVAL_S = 5.0
+
+
+def _progress_listener(queue: asyncio.Queue):
+    """A ``graph.turn_liveness`` listener that puts a rate-limited
+    ``{"phase": "progress", "subagent": …}`` event on ``queue``, the short-circuit's own
+    frame queue — bound with ``progress_scope`` INSIDE the short-circuit's runner task, so
+    only subagent runs this turn started can reach it (#3940, #3977).
+
+    Before this a short-circuit run was silent from its start card to its end card, so
+    one longer than the stall window (``turn_stall_timeout_seconds``, 900s) was cancelled
+    for being quiet. Normally called from the runner's own task, but a subagent driven on
+    another thread (its own loop) calls it from there — ``asyncio.Queue`` is not
+    thread-safe, so hop to the owning loop. Must be built on that loop."""
+    last = [float("-inf")]
+    lock = threading.Lock()
+    owner_loop = asyncio.get_running_loop()
+
+    def _on_progress(subagent_type: str) -> None:
+        now = time.monotonic()
+        with lock:
+            if now - last[0] < _PROGRESS_MIN_INTERVAL_S:
+                return
+            last[0] = now
+        event = {"phase": "progress", "subagent": subagent_type}
+        try:
+            on_owner = asyncio.get_running_loop() is owner_loop
+        except RuntimeError:  # a plain thread, no loop at all
+            on_owner = False
+        if on_owner:
+            queue.put_nowait(event)
+        elif not owner_loop.is_closed():
+            owner_loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    return _on_progress
 
 
 def _chat():
@@ -530,31 +572,8 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         async def _on_step(event: dict) -> None:
             await step_q.put(event)
 
-        _last_progress = [float("-inf")]
-        _progress_lock = threading.Lock()
-        _owner_loop = asyncio.get_running_loop()
-
-        def _on_progress(subagent_type: str) -> None:
-            # A step's subagent completed a super-step (#3940). Before this a step was
-            # silent from its start card to its end card, so one longer than the stall
-            # window (`turn_stall_timeout_seconds`, 900s) had its workflow cancelled
-            # for being quiet. Rate-limited. Normally called from the runner's own task,
-            # but a subagent driven on another thread (its own loop) would call it from
-            # there — `asyncio.Queue` is not thread-safe, so hop to the owning loop.
-            now = time.monotonic()
-            with _progress_lock:
-                if now - _last_progress[0] < _WORKFLOW_PROGRESS_MIN_INTERVAL_S:
-                    return
-                _last_progress[0] = now
-            event = {"phase": "progress", "subagent": subagent_type}
-            try:
-                on_owner = asyncio.get_running_loop() is _owner_loop
-            except RuntimeError:  # a plain thread, no loop at all
-                on_owner = False
-            if on_owner:
-                step_q.put_nowait(event)
-            elif not _owner_loop.is_closed():
-                _owner_loop.call_soon_threadsafe(step_q.put_nowait, event)
+        # A step's subagent completed a super-step (#3940): a rate-limited liveness event.
+        _on_progress = _progress_listener(step_q)
 
         async def _runner() -> str:
             # Each step runs through `graph.sdk.run_subagent`, which reads the turn's model
@@ -661,21 +680,56 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             return
         sub_tool_id = f"subagent:{sub_type}"
         yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
-        # The turn's model override reaches the slash run under the one subagent
-        # precedence: its own pin wins over it (#3944) — on every driver (#3955).
-        with delegation_usage.collect() as sub_usage:
+        # The run goes in its own task so this generator can yield liveness WHILE it
+        # works (#3977): each super-step of the subagent (a model call, a tool round)
+        # becomes a rate-limited `progress` frame the A2A stall guard counts — no card.
+        # Before, the turn was silent from tool_start to tool_end, and a run that kept
+        # working past the stall window was stopped as stalled. A run wedged inside ONE
+        # call completes no super-step, sends nothing, and is still ended by the guard.
+        _SUB_DONE = object()
+        sub_q: asyncio.Queue = asyncio.Queue()
+        _on_sub_progress = _progress_listener(sub_q)
+
+        async def _sub_runner() -> str:
+            # Bound inside the task (its own copied context): only THIS turn's run reports
+            # here — another turn's subagent can't keep this one alive.
             try:
-                sub_out = await _chat_commands._run_parsed_subagent(
-                    sub_type,
-                    sub_prompt,
-                    session_id=session_id,
-                    turn_model=turn_model,
-                )
-            except Exception:
-                # Bill what the run spent before it failed (#3957); see the workflow branch.
-                for row in _usage_frames(sub_usage):
-                    yield row
-                raise
+                with progress_scope(_on_sub_progress):
+                    # The turn's model override reaches the slash run under the one
+                    # subagent precedence: its own pin wins over it (#3944) — on every
+                    # driver (#3955).
+                    return await _chat_commands._run_parsed_subagent(
+                        sub_type,
+                        sub_prompt,
+                        session_id=session_id,
+                        turn_model=turn_model,
+                    )
+            finally:
+                sub_q.put_nowait(_SUB_DONE)
+
+        # Bound BEFORE the task is created, so its copied context carries the collector.
+        with delegation_usage.collect() as sub_usage:
+            sub_runner = asyncio.create_task(_sub_runner())
+        sub_finished = False
+        try:
+            while True:
+                event = await sub_q.get()
+                if event is _SUB_DONE:
+                    sub_finished = True
+                    break
+                yield ("progress", {"id": sub_tool_id, "subagent": event.get("subagent", "")})
+        finally:
+            # Closed early (the stall guard, a CancelTask, the driver closing): the run is
+            # part of THIS turn and ends with it — as it did when it was awaited inline.
+            if not sub_finished:
+                await _stop_abandoned_runner(sub_runner, "subagent", sub_type)
+        try:
+            sub_out = await sub_runner
+        except Exception:
+            # Bill what the run spent before it failed (#3957); see the workflow branch.
+            for row in _usage_frames(sub_usage):
+                yield row
+            raise
         yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
         for row in _usage_frames(sub_usage):
             yield row
