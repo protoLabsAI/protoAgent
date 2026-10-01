@@ -149,18 +149,56 @@ def goal_fenced(goal_state, fence) -> list[str]:
     return intersect_fences(list(fence or []), normalize_fence(getattr(goal_state, "fence", None)))
 
 
-def goal_model(goal_state, model: str | None) -> str:
-    """The model a goal-driven pass runs on (#3957): the turn's own pick, else the pick of
-    the turn that SET the goal (``GoalState.model``), else ``""`` (the configured default).
+def goal_model_notice(model: str) -> str:
+    return (
+        f"⚠ The goal's model `{model}` is unavailable — running on the default model. "
+        "Pick a model, or `/goal clear`."
+    )
 
-    The pick is no longer inherited from the thread's checkpoint (it is stamped on every
-    pass), so a goal re-driven by a turn that carries no pick — a watch / schedule fire, a
-    background nudge, a "Default" message — would otherwise drop to the default model.
-    The goal carries it explicitly instead; ``/goal clear`` ends it."""
-    own = (model or "").strip()
-    if own or goal_state is None:
-        return own
-    return str(getattr(goal_state, "model", "") or "").strip()
+
+def resolve_turn_model(session_id: str, request_model: str | None) -> tuple[str, str]:
+    """``(effective model pick, notice)`` for a turn (#3957). Called once, at turn start, by
+    both drivers; the result is what the lead graph is stamped with AND what
+    ``turn_model_scope`` binds — so ``/<workflow>`` steps, ``sdk.run_subagent`` and every
+    delegation follow the same model the lead runs on.
+
+    - A pick carried by THIS request wins. It may hard-fail the turn (the middleware's
+      400/503), and on a turn that drives an active goal it becomes the goal's model, so
+      the next re-drive without a pick uses it.
+    - No pick, and an active goal set with one (``GoalState.model``): the turn inherits
+      it — a watch / schedule fire, a self-resume, a "Default" message. An INHERITED pick
+      must never lock the goal into failing: it is test-built here first, and if it can't
+      be built the turn runs on the default with ``notice`` saying so (logged at WARNING).
+    - Neither: ``""`` — the configured default."""
+    own = (request_model or "").strip()
+    goal = active_goal(session_id)
+    if own:
+        if goal is not None and getattr(goal, "model", "") != own:
+            remember = getattr(STATE.goal_controller, "remember_model", None)
+            if remember is not None:
+                try:
+                    remember(session_id, own)
+                except Exception:  # noqa: BLE001 — bookkeeping never fails the turn
+                    pass
+        return own, ""
+    inherited = str(getattr(goal, "model", "") or "").strip() if goal is not None else ""
+    if not inherited:
+        return "", ""
+    try:
+        from graph import llm as _llm
+
+        _llm.create_llm(STATE.graph_config, model_name=inherited)
+    except Exception as exc:  # noqa: BLE001 — any failure: fall back, never lock the goal in
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[goal] the goal's model %r is unavailable for session %s (%s) — running this turn on the default",
+            inherited,
+            session_id,
+            exc,
+        )
+        return "", goal_model_notice(inherited)
+    return inherited, ""
 
 
 def kickoff_message(goal_state, message: str, *, resume: bool, overflow_retry: bool = False) -> str:
@@ -228,8 +266,20 @@ class GoalDrive:
         # thread lock, for a driver that does NOT already hold it across the drive (the
         # non-streaming one locks per pass). ``None``: the caller already holds it.
         self.note_lock = None
+        # Set by the driver when the turn's inherited goal model fell back (#3957).
+        self.notice = ""
 
     async def steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
+        # The inherited-model fallback notice (#3957, ``resolve_turn_model``): a status
+        # line up front for the streaming surface, and a line on the final text for all.
+        if self.notice:
+            yield GoalNote(self.notice)
+        async for step in self._steps():
+            yield step
+        if self.notice:
+            self.text = f"{self.text}\n\n{self.notice}"
+
+    async def _steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
         if STATE.goal_controller is None or not STATE.goal_controller.active_goal(self.session_id):
             return
         # Hard cap on top of the controller's own budget: a verifier that never says

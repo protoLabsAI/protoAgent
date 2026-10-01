@@ -454,8 +454,11 @@ def _v1_error_response(err: dict) -> JSONResponse:
         status = 400
     else:
         status = 500
+    # A transient model-pick failure says when to come back (#3957).
+    headers = {"Retry-After": str(err["retry_after"])} if status == 503 and err.get("retry_after") else None
     return JSONResponse(
-        {
+        headers=headers,
+        content={
             "error": {
                 "message": err.get("message") or "the turn failed",
                 "type": err.get("type") or "server_error",
@@ -534,6 +537,19 @@ def register_chat_routes(app, ui: str) -> None:
 
     @app.delete("/api/chat/sessions/{session_id}")
     async def _api_delete_session(session_id: SessionId, harvest: bool = False, retire: bool = True, forget: bool = False):
+        """See :func:`_delete_session` — registered as in flight for the orphaned-forget
+        sweep (#3957), which must never settle a forget a running delete still owns."""
+        from graph import conversation_harvest as _harvest
+
+        if not forget:
+            return await _delete_session(session_id, harvest=harvest, retire=retire, forget=False)
+        _harvest.FORGETS_IN_FLIGHT.add(session_id)
+        try:
+            return await _delete_session(session_id, harvest=harvest, retire=retire, forget=True)
+        finally:
+            _harvest.FORGETS_IN_FLIGHT.discard(session_id)
+
+    async def _delete_session(session_id: str, *, harvest: bool, retire: bool, forget: bool):
         """Purge a chat session's checkpoints for both the A2A and chat prefix,
         optionally harvesting the conversation into the knowledge base first.
         The default ``retire=true`` permanently hides the id from durable

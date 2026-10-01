@@ -33,6 +33,74 @@ from server import _event_bus
 log = logging.getLogger("protoagent.server")
 
 
+def _forget_retirement_incomplete(session_id: str, marked_at: str) -> bool:
+    """For the orphaned-forget sweep (#3957 review B1): does the session still hold
+    checkpoints written BEFORE its forget hid the rows — i.e. did its retirement never
+    complete? Raises when it can't tell (the sweep then leaves the marker alone)."""
+    from datetime import datetime
+
+    before = datetime.fromisoformat(marked_at).timestamp() if marked_at else None
+    tids = {f"a2a:{session_id}"}
+    try:
+        from server.turn_control import _resolve_thread_id
+
+        tids.add(_resolve_thread_id(None, session_id))
+    except Exception:  # noqa: BLE001 — a metadata-scoped resolver: the a2a id still answers
+        pass
+    if STATE.checkpoint_path:
+        from graph.checkpoint_prune import thread_has_checkpoints_before
+
+        return any(thread_has_checkpoints_before(STATE.checkpoint_path, t, before) for t in tids)
+    lister = getattr(STATE.checkpointer, "list", None)
+    if not callable(lister):
+        raise RuntimeError("no checkpoint store to consult")
+    for tid in tids:
+        for tup in lister({"configurable": {"thread_id": tid}}):
+            ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
+            if not ts or before is None or datetime.fromisoformat(ts).timestamp() < before:
+                return True
+    return False
+
+
+async def _sweep_orphaned_forgets() -> None:
+    """Settle chat-delete forgets a crash or an unretried failure left half-done (#3957)."""
+    import asyncio
+
+    store = STATE.knowledge_store
+    if store is None:
+        return
+    from graph.conversation_harvest import sweep_orphaned_forgets
+
+    res = await asyncio.to_thread(
+        sweep_orphaned_forgets, store, retirement_incomplete=_forget_retirement_incomplete
+    )
+    if res["finished"] or res["restored"]:
+        log.info("[forget] settled %d interrupted forget(s), restored %d", res["finished"], res["restored"])
+
+
+_ONE_SHOT_TASKS: set = set()  # strong refs, so a fire-and-forget task isn't collected
+
+
+def _start_forget_sweep_once() -> None:
+    """Schedule :func:`_forget_sweep_once` (needs a running loop)."""
+    import asyncio
+
+    task = asyncio.create_task(_forget_sweep_once())
+    _ONE_SHOT_TASKS.add(task)
+    task.add_done_callback(_ONE_SHOT_TASKS.discard)
+
+
+async def _forget_sweep_once() -> None:
+    """The startup orphaned-forget sweep when the prune loop (which repeats it) is off."""
+    import asyncio
+
+    await asyncio.sleep(60)  # let boot settle, as the prune loop does
+    try:
+        await _sweep_orphaned_forgets()
+    except Exception:
+        log.exception("[forget] orphan sweep failed")
+
+
 async def _checkpoint_prune_loop() -> None:
     """Periodically trim the SQLite checkpoint DB (per-thread cap + age TTL).
 
@@ -45,6 +113,12 @@ async def _checkpoint_prune_loop() -> None:
 
     await asyncio.sleep(60)  # let boot settle before the first sweep
     while True:
+        # Interrupted chat-delete forgets (#3957) — first pass is the startup sweep.
+        # Ungated by the prune interval: a hidden row must not stay in limbo forever.
+        try:
+            await _sweep_orphaned_forgets()
+        except Exception:
+            log.exception("[forget] orphan sweep failed")
         cfg = STATE.graph_config
         path = STATE.checkpoint_path
         interval_h = getattr(cfg, "checkpoint_prune_interval_hours", 0) if cfg else 0

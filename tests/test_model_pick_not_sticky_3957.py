@@ -136,18 +136,6 @@ async def test_a_good_pick_applies_to_its_own_turn_only(env, turn):
     assert text(default) == "answer from default-model"
 
 
-def test_goal_model_precedence():
-    from types import SimpleNamespace
-
-    from server.goal_loop import goal_model
-
-    goal = SimpleNamespace(model=_GOOD)
-    assert goal_model(goal, "") == _GOOD  # a re-drive with no pick keeps the goal's
-    assert goal_model(goal, "other:pick") == "other:pick"  # the turn's own pick wins
-    assert goal_model(None, "") == ""
-    assert goal_model(SimpleNamespace(model=""), None) == ""
-
-
 @pytest.mark.asyncio
 async def test_a_goal_records_the_setting_turns_pick(tmp_path):
     from graph.goals.controller import GoalController
@@ -164,14 +152,22 @@ async def test_a_goal_records_the_setting_turns_pick(tmp_path):
 
 
 def _goals(monkeypatch, *, model=""):
-    """A goal that asks for one continuation, then is met."""
+    """A goal that asks for one continuation, then is met; records model updates."""
     import runtime.state as rs
     from tests._turn_driver_fakes import FakeGoals
 
-    goals = FakeGoals([("continue", "not yet", "keep going"), ("done", "met")], iteration=1)
+    class _Goals(FakeGoals):
+        def remember_model(self, session_id, m):
+            self.state.model = m
+
+    goals = _Goals([("continue", "not yet", "keep going"), ("done", "met")], iteration=1)
     goals.state.model = model
     monkeypatch.setattr(rs.STATE, "goal_controller", goals, raising=False)
     return goals
+
+
+def _text(r):
+    return r["content"] if isinstance(r, dict) else r[1]
 
 
 @pytest.mark.asyncio
@@ -194,3 +190,79 @@ async def test_a_no_pick_re_drive_runs_on_the_goals_model(env, monkeypatch, turn
     await turn("s-redrive")
 
     assert CALLS == [_GOOD, _GOOD]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn", [_sync_turn, _stream_turn], ids=["sync", "stream"])
+async def test_a_broken_inherited_goal_pick_falls_back_to_the_default_with_a_notice(env, monkeypatch, turn, caplog):
+    """Review round 2 (A1): a goal set with a pick that later breaks must not hard-fail
+    every re-drive that carries no pick of its own (a fire, a "Default" message)."""
+    _goals(monkeypatch, model=_BAD)
+
+    with caplog.at_level("WARNING"):
+        out = await turn("s-broken-goal")
+
+    assert CALLS == ["default-model", "default-model"]  # ran — on the default, every pass
+    assert "The goal's model `nonexistent-provider:bogus` is unavailable" in _text(out)
+    assert "/goal clear" in _text(out)
+    assert any("goal's model" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn", [_sync_turn, _stream_turn], ids=["sync", "stream"])
+async def test_an_explicit_pick_on_a_goal_turn_becomes_the_goals_model(env, monkeypatch, turn):
+    goals = _goals(monkeypatch, model=_BAD)
+
+    await turn("s-repick", _GOOD)
+
+    assert goals.state.model == _GOOD  # the next fire uses it
+    assert CALLS == [_GOOD, _GOOD]
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_broken_pick_on_a_goal_turn_still_hard_fails(env, monkeypatch):
+    _goals(monkeypatch, model=_GOOD)
+
+    first = await _stream_turn("s-explicit-bad", _BAD)
+
+    assert first[0] == "error" and "not available" in first[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn", [_sync_turn, _stream_turn], ids=["sync", "stream"])
+async def test_a_workflow_on_a_no_pick_goal_turn_runs_on_the_goals_model(env, monkeypatch, turn):
+    """Review round 2 (A3): ``turn_model_scope`` binds the EFFECTIVE pick, so a
+    ``/<workflow>`` step (``sdk.run_subagent``) follows the model the lead would run on."""
+    from graph.subagent_model import current_turn_model
+
+    _goals(monkeypatch, model=_GOOD)
+    dispatch = importlib.import_module("server.chat_dispatch")
+    cc = dispatch._chat_commands
+    seen: list[str] = []
+    monkeypatch.setattr(cc, "_parse_workflow_command", lambda m: ("wf", {}) if m.startswith("/wf") else None)
+
+    async def _run_parsed_workflow(name, inputs, *, on_step):
+        seen.append(current_turn_model())
+        return "wf done"
+
+    monkeypatch.setattr(cc, "_run_parsed_workflow", _run_parsed_workflow)
+    if turn is _sync_turn:
+        await chat_mod.chat("/wf go", "s-wf", origin="api-chat")
+    else:
+        [f async for f in chat_mod._chat_langgraph_stream("/wf go", "s-wf", request_metadata={})]
+
+    assert seen == [_GOOD]
+
+
+@pytest.mark.asyncio
+async def test_the_controller_remembers_an_explicit_pick(tmp_path):
+    from graph.goals.controller import GoalController
+    from graph.goals.store import GoalStore
+
+    ctrl = GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
+    await ctrl.parse_control("/goal make it so", "s1", trusted=False)
+
+    ctrl.remember_model("s1", _GOOD)
+
+    assert ctrl.active_goal("s1").model == _GOOD
+    assert GoalController(config=None, store=GoalStore(base_dir=str(tmp_path))).active_goal("s1").model == _GOOD

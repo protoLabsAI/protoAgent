@@ -143,21 +143,97 @@ def test_an_unknown_connection_prefix_raises_a_short_caller_error(monkeypatch):
     assert "Missing credentials" not in msg and "anthropic-oauth" not in msg and "gateway" not in msg
 
 
-def test_a_known_connection_that_cannot_build_is_unavailable_not_a_caller_error(monkeypatch):
-    """A sign-in refresh failing (often transient) is not the caller's fault: not a 400."""
+def _oauth_error(message, *, relogin):
+    from graph.providers.oauth import OAuthCredentialError
 
-    def _refresh_failed(*_a, **_k):
-        raise RuntimeError("token refresh failed: 503 from auth server; secret=abc123")
+    return OAuthCredentialError(message, provider="openai-codex", relogin=relogin)
 
-    monkeypatch.setattr("graph.llm.create_llm", _refresh_failed)
+
+def _raising(exc):
+    def _create_llm(*_a, **_k):
+        raise exc
+
+    return _create_llm
+
+
+def _chained(outer: BaseException, inner: BaseException) -> BaseException:
+    outer.__cause__ = inner
+    return outer
+
+
+@pytest.mark.parametrize(
+    "cause",
+    [
+        _oauth_error("Codex token refresh could not reach OpenAI: timed out", relogin=False),
+        _chained(RuntimeError("build failed"), httpx.ConnectTimeout("timed out")),
+        TimeoutError("token endpoint timed out"),
+    ],
+    ids=["oauth-unreachable", "transport-cause", "timeout"],
+)
+def test_a_transient_build_failure_is_unavailable(monkeypatch, cause):
+    monkeypatch.setattr("graph.llm.create_llm", _raising(cause))
     mw = ModelOverrideMiddleware(LangGraphConfig())
 
     with pytest.raises(ModelUnavailableError) as ei:
-        mw._override(_Req({"model": "anthropic-oauth:claude-sonnet-4-6"}))
+        mw._override(_Req({"model": "openai-codex:gpt-5.6-sol"}))
 
-    assert not isinstance(ei.value, ValueError)
-    assert "secret" not in str(ei.value) and "refresh" not in str(ei.value)
     assert "could not be loaded right now" in str(ei.value)
+    assert str(cause) not in str(ei.value)  # the cause is a hint, never the message
+
+
+@pytest.mark.parametrize(
+    "model, cause",
+    [
+        ("openai-codex:gpt-5.6-sol", _oauth_error("Codex token refresh failed (HTTP 401). Run `codex login`.", relogin=True)),
+        ("openai-codex:protolabs/coder", RuntimeError("model.name='protolabs/coder' is not an OpenAI model id")),
+        ("gateway:protolabs/coder", RuntimeError("that connection has no base URL or API key of its own")),
+        ("protolabs/coder", RuntimeError("Missing credentials. Please pass an `api_key`")),
+    ],
+    ids=["needs-relogin", "rejected-model-id", "connection-missing-key", "bare-alias-no-gateway"],
+)
+def test_a_permanent_build_failure_is_a_caller_error_not_a_retry(monkeypatch, model, cause):
+    """Review round 2 (C1): only a transient cause is a 503 "try again"; a config or model
+    error is a 400 — retrying can't fix it."""
+    monkeypatch.setattr("graph.llm.create_llm", _raising(cause))
+    mw = ModelOverrideMiddleware(LangGraphConfig())
+
+    with pytest.raises(ModelOverrideError) as ei:
+        mw._override(_Req({"model": model}))
+
+    assert str(ei.value) == f"model {model!r} is not available: this agent cannot use it."
+    assert ei.value.hint and "secret" not in ei.value.hint
+
+
+@pytest.mark.asyncio
+async def test_the_fix_it_hint_reaches_operator_callers_only(monkeypatch):
+    """Review round 2 (C2): the console (operator tier) sees "Run `codex login`"; a
+    federation-tier A2A caller and /v1 get the short message only."""
+    import importlib
+
+    from observability import tracing
+
+    chat_mod = importlib.import_module("server.chat")
+
+    async def _no_record(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(chat_mod, "record_failed_turn", _no_record)
+    exc = ModelOverrideError("openai-codex:gpt-5.6-sol", hint="Codex token refresh failed (HTTP 401). Run `codex login`.")
+
+    token = tracing.set_trust_tier("operator")
+    try:
+        operator_msg = await chat_mod._fail_turn(exc, "s1", tag="t")
+    finally:
+        tracing._trust_tier_ctx.reset(token)
+    token = tracing.set_trust_tier("federation")
+    try:
+        peer_msg = await chat_mod._fail_turn(exc, "s1", tag="t")
+    finally:
+        tracing._trust_tier_ctx.reset(token)
+
+    assert "Run `codex login`" in operator_msg
+    assert peer_msg == str(exc) and "codex login" not in peer_msg
+    assert chat_mod.turn_error(exc, operator_msg)["message"] == str(exc)  # /v1 stays short
 
 
 def test_an_effort_only_failure_still_degrades_to_the_current_model(monkeypatch):
@@ -188,7 +264,7 @@ def test_turn_error_classifies_pick_failures():
     assert bad["message"] == "model 'nope:x' is not available: 'nope' is not a known connection."
 
     down = chat_mod.turn_error(_rewrapped(ModelUnavailableError("anthropic-oauth:m")))
-    assert down["type"] == "server_error" and down["model_unavailable"] is True
+    assert down["type"] == "server_error" and down["model_unavailable"] is True and down["retry_after"] == 30
 
 
 def _v1_client(monkeypatch, exc):
@@ -228,7 +304,7 @@ def test_v1_answers_an_unbuildable_known_connection_503(monkeypatch):
 
     r = c.post("/v1/chat/completions", json={"model": "x", "messages": [{"role": "user", "content": "hi"}]})
 
-    assert r.status_code == 503
+    assert r.status_code == 503 and r.headers.get("retry-after") == "30"
 
 
 # ── 3. only the explicit cause chain is upstream evidence ──────────────────────────

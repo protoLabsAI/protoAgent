@@ -881,6 +881,7 @@ async def _run_native_turn(
     images=None,
     overflow_retry=False,
     fence=None,
+    model_notice="",
 ):
     """One native LangGraph turn (the non-ACP path): run the graph, the dropped-turn
     kicker retry, and goal-mode continuations, then yield the terminal done frame. Extracted from _chat_langgraph_stream so the A2A handler can hold a per-thread
@@ -908,8 +909,9 @@ async def _run_native_turn(
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
-    # ...and, absent a pick of its own, on the model of the turn that set it (#3957).
-    _model = _goal_loop.goal_model(_goal_state, _model) or None
+    # The metadata's model is already the turn's EFFECTIVE pick — the request's own, or
+    # the goal's inherited one (``_goal_loop.resolve_turn_model``, run by the caller).
+    _model = _model or None
     # A goal-driven turn also runs under the fence of the turn that SET the goal.
     _turn_fence = {"fence": _goal_loop.goal_fenced(_goal_state, _fence)}
     # Kickoff injection (#1910) — shared with the non-streaming driver (server/goal_loop.py).
@@ -1046,6 +1048,7 @@ async def _run_native_turn(
     # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
     # it (the status frames are transient and can coalesce).
     drive = _goal_loop.GoalDrive(session_id, config, final_text)
+    drive.notice = model_notice  # the goal's model fell back to the default (#3957)
     drive.last_pass = _goal_pass  # a round-capped pass pauses the drive (#3957)
     _last_config = config
     async with contextlib.aclosing(drive.steps()) as _goal_steps:
@@ -1307,6 +1310,18 @@ async def _force_compact_for_overflow(thread_id: str, session_id: str) -> bool:
         return False
 
 
+def _operator_caller() -> bool:
+    """True when the request was authenticated at the OPERATOR tier (ADR 0066) — the
+    console, ``/api/chat``. A federation-tier peer, and an unclassified (in-process)
+    caller, are not."""
+    try:
+        from observability import tracing
+
+        return tracing.current_trust_tier() == "operator"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id: str | None = None) -> str:
     """Log, record (#2593) and describe a failed turn — ONE classifier for both drivers,
     so the two surfaces leave the SAME transcript and the same log shape. Returns the
@@ -1315,6 +1330,16 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id
 
     ``thread_id`` is the thread the turn ran on, as the driver resolved it — the record
     must land THERE, not on a re-resolution without the turn's request metadata (#3871)."""
+    pick_failure = _model_pick_failure(exc)
+    if pick_failure is not None:
+        # The turn's model pick could not be used (#3957; the middleware logged the cause).
+        # Callers get the short message; the fix-it hint ("Run `codex login`", "Sign in
+        # again") goes to the operator's transcript always, and to the live reply only for
+        # an operator-tier caller (the console, /api/chat) — never a federation peer.
+        msg = str(pick_failure)
+        hint = getattr(pick_failure, "hint", "") or ""
+        await record_failed_turn(session_id, f"**Error:** {msg} {hint}".rstrip(), thread_id=thread_id)
+        return f"{msg} {hint}".rstrip() if hint and _operator_caller() else msg
     if _is_provider_stream_drop(exc):
         log.warning(
             "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
@@ -1389,6 +1414,14 @@ async def _chat_langgraph_stream_impl(
             yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
+    # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
+    # test-built, falling back to the default with a notice when it can't be. Everything
+    # below reads it from the metadata: the lead graph's stamp, the pre-turn chain's
+    # `/<workflow>` / `/<subagent>` runs, and `turn_model_scope` (sdk.run_subagent).
+    _req_model = str((request_metadata or {}).get("model") or "").strip()
+    _eff_model, _model_notice = _goal_loop.resolve_turn_model(session_id, _req_model)
+    if _eff_model != _req_model:
+        request_metadata = {**(request_metadata or {}), "model": _eff_model}
     async with (
         tracing.trace_session(
             session_id=session_id,
@@ -1519,7 +1552,13 @@ async def _chat_langgraph_stream_impl(
                     # before aclose() returns rather than at GC.
                     async with contextlib.aclosing(
                         _run_native_turn(
-                            message, session_id, config, request_metadata=request_metadata, resume=resume, images=images
+                            message,
+                            session_id,
+                            config,
+                            request_metadata=request_metadata,
+                            resume=resume,
+                            images=images,
+                            model_notice=_model_notice,
                         )
                     ) as _native_frames:
                         async for frame in _native_frames:
@@ -1562,6 +1601,7 @@ async def _chat_langgraph_stream_impl(
                                     images=None,
                                     overflow_retry=True,
                                     fence=_retry_fence,
+                                    model_notice=_model_notice,
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:
@@ -1687,6 +1727,7 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
         else:
             err["type"] = "server_error"
             err["model_unavailable"] = True
+            err["retry_after"] = int(getattr(pick_failure, "RETRY_AFTER_S", 30))
         return err
     if err["upstream_status"] is None and _upstream_unreachable(exc):
         # The gateway never answered (connection refused / DNS / timeout) — no status to

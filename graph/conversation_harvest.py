@@ -208,7 +208,11 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
 # afresh), a failed retirement un-hides them, and the final delete removes exactly the
 # hidden rows — never anything the harvest wrote.
 
-FORGET_PENDING_PREFIX = "forget_pending:"
+FORGET_PENDING_PREFIX = "forget_pending:"  # == knowledge.store.FORGET_PENDING_PREFIX
+
+# Sessions whose delete-with-forget is running in THIS process right now — the orphan
+# sweep must never touch their marker (it would restore rows mid-retirement).
+FORGETS_IN_FLIGHT: set[str] = set()
 
 
 def forget_marker(session_id: str) -> str:
@@ -266,6 +270,46 @@ def finish_forget(knowledge_store, marker: str) -> int:
     removed = int(knowledge_store.delete_forget_pending(marker) or 0)
     log.info("[forget] removed %d knowledge row(s) under %s", removed, marker)
     return removed
+
+
+def sweep_orphaned_forgets(knowledge_store, *, retirement_incomplete) -> dict[str, int]:
+    """Settle forgets a crash (or a failed final delete nobody retried) left behind
+    (review #3957 B1): rows hidden under a ``forget_pending:<session>`` marker that no
+    running delete owns. For each such marker:
+
+    - ``retirement_incomplete(session_id, marked_at)`` is True — the session still has
+      checkpoints written BEFORE the rows were hidden, so its retirement never completed:
+      the delete did not happen, so its forget must not either — RESTORE the rows;
+    - otherwise the conversation was retired (it has no checkpoints, or only ones written
+      after the forget began — the same id reused by a kept tab): FINISH the delete.
+
+    A predicate that raises leaves the marker alone for the next sweep. Returns
+    ``{"finished": n, "restored": n}`` (markers, not rows). Never raises."""
+    out = {"finished": 0, "restored": 0}
+    markers = getattr(knowledge_store, "forget_pending_markers", None)
+    if not callable(markers):
+        return out
+    try:
+        pending = markers() or {}
+    except Exception:  # noqa: BLE001 — the next sweep retries
+        log.warning("[forget] could not list pending forgets", exc_info=True)
+        return out
+    for marker, marked_at in pending.items():
+        session_id = marker[len(FORGET_PENDING_PREFIX) :]
+        if not session_id or session_id in FORGETS_IN_FLIGHT:
+            continue
+        try:
+            if retirement_incomplete(session_id, marked_at):
+                abort_forget(knowledge_store, marker)
+                out["restored"] += 1
+                log.warning("[forget] restored rows of an interrupted forget (session %s never retired)", session_id)
+            else:
+                finish_forget(knowledge_store, marker)
+                out["finished"] += 1
+                log.warning("[forget] finished an interrupted forget of retired session %s", session_id)
+        except Exception:  # noqa: BLE001 — leave it for the next sweep
+            log.warning("[forget] could not settle the pending forget of session %s", session_id, exc_info=True)
+    return out
 
 
 _SUMMARY_PROMPT = (

@@ -21,31 +21,53 @@ from langchain.agents.middleware import AgentMiddleware
 log = logging.getLogger(__name__)
 
 
+_HINT_MAX_CHARS = 400
+
+
+def _fix_it_hint(cause: BaseException | None) -> str:
+    """The cause's own message, redacted and capped — the "Run `codex login`" / "Sign in
+    again" text a credential error carries. Shown only on trusted (operator) surfaces;
+    never on ``/v1`` or to a federation-tier A2A caller."""
+    if cause is None:
+        return ""
+    try:
+        from graph.middleware.redaction import redact
+
+        return redact(str(cause)).strip()[:_HINT_MAX_CHARS]
+    except Exception:  # noqa: BLE001 — a hint, never a second failure
+        return ""
+
+
 class ModelOverrideError(ValueError):
-    """A per-turn model override (``state["model"]`` — a console tab's pick, a ``/v1``
-    request's ``model``, an A2A ``metadata.model``) that names nothing this agent can run
-    (#3957): its ``<prefix>:`` is not a known connection.
+    """A per-turn model pick (``state["model"]`` — a console tab's pick, a ``/v1``
+    request's ``model``, an A2A ``metadata.model``) this agent cannot use (#3957), for a
+    reason that will not go away by retrying: an unknown connection prefix, a model id the
+    connection's builder rejects, a connection with no endpoint/key, a sign-in that needs
+    redoing. ``/v1`` answers it 400.
 
-    A ``ValueError`` because it is the caller's input that is wrong — ``/v1`` answers it
-    400. The message is deliberately short: it reaches remote callers (``/v1``, A2A), so it
-    names the pick and the prefix but neither the build error nor the agent's connection
-    list; those go to the server log."""
+    ``str()`` is deliberately short — it reaches remote callers (``/v1``, A2A) — and names
+    neither the build error nor the agent's connection list. ``hint`` carries the cause's
+    own fix-it text for trusted surfaces only."""
 
-    def __init__(self, model: str, prefix: str = ""):
+    def __init__(self, model: str, prefix: str = "", *, hint: str = ""):
         self.model = model
-        what = f"{prefix!r} is not a known connection" if prefix else "it is not a known model"
+        self.hint = hint
+        what = f"{prefix!r} is not a known connection" if prefix else "this agent cannot use it"
         super().__init__(f"model {model!r} is not available: {what}.")
 
 
 class ModelUnavailableError(RuntimeError):
-    """A per-turn model override that names a KNOWN connection but whose client could not
-    be built right now (#3957) — a sign-in token that failed to refresh, a credential file
-    that is missing, a network error during the refresh. Not the caller's fault and often
-    transient, so it is not a 400: ``/v1`` answers 503. Same short-message rule as
-    :class:`ModelOverrideError`; the cause is logged, never echoed."""
+    """A per-turn model pick whose client could not be built because of something
+    TRANSIENT (#3957) — a network error or timeout reaching the provider or its token
+    endpoint, a 5xx/429 from it. Not the caller's fault and retryable: ``/v1`` answers 503
+    with ``Retry-After``. Same short-``str()`` / trusted-``hint`` rule as
+    :class:`ModelOverrideError`."""
 
-    def __init__(self, model: str):
+    RETRY_AFTER_S = 30
+
+    def __init__(self, model: str, *, hint: str = ""):
         self.model = model
+        self.hint = hint
         super().__init__(f"model {model!r} could not be loaded right now; try again shortly.")
 
 
@@ -68,14 +90,45 @@ def _unknown_prefix(model: str, config) -> str:
         return ""
 
 
+def is_transient_build_failure(cause: BaseException | None) -> bool:
+    """Would building this model plausibly succeed if retried shortly? Only for a network
+    error / timeout (on the explicit ``__cause__`` chain), a 429 or 5xx from the provider or
+    its token endpoint, or an OAuth credential error flagged as not needing a re-login (the
+    refresh could not reach the provider). Everything else — an unknown model id, a
+    connection with no endpoint/key, a sign-in that must be redone — is permanent."""
+    from graph.upstream_errors import upstream_status_in_chain, upstream_unreachable
+
+    seen: set[int] = set()
+    exc = cause
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        if isinstance(exc, TimeoutError):
+            return True
+        if type(exc).__name__ == "OAuthCredentialError" and getattr(exc, "relogin", True) is False:
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__
+    if upstream_unreachable(cause):
+        return True
+    status = upstream_status_in_chain(cause)
+    return status is not None and (status == 429 or status >= 500)
+
+
 def override_error(model: str, cause: BaseException, config) -> Exception:
-    """The error a failed explicit pick fails its turn with (#3957): the caller's
-    :class:`ModelOverrideError` for an unknown connection prefix, else a
-    :class:`ModelUnavailableError`. The cause is logged here, with the detail the
-    short messages leave out."""
+    """The error a failed EXPLICIT pick fails its turn with (#3957): a retryable
+    :class:`ModelUnavailableError` only for a transient cause, else the caller's
+    :class:`ModelOverrideError`. The cause is logged here in full."""
     prefix = _unknown_prefix(model, config)
-    log.warning("[model-override] could not build %r (%s): %s", model, "unknown connection" if prefix else "unavailable", cause)
-    return ModelOverrideError(model, prefix) if prefix else ModelUnavailableError(model)
+    transient = not prefix and is_transient_build_failure(cause)
+    log.warning(
+        "[model-override] could not build %r (%s): %s",
+        model,
+        "unknown connection" if prefix else ("transient" if transient else "unusable"),
+        cause,
+    )
+    hint = _fix_it_hint(cause) if not prefix else ""
+    if transient:
+        return ModelUnavailableError(model, hint=hint)
+    return ModelOverrideError(model, prefix, hint=hint)
 
 
 def _model_name_of(model) -> str:
@@ -125,8 +178,8 @@ class ModelOverrideMiddleware(AgentMiddleware):
                 # something to paper over (#3957). Falling back to the default ran the turn
                 # on a model nobody chose — billed to a different account, recorded in
                 # telemetry as the default, and answered as though the pick had worked. Fail
-                # the turn with a message that names the pick (/v1: 400 for an unknown
-                # connection, 503 for one that could not be built right now).
+                # the turn with a message that names the pick (/v1: 400, or 503 when the
+                # cause is transient).
                 raise override_error(want, exc, self._config) from exc
             # Effort-only on the current model: the model itself is still the one the
             # operator is on, so degrading to it without the effort stays a soft fallback.

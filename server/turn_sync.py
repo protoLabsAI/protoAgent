@@ -108,6 +108,7 @@ async def _native_turn(
     overflow_retry: bool = False,
     origin: str = "local",
     telemetry_sink: dict[str, Any] | None = None,
+    model_notice: str = "",
 ) -> list[dict[str, Any]]:
     """One native turn on this session's thread, as the reply list. Run once
     for the operator's message and, after a context-overflow compaction, once
@@ -145,12 +146,7 @@ async def _native_turn(
     if goal_active:
         # A goal-driven turn also runs under the fence of the turn that SET the goal.
         tool_fence = _goal_loop.goal_fenced(_goal_state, tool_fence)
-        # ...and, absent a pick of its own, on the model of the turn that set it (#3957).
-        state_extra = {
-            **state_extra,
-            "subagent_fence": tool_fence,
-            "model": _goal_loop.goal_model(_goal_state, state_extra.get("model")),
-        }
+        state_extra = {**state_extra, "subagent_fence": tool_fence}
     # The streaming driver's request metadata, as far as this surface has it (#3891 F2):
     # the origin (autonomy) and the operator's HITL-answer marker.
     turn_metadata: dict[str, Any] = {"origin": origin}
@@ -280,6 +276,7 @@ async def _native_turn(
     # stops; run each continuation it asks for. No status surface here — the
     # verifier notes are skipped and only the terminal note reaches the reply.
     drive = _goal_loop.GoalDrive(session_id, config, response)
+    drive.notice = model_notice  # the goal's model fell back to the default (#3957)
     drive.last_pass = goal_pass  # a round-capped pass pauses the drive (#3957)
     # This driver locks the thread per pass, not across the drive: the pause note's
     # checkpoint write takes the lock itself, like any other writer to the thread.
@@ -367,6 +364,12 @@ async def _chat_langgraph_impl(
     ``origin`` (the ``chat()`` surface) decides whether the turn is autonomous (#3891 F2).
     """
     from observability import tracing
+
+    # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
+    # test-built, falling back to the default with a notice when it can't be. The lead
+    # graph's stamp, the pre-turn chain and `turn_model_scope` all use it.
+    requested_model = (model or "").strip()
+    model, model_notice = _goal_loop.resolve_turn_model(session_id, requested_model)
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
     # Incognito is stamped explicitly every turn (the channel persists in the
     # checkpointer — an omitted key would inherit the previous turn's value).
@@ -415,7 +418,7 @@ async def _chat_langgraph_impl(
             # The model the caller asked for (#3957): what the row names when no model call
             # reported one — a failed turn, a short-circuit — instead of the configured
             # default, which is what ran only when nothing was requested.
-            _telemetry_sink["requested_model"] = (model or "").strip()
+            _telemetry_sink["requested_model"] = requested_model
         # Set only once the NATIVE turn is about to run — the overflow recovery below
         # compacts + retries that thread (same contract as the streaming driver, #3805).
         native_tid: str | None = None
@@ -499,6 +502,7 @@ async def _chat_langgraph_impl(
                     incognito=incognito,
                     origin=origin,
                     telemetry_sink=_telemetry_sink,
+                    model_notice=model_notice,
                 )
             )
         except Exception as e:
@@ -524,6 +528,7 @@ async def _chat_langgraph_impl(
                             overflow_retry=True,
                             origin=origin,
                             telemetry_sink=_telemetry_sink,
+                            model_notice=model_notice,
                         )
                     )
                 except Exception as retry_exc:  # noqa: BLE001 — second failure surfaces honestly

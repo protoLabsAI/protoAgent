@@ -419,20 +419,17 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().delete_by_namespace(namespace)
 
-    def mark_forget_pending(self, marker: str, *, namespace: str = "", sources=(), source_types=None) -> int:
-        """Drop the vectors of the already-invalidated rows phase 1 hard-deletes (no FK
-        cascade on the side table), then delegate. Hidden rows keep their vectors until
-        :meth:`delete_forget_pending` — a restore must bring them back whole."""
-        from knowledge.store import _forget_selection
-
-        where, params = _forget_selection(namespace, sources, source_types)
-        if marker and where:
-            self._drop_vectors(f"SELECT id FROM chunks WHERE ({where}) AND invalidated_at IS NOT NULL", params)
-        return super().mark_forget_pending(marker, namespace=namespace, sources=sources, source_types=source_types)
-
     def delete_forget_pending(self, marker: str) -> int:
+        """Drop the held rows' vectors first (no FK cascade on the side table)."""
         if marker:
-            self._drop_vectors("SELECT id FROM chunks WHERE invalidation_reason = ?", [marker])
+            from knowledge.store import FORGET_PREV_SEP
+
+            n = len(marker + FORGET_PREV_SEP)
+            self._drop_vectors(
+                "SELECT id FROM chunks WHERE invalidation_reason = ? "
+                f"OR substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
+                [marker, marker],
+            )
         return super().delete_forget_pending(marker)
 
     def _drop_vectors(self, id_select: str, params) -> None:

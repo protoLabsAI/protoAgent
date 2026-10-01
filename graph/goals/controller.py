@@ -526,6 +526,15 @@ class GoalController:
         }
         state.history = (list(state.history) + [event])[-_HISTORY_CAP:]
 
+    def remember_model(self, session_id: str, model: str) -> None:
+        """An explicit pick on a turn that drives this goal becomes the goal's model
+        (#3957), so the next re-drive without a pick (a watch / schedule fire) uses it."""
+        state = self.active_goal(session_id)
+        if state is None or state.model == (model or ""):
+            return
+        state.model = model or ""
+        self._store.set(state)
+
     def note_round_cap(self, session_id: str, reason: str) -> None:
         """Record on the goal's timeline that the drive paused because a goal-driven turn hit
         its per-turn round cap (#3957). The goal stays ACTIVE (a pause, like the ADR 0079
