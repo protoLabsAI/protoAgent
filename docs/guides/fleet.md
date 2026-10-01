@@ -9,7 +9,7 @@ primitives:
 |---|---|---|
 | **Workspace** | a named agent — its own config, secrets, plugins, scoped data, port | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Bundle** | a curated, pinned set of plugins installed as one | [0040](../adr/0040-plugin-bundles.md) |
-| **Archetype** | a starter *agent type* in the new-agent picker — a persona plus an optional bundle; the shipped catalog plus any installed bundle that declares one. Ships in an **archetype repo** (`cowork-archetype`, `social-archetype`, …; the old "stack" term is retired) | [0100](../adr/0100-agent-archetypes.md) |
+| **Archetype** | a starter *agent type* in the new-agent picker — a persona plus an optional bundle; the shipped catalog plus any installed bundle that declares one. Ships in an **archetype repo** (`cowork-archetype`, `engineer-archetype`, …; the old "stack" term is retired) | [0100](../adr/0100-agent-archetypes.md) |
 | **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
@@ -126,7 +126,7 @@ The picker draws from **two** sources:
   code-free personas are Basic and Custom, the rest reference published archetype repos)
   and is **data-driven**: add or remove archetypes by editing the JSON, no code change. A
   row the operator has pulled from the picker without deleting it sits in the file's
-  `held:` array (Social Marketing and its successor candidate, Brand & Launch, are parked there today) — held rows are never served, but a held archetype is still creatable through the API (`POST /api/fleet` with its `bundle` URL and the persona as `soul`). A fork or instance overrides it by
+  `held:` array (Brand & Launch, which replaced Social Marketing, is parked there until it's been tested) — held rows are never served, but a held archetype is still creatable through the API (`POST /api/fleet` with its `bundle` URL and the persona as `soul`). A fork or instance overrides it by
   dropping its own `archetype-catalog.json` in the live config dir (same rule as
   `plugin-catalog.json`); if the file is missing entirely, a hardcoded Basic + Custom
   fallback keeps the picker from rendering empty. Each entry names a `soul_preset` (a

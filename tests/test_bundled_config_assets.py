@@ -342,52 +342,32 @@ def test_engineer_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
-def test_social_marketing_archetype_is_held() -> None:
-    """The Social Marketing archetype is HELD from the picker (operator call,
-    2026-08-20: not ready for release). JSON has no comments, so 'commented out'
-    is a sibling ``held`` list the reader never serves. This pins BOTH directions:
-    the row must not ship in ``archetypes`` (it would become selectable again),
-    and it must survive intact in ``held`` — soul preset and bundle still valid —
-    so restoring it is one move, not an archaeology dig."""
+def test_brand_launch_replaces_social_marketing_and_is_held() -> None:
+    """Brand & Launch (a launch manager for any app: campaign plan, scripted recordings,
+    GIFs, cards, copy drafts, operator-only approval) REPLACES the Social Marketing
+    archetype (operator call, 2026-10-01). It ships HELD until the operator has tested it.
+    Pins every direction of that decision:
+
+    * ``social-marketing`` is gone — not served, not parked in ``held``, its soul preset
+      retired — so it can't be restored by accident alongside its replacement;
+    * ``brand-launch`` is not served in ``archetypes`` and is parked exactly once in
+      ``held`` with its `_held` note, a resolving soul preset and its bundle URL, so
+      listing it is one move (into ``archetypes`` before ``custom``, dropping `_held`)."""
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     ids = [a["id"] for a in catalog["archetypes"]]
-
-    assert "social-marketing" not in ids, (
-        f"'social-marketing' is held from release — it must not be in archetypes, got {ids}"
-    )
-
     held = [a["id"] for a in catalog.get("held") or []]
-    assert held.count("social-marketing") == 1, f"'social-marketing' must be parked exactly once in `held`, got {held}"
-    (row,) = (a for a in catalog["held"] if a["id"] == "social-marketing")
-    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
-    assert preset.is_file(), (
-        f"held archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
-        f"but {preset} does not exist — restoring the row would silently seed nothing."
+
+    assert "social-marketing" not in ids + held, (
+        f"'social-marketing' was replaced by 'brand-launch' — it must be in neither list, got {ids} / {held}"
     )
-    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/"), (
-        "the held row must keep its bundle URL so restoration is one move"
+    assert not (CONFIG / "soul-presets" / "social-marketing.md").exists(), (
+        "the social-marketing persona was retired with its row"
     )
 
-    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
-
-
-def test_brand_launch_archetype_is_held() -> None:
-    """The Brand & Launch archetype (a launch manager for any app: campaign plan, scripted
-    recordings, GIFs, cards, copy drafts, operator-only approval) ships HELD — the operator
-    decides when it reaches the picker. It is the successor candidate to the held
-    ``social-marketing`` row, which stays parked beside it. Pins BOTH directions, like
-    social-marketing: not served in ``archetypes``, and intact in ``held`` (soul preset
-    resolves, bundle URL kept, `_held` note present) so listing it is one move."""
-    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
-    ids = [a["id"] for a in catalog["archetypes"]]
-
-    assert "brand-launch" not in ids, f"'brand-launch' is held from release — it must not be in archetypes, got {ids}"
-
-    held = [a["id"] for a in catalog.get("held") or []]
+    assert "brand-launch" not in ids, f"'brand-launch' is held until tested — it must not be in archetypes, got {ids}"
     assert held.count("brand-launch") == 1, f"'brand-launch' must be parked exactly once in `held`, got {held}"
-    assert "social-marketing" in held, "Brand & Launch is a successor CANDIDATE — social-marketing stays parked, not deleted"
     (row,) = (a for a in catalog["held"] if a["id"] == "brand-launch")
-    assert row.get("_held"), "a held row carries the `_held` note saying why and how to restore it"
+    assert "Replaces social-marketing" in row.get("_held", ""), "the held row says why it's parked"
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), (
         f"held archetype 'brand-launch' points at soul_preset '{row['soul_preset']}' "
