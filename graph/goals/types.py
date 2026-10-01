@@ -24,6 +24,30 @@ from time import time
 #                   explicitly gave up with a reason)
 TERMINAL_STATUSES = ("achieved", "exhausted", "unachievable")
 
+# Accepted ranges for a goal's per-goal budgets when a caller sets them (#3973). Unset
+# (``None``) means "use the config default". Outside the range is refused, not clamped:
+# a string, a float, a bool, zero or a negative would otherwise reach ``GoalState`` and
+# break the drive loop's ``iteration >= max_iterations`` comparison later.
+MAX_GOAL_ITERATIONS = 1000
+MAX_GOAL_NO_PROGRESS_LIMIT = 100
+
+
+def goal_budget_problem(max_iterations: object, no_progress_limit: object) -> str | None:
+    """Why a caller-supplied ``max_iterations`` / ``no_progress_limit`` is unusable, or
+    ``None`` when both are acceptable. Each must be absent (``None``) or a whole number
+    in ``1..MAX``. ``bool`` is refused even though it subclasses ``int``."""
+    for name, value, hi in (
+        ("max_iterations", max_iterations, MAX_GOAL_ITERATIONS),
+        ("no_progress_limit", no_progress_limit, MAX_GOAL_NO_PROGRESS_LIMIT),
+    ):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"{name} must be a whole number, got {value!r}."
+        if not 1 <= value <= hi:
+            return f"{name} must be between 1 and {hi}, got {value}."
+    return None
+
 
 @dataclass
 class VerifyResult:

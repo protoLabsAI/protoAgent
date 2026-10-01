@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from graph.fence_scope import current_fence, fence_scope
 from graph.goals.store import GoalStore
-from graph.goals.types import GoalState
+from graph.goals.types import GoalState, goal_budget_problem
 from graph.goals.verifiers import (
     VERIFIERS,
     VerifierInvoker,
@@ -130,6 +130,10 @@ class GoalController:
                 '`/goal {"condition": "...", "verifier": {"type": "command", '
                 '"command": "pytest -q"}}`.'
             )
+        # A JSON spec's budgets are caller data (#3973): `"max_iterations": "abc"` used to
+        # be stored as-is and broke the drive loop's budget comparison on the next turn.
+        if problem := goal_budget_problem(max_iters, no_progress):
+            return f"Could not set goal: {problem}"
         # Validate the verifier TYPE before the trust-gate (#3957): an unknown type is a
         # typo, not a safety question — answering it with the "for safety…" refusal sent
         # the operator looking for a trust problem that wasn't there.
@@ -289,6 +293,8 @@ class GoalController:
             )
         if not condition:
             return (False, "a goal condition is required.")
+        if problem := goal_budget_problem(max_iterations, no_progress_limit):
+            return (False, problem)
         if not (verifier.get("check")):
             return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
         if err := self.unknown_plugin_verifier_error(verifier):
@@ -335,6 +341,8 @@ class GoalController:
 
         if not condition:
             return (False, "a goal condition is required.")
+        if problem := goal_budget_problem(max_iterations, no_progress_limit):
+            return (False, problem)
         verifier = verifier or {"type": "llm"}
         vtype = verifier.get("type", "llm")
         if vtype not in VERIFIERS:

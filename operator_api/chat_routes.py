@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
@@ -49,6 +49,7 @@ from server.chat import (
     publish_session,
     revoke_published_link,
     rewind_session,
+    turn_error,
 )
 
 
@@ -419,6 +420,74 @@ def _v1_invalid_request(message: str, *, param: str | None = None) -> JSONRespon
     )
 
 
+def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
+    """The HTTP status (and headers) for a failed turn's ``turn_error`` dict — the one
+    policy ``/v1`` and ``POST /api/chat`` share (#3973). See ``_v1_error_response`` for
+    why each failure gets the status it does."""
+    upstream = err.get("upstream_status")
+    if upstream == 429:
+        status = 429
+    elif isinstance(upstream, int) or err.get("upstream_unreachable") or err.get("upstream_stream_closed"):
+        # A provider that closed the stream mid-turn (reconnects exhausted) is the hop
+        # behind us failing — most likely rate limiting — not our own fault (#3973).
+        status = 502
+    elif err.get("model_unavailable"):
+        # The turn's model pick names a known connection that could not be set up right
+        # now (#3957) — a sign-in refresh that failed, say. Retryable, not the caller's fault.
+        status = 503
+    elif err.get("type") == "invalid_request_error":
+        # Our own refusal of the request as sent — e.g. a `model` naming a connection this
+        # agent doesn't have (#3957). No hop failed; the caller's input did.
+        status = 400
+    else:
+        status = 500
+    # A transient model-pick failure says when to come back (#3957).
+    headers = {"Retry-After": str(err["retry_after"])} if status == 503 and err.get("retry_after") else None
+    return status, headers
+
+
+def _api_chat_error(
+    err: dict, session_id: str, exc: BaseException | None = None, *, raised: bool = False
+) -> HTTPException:
+    """``POST /api/chat``'s answer to a failed turn (#3973) — the ``/v1`` status policy
+    (``_turn_error_status``: 429 mirrored, other upstream failures / an unreachable
+    gateway / a provider-closed stream 502, an unavailable model 503, a refused request
+    400), in this surface's ``{"detail": {code, message, upstream_status, session_id,
+    error_id}}`` shape.
+
+    The message is the turn's own for an IN-BAND failure — the driver already wrote it as
+    user-facing text (``server.chat._fail_turn``) and stored it in the transcript, and
+    ``/v1`` shows it too. Only when ``chat()`` itself RAISED (``raised=True``) and the
+    failure is our own (500) is the exception text replaced by a generic message: that
+    text never went through the driver's classifier. Either way the server log carries the
+    ``error_id`` beside the real message, so a client report joins up with the log."""
+    status, headers = _turn_error_status(err)
+    message = err.get("message") or "the turn failed"
+    error_id = uuid.uuid4().hex[:8]
+    log.log(
+        logging.ERROR if status == 500 else logging.WARNING,
+        "[api-chat] turn for session %s failed with HTTP %s (error id %s): %s",
+        session_id,
+        status,
+        error_id,
+        message,
+        exc_info=exc,
+    )
+    if raised and status == 500:
+        message = f"The turn failed with an internal error (error id {error_id}); the details are in the server log."
+    return HTTPException(
+        status_code=status,
+        headers=headers,
+        detail={
+            "code": err.get("type") or "server_error",
+            "message": message,
+            "upstream_status": err.get("upstream_status"),
+            "session_id": session_id,
+            "error_id": error_id,
+        },
+    )
+
+
 def _v1_error_response(err: dict) -> JSONResponse:
     """Map a failed turn to an OpenAI-shaped HTTP error instead of a 200 (#2578).
 
@@ -440,22 +509,7 @@ def _v1_error_response(err: dict) -> JSONResponse:
     - **No HTTP status at all ⇒ 500** — that's a fault in our own turn, not a proxy hop.
     """
     upstream = err.get("upstream_status")
-    if upstream == 429:
-        status = 429
-    elif isinstance(upstream, int) or err.get("upstream_unreachable"):
-        status = 502
-    elif err.get("model_unavailable"):
-        # The turn's model pick names a known connection that could not be set up right
-        # now (#3957) — a sign-in refresh that failed, say. Retryable, not the caller's fault.
-        status = 503
-    elif err.get("type") == "invalid_request_error":
-        # Our own refusal of the request as sent — e.g. a `model` naming a connection this
-        # agent doesn't have (#3957). No hop failed; the caller's input did.
-        status = 400
-    else:
-        status = 500
-    # A transient model-pick failure says when to come back (#3957).
-    headers = {"Retry-After": str(err["retry_after"])} if status == 503 and err.get("retry_after") else None
+    status, headers = _turn_error_status(err)
     return JSONResponse(
         headers=headers,
         content={
@@ -524,14 +578,24 @@ def register_chat_routes(app, ui: str) -> None:
         # Echo the (possibly minted) session_id so callers can continue the
         # session — additive key, existing consumers unaffected.
         session_id = req.session_id.strip() or _mint_session_id()
-        result = await chat(
-            req.message,
-            session_id,
-            model=req.model,
-            incognito=req.incognito,
-            hitl_resume=req.hitl_resume,
-            origin="api-chat",
-        )
+        # A failed turn is a real HTTP error, mapped the way /v1 maps it (#3973): a turn
+        # that raised used to be a bare 500 carrying the exception text, and one that came
+        # back as a structured error bubble a 200 a client counted as an answer. The
+        # console's /api/chat fallback already reads a non-2xx `detail` as a failed turn.
+        try:
+            result = await chat(
+                req.message,
+                session_id,
+                model=req.model,
+                incognito=req.incognito,
+                hitl_resume=req.hitl_resume,
+                origin="api-chat",
+            )
+        except Exception as exc:
+            raise _api_chat_error(turn_error(exc), session_id, exc, raised=True) from exc
+        turn_err = next((m["error"] for m in result if isinstance(m.get("error"), dict)), None)
+        if turn_err:
+            raise _api_chat_error(turn_err, session_id)
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
