@@ -36,6 +36,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from graph import delegation_usage
 from graph.output_format import extract_output
 from graph.subagent_model import turn_model_scope
 
@@ -519,7 +520,10 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             finally:
                 await step_q.put(_WF_DONE)
 
-        runner = asyncio.create_task(_runner())
+        # Bound BEFORE the runner task is created, so its copied context carries the
+        # collector: each step's subagent usage lands here (#3957).
+        with delegation_usage.collect() as wf_usage:
+            runner = asyncio.create_task(_runner())
         finished = False
         try:
             # An umbrella card for the whole workflow, then one per step.
@@ -566,6 +570,8 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                 await _stop_abandoned_workflow(runner, wf_name)
         wf_out = await runner
         yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
+        for row in _usage_frames(wf_usage):
+            yield row
         pre.handled = True
         yield ("done", wf_out)
         return
@@ -584,13 +590,16 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
         # The turn's model override reaches the slash run under the one subagent
         # precedence: its own pin wins over it (#3944) — on every driver (#3955).
-        sub_out = await _chat_commands._run_parsed_subagent(
-            sub_type,
-            sub_prompt,
-            session_id=session_id,
-            turn_model=turn_model,
-        )
+        with delegation_usage.collect() as sub_usage:
+            sub_out = await _chat_commands._run_parsed_subagent(
+                sub_type,
+                sub_prompt,
+                session_id=session_id,
+                turn_model=turn_model,
+            )
         yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
+        for row in _usage_frames(sub_usage):
+            yield row
         pre.handled = True
         yield ("done", sub_out)
         return
@@ -622,6 +631,18 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     from runtime.acp_runtime import is_acp_runtime
 
     pre.acp = bool(is_acp_runtime(STATE.graph_config))
+
+
+def _usage_frames(rows: list[dict]) -> list[tuple[str, dict]]:
+    """The short-circuit run's delegated model calls as ``("usage", row)`` frames (#3957).
+
+    One frame per model call, in the shape the turn drivers already account: the
+    streaming executor sums them exactly as it sums a ``task`` delegation's custom usage
+    events (each row carries ``subagent_type``, which keeps it out of the LEAD thread's
+    context-window fill), and the non-streaming driver folds them into its telemetry row.
+    Without them a `/<subagent>` or `/<workflow>` turn recorded 0 calls and 0 tokens on
+    the configured default model."""
+    return [("usage", dict(r)) for r in rows or [] if isinstance(r, dict)]
 
 
 def _short_circuit_reply(frame: tuple | None) -> list[dict[str, Any]]:

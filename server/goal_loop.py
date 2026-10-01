@@ -60,6 +60,59 @@ def round_cap_note(marker) -> str:
     )
 
 
+def _thread_of(config: dict | None) -> str:
+    return str(((config or {}).get("configurable") or {}).get("thread_id") or "")
+
+
+async def record_goal_note(config: dict, note: str, *, pass_config: dict | None = None) -> bool:
+    """Write the drive's terminal pause note onto the turn's checkpointed thread (#3957).
+
+    The note reaches the caller only as a suffix on the turn's final TEXT (``GoalDrive.text``)
+    — the stream's terminal frame, ``/v1``'s content. The checkpoint, which is what a
+    transcript export (and a rebuilt chat, and the next turn's model) reads, held only the
+    round governor's hand-back, so the export lost the one line that says the goal is
+    paused and why.
+
+    When the capped pass ran on this thread and ended on a plain text reply (the
+    governor's hand-back), that message is rewritten in place — same id, so the
+    ``add_messages`` reducer replaces it — to the text the stream showed: the hand-back,
+    a rule, the note. Otherwise (a fresh-context goal's pass ran on its own scoped thread,
+    or the tail is not a plain reply) the note is appended as its own assistant message.
+    Tagged ``protoagent_goal_note`` either way. Best-effort: never raises."""
+    graph = STATE.graph
+    if graph is None or not (note or "").strip():
+        return False
+    try:
+        from langchain_core.messages import AIMessage
+
+        last = None
+        if _thread_of(pass_config) == _thread_of(config):
+            snap = await graph.aget_state(config)
+            msgs = ((getattr(snap, "values", None) or {}) if snap is not None else {}).get("messages") or []
+            last = msgs[-1] if msgs else None
+        tagged = {"protoagent_goal_note": note}
+        if (
+            isinstance(last, AIMessage)
+            and getattr(last, "id", None)
+            and not getattr(last, "tool_calls", None)
+            and isinstance(last.content, str)
+        ):
+            msg = AIMessage(
+                content=f"{last.content}\n\n---\n{note}",
+                id=last.id,
+                additional_kwargs={**(last.additional_kwargs or {}), **tagged},
+            )
+        else:
+            msg = AIMessage(content=note, additional_kwargs=tagged)
+        await graph.aupdate_state(config, {"messages": [msg]})
+        return True
+    except Exception:  # noqa: BLE001 — bookkeeping must never break the drive
+        import logging
+
+        logging.getLogger(__name__).warning("[goal] could not record the pause note on the thread", exc_info=True)
+        return False
+
+
 # HitlAutoAnswer.on_interrupt verdicts.
 PARK = "park"
 ANSWER = "answer"
@@ -153,6 +206,9 @@ class GoalDrive:
         # The ``goal_turn()`` marker of the pass just run (graph.goals.goal_turn.GoalTurn).
         # The driver sets it after the initial pass; each continuation's rides the step.
         self.last_pass = None
+        # The config the last pass ran on — the turn's own, or a fresh-context goal's
+        # scoped ``…:goal-iter-N`` thread (``record_goal_note`` needs to know which).
+        self.last_pass_config: dict | None = config
 
     async def steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
         if STATE.goal_controller is None or not STATE.goal_controller.active_goal(self.session_id):
@@ -183,11 +239,13 @@ class GoalDrive:
                 _record = getattr(STATE.goal_controller, "note_round_cap", None)
                 if _record is not None:
                     _record(self.session_id, note)
+                await record_goal_note(self.config, note, pass_config=self.last_pass_config)
                 yield GoalNote(note)
                 break
             step = GoalContinuation(decision.message, _chat()._goal_continuation_config(self.config, decision.state))
             yield step
             self.last_pass = step.goal_pass
+            self.last_pass_config = step.config
             if step.text:
                 self.text = step.text
         if note:

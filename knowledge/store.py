@@ -248,12 +248,16 @@ def _escape_like(text: str) -> str:
     )
 
 
-def _source_clause(source: str, source_types=None, prefix: bool = False) -> tuple[str, list[str]]:
+def _source_clause(source: str, source_types=None, prefix: bool = False, before=None) -> tuple[str, list[str]]:
     """SQL predicate + params selecting chunks by ``source`` (exact, or a prefix match
-    when ``prefix``), optionally narrowed to ``source_types``. ``("", [])`` means
-    "match nothing": an empty source, or an EMPTY type list, is never widened into a
-    delete of every row."""
+    when ``prefix``), optionally narrowed to ``source_types`` and to rows created strictly
+    ``before`` a cutoff. ``("", [])`` means "match nothing": an empty source, an EMPTY
+    type list, or an unparseable cutoff is never widened into a delete of every row."""
     if not source or not str(source).strip():
+        return "", []
+    try:
+        cutoff = _normalize_before(before)
+    except ValueError:
         return "", []
     if prefix:
         clauses = [f"source LIKE ? ESCAPE '{_LIKE_ESCAPE}'"]
@@ -267,6 +271,9 @@ def _source_clause(source: str, source_types=None, prefix: bool = False) -> tupl
             return "", []
         clauses.append(f"source_type IN ({', '.join('?' * len(types))})")
         params.extend(types)
+    if cutoff is not None:
+        clauses.append("created_at < ?")
+        params.append(cutoff)
     return " AND ".join(clauses), params
 
 
@@ -1616,17 +1623,19 @@ class KnowledgeStore:
         finally:
             db.close()
 
-    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False) -> int:
+    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False, before=None) -> int:
         """HARD-delete every chunk whose ``source`` is ``source`` (or starts with it,
         when ``prefix``), superseded rows included, optionally only those whose
-        ``source_type`` is in ``source_types``. Returns the count removed.
+        ``source_type`` is in ``source_types`` and — with ``before`` (an ISO-8601
+        timestamp or a datetime; naive = UTC) — only rows created strictly before it.
+        Returns the count removed.
 
         Explicit-intent path like :meth:`delete_by_namespace`: the delete-chat
         dialog's "forget what this chat saved" (#3493) removes the summaries and
         facts harvested from a chat's thread. Unlike :meth:`invalidate_by_source`
         (the console's reversible bulk delete), nothing is kept for an Undo. An
         empty ``source`` or an empty ``source_types`` list removes nothing."""
-        where, params = _source_clause(source, source_types, prefix)
+        where, params = _source_clause(source, source_types, prefix, before)
         if not where:
             return 0
         db = self._get_db()

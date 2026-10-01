@@ -159,7 +159,7 @@ def archive_payload(
 _FORGET_SOURCE_TYPES = ("harvest", "extracted")
 
 
-def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> int:
+def forget_conversation_memory(knowledge_store, session_id: str, thread_ids, *, before=None) -> int:
     """Delete what a chat already wrote to the knowledge store (#3493, the delete
     dialog's opt-in). Returns the number of rows removed.
 
@@ -176,6 +176,11 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
     provenance existed (``source="harvest"``, which names no thread). A fact from
     ANOTHER chat that one of this chat's facts superseded stays superseded.
 
+    ``before`` (a datetime / ISO-8601 cutoff) limits the harvested-row delete to rows
+    created strictly before it (#3957): the chat delete runs this AFTER retiring the
+    threads, and a harvest ticked alongside writes its fresh summary during retirement —
+    after the cutoff — so it survives. Archives are not cut off: retirement writes none.
+
     Hard delete, like the chat delete it rides on. Stores without the method (a plugin
     backend) are skipped with a warning rather than failing the delete."""
     if knowledge_store is None or not session_id:
@@ -188,9 +193,10 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
         log.warning("[forget] knowledge store has no delete_by_namespace — archives of %s kept", session_id)
     by_source = getattr(knowledge_store, "delete_by_source", None)
     if callable(by_source):
+        cutoff = {"before": before} if before is not None else {}
         for tid in dict.fromkeys(str(t) for t in thread_ids if t):
-            removed += int(by_source(tid, source_types=_FORGET_SOURCE_TYPES) or 0)
-            removed += int(by_source(f"{tid}:goal-iter-", source_types=_FORGET_SOURCE_TYPES, prefix=True) or 0)
+            removed += int(by_source(tid, source_types=_FORGET_SOURCE_TYPES, **cutoff) or 0)
+            removed += int(by_source(f"{tid}:goal-iter-", source_types=_FORGET_SOURCE_TYPES, prefix=True, **cutoff) or 0)
     else:
         log.warning("[forget] knowledge store has no delete_by_source — harvested rows of %s kept", session_id)
     log.info("[forget] removed %d knowledge row(s) written by session %s", removed, session_id)

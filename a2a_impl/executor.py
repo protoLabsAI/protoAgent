@@ -205,6 +205,11 @@ class TurnOutcome:
     # which reads as a completed one that trails off) and would have to re-fetch
     # the task to say what went wrong. Empty for a completed turn.
     error: str = ""
+    # The model the turn's caller asked for (``metadata.model`` — a console tab's pick, an
+    # A2A peer's per-request override). Empty when none was requested. Telemetry names it
+    # when no model call reported usage — a turn that failed on its first call, a
+    # short-circuit reply — instead of the configured default it never ran on (#3957).
+    requested_model: str = ""
 
 
 # A terminal hook the host can register (ADR 0003 / 0006): invoked with a
@@ -812,6 +817,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 stimulus=_stimulus,
                 trace_id=trace_id[0],
                 error=error,
+                requested_model=str(_md.get("model") or "").strip(),
             )
 
         # What the turn was last seen doing — read only when the stall guard trips,

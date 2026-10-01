@@ -400,6 +400,10 @@ async def _chat_langgraph_impl(
             # row lost its link to its Langfuse trace. Same capture-during-the-turn rule
             # as the A2A executor's `_capture_trace_id`.
             _telemetry_sink["trace_id"] = tracing.current_trace_id() or ""
+            # The model the caller asked for (#3957): what the row names when no model call
+            # reported one — a failed turn, a short-circuit — instead of the configured
+            # default, which is what ran only when nothing was requested.
+            _telemetry_sink["requested_model"] = (model or "").strip()
         # Set only once the NATIVE turn is about to run — the overflow recovery below
         # compacts + retries that thread (same contract as the streaming driver, #3805).
         native_tid: str | None = None
@@ -416,11 +420,19 @@ async def _chat_langgraph_impl(
                 message, fenced=bool(tool_fence), fence=list(tool_fence or []), turn_model=(model or "").strip()
             )
             last_frame: tuple | None = None
+            delegated_usage: list[dict] = []
             async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
                 async for frame in _pre_frames:
+                    if frame and frame[0] == "usage":
+                        # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this
+                        # surface renders no frames, but its telemetry row bills them.
+                        delegated_usage.append(frame[1])
+                        continue
                     last_frame = frame
             if pre.handled:
                 if _telemetry_sink is not None:
+                    if delegated_usage:
+                        _telemetry_sink["delegated_usage"] = delegated_usage
                     # A short-circuit (slash command, @-address, /goal control…) is a turn
                     # the A2A surface records a row for — `completed`, or `input_required`
                     # for a plugin form — so this surface does too (#3945).

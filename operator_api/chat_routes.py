@@ -433,6 +433,8 @@ def _v1_error_response(err: dict) -> JSONResponse:
       names it — ``upstream_status`` carries the original.
     - **Gateway unreachable ⇒ 502** (#3946) — connection refused / DNS / timeout carries
       no HTTP status, but it is still the hop behind us failing, not our own code.
+    - **The request itself was invalid ⇒ 400** (#3957) — a ``model`` the agent can't
+      build (an unknown connection prefix, say) fails the turn before any hop is called.
     - **No HTTP status at all ⇒ 500** — that's a fault in our own turn, not a proxy hop.
     """
     upstream = err.get("upstream_status")
@@ -440,6 +442,10 @@ def _v1_error_response(err: dict) -> JSONResponse:
         status = 429
     elif isinstance(upstream, int) or err.get("upstream_unreachable"):
         status = 502
+    elif err.get("type") == "invalid_request_error":
+        # Our own refusal of the request as sent — e.g. a `model` naming a connection this
+        # agent doesn't have (#3957). No hop failed; the caller's input did.
+        status = 400
     else:
         status = 500
     return JSONResponse(
@@ -447,7 +453,7 @@ def _v1_error_response(err: dict) -> JSONResponse:
             "error": {
                 "message": err.get("message") or "the turn failed",
                 "type": err.get("type") or "server_error",
-                "param": None,
+                "param": err.get("param"),
                 "code": str(upstream) if isinstance(upstream, int) else None,
                 # Non-standard but additive: which hop actually failed, for operators
                 # staring at a 502 wondering whose credential expired.
@@ -539,13 +545,26 @@ def register_chat_routes(app, ui: str) -> None:
         with one of this chat's threads as their ``source``. Not the memories the
         agent was asked to keep (``memory_ingest``, hot memory), and not rows
         written before provenance existed (a fact stored with the legacy
-        ``source="harvest"`` names no thread). It runs BEFORE retirement, so a
-        harvest ticked alongside it writes a fresh summary that survives.
+        ``source="harvest"`` names no thread). It runs AFTER retirement (#3957) but
+        only removes rows written before the delete began, so a harvest ticked
+        alongside it writes a fresh summary that survives.
 
         Both ``a2a:{session_id}`` and the legacy ``chat:{session_id}`` threads are
         retired (non-streaming turns keyed ``chat:`` before ADR 0069 unified the
         prefix) with cascade so goal-mode ``:goal-iter-N`` sub-threads are not
         orphaned."""
+        # The forget cutoff is taken BEFORE retirement and the forget runs AFTER it (#3957).
+        # Forgetting first meant a retirement that then raised (a checkpoint delete failing)
+        # left the chat in place with its memory already gone — the delete reported failure
+        # and the console kept the tab, but the hard-deleted rows could not come back. Now
+        # a failed retirement forgets nothing, and a failed forget leaves a retired chat the
+        # operator can delete again (retirement is idempotent). The cutoff is what keeps a
+        # harvest ticked alongside the forget: its fresh summary is written during
+        # retirement, after the cutoff, so the forget — which only removes rows created
+        # before the delete began — leaves it alone.
+        forget_before = datetime.now(timezone.utc)
+        chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
+        await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
         forgotten = 0
         if forget and STATE.knowledge_store is not None:
             from graph.conversation_harvest import forget_conversation_memory
@@ -557,9 +576,8 @@ def register_chat_routes(app, ui: str) -> None:
                 STATE.knowledge_store,
                 session_id,
                 [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)],
+                before=forget_before,
             )
-        chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
-        await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
         # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a
         # deleted chat leaves nothing indexed behind.
         store = STATE.knowledge_store

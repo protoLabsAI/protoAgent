@@ -34,6 +34,7 @@ import logging
 import time
 from typing import Any
 
+from graph import upstream_errors as _upstream_errors
 from graph.fence_scope import fence_scope
 from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
@@ -1589,45 +1590,21 @@ _ERROR_TYPE_BY_STATUS = {
 }
 
 
-def _upstream_status(exc: BaseException | None) -> int | None:
-    """The HTTP status an upstream provider returned, if the exception carries one.
-
-    Covers the openai SDK (``status_code``), older/alternate clients (``http_status``),
-    and anything wrapping an httpx/requests response.
-    """
-    for attr in ("status_code", "http_status"):
-        code = getattr(exc, attr, None)
-        if isinstance(code, int) and 400 <= code < 600:
-            return code
-    code = getattr(getattr(exc, "response", None), "status_code", None)
-    return code if isinstance(code, int) and 400 <= code < 600 else None
+# Moved to graph/upstream_errors.py so the operator API (which may not import server)
+# classifies a failed subagent run the same way /v1 classifies a failed turn (#3957).
+_upstream_status = _upstream_errors.upstream_status
+_upstream_unreachable = _upstream_errors.upstream_unreachable
 
 
-def _upstream_unreachable(exc: BaseException | None) -> bool:
-    """True when the turn failed because the model gateway could not be REACHED at all —
-    connection refused, DNS failure, a connect/read timeout (#3946). No HTTP status comes
-    back in that case, so :func:`_upstream_status` is ``None`` and ``/v1`` used to call it
-    an internal 500; it is a failed proxy hop and belongs with the other 502s.
+def _is_model_override_error(exc: BaseException | None) -> bool:
+    """True when ``exc`` (or anything in its cause chain) is the per-turn model override
+    failing to build (``graph.middleware.model_override.ModelOverrideError``, #3957). The
+    chain walk covers a framework layer that re-wraps the middleware's exception."""
+    from graph.middleware.model_override import ModelOverrideError
 
-    Walks the ``__cause__``/``__context__`` chain, since the openai SDK's
-    ``APIConnectionError`` wraps the underlying ``httpx`` transport error (and a
-    framework layer may wrap it again). Bounded, so a cyclic chain can't spin."""
-    transport: tuple[type[BaseException], ...] = (ConnectionError,)
-    try:
-        import httpx
-
-        transport += (httpx.TransportError,)
-    except ImportError:  # pragma: no cover — httpx ships with the openai SDK
-        pass
-    try:
-        import openai
-
-        transport += (openai.APIConnectionError,)  # APITimeoutError subclasses it
-    except ImportError:  # pragma: no cover
-        pass
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen and len(seen) < 16:
-        if isinstance(exc, transport):
+        if isinstance(exc, ModelOverrideError):
             return True
         seen.add(id(exc))
         exc = exc.__cause__ or exc.__context__
@@ -1692,6 +1669,12 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
         # None for a failure with no exception behind it (a turn that produced no reply, #3873).
         "exception": type(exc).__name__ if exc is not None else None,
     }
+    if _is_model_override_error(exc):
+        # The turn's model pick could not be built (#3957) — the caller's input, so /v1
+        # answers 400 rather than 500, and names the field the way OpenAI's errors do.
+        err["type"] = "invalid_request_error"
+        err["param"] = "model"
+        return err
     if err["upstream_status"] is None and _upstream_unreachable(exc):
         # The gateway never answered (connection refused / DNS / timeout) — no status to
         # carry, but still a failed upstream hop: /v1 maps it to 502, not 500 (#3946).

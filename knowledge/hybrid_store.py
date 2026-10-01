@@ -419,12 +419,12 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().delete_by_namespace(namespace)
 
-    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False) -> int:
+    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False, before=None) -> int:
         """Drop the matching chunks AND their vectors (no FK cascade on the side
         table) — the :meth:`delete_by_namespace` pattern, same predicate for both."""
         from knowledge.store import _source_clause
 
-        where, params = _source_clause(source, source_types, prefix)
+        where, params = _source_clause(source, source_types, prefix, before)
         if not where:
             return 0
         db = self._get_db()
@@ -436,7 +436,7 @@ class HybridKnowledgeStore(KnowledgeStore):
                 log.warning("[knowledge] delete_by_source vectors failed: %s", exc)
             finally:
                 db.close()
-        return super().delete_by_source(source, source_types=source_types, prefix=prefix)
+        return super().delete_by_source(source, source_types=source_types, prefix=prefix, before=before)
 
     def purge_domain(self, domain: str, *, before=None) -> int:
         """Purge the domain's chunks AND their vectors (#1634) — the

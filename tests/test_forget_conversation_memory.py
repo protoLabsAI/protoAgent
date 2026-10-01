@@ -119,3 +119,37 @@ def test_forget_degrades_on_a_backend_without_the_delete_methods():
     assert forget_conversation_memory(object(), "s1", ["a2a:s1"]) == 0
     assert forget_conversation_memory(None, "s1", ["a2a:s1"]) == 0
     assert forget_conversation_memory(_PluginBackend(), "", ["a2a:s1"]) == 0  # never a bare "chat-archive:"
+
+
+def test_forget_before_a_cutoff_keeps_a_harvest_written_after_it(tmp_path):
+    """#3957: the chat delete now retires FIRST and forgets after, cut off at the moment
+    the delete began. A harvest ticked alongside writes its summary during retirement —
+    after the cutoff — and must survive; everything the chat wrote before goes, in both
+    the plain and the hybrid store."""
+    import time
+    from datetime import datetime, timezone
+
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    for store in (
+        KnowledgeStore(tmp_path / "kb.db"),
+        HybridKnowledgeStore(tmp_path / "hy.db", embed_fn=lambda t: [1.0, 0.0]),
+    ):
+        store.add_chunk("old summary", domain="conversation", source="a2a:s1", source_type="harvest")
+        store.add_chunk("old fact", domain="fact", source="a2a:s1:goal-iter-1", source_type="extracted")
+        time.sleep(0.01)
+        cutoff = datetime.now(timezone.utc)
+        time.sleep(0.01)
+        store.add_chunk("fresh harvest", domain="conversation", source="a2a:s1", source_type="harvest")
+
+        removed = forget_conversation_memory(store, "s1", ["a2a:s1"], before=cutoff)
+
+        assert removed == 2
+        assert _contents(store) == ["fresh harvest"]
+
+
+def test_delete_by_source_refuses_an_unparseable_cutoff(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("keep", domain="fact", source="a2a:s1", source_type="extracted")
+    assert store.delete_by_source("a2a:s1", before="not-a-date") == 0
+    assert _contents(store) == ["keep"]

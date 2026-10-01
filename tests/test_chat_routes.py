@@ -271,11 +271,15 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     ]
 
 
-def test_delete_session_forget_is_opt_in_and_runs_before_retirement(monkeypatch):
+def test_delete_session_forget_is_opt_in_and_runs_after_retirement(monkeypatch):
     """#3493: deleting a chat can forget what it already wrote to memory — only when
-    asked (`?forget=true`, the dialog's second switch), for this session's threads,
-    and BEFORE retirement, so a harvest ticked alongside it writes a summary that
-    survives rather than one the forget immediately removes."""
+    asked (`?forget=true`, the dialog's second switch), for this session's threads.
+
+    #3957: it runs AFTER retirement, cut off at the moment the delete began — so a
+    retirement that raises forgets nothing, and a harvest ticked alongside it (written
+    during retirement, after the cutoff) survives the forget."""
+    from datetime import datetime
+
     import graph.conversation_harvest as ch
     import operator_api.chat_routes as cr
     import runtime.state as rs
@@ -288,8 +292,8 @@ def test_delete_session_forget_is_opt_in_and_runs_before_retirement(monkeypatch)
 
     store = object()
 
-    def _fake_forget(knowledge_store, session_id, thread_ids):
-        order.append(("forget", knowledge_store is store, session_id, list(thread_ids)))
+    def _fake_forget(knowledge_store, session_id, thread_ids, *, before=None):
+        order.append(("forget", knowledge_store is store, session_id, list(thread_ids), before))
         return 5
 
     monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
@@ -304,12 +308,39 @@ def test_delete_session_forget_is_opt_in_and_runs_before_retirement(monkeypatch)
     order.clear()
     body = c.delete("/api/chat/sessions/s2?forget=true&harvest=true").json()
     assert body == {"deleted": True, "harvested": True, "forgotten": 5}
-    assert order[0] == ("forget", True, "s2", ["a2a:s2", "chat:s2", "a2a:s2"])
-    assert order[1:] == [("retire", "a2a:s2", True), ("retire", "chat:s2", False)]
+    assert order[:2] == [("retire", "a2a:s2", True), ("retire", "chat:s2", False)]
+    assert order[2][:4] == ("forget", True, "s2", ["a2a:s2", "chat:s2", "a2a:s2"])
+    assert isinstance(order[2][4], datetime) and order[2][4].tzinfo is not None
 
     order.clear()  # clear-but-keep-tab takes the same opt-in
     assert c.delete("/api/chat/sessions/s3?forget=true&retire=false").json()["forgotten"] == 5
-    assert order[0][:3] == ("forget", True, "s3")
+    assert order[-1][:3] == ("forget", True, "s3")
+
+
+def test_delete_session_retirement_failure_forgets_nothing(monkeypatch):
+    """#3957: memory rows used to be hard-deleted BEFORE retirement ran, so a retirement
+    that raised left the chat in place with its memory already gone for good."""
+    import graph.conversation_harvest as ch
+    import operator_api.chat_routes as cr
+    import pytest
+    import runtime.state as rs
+
+    forgot: list[str] = []
+
+    async def _boom_retire(thread_id, *, harvest=None, cascade=True):
+        raise OSError("checkpoint db locked")
+
+    def _forget(knowledge_store, session_id, thread_ids, *, before=None):
+        forgot.append(session_id)
+        return 3
+
+    monkeypatch.setattr(cr, "_retire_thread", _boom_retire)
+    monkeypatch.setattr(ch, "forget_conversation_memory", _forget)
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
+    with pytest.raises(OSError, match="checkpoint db locked"):
+        c.delete("/api/chat/sessions/s1?forget=true")
+    assert forgot == []
 
 
 def _seeded_task_engine(tmp_path, name, rows):
@@ -457,8 +488,9 @@ def test_session_summary_route_without_a_task_store_reports_known(monkeypatch):
 
 
 def test_delete_session_forget_failure_fails_the_delete(monkeypatch):
-    """A forget that fails must not report success: the delete fails before anything is
-    retired, so the console keeps the tab and the operator can retry."""
+    """A forget that fails must not report success: the delete fails, so the console
+    keeps the tab and the operator can retry. Retirement already ran (#3957 — it comes
+    first now) and is idempotent, so the retry retires nothing new and forgets again."""
     import graph.conversation_harvest as ch
     import operator_api.chat_routes as cr
     import pytest
@@ -478,7 +510,7 @@ def test_delete_session_forget_failure_fails_the_delete(monkeypatch):
     monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
     with pytest.raises(RuntimeError, match="store locked"):
         c.delete("/api/chat/sessions/s1?forget=true")
-    assert retired == []
+    assert retired == ["a2a:s1", "chat:s1"]
 
 
 def test_delete_session_purges_prompt_snapshots(monkeypatch):

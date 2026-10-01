@@ -26,6 +26,7 @@ from graph.fence_scope import current_fence, fence_scope
 from graph.goals.store import GoalStore
 from graph.goals.types import GoalState
 from graph.goals.verifiers import (
+    VERIFIERS,
     VerifierInvoker,
     VerifyContext,
     is_safe_workspace_relative_data_path,
@@ -128,6 +129,12 @@ class GoalController:
                 '`/goal {"condition": "...", "verifier": {"type": "command", '
                 '"command": "pytest -q"}}`.'
             )
+        # Validate the verifier TYPE before the trust-gate (#3957): an unknown type is a
+        # typo, not a safety question — answering it with the "for safety…" refusal sent
+        # the operator looking for a trust problem that wasn't there.
+        vtype = (spec or {}).get("type", "llm")
+        if vtype not in VERIFIERS:
+            return f"Could not set goal: unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}."
         # Phase 1 trust-gate (#1407): a /goal CHAT message is untrusted — both server call
         # sites pass trusted=False, because a federation peer / API client shares the
         # operator bearer today, so we can't tell them apart. Refuse the code-exec verifiers

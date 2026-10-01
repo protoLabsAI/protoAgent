@@ -45,6 +45,7 @@ from tools.a2a_parse import drop_peer_markers
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "fold_usage_rows",
     "local_task_id",
     "make_usage_callback",
     "record_local_turn",
@@ -109,6 +110,44 @@ def _publish_usage(row: dict, models: list[str], soul_rev: str) -> None:
         pass
 
 
+def _display_model(requested: str) -> str:
+    """A requested model override as the ``model`` column names models (#3957).
+
+    Usage-derived rows carry the provider's bare model id (``claude-sonnet-4-6``), so a
+    REGISTERED connection prefix (``anthropic-oauth:claude-sonnet-4-6``) is dropped to
+    match. An unregistered prefix is kept whole: it is not a connection, so the string as
+    the caller sent it is the honest record of what was asked for."""
+    raw = (requested or "").strip()
+    if not raw:
+        return ""
+    try:
+        from graph.llm import split_slot_target
+
+        provider, model = split_slot_target(raw, STATE.graph_config)
+        return model if provider and model else raw
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        return raw
+
+
+def fold_usage_rows(rows: list[dict]) -> tuple[list[str], dict[str, int], float]:
+    """Fold per-call usage rows (``graph.agent._extract_subagent_usage``'s shape:
+    ``{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens,
+    cost_usd, model}``) into ``(models, summed usage, cost_usd)`` — :func:`telemetry_usage`'s
+    shape. ``input_tokens`` stays cache-INCLUSIVE here, as in the rows; ``record_turn``
+    splits it (#3003)."""
+    models: list[str] = []
+    totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    cost = 0.0
+    for r in rows or []:
+        model = str(r.get("model") or "")
+        if model and model not in models:
+            models.append(model)
+        for k in totals:
+            totals[k] += int(r.get(k, 0) or 0)
+        cost += float(r.get("cost_usd", 0.0) or 0.0)
+    return models, totals, round(cost, 6)
+
+
 def _success_for(state: str) -> int | None:
     """1 / 0 / NULL for the ``success`` column.
 
@@ -135,8 +174,16 @@ def record_turn(
     tool_durations: dict | None = None,
     context_tokens: int = 0,
     publish_usage_event: bool = True,
+    requested_model: str = "",
 ) -> None:
     """Record one finished turn leg: Prometheus, the realtime bus, and the store.
+
+    ``requested_model`` is the turn's model override (a console tab's pick, a ``/v1``
+    ``model``, an A2A ``metadata.model``). The ``model`` column names the model that ran,
+    taken from the turn's own usage; when no call reported usage (a turn that failed on
+    its first call, a short-circuit reply) it falls back to the REQUESTED model, and to
+    the configured default only when nothing was requested (#3957) — a failed override
+    turn used to be filed under the default model it never touched.
 
     Every step is independently guarded, so a failure in one still lets the
     others run and none of them can reach the caller.
@@ -191,7 +238,7 @@ def record_turn(
     # them, which is where peer spend stays legible. See `drop_peer_markers` for why.
     real_models = drop_peer_markers(models)
     configured_model = (STATE.graph_config.model_name if STATE.graph_config else "") or ""
-    primary_model = real_models[0] if real_models else configured_model
+    primary_model = real_models[0] if real_models else (_display_model(requested_model) or configured_model)
 
     ended = datetime.now(timezone.utc)
     created = ended - timedelta(milliseconds=duration_ms)
@@ -269,6 +316,17 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
             return
         per_model = (getattr(usage_cb, "usage_metadata", None) or {}) if usage_cb is not None else {}
         models, usage, cost = telemetry_usage(per_model)
+        llm_calls = int(getattr(usage_cb, "llm_calls", 0) or 0)
+        # A `/<subagent>` / `/<workflow>` short-circuit's delegated model calls (#3957):
+        # per-call rows, the same shape the streaming executor sums.
+        delegated = [r for r in (sink.get("delegated_usage") or []) if isinstance(r, dict)]
+        if delegated:
+            d_models, d_usage, d_cost = fold_usage_rows(delegated)
+            models += [m for m in d_models if m not in models]
+            for k, v in d_usage.items():
+                usage[k] = usage.get(k, 0) + v
+            cost = round(cost + d_cost, 6)
+            llm_calls += len(delegated)
         if not always and not models and not usage["input_tokens"] and not usage["output_tokens"]:
             return  # reached the graph but made no model call (an ACP turn, a tool-only short-circuit)
 
@@ -282,8 +340,9 @@ def record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, s
             usage=usage,
             cost_usd=cost,
             duration_ms=int((time.monotonic() - started) * 1000),
-            llm_calls=int(getattr(usage_cb, "llm_calls", 0) or 0),
+            llm_calls=llm_calls,
             tool_calls=int(getattr(usage_cb, "tool_calls", 0) or 0),
+            requested_model=str(sink.get("requested_model") or ""),
             # The sink's copy, captured inside the trace scope (#3945); the live read
             # is only a fallback for a caller that records while its scope is open.
             trace_id=sink.get("trace_id") or tracing.current_trace_id() or "",
