@@ -129,35 +129,34 @@ async def _record_chat_tombstone(conn, session_id: str) -> None:
     )
 
 
-async def _newest_turn_summary(conn, session_id: str) -> tuple[int, Any, str | None]:
-    """``(turn_count, last_updated, last_state)`` for one context, where ``last_state`` is
-    the state of its newest-CREATED turn (``task_newest_first``, #3963/#3965)."""
+def _newest_turn_ranked(task_model, dialect_name: str, where):
+    """One row per task of the contexts ``where`` selects, each carrying its context's
+    ``turn_count`` and ``last_updated`` and its ``rn`` — 1 on the context's newest-CREATED
+    turn (``task_newest_first``, #3963/#3965).
+
+    The SDK's ``tasks`` table has no ``context_id`` index, so every per-context read is a
+    full scan; computing all the summaries in ONE windowed pass keeps a page of N sessions
+    at one scan instead of 2·N (#3972)."""
     from sqlalchemy import func, select
 
-    from a2a.server.tasks.database_task_store import TaskModel
-
-    agg = (
-        await conn.execute(
-            select(func.count(TaskModel.id), func.max(TaskModel.last_updated)).where(
-                TaskModel.context_id == session_id
-            )
+    by_context = task_model.context_id
+    return (
+        select(
+            task_model.context_id.label("context_id"),
+            task_model.status.label("status"),
+            func.count(task_model.id).over(partition_by=by_context).label("turn_count"),
+            func.max(task_model.last_updated).over(partition_by=by_context).label("last_updated"),
+            func.row_number()
+            .over(partition_by=by_context, order_by=task_newest_first(task_model, dialect_name))
+            .label("rn"),
         )
-    ).first()
-    count = int(agg[0] or 0) if agg else 0
-    last = agg[1] if agg else None
-    newest = None
-    if count:
-        newest = (
-            await conn.execute(
-                select(TaskModel.status)
-                .where(TaskModel.context_id == session_id)
-                .order_by(*task_newest_first(TaskModel, conn.dialect.name))
-                .limit(1)
-            )
-        ).first()
-    status = newest[0] if newest else None
-    state = ((status or {}).get("state") or None) if isinstance(status, dict) else None
-    return count, last, state
+        .where(where)
+        .subquery("newest_turn")
+    )
+
+
+def _status_state(status) -> str | None:
+    return ((status or {}).get("state") or None) if isinstance(status, dict) else None
 
 
 # The stored spellings of a turn parked on the operator: A2A 1.0's, and 0.3's for a row
@@ -187,31 +186,43 @@ async def _parked_sessions(engine, limit: int) -> list[dict]:
     async with engine.begin() as conn:
         tombstones = await _ensure_chat_tombstones(conn)
         candidates = (
+            select(TaskModel.context_id, func.max(TaskModel.last_updated).label("parked_at"))
+            .where(TaskModel.context_id.like("chat-%"))
+            .where(state.in_(_PARKED_STORED_STATES))
+            .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
+            .group_by(TaskModel.context_id)
+            .order_by(func.max(TaskModel.last_updated).desc().nulls_last(), TaskModel.context_id.desc())
+            .limit(limit * 4)
+            .cte("parked_candidates")
+        )
+        # Each candidate is confirmed off its newest-created turn in the SAME statement
+        # (#3972): one windowed pass over the candidates' rows, not 2 scans per candidate.
+        newest = _newest_turn_ranked(
+            TaskModel, conn.dialect.name, TaskModel.context_id.in_(select(candidates.c.context_id))
+        )
+        rows = (
             await conn.execute(
-                select(TaskModel.context_id, func.max(TaskModel.last_updated).label("parked_at"))
-                .where(TaskModel.context_id.like("chat-%"))
-                .where(state.in_(_PARKED_STORED_STATES))
-                .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
-                .group_by(TaskModel.context_id)
-                .order_by(func.max(TaskModel.last_updated).desc().nulls_last(), TaskModel.context_id.desc())
-                .limit(limit * 4)
+                select(newest.c.context_id, newest.c.status, newest.c.turn_count, newest.c.last_updated)
+                .join(candidates, candidates.c.context_id == newest.c.context_id)
+                .where(newest.c.rn == 1)
+                .order_by(candidates.c.parked_at.desc().nulls_last(), candidates.c.context_id.desc())
             )
         ).fetchall()
-        out: list[dict] = []
-        for row in candidates:
-            count, last, last_state = await _newest_turn_summary(conn, row.context_id)
-            if not last_state or not _PAUSED_TASK_STATE.search(last_state):
-                continue
-            out.append(
-                {
-                    "session_id": row.context_id,
-                    "last_updated": last.isoformat() if last else None,
-                    "turn_count": count,
-                    "last_state": last_state,
-                }
-            )
-            if len(out) >= limit:
-                break
+    out: list[dict] = []
+    for row in rows:
+        last_state = _status_state(row.status)
+        if not last_state or not _PAUSED_TASK_STATE.search(last_state):
+            continue
+        out.append(
+            {
+                "session_id": row.context_id,
+                "last_updated": row.last_updated.isoformat() if row.last_updated else None,
+                "turn_count": int(row.turn_count or 0),
+                "last_state": last_state,
+            }
+        )
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -239,7 +250,17 @@ async def session_summary(session_id: str) -> dict | None:
         tombstones = await _ensure_chat_tombstones(conn)
         if (await conn.execute(select(tombstones.c.context_id).where(tombstones.c.context_id == session_id))).first():
             return None
-        count, last, last_state = await _newest_turn_summary(conn, session_id)
+        from a2a.server.tasks.database_task_store import TaskModel
+
+        newest = _newest_turn_ranked(TaskModel, conn.dialect.name, TaskModel.context_id == session_id)
+        row = (
+            await conn.execute(
+                select(newest.c.turn_count, newest.c.last_updated, newest.c.status).where(newest.c.rn == 1)
+            )
+        ).first()
+    count = int(row.turn_count or 0) if row else 0
+    last = row.last_updated if row else None
+    last_state = _status_state(row.status) if row else None
     if not count and not active:
         return None
     return {

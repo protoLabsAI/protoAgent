@@ -1,8 +1,9 @@
 import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
-import { isTaskFailed, isTaskTerminal } from "../chat/taskState";
+import { isTaskFailed, isTaskStateUnknown, isTaskTerminal } from "../chat/taskState";
 import { api, authToken, currentSlug } from "../lib/api";
+import { taskFromGetTask } from "../lib/api/chat";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
 
@@ -79,8 +80,9 @@ async function taskState(slug: string, taskId: string): Promise<string> {
   });
   if (!r.ok) return "";
   const j = await r.json().catch(() => null);
-  const res = j?.result;
-  const task = res?.task ?? res;
+  // One unwrap for every GetTask reader (#3957/#3972): a 1.0 flat task, a 0.3
+  // `kind: "task"` one or a `{task}` wrapper — never a tagged message or status update.
+  const task = taskFromGetTask(j?.result);
   return String(task?.status?.state ?? "");
 }
 
@@ -128,7 +130,9 @@ export function FleetTurnWatch() {
       for (const w of candidates) {
         try {
           const state = await taskState(w.slug, w.taskId);
-          if (isTaskTerminal(state)) {
+          // A state the server cannot name (`unknown` / UNSPECIFIED) is settled too: no
+          // producer will move it on, so watching it only polls forever (#3972).
+          if (isTaskTerminal(state) || isTaskStateUnknown(state)) {
             void announce(w, state);
             prev = prev.filter((p) => p.taskId !== w.taskId);
           }
