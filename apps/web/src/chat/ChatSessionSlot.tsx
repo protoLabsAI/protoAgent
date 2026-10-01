@@ -60,6 +60,7 @@ import {
   createParkTracker,
   settleStreamEnd,
 } from "./turnReducers";
+import { applyDelegateProgress, settleDelegateProgress } from "./delegateProgress";
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
@@ -1352,6 +1353,16 @@ export function ChatSessionSlot({
             claimsAnswer ? markTurnAnsweredByParticipants(withBubble, assistantId) : withBubble,
           );
         },
+        onDelegateProgress: (evt) => {
+          // A coding delegate's live state (#3979) lands on its card — the `@` mention
+          // card, or the `delegate_to` ask row — wherever the split put it. Not a
+          // chronology frame: nothing is inserted, so no reveal flush.
+          bumpWatchdog();
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          const next = applyDelegateProgress(latest.messages, evt);
+          if (next !== latest.messages) chatStore.updateMessages(session.id, next);
+        },
         onSteerConsumed: (consumed) => {
           // Like a room reply, this is a chronology frame inside one long assistant
           // message. Commit reveal-paced text first, then split at the exact boundary;
@@ -1450,9 +1461,13 @@ export function ChatSessionSlot({
             // races with the terminal `done` (e.g. a workflow card whose end arrives in
             // the same tick) would otherwise leave the card spinning forever —
             // settleStreamEnd flips any lingering `running` card to `done`.
+            // …and a delegation row whose delegate never sent its final snapshot (a
+            // stopped turn) stops reading as live (#3979).
             settleTurnBubbles(
-              latest.messages.map((message) =>
-                message.id === assistantId ? settleStreamEnd(message, { parked: false }) : message,
+              settleDelegateProgress(
+                latest.messages.map((message) =>
+                  message.id === assistantId ? settleStreamEnd(message, { parked: false }) : message,
+                ),
               ),
               assistantId,
             ),

@@ -820,7 +820,41 @@ export type ToolCall = {
   durationMs?: number;
   /** id of the enclosing `task` tool, if this call ran inside a subagent. */
   parentId?: string;
+  /** An `@`-mention card's addressed coding agents' live state (#3979), keyed by
+   *  participant name — `@a @b` is one card over two delegates. */
+  delegateProgress?: Record<string, DelegateProgress>;
 };
+
+/** A tool call a coding-agent delegate is making, as its live view shows it (#3979). */
+export type DelegateTool = {
+  id?: string;
+  name: string;
+  /** ACP's classification: read / edit / execute / search / fetch / think / … */
+  kind?: string;
+  status: "running" | "completed" | "failed" | string;
+  locations?: Array<{ path: string; line?: number }>;
+};
+
+/** One entry of a coding agent's own plan (its todo list). */
+export type DelegatePlanEntry = { content: string; status: "pending" | "in_progress" | "completed" | string };
+
+/** A coding-agent delegation's live state — a WHOLE snapshot (latest wins), bounded
+ *  server-side (graph/delegate_progress.py), on the delegate-progress-v1 frame (#3979). */
+export type DelegateProgress = {
+  target: string;
+  plan?: DelegatePlanEntry[];
+  currentTool?: DelegateTool;
+  recentTools: DelegateTool[];
+  toolCount: number;
+  /** The tail of what the coder has said so far. */
+  text?: string;
+  done: boolean;
+  ok: boolean;
+};
+
+/** The wire event: which card (`id`) a snapshot belongs to — an `@` mention card's tool
+ *  call id, or a `delegate_to` ask's id. */
+export type DelegateProgressEvent = DelegateProgress & { id: string };
 
 /** One artifact reference resolved into a chat-bundle tool_call part (#2179 P2, graph.chat_bundle
  *  / plugins.artifact.resolve_for_bundle). `available: false` covers a deleted artifact, a binary
@@ -1086,6 +1120,10 @@ export type Delegation = {
   jobId?: string;
   /** The dispatch itself failed (an unknown delegate, …) — the reason. */
   error?: string;
+  /** The ask's id on the wire (the delegation's run) — what its live progress is keyed by. */
+  id?: string;
+  /** A coding delegate's live state while it works, and its final state after (#3979). */
+  progress?: DelegateProgress;
 };
 
 /** Operator messages folded into a running turn at one model-call boundary (#2959). */

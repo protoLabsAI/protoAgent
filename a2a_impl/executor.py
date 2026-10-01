@@ -22,6 +22,7 @@ The producer-event contract (unchanged from the hand-rolled handler) is::
                     tracking
     input_required  HITL pause {question}
     steer_consumed  queued operator input folded before the next model call
+    delegate_progress  a running coding-agent delegation's live snapshot {id,target,…}
     done            terminal; payload is the final text
     error           terminal; payload is the error string
 
@@ -82,6 +83,12 @@ ROOM_MIME = "application/vnd.protolabs.room-v1+json"
 # Mid-turn operator input consumed at a model-call boundary (#2959). The payload is
 # {items:[{id,text}]}; its position among working frames is the chronology contract.
 STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
+# A running coding-agent delegation's live state (#3979) — a bounded WHOLE snapshot
+# ({id, target, plan, current_tool, recent_tools, tool_count, text, done, ok}; see
+# graph/delegate_progress.py), keyed by the card it belongs to: the `@` mention card's
+# tool-call id, or a `delegate_to` ask's id. Latest wins, so a consumer that ignores or
+# misses one loses nothing but latency.
+DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -964,6 +971,19 @@ class ProtoAgentExecutor(AgentExecutor):
                             context.context_id,
                             context.task_id,
                             {"phase": "room_reply", **payload, "origin": _origin},
+                        )
+
+                elif event_type == "delegate_progress":
+                    # A coding-agent delegation's live state (#3979): its plan, current
+                    # tool, recent tools. One bounded, throttled snapshot per frame — the
+                    # producer (graph/delegate_progress.py) caps both size and rate.
+                    if isinstance(payload, dict) and payload.get("id"):
+                        current = payload.get("current_tool") or {}
+                        if isinstance(current, dict) and current.get("status") == "running":
+                            last_activity[0] = f"waiting on @{payload.get('target') or 'a delegate'} ({current.get('name') or 'a tool'})"
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, DELEGATE_PROGRESS_MIME)]),
                         )
 
                 elif event_type == "steer_consumed":

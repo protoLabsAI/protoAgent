@@ -18,6 +18,7 @@ import {
   type ChatSession,
   type HydrationEligibility,
 } from "./chat-store";
+import { applyDelegateProgressTo } from "./delegateProgress";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
 import { isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
@@ -162,6 +163,10 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     },
     onComponent: (spec) => {
       assistant = applyComponent(assistant, spec);
+    },
+    onDelegateProgress: (evt) => {
+      // An `@` mention card's coding delegate, at its final (durably kept) state (#3979).
+      assistant = applyDelegateProgressTo(assistant, evt);
     },
     onCost: (usage) => {
       assistant = applyUsage(assistant, usage);

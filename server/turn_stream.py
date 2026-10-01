@@ -546,6 +546,18 @@ def _on_custom_steer_consumed(st: _TurnStreamState, event: dict, name: str, pare
             yield ("steer_consumed", {"items": clean})
 
 
+def _on_custom_delegate_progress(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
+    # A foreground `delegate_to`'s coding agent reporting while it works (#3979). The
+    # tool body dispatches this under its own run (graph/delegate_progress.py via the
+    # delegates plugin), so the event's `run_id` IS the delegation's run — the same key
+    # the outgoing ask's room_reply `id` carries, which is how the console finds the row.
+    # Only for a delegation that drew an ask row: anything else has no card to update.
+    data = event.get("data")
+    rid = event.get("run_id")
+    if isinstance(data, dict) and rid and rid in st.delegate_targets:
+        yield ("delegate_progress", {**data, "id": rid})
+
+
 # `astream_events` kind → handler. Kinds not listed produce nothing (skills are no
 # longer auto-retrieved per turn — ADR 0060 progressive disclosure; the model loads one
 # on demand via the `load_skill` tool, an ordinary tool card — so there is no
@@ -561,6 +573,7 @@ _EVENT_HANDLERS: dict[str, Callable[..., _Frames]] = {
 _CUSTOM_EVENT_HANDLERS: dict[str, Callable[..., _Frames]] = {
     "usage": _on_custom_usage,
     "steer_consumed": _on_custom_steer_consumed,
+    "delegate_progress": _on_custom_delegate_progress,
 }
 
 

@@ -148,18 +148,25 @@ def _build_delegate_to(registry: DelegateRegistry):
                 summary=summary,
                 project=scope,
             )
+        from graph.delegate_progress import progress_sink
+
         try:
-            return await _dispatch_into_room(
-                registry,
-                target,
-                query,
-                state,
-                tool_call_id=tool_call_id,
-                item_id=item_id or None,
-                resume_task_id=resume_task_id or None,
-                timeout=timeout_s,
-                project=scope,
-            )
+            # A coding delegate reports its live progress into this delegation's ask row
+            # (#3979) — a LangChain custom event under THIS tool's run, which the turn
+            # stream keys to the row by run id. Foreground only: the background branch
+            # above returned already, and reports through its job instead.
+            with progress_sink(_tool_progress_sink()):
+                return await _dispatch_into_room(
+                    registry,
+                    target,
+                    query,
+                    state,
+                    tool_call_id=tool_call_id,
+                    item_id=item_id or None,
+                    resume_task_id=resume_task_id or None,
+                    timeout=timeout_s,
+                    project=scope,
+                )
         except DelegateError as exc:
             # A stopped member of THIS box's fleet is recoverable: ask, start, retry.
             # Anything else — a remote peer, a timeout, an HTTP error, an operatorless
@@ -184,6 +191,29 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+def _tool_progress_sink():
+    """A ``graph.delegate_progress`` sink that re-emits each snapshot as a
+    ``delegate_progress`` custom event under the CALLING tool's run, or None outside one.
+
+    The run config is captured NOW, in the tool body: the snapshots are produced on the
+    ACP client's reader task, whose context holds no LangChain run, so a bare
+    ``adispatch_custom_event`` there would have no parent run to attach to."""
+    try:
+        from langchain_core.callbacks import adispatch_custom_event
+        from langchain_core.runnables.config import ensure_config
+
+        config = ensure_config()
+    except Exception:  # noqa: BLE001 — no run context (a unit test, a CLI call): no live view
+        return None
+    if not config.get("callbacks"):
+        return None
+
+    async def _sink(snapshot: dict) -> None:
+        await adispatch_custom_event("delegate_progress", snapshot, config=config)
+
+    return _sink
 
 
 async def _offer_start_and_retry(

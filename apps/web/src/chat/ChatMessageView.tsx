@@ -22,6 +22,7 @@ import {
 import { useUI } from "../state/uiStore";
 import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
+import { DelegateProgressView } from "./DelegateProgressView";
 import { Markdown } from "./LazyMarkdown";
 import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
@@ -361,7 +362,12 @@ function DelegationRow({ message }: { message: ChatMessage }) {
   const job = useBackgroundJob(d?.background ? d.jobId : undefined);
   const state = delegationState(d, job?.status);
   const [open, setOpen] = useState(false);
+  const [showWork, setShowWork] = useState(false);
   const summary = d?.summary || briefSummary(message.content);
+  // Background: the job's live snapshot while it runs (the bus drops it after). Foreground:
+  // the row's own, live until the delegate's final snapshot (or the turn's end) lands.
+  const progress = d?.background ? (job?.status === "running" ? job.progress : undefined) : d?.progress;
+  const progressLive = Boolean(progress && !progress.done);
   return (
     <Message role="assistant" className="chat-delegation">
       <div className={`chat-delegation-row chat-delegation-row--${state}`}>
@@ -376,6 +382,11 @@ function DelegationRow({ message }: { message: ChatMessage }) {
             {state === "running" ? <Spinner size={12} /> : state === "done" ? <Check size={13} /> : <X size={13} />}
           </span>
         ) : null}
+        {progress && !progressLive && progress.toolCount > 0 ? (
+          <Button variant="ghost" size="sm" aria-expanded={showWork} onClick={() => setShowWork((v) => !v)}>
+            {showWork ? "Hide work" : `Show work · ${progress.toolCount}`}
+          </Button>
+        ) : null}
         {message.content ? (
           <Button
             variant="ghost"
@@ -388,6 +399,10 @@ function DelegationRow({ message }: { message: ChatMessage }) {
         ) : null}
       </div>
       {d?.error ? <p className="chat-delegation-error">{d.error}</p> : null}
+      {/* A coding delegate's live view (#3979): a foreground delegation's own snapshots,
+          or a background one's job progress while it runs. Once a foreground run is over
+          its final state stays one toggle away rather than under every finished row. */}
+      {progress && (progressLive || showWork) ? <DelegateProgressView progress={progress} live={progressLive} /> : null}
       {open ? (
         <div className="chat-delegation-brief">
           <Markdown>{message.content}</Markdown>

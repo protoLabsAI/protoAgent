@@ -2,7 +2,8 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
 import { onConnectionChange, onTopic } from "../lib/events";
-import type { BackgroundJobDTO } from "../lib/types";
+import { delegateProgressFromWire } from "../lib/delegateProgress";
+import type { BackgroundJobDTO, DelegateProgress } from "../lib/types";
 
 // Background jobs as the CHAT needs them: which are still running, per session, and the
 // status of one job by id. The delegation row tracks its background job here, and the
@@ -14,7 +15,12 @@ import type { BackgroundJobDTO } from "../lib/types";
 // events, so the two can't disagree for long.
 
 export type JobStatus = BackgroundJobDTO["status"];
-export type JobLite = Pick<BackgroundJobDTO, "id" | "status" | "subagent_type" | "description" | "origin_session">;
+export type JobLite = Pick<BackgroundJobDTO, "id" | "status" | "subagent_type" | "description" | "origin_session"> & {
+  /** A background delegation's coding agent, live (#3979) — from `background.progress`
+   *  frames with phase `delegate_progress`. Live-only: a reload shows it again on the
+   *  next frame, and the job's reply arrives as its own message when it lands. */
+  progress?: DelegateProgress;
+};
 
 let jobs: Record<string, JobLite> = {};
 // When each job last changed from a LIVE event. A `GET /api/background` that started before
@@ -42,6 +48,7 @@ function upsert(id: string, patch: Partial<JobLite>, fromLiveEvent = false) {
       subagent_type: patch.subagent_type ?? prev?.subagent_type ?? "",
       description: patch.description ?? prev?.description ?? "",
       origin_session: patch.origin_session ?? prev?.origin_session,
+      ...((patch.progress ?? prev?.progress) ? { progress: patch.progress ?? prev?.progress } : {}),
     },
   };
   emit();
@@ -120,10 +127,22 @@ function start() {
       true,
     );
   });
+  const offProgress = onTopic("background.progress", (d) => {
+    // Only a coding delegate's snapshot: the same topic carries a background TURN's
+    // tool frames, which the utility-bar widget follows and this store does not.
+    if (d.phase !== "delegate_progress") return;
+    const id = String(d.job_id || "");
+    const evt = delegateProgressFromWire(d.progress, id);
+    if (!id || !evt) return;
+    const { id: _id, ...progress } = evt;
+    void _id;
+    upsert(id, { progress }, true);
+  });
   stop = () => {
     offConn();
     offStart();
     offDone();
+    offProgress();
   };
 }
 

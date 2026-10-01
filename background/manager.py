@@ -265,9 +265,15 @@ class BackgroundManager:
         """Run a ``spawn_work`` coroutine under the shared concurrency cap, settle the
         store row, publish ``background.completed``, and fire the optional terminal hook
         (idle-wake). Mirrors what the A2A terminal hook does for subagent-turn jobs."""
+        from graph.delegate_progress import progress_sink
+
         async with self._sem:  # same cap as background turns — one fan-out can't swamp the gateway
             try:
-                result = await work()
+                # A coding delegate this job dispatches reports its live progress onto the
+                # job's own `background.progress` lane (#3979) — never into the card of the
+                # foreground turn that spawned it, whose context this task copied.
+                with progress_sink(self._progress_sink(job_id, origin_session)):
+                    result = await work()
                 status, text = "completed", (str(result) if result is not None else "")
             except asyncio.CancelledError:
                 # cancel() already settled the row + published; just unwind.
@@ -287,6 +293,32 @@ class BackgroundManager:
                 log.exception("[background] on_terminal hook failed for %s", job_id)
 
     # ── event-bus helpers (shared by spawn + spawn_work) ──────────────────────
+
+    def _progress_sink(self, job_id: str, origin_session: str):
+        """A ``graph.delegate_progress`` sink publishing a job's coding-delegate snapshots
+        as ``background.progress`` (phase ``delegate_progress``) — the lane the console's
+        background views already follow. None without a bus."""
+        if self._publish is None:
+            return None
+
+        async def _sink(snapshot: dict) -> None:
+            data = {
+                "job_id": job_id,
+                "origin_session": origin_session,
+                "phase": "delegate_progress",
+                "progress": snapshot,
+            }
+            try:
+                try:
+                    # Live-only, like every other background.progress frame (#2692): a long
+                    # coder run must not evict background.completed from the replay ring.
+                    self._publish("background.progress", data, retain=False)
+                except TypeError:  # an injected publisher without the bus's retain kwarg
+                    self._publish("background.progress", data)
+            except Exception:  # noqa: BLE001 — the event is best-effort
+                log.exception("[background] progress publish failed for %s", job_id)
+
+        return _sink
 
     def _publish_started(self, job_id: str, kind: str, description: str, origin_session: str) -> None:
         if self._publish is None:

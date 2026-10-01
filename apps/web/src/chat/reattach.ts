@@ -38,6 +38,7 @@
 import { api, supersededByFromStatus, type DurableChatTurn, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
+import { applyDelegateProgress } from "./delegateProgress";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
 import { messagesFromDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
@@ -349,6 +350,13 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       updateMessage(sessionId, assistantId, (m) => applyToolEvent(m, evt));
     },
     onComponent: (spec) => updateMessage(sessionId, assistantId, (m) => applyComponent(m, spec)),
+    // A coding delegate's live state (#3979) — on its mention card or ask row, wherever it is.
+    onDelegateProgress: (evt) => {
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (!cur) return;
+      const next = applyDelegateProgress(cur.messages, evt);
+      if (next !== cur.messages) chatStore.updateMessages(sessionId, next);
+    },
     onCost: (usage) => updateMessage(sessionId, assistantId, (m) => applyUsage(m, usage)),
     onContext: (contextWindow) => updateMessage(sessionId, assistantId, (m) => ({ ...m, contextWindow })),
     onInputRequired: (payload) => hooks.onHitl?.(payload),

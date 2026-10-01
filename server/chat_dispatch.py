@@ -377,11 +377,13 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         }
         yield ("tool_start", _mention_tool)
 
+    _at_reply, _at_outcome = None, None
     try:
-        async with _turn_control._thread_lock(_turn_control._resolve_thread_id(request_metadata, session_id)):
-            _at_reply, _at_outcome = await _chat_rooms._at_delegate_exchange(
-                message, session_id, request_metadata
-            )
+        async for _frame in _mention_exchange_with_progress(message, session_id, request_metadata, _mention_tool):
+            if _frame[0] == "__result__":
+                _at_reply, _at_outcome = _frame[1]
+            else:
+                yield _frame
     except Exception as exc:
         # Most adapter failures are ordinary room outcomes, but an unexpected
         # exchange failure still flows to the turn-level error handler below.
@@ -708,6 +710,57 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     from runtime.acp_runtime import is_acp_runtime
 
     pre.acp = bool(is_acp_runtime(STATE.graph_config))
+
+
+async def _mention_exchange_with_progress(
+    message: str, session_id: str, request_metadata: dict | None, mention_tool: dict | None
+):
+    """Run the ``@`` exchange, yielding the addressed coder's live progress meanwhile (#3979).
+
+    The exchange awaits the delegate inline, so nothing could reach the operator until it
+    returned: the mention card was a spinner and a clock for the whole run. An ACP coder
+    (``graph.delegate_progress``) now reports into a sink bound here, and its snapshots
+    come out as ``("delegate_progress", {id: <the mention card>, …})`` frames WHILE the
+    exchange runs. The exchange moves into a task for that — it inherits this context,
+    sink included — and the frames are drained as they arrive. Ends with one
+    ``("__result__", (reply, outcomes))`` sentinel; an exchange error propagates as-is.
+
+    Closing this generator (the operator stopped the turn, the client went away) cancels
+    the exchange, exactly as cancelling the old inline await did — the ACP adapter kills
+    its coder on that cancellation.
+    """
+    from graph.delegate_progress import progress_sink
+
+    frames: asyncio.Queue = asyncio.Queue()
+
+    async def _sink(snapshot: dict) -> None:
+        if mention_tool is not None:
+            frames.put_nowait(("delegate_progress", {**snapshot, "id": mention_tool["id"]}))
+
+    async def _exchange():
+        async with _turn_control._thread_lock(_turn_control._resolve_thread_id(request_metadata, session_id)):
+            return await _chat_rooms._at_delegate_exchange(message, session_id, request_metadata)
+
+    with progress_sink(_sink if mention_tool is not None else None):
+        task = asyncio.ensure_future(_exchange())
+    try:
+        while True:
+            getter = asyncio.ensure_future(frames.get())
+            done, _ = await asyncio.wait({task, getter}, return_when=asyncio.FIRST_COMPLETED)
+            if getter in done:
+                yield getter.result()
+                continue
+            getter.cancel()
+            # A get that completed between the wait and the cancel still holds its frame.
+            if getter.done() and not getter.cancelled():
+                yield getter.result()
+            break
+        while not frames.empty():
+            yield frames.get_nowait()
+        yield ("__result__", task.result())
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 def _usage_frames(rows: list[dict]) -> list[tuple[str, dict]]:
