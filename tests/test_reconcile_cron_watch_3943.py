@@ -63,12 +63,39 @@ async def test_a_job_interrupted_by_a_restart_settles_its_ledger_edge(ledger_db,
     edges = {r["task_id"]: r for r in ledger_db.recent()}
     assert edges[running]["outcome"] == "failed", "an interrupted job's edge must not read as running forever"
     assert INTERRUPTED_ERROR in edges[running]["error"]
+    # The job's end time is unknown, so no duration is recorded — boot-time minus
+    # spawn-time would be the server's downtime, not the job's work (#3969 review).
+    assert not edges[running]["duration_ms"]
     assert edges[done] == done_before, "an already-settled edge is left alone"
     job = store.get(running)
     assert job.status == "failed" and job.error == INTERRUPTED_ERROR
     assert "Interrupted" in job.result
     # Idempotent: a second boot has nothing left to reconcile.
     assert store.reconcile_interrupted() == 0
+
+
+def test_reconcile_does_not_record_the_downtime_as_the_jobs_duration(ledger_db, tmp_path):
+    """A job spawned an hour before a crash-and-restart did not WORK for an hour."""
+    from datetime import UTC, datetime, timedelta
+
+    from background.store import BackgroundStore
+
+    s = BackgroundStore(str(tmp_path / "jobs.db"))
+    jid = s.create(
+        agent_name="a",
+        origin_session="s",
+        subagent_type="r",
+        description="d",
+        prompt="p",
+        now=datetime.now(UTC) - timedelta(hours=1),
+    )
+    ledger_db.record(from_agent="a", to_kind="subagent", to_name="r", task_id=jid, origin="background")
+
+    assert s.reconcile_interrupted() == 1
+
+    (edge,) = [r for r in ledger_db.recent() if r["task_id"] == jid]
+    assert edge["outcome"] == "failed"
+    assert not edge["duration_ms"], f"recorded {edge['duration_ms']}ms of downtime as work"
 
 
 def test_reconcile_without_a_ledger_still_fails_the_jobs(tmp_path, monkeypatch):
@@ -330,3 +357,34 @@ async def test_an_uncontended_evaluate_still_writes(tmp_path, monkeypatch):
     assert status is None
     stored = c.store.get(w.id)
     assert stored.check_count == 1 and stored.last_evidence == "evidence-1"
+
+
+# The console's exact PUT bodies (apps/web SchedulePanel → api.updateSchedule). The PUT is
+# partial, so the console must SAY "UTC" with an explicit null — these pin both halves.
+
+
+def test_console_switch_to_utc_payload_clears_the_zone(tmp_path, monkeypatch):
+    client, _sched = _real_scheduler_client(tmp_path, monkeypatch)
+    client.post(
+        "/api/scheduler/jobs",
+        json={"prompt": "p", "schedule": "0 9 * * *", "job_id": "j1", "timezone": "America/Chicago"},
+    )
+    # The "UTC" option in the zone select: `timezone: out.timezone ?? null`.
+    resp = client.put("/api/scheduler/jobs/j1", json={"prompt": "p", "schedule": "0 9 * * *", "timezone": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["job"]["timezone"] is None
+
+
+def test_console_cron_to_one_shot_payload_drops_the_zone(tmp_path, monkeypatch):
+    client, _sched = _real_scheduler_client(tmp_path, monkeypatch)
+    client.post(
+        "/api/scheduler/jobs",
+        json={"prompt": "p", "schedule": "0 9 * * *", "job_id": "j1", "timezone": "America/Chicago"},
+    )
+    # A one-shot carries its own offset, so the builder reports no zone → null.
+    resp = client.put(
+        "/api/scheduler/jobs/j1", json={"prompt": "p", "schedule": "2030-01-01T09:00:00Z", "timezone": None}
+    )
+    assert resp.status_code == 200, resp.text
+    job = resp.json()["job"]
+    assert job["timezone"] is None and job["schedule"] == "2030-01-01T09:00:00Z"

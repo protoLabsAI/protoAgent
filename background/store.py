@@ -307,6 +307,7 @@ class BackgroundStore:
         now: datetime | None = None,
         cost_usd: float | None = None,
         error: str = "",
+        record_duration: bool = True,
     ) -> bool:
         """Transition a job to a terminal state, idempotently.
 
@@ -320,6 +321,10 @@ class BackgroundStore:
 
         ``error`` is why a non-completed job ended (#3945) — stored beside ``result``, which
         stays the turn's own output. Ignored for a ``completed`` job.
+
+        ``record_duration=False`` settles the ledger edge WITHOUT a duration — for a job
+        whose end time isn't known (restart reconciliation: "now" minus "created" would
+        record the server's downtime as the job's work time).
         """
         if status not in _TERMINAL:
             raise ValueError(f"mark_complete status must be terminal, got {status!r}")
@@ -351,7 +356,7 @@ class BackgroundStore:
 
                 row = self.get(job_id)
                 elapsed = None
-                if row is not None and getattr(row, "created_at", None):
+                if record_duration and row is not None and getattr(row, "created_at", None):
                     try:
                         started = datetime.fromisoformat(row.created_at)
                         elapsed = max(0, int((datetime.fromisoformat(completed) - started).total_seconds() * 1000))
@@ -471,7 +476,11 @@ class BackgroundStore:
         for job_id in ids:
             # Idempotent per row: a job that settles between the SELECT and here is
             # left alone (``mark_complete`` only transitions a still-``running`` row).
-            if self.mark_complete(job_id, "failed", INTERRUPTED_RESULT, now=now, error=INTERRUPTED_ERROR):
+            # No duration: the job died at some unknown point before the restart, and
+            # boot-time minus spawn-time would record the downtime as its work time.
+            if self.mark_complete(
+                job_id, "failed", INTERRUPTED_RESULT, now=now, error=INTERRUPTED_ERROR, record_duration=False
+            ):
                 reconciled += 1
         return reconciled
 
