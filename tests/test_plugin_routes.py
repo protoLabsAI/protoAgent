@@ -678,6 +678,17 @@ def test_update_route_flags_restart_for_a_live_plugin_it_did_not_reload(monkeypa
     body = _client().post("/api/plugins/boardy/update").json()
     assert body["reloaded"] is False and body["restart_recommended"] is False
 
+    # plugin_meta lists every DISCOVERED plugin, disabled ones too (loaded: False) — a
+    # listing is not a running plugin.
+    monkeypatch.setattr(rs.STATE, "plugin_meta", [{"id": "boardy", "enabled": False, "loaded": False}])
+    body = _client().post("/api/plugins/boardy/update").json()
+    assert body["restart_recommended"] is False
+
+    # …but a surface a reconcile couldn't end is still running its code (#3990 review).
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_stuck", {("boardy", "sweep"): "did not stop"})
+    body = _client().post("/api/plugins/boardy/update").json()
+    assert body["reloaded"] is False and body["restart_recommended"] is True
+
 
 # ── uninstall teardown (#1955) ────────────────────────────────────────────────
 

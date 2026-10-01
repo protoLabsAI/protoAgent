@@ -396,3 +396,56 @@ def test_a_surface_kept_on_its_reload_hook_across_an_update_recommends_a_restart
     assert status == 200, body
     _wait_for(lambda: _lines(log, pid)[-1:] == ["stop v1"], "surface stop on uninstall")
     assert body["restart_recommended"] is False, body
+
+
+def test_a_stuck_surface_on_a_disabled_plugin_still_recommends_a_restart(live):
+    # Disable can't end the surface, so the plugin is out of plugins.enabled with nothing
+    # loaded or mounted — yet its task is still running. Update and uninstall run no
+    # reload for a plugin that isn't enabled, so the stuck record is the only evidence
+    # it's live; both must still ask for a restart.
+    srv, repos, log = live
+    pid = "probestuckoff"
+    repo = _make_repo(repos, pid, _STUCK)
+
+    body = srv.install(repo.as_uri())
+    assert body["restart_recommended"] is False
+    _wait_for(lambda: "start v1" in _lines(log, pid), "stuck v1 surface start")
+
+    status, body = srv.call("POST", f"/api/plugins/{pid}/enabled", {"enabled": False})
+    assert status == 200 and body["restart_recommended"] is True, body
+    _wait_for(lambda: srv.call("GET", f"/plugins/{pid}/version", timeout=5)[0] == 404, "404 after disable")
+
+    _write_generation(repo, pid, "v2", _STUCK)
+    status, body = srv.call("POST", f"/api/plugins/{pid}/update")
+    assert status == 200, body
+    assert body["reloaded"] is False, body  # not enabled → no reload
+    assert body["restart_recommended"] is True, body
+
+    status, body = srv.call("DELETE", f"/api/plugins/{pid}")
+    assert status == 200, body
+    assert body["reloaded"] is False, body
+    assert body["restart_recommended"] is True, body
+
+
+def test_updating_or_uninstalling_a_cleanly_disabled_plugin_needs_no_restart(live):
+    # The control for the test above: disabled the normal way, nothing of it runs (the
+    # runtime roster still LISTS it, unloaded), so its update and uninstall are clean.
+    srv, repos, log = live
+    pid = "probeoff"
+    repo = _make_repo(repos, pid, _GOOD)
+
+    srv.install(repo.as_uri())
+    _wait_for(lambda: "start v1" in _lines(log, pid), "v1 surface start")
+    status, body = srv.call("POST", f"/api/plugins/{pid}/enabled", {"enabled": False})
+    assert status == 200 and body["restart_recommended"] is False, body
+    _wait_for(lambda: _lines(log, pid)[-1:] == ["stop v1"], "surface stop on disable")
+
+    _write_generation(repo, pid, "v2", _GOOD)
+    status, body = srv.call("POST", f"/api/plugins/{pid}/update")
+    assert status == 200 and body["reloaded"] is False, body
+    assert body["restart_recommended"] is False, body
+    assert "start v2" not in _lines(log, pid)  # a disabled plugin's update runs nothing
+
+    status, body = srv.call("DELETE", f"/api/plugins/{pid}")
+    assert status == 200 and body["reloaded"] is False, body
+    assert body["restart_recommended"] is False, body

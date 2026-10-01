@@ -171,9 +171,16 @@ async def _restart_needed(plugin_ids) -> bool:
 
 
 def _is_live(plugin_id: str) -> bool:
-    """The plugin is running in this process: loaded (``plugin_meta``) or with a router
-    on the live app (``_mount_plugin_routers``'s registry)."""
-    if any(p.get("id") == plugin_id for p in (STATE.plugin_meta or [])):
+    """The plugin is running in this process: LOADED (a ``plugin_meta`` entry with
+    ``loaded`` — the list also carries every discovered-but-disabled plugin, which isn't
+    running), with a router on the live app (``_mount_plugin_routers``'s registry), or with
+    a surface task an earlier reconcile couldn't end (``STATE.plugin_surfaces_stuck``) — a
+    disabled plugin whose surface never stopped is still running code, and no reload will
+    end it."""
+    if any(p.get("id") == plugin_id and p.get("loaded") for p in (STATE.plugin_meta or [])):
+        return True
+    stuck = getattr(STATE, "plugin_surfaces_stuck", None) or {}
+    if any(pid == plugin_id for (pid, _name) in stuck):
         return True
     keys = getattr(STATE, "plugin_router_keys", None) or set()
     return any(pid == plugin_id for (pid, _prefix) in keys)
