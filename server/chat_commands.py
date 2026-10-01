@@ -78,8 +78,23 @@ def _parse_workflow_command(message: str):
     return name, _parse_workflow_inputs(recipe, rest)
 
 
+class WorkflowReply(str):
+    """A ``/<workflow>`` reply: the text, plus whether the run had a FAILED step — so the
+    turn can end failed instead of completed (#3957). A ``str``, so every caller that only
+    wants the text (and every test fake returning a plain string) is unchanged."""
+
+    failed: bool = False
+
+
+def _failed_reply(text: str) -> WorkflowReply:
+    reply = WorkflowReply(text)
+    reply.failed = True
+    return reply
+
+
 async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
-    """Run a workflow command and format its output as the assistant reply.
+    """Run a workflow command and format its output as the assistant reply — a
+    :class:`WorkflowReply` whose ``failed`` is set when a step failed.
 
     ``on_step`` is forwarded to the workflows plugin's runner (``STATE.workflow_run``,
     set when the plugin is enabled) so the caller can stream per-step progress (the
@@ -102,7 +117,7 @@ async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
     out = extract_output(raw) or raw or "(workflow produced no output)"
     failed = result.get("failed") or []
     if failed:
-        out += f"\n\n_(failed steps: {', '.join(failed)})_"
+        return _failed_reply(f"{out}\n\n_(failed steps: {', '.join(failed)})_")
     return out
 
 

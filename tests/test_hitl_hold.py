@@ -118,9 +118,9 @@ async def _history(session_id: str) -> list:
 
 @pytest.fixture(autouse=True)
 def _clear_queue():
-    steering._QUEUES.clear()
+    steering._reset()
     yield
-    steering._QUEUES.clear()
+    steering._reset()
 
 
 # ── held while the form is pending ────────────────────────────────────────────
@@ -251,7 +251,7 @@ async def test_restart_with_pending_form_still_resumes(monkeypatch):
     # Simulated restart: the in-memory steering queue is gone; the pending-form
     # state lives in the DURABLE checkpoint (re-read on every turn), so the hold
     # cannot latch shut — the form still resumes and the thread completes.
-    steering._QUEUES.clear()
+    steering._reset()
     frames = await _frames('{"env": "prod"}', sid, request_metadata={"hitl_resume": True})
     assert any(kind == "done" for kind, _ in frames)
     assert await chat_mod._pending_interrupt_value(_cfg(sid)) is None

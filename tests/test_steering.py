@@ -18,11 +18,9 @@ from graph.middleware.steering import SteeringMiddleware
 
 @pytest.fixture(autouse=True)
 def _clear_queue():
-    steering._QUEUES.clear()
-    steering._DRAINED.clear()
+    steering._reset()
     yield
-    steering._QUEUES.clear()
-    steering._DRAINED.clear()
+    steering._reset()
 
 
 # ── the queue ─────────────────────────────────────────────────────────────────

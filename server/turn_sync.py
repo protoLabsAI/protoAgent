@@ -463,6 +463,10 @@ async def _chat_langgraph_impl(
                     _telemetry_sink["short_circuit"] = True
                     if last_frame is not None and last_frame[0] == "input_required":
                         _telemetry_sink["state"] = "input_required"
+                    elif last_frame is not None and last_frame[0] == "error":
+                        # A short-circuit that ended FAILED — a `/<workflow>` with a failed
+                        # step (#3957) — is a failed row here too, as on the A2A surface.
+                        _telemetry_sink["state"] = "failed"
                 return _traced(_chat_dispatch._short_circuit_reply(last_frame))
             message = pre.message
 

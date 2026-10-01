@@ -48,10 +48,10 @@ _FENCE = ["discord_read"]
 
 @pytest.fixture(autouse=True)
 def _clean_queues():
-    steering._QUEUES.clear()
+    steering._reset()
     fire_auth._TOKENS.clear()
     yield
-    steering._QUEUES.clear()
+    steering._reset()
     fire_auth._TOKENS.clear()
 
 

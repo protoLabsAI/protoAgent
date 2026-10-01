@@ -33,12 +33,14 @@ import asyncio
 import importlib
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from graph import delegation_usage
 from graph.output_format import extract_output
 from graph.subagent_model import turn_model_scope
+from graph.subagent_progress import progress_scope
 
 # Bound at import, exactly as ``server.chat`` binds them: the plugin chat-command
 # dispatch and the shared slash resolver (``graph.slash_commands`` is re-imported on a
@@ -69,6 +71,13 @@ async def _stop_abandoned_workflow(runner: asyncio.Task, wf_name: str) -> None:
     raises for the runner's own outcome; a cancel of the CALLER while waiting propagates.
     Mirrors ``server.chat_acp._stop_abandoned_driver`` (#3837)."""
     runner.cancel()
+    # Retrieve the runner's eventual outcome whatever happens to THIS wait, so a late
+    # failure never surfaces as asyncio's "Task exception was never retrieved" at GC.
+    # Attached up front, not only when the settle bound runs out (#3940): the wait itself
+    # can be cancelled first — the A2A stall guard gives the whole stream close 5s
+    # (`a2a_impl.executor._stall_guarded`), less than this 10s bound — and a cancelled
+    # wait used to return with no callback attached.
+    runner.add_done_callback(_retrieve_outcome)
     done, _ = await asyncio.wait({runner}, timeout=_WORKFLOW_CANCEL_SETTLE_S)
     if not done:
         log.warning(
@@ -76,14 +85,23 @@ async def _stop_abandoned_workflow(runner: asyncio.Task, wf_name: str) -> None:
             wf_name,
             _WORKFLOW_CANCEL_SETTLE_S,
         )
-        # Nobody awaits it now: retrieve its eventual outcome so a late failure doesn't
-        # surface only as asyncio's "Task exception was never retrieved" at GC.
-        runner.add_done_callback(lambda t: t.cancelled() or t.exception())
         return
     if runner.cancelled():
         log.info("[workflow] abandoned /%s run cancelled (its turn ended early)", wf_name)
     elif runner.exception() is not None:
         log.debug("[workflow] abandoned /%s run ended with: %r", wf_name, runner.exception())
+
+
+def _retrieve_outcome(task: asyncio.Task) -> None:
+    """Done-callback that marks a dropped task's exception as retrieved."""
+    if not task.cancelled():
+        task.exception()
+
+
+# The least time between two liveness frames a running ``/workflow`` step emits (#3940).
+# Each frame resets the A2A stall guard; one every few seconds is plenty against a
+# 900s window, and a chatty sub-graph must not turn into a frame per super-step.
+_WORKFLOW_PROGRESS_MIN_INTERVAL_S = 5.0
 
 
 def _chat():
@@ -509,13 +527,27 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         async def _on_step(event: dict) -> None:
             await step_q.put(event)
 
+        _last_progress = [float("-inf")]
+
+        def _on_progress(subagent_type: str) -> None:
+            # A step's subagent completed a super-step (#3940). Before this a step was
+            # silent from its start card to its end card, so one longer than the stall
+            # window (`turn_stall_timeout_seconds`, 900s) had its workflow cancelled
+            # for being quiet. Rate-limited; called from the runner's own task.
+            now = time.monotonic()
+            if now - _last_progress[0] < _WORKFLOW_PROGRESS_MIN_INTERVAL_S:
+                return
+            _last_progress[0] = now
+            step_q.put_nowait({"phase": "progress", "subagent": subagent_type})
+
         async def _runner() -> str:
             # Each step runs through `graph.sdk.run_subagent`, which reads the turn's model
             # override from this scope — steps follow the turn's model like a `/<subagent>`
             # run does, under the same pin > override > aux > main precedence (#3955).
-            # Bound inside the task: it runs in its own copied context.
+            # Bound inside the task: it runs in its own copied context. So is the progress
+            # listener: the engine's per-step tasks copy it from here.
             try:
-                with turn_model_scope(turn_model):
+                with turn_model_scope(turn_model), progress_scope(_on_progress):
                     return await _chat_commands._run_parsed_workflow(wf_name, wf_inputs, on_step=_on_step)
             finally:
                 await step_q.put(_WF_DONE)
@@ -540,6 +572,13 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                 if event is _WF_DONE:
                     finished = True
                     break
+                if event.get("phase") == "progress":
+                    # Liveness only — no card. The A2A stall guard counts every frame, so
+                    # a step that keeps working is never cut off for being quiet, while a
+                    # step wedged inside ONE call completes no super-step, sends nothing,
+                    # and is still ended by the guard like any wedged turn (#3940).
+                    yield ("progress", {"id": f"workflow:{wf_name}", "subagent": event.get("subagent", "")})
+                    continue
                 sid = event.get("step_id", "")
                 step_tool_id = f"workflow:{wf_name}:{sid}"
                 label = f"{wf_name} · {sid}"
@@ -581,7 +620,10 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         for row in _usage_frames(wf_usage):
             yield row
         pre.handled = True
-        yield ("done", wf_out)
+        # A run with a failed step ends the turn FAILED (#3957), not COMPLETED with the
+        # step's "Error: …" text as the answer. The reply text (output + failed-steps
+        # note) is the failure message, so nothing the run produced is lost.
+        yield ("error" if getattr(wf_out, "failed", False) else "done", wf_out)
         return
 
     # Subagent slash command (/<subagent> <prompt>) short-circuits the

@@ -176,7 +176,7 @@ async def test_a_cancelled_run_finishes_its_record(tmp_path, monkeypatch, fake_l
     import asyncio
 
     import plugins.workflows as wf
-    from plugins.workflows.run_state import STATUS_FAILED, WorkflowRunStore
+    from plugins.workflows.run_state import STATUS_CANCELLED, WorkflowRunStore
 
     async def cancelled(*_a, **_k):
         raise asyncio.CancelledError
@@ -187,4 +187,5 @@ async def test_a_cancelled_run_finishes_its_record(tmp_path, monkeypatch, fake_l
 
     with pytest.raises(asyncio.CancelledError):
         await wf._execute(_GatedReg(), "gated", {"topic": "ai"}, run_store=store)
-    assert store.load(store.run_id)["status"] == STATUS_FAILED  # not left "running"
+    # Not left "running" — and recorded as stopped, not as broken (#3957).
+    assert store.load(store.run_id)["status"] == STATUS_CANCELLED

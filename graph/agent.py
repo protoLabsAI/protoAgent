@@ -994,6 +994,7 @@ async def _run_subagent_inner(
         # max_turns is a budget, not a bomb: on the limit, salvage the transcript.
         from langgraph.errors import GraphRecursionError
 
+        from graph.subagent_progress import note_progress
         from observability import tracing
 
         result: dict[str, Any] = {}
@@ -1018,6 +1019,10 @@ async def _run_subagent_inner(
                     stream_mode="values",
                 ):
                     result = state
+                    # One completed super-step (a model call or a tool round) — the
+                    # liveness a `/<workflow>` step reports to the turn's stall guard
+                    # (#3940). Silent while wedged inside one call, by design.
+                    note_progress(subagent_type)
             except GraphRecursionError:
                 hard_stop = True
 

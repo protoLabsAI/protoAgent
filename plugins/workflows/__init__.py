@@ -32,7 +32,13 @@ from langchain_core.tools import tool
 from graph import sdk
 from plugins.workflows.engine import execute_workflow, render_template, resolve_inputs, validate_recipe
 from plugins.workflows.registry import WorkflowRegistry
-from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_PAUSED, WorkflowRunStore
+from plugins.workflows.run_state import (
+    STATUS_CANCELLED,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PAUSED,
+    WorkflowRunStore,
+)
 
 log = logging.getLogger("protoagent.plugins.workflows")
 
@@ -183,7 +189,10 @@ async def _run_prepared(
                 seed_outputs=seed_outputs,
             )
             _trace_outcome(traced, result)
-    except BaseException:  # a cancelled run too, or its record is left "running" forever
+    except asyncio.CancelledError:  # stopped, not broken — its own terminal state (#3957)
+        run_store.finish(STATUS_CANCELLED)
+        raise
+    except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
@@ -433,7 +442,10 @@ async def _resume(
         ) as traced:
             result = await execute_workflow(recipe, inputs, **kwargs)
             _trace_outcome(traced, result)
-    except BaseException:  # a cancelled run too, or its record is left "running" forever
+    except asyncio.CancelledError:  # stopped, not broken — its own terminal state (#3957)
+        run_store.finish(STATUS_CANCELLED)
+        raise
+    except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal

@@ -21,7 +21,7 @@ console's polling target while it executes, not just a post-mortem):
 
 * ``steps`` — the recipe's step graph at start time (id / subagent / depends_on /
   gate), so the timeline renders lanes even after the recipe is edited or deleted.
-* ``step_meta`` — per-step lifecycle: ``status`` (running / done / failed),
+* ``step_meta`` — per-step lifecycle: ``status`` (running / done / failed / cancelled),
   ``started_at`` / ``finished_at``, and ``seconds`` (the engine's RUNNING time,
   folded in at finish).
 * ``output`` / ``failed`` / ``degraded`` — the final envelope, persisted at
@@ -47,8 +47,12 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_PAUSED = "paused"
 STATUS_SEEDED = "seeded"  # a step this run did not dispatch: its output was handed in (#3571)
+# The run was stopped from outside — its turn ended (a CancelTask, the stall guard) or the
+# server shut it down — rather than failing on its own (#3957). Steps still in flight at
+# that moment are marked cancelled too, not left "running" on a terminal record.
+STATUS_CANCELLED = "cancelled"
 
-TERMINAL = (STATUS_DONE, STATUS_FAILED)
+TERMINAL = (STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED)
 
 
 def _now() -> str:
@@ -167,12 +171,18 @@ class WorkflowRunStore:
         self._write()
 
     def finish(self, status: str, result: dict | None = None) -> None:
-        """Mark the run terminal (``done`` / ``failed``), folding in the engine's
-        final envelope when given: final ``output``, ``failed`` / ``degraded`` ids
-        (their step_meta flips to failed), and per-step ``timings`` → ``seconds``."""
+        """Mark the run terminal (``done`` / ``failed`` / ``cancelled``), folding in the
+        engine's final envelope when given: final ``output``, ``failed`` / ``degraded`` ids
+        (their step_meta flips to failed), and per-step ``timings`` → ``seconds``. A
+        cancelled run's in-flight steps are marked cancelled with it."""
         if self._state is None:
             return
         self._state["status"] = status
+        if status == STATUS_CANCELLED:
+            for meta in (self._state.get("step_meta") or {}).values():
+                if meta.get("status") == STATUS_RUNNING:
+                    meta["status"] = STATUS_CANCELLED
+                    meta["finished_at"] = _now()
         if result:
             self._state["output"] = str(result.get("output", ""))
             self._state["failed"] = list(result.get("failed") or [])

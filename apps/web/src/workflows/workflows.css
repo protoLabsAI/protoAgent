@@ -441,6 +441,10 @@
   border-color: color-mix(in srgb, var(--pl-color-status-error) 45%, transparent);
 }
 
+.run-status-cancelled {
+  color: var(--pl-color-fg-muted);
+}
+
 .run-status-paused {
   color: var(--pl-color-status-warning);
   border-color: color-mix(in srgb, var(--pl-color-status-warning) 45%, transparent);
@@ -510,6 +514,10 @@
 
 .run-step-gated {
   color: var(--pl-color-status-warning);
+}
+
+.run-step-cancelled {
+  color: var(--pl-color-fg-subtle);
 }
 
 .run-gate {
