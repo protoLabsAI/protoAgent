@@ -38,7 +38,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from .acp_client import AcpClient, ProgressCallback, TappedResult, ToolCallback
+from .acp_client import AcpClient, PlanCallback, ProgressCallback, TappedResult, ToolCallback
 
 log = logging.getLogger("protoagent.plugins.coding_agent")
 
@@ -365,6 +365,7 @@ async def dispatch_tapped(
     on_tool: ToolCallback | None = None,
     on_thought: ProgressCallback | None = None,
     on_text: ProgressCallback | None = None,
+    on_plan: PlanCallback | None = None,
     timeout: float | None = None,
 ) -> TappedResult:
     """Run ONE fully-tapped coder turn against ``delegate`` and return a `TappedResult`.
@@ -387,8 +388,11 @@ async def dispatch_tapped(
       ``deny_kinds`` / ``permissions_ceiling``.
     * **callback forwarding** — ``on_tool`` receives the structured tool start/end
       event dicts, ``on_thought`` the coder's reasoning deltas, ``on_text`` the
-      answer-text deltas, exactly as ``AcpClient.prompt`` streams them. All optional
-      and best-effort: a raising callback never breaks the turn.
+      answer-text deltas, and ``on_plan`` the coder's WHOLE current plan (a list of
+      ``{content, status, priority}`` entries, replaced on every ACP ``plan`` update —
+      claude-agent-acp emits one per TaskCreate/TaskUpdate), exactly as
+      ``AcpClient.prompt`` streams them. All optional and best-effort: a raising
+      callback never breaks the turn.
     * **cancel kills the child** — ``asyncio.CancelledError`` drops the private handle
       and synchronously SIGKILLs the coder's whole process tree before re-raising, so
       stopping the caller stops the coder (no awaits on the cancellation path). A
@@ -406,6 +410,8 @@ async def dispatch_tapped(
         on_tool: async callback for structured tool start/end event dicts.
         on_thought: async callback for the coder's reasoning-text deltas.
         on_text: async callback for answer-text deltas.
+        on_plan: async callback for the coder's live plan — the full, normalized entry
+            list on every update (the last one also rides ``TappedResult.plan``).
         timeout: seconds to await the turn; defaults to the delegate's ``timeout_s``
             (else 600).
 
@@ -425,6 +431,7 @@ async def dispatch_tapped(
             tool_callback=on_tool,
             thought_callback=on_thought,
             text_callback=on_text,
+            plan_callback=on_plan,
             timeout=timeout,
         )
         # Snapshot BEFORE teardown: the signals are per-client state and the client is
