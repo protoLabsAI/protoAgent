@@ -190,7 +190,7 @@ plugins:
     name: Social Studio
     category: Marketing
     repo: https://github.com/protoLabsAI/social-plugin
-    tagline: "Organic social marketing that never posts — a brand kit every draft follows, nine platforms' hard limits and dated norms, a content queue, a linter, and a copy-ready export pack, with a writer + editor + researcher crew. The Social Marketing archetype installs it."
+    tagline: "Organic social marketing that never posts — a brand kit every draft follows, nine platforms' hard limits and dated norms, a content queue, a linter, and a copy-ready export pack, with a writer + editor + researcher crew. The Brand & Launch archetype installs it."
     adds: [tool, skill, subagent, view, settings]
 
   - id: bloodbowl
@@ -440,10 +440,10 @@ archetype_repos:
     repo: protoLabsAI/engineer-archetype
     archetype: engineer
     tagline: "Engineer — a hands-on pair-programming navigator: onboards any repo, points at the evidence, you write the fix."
-  - id: social-archetype
-    repo: protoLabsAI/social-archetype
-    archetype: social-marketing
-    tagline: "Social Marketing — brand voice, balanced calendar, native drafts per platform. Draft-only."
+  - id: brand-launch-archetype
+    repo: protoLabsAI/brand-launch-archetype
+    archetype: brand-launch   # held from the picker (archetype-catalog.json `held`) until Josh has tested it; replaces social-archetype (retired 2026-10-01)
+    tagline: "Brand & Launch — a launch campaign for any app: plan, scripted recordings, GIFs, cards, copy drafts, operator approval. Draft-only."
   - id: project-manager-archetype
     repo: protoLabsAI/project-manager-archetype
     archetype: project-manager

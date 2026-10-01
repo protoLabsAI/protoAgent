@@ -257,7 +257,9 @@ def test_archetype_catalog_bundles_are_registered() -> None:
     rows = _load_directory_doc().get("archetype_repos") or []
     registered_urls = {f"https://github.com/{r['repo']}".lower() for r in rows}
     by_archetype = {r["archetype"] for r in rows if r.get("archetype")}
-    for entry in catalog.get("archetypes") or []:
+    # Held rows too: restoring one is "move it into `archetypes`", so its bundle must
+    # already be registered or the restore would fail this guard after the fact.
+    for entry in (catalog.get("archetypes") or []) + (catalog.get("held") or []):
         bundle = entry.get("bundle")
         if not bundle:
             continue

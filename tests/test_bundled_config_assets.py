@@ -342,31 +342,47 @@ def test_engineer_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
-def test_social_marketing_archetype_is_held() -> None:
-    """The Social Marketing archetype is HELD from the picker (operator call,
-    2026-08-20: not ready for release). JSON has no comments, so 'commented out'
-    is a sibling ``held`` list the reader never serves. This pins BOTH directions:
-    the row must not ship in ``archetypes`` (it would become selectable again),
-    and it must survive intact in ``held`` — soul preset and bundle still valid —
-    so restoring it is one move, not an archaeology dig."""
+def test_brand_launch_replaces_social_marketing_and_is_held() -> None:
+    """Brand & Launch (a launch manager for any app: campaign plan, scripted recordings,
+    GIFs, cards, copy drafts, operator-only approval) REPLACES the Social Marketing
+    archetype (operator call, 2026-10-01). It ships HELD until the operator has tested it.
+    Pins every direction of that decision:
+
+    * ``social-marketing`` is gone — not served, not parked in ``held``, its soul preset
+      retired — so it can't be restored by accident alongside its replacement;
+    * ``brand-launch`` is not served in ``archetypes`` and is parked exactly once in
+      ``held`` with its `_held` note, a resolving soul preset and its bundle URL, so
+      listing it is one move (into ``archetypes`` before ``custom``, dropping `_held`)."""
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     ids = [a["id"] for a in catalog["archetypes"]]
+    held = [a["id"] for a in catalog.get("held") or []]
 
-    assert "social-marketing" not in ids, (
-        f"'social-marketing' is held from release — it must not be in archetypes, got {ids}"
+    assert "social-marketing" not in ids + held, (
+        f"'social-marketing' was replaced by 'brand-launch' — it must be in neither list, got {ids} / {held}"
+    )
+    assert not (CONFIG / "soul-presets" / "social-marketing.md").exists(), (
+        "the social-marketing persona was retired with its row"
     )
 
-    held = [a["id"] for a in catalog.get("held") or []]
-    assert held.count("social-marketing") == 1, f"'social-marketing' must be parked exactly once in `held`, got {held}"
-    (row,) = (a for a in catalog["held"] if a["id"] == "social-marketing")
+    assert "brand-launch" not in ids, f"'brand-launch' is held until tested — it must not be in archetypes, got {ids}"
+    assert held.count("brand-launch") == 1, f"'brand-launch' must be parked exactly once in `held`, got {held}"
+    (row,) = (a for a in catalog["held"] if a["id"] == "brand-launch")
+    assert "Replaces social-marketing" in row.get("_held", ""), "the held row says why it's parked"
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), (
-        f"held archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
-        f"but {preset} does not exist — restoring the row would silently seed nothing."
+        f"held archetype 'brand-launch' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — listing the row would silently seed nothing."
     )
-    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/"), (
-        "the held row must keep its bundle URL so restoration is one move"
+    assert row.get("bundle") == "https://github.com/protoLabsAI/brand-launch-archetype", (
+        "the held row must keep its bundle URL so listing it is one move"
     )
+
+    # Draft-only doctrine: the persona must keep its hard rules (never posts, never invents a
+    # number, operator is the only approver, nothing private on screen, sourced norms).
+    soul = preset.read_text().lower()
+    for needle in ("never post", "never invent a number", "only approver", "competitor",
+                   "home paths", "sources", "one checkpoint per phase"):
+        assert needle in soul, f"brand-launch persona lost a hard rule: {needle!r}"
 
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 

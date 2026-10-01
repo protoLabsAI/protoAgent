@@ -7,7 +7,7 @@ hand-assembling URLs, refs, and `plugins.enabled`. That's a **bundle**
 a pinned set of plugin repos plus everything needed to make them useful on arrival.
 
 A published bundle repo that ships an `archetype:` block is an **archetype repo**
-(`cowork-archetype`, `social-archetype`, …) — the repo an agent starter type ships in.
+(`cowork-archetype`, `engineer-archetype`, …) — the repo an agent starter type ships in.
 The mechanism is always "bundle"; the product noun is always "archetype". (The old
 term "stack" is retired — [ADR 0100](/adr/0100-agent-archetypes), amended 2026-08-19.)
 
