@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.187.0",
+    "date": "2026-10-01",
+    "changes": [
+      "Goal-driven turns get their own round cap, goal.max_rounds_per_turn (#3957).",
+      "A per-request model override now reaches every subagent run (#3955).",
+      "Console: a turn parked on an ask_human question now waits for you live and keeps its form across a reload (#3956).",
+      "Concurrent turns each deliver their own projected context (#3958).",
+      "A resumed turn's context recompose now retrieves for the turn's own input and is logged (#3960).",
+      "Console: a question the agent asked again after a plain message now keeps its form, in a fresh browser and after a reload (#3963).",
+      "A goal-driven turn applies the goal's tool scope before pre-turn dispatch (#3964)."
+    ]
+  },
+  {
     "version": "v0.186.0",
     "date": "2026-09-30",
     "changes": [
