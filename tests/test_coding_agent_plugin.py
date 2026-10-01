@@ -1405,6 +1405,113 @@ async def test_dispatch_tapped_forwards_callbacks_and_returns_wire_signals(tmp_p
     assert created[0] not in P._CLIENTS.values()
 
 
+# Two plan updates in one turn — the shape claude-agent-acp emits when Claude Code calls
+# TaskCreate (the checklist appears) then TaskUpdate (an entry advances). Each update
+# carries the WHOLE plan; the second also has a malformed entry and an over-long one so
+# the test proves `on_plan` sees the client's normalized entries, not the raw wire.
+_PLAN_TAPPED_AGENT = _TAPPED_AGENT.replace(
+    """        update({"sessionUpdate": "plan", "entries": [
+            {"content": "edit app.py", "status": "completed", "priority": "high"}]})""",
+    """        update({"sessionUpdate": "plan", "entries": [
+            {"content": "edit app.py", "status": "in_progress", "priority": "high"},
+            {"content": "write tests", "status": "pending", "priority": "medium"}]})
+        update({"sessionUpdate": "plan", "entries": [
+            {"content": "edit app.py", "status": "completed", "priority": "high"},
+            {"content": "x" * 500, "status": "in_progress"},
+            "not-an-entry"]})""",
+)
+
+
+async def test_dispatch_tapped_streams_the_plan_live_to_on_plan(tmp_path):
+    """`on_plan` fires on EVERY plan update — mid-turn, not only via the final result —
+    with the full normalized entry list, and the last one also rides TappedResult.plan."""
+    import inspect
+
+    # projectBoard passes `on_plan` only when the seam's signature NAMES it.
+    assert "on_plan" in inspect.signature(P.dispatch_tapped).parameters
+    assert _PLAN_TAPPED_AGENT != _TAPPED_AGENT  # the replace above matched
+    script = tmp_path / "plan_agent.py"
+    script.write_text(_PLAN_TAPPED_AGENT, encoding="utf-8")
+    plans: list[list] = []
+    order: list[str] = []
+
+    async def on_plan(entries: list) -> None:
+        plans.append(entries)
+        order.append("plan")
+
+    async def on_text(delta: str) -> None:
+        order.append("text")
+
+    result = await P.dispatch_tapped(
+        _tapped_delegate(script, tmp_path, name="planner"),
+        "build it",
+        on_plan=on_plan,
+        on_text=on_text,
+        timeout=30.0,
+    )
+
+    assert plans == [
+        [
+            {"content": "edit app.py", "status": "in_progress", "priority": "high"},
+            {"content": "write tests", "status": "pending", "priority": "medium"},
+        ],
+        [
+            {"content": "edit app.py", "status": "completed", "priority": "high"},
+            {"content": "x" * 200, "status": "in_progress", "priority": ""},
+        ],
+    ]
+    # Live, in wire order: both plans arrived while the turn ran, before the answer text.
+    assert order == ["plan", "plan", "text", "text"]
+    assert result.reply == "All done"
+    assert result.plan == plans[-1]
+    # The callback got its own copy — mutating it can't corrupt the result snapshot.
+    plans[-1].clear()
+    assert len(result.plan) == 2
+
+
+async def test_dispatch_tapped_survives_a_raising_on_plan(tmp_path):
+    """A broken live view must never break the run: a raising `on_plan` is swallowed and
+    the turn still completes with its reply and final plan."""
+    script = tmp_path / "plan_agent.py"
+    script.write_text(_PLAN_TAPPED_AGENT, encoding="utf-8")
+    calls = 0
+
+    async def on_plan(entries: list) -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("board view exploded")
+
+    result = await P.dispatch_tapped(
+        _tapped_delegate(script, tmp_path, name="planner"), "build it", on_plan=on_plan, timeout=30.0
+    )
+    assert calls == 2
+    assert result.reply == "All done"
+    assert result.stop_reason == "end_turn"
+    assert result.plan and result.plan[0]["status"] == "completed"
+
+
+async def test_acp_adapter_dispatch_tapped_forwards_on_plan(monkeypatch):
+    """The delegates plugin's `AcpAdapter.dispatch_tapped` wrapper hands `on_plan`
+    through to the core seam rather than dropping it."""
+    import plugins.coding_agent as coding_agent
+    from plugins.delegates.acp_adapter import AcpAdapter
+
+    seen: dict = {}
+
+    async def fake_seam(d, prompt, **kw):
+        seen.update(kw)
+        return "ok"
+
+    monkeypatch.setattr(coding_agent, "dispatch_tapped", fake_seam)
+
+    async def on_plan(entries: list) -> None:
+        return None
+
+    out = await AcpAdapter.dispatch_tapped(object.__new__(AcpAdapter), object(), "go", on_plan=on_plan)
+    assert out == "ok"
+    assert seen["on_plan"] is on_plan
+
+
 async def test_dispatch_tapped_surfaces_a_dead_end(tmp_path):
     """A refusal comes back classified (stop_reason + dead_end), not as bare text —
     the signal the retry ladder needs to stop escalating tiers (#2279)."""

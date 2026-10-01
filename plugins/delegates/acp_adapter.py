@@ -20,7 +20,7 @@ from .base import (
 )
 
 if TYPE_CHECKING:
-    from plugins.coding_agent.acp_client import ProgressCallback, TappedResult, ToolCallback
+    from plugins.coding_agent.acp_client import PlanCallback, ProgressCallback, TappedResult, ToolCallback
 
 
 #: ACP ``stopReason`` values that mean the reply is CUT OFF rather than finished, mapped
@@ -320,9 +320,10 @@ class AcpAdapter(Adapter):
         on_tool: ToolCallback | None = None,
         on_thought: ProgressCallback | None = None,
         on_text: ProgressCallback | None = None,
+        on_plan: PlanCallback | None = None,
         timeout: float | None = None,
     ) -> TappedResult:
-        """One fully-tapped coder turn — live tool/thought/text callbacks plus the wire
+        """One fully-tapped coder turn — live tool/thought/text/plan callbacks plus the wire
         signals (usage, plan, stop reason, dead end) as a ``TappedResult``.
 
         The public alternative to reaching into ``plugins.coding_agent``'s private
@@ -340,7 +341,13 @@ class AcpAdapter(Adapter):
 
         try:
             return await dispatch_tapped(
-                d, prompt, on_tool=on_tool, on_thought=on_thought, on_text=on_text, timeout=timeout
+                d,
+                prompt,
+                on_tool=on_tool,
+                on_thought=on_thought,
+                on_text=on_text,
+                on_plan=on_plan,
+                timeout=timeout,
             )
         except AcpError as exc:
             # Same attribution as `_prompt`: name the delegate and its command, so a
