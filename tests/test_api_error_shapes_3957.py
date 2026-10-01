@@ -76,7 +76,7 @@ def test_subagent_run_upstream_429_is_429_with_retry_after():
 
     assert r.status_code == 429  # was 500
     assert r.headers.get("retry-after") == "17"
-    assert "rate-limited" in r.json()["detail"] and "429" in r.json()["detail"]
+    assert "rate-limited" in r.json()["detail"]["message"] and "429" in r.json()["detail"]["message"]
 
 
 def test_subagent_batch_upstream_429_is_429():
@@ -99,6 +99,56 @@ def test_subagent_run_other_upstream_failures_are_502(exc):
     r = _routes_client(run_exc=exc).post("/api/subagents/run", json={"prompt": "x"})
 
     assert r.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "route, body",
+    [
+        ("/api/subagents/run", {"prompt": "x", "session_id": "s-3991"}),
+        ("/api/subagents/batch", {"tasks": [{"prompt": "x"}], "session_id": "s-3991"}),
+    ],
+    ids=["run", "batch"],
+)
+@pytest.mark.parametrize(
+    "exc, status, code, upstream",
+    [
+        (_wrapped(_RateLimited()), 429, "rate_limit_error", 429),
+        (_wrapped(_BadGateway("upstream down")), 502, "server_error", 503),
+        (_wrapped(httpx.ConnectError("connection refused")), 502, "server_error", None),
+    ],
+    ids=["429", "upstream-5xx", "unreachable"],
+)
+def test_subagent_upstream_failure_detail_is_the_api_chat_object(route, body, exc, status, code, upstream):
+    """#3991 — the subagent routes' upstream 429/502 carry ``/api/chat``'s OBJECT detail
+    ``{code, message, upstream_status, session_id, error_id}``. A plain-string 502 is the
+    hub proxy's "agent not up yet", which the console retries as a cold start — a
+    subagent's model failure must not look like that."""
+    kwargs = {"run_exc": exc} if route.endswith("/run") else {"batch_exc": exc}
+
+    r = _routes_client(**kwargs).post(route, json=body)
+
+    assert r.status_code == status
+    detail = r.json()["detail"]
+    assert isinstance(detail, dict)
+    assert set(detail) == {"code", "message", "upstream_status", "session_id", "error_id"}
+    assert detail["code"] == code
+    assert detail["upstream_status"] == upstream
+    assert detail["session_id"] == "s-3991"
+    assert isinstance(detail["error_id"], str) and len(detail["error_id"]) == 8
+    assert isinstance(detail["message"], str) and detail["message"]
+
+
+def test_subagent_upstream_auth_failure_code_matches_api_chat():
+    """The ``code`` for an upstream status is the one ``/api/chat`` / ``/v1`` use."""
+
+    class _Unauthorized(Exception):
+        status_code = 401
+
+    r = _routes_client(run_exc=_wrapped(_Unauthorized("Error code: 401"))).post("/api/subagents/run", json={"prompt": "x"})
+
+    assert r.status_code == 502
+    assert r.json()["detail"]["code"] == "authentication_error"
+    assert r.json()["detail"]["upstream_status"] == 401
 
 
 @pytest.mark.parametrize(
@@ -353,5 +403,5 @@ def test_subagent_run_maps_every_non_429_upstream_status_to_502(upstream):
     r = _routes_client(run_exc=_wrapped(_Upstream(f"Error code: {upstream}"))).post("/api/subagents/run", json={"prompt": "x"})
 
     assert r.status_code == 502
-    assert f"upstream HTTP {upstream}" in r.json()["detail"]
+    assert f"upstream HTTP {upstream}" in r.json()["detail"]["message"]
     assert "retry-after" not in r.headers

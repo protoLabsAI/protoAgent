@@ -110,10 +110,17 @@ export function FleetTurnWatch() {
       markNotified(w.taskId);
       const name = await displayName(w.slug);
       const failed = isTaskFailed(state);
+      // `unknown` / UNSPECIFIED settles the watch (#3972) but is NOT a clean finish —
+      // a neutral toast, never the success one (#3991).
+      const unknown = !failed && isTaskStateUnknown(state);
       toast({
-        tone: failed ? "error" : "success",
+        tone: failed ? "error" : unknown ? "neutral" : "success",
         title: `${name} finished a turn`,
-        message: failed ? `"${w.title}" ended with ${state}` : `"${w.title}" is done — switch over to read it.`,
+        message: failed
+          ? `"${w.title}" ended with ${state}`
+          : unknown
+            ? `"${w.title}" ended in an unknown state — switch over to check it.`
+            : `"${w.title}" is done — switch over to read it.`,
       });
       notifyIfHidden(`${name} finished a turn`, w.title);
     }

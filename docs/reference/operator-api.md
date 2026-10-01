@@ -17,10 +17,15 @@ Every error body is `{"detail": …}`, in one of three shapes:
 |---|---|
 | `detail: "<message>"` (a string) | Most routes. `400` = the request's input was refused (the message says why), `404` = the named resource doesn't exist, `409` = the subsystem isn't loaded yet (setup incomplete), `503` = the feature isn't enabled. A `500` is a fault in the server: its detail is a generic message with a short **error id** (`Internal server error (error id 1a2b3c4d); …`) — the real exception is in the server log under that id, never in the response. |
 | `detail: [{loc, msg, type, …}, …]` (a list) | `422` — the body or query failed type validation before the route ran (FastAPI's standard shape). |
-| `detail: {code, message, upstream_status, session_id, error_id}` (an object) | `POST /api/chat` when the turn failed — see below. A few other routes use an object `{code, reason}` (noted per route). |
+| `detail: {code, message, upstream_status, session_id, error_id}` (an object) | `POST /api/chat` when the turn failed — see below — and `POST /api/subagents/run` / `/batch` when the model provider failed (`429` / `502`). A few other routes use an object `{code, reason}` (noted per route). |
 
 A client should read `detail` as: a string → show it; an object → show `message` (or
 `reason`); a list → show the first item's `msg`.
+
+A `502` with a **string** detail comes from the fleet hub's proxy (the agent isn't up or
+reachable yet) and is worth retrying; a `502` with an **object** detail is the agent itself
+reporting that its model provider failed, so retrying right away won't help. The console
+tells the two apart this way.
 
 ## Runtime & health
 
@@ -59,7 +64,7 @@ A client should read `detail` as: a string → show it; an object → show `mess
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/subagents` | Registered subagents (allowlists, max turns) |
-| POST | `/api/subagents/run` | Run one subagent manually |
+| POST | `/api/subagents/run` | Run one subagent manually. A model-provider failure is **429** (mirrored, with `Retry-After` when the provider sent one) or **502** (any other upstream failure or an unreachable gateway), with the object detail `{code, message, upstream_status, session_id, error_id}`; the same applies to `/batch` |
 | POST | `/api/subagents/batch` | Run several subagents concurrently: `{session_id?, tasks: [{prompt, description?, type?, subagent_type?}]}`, **at most 20 tasks**. Every task needs a non-empty `prompt` — one task without it fails the whole batch with `422` (it used to run the others and report that task as an error) |
 | GET | `/api/tools` | Wired tools (core / plugin / MCP) |
 | GET | `/api/acp-agents` | Detected ACP coding agents |
