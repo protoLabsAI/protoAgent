@@ -587,7 +587,10 @@ def register_chat_routes(app, ui: str) -> None:
         # Resolved only when forgetting: a resolver replay without request metadata is a
         # best-effort call this route otherwise makes exactly where it always did.
         forget_tids = (
-            [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)] if forget else []
+            # dict.fromkeys: ordered dedupe — the default resolver answers `a2a:<id>` again.
+            list(dict.fromkeys([f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)]))
+            if forget
+            else []
         )
         # Not best-effort: if this raises, the delete fails before anything is retired.
         marker = await asyncio.to_thread(_harvest.begin_forget, store, session_id, forget_tids) if forget else None

@@ -340,3 +340,18 @@ def test_v1_upstream_statuses_are_unchanged():
     assert _v1_error_response({"upstream_status": 400, "type": "invalid_request_error"}).status_code == 502
     assert _v1_error_response({"upstream_status": None, "upstream_unreachable": True}).status_code == 502
     assert _v1_error_response({"upstream_status": None, "type": "server_error"}).status_code == 500
+
+
+@pytest.mark.parametrize("upstream", [400, 401, 403, 404, 500, 503])
+def test_subagent_run_maps_every_non_429_upstream_status_to_502(upstream):
+    """Only a 429 is mirrored; the provider's own 401/403/5xx never reach the caller as
+    that status (a 401 from US means "your protoAgent bearer is bad")."""
+
+    class _Upstream(Exception):
+        status_code = upstream
+
+    r = _routes_client(run_exc=_wrapped(_Upstream(f"Error code: {upstream}"))).post("/api/subagents/run", json={"prompt": "x"})
+
+    assert r.status_code == 502
+    assert f"upstream HTTP {upstream}" in r.json()["detail"]
+    assert "retry-after" not in r.headers

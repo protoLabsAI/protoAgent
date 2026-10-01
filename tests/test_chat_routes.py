@@ -378,6 +378,32 @@ def test_delete_session_forget_retry_keeps_the_first_attempts_harvest(monkeypatc
     assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
 
 
+def test_delete_session_forget_failure_fails_the_delete(monkeypatch, tmp_path):
+    """Phase 1 (hiding the chat's rows) failing must fail the delete cleanly: nothing is
+    retired and nothing is forgotten, so the console keeps the tab and the operator can
+    retry."""
+    import pytest
+
+    retired: list[str] = []
+
+    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
+        retired.append(thread_id)
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=_fake_retire)
+    before = sorted((ch.content, ch.invalidated_at) for ch in store.list_chunks(limit=500, include_invalidated=True))
+
+    def _locked(*_a, **_k):
+        raise RuntimeError("store locked")
+
+    store.mark_forget_pending = _locked
+    with pytest.raises(RuntimeError, match="store locked"):
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+
+    assert retired == []
+    after = sorted((ch.content, ch.invalidated_at) for ch in store.list_chunks(limit=500, include_invalidated=True))
+    assert after == before
+
+
 def test_delete_session_forget_falls_back_to_one_step_for_a_plain_store(monkeypatch):
     """A store that can't hide rows (a plugin backend) gets the one-step delete — after
     retirement, so a failed retirement still forgets nothing."""
@@ -401,7 +427,8 @@ def test_delete_session_forget_falls_back_to_one_step_for_a_plain_store(monkeypa
     monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
 
     assert c.delete("/api/chat/sessions/s2?forget=true").json()["forgotten"] == 5
-    assert order == [("retire", "a2a:s2"), ("retire", "chat:s2"), ("forget", "s2", ["a2a:s2", "chat:s2", "a2a:s2"])]
+    # Thread ids deduped: the default resolver answers `a2a:s2` again.
+    assert order == [("retire", "a2a:s2"), ("retire", "chat:s2"), ("forget", "s2", ["a2a:s2", "chat:s2"])]
 
 
 def _seeded_task_engine(tmp_path, name, rows):

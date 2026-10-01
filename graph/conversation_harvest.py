@@ -18,6 +18,7 @@ import re
 from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.output_format import extract_output
+from knowledge.store import FORGET_PENDING_PREFIX  # the store owns the marker format
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +209,6 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
 # afresh), a failed retirement un-hides them, and the final delete removes exactly the
 # hidden rows — never anything the harvest wrote.
 
-FORGET_PENDING_PREFIX = "forget_pending:"  # == knowledge.store.FORGET_PENDING_PREFIX
 
 # Sessions whose delete-with-forget is running in THIS process right now — the orphan
 # sweep must never touch their marker (it would restore rows mid-retirement).
