@@ -4,10 +4,12 @@
  * dispatcher shared by the live turn, the reattach stream and durable-turn replay.
  * Pure — no fetch, no routing — and must never import `lib/api.ts`.
  */
+import { delegateProgressFromWire } from "../delegateProgress";
 import type {
   ComponentSpec,
   ContextWindow,
   ConsumedSteer,
+  DelegateProgressEvent,
   HitlPayload,
   RoomReply,
   ToolEvent,
@@ -152,6 +154,9 @@ const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 // BEFORE the answer artifact, so the answer can be attributed as it is drawn.
 const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
 const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
+// A coding-agent delegation's live state (#3975) — a whole, bounded snapshot keyed by
+// the card it belongs to (an `@` mention card, or a `delegate_to` ask).
+const DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json";
 
 // The two protolabs-a2a SDK extensions we consume ride the message/artifact METADATA
 // map keyed by their extension URI (protolabs-a2a 0.3.0) — they are no longer MIME-typed
@@ -258,6 +263,7 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
         error?: string;
         in_answer?: boolean;
         note?: boolean;
+        id?: string;
       }
     | undefined;
   if (!d) return null;
@@ -284,6 +290,11 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
   };
 }
 
+
+/** Decode a coding delegate's live-progress snapshot (#3975), or null. */
+export function delegateProgressFromParts(parts?: RawPart[]): DelegateProgressEvent | null {
+  return delegateProgressFromWire(dataByMime(parts, DELEGATE_PROGRESS_MIME));
+}
 
 /** Decode the exact model-call boundary where queued operator input was consumed. */
 export function consumedSteersFromParts(parts?: RawPart[]): ConsumedSteer[] | null {
@@ -453,6 +464,8 @@ export type TurnStreamHandlers = {
    *  is a participant speaking, so each becomes its own authored message. */
   onRoomReply?: (reply: RoomReply) => void;
   onSteerConsumed?: (items: ConsumedSteer[]) => void;
+  /** A coding delegate's live state (#3975) — a whole snapshot for the card `evt.id`. */
+  onDelegateProgress?: (evt: DelegateProgressEvent) => void;
   /** A durable rebuild only (`replaySteers`): an operator message that arrived MID-task —
    *  the answer that continued a paused task on its own id (A2A §3.4.3, #3930). The
    *  task's opening message is not one; the rebuild draws that bubble separately. */
@@ -491,6 +504,10 @@ function replayTaskSnapshot(
     if (reasoning) handlers.onReasoning?.(reasoning);
     const component = componentFromParts(msg.parts);
     if (component) handlers.onComponent?.(component);
+    // A delegate's progress snapshot (#3975): the durable store keeps the LATEST per
+    // delegation, so a reattach or reload lands the run's final state on its card.
+    const progress = delegateProgressFromParts(msg.parts);
+    if (progress) handlers.onDelegateProgress?.(progress);
     // Steer-consumed markers replay only for a transcript being REBUILT from durable
     // turns (`replaySteers`), never into a live bubble: a snapshot's artifacts flatten
     // all answer text into one accumulation, so the marker's position relative to that
@@ -573,6 +590,8 @@ export function makeA2ADispatcher(
       if (roomReply) handlers.onRoomReply?.(roomReply);
       const consumedSteers = consumedSteersFromParts(parts);
       if (consumedSteers) handlers.onSteerConsumed?.(consumedSteers);
+      const progress = delegateProgressFromParts(parts);
+      if (progress) handlers.onDelegateProgress?.(progress);
       if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
         handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
       }

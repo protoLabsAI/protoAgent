@@ -272,16 +272,28 @@ class AcpAdapter(Adapter):
         from plugins.coding_agent import _client_for, _drop_client, _make_permission
         from plugins.coding_agent.acp_client import AcpError
 
+        from graph.delegate_progress import DelegateProgress, current_sink
+
         spec = self._spec(d)
         client = _client_for(spec)
         client._permission = _make_permission(spec)
+        # Live progress for the delegation card (#3975) — only when the caller that owns
+        # a card bound a sink. Read HERE, in the dispatching task: the callbacks fire on
+        # the client's reader task, whose context predates this turn.
+        sink = current_sink()
+        tracker = DelegateProgress(d.name, sink) if sink is not None else None
+        callbacks = tracker.acp_prompt_callbacks() if tracker is not None else {}
         try:
-            reply = await client.prompt(query, timeout=timeout or d.timeout_s)
+            reply = await client.prompt(query, timeout=timeout or d.timeout_s, **callbacks)
+            if tracker is not None:
+                await tracker.finish(ok=True)
             # getattr: the pool hands back whatever client the spec resolves to, and a
             # missing stop reason must degrade to 'no marker', never to an AttributeError
             # that turns a working delegate into a hard dispatch failure.
             return _mark_incomplete(reply, getattr(client, "last_stop_reason", None))
         except asyncio.CancelledError:
+            if tracker is not None:
+                tracker.close()  # synchronous — no awaits mid-cancellation
             # The turn was stopped (operator hit stop, or an orchestrator watchdog
             # fired). The client is POOLED, so without this its subprocess keeps
             # running detached — exactly "I stopped the main thread and the delegate
@@ -291,9 +303,14 @@ class AcpAdapter(Adapter):
             client.kill_now()
             raise
         except AcpError as exc:
+            if tracker is not None:
+                await tracker.finish(ok=False)
             # Attribute it. `delegate_to` renders a DelegateError as a bare `Error: <msg>`,
             # so without the name a fan-out across several coders can't tell which one blew up.
             raise DelegateError(f"delegate {d.name!r} ({d.command}): {exc}") from exc
+        finally:
+            if tracker is not None:
+                tracker.close()  # idempotent — no trailing flush outlives the run
 
     async def dispatch_tapped(
         self,

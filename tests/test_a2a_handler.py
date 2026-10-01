@@ -806,6 +806,42 @@ def _reasoning_texts_from_history(history: list[dict]) -> list[str]:
 
 
 @pytest.mark.asyncio
+async def test_delegate_progress_rides_a_dataframe_and_persists_once_per_delegation(tmp_path):
+    """#3975: a coding delegate's live snapshots reach the console as delegate-progress-v1
+    DataParts on WORKING frames — and the durable store keeps only the LATEST one per
+    delegation, so a reload replays the final state without a row per frame."""
+    from a2a_impl.executor import DELEGATE_PROGRESS_MIME
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_start", {"id": "mention:claude-code", "name": "@claude-code", "input": "go"})
+        for n in range(1, 31):
+            yield (
+                "delegate_progress",
+                {"id": "mention:claude-code", "target": "claude-code", "tool_count": n, "done": n == 30},
+            )
+        yield ("tool_end", {"id": "mention:claude-code", "name": "@claude-code", "output": "1 replied"})
+        yield ("done", "the reply")
+
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(str(tmp_path / "a2a-tasks.db")))
+    await store.initialize()
+    app = _build_app(stream, task_store=store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    snapshots = [
+        part["data"]
+        for m in final.get("history") or []
+        for part in m.get("parts") or []
+        if (part.get("metadata") or {}).get("mimeType") == DELEGATE_PROGRESS_MIME
+    ]
+    assert len(snapshots) == 1, snapshots
+    assert snapshots[0]["tool_count"] == 30 and snapshots[0]["done"] is True
+
+
+@pytest.mark.asyncio
 async def test_reasoning_flood_coalesces_in_durable_history(tmp_path):
     """#1710: a token-per-event reasoning stream (~200 deltas) lands in durable
     task history as ONE coalesced reasoning Message carrying the full text —

@@ -1633,6 +1633,8 @@ def _fresh_client():
     c._answer = ""
     c._text_after_tool = False
     c._last_chunk = ""
+    c._segment = ""
+    c._segment_chunks = 0
     c._turn_tool_calls = 0
     c._turn_open_tools = {}
     c._turn_session_id = None
@@ -1723,3 +1725,32 @@ async def test_a_repeat_across_a_tool_call_survives():
     await c._handle_update(_tool())
     await c._handle_update(_chunk(line))
     assert c._answer == f"{line}\n\n{line}"
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_block_replayed_whole_is_dropped():
+    """The doubled FIRST sentence (#3975, captured live from claude-agent-acp on
+    2026-10-01): the block streams as deltas, then arrives AGAIN as one chunk before the
+    tool call. No single delta equals it (the adjacent guard misses it) and the reply is
+    not one block (the halving collapse misses it) — so the reply read "I'll look at the
+    existing `calc.py` first.I'll look at the existing `calc.py` first." """
+    c = _fresh_client()
+    for delta in ("I'll look", " at the existing `calc.", "py` first."):
+        await c._handle_update(_chunk(delta))
+    await c._handle_update(_chunk("I'll look at the existing `calc.py` first."))
+    await c._handle_update(_tool())
+    for delta in ("Here's", " the file."):
+        await c._handle_update(_chunk(delta))
+    await c._handle_update(_chunk("Here's the file."))  # the guard resets per segment
+
+    assert c._answer == "I'll look at the existing `calc.py` first.\n\nHere's the file."
+
+
+@pytest.mark.asyncio
+async def test_a_single_chunk_repeated_is_not_a_replay():
+    """The replay guard needs a STREAMED segment (>=2 chunks): a one-chunk sentence
+    followed by different text that merely contains it is ordinary narration."""
+    c = _fresh_client()
+    await c._handle_update(_chunk("Short line."))
+    await c._handle_update(_chunk(" Short line."))  # not equal to the segment
+    assert c._answer == "Short line. Short line."

@@ -21,6 +21,7 @@ import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabs
 
 import { tokens } from "../lib/format";
 import type { ToolCall } from "../lib/types";
+import { DelegateProgressList } from "./DelegateProgressView";
 import { isCancelledDelegation } from "./dismissedToolCalls";
 import { useUI } from "../state/uiStore";
 import { SHOW_ELAPSED_AFTER_MS, formatElapsed, useElapsed } from "./elapsed";
@@ -334,8 +335,16 @@ function ToolGroup({
   // tools (the `.pl-toolcard__children` indented rail, but here gated by the card's open
   // state instead of always-on — so the header row stays a stable height as kids stream in).
   const Icon = iconFor(call.name);
+  // A coding delegate's live view (#3975) — on an `@` mention card. While the card runs it
+  // renders OUTSIDE the collapsed body, under the header, so the plan and current tool are
+  // visible without expanding (the whole point: the card used to be a bare spinner); once
+  // the card settles it moves INTO the body, the run's final state one click away.
+  const hasProgress = Boolean(call.delegateProgress && Object.keys(call.delegateProgress).length);
+  const liveProgress = hasProgress && call.status === "running";
+  const settledProgress =
+    hasProgress && !liveProgress ? <DelegateProgressList progress={call.delegateProgress} live={false} /> : null;
   const body =
-    call.input || call.output || nestedCards ? (
+    call.input || call.output || nestedCards || settledProgress ? (
       <>
         {call.input ? (
           <ToolSection label="input" copyText={call.input}>
@@ -350,6 +359,7 @@ function ToolGroup({
           </ToolSection>
         ) : null}
         {nestedCards ? <div className="pl-toolcard__children">{nestedCards}</div> : null}
+        {settledProgress}
       </>
     ) : undefined;
 
@@ -485,7 +495,7 @@ function ToolGroup({
     </>
   );
 
-  return (
+  const card = (
     <ToolCard
       name={name}
       // The DS has no paused glyph: a waiting card drops the spinner (done frame, glyph
@@ -498,5 +508,12 @@ function ToolGroup({
     >
       {body}
     </ToolCard>
+  );
+  if (!liveProgress) return card;
+  return (
+    <>
+      {card}
+      <DelegateProgressList progress={call.delegateProgress} live={!waiting} />
+    </>
   );
 }

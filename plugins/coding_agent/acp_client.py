@@ -49,6 +49,13 @@ from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
 _DUPLICATE_CHUNK_FLOOR = 24
 
+# The SEGMENT replay (#3975): claude-agent-acp streams a text block as deltas, then can
+# re-send the whole block as ONE more chunk — "I'll look at calc.py first.I'll look at
+# calc.py first." Shorter than this, a segment that equals the next chunk is left alone.
+_SEGMENT_REPLAY_FLOOR = 8
+
+PlanCallback = Callable[[list], Awaitable[None]]
+
 logger = logging.getLogger("protoagent.plugins.coding_agent")
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -116,6 +123,28 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
         if raw not in (None, "", {}, []):
             out.append(raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, default=str))
     return " ".join(o for o in out if o).strip()[:limit]
+
+
+def _tool_kind_and_locations(update: dict) -> dict:
+    """ACP's ``kind`` (read/edit/execute/search/…) and ``locations`` ({path, line}) off a
+    ``tool_call``/``tool_call_update`` — only the keys the update actually carries, capped
+    and sanitized, so a refinement never blanks what the start already said."""
+    out: dict = {}
+    kind = update.get("kind")
+    if isinstance(kind, str) and kind:
+        out["kind"] = kind[:32]
+    locs = update.get("locations")
+    if isinstance(locs, list) and locs:
+        clean = []
+        for loc in locs[:4]:
+            if isinstance(loc, dict) and isinstance(loc.get("path"), str) and loc["path"]:
+                entry: dict = {"path": loc["path"][:400]}
+                if isinstance(loc.get("line"), int):
+                    entry["line"] = loc["line"]
+                clean.append(entry)
+        if clean:
+            out["locations"] = clean
+    return out
 
 
 def _split_tool_title(title: str) -> tuple[str, str]:
@@ -570,6 +599,10 @@ class AcpClient:
         self._text_after_tool = False
         # The previous chunk verbatim, for the adjacent-duplicate guard (#3407).
         self._last_chunk = ""
+        # The narration since the last tool call (or turn start) and how many chunks
+        # built it, for the segment-replay guard (#3975).
+        self._segment = ""
+        self._segment_chunks = 0
         # How many tool calls the coder made this turn — counted in ``_handle_update``
         # off the wire, NOT off ``tool_callback``, because the delegates adapter wires
         # no callback at all and its runs would otherwise all record zero (#3015).
@@ -615,6 +648,7 @@ class AcpClient:
         self._on_tool: ToolCallback | None = None
         self._on_text: ProgressCallback | None = None
         self._on_thought: ProgressCallback | None = None
+        self._on_plan: PlanCallback | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -1042,7 +1076,27 @@ class AcpClient:
                         text[:48],
                     )
                     return
+                # The SEGMENT replay (#3975): the agent streamed a text block as deltas and
+                # then re-sent the WHOLE block as one more chunk. The adjacent guard above
+                # cannot see it (no single delta equals the block), and the halving collapse
+                # only catches a reply that is ONE block — so a reply that narrates, calls a
+                # tool, then answers came back with its opening sentence twice. Exact
+                # whole-segment equality after >=2 chunks: a model deliberately restating its
+                # entire preceding paragraph with no joiner is not a thing; this bug is.
+                if self._segment_chunks >= 2 and len(text) >= _SEGMENT_REPLAY_FLOOR and text == self._segment:
+                    logger.warning(
+                        "[acp/%s] dropped a replayed text block (%d chars, session=%s) — the agent "
+                        "re-sent the narration it had just streamed: %r",
+                        self.name,
+                        len(text),
+                        params.get("sessionId"),
+                        text[:48],
+                    )
+                    self._last_chunk = text
+                    return
                 self._last_chunk = text
+                self._segment += text
+                self._segment_chunks += 1
                 # Narration resumed after a tool call: start a paragraph instead of gluing
                 # it to the previous sentence (#3408). Without this the reply reads as one
                 # wall — "…both PRs first.Both PRs are open…" — because every run between
@@ -1072,6 +1126,7 @@ class AcpClient:
             # narration. (QA panel finding on this PR.)
             self._text_after_tool = True
             self._last_chunk = ""
+            self._segment, self._segment_chunks = "", 0
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start). The card
             # NAME is a short label; the verbose args (structured rawInput, else the title's
@@ -1095,6 +1150,9 @@ class AcpClient:
                     "id": str(update.get("toolCallId") or title),
                     "name": name,
                     "input": tool_input,
+                    # ACP's own classification + the files it touches — additive keys a
+                    # live view renders ("edit · calc.py:12"); older consumers ignore them.
+                    **_tool_kind_and_locations(update),
                 },
                 raw_input=raw_input,
             )
@@ -1139,7 +1197,15 @@ class AcpClient:
                 # A separate ``update`` phase, not a second ``start``: consumers that count
                 # or list starts (a plugin's recent-tools feed) would double a call, and an
                 # old consumer that knows only start/end ignores it harmlessly (#3691).
-                await self._emit_tool({"phase": "update", "id": tool_id, "name": name, "input": tool_input})
+                await self._emit_tool(
+                    {
+                        "phase": "update",
+                        "id": tool_id,
+                        "name": name,
+                        "input": tool_input,
+                        **_tool_kind_and_locations(update),
+                    }
+                )
             if status in ("completed", "failed") and tool_id not in self._turn_ended_tool_ids:
                 self._turn_ended_tool_ids.add(tool_id)
                 end_title = str(update.get("title") or "")
@@ -1194,6 +1260,12 @@ class AcpClient:
                     for e in entries[:40]
                     if isinstance(e, dict)
                 ]
+                # A plan update is a work boundary like a tool call (claude-agent-acp turns
+                # its task-list tool into plan updates, not tool calls): narration after it
+                # starts a new paragraph instead of "…the 3-item plan.Plan created." (#3408).
+                # The replay guard's segment is deliberately NOT reset here.
+                self._text_after_tool = True
+                await self._emit_plan(self._turn_plan)
         elif kind:
             # current_mode_update / available_commands_update —
             # not surfaced yet, but logged so they're visibly dropped, not silent.
@@ -1333,6 +1405,13 @@ class AcpClient:
                 await self._on_tool(event)
             except Exception as exc:  # best-effort — tool cards never break a turn
                 logger.warning("[acp/%s] tool_callback raised: %s", self.name, exc)
+
+    async def _emit_plan(self, entries: list) -> None:
+        if self._on_plan:
+            try:
+                await self._on_plan(list(entries))
+            except Exception as exc:  # best-effort — a live view never breaks a turn
+                logger.warning("[acp/%s] plan_callback raised: %s", self.name, exc)
 
     async def _emit_text(self, delta: str) -> None:
         if self._on_text and delta:
@@ -1586,6 +1665,7 @@ class AcpClient:
         tool_callback: ToolCallback | None = None,
         text_callback: ProgressCallback | None = None,
         thought_callback: ProgressCallback | None = None,
+        plan_callback: PlanCallback | None = None,
         timeout: float = 600.0,
     ) -> str:
         """Send one user turn; return the agent's accumulated message text.
@@ -1594,7 +1674,8 @@ class AcpClient:
         start/end events to ``tool_callback`` (UI tool cards), answer-text deltas to
         ``text_callback`` (token-ish streaming), and the coder's reasoning deltas to
         ``thought_callback`` (``agent_thought_chunk``; falls back to ``progress_callback``)
-        as the agent works. Raises ``AcpError`` on transport/protocol failure.
+        as the agent works, and each ``plan`` update (the coder's whole todo list, sanitized)
+        to ``plan_callback``. Raises ``AcpError`` on transport/protocol failure.
 
         Turns are serialized per client: a concurrent call queues (bounded by its own
         ``timeout``) instead of interleaving prompts into the one session — the per-turn
@@ -1683,6 +1764,7 @@ class AcpClient:
                         tool_callback=tool_callback,
                         text_callback=text_callback,
                         thought_callback=thought_callback,
+                        plan_callback=plan_callback,
                         timeout=timeout,
                     )
                 finally:
@@ -1901,6 +1983,7 @@ class AcpClient:
         text_callback: ProgressCallback | None,
         thought_callback: ProgressCallback | None,
         timeout: float,
+        plan_callback: PlanCallback | None = None,
     ) -> str:
         # Per-turn state is cleared BEFORE the start attempt, not after it. This client
         # is pooled, and `_ensure_started` raises on every start-failure mode there is —
@@ -1911,6 +1994,7 @@ class AcpClient:
         self._answer = ""
         self._text_after_tool = False
         self._last_chunk = ""
+        self._segment, self._segment_chunks = "", 0
         self._turn_tool_calls = 0
         self._turn_ended_tool_ids = set()
         self._turn_open_tools = {}
@@ -1923,6 +2007,7 @@ class AcpClient:
         self._on_tool = tool_callback
         self._on_text = text_callback
         self._on_thought = thought_callback
+        self._on_plan = plan_callback
         try:
             await self._ensure_started()
             # Now — and only now — does this run have a session of its own to be
@@ -1967,6 +2052,7 @@ class AcpClient:
             self._on_tool = None
             self._on_text = None
             self._on_thought = None
+            self._on_plan = None
         self.last_stop_reason = str((result or {}).get("stopReason") or "") or None
         usage = (result or {}).get("usage")
         self._turn_usage = usage if isinstance(usage, dict) else None

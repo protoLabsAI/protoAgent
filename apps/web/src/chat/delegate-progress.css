@@ -1,0 +1,97 @@
+/* A coding delegate's live view on its delegation card (#3975, DelegateProgressView.tsx):
+   its plan checklist, the tool it is running, its last few tools, a narration tail.
+   Quiet by design — it sits under a card the operator is already watching, so it reads as
+   detail, not as a second message. Every list is capped server-side, so no max-height. */
+.delegate-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  min-width: 0;
+  margin: var(--pl-space-1) 0 var(--pl-space-1) var(--pl-space-3);
+  padding-left: var(--pl-space-2_5);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+  border-left: 2px solid var(--pl-color-border);
+}
+.delegate-progress--live {
+  border-left-color: var(--pl-color-accent);
+}
+.dp-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pl-space-2);
+  align-items: baseline;
+}
+.dp-target {
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+.dp-count {
+  color: var(--pl-color-fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.dp-failed {
+  color: var(--pl-color-status-error);
+}
+.dp-plan,
+.dp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-0_5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dp-plan-entry,
+.dp-tool {
+  display: flex;
+  gap: var(--pl-space-1_5);
+  align-items: center;
+  min-width: 0;
+}
+.dp-plan-entry > span,
+.dp-tool-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dp-plan-entry--completed > span {
+  color: var(--pl-color-fg-subtle);
+  text-decoration: line-through;
+}
+.dp-plan-entry--in_progress > span,
+.dp-tool--current .dp-tool-name {
+  color: var(--pl-color-fg);
+}
+.dp-glyph {
+  flex: 0 0 auto;
+  opacity: 0.6;
+}
+.dp-glyph--done {
+  color: var(--pl-color-status-success);
+  opacity: 1;
+}
+.dp-glyph--active {
+  color: var(--pl-color-accent);
+  opacity: 1;
+}
+.dp-glyph--failed {
+  color: var(--pl-color-status-error);
+  opacity: 1;
+}
+.dp-kind {
+  flex: 0 0 auto;
+  padding: 0 var(--pl-space-1);
+  font-size: var(--pl-font-size-3xs);
+  color: var(--pl-color-fg-subtle);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+}
+.dp-text {
+  margin: 0;
+  color: var(--pl-color-fg-subtle);
+  font-style: italic;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}

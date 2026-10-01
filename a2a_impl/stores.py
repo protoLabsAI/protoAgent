@@ -328,9 +328,59 @@ def coalesce_reasoning_history(task: Task) -> int:
     return removed
 
 
+# Duplicated from a2a_impl.executor for the same import-chain reason as above; locked
+# together by tests/test_delegate_progress.py.
+_DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json"
+
+
+def prune_superseded_progress(task: Task) -> int:
+    """Keep only the LATEST delegate-progress Message per delegation in ``task.history``,
+    in place. Returns the number of messages removed.
+
+    A coding delegate's live progress (#3975) streams as whole-state snapshots on WORKING
+    frames, and the SDK moves every one into durable history — a long coder run would
+    persist hundreds of rows that each restate the last. A snapshot supersedes every
+    earlier one for the same card (it is the whole state, not a delta), so dropping them
+    loses nothing a reattach or a reload needs: it replays the final state. Only agent
+    messages whose parts are ALL delegate-progress DataParts are touched."""
+    from a2a.types import Role
+
+    def _progress_id(msg) -> str | None:
+        if msg.role != Role.ROLE_AGENT or len(msg.parts) != 1:
+            return None
+        part = msg.parts[0]
+        if part.WhichOneof("content") != "data":
+            return None
+        mime = part.metadata.fields["mimeType"].string_value if "mimeType" in part.metadata.fields else ""
+        if mime != _DELEGATE_PROGRESS_MIME:
+            return None
+        fields = part.data.struct_value.fields
+        return fields["id"].string_value if "id" in fields else ""
+
+    ids = [_progress_id(m) for m in task.history]
+    if sum(1 for i in ids if i is not None) < 2:
+        return 0
+    last: dict[str, int] = {}
+    for index, pid in enumerate(ids):
+        if pid is not None:
+            last[pid] = index
+    keep = [i for i, pid in enumerate(ids) if pid is None or last[pid] == i]
+    removed = len(ids) - len(keep)
+    if removed:
+        kept = []
+        for i in keep:
+            c = type(task.history[i])()
+            c.CopyFrom(task.history[i])
+            kept.append(c)
+        del task.history[:]
+        task.history.extend(kept)
+    return removed
+
+
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     """Durable task store that coalesces contiguous reasoning-v1 history runs
-    into one Message per run on every save (#1710). Streaming frames are
+    into one Message per run on every save (#1710), and keeps only the latest
+    delegate-progress snapshot per delegation (#3975). Streaming frames are
     untouched — this is persistence-shape only, so the wire contract and the
     live thinking bubble are unchanged."""
 
@@ -339,6 +389,10 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             coalesce_reasoning_history(task)
         except Exception:  # noqa: BLE001 — coalescing must never lose a save
             log.exception("[a2a] reasoning coalescing failed; saving uncoalesced")
+        try:
+            prune_superseded_progress(task)
+        except Exception:  # noqa: BLE001 — pruning must never lose a save
+            log.exception("[a2a] delegate-progress pruning failed; saving unpruned")
         await super().save(task, context)
 
 
