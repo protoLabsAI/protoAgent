@@ -19,6 +19,10 @@ from fastapi.testclient import TestClient
 
 from observability.ledger_store import LedgerStore
 
+# The watch tests import graph.goals.verifiers (platform-branching), and the scheduler
+# tests touch real SQLite files — run them on the Windows lane too.
+pytestmark = pytest.mark.platform_sensitive
+
 # --- 1. reconcile_interrupted settles the ledger edge ----------------------------------
 
 
