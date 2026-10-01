@@ -96,6 +96,37 @@ def _reset_live_embed_breaker() -> None:
             pass
 
 
+def _qualified_live_target(model: str):
+    """The probe target for a provider-qualified LIVE model value, or None when unqualified.
+
+    A blank-form "Test connection" / model listing re-tests what the agent actually runs.
+    When that model names its own connection (`gateway:protolabs/smart`, ADR 0106) the
+    runtime builds against THAT connection's endpoint and stored key with the bare model
+    id — not the retired `model.api_base` / `model.api_key` default route (#3128), which a
+    registry-only config leaves pointing at the dataclass default with no key. Resolved
+    through `graph.llm.resolve_slot_target`, the same dispatch `create_llm` runs, so the
+    probe and the real call cannot disagree.
+
+    Returns ``("oauth", provider_type, model)`` for a native subscription lane, or
+    ``("route", base, key, allow_env_key, model)`` for an OpenAI-compatible one.
+    """
+    from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, resolve_model_route
+    from graph.llm import GATEWAY_SLOT, resolve_slot_target
+
+    cfg = STATE.graph_config
+    if cfg is None:
+        return None
+    conn, entry, ptype, bare = resolve_slot_target(model, cfg)
+    if not conn:
+        return None
+    if ptype == PROVIDER_TYPE_OPENAI_COMPAT or conn == GATEWAY_SLOT:
+        # A registered connection resolves strictly from its own fields (never the env
+        # key); an unregistered legacy `gateway:` lane IS the default route, as in create_llm.
+        route = resolve_model_route(cfg, entry) if entry is not None else resolve_model_route(cfg)
+        return ("route", route.base_url or "", route.api_key, entry is None, bare)
+    return ("oauth", ptype, bare)
+
+
 async def _rebuild_graph_after_reconnect(result: dict, provider: str = "") -> dict:
     """After a completed in-console sign-in, restore the live graph (#2458).
 
@@ -228,13 +259,26 @@ def register_config_routes(app) -> None:
         from graph.config_io import list_gateway_models
 
         body = req or ModelsProbeRequest()
+        from graph.providers import is_native_oauth_provider
+        from graph.providers.discovery import list_provider_models
+
+        # A blank form lists what the LIVE model's connection offers. A provider-qualified
+        # lead (`gateway:protolabs/smart`) names its own connection, and that wins over the
+        # retired `model.provider` exactly as it does in create_llm.
+        target = None
+        if not body.provider and not body.api_base and STATE.graph_config is not None:
+            target = _qualified_live_target(STATE.graph_config.model_name)
+        if target is not None and target[0] == "oauth":
+            models, error = await asyncio.to_thread(list_provider_models, target[1], STATE.graph_config)
+            return {"models": models, "error": error}
+        if target is not None:
+            _, base, key, allow_env, _model = target
+            key = body.api_key or key
+            models, error = await asyncio.to_thread(list_gateway_models, base, key, allow_env_key=allow_env)
+            return {"models": models, "error": error}
         # Native OAuth providers list the subscription account's models, not the gateway's.
         provider = (body.provider or getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
-        from graph.providers import is_native_oauth_provider
-
         if is_native_oauth_provider(provider):
-            from graph.providers.discovery import list_provider_models
-
             models, error = await asyncio.to_thread(list_provider_models, provider, STATE.graph_config)
             return {"models": models, "error": error}
         live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
@@ -405,14 +449,28 @@ def register_config_routes(app) -> None:
 
         body = req or ModelsProbeRequest()
         model = body.model or (STATE.graph_config.model_name if STATE.graph_config else "")
+        from graph.providers import is_native_oauth_provider
+        from graph.providers.discovery import validate_oauth_connection
+
+        # A blank-form re-test of a provider-qualified model (`gateway:protolabs/smart`)
+        # probes THAT connection with its stored key and the bare model id — the same
+        # dispatch create_llm runs for the real call. Before this it went to the retired
+        # default route, which a registry-only config leaves keyless (a spurious 401 while
+        # chat worked), and sent the qualified string as the model id.
+        target = _qualified_live_target(model) if not body.provider and not body.api_base else None
+        if target is not None and target[0] == "oauth":
+            ok, error = await asyncio.to_thread(validate_oauth_connection, target[1], target[2], STATE.graph_config)
+            return {"ok": ok, "error": error}
+        if target is not None:
+            _, base, key, allow_env, bare = target
+            ok, error = await asyncio.to_thread(
+                validate_model_connection, base, body.api_key or key, bare, allow_env_key=allow_env
+            )
+            return {"ok": ok, "error": error}
         # Native OAuth providers (ADR 0097) test through the subscription, not a gateway
         # key — build the real client and stream a 1-token turn.
         provider = (body.provider or getattr(STATE.graph_config, "model_provider", "") or "").strip().lower()
-        from graph.providers import is_native_oauth_provider
-
         if is_native_oauth_provider(provider):
-            from graph.providers.discovery import validate_oauth_connection
-
             ok, error = await asyncio.to_thread(validate_oauth_connection, provider, model, STATE.graph_config)
             return {"ok": ok, "error": error}
         live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None

@@ -877,6 +877,24 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     return prefix.strip().lower(), rest.strip()
 
 
+def resolve_slot_target(model_name: str | None, config: LangGraphConfig | None = None) -> tuple[str, "Provider | None", str, str]:
+    """Where a (possibly provider-qualified) model value routes — the dispatch ``create_llm`` runs.
+
+    Returns ``(connection_id, entry, provider_type, bare_model)``. ``connection_id`` is
+    ``""`` for an unqualified value (the caller's default route applies). ``entry`` is the
+    registered connection (ADR 0106) or None for a legacy-floor lane no registry declares,
+    in which case ``provider_type`` is the lane's own name — exactly how ``create_llm``
+    resolves it. Shared so a probe (the console's "Test connection", the model listing)
+    reaches the same endpoint with the same key as the real call.
+    """
+    slot_provider, slot_model = split_slot_target(model_name, config)
+    if not slot_provider:
+        return "", None, "", slot_model
+    entry = config.provider_by_id(slot_provider) if config is not None else None
+    ptype = entry.type if entry is not None else slot_provider
+    return slot_provider, entry, ptype, slot_model
+
+
 def _build_llm_kwargs(config: LangGraphConfig, connection: Provider | None = None) -> dict:
     """Assemble the ChatOpenAI kwargs from config (extracted for testing).
 
@@ -1000,7 +1018,7 @@ def create_llm(
     # Claude subscription and a ChatGPT subscription can mix all of them across slots
     # instead of every slot inheriting `model.provider`. The qualified form wins over
     # every heuristic below, and says out loud which account pays for the call.
-    slot_provider, slot_model = split_slot_target(model_name, config)
+    slot_provider, entry, ptype, slot_model = resolve_slot_target(model_name, config)
     if not slot_provider and not model_name:
         # The PRIMARY model names its own connection too (ADR 0106):
         # `model.name: prod-gateway:protolabs/reasoning`. Before the registry the lead
@@ -1009,7 +1027,7 @@ def create_llm(
         # say which connection runs the main brain, and it has to win over the
         # lead-provider dispatch below — otherwise the qualified string is handed to the
         # legacy provider whole and rejected as "not an OpenAI model id".
-        slot_provider, slot_model = split_slot_target(getattr(config, "model_name", ""), config)
+        slot_provider, entry, ptype, slot_model = resolve_slot_target(getattr(config, "model_name", ""), config)
         if slot_provider:
             # Report the value we actually resolved, not the (absent) argument — an
             # error reading "slot model None names the 'prod-gateway' connection" tells
@@ -1020,8 +1038,6 @@ def create_llm(
         # implies a kind — `prod-gateway` and `local-vllm` are both openai-compat — so
         # the registry is what says how to build, and an unregistered prefix never
         # reaches here because `split_slot_target` declined to claim it.
-        entry = config.provider_by_id(slot_provider)
-        ptype = entry.type if entry is not None else slot_provider
         if ptype == PROVIDER_TYPE_OPENAI_COMPAT or slot_provider == GATEWAY_SLOT:
             if not _gateway_configured(config, entry):
                 raise RuntimeError(

@@ -262,8 +262,15 @@ def test_both_agent_init_egress_call_sites_go_through_the_helper():
         assert site in joined, f"missing egress helper call: {site}"
 
 
-def test_the_model_listing_and_test_connection_routes(case, monkeypatch, no_network):
+#: Cases whose LEAD model is provider-qualified: a blank-form probe re-tests what the agent
+#: actually runs, i.e. that connection — not the unqualified default route (the 401 bug:
+#: a registry-only config probed the dataclass default endpoint with no key).
+_LEAD_CONNECTION_ROUTE = {"registry-only": (REGISTRY, "registry-key"), "qualified-slot": (VLLM, "")}
+
+
+def test_the_model_listing_and_test_connection_routes(case, monkeypatch, no_network, request):
     cfg, (base, key) = case
+    base, key = _LEAD_CONNECTION_ROUTE.get(request.node.callspec.params["case"], (base, key))
     _live(cfg, monkeypatch)
     root = base.rstrip("/")
     client = _routes_client()
@@ -395,6 +402,84 @@ def test_a_blank_form_retest_uses_the_live_route_even_when_a_legacy_field_names_
     _live(cfg, monkeypatch)
     _routes_client().post("/api/config/test-model", json={"model": "m"})
     assert no_network[-1] == (f"{LEGACY}/chat/completions", "legacy-key")
+
+
+def _capturing_wire(monkeypatch):
+    """Like `no_network`, but records the completion payload too, and answers 200."""
+    seen: list[dict] = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, headers=None, **kw):
+            seen.append({"url": str(url), "bearer": (headers or {}).get("Authorization", "").removeprefix("Bearer ")})
+            return SimpleNamespace(status_code=200, json=lambda: {"data": [{"id": "protolabs/smart"}]})
+
+        def post(self, url, headers=None, json=None, **kw):
+            seen.append(
+                {
+                    "url": str(url),
+                    "bearer": (headers or {}).get("Authorization", "").removeprefix("Bearer "),
+                    "model": (json or {}).get("model"),
+                }
+            )
+            return SimpleNamespace(status_code=200, json=lambda: {"choices": [{"message": {"content": "p"}}]}, text="")
+
+    monkeypatch.setattr("httpx.Client", _Client)
+    monkeypatch.setattr("security.egress.check_url", lambda *a, **k: None)
+    return seen
+
+
+def _connection_keyed_lead(monkeypatch) -> LangGraphConfig:
+    """The repro shape: lead `gateway:protolabs/smart`, the key stored ONLY in the
+    connection's secret (PATCH /api/config/providers/gateway), no legacy fields."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    return LangGraphConfig.from_dict(
+        {"providers": [{"id": "gateway", "base_url": REGISTRY}], "model": {"name": "gateway:protolabs/smart"}},
+        secrets={"providers": {"gateway": "conn-secret"}},
+    )
+
+
+def test_a_blank_test_model_probes_the_lead_connection_with_its_stored_key(monkeypatch):
+    """Regression: chat worked (create_llm resolves `gateway:` to the connection) but the
+    blank-form "Test connection" went to the retired default route keyless → HTTP 401."""
+    cfg = _connection_keyed_lead(monkeypatch)
+    _live(cfg, monkeypatch)
+    wire = _capturing_wire(monkeypatch)
+    resp = _routes_client().post("/api/config/test-model", json={})
+    assert resp.json()["ok"] is True, resp.json()
+    assert wire == [{"url": f"{REGISTRY}/chat/completions", "bearer": "conn-secret", "model": "protolabs/smart"}]
+
+
+def test_a_qualified_form_model_probes_its_connection(monkeypatch):
+    """Selecting a qualified model in the form (no endpoint typed) probes that connection."""
+    cfg = _load(CASES["both"][0], "env-key", monkeypatch)
+    _live(cfg, monkeypatch)
+    wire = _capturing_wire(monkeypatch)
+    _routes_client().post("/api/config/test-model", json={"model": "gateway:protolabs/smart"})
+    assert wire == [{"url": f"{REGISTRY}/chat/completions", "bearer": "registry-key", "model": "protolabs/smart"}]
+
+
+def test_a_blank_model_listing_uses_the_lead_connection_with_its_stored_key(monkeypatch):
+    cfg = _connection_keyed_lead(monkeypatch)
+    _live(cfg, monkeypatch)
+    wire = _capturing_wire(monkeypatch)
+    resp = _routes_client().post("/api/config/models", json={})
+    assert resp.json()["models"] == ["protolabs/smart"]
+    assert wire == [{"url": f"{REGISTRY}/models", "bearer": "conn-secret"}]
+
+
+def test_the_probe_and_the_runtime_client_resolve_the_same_connection(monkeypatch):
+    """The probe reuses create_llm's dispatch, so the two cannot drift apart again."""
+    cfg = _connection_keyed_lead(monkeypatch)
+    assert _runtime_client(cfg, monkeypatch, model_name=None) == (REGISTRY, "conn-secret")
 
 
 # ── the resolver itself ───────────────────────────────────────────────────────────────
