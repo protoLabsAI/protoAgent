@@ -1,8 +1,9 @@
 """Live progress of a running delegation, for the console's delegation card (#3979).
 
 Delegate-type agnostic. A delegate that reports while it works — an ACP coder
-(claude-agent-acp, codex-acp, protoCLI…) over ``session/update``, and next an A2A peer
-over its streamed status/tool-call frames — is normalized into ONE small model the card
+(claude-agent-acp, codex-acp, protoCLI…) over ``session/update``, or a streaming A2A
+peer over its task's SSE status/artifact/tool-call frames (``plugins/delegates/
+a2a_progress.py``) — is normalized into ONE small model the card
 renders, whatever the transport:
 
 * ``plan``          — the delegate's own todo list: ``[{content, status}]``, latest wins

@@ -837,18 +837,41 @@ class A2aAdapter(Adapter):
             metadata={"url": d.url, "delegate": d.name, "poll_timeout_s": poll_timeout},
             as_type="agent",
         ):
-            return await self._dispatch_traced(
-                d,
-                query,
-                send_timeout=timeout,
-                poll_timeout=poll_timeout,
-                _rpc=_rpc,
-                resume_task_id=resume_task_id,
-                started=started,
-            )
+            # Live progress for the delegation card (#3979): only when whoever owns the card
+            # bound a sink AND the peer's card advertises streaming — a non-streaming peer
+            # keeps the spinner and the final reply, exactly as before.
+            from graph.delegate_progress import DelegateProgress, current_sink
+
+            from .a2a_progress import LiveView
+
+            sink = current_sink()
+            live = LiveView(DelegateProgress(d.name, sink)) if sink is not None and info.get("streaming") else None
+            try:
+                reply = await self._dispatch_traced(
+                    d,
+                    query,
+                    send_timeout=timeout,
+                    poll_timeout=poll_timeout,
+                    _rpc=_rpc,
+                    resume_task_id=resume_task_id,
+                    started=started,
+                    live=live,
+                    headers=headers,
+                )
+            except asyncio.CancelledError:
+                if live is not None:
+                    live.abort()
+                raise
+            except BaseException:
+                if live is not None:
+                    await live.close(ok=False)
+                raise
+            if live is not None:
+                await live.close(ok=True)
+            return reply
 
     async def _dispatch_traced(
-        self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None, started=None
+        self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None, started=None, live=None, headers=None
     ) -> str:
         """The wire half of ``dispatch``, inside the outbound span (see caller)."""
         import time
@@ -1051,6 +1074,10 @@ class A2aAdapter(Adapter):
             progress_fingerprint = _a2a_progress_fingerprint(result)
             deadline = time.monotonic() + poll_timeout
             poll_interval = 1.0
+            if live is not None and task_id and not _is_terminal(state) and not _is_input_required(state):
+                # Follow the task's own SSE stream for the card (an observer only — this
+                # poll still decides the answer; see a2a_progress).
+                live.start(d.url, headers or {}, str(task_id))
 
             def _within_bounds() -> bool:
                 now = time.monotonic()
@@ -1059,7 +1086,11 @@ class A2aAdapter(Adapter):
             while task_id and not _is_terminal(state) and not _is_input_required(state) and _within_bounds():
                 # Never sleep past the caller's explicit timeout — the interval grows to 5s.
                 nap = poll_interval if hard_deadline is None else min(poll_interval, hard_deadline - time.monotonic())
-                await asyncio.sleep(max(nap, 0.0))
+                if live is not None:
+                    # Same nap, but the stream seeing the task settle wakes it at once.
+                    await live.wait_settled(max(nap, 0.0))
+                else:
+                    await asyncio.sleep(max(nap, 0.0))
                 # Back off toward 5s. Every GetTask makes a protoAgent peer load and parse the
                 # task's whole stored history — ``historyLength`` trims only the reply — on
                 # the event loop its turn is running on, so a long turn must not be polled
@@ -1317,12 +1348,17 @@ class A2aAdapter(Adapter):
             advertised = _advertised_a2a_versions(body)
             pv = advertised[0] if advertised else ""
             detail = f"agent-card OK ({name})" + (f", A2A {pv}" if pv else "")
+            from .a2a_progress import peer_streams
+
             return {
                 "ok": True,
                 "latency_ms": ms,
                 "protocol_version": pv,
                 "supported_versions": advertised,
                 "version": body.get("version", ""),
+                # Whether the peer serves A2A SSE streams — what the live delegation view
+                # (#3979) follows a task over. False for a silent card.
+                "streaming": peer_streams(body),
                 "detail": detail,
             }
         except Exception as exc:  # noqa: BLE001

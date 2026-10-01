@@ -162,14 +162,15 @@ _ACP_CANCEL_SETTLE_S = 10.0
 
 
 def _late_outcome_logger(agent: str):
-    """A done-callback for a driver dropped past the settle bound: retrieve its outcome."""
+    """A done-callback for an abandoned turn's driver: retrieve its outcome (nobody else
+    awaits it once the caller has let go)."""
 
     def _retrieve(task: asyncio.Task) -> None:
         if task.cancelled():
             return
         exc = task.exception()  # retrieving it is the point — see the caller
         if exc is not None:
-            log.debug("[acp-runtime] abandoned turn on %s finished late with: %r", agent, exc)
+            log.debug("[acp-runtime] abandoned turn on %s ended with: %r", agent, exc)
 
     return _retrieve
 
@@ -178,6 +179,12 @@ async def _stop_abandoned_driver(driver: asyncio.Task, rt) -> None:
     """Cancel an abandoned turn's driver task and wait (bounded) for it to stop, so the
     caller's release happens only after the turn has actually ended. Never raises for the
     driver's own outcome; a cancel of the CALLER while waiting propagates as usual."""
+    # Retrieve the driver's outcome whenever it lands — attached UP FRONT, before any
+    # await. Attached only after the settle wait (as it was), a cancel of THIS caller
+    # during the wait skipped it, and a driver that then failed surfaced only as
+    # asyncio's "Task exception was never retrieved" at GC. It also covers the driver
+    # that outlives the bound below, and one that failed before the cancel landed.
+    driver.add_done_callback(_late_outcome_logger(getattr(rt, "agent", "?")))
     driver.cancel()
     done, _ = await asyncio.wait({driver}, timeout=_ACP_CANCEL_SETTLE_S)
     if not done:
@@ -186,16 +193,9 @@ async def _stop_abandoned_driver(driver: asyncio.Task, rt) -> None:
             getattr(rt, "agent", "?"),
             _ACP_CANCEL_SETTLE_S,
         )
-        # Nobody awaits the dropped driver now: retrieve its eventual outcome, or a late
-        # failure surfaces only as asyncio's "Task exception was never retrieved" at GC.
-        driver.add_done_callback(_late_outcome_logger(getattr(rt, "agent", "?")))
         return
     if driver.cancelled():
         log.info("[acp-runtime] abandoned turn on %s cancelled (consumer went away)", getattr(rt, "agent", "?"))
-    elif driver.exception() is not None:
-        # Finished (with an error) before the cancel landed; retrieve it so asyncio
-        # doesn't log "exception was never retrieved" — nobody is left to show it to.
-        log.debug("[acp-runtime] abandoned turn ended with: %r", driver.exception())
 
 
 async def _acp_drive_turn(rt, message: str):
