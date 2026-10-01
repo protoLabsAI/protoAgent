@@ -299,3 +299,14 @@ def test_restore_is_one_transaction(tmp_path):
 
     assert store.count_forget_pending(marker) == held  # nothing half-restored
     assert store.list_chunks(limit=500) == []  # the hidden rows are still hidden
+
+
+def test_settle_failed_retirement_keeps_the_marker_when_it_cannot_tell(tmp_path):
+    from graph.conversation_harvest import begin_forget, settle_failed_retirement
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    _seed(store)
+    marker = begin_forget(store, "s1", ["a2a:s1"])
+
+    assert settle_failed_retirement(store, marker, thread_ids=["a2a:s1"]) == "kept"  # no checkpoint store
+    assert store.forget_pending_markers()

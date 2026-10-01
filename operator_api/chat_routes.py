@@ -599,7 +599,18 @@ def register_chat_routes(app, ui: str) -> None:
             await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
         except BaseException:
             if marker:
-                await asyncio.to_thread(_harvest.abort_forget, store, marker)
+                # Restore only if retirement never completed — the same checkpoint-age rule
+                # as the orphan sweep. A resumed marker proves nothing: a retry can fail
+                # after the first attempt's retirement deleted the checkpoints, and restoring
+                # then would let the NEXT attempt hide and delete that attempt's harvest.
+                await asyncio.to_thread(
+                    _harvest.settle_failed_retirement,
+                    store,
+                    marker,
+                    thread_ids=forget_tids,
+                    checkpoint_path=STATE.checkpoint_path,
+                    checkpointer=STATE.checkpointer,
+                )
             raise
         # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a
         # deleted chat leaves nothing indexed behind.

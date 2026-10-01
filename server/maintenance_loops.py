@@ -33,33 +33,29 @@ from server import _event_bus
 log = logging.getLogger("protoagent.server")
 
 
-def _forget_retirement_incomplete(session_id: str, marked_at: str) -> bool:
-    """For the orphaned-forget sweep (#3957 review B1): does the session still hold
-    checkpoints written BEFORE its forget hid the rows — i.e. did its retirement never
-    complete? Raises when it can't tell (the sweep then leaves the marker alone)."""
-    from datetime import datetime
-
-    before = datetime.fromisoformat(marked_at).timestamp() if marked_at else None
-    tids = {f"a2a:{session_id}"}
+def _forget_thread_ids(session_id: str) -> list[str]:
+    """The threads a chat delete retires: ``a2a:``, legacy ``chat:``, and the resolver's."""
+    tids = [f"a2a:{session_id}", f"chat:{session_id}"]
     try:
         from server.turn_control import _resolve_thread_id
 
-        tids.add(_resolve_thread_id(None, session_id))
+        tids.append(_resolve_thread_id(None, session_id))
     except Exception:  # noqa: BLE001 — a metadata-scoped resolver: the a2a id still answers
         pass
-    if STATE.checkpoint_path:
-        from graph.checkpoint_prune import thread_has_checkpoints_before
+    return list(dict.fromkeys(tids))
 
-        return any(thread_has_checkpoints_before(STATE.checkpoint_path, t, before) for t in tids)
-    lister = getattr(STATE.checkpointer, "list", None)
-    if not callable(lister):
-        raise RuntimeError("no checkpoint store to consult")
-    for tid in tids:
-        for tup in lister({"configurable": {"thread_id": tid}}):
-            ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
-            if not ts or before is None or datetime.fromisoformat(ts).timestamp() < before:
-                return True
-    return False
+
+def _forget_retirement_incomplete(session_id: str, marked_at: str) -> bool:
+    """The orphan sweep's view of :func:`graph.conversation_harvest.forget_retirement_incomplete`
+    — the same rule the delete route settles a failed retirement by (#3957)."""
+    from graph.conversation_harvest import forget_retirement_incomplete
+
+    return forget_retirement_incomplete(
+        marked_at,
+        thread_ids=_forget_thread_ids(session_id),
+        checkpoint_path=STATE.checkpoint_path,
+        checkpointer=STATE.checkpointer,
+    )
 
 
 async def _sweep_orphaned_forgets() -> None:

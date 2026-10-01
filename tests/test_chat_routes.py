@@ -2,6 +2,8 @@
 
 import json
 import re
+import sqlite3
+import time
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -271,6 +273,15 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     ]
 
 
+def _uuid6(ts: float) -> str:
+    """A UUIDv6 checkpoint id dated ``ts`` (what LangGraph's sqlite saver writes)."""
+    import uuid
+
+    g = int((ts + 12219292800) * 1e7)
+    hex_ = f"{g >> 12:012x}6{g & 0xFFF:03x}"
+    return f"{hex_[:8]}-{hex_[8:12]}-{hex_[12:16]}-8000-{uuid.uuid4().hex[:12]}"
+
+
 def _forget_fixture(monkeypatch, tmp_path, *, retire=None):
     """A real KnowledgeStore holding a chat's memory: an archive, a harvested summary and a
     fact — plus another chat's fact that must never be touched. ``retire`` replaces the
@@ -288,12 +299,26 @@ def _forget_fixture(monkeypatch, tmp_path, *, retire=None):
     _store_facts(store, ["The user lives in Lisbon."], source="a2a:other")
     calls: list[tuple] = []
 
+    # A real checkpoint file: the chat's thread has history from before any delete began.
+    # Retirement deletes it; the route settles a failed retirement by checkpoint age.
+    from graph.checkpoint_prune import delete_thread
+
+    ck = str(tmp_path / "checkpoints.db")
+    conn = sqlite3.connect(ck)
+    conn.execute("CREATE TABLE checkpoints (thread_id TEXT, checkpoint_id TEXT)")
+    conn.execute("CREATE TABLE writes (thread_id TEXT)")
+    conn.execute("INSERT INTO checkpoints VALUES ('a2a:s1', ?)", (_uuid6(time.time() - 3600),))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(rs.STATE, "checkpoint_path", ck, raising=False)
+
     retired: set[str] = set()
 
     async def _harvesting_retire(thread_id, *, harvest=None, cascade=True):
         calls.append((thread_id, harvest))
         first = thread_id not in retired
         retired.add(thread_id)  # its checkpoints are gone: a later harvest finds nothing
+        delete_thread(ck, thread_id, cascade=cascade)
         if harvest and first:
             store.add_chunk("fresh summary", domain="conversation", source=thread_id, source_type="harvest")
             # Dedupes against what the store SHOWS — so it only writes the fact if the
@@ -402,6 +427,75 @@ def test_delete_session_forget_failure_fails_the_delete(monkeypatch, tmp_path):
     assert retired == []
     after = sorted((ch.content, ch.invalidated_at) for ch in store.list_chunks(limit=500, include_invalidated=True))
     assert after == before
+
+
+def test_delete_session_double_failure_retry_keeps_the_harvest(monkeypatch, tmp_path):
+    """CodeRabbit (chat_routes): attempt 1 retires (and harvests) but its final delete
+    fails; the retry resumes the marker and its retirement fails too. A resumed marker
+    doesn't prove retirement is incomplete — restoring there let attempt 3 hide and delete
+    attempt 1's harvest. The route now restores only when a checkpoint predates the hide."""
+    import pytest
+
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+    import operator_api.chat_routes as cr
+
+    real_retire = cr._retire_thread
+    real_finish = store.delete_forget_pending
+    fail = {"finish": True, "retire": False}
+
+    def _flaky_finish(marker):
+        if fail.pop("finish", False):
+            raise RuntimeError("store locked")
+        return real_finish(marker)
+
+    async def _flaky_retire(thread_id, **kw):
+        if fail.get("retire"):
+            raise OSError("checkpoint db locked")
+        return await real_retire(thread_id, **kw)
+
+    store.delete_forget_pending = _flaky_finish
+    monkeypatch.setattr(cr, "_retire_thread", _flaky_retire)
+
+    with pytest.raises(RuntimeError, match="store locked"):  # attempt 1: finish fails
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+    fail["retire"] = True
+    with pytest.raises(OSError, match="checkpoint db locked"):  # attempt 2: retirement fails
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+    # Retirement HAD completed (attempt 1): the old rows stay hidden, not restored.
+    assert "old summary" not in [ch.content for ch in store.list_chunks(limit=500)]
+    fail["retire"] = False
+    c.delete("/api/chat/sessions/s1?forget=true&harvest=true")  # attempt 3
+
+    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+
+
+def test_delete_session_resumed_marker_with_incomplete_retirement_still_restores(monkeypatch, tmp_path):
+    """The other half of the rule: a marker resumed by a retry whose retirement never got
+    as far as the checkpoints is restored — the chat is still there, so is its memory."""
+    import pytest
+
+    async def _boom(thread_id, *, harvest=None, cascade=True):
+        raise OSError("checkpoint db locked")
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=_boom)
+    visible = sorted(ch.content for ch in store.list_chunks(limit=500))
+    real_restore = store.restore_forget_pending
+    state = {"fail": True}
+
+    def _flaky_restore(marker):
+        if state.pop("fail", False):
+            raise RuntimeError("store locked")
+        return real_restore(marker)
+
+    store.restore_forget_pending = _flaky_restore
+    with pytest.raises(OSError):  # attempt 1: retirement fails, and so does the restore
+        c.delete("/api/chat/sessions/s1?forget=true")
+    assert store.forget_pending_markers()  # the marker survived
+    with pytest.raises(OSError):  # attempt 2 resumes it; retirement fails again
+        c.delete("/api/chat/sessions/s1?forget=true")
+
+    assert sorted(ch.content for ch in store.list_chunks(limit=500)) == visible
+    assert store.forget_pending_markers() == {}
 
 
 def test_delete_session_forget_falls_back_to_one_step_for_a_plain_store(monkeypatch):

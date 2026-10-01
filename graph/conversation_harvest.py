@@ -272,6 +272,62 @@ def finish_forget(knowledge_store, marker: str) -> int:
     return removed
 
 
+def forget_retirement_incomplete(
+    marked_at: str, *, thread_ids, checkpoint_path: str | None = None, checkpointer=None
+) -> bool:
+    """Did the retirement of a forgotten chat NOT complete? True iff one of its
+    ``thread_ids`` still holds a checkpoint written BEFORE the forget hid its rows
+    (``marked_at``, the marker's UTC-ISO stamp). The ONE rule both the delete route (on a
+    failed retirement) and the orphan sweep settle a marker by (#3957): incomplete →
+    restore the rows; complete → the hidden rows are the chat's to delete, and anything
+    written since is its harvest. A resumed marker proves nothing either way — a retried
+    delete can fail before, or after, the checkpoints are gone.
+
+    Reads the SQLite checkpoint file when there is one, else the checkpointer's ``list``.
+    A checkpoint that can't be dated counts as "before" (the conservative answer). Raises
+    when there is nothing to consult; callers then keep the marker as it is."""
+    from datetime import datetime
+
+    before = datetime.fromisoformat(marked_at).timestamp() if marked_at else None
+    tids = [t for t in dict.fromkeys(str(t) for t in thread_ids or ()) if t]
+    if checkpoint_path:
+        from graph.checkpoint_prune import thread_has_checkpoints_before
+
+        return any(thread_has_checkpoints_before(checkpoint_path, t, before) for t in tids)
+    lister = getattr(checkpointer, "list", None)
+    if not callable(lister):
+        raise RuntimeError("no checkpoint store to consult")
+    for tid in tids:
+        for tup in lister({"configurable": {"thread_id": tid}}):
+            ts = str(((getattr(tup, "checkpoint", None) or {}).get("ts")) or "")
+            if not ts or before is None or datetime.fromisoformat(ts).timestamp() < before:
+                return True
+    return False
+
+
+def settle_failed_retirement(
+    knowledge_store, marker: str, *, thread_ids, checkpoint_path: str | None = None, checkpointer=None
+) -> str:
+    """The delete route's retirement raised with ``marker`` held: restore the rows when
+    the retirement never completed, else KEEP the marker so no later attempt hides (and
+    deletes) what this chat's harvest wrote. Undecidable ⇒ keep — hidden rows are never
+    lost, and the sweep decides later. Returns ``"restored"`` or ``"kept"``. Never raises:
+    it runs on the failure path."""
+    try:
+        marked_at = (knowledge_store.forget_pending_markers() or {}).get(marker, "")
+        incomplete = forget_retirement_incomplete(
+            marked_at, thread_ids=thread_ids, checkpoint_path=checkpoint_path, checkpointer=checkpointer
+        )
+    except Exception:  # noqa: BLE001 — keep: the sweep settles it once it can tell
+        log.warning("[forget] could not tell whether %s's retirement completed — keeping it", marker, exc_info=True)
+        return "kept"
+    if incomplete:
+        abort_forget(knowledge_store, marker)
+        return "restored"
+    log.info("[forget] retirement of %s had completed — keeping its hidden rows for the retry", marker)
+    return "kept"
+
+
 def sweep_orphaned_forgets(knowledge_store, *, retirement_incomplete) -> dict[str, int]:
     """Settle forgets a crash (or a failed final delete nobody retried) left behind
     (review #3957 B1): rows hidden under a ``forget_pending:<session>`` marker that no
