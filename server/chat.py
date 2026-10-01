@@ -1627,14 +1627,8 @@ async def _chat_langgraph_stream_impl(
 
 # OpenAI-shaped `error.type` per upstream HTTP status. Anything unmapped — including
 # 5xx and "no status at all" (a bug in our own code) — is a server_error.
-_ERROR_TYPE_BY_STATUS = {
-    400: "invalid_request_error",
-    401: "authentication_error",
-    403: "authentication_error",
-    404: "invalid_request_error",
-    422: "invalid_request_error",
-    429: "rate_limit_error",
-}
+# Moved to graph/upstream_errors.py so the subagent routes share it (#3991).
+_ERROR_TYPE_BY_STATUS = _upstream_errors.ERROR_TYPE_BY_STATUS
 
 
 # Moved to graph/upstream_errors.py so the operator API (which may not import server)

@@ -52,6 +52,69 @@ describe("cold-start detection (ApiError / isColdStart)", () => {
   });
 });
 
+describe("a subagent route's model failure is not a cold start (#3991)", () => {
+  // `/api/subagents/run|batch` answer a failed model hop with `/api/chat`'s OBJECT detail
+  // `{code, message, upstream_status, session_id, error_id}`. With the old plain-string
+  // detail the 502 read as the hub proxy's "agent not up yet" and the QueryClient retried
+  // it as a cold start, up to 25 times.
+  const respond = (status: number, detail: unknown) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status,
+        statusText: "x",
+        text: async () => JSON.stringify({ detail }),
+      })),
+    );
+  const failure = async (call: () => Promise<unknown>) => {
+    try {
+      await call();
+    } catch (e) {
+      return e;
+    }
+    throw new Error("expected the call to reject");
+  };
+  const detail = (status: number, code: string) => ({
+    code,
+    message: `The model provider rejected this subagent run (upstream HTTP ${status}).`,
+    upstream_status: status,
+    session_id: "manual-subagent",
+    error_id: "1a2b3c4d",
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  for (const [name, call] of [
+    ["runSubagent", () => api.runSubagent({ session_id: "s", type: "researcher", description: "d", prompt: "p" })],
+    ["runSubagentBatch", () => api.runSubagentBatch({ session_id: "s", tasks: [{ description: "d", prompt: "p" }] })],
+  ] as const) {
+    it(`${name}: an upstream 502 is neither a cold start nor an unreachable agent`, async () => {
+      respond(502, detail(503, "server_error"));
+      const err = await failure(call);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(502);
+      expect((err as ApiError).code).toBe("server_error");
+      expect((err as ApiError).message).toContain("upstream HTTP 503");
+      expect(isColdStart(err)).toBe(false);
+      expect(isAgentUnreachable(err)).toBe(false);
+    });
+
+    it(`${name}: an upstream 429 is not a cold start`, async () => {
+      respond(429, detail(429, "rate_limit_error"));
+      const err = await failure(call);
+      expect((err as ApiError).status).toBe(429);
+      expect(isColdStart(err)).toBe(false);
+    });
+  }
+
+  it("the hub proxy's plain-string 502 still retries as a cold start", async () => {
+    respond(502, "agent 'ava' is not reachable");
+    const err = await failure(() => api.runSubagent({ session_id: "s", type: "t", description: "d", prompt: "p" }));
+    expect(isColdStart(err)).toBe(true);
+    expect(isAgentUnreachable(err)).toBe(true);
+  });
+});
+
 describe("focused-agent-down detection (isAgentNotRunning)", () => {
   it("true ONLY for a 409 (the fleet proxy's 'agent not running')", () => {
     expect(isAgentNotRunning(new ApiError(409, "agent 'x' is not running"))).toBe(true);

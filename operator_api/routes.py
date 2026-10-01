@@ -268,30 +268,48 @@ def _http_error(exc: Exception) -> HTTPException:
     )
 
 
-def _subagent_http_error(exc: Exception) -> HTTPException:
+def _subagent_http_error(exc: Exception, session_id: str | None = None) -> HTTPException:
     """``_http_error`` for a subagent run, which fails on the MODEL hop more than anywhere
     else (#3957). A provider 429 used to come back as a 500 — "protoAgent is broken" —
     when it means "back off and retry"; a client's backoff only keys on the real status.
     Same mapping as ``/v1``: 429 mirrored (with ``Retry-After`` when the provider sent
     one), any other upstream failure or an unreachable gateway a 502; everything else
-    keeps ``_http_error``'s 400/409/500."""
-    from graph.upstream_errors import upstream_http_status, upstream_status_in_chain
+    keeps ``_http_error``'s 400/409/500.
+
+    The upstream 429/502 carry ``POST /api/chat``'s OBJECT detail — ``{code, message,
+    upstream_status, session_id, error_id}`` (#3991). A plain-string 502 is what the hub
+    proxy answers for an agent that is not up yet, and the console retries THAT as a cold
+    start (``isColdStart``): a string detail here made a subagent's model failure look
+    like a booting agent, retried up to 25 times."""
+    from graph.upstream_errors import upstream_error_type, upstream_http_status, upstream_status_in_chain
 
     status = upstream_http_status(exc)
     if status is None:
         return _http_error(exc)
     upstream = upstream_status_in_chain(exc)
     if status == 429:
-        detail = f"The model provider rate-limited this subagent run (upstream HTTP 429) — retry later. {exc}"
+        message = f"The model provider rate-limited this subagent run (upstream HTTP 429) — retry later. {exc}"
     elif upstream is not None:
-        detail = f"The model provider rejected this subagent run (upstream HTTP {upstream}). {exc}"
+        message = f"The model provider rejected this subagent run (upstream HTTP {upstream}). {exc}"
     else:
-        detail = f"The model gateway could not be reached for this subagent run. {exc}"
+        message = f"The model gateway could not be reached for this subagent run. {exc}"
+    error_id = uuid.uuid4().hex[:8]
+    log.warning("[operator-api] subagent run failed with HTTP %s (error id %s): %s", status, error_id, message)
     headers = None
     retry_after = _retry_after(exc) if status == 429 else None
     if retry_after:
         headers = {"Retry-After": retry_after}
-    return HTTPException(status_code=status, detail=detail, headers=headers)
+    return HTTPException(
+        status_code=status,
+        detail={
+            "code": upstream_error_type(upstream),
+            "message": message,
+            "upstream_status": upstream,
+            "session_id": session_id,
+            "error_id": error_id,
+        },
+        headers=headers,
+    )
 
 
 def _retry_after(exc: BaseException | None) -> str | None:
@@ -559,7 +577,7 @@ def register_operator_routes(
             output = await subagent_run(_model_payload(req))
             return {"ok": True, "session_id": req.session_id, "output": output}
         except Exception as exc:
-            raise _subagent_http_error(exc) from exc
+            raise _subagent_http_error(exc, req.session_id) from exc
 
     @app.post("/api/subagents/batch")
     async def _subagent_batch(req: SubagentBatchRequest):
@@ -567,7 +585,7 @@ def register_operator_routes(
             output = await subagent_batch(req.payload())
             return {"ok": True, "session_id": req.session_id, "output": output}
         except Exception as exc:
-            raise _subagent_http_error(exc) from exc
+            raise _subagent_http_error(exc, req.session_id) from exc
 
     @app.get("/api/tasks/status")
     async def _tasks_status(project_path: str = ""):

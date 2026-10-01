@@ -7,6 +7,23 @@ the operator API (``/api/subagents/run`` / ``/batch``, #3957), which may not imp
 
 from __future__ import annotations
 
+# The machine-readable error ``type`` / ``code`` for an upstream HTTP status — what
+# ``/v1``'s error ``type``, ``/api/chat``'s ``detail.code`` and the subagent routes'
+# ``detail.code`` carry (#3991). Anything unlisted is ``server_error``.
+ERROR_TYPE_BY_STATUS: dict[int, str] = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "authentication_error",
+    404: "invalid_request_error",
+    422: "invalid_request_error",
+    429: "rate_limit_error",
+}
+
+
+def upstream_error_type(status: int | None) -> str:
+    """:data:`ERROR_TYPE_BY_STATUS` for ``status``, else ``"server_error"``."""
+    return ERROR_TYPE_BY_STATUS.get(status, "server_error") if status is not None else "server_error"
+
 
 def upstream_status(exc: BaseException | None) -> int | None:
     """The HTTP status an upstream provider returned, if the exception carries one.

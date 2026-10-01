@@ -55,23 +55,33 @@ def slash_state(monkeypatch):
     monkeypatch.setattr(chat_commands, "_parse_slash_command", lambda m: ("", ""))
     monkeypatch.setattr(chat_commands, "_parse_workflow_command", lambda m: None)
     monkeypatch.setattr(chat_commands, "_parse_subagent_command", lambda m: (PROBE, m.split(" ", 1)[1]))
-    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 0.0, raising=False)
+    # No `raising=False`: if the knob is renamed this must fail loudly, not silently
+    # leave the real rate limit in place (#3991).
+    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 0.0)
+
+
+class _Busy(list):
+    """The probe's tool-execution log, plus the knobs the next run reads: how many tool
+    rounds the model scripts and how long each tool call takes."""
+
+    rounds: int = ROUNDS
+    tool_s: float = TOOL_S
 
 
 @pytest.fixture
 def busy_subagent(monkeypatch):
     """The probe subagent: ROUNDS tool rounds of an async tool taking TOOL_S each, run
     through the real `_run_parsed_subagent`. Returns the tool-execution log."""
-    executed: list[str] = []
+    executed = _Busy()
 
     @tool
     async def slow_ping() -> str:
         """Do a slow bit of work."""
-        await asyncio.sleep(TOOL_S)
+        await asyncio.sleep(executed.tool_s)
         executed.append("ping")
         return "pong"
 
-    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_k: _ScriptedModel(rounds=ROUNDS))
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_k: _ScriptedModel(rounds=executed.rounds))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(agent_mod, "get_all_tools", lambda *_a, **_k: [slow_ping])
     monkeypatch.setitem(
@@ -92,10 +102,15 @@ async def _frames(stall_s: float = STALL_S, *, message: str = "/probe go", sessi
     return pre, frames
 
 
-async def _warm_up(executed: list[str]) -> None:
+async def _warm_up(executed: _Busy) -> None:
     """Run once unguarded: the first model call in a process pays one-time costs
-    (executor thread start, lazy imports) that can exceed a sub-second window."""
-    await _frames(stall_s=0)
+    (executor thread start, lazy imports) that can exceed a sub-second window. One quick
+    round pays them all — the full ROUNDS x TOOL_S script only cost time (#3991)."""
+    executed.rounds, executed.tool_s = 1, 0.0
+    try:
+        await _frames(stall_s=0)
+    finally:
+        executed.rounds, executed.tool_s = ROUNDS, TOOL_S
     executed.clear()
 
 
@@ -116,7 +131,8 @@ async def test_a_slash_subagent_that_keeps_working_outlives_the_stall_window(sla
 
 
 async def test_slash_liveness_frames_are_rate_limited(slash_state, busy_subagent, monkeypatch):
-    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 3600.0, raising=False)
+    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 3600.0)
+    busy_subagent.tool_s = 0.0  # guard off and the limit an hour: timing is irrelevant
     _pre, frames = await _frames(stall_s=0)  # guard off: count frames only
 
     assert len(busy_subagent) == ROUNDS
@@ -203,40 +219,46 @@ async def test_a_failing_slash_subagent_still_fails_the_turn(slash_state, monkey
 # windows long, in sub-window rounds, and pass on origin/main too — guards, not fixes.
 
 
-def _slow_native_model(monkeypatch):
-    """The nesting test's streaming fake, each model call taking TOOL_S."""
+def _slow_native_model(monkeypatch) -> dict[str, float]:
+    """The nesting test's streaming fake, each model call taking ``delay["s"]`` (TOOL_S
+    unless a warm-up turns it off)."""
     from tests.test_subagent_nesting_stream import _ToolFake
 
     original = _ToolFake._astream
+    delay = {"s": TOOL_S}
 
     async def _slow_astream(self, messages, stop=None, run_manager=None, **kwargs):
-        await asyncio.sleep(TOOL_S)
+        await asyncio.sleep(delay["s"])
         async for chunk in original(self, messages, stop=stop, run_manager=run_manager, **kwargs):
             yield chunk
 
     monkeypatch.setattr(_ToolFake, "_astream", _slow_astream)
+    return delay
 
 
-def _rounds(tool_name: str):
+def _rounds(tool_name: str, n: int = ROUNDS):
     from langchain_core.messages import AIMessage
 
     return [
         AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": f"s{i}", "type": "tool_call"}])
-        for i in range(ROUNDS)
+        for i in range(n)
     ]
 
 
-async def _guarded_native(install, session: str) -> list:
-    """Warm up unguarded (the first graph run pays one-time costs), then one guarded turn
-    on a freshly installed script."""
+async def _guarded_native(install, script, warm_script, delay: dict[str, float], session: str) -> list:
+    """Warm up unguarded on a ONE-round script with no model delay (the first graph run
+    pays one-time costs; the same path, cheap — #3991), then one guarded turn on a freshly
+    installed full script."""
     from server.chat import _run_turn_stream
 
-    install()
+    delay["s"] = 0.0
+    install(warm_script)
     async for _frame in _run_turn_stream(
         "warm up", f"{session}-warm", {"configurable": {"thread_id": f"{session}-warm"}}
     ):
         pass
-    install()
+    delay["s"] = TOOL_S
+    install(script)
     frames = []
     gen = _stall_guarded(
         _run_turn_stream("go", session, {"configurable": {"thread_id": session}}), STALL_S, ["starting up"]
@@ -251,12 +273,15 @@ async def test_a_native_task_delegation_that_keeps_working_outlives_the_stall_wi
 
     from tests.test_subagent_nesting_stream import _delegate, _install
 
-    _slow_native_model(monkeypatch)
-    script = [_delegate(description="check", prompt="what time is it", subagent_type="researcher")]
-    script += _rounds("current_time")
-    script += [AIMessage(content="it is noon"), AIMessage(content="the subagent says it is noon")]
+    delay = _slow_native_model(monkeypatch)
 
-    frames = await _guarded_native(lambda: _install(monkeypatch, script), "s-native-task")
+    def _script(n: int) -> list:
+        head = [_delegate(description="check", prompt="what time is it", subagent_type="researcher")]
+        return head + _rounds("current_time", n) + [AIMessage(content="it is noon"), AIMessage(content="noon")]
+
+    frames = await _guarded_native(
+        lambda script: _install(monkeypatch, script), _script(ROUNDS), _script(1), delay, "s-native-task"
+    )
 
     nested_ends = [p for k, p in frames if k == "tool_end" and p.get("parentId") == "t1"]
     assert len(nested_ends) == ROUNDS  # every subagent round ran and surfaced
@@ -277,8 +302,8 @@ async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_
 
     @tool
     async def slow_ping() -> str:
-        """Do a slow bit of work."""
-        await asyncio.sleep(TOOL_S)
+        """A step's tool round. Instant: each round already spends TOOL_S in its model
+        call, so a sleep here only doubled the run (#3991)."""
         return "pong"
 
     @tool
@@ -296,13 +321,15 @@ async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_
         monkeypatch.setattr(rs.STATE, attr, None, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
-    _slow_native_model(monkeypatch)
+    delay = _slow_native_model(monkeypatch)
     lead_call = AIMessage(
         content="", tool_calls=[{"name": "run_workflow", "args": {"name": "w"}, "id": "w1", "type": "tool_call"}]
     )
-    script = [lead_call, *_rounds("slow_ping"), AIMessage(content="step done"), AIMessage(content="workflow done")]
 
-    def install():
+    def _script(n: int) -> list:
+        return [lead_call, *_rounds("slow_ping", n), AIMessage(content="step done"), AIMessage(content="workflow done")]
+
+    def install(script):
         fake = _ToolFake(messages=itertools.chain(iter(script), itertools.repeat(AIMessage(content="done"))))
         monkeypatch.setattr(agent_mod, "create_llm", lambda *a, **k: fake)
         graph = agent_mod.create_agent_graph(
@@ -310,7 +337,7 @@ async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_
         )
         monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
 
-    frames = await _guarded_native(install, "s-native-wf")
+    frames = await _guarded_native(install, _script(ROUNDS), _script(1), delay, "s-native-wf")
 
     assert sum(1 for k, p in frames if k == "tool_end" and p.get("name") == "slow_ping") == ROUNDS
     assert any(k == "tool_end" and p.get("name") == "run_workflow" for k, p in frames)

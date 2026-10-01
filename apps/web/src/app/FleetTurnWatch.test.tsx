@@ -108,6 +108,18 @@ describe("FleetTurnWatch", () => {
     });
   }
 
+  for (const state of ["TASK_STATE_UNSPECIFIED", "unknown"]) {
+    it(`announces a ${state} turn with a NEUTRAL toast, not the success one (#3991)`, async () => {
+      serveGetTask({ id: TASK, status: { state } });
+      await mount();
+      expect(mocks.toast).toHaveBeenCalledTimes(1);
+      const opts = mocks.toast.mock.calls[0][0];
+      expect(opts.tone).toBe("neutral");
+      expect(opts.message).toContain("unknown state");
+      expect(opts.message).not.toContain("is done");
+    });
+  }
+
   it("keeps polling a turn that is still working", async () => {
     serveGetTask({ id: TASK, status: { state: "TASK_STATE_WORKING" } });
     await mount();
