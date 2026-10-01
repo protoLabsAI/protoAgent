@@ -15,6 +15,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.187.0] - 2026-10-01
+
+### Added
+- **Goal-driven turns get their own round cap, `goal.max_rounds_per_turn` (#3957).**
+  An unsatisfiable goal could spin one turn for 130+ model calls because
+  `model.round_hard_cap` is off by default. A goal turn now ends with a hand-back at 50
+  model rounds (default; `0` = unlimited, and `model.round_hard_cap` still applies if set —
+  the smaller wins), and the goal drive pauses with "round cap reached" instead of
+  re-driving at once; the goal stays active. Editable in Settings ▸ Goal mode.
+
+### Fixed
+- **A per-request model override now reaches every subagent run (#3955).** `/api/chat` and
+  `/v1` `/<subagent>` runs, `/<workflow>` steps (on every surface), and a plugin's
+  `sdk.run_subagent` / `sdk.spawn_background` ran on the default model even when the
+  request picked another — with the default rate-limited, `/v1` answered HTTP 500. They
+  now follow the same precedence as `task`: the subagent's pinned model > the turn's
+  override > `routing.aux_model` > the main model.
+
+- **Console: a turn parked on an `ask_human` question now waits for you live and keeps its form across a reload (#3956).**
+  The live stream closes when a turn parks, and the console settled that close like a
+  finished turn: the `ask_human` card showed done ✓ while the form was up, and the saved
+  transcript said the turn was over, so a reload in the same browser never reattached and
+  the form was gone. A parked turn now stays paused ("waiting for you"), even when the
+  stream drops or errors after the park, and after a reload each parked tab resubscribes to
+  its own task and brings its form back. Parked tabs no longer show a streaming dot.
+
+- **Concurrent turns each deliver their own projected context (#3958).** The per-turn
+  composed context (memory, working state, skills index) and the one-shot toolset
+  notice now travel with each run in a private, never-checkpointed state channel
+  instead of on the middleware instance shared by every concurrent turn, so a turn's
+  later model calls no longer pick up the context composed for another overlapping turn.
+
+- **A resumed turn's context recompose now retrieves for the turn's own input and is logged (#3960).**
+  After a HITL resume, retrieval uses the turn's newest operator message, and a mid-turn steer counts as one. Guard notes and conversation summaries written above that message are skipped. Each resume compose now writes its own row to the memory injection log.
+
+- **Console: a question the agent asked again after a plain message now keeps its form, in a fresh browser and after a reload (#3963).**
+  A message sent while a turn waited on an `ask_human` question moves the question to a new
+  task and closes the old one. The server listed a chat's turns by when each last changed,
+  so the closed task came last and the console took it as the latest turn. The form never
+  came back, and a reply typed in the composer was asked again on yet another task. Turns
+  are now listed in the order they began, and the response names the turn that is still
+  live. The console draws the waiting turn last whatever order it receives. A tab that
+  still points at the old task follows it to the new one. The form answer continues the
+  task that holds the question, and nothing is left waiting.
+
+- **A goal-driven turn applies the goal's tool scope before pre-turn dispatch (#3964).** In a session
+  whose active goal runs with a restricted tool scope, slash/@/workflow/subagent shortcuts no longer
+  run outside it (a one-line notice says commands are paused), an ACP runtime declines the turn, and
+  the `/btw` side question runs under the same scope; `/goal` (status, clear, replace) always works.
+
 ## [0.186.0] - 2026-09-30
 
 ### Changed
