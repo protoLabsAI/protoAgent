@@ -113,6 +113,24 @@ def is_transient_build_failure(cause: BaseException | None) -> bool:
     return status is not None and (status == 429 or status >= 500)
 
 
+def _rejects_pick(exc: BaseException) -> bool:
+    """A call on the INHERITED pick failed in a way the default model would not: the
+    provider refused the credential or doesn't know the model (401/403/404), or a sign-in
+    could not be refreshed mid-call. Not a 400 (a context overflow has its own recovery)
+    and not a 429/5xx (the default may share the account, and a blip is a blip)."""
+    from graph.upstream_errors import upstream_status_in_chain
+
+    if upstream_status_in_chain(exc) in (401, 403, 404):
+        return True
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        if type(exc).__name__ == "OAuthCredentialError":
+            return True
+        seen.add(id(exc))
+        exc = exc.__cause__
+    return False
+
+
 def override_error(model: str, cause: BaseException, config) -> Exception:
     """The error a failed EXPLICIT pick fails its turn with (#3957): a retryable
     :class:`ModelUnavailableError` only for a transient cause, else the caller's
@@ -187,7 +205,48 @@ class ModelOverrideMiddleware(AgentMiddleware):
             return request
 
     def wrap_model_call(self, request, handler):
-        return handler(self._override(request))
+        swapped, pick = self._swap(request)
+        if pick is None:
+            return handler(swapped)
+        try:
+            return handler(swapped)
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if not _rejects_pick(exc):
+                raise
+            self._fell_back(pick, exc)
+            return handler(request)
 
     async def awrap_model_call(self, request, handler):
-        return await handler(self._override(request))
+        swapped, pick = self._swap(request)
+        if pick is None:
+            return await handler(swapped)
+        try:
+            return await handler(swapped)
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if not _rejects_pick(exc):
+                raise
+            self._fell_back(pick, exc)
+            return await handler(request)
+
+    def _swap(self, request):
+        """``(request to run, the turn's inherited pick when THIS call runs on it)``.
+        An inherited pick that already fell back this turn is not tried again."""
+        from graph.subagent_model import current_inherited_pick
+
+        pick = current_inherited_pick()
+        want = ((getattr(request, "state", None) or {}).get("model") or "").strip()
+        if pick is None or not want or want != pick.model:
+            return self._override(request), None
+        if pick.fell_back:
+            return request, None
+        swapped = self._override(request)
+        return swapped, (pick if swapped is not request else None)
+
+    @staticmethod
+    def _fell_back(pick, exc) -> None:
+        pick.fell_back = True
+        log.warning(
+            "[model-override] the goal's inherited model %r was rejected (%s) — this turn runs on the default",
+            pick.model,
+            exc,
+        )

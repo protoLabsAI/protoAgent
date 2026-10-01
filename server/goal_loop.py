@@ -276,8 +276,17 @@ class GoalDrive:
             yield GoalNote(self.notice)
         async for step in self._steps():
             yield step
-        if self.notice:
-            self.text = f"{self.text}\n\n{self.notice}"
+        notice = self.notice
+        if not notice:
+            # ...or the provider rejected the inherited pick mid-turn (the middleware fell
+            # back to the default and flagged the turn's marker).
+            from graph.subagent_model import current_inherited_pick
+
+            pick = current_inherited_pick()
+            if pick is not None and pick.fell_back:
+                notice = goal_model_notice(pick.model)
+        if notice:
+            self.text = f"{self.text}\n\n{notice}"
 
     async def _steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
         if STATE.goal_controller is None or not STATE.goal_controller.active_goal(self.session_id):

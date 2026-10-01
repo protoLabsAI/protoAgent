@@ -33,6 +33,7 @@ _GOOD = "gateway:picked-model"
 
 
 CALLS: list[str] = []  # the model each graph model call ran on
+_REJECTED = "gateway:revoked-key-model"  # builds fine; the provider answers 401
 
 
 class _Fake(GenericFakeChatModel):
@@ -41,6 +42,18 @@ class _Fake(GenericFakeChatModel):
     def _generate(self, *a, **k):
         CALLS.append(self.model_name)
         return super()._generate(*a, **k)
+
+
+class _Unauthorized(Exception):
+    status_code = 401
+
+
+class _Rejecting(GenericFakeChatModel):
+    model_name: str = _REJECTED
+
+    def _generate(self, *a, **k):
+        CALLS.append(f"rejected:{self.model_name}")
+        raise _Unauthorized("Error code: 401 - token revoked")
 
 
 def _model(name: str) -> _Fake:
@@ -56,6 +69,8 @@ def env(monkeypatch):
     def _create_llm(config, *, model_name=None, reasoning_effort=None):
         if model_name == _BAD:
             raise RuntimeError("Missing credentials")
+        if model_name == _REJECTED:
+            return _Rejecting(messages=iter([]), model_name=_REJECTED)
         return _model(model_name or "default-model")
 
     monkeypatch.setattr("graph.llm.create_llm", _create_llm)
@@ -266,3 +281,26 @@ async def test_the_controller_remembers_an_explicit_pick(tmp_path):
 
     assert ctrl.active_goal("s1").model == _GOOD
     assert GoalController(config=None, store=GoalStore(base_dir=str(tmp_path))).active_goal("s1").model == _GOOD
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("turn", [_sync_turn, _stream_turn], ids=["sync", "stream"])
+async def test_an_inherited_pick_the_provider_rejects_falls_back_mid_turn(env, monkeypatch, turn, caplog):
+    """An inherited pick can build and still be refused at call time (a revoked key, a
+    token that expired since). That must not lock the goal into failing either: the call
+    is retried on the default, later calls in the turn skip the pick, and the turn says so."""
+    _goals(monkeypatch, model=_REJECTED)
+
+    with caplog.at_level("WARNING"):
+        out = await turn("s-rejected")
+
+    assert CALLS == [f"rejected:{_REJECTED}", "default-model", "default-model"]
+    assert f"The goal's model `{_REJECTED}` is unavailable" in _text(out)
+    assert any("was rejected" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_pick_the_provider_rejects_still_fails(env):
+    out = await _sync_turn("s-explicit-rejected", _REJECTED)
+
+    assert out.get("error") and out["error"]["upstream_status"] == 401

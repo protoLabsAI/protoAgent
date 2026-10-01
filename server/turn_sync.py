@@ -393,7 +393,7 @@ async def _chat_langgraph_impl(
         _trace_reply_output(reply)
         return reply
 
-    from graph.subagent_model import turn_model_scope
+    from graph.subagent_model import inherited_pick_scope, turn_model_scope
 
     # The turn's model override is bound for the whole turn (#3955): the pre-turn chain's
     # `/<workflow>` steps and any plugin tool reaching `graph.sdk.run_subagent` /
@@ -407,6 +407,9 @@ async def _chat_langgraph_impl(
             incognito=bool(incognito),
         ),
         turn_model_scope(model),
+        # An INHERITED pick (the goal's, not this request's) falls back to the default if
+        # its provider rejects it mid-turn, instead of failing every re-drive (#3957).
+        inherited_pick_scope(model if model != requested_model else ""),
     ):
         if _telemetry_sink is not None:
             # The trace id, read HERE while the scope is open (#3945): the wrapper writes

@@ -1388,7 +1388,7 @@ async def _chat_langgraph_stream_impl(
     from observability import tracing
 
     from graph.middleware.request_context import request_metadata_scope
-    from graph.subagent_model import turn_model_scope
+    from graph.subagent_model import inherited_pick_scope, turn_model_scope
 
     from graph.config_io import soul_revision
 
@@ -1434,6 +1434,9 @@ async def _chat_langgraph_stream_impl(
         # The turn's model override for the paths outside the lead graph's state — a
         # `/<workflow>` step, a plugin tool's `sdk.run_subagent` / `spawn_background` (#3955).
         turn_model_scope((request_metadata or {}).get("model")),
+        # An INHERITED pick (the goal's, not this request's) falls back to the default if
+        # its provider rejects it mid-turn, instead of failing every re-drive (#3957).
+        inherited_pick_scope(_eff_model if _eff_model != _req_model else ""),
     ):
         # Set only once the NATIVE turn is about to run: the overflow recovery in the
         # handler below compacts + retries that thread, and must not fire for a failure
