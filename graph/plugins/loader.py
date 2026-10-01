@@ -672,12 +672,24 @@ def _report_deps_gap(manifest: PluginManifest) -> list[str]:
     soft_missing = installer._deps_satisfied(soft, scopes)[1] if soft else []
     message = _deps_gap_message(manifest.id, hard_missing, soft_missing)
     # Logged for EITHER tier — independent of the banner, which only a required gap raises.
-    # An optional-only gap has no banner by design, so the log is one of its surfaces.
-    if hard_missing or soft_missing:
+    # An optional-only gap has no banner by design, so the log is one of its surfaces —
+    # but at INFO, not WARNING: the optional tier's contract is "runs without them", and a
+    # bare `uvx --from protolabs-agent protoagent serve` (where the default-on cowork pack's
+    # document libraries are deliberately not core deps) must not open with a warning about
+    # something that isn't wrong. A missing REQUIRED dep is a broken plugin and stays loud.
+    if hard_missing:
         log.warning(
             "[plugins] %s enabled but declared deps are missing (%s) — run: protoagent plugin install-deps %s",
             manifest.id,
             ", ".join(sorted([*hard_missing, *soft_missing])),
+            manifest.id,
+        )
+    elif soft_missing:
+        log.info(
+            "[plugins] %s: optional packages not installed (%s); the features that use them "
+            "stay unavailable until you run: protoagent plugin install-deps %s",
+            manifest.id,
+            ", ".join(sorted(soft_missing)),
             manifest.id,
         )
     setup_gaps.report(
