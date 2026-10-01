@@ -199,7 +199,47 @@ async def test_a_driver_dropped_past_the_bound_has_its_late_failure_retrieved(mo
         loop.set_exception_handler(old_handler)
 
     assert not [c for c in unretrieved if "never retrieved" in str(c.get("message", ""))]
-    assert any("finished late with: RuntimeError('boom after the bound')" in r.getMessage() for r in caplog.records)
+    assert any("ended with: RuntimeError('boom after the bound')" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_caller_cancelled_during_the_settle_wait_still_retrieves_the_drivers_failure(caplog):
+    """The retrieval is attached BEFORE the settle wait (#3979 panel nit). Attached only
+    after it, a caller cancelled mid-wait never attached it, and a driver that then failed
+    surfaced only as asyncio's "Task exception was never retrieved" at GC."""
+    import gc
+
+    release = asyncio.Event()
+
+    async def stubborn_then_fails():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await release.wait()  # ignore the cancel...
+        raise RuntimeError("boom after the caller left")  # ...then fail, nobody awaiting
+
+    loop = asyncio.get_running_loop()
+    unretrieved: list[dict] = []
+    old_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: unretrieved.append(ctx))
+    try:
+        driver = asyncio.ensure_future(stubborn_then_fails())
+        await asyncio.sleep(0)
+        caller = asyncio.ensure_future(chat_acp._stop_abandoned_driver(driver, types.SimpleNamespace(agent="wedged")))
+        await asyncio.sleep(0.01)  # the caller is now inside its settle wait
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        with caplog.at_level(logging.DEBUG, logger="protoagent.server"):
+            release.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+            del driver
+            gc.collect()
+    finally:
+        loop.set_exception_handler(old_handler)
+
+    assert not [c for c in unretrieved if "never retrieved" in str(c.get("message", ""))]
+    assert any("ended with: RuntimeError('boom after the caller left')" in r.getMessage() for r in caplog.records)
 
 
 async def test_collected_caller_releases_only_after_the_turn_stopped(monkeypatch):
