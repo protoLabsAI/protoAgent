@@ -133,8 +133,10 @@ class GoalController:
         # Validate the verifier TYPE before the trust-gate (#3957): an unknown type is a
         # typo, not a safety question — answering it with the "for safety…" refusal sent
         # the operator looking for a trust problem that wasn't there.
-        vtype = (spec or {}).get("type", "llm")
-        if vtype not in VERIFIERS:
+        # Shape-guarded: a JSON verifier can carry any value as its type (a list is
+        # unhashable, and `in` on the dict would raise rather than refuse it).
+        vtype = (spec or {}).get("type", "llm") if isinstance(spec, dict) else None
+        if not isinstance(vtype, str) or vtype not in VERIFIERS:
             return f"Could not set goal: unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}."
         # Phase 1 trust-gate (#1407): a /goal CHAT message is untrusted — both server call
         # sites pass trusted=False, because a federation peer / API client shares the

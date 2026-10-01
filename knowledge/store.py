@@ -1714,20 +1714,33 @@ class KnowledgeStore:
 
     def restore_forget_pending(self, marker: str) -> int:
         """Undo phase 1 — the retirement failed: un-hide every chunk ``marker`` hid, and
-        give the already-invalidated ones their own reason back."""
-        restored = self._forget_pending_exec(
-            "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
-            marker,
-            raw=True,
-        )
+        give the already-invalidated ones their own reason back. ONE transaction: a
+        half-applied restore would leave a marker that a later forget resumes without
+        hiding the rows the first half already un-hid. Raises on a database error."""
+        if not marker:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
         n = len(marker + FORGET_PREV_SEP)
-        self._forget_pending_exec(
-            f"UPDATE chunks SET invalidation_reason = NULLIF(substr(invalidation_reason, {n + 1}), '') "
-            f"WHERE substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
-            marker,
-            raw=True,
-        )
-        return restored
+        try:
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
+                (marker,),
+            )
+            restored = int(cur.rowcount)
+            db.execute(
+                f"UPDATE chunks SET invalidation_reason = NULLIF(substr(invalidation_reason, {n + 1}), '') "
+                f"WHERE substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
+                (marker,),
+            )
+            db.commit()
+            return restored
+        except sqlite3.DatabaseError:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def delete_forget_pending(self, marker: str) -> int:
         """Phase 2 — the chat is retired: HARD-delete exactly the chunks ``marker`` holds
@@ -1755,7 +1768,7 @@ class KnowledgeStore:
                 out[marker] = str(at or "")
         return out
 
-    def _forget_pending_exec(self, sql: str, marker: str, *, count: bool = False, raw: bool = False) -> int:
+    def _forget_pending_exec(self, sql: str, marker: str, *, count: bool = False) -> int:
         """Run one marker-scoped statement. ``{held}`` in ``sql`` expands to "held by
         ``marker``": exactly it, or ``marker|prev:…``. Raises on a database error: these
         back an explicit delete that must fail loudly rather than report memory gone (or
@@ -1766,12 +1779,9 @@ class KnowledgeStore:
         if db is None:
             return 0
         try:
-            if raw:
-                cur = db.execute(sql, (marker,))
-            else:
-                n = len(marker + FORGET_PREV_SEP)
-                held = f"(invalidation_reason = ? OR substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}')"
-                cur = db.execute(sql.format(held=held), (marker, marker))
+            n = len(marker + FORGET_PREV_SEP)
+            held = f"(invalidation_reason = ? OR substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}')"
+            cur = db.execute(sql.format(held=held), (marker, marker))
             if count:
                 return int(cur.fetchone()[0])
             db.commit()

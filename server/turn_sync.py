@@ -369,7 +369,7 @@ async def _chat_langgraph_impl(
     # test-built, falling back to the default with a notice when it can't be. The lead
     # graph's stamp, the pre-turn chain and `turn_model_scope` all use it.
     requested_model = (model or "").strip()
-    model, model_notice = _goal_loop.resolve_turn_model(session_id, requested_model)
+    model, model_notice = await _goal_loop.resolve_turn_model(session_id, requested_model)
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
     # Incognito is stamped explicitly every turn (the channel persists in the
     # checkpointer — an omitted key would inherit the previous turn's value).
@@ -439,18 +439,24 @@ async def _chat_langgraph_impl(
             )
             last_frame: tuple | None = None
             delegated_usage: list[dict] = []
-            async with contextlib.aclosing(_chat_dispatch._pre_turn_dispatch(pre, session_id, None)) as _pre_frames:
-                async for frame in _pre_frames:
-                    if frame and frame[0] == "usage":
-                        # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this
-                        # surface renders no frames, but its telemetry row bills them.
-                        delegated_usage.append(frame[1])
-                        continue
-                    last_frame = frame
+            try:
+                async with contextlib.aclosing(
+                    _chat_dispatch._pre_turn_dispatch(pre, session_id, None)
+                ) as _pre_frames:
+                    async for frame in _pre_frames:
+                        if frame and frame[0] == "usage":
+                            # A `/<subagent>` / `/<workflow>` run's model calls (#3957) — this
+                            # surface renders no frames, but its telemetry row bills them.
+                            delegated_usage.append(frame[1])
+                            continue
+                        last_frame = frame
+            finally:
+                # Handed over even when the dispatch raised: a failed slash run's row
+                # still bills what it spent before it failed.
+                if _telemetry_sink is not None and delegated_usage:
+                    _telemetry_sink["delegated_usage"] = delegated_usage
             if pre.handled:
                 if _telemetry_sink is not None:
-                    if delegated_usage:
-                        _telemetry_sink["delegated_usage"] = delegated_usage
                     # A short-circuit (slash command, @-address, /goal control…) is a turn
                     # the A2A surface records a row for — `completed`, or `input_required`
                     # for a plugin form — so this surface does too (#3945).

@@ -115,3 +115,13 @@ async def test_chat_goal_known_unsafe_type_still_hits_trust_gate(ctrl):
     reply = await ctrl.parse_control('/goal {"condition": "x", "verifier": {"type": "command", "command": "true"}}', "s", trusted=False)
     assert "For safety" in reply
     assert ctrl.active_goal("s") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vtype", ['["command"]', '{"x": 1}', "7", "null"])
+async def test_chat_goal_non_string_verifier_type_is_refused_not_a_crash(ctrl, vtype):
+    """CodeRabbit (controller): a JSON verifier may carry any value as its type; a list
+    is unhashable, so the membership check raised TypeError instead of refusing."""
+    reply = await ctrl.parse_control(f'/goal {{"condition": "x", "verifier": {{"type": {vtype}}}}}', "s", trusted=False)
+    assert "unknown verifier type" in reply
+    assert ctrl.active_goal("s") is None

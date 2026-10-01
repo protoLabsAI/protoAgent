@@ -1419,7 +1419,7 @@ async def _chat_langgraph_stream_impl(
     # below reads it from the metadata: the lead graph's stamp, the pre-turn chain's
     # `/<workflow>` / `/<subagent>` runs, and `turn_model_scope` (sdk.run_subagent).
     _req_model = str((request_metadata or {}).get("model") or "").strip()
-    _eff_model, _model_notice = _goal_loop.resolve_turn_model(session_id, _req_model)
+    _eff_model, _model_notice = await _goal_loop.resolve_turn_model(session_id, _req_model)
     if _eff_model != _req_model:
         request_metadata = {**(request_metadata or {}), "model": _eff_model}
     async with (

@@ -286,3 +286,41 @@ def test_the_collector_is_a_noop_unless_bound():
     with delegation_usage.collect() as rows:
         pass
     assert rows == []
+
+
+@pytest.fixture
+def failing_delegation(fake_delegation, monkeypatch):
+    """The same slash routes, but the sub-graph run bills two calls and THEN fails."""
+    import graph.agent as agent_mod
+
+    async def _inner(**kw):
+        kw["usage_sink"].extend(dict(r) for r in _ROWS)
+        raise RuntimeError("upstream fell over mid-run")
+
+    monkeypatch.setattr(agent_mod, "_run_subagent_inner", _inner)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["/researcher dig", "/wf q=1"])
+async def test_a_failed_sync_slash_run_still_bills_what_it_spent(env, failing_delegation, command):
+    """CodeRabbit (chat_dispatch): the usage frames were emitted only on success, so a
+    slash run that spent tokens and then failed recorded a 0-call failed row."""
+    env.install([])
+
+    out = await chat_mod.chat(command, "s1", model=_OVERRIDE, origin="v1")
+
+    assert out[0].get("error")
+    (row,) = env.store.recent()
+    assert row["state"] == "failed"
+    assert row["llm_calls"] == 2 and row["output_tokens"] == 80
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["/researcher dig", "/wf q=1"])
+async def test_a_failed_streamed_slash_run_still_bills_what_it_spent(env, failing_delegation, command):
+    env.install([])
+
+    (outcome,) = await _execute(command, {"model": _OVERRIDE})
+
+    assert outcome.state == "failed"
+    assert outcome.llm_calls == 2 and outcome.usage["output_tokens"] == 80

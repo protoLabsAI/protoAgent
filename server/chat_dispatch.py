@@ -568,7 +568,15 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             # runner whose turn is over and whose frames nobody will ever read.
             if not finished:
                 await _stop_abandoned_workflow(runner, wf_name)
-        wf_out = await runner
+        try:
+            wf_out = await runner
+        except Exception:
+            # A failed workflow still spent what its finished steps spent (#3957): bill it
+            # before the failure propagates. Ordinary exceptions only — a cancellation or
+            # a generator close never yields from cleanup.
+            for row in _usage_frames(wf_usage):
+                yield row
+            raise
         yield ("tool_end", {"id": f"workflow:{wf_name}", "name": f"workflow:{wf_name}", "output": wf_out[:300]})
         for row in _usage_frames(wf_usage):
             yield row
@@ -591,12 +599,18 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         # The turn's model override reaches the slash run under the one subagent
         # precedence: its own pin wins over it (#3944) — on every driver (#3955).
         with delegation_usage.collect() as sub_usage:
-            sub_out = await _chat_commands._run_parsed_subagent(
-                sub_type,
-                sub_prompt,
-                session_id=session_id,
-                turn_model=turn_model,
-            )
+            try:
+                sub_out = await _chat_commands._run_parsed_subagent(
+                    sub_type,
+                    sub_prompt,
+                    session_id=session_id,
+                    turn_model=turn_model,
+                )
+            except Exception:
+                # Bill what the run spent before it failed (#3957); see the workflow branch.
+                for row in _usage_frames(sub_usage):
+                    yield row
+                raise
         yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
         for row in _usage_frames(sub_usage):
             yield row

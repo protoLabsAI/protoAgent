@@ -75,6 +75,7 @@ def env(monkeypatch):
 
     monkeypatch.setattr("graph.llm.create_llm", _create_llm)
     CALLS.clear()
+    monkeypatch.setattr("server.goal_loop._PROBE_OK", {}, raising=False)  # no probe result leaks across tests
     cfg = LangGraphConfig()
     graph = create_agent(
         model=_model("default-model"),
@@ -304,3 +305,32 @@ async def test_an_explicit_pick_the_provider_rejects_still_fails(env):
     out = await _sync_turn("s-explicit-rejected", _REJECTED)
 
     assert out.get("error") and out["error"]["upstream_status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_the_inherited_pick_probe_runs_off_the_event_loop_and_is_cached(env, monkeypatch):
+    """CodeRabbit (goal_loop): building a native-OAuth client may refresh its token with a
+    synchronous request — the probe must not run on the event loop, and a pick that just
+    built fine is not re-probed every turn."""
+    import threading
+
+    import graph.llm as llm_mod
+
+    real = llm_mod.create_llm
+    probes: list[bool] = []
+
+    def _spy(config, *, model_name=None, reasoning_effort=None):
+        if model_name == _GOOD and reasoning_effort is None:
+            probes.append(threading.current_thread() is threading.main_thread())
+        return real(config, model_name=model_name, reasoning_effort=reasoning_effort)
+
+    monkeypatch.setattr("graph.llm.create_llm", _spy)
+    _goals(monkeypatch, model=_GOOD)
+
+    await _sync_turn("s-probe")
+    await _sync_turn("s-probe")
+
+    # One probe across both turns (cached), and not on the loop's thread. (The middleware's
+    # own build also lands here once, on the loop — it is cached for the graph's life.)
+    probe_calls = [p for p in probes if p is False]
+    assert len(probe_calls) == 1

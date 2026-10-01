@@ -156,7 +156,14 @@ def goal_model_notice(model: str) -> str:
     )
 
 
-def resolve_turn_model(session_id: str, request_model: str | None) -> tuple[str, str]:
+# Inherited picks that test-built recently: model → monotonic time of the last good build.
+# The probe is only needed to catch a pick that broke; a few minutes' staleness is covered
+# by the middleware's call-time fallback (a pick refused mid-turn still drops to default).
+_PROBE_OK: dict[str, float] = {}
+_PROBE_TTL_S = 300.0
+
+
+async def resolve_turn_model(session_id: str, request_model: str | None) -> tuple[str, str]:
     """``(effective model pick, notice)`` for a turn (#3957). Called once, at turn start, by
     both drivers; the result is what the lead graph is stamped with AND what
     ``turn_model_scope`` binds — so ``/<workflow>`` steps, ``sdk.run_subagent`` and every
@@ -184,11 +191,21 @@ def resolve_turn_model(session_id: str, request_model: str | None) -> tuple[str,
     inherited = str(getattr(goal, "model", "") or "").strip() if goal is not None else ""
     if not inherited:
         return "", ""
+    import asyncio
+    import time
+
+    ok_at = _PROBE_OK.get(inherited)
+    if ok_at is not None and time.monotonic() - ok_at < _PROBE_TTL_S:
+        return inherited, ""
     try:
         from graph import llm as _llm
 
-        _llm.create_llm(STATE.graph_config, model_name=inherited)
+        # Off the event loop: building a native-OAuth client may refresh its token over the
+        # network (a synchronous request with a 20s timeout), which must not stall every
+        # other turn on this worker.
+        await asyncio.to_thread(_llm.create_llm, STATE.graph_config, model_name=inherited)
     except Exception as exc:  # noqa: BLE001 — any failure: fall back, never lock the goal in
+        _PROBE_OK.pop(inherited, None)
         import logging
 
         logging.getLogger(__name__).warning(
@@ -198,6 +215,7 @@ def resolve_turn_model(session_id: str, request_model: str | None) -> tuple[str,
             exc,
         )
         return "", goal_model_notice(inherited)
+    _PROBE_OK[inherited] = time.monotonic()
     return inherited, ""
 
 

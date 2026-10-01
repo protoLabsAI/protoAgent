@@ -272,3 +272,30 @@ def test_retirement_incomplete_reads_checkpoint_age(tmp_path, monkeypatch):
     conn.commit()
     assert _forget_retirement_incomplete("s1", marked.isoformat()) is True  # older: never retired
     conn.close()
+
+
+def test_restore_is_one_transaction(tmp_path):
+    """CodeRabbit (store): the restore's two UPDATEs ran on separate connections; if the
+    second failed, the first had already un-hidden rows while the marker survived — a
+    later forget resumed it without hiding them again, so they were never forgotten."""
+    import pytest
+
+    from graph.conversation_harvest import begin_forget
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    _seed(store)
+    marker = begin_forget(store, "s1", ["a2a:s1"])
+    held = store.count_forget_pending(marker)
+    conn = sqlite3.connect(tmp_path / "kb.db")
+    conn.execute(
+        "CREATE TRIGGER fail_prev BEFORE UPDATE OF invalidation_reason ON chunks "
+        "WHEN instr(old.invalidation_reason, '|prev:') > 0 BEGIN SELECT RAISE(ABORT, 'database is locked'); END"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(sqlite3.DatabaseError):
+        store.restore_forget_pending(marker)
+
+    assert store.count_forget_pending(marker) == held  # nothing half-restored
+    assert store.list_chunks(limit=500) == []  # the hidden rows are still hidden
