@@ -1,4 +1,6 @@
-"""Liveness signal from an in-flight subagent run (#3940).
+"""Turn liveness: progress from an in-flight subagent run, and why a turn was stopped (#3940).
+
+**Progress.**
 
 A subagent run (``graph.agent._run_subagent_inner``) streams its sub-graph's state one
 super-step at a time — each model call, each tool round. A caller that runs subagents
@@ -16,7 +18,14 @@ progress is bounded by its subagent's ``max_turns`` and the recipe's opt-in per-
 
 A ``ContextVar``, so the listener follows the run into the tasks the workflow engine
 spawns per step (each copies the context it was created in) and never leaks into an
-unrelated turn. Outside a scope :func:`note_progress` is a no-op. Host-free.
+unrelated turn. Outside a scope :func:`note_progress` is a no-op.
+
+**Stop reason.** When the stall guard ends a turn it cancels the work under it, and to
+that work a cancel looks the same whether the guard sent it or an operator did (an A2A
+``CancelTask``). The guard records WHY on a :class:`TurnStop` it binds into the context
+it runs the turn in, BEFORE it cancels. Everything the turn spawned (a ``/<workflow>``
+runner and its step tasks) copied that context, so it shares the same object and can tell
+a stall (a failure) from a cancel. Empty outside a guarded turn. Host-free.
 """
 
 from __future__ import annotations
@@ -30,7 +39,7 @@ log = logging.getLogger(__name__)
 ProgressListener = Callable[[str], None]
 
 _listener_ctx: contextvars.ContextVar[ProgressListener | None] = contextvars.ContextVar(
-    "protoagent_subagent_progress", default=None
+    "protoagent_turn_progress", default=None
 )
 
 
@@ -67,3 +76,27 @@ class progress_scope:
             except ValueError:  # exited in a different context than it was entered in
                 _listener_ctx.set(None)
             self._token = None
+
+
+class TurnStop:
+    """Mutable, shared by every context copied from the one it was bound into."""
+
+    __slots__ = ("reason",)
+
+    def __init__(self) -> None:
+        self.reason = ""
+
+
+_stop_ctx: contextvars.ContextVar[TurnStop | None] = contextvars.ContextVar("protoagent_turn_stop", default=None)
+
+
+def bind_turn_stop(ctx: contextvars.Context, stop: TurnStop) -> None:
+    """Bind ``stop`` into ``ctx`` (a context the caller runs the turn's work in)."""
+    ctx.run(_stop_ctx.set, stop)
+
+
+def turn_stop_reason() -> str:
+    """Why the current turn was stopped from above (a stall), or ``""`` — not stopped,
+    or stopped by a plain cancel."""
+    stop = _stop_ctx.get()
+    return stop.reason if stop is not None else ""

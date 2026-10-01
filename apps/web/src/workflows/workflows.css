@@ -442,7 +442,9 @@
 }
 
 .run-status-cancelled {
-  color: var(--pl-color-fg-muted);
+  color: var(--pl-color-fg-subtle);
+  border-color: color-mix(in srgb, var(--pl-color-fg-subtle) 45%, transparent);
+  border-style: dashed;
 }
 
 .run-status-paused {

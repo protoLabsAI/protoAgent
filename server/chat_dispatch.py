@@ -33,6 +33,7 @@ import asyncio
 import importlib
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -40,7 +41,7 @@ from typing import Any
 from graph import delegation_usage
 from graph.output_format import extract_output
 from graph.subagent_model import turn_model_scope
-from graph.subagent_progress import progress_scope
+from graph.turn_liveness import progress_scope
 
 # Bound at import, exactly as ``server.chat`` binds them: the plugin chat-command
 # dispatch and the shared slash resolver (``graph.slash_commands`` is re-imported on a
@@ -528,17 +529,30 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
             await step_q.put(event)
 
         _last_progress = [float("-inf")]
+        _progress_lock = threading.Lock()
+        _owner_loop = asyncio.get_running_loop()
 
         def _on_progress(subagent_type: str) -> None:
             # A step's subagent completed a super-step (#3940). Before this a step was
             # silent from its start card to its end card, so one longer than the stall
             # window (`turn_stall_timeout_seconds`, 900s) had its workflow cancelled
-            # for being quiet. Rate-limited; called from the runner's own task.
+            # for being quiet. Rate-limited. Normally called from the runner's own task,
+            # but a subagent driven on another thread (its own loop) would call it from
+            # there — `asyncio.Queue` is not thread-safe, so hop to the owning loop.
             now = time.monotonic()
-            if now - _last_progress[0] < _WORKFLOW_PROGRESS_MIN_INTERVAL_S:
-                return
-            _last_progress[0] = now
-            step_q.put_nowait({"phase": "progress", "subagent": subagent_type})
+            with _progress_lock:
+                if now - _last_progress[0] < _WORKFLOW_PROGRESS_MIN_INTERVAL_S:
+                    return
+                _last_progress[0] = now
+            event = {"phase": "progress", "subagent": subagent_type}
+            try:
+                on_owner = asyncio.get_running_loop() is _owner_loop
+            except RuntimeError:  # a plain thread, no loop at all
+                on_owner = False
+            if on_owner:
+                step_q.put_nowait(event)
+            elif not _owner_loop.is_closed():
+                _owner_loop.call_soon_threadsafe(step_q.put_nowait, event)
 
         async def _runner() -> str:
             # Each step runs through `graph.sdk.run_subagent`, which reads the turn's model
@@ -620,10 +634,17 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         for row in _usage_frames(wf_usage):
             yield row
         pre.handled = True
-        # A run with a failed step ends the turn FAILED (#3957), not COMPLETED with the
-        # step's "Error: …" text as the answer. The reply text (output + failed-steps
-        # note) is the failure message, so nothing the run produced is lost.
-        yield ("error" if getattr(wf_out, "failed", False) else "done", wf_out)
+        if getattr(wf_out, "failed", False):
+            # A FAILED run (#3957: its output step failed, or every step did — see
+            # `WorkflowReply`) ends the turn failed, not completed with the step's
+            # "Error: …" text as the answer. The output still goes out as the turn's
+            # text, so the transcript, an Activity post, a scheduled report and a
+            # background job's result keep it; the error itself is one short line.
+            steps = ", ".join(getattr(wf_out, "failed_steps", ()) or ()) or "?"
+            yield ("text", str(wf_out))
+            yield ("error", f"workflow /{wf_name} failed: step(s) {steps}")
+            return
+        yield ("done", wf_out)
         return
 
     # Subagent slash command (/<subagent> <prompt>) short-circuits the
@@ -701,9 +722,15 @@ def _usage_frames(rows: list[dict]) -> list[tuple[str, dict]]:
     return [("usage", dict(r)) for r in rows or [] if isinstance(r, dict)]
 
 
-def _short_circuit_reply(frame: tuple | None) -> list[dict[str, Any]]:
-    """The non-streaming shape of a pre-turn short-circuit's terminal frame."""
+def _short_circuit_reply(frame: tuple | None, streamed_text: str = "") -> list[dict[str, Any]]:
+    """The non-streaming shape of a pre-turn short-circuit's terminal frame.
+
+    ``streamed_text`` is the ``text`` the short-circuit streamed before it — a failed
+    ``/<workflow>`` streams its output and then ends on a one-line ``error`` (#3940); the
+    reply keeps both."""
     kind, payload = frame if frame is not None else ("done", "")
+    if kind == "error" and streamed_text.strip():
+        return [{"role": "assistant", "content": f"{streamed_text.rstrip()}\n\n⚠️ {payload}"}]
     if kind == "input_required":
         # Non-streaming callers (e.g. the OpenAI-compat /v1 path) can't render a
         # plugin form — degrade to a text note pointing at the console (#1701 S2).

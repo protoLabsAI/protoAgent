@@ -189,8 +189,8 @@ async def _run_prepared(
                 seed_outputs=seed_outputs,
             )
             _trace_outcome(traced, result)
-    except asyncio.CancelledError:  # stopped, not broken — its own terminal state (#3957)
-        run_store.finish(STATUS_CANCELLED)
+    except asyncio.CancelledError:
+        _finish_stopped(run_store)
         raise
     except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
@@ -264,6 +264,17 @@ async def _start_background(
 
     _spawn(_run())
     return run_id
+
+
+def _finish_stopped(run_store: WorkflowRunStore) -> None:
+    """Close out a run whose task was cancelled. A cancel is its own terminal state
+    (#3957) — stopped, not broken — EXCEPT when the stall guard sent it (#3940): that
+    turn failed ("The turn stalled …"), so the run did too, and says why."""
+    stalled = sdk.turn_stop_reason()
+    if stalled:
+        run_store.finish(STATUS_FAILED, error=stalled)
+    else:
+        run_store.finish(STATUS_CANCELLED)
 
 
 async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str) -> str:
@@ -442,8 +453,8 @@ async def _resume(
         ) as traced:
             result = await execute_workflow(recipe, inputs, **kwargs)
             _trace_outcome(traced, result)
-    except asyncio.CancelledError:  # stopped, not broken — its own terminal state (#3957)
-        run_store.finish(STATUS_CANCELLED)
+    except asyncio.CancelledError:
+        _finish_stopped(run_store)
         raise
     except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)

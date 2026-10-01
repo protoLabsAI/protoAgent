@@ -295,7 +295,9 @@ export function RunTimeline({ runId, onClose }: { runId: string; onClose: () => 
         </p>
       ) : null}
       {record.status === "failed" || record.failed?.length ? (
-        <p className="workflow-failed">Failed steps: {(record.failed ?? []).join(", ") || "(run error)"}</p>
+        <p className="workflow-failed">
+          {record.failed?.length ? `Failed steps: ${record.failed.join(", ")}` : record.error || "Failed steps: (run error)"}
+        </p>
       ) : null}
       {record.status === "done" && record.output ? (
         <div className="workflow-result">

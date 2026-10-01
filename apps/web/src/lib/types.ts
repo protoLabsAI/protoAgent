@@ -621,6 +621,8 @@ export type WorkflowRunRecord = {
   output?: string;
   failed?: string[];
   degraded?: string[];
+  // Why a run that never returned its envelope failed (e.g. its turn stalled, #3940).
+  error?: string;
 };
 
 // History summaries (GET /runs/all) — every recorded run, newest first.

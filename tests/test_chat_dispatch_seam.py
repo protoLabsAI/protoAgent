@@ -140,7 +140,7 @@ async def test_nonstreaming_driver_calls_the_dispatch_and_shaper_through_chat_di
     shaped: list = []
     monkeypatch.setattr(chat_dispatch, "_pre_turn_dispatch", _fake_dispatch(seen))
 
-    def _shape(frame):
+    def _shape(frame, streamed_text=""):
         shaped.append(frame)
         return [{"role": "assistant", "content": "shaped-by-chat-dispatch"}]
 

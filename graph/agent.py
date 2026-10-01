@@ -994,7 +994,7 @@ async def _run_subagent_inner(
         # max_turns is a budget, not a bomb: on the limit, salvage the transcript.
         from langgraph.errors import GraphRecursionError
 
-        from graph.subagent_progress import note_progress
+        from graph.turn_liveness import note_progress
         from observability import tracing
 
         result: dict[str, Any] = {}

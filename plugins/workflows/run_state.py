@@ -170,18 +170,21 @@ class WorkflowRunStore:
         self._state["updated_at"] = _now()
         self._write()
 
-    def finish(self, status: str, result: dict | None = None) -> None:
+    def finish(self, status: str, result: dict | None = None, *, error: str = "") -> None:
         """Mark the run terminal (``done`` / ``failed`` / ``cancelled``), folding in the
         engine's final envelope when given: final ``output``, ``failed`` / ``degraded`` ids
-        (their step_meta flips to failed), and per-step ``timings`` → ``seconds``. A
-        cancelled run's in-flight steps are marked cancelled with it."""
+        (their step_meta flips to failed), and per-step ``timings`` → ``seconds``. Steps
+        still in flight when a run is cancelled or fails end with it. ``error`` is why a
+        run that never returned an envelope failed (a stalled turn, #3940)."""
         if self._state is None:
             return
         self._state["status"] = status
-        if status == STATUS_CANCELLED:
+        if error:
+            self._state["error"] = error
+        if status in (STATUS_CANCELLED, STATUS_FAILED):
             for meta in (self._state.get("step_meta") or {}).values():
                 if meta.get("status") == STATUS_RUNNING:
-                    meta["status"] = STATUS_CANCELLED
+                    meta["status"] = status
                     meta["finished_at"] = _now()
         if result:
             self._state["output"] = str(result.get("output", ""))

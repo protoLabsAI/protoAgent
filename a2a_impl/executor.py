@@ -33,6 +33,7 @@ surfaced as tool-call-v1 DataParts on the working status frames.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 import uuid
@@ -50,6 +51,7 @@ from google.protobuf import json_format, struct_pb2
 import protolabs_a2a as pa
 
 from a2a_impl import hitl_routing
+from graph.turn_liveness import TurnStop, bind_turn_stop
 from runtime.session_ids import session_id_problem
 
 logger = logging.getLogger(__name__)
@@ -128,26 +130,51 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
             return
 
         iterator = stream.__aiter__()
+        # Why the turn was stopped, shared with everything the stream spawns (#3940): a
+        # `/<workflow>` runner reads it on its cancel to record a stall as FAILED rather
+        # than as an operator's cancel. Set BEFORE the cancel below, which is why this is
+        # an explicit wait + cancel rather than `asyncio.wait_for` (that cancels first).
+        stop = TurnStop()
         while True:
+            # Each step runs as its own task in a fresh copy of this context, exactly as
+            # `wait_for` ran it, plus the shared `stop`.
+            step_ctx = contextvars.copy_context()
+            bind_turn_stop(step_ctx, stop)
+            step = asyncio.get_running_loop().create_task(iterator.__anext__(), context=step_ctx)
             try:
-                # On a wedged ACP runtime, TurnStalled can surface up to _ACP_CANCEL_SETTLE_S later.
-                item = await asyncio.wait_for(iterator.__anext__(), seconds)
-            except StopAsyncIteration:
-                return
-            except TimeoutError:
-                # The step is already cancelled by wait_for; aclose() finalizes the
-                # generator so its `finally` blocks run. Bounded and best-effort —
-                # a cleanup that hangs must not replace one hang with another.
+                finished, _ = await asyncio.wait({step}, timeout=seconds)
+            except asyncio.CancelledError:
+                # Cancelled from above (an A2A CancelTask): cancel the step and let it
+                # unwind, as `wait_for` did.
+                step.cancel()
+                await asyncio.wait({step})
+                raise
+            if finished:
+                try:
+                    item = step.result()
+                except StopAsyncIteration:
+                    return
+            else:
+                stalled = (
+                    f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
+                    "It was stopped rather than left running invisibly — the last step never "
+                    "returned. Retry, or narrow whatever that step was doing."
+                )
+                stop.reason = stalled
+                step.cancel()
+                # On a wedged ACP runtime, this can take up to _ACP_CANCEL_SETTLE_S.
+                await asyncio.wait({step})
+                if not step.cancelled():
+                    step.exception()  # retrieved: the turn is failing with TurnStalled
+                # aclose() finalizes the generator so its `finally` blocks run. Bounded
+                # and best-effort — a cleanup that hangs must not replace one hang with
+                # another.
                 closed = True
                 try:
                     await asyncio.wait_for(stream.aclose(), 5.0)
                 except (Exception, asyncio.CancelledError):  # noqa: BLE001
                     logger.debug("[a2a] stalled stream did not close cleanly", exc_info=True)
-                raise TurnStalled(
-                    f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
-                    "It was stopped rather than left running invisibly — the last step never "
-                    "returned. Retry, or narrow whatever that step was doing."
-                ) from None
+                raise TurnStalled(stalled) from None
             yield item
     finally:
         if not closed:
@@ -1048,6 +1075,10 @@ class ProtoAgentExecutor(AgentExecutor):
                     return
 
                 elif event_type == "error":
+                    # Keep whatever the turn said before it failed (#3940) — a `/<workflow>`
+                    # streams its whole output as text, then a short `error`.
+                    await _flush_reasoning()
+                    await _flush_text()
                     await updater.failed(message=updater.new_agent_message([_text_part(str(payload))]))
                     _notify_terminal(_outcome("failed", accumulated, error=str(payload)))
                     return
