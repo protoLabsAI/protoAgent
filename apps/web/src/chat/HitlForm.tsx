@@ -194,6 +194,8 @@ function Field({
     control = (
       <Input
         type="number"
+        min={schema.minimum}
+        max={schema.maximum}
         value={value === undefined || value === null ? "" : String(value)}
         onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
         onKeyDown={confirmOnEnter}

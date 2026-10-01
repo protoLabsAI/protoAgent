@@ -7,6 +7,7 @@ import {
   buildVerifier,
   goalFormPayload,
   parseMaxIterations,
+  MAX_GOAL_ITERATIONS,
   splitLines,
   verifierDetail,
   verifierLabel,
@@ -47,6 +48,13 @@ describe("goalFormPayload", () => {
       expect(props[key], `missing step-2 field ${key}`).toBeDefined();
     }
     expect(step2.required ?? []).toEqual([]); // the whole contract is optional
+  });
+
+  it("bounds max_iterations to the server's 1..MAX range (#3973)", () => {
+    const field = (step2.properties ?? {}).max_iterations as { minimum?: number; maximum?: number };
+    expect(field.minimum).toBe(1);
+    expect(field.maximum).toBe(MAX_GOAL_ITERATIONS);
+    expect(MAX_GOAL_ITERATIONS).toBe(1000); // graph/goals/types.py MAX_GOAL_ITERATIONS
   });
 
   it("renders the verifier field as option cards for every type (single source of truth)", () => {
@@ -149,6 +157,13 @@ describe("parseMaxIterations", () => {
     expect(parseMaxIterations(12)).toBe(12);
     expect(parseMaxIterations("7")).toBe(7);
     expect(parseMaxIterations(4.9)).toBe(4);
+  });
+
+  it("never exceeds the server's ceiling (#3973)", () => {
+    expect(parseMaxIterations(MAX_GOAL_ITERATIONS)).toBe(MAX_GOAL_ITERATIONS);
+    expect(parseMaxIterations(MAX_GOAL_ITERATIONS + 1)).toBe(MAX_GOAL_ITERATIONS);
+    expect(parseMaxIterations("1000000")).toBe(MAX_GOAL_ITERATIONS);
+    expect(parseMaxIterations(0.5)).toBe(DEFAULT_MAX_ITERATIONS);
   });
 });
 

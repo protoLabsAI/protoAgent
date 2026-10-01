@@ -63,10 +63,20 @@ export function parseErrorBody(raw: string, fallback: string): { detail: string;
  *     surfaces this as `TypeError: Load failed` — which is exactly why the tasks/notes
  *     panels showed "Load failed" and had to be reloaded on a fresh desktop start.
  *  A genuinely-down backend just keeps the panels in their loading state until the
- *  shell's boot-gate ("isn't responding") takes over — same as before. */
+ *  shell's boot-gate ("isn't responding") takes over — same as before.
+ *  A 502 that carries a machine-readable `detail.code` is NOT a cold start: it is the
+ *  agent itself answering that ITS upstream (the model provider) failed — `POST /api/chat`
+ *  maps a failed turn that way (#3973). The hub proxy's "agent is not reachable" 502 has
+ *  a plain-string detail, so it still retries. */
 export function isColdStart(error: unknown): boolean {
-  if (error instanceof ApiError) return error.status === 409 || error.status === 502;
+  if (error instanceof ApiError) return error.status === 409 || isProxy502(error);
   return true; // no HTTP response at all ⇒ not reachable yet (desktop sidecar booting)
+}
+
+/** A 502 from the hub proxy / a not-yet-bound backend, as opposed to an agent's own
+ *  upstream-failure 502 (which carries a `detail.code`, e.g. `/api/chat`'s turn errors). */
+function isProxy502(error: ApiError): boolean {
+  return error.status === 502 && !error.code;
 }
 
 /** The fleet proxy's "agent isn't running/registered" signal (ADR 0042): a 409 from a
@@ -89,7 +99,8 @@ export function is401(error: unknown): boolean {
  *  `isAgentNotRunning` (409) so the boot gate can offer the same return-to-host recovery for a
  *  dead remote that it does for a down local peer. */
 export function isAgentUnreachable(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 502;
+  // A coded 502 is the agent answering about ITS model provider — reachable (#3973).
+  return error instanceof ApiError && isProxy502(error);
 }
 
 /** A request is MEMBER-scoped when it's slug-routed to the focused agent (not the hub). A 401

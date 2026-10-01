@@ -1734,6 +1734,11 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
             err["model_unavailable"] = True
             err["retry_after"] = int(getattr(pick_failure, "RETRY_AFTER_S", 30))
         return err
+    if err["upstream_status"] is None and exc is not None and _is_provider_stream_drop(exc):
+        # The provider closed the stream and the reconnects were exhausted (#1728) — a
+        # failed upstream hop, so /v1 and /api/chat answer 502, not an internal 500
+        # (#3973). Only present when true, like `upstream_unreachable`.
+        err["upstream_stream_closed"] = True
     if err["upstream_status"] is None and _upstream_unreachable(exc):
         # The gateway never answered (connection refused / DNS / timeout) — no status to
         # carry, but still a failed upstream hop: /v1 maps it to 502, not 500 (#3946).

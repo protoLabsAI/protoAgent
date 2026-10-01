@@ -9,6 +9,19 @@ All `/api/*` routes are gated by the same bearer auth as the rest of the server 
 `A2A_AUTH_TOKEN` / the configured token); the console attaches it automatically. This page
 is a map — `operator_api/*.py` is the source of truth for exact request/response shapes.
 
+## Error shapes
+
+Every error body is `{"detail": …}`, in one of three shapes:
+
+| Shape | When |
+|---|---|
+| `detail: "<message>"` (a string) | Most routes. `400` = the request's input was refused (the message says why), `404` = the named resource doesn't exist, `409` = the subsystem isn't loaded yet (setup incomplete), `503` = the feature isn't enabled. A `500` is a fault in the server: its detail is a generic message with a short **error id** (`Internal server error (error id 1a2b3c4d); …`) — the real exception is in the server log under that id, never in the response. |
+| `detail: [{loc, msg, type, …}, …]` (a list) | `422` — the body or query failed type validation before the route ran (FastAPI's standard shape). |
+| `detail: {code, message, upstream_status, session_id, error_id}` (an object) | `POST /api/chat` when the turn failed — see below. A few other routes use an object `{code, reason}` (noted per route). |
+
+A client should read `detail` as: a string → show it; an object → show `message` (or
+`reason`); a list → show the first item's `msg`.
+
 ## Runtime & health
 
 | Method | Path | Purpose |
@@ -20,7 +33,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/chat` | Run a non-streaming chat turn (the streaming path is A2A `/a2a`) |
+| POST | `/api/chat` | Run a non-streaming chat turn (the streaming path is A2A `/a2a`). Success → `{response, messages, session_id}`. A failed turn is a real HTTP error with the same status policy as `/v1`: **429** when the provider rate-limited (with `Retry-After` when it sent one), **502** for any other upstream failure, an unreachable gateway, or a provider that closed the stream, **503** when the turn's model connection can't be set up right now (`Retry-After`), **400** when the request named an unknown model, **500** otherwise. The body is `{"detail": {code, message, upstream_status, session_id, error_id}}`: `message` is the turn's own user-facing reason (the same text the transcript records); only when the server itself crashed is it replaced by a generic message carrying `error_id`. `error_id` is always logged next to the real message. |
 | GET | `/api/chat/sessions/{id}` | One session + its **busy signal**: `{session_id, active, turn_count, last_updated, last_state}`. `active` is true while a turn is running on the session from any surface (console, A2A, `/api/chat`); the Zed shim polls it before sending so two turns never interleave. Unknown or deleted → 404 `{detail: {code: "not_found"}}` |
 | DELETE | `/api/chat/sessions/{id}` | Delete a session (`?harvest=true` to extract memory first; `?forget=true` to remove what it already wrote to memory: its compaction archives and harvested summaries/facts; `?retire=false` clears it but keeps the id) |
 | GET | `/api/chat/commands` | Slash-command inventory (workflows / subagents / skills) |
@@ -36,7 +49,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 |---|---|---|
 | GET | `/api/goals` | List goals across sessions |
 | GET | `/api/goals/{session_id}` | One goal's detail — status + its durable plan artifact (`plan`, the `.plan.md` the agent maintains via `update_goal_plan`, ADR 0079) |
-| POST | `/api/goals` | Set a goal. Optional completion-contract fields (ADR 0073) + `kick` (default `true`; the console panel sends `false` and drives the goal from a dedicated chat tab instead of a headless turn) |
+| POST | `/api/goals` | Set a goal: `{session_id, condition, verifier?, max_iterations?, no_progress_limit?, outcome?, constraints?, boundaries?, stop_when?, kick?}`. Optional completion-contract fields (ADR 0073) + `kick` (default `true`; the console panel sends `false` and drives the goal from a dedicated chat tab instead of a headless turn). `max_iterations` is a whole number **1..1000** and `no_progress_limit` **1..100** (omit either for the config default); a wrong type or out-of-range value is a `422`. A refused goal (missing condition, unknown verifier) is a `400` |
 | POST | `/api/goals/{session_id}/rearm` | Re-arm: extend an active goal's iteration budget (`add_iterations`), or reactivate a terminal one and kick a fresh drive turn |
 | POST | `/api/goals/{session_id}/resume` | Kick a headless continuation for an active goal (used when a chat tab driving it is closed but the goal is kept running) |
 | DELETE | `/api/goals/{session_id}` | Clear (stop) a goal. `?close_tasks=true` also closes the goal's session-scoped task backlog (ADR 0079) |
@@ -47,7 +60,7 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 |---|---|---|
 | GET | `/api/subagents` | Registered subagents (allowlists, max turns) |
 | POST | `/api/subagents/run` | Run one subagent manually |
-| POST | `/api/subagents/batch` | Run several subagents concurrently |
+| POST | `/api/subagents/batch` | Run several subagents concurrently: `{session_id?, tasks: [{prompt, description?, type?, subagent_type?}]}`, **at most 20 tasks**. Every task needs a non-empty `prompt` — one task without it fails the whole batch with `422` (it used to run the others and report that task as an error) |
 | GET | `/api/tools` | Wired tools (core / plugin / MCP) |
 | GET | `/api/acp-agents` | Detected ACP coding agents |
 
@@ -55,12 +68,13 @@ is a map — `operator_api/*.py` is the source of truth for exact request/respon
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/background` | Background subagent jobs |
+| GET | `/api/background` | Background subagent jobs. `?status=` must be one of `running`, `completed`, `failed`, `canceled` (else `400`) |
 | GET | `/api/background/{job_id}` | One job's full row by id (full result text; ADR 0070) |
 | POST | `/api/background/{job_id}/cancel` · `/api/background/clear` | Cancel one / clear finished |
-| DELETE | `/api/background/{job_id}` | Remove a job row |
-| GET · POST | `/api/scheduler/jobs` | List / create scheduled jobs |
-| DELETE | `/api/scheduler/jobs/{job_id}` | Delete a scheduled job |
+| DELETE | `/api/background/{job_id}` | Remove a job row. Every `/api/background/{job_id}` route checks the id is `bg-<12 hex>` (else `400`) |
+| GET · POST | `/api/scheduler/jobs` | List / create scheduled jobs. A malformed `schedule` (not a 5-field cron expression or an ISO-8601 datetime) or `timezone` (not an IANA name) is a `400` |
+| PUT | `/api/scheduler/jobs/{job_id}` | Edit a job in place (partial: only the fields sent change). Unknown id → `404` |
+| DELETE | `/api/scheduler/jobs/{job_id}` | Delete a scheduled job → `{canceled: true}`. Unknown id → `404` (was `200 {canceled: false}`) |
 
 ## Knowledge & skills
 
@@ -100,7 +114,7 @@ record.
 | POST | `/api/inbox/{item_id}/deliver` | Deliver an inbox item to the agent |
 | GET | `/api/events` | Server-sent event stream (console live updates) |
 | POST | `/api/events/publish` | Publish an event to the bus |
-| GET · POST · PATCH · DELETE | `/api/tasks/...` | Tasks issue store (status, init, issues CRUD, close) |
+| GET · POST · PATCH · DELETE | `/api/tasks/...` | Tasks issue store (status, init, issues CRUD, close). An unknown issue id on `PATCH`, close or `DELETE` is a `404` (`DELETE` used to answer `200 {deleted: false}`). With no task store wired, `/api/tasks/status` reports `{initialized: false}` and every other task route answers `503 "tasks not enabled"` |
 
 ## Config, setup & settings
 

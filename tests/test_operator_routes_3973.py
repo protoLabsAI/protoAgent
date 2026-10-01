@@ -536,3 +536,45 @@ def test_task_routes_without_a_store_answer_503_and_status_reports_uninitialized
         resp = getattr(client, method)(path, **kwargs)
         assert resp.status_code == 503, (method, path, resp.text)
         assert resp.json()["detail"] == "tasks not enabled"
+
+
+def test_api_chat_in_band_500_keeps_the_turns_own_message(monkeypatch, caplog):
+    # An in-band failure's message is already user-facing (server.chat._fail_turn wrote
+    # it and stored it in the transcript); /api/chat must not mask it as "internal".
+    msg = "the turn produced no reply — it may have stalled or been interrupted; retry it"
+    err = {"message": msg, "type": "server_error", "upstream_status": None, "exception": None}
+    reply = [{"role": "assistant", "content": f"**Error:** {msg}", "error": err}]
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        resp = _chat_client(monkeypatch, reply=reply).post("/api/chat", json={"message": "hi"})
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["message"] == msg
+    # The error id the client sees is in the server log beside the real message.
+    assert any(detail["error_id"] in r.getMessage() and msg in r.getMessage() for r in caplog.records)
+
+
+def test_api_chat_raised_500_is_masked_but_logged_with_its_id(monkeypatch, caplog):
+    with caplog.at_level(logging.ERROR, logger="protoagent.server"):
+        resp = _chat_client(monkeypatch, raises=KeyError("/Users/secret/thing")).post(
+            "/api/chat", json={"message": "hi"}
+        )
+    detail = resp.json()["detail"]
+    assert resp.status_code == 500 and "/Users/secret" not in detail["message"]
+    assert detail["error_id"] in detail["message"]
+    assert any(detail["error_id"] in r.getMessage() and "/Users/secret" in r.getMessage() for r in caplog.records)
+
+
+def test_provider_closed_stream_is_a_502_not_an_internal_500(monkeypatch):
+    # turn_error flags a provider stream drop (reconnects exhausted); both /v1 and
+    # /api/chat answer it as the failed upstream hop it is.
+    from graph.llm import StreamStallTimeout
+    from operator_api.chat_routes import _turn_error_status
+    from server.chat import _PROVIDER_CLOSED_MSG, turn_error
+
+    err = turn_error(StreamStallTimeout("no first token"), _PROVIDER_CLOSED_MSG)
+    assert err["upstream_stream_closed"] is True
+    assert _turn_error_status(err)[0] == 502
+    reply = [{"role": "assistant", "content": f"**Error:** {_PROVIDER_CLOSED_MSG}", "error": err}]
+    resp = _chat_client(monkeypatch, reply=reply).post("/api/chat", json={"message": "hi"})
+    assert resp.status_code == 502 and resp.json()["detail"]["message"] == _PROVIDER_CLOSED_MSG
+    assert "upstream_stream_closed" not in turn_error(RuntimeError("bug"))

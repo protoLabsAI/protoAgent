@@ -36,6 +36,13 @@ describe("cold-start detection (ApiError / isColdStart)", () => {
     expect(isColdStart(new ApiError(500, "boom"))).toBe(false);
   });
 
+  it("does NOT retry an agent's own upstream-failure 502 as a cold start (#3973)", () => {
+    // `/api/chat` answers a failed model hop with a 502 whose detail carries a `code`;
+    // the hub proxy's "agent is not reachable" 502 has a plain-string detail.
+    expect(isColdStart(new ApiError(502, "The model provider closed the stream", "server_error"))).toBe(false);
+    expect(isColdStart(new ApiError(502, "agent is not reachable"))).toBe(true);
+  });
+
   it("treats a fetch with no HTTP response as cold-start (desktop sidecar booting)", () => {
     // WKWebView throws `TypeError: Load failed` (Chrome: "Failed to fetch") when the
     // local sidecar isn't bound to its port yet on first launch — ride it out rather
@@ -63,6 +70,8 @@ describe("unreachable-remote detection (isAgentUnreachable)", () => {
     expect(isAgentUnreachable(new ApiError(401, "unauthorized"))).toBe(false); // that's a bad token
     expect(isAgentUnreachable(new TypeError("Load failed"))).toBe(false);
     expect(isAgentUnreachable(undefined)).toBe(false);
+    // The agent's own upstream-failure 502 (coded detail, #3973) means it IS reachable.
+    expect(isAgentUnreachable(new ApiError(502, "provider closed the stream", "server_error"))).toBe(false);
   });
 });
 

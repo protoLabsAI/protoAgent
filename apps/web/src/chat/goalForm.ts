@@ -28,6 +28,9 @@ export const FALLBACK_GOAL_VERIFIERS: VerifierCatalog = {
 };
 
 export const DEFAULT_MAX_ITERATIONS = 8;
+// The server's ceiling for a goal's iteration budget (graph/goals/types.py
+// MAX_GOAL_ITERATIONS, #3973) — `POST /api/goals` answers 422 above it.
+export const MAX_GOAL_ITERATIONS = 1000;
 
 // A two-step wizard (ADR 0073). Step 1 = the goal + how to verify it, with a TYPE-AWARE
 // verification input: the verifier cards drive `showWhen`-conditional fields, so only the
@@ -144,7 +147,9 @@ export function goalFormPayload(catalog: VerifierCatalog = FALLBACK_GOAL_VERIFIE
               type: "number",
               title: "Max iterations",
               default: DEFAULT_MAX_ITERATIONS,
-              description: `Drive-loop budget. Default ${DEFAULT_MAX_ITERATIONS}.`,
+              minimum: 1,
+              maximum: MAX_GOAL_ITERATIONS,
+              description: `Drive-loop budget, 1–${MAX_GOAL_ITERATIONS}. Default ${DEFAULT_MAX_ITERATIONS}.`,
             },
           },
         },
@@ -236,8 +241,10 @@ export function verifierDetail(answers: Record<string, unknown>): string {
 /** Coerce the (optional) max-iterations answer to a positive integer, defaulting to
  *  `DEFAULT_MAX_ITERATIONS` when blank / non-numeric / ≤ 0. */
 export function parseMaxIterations(value: unknown): number {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_ITERATIONS;
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_ITERATIONS;
+  // Never send what the server refuses: above the ceiling is held AT the ceiling.
+  return Math.min(n, MAX_GOAL_ITERATIONS);
 }
 
 /** A compact human label for a verifier spec — mirrors the backend `_verifier_summary`

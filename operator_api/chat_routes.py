@@ -427,7 +427,9 @@ def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
     upstream = err.get("upstream_status")
     if upstream == 429:
         status = 429
-    elif isinstance(upstream, int) or err.get("upstream_unreachable"):
+    elif isinstance(upstream, int) or err.get("upstream_unreachable") or err.get("upstream_stream_closed"):
+        # A provider that closed the stream mid-turn (reconnects exhausted) is the hop
+        # behind us failing — most likely rate limiting — not our own fault (#3973).
         status = 502
     elif err.get("model_unavailable"):
         # The turn's model pick names a known connection that could not be set up right
@@ -444,23 +446,34 @@ def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
     return status, headers
 
 
-def _api_chat_error(err: dict, session_id: str, exc: BaseException | None = None) -> HTTPException:
+def _api_chat_error(
+    err: dict, session_id: str, exc: BaseException | None = None, *, raised: bool = False
+) -> HTTPException:
     """``POST /api/chat``'s answer to a failed turn (#3973) — the ``/v1`` status policy
     (``_turn_error_status``: 429 mirrored, other upstream failures / an unreachable
-    gateway 502, an unavailable model 503, a refused request 400), in this surface's
-    ``{"detail": {...}}`` error shape. A 500 is a fault in our own turn: its message is
-    logged under a short error id and the client gets the id, not the internal text."""
+    gateway / a provider-closed stream 502, an unavailable model 503, a refused request
+    400), in this surface's ``{"detail": {code, message, upstream_status, session_id,
+    error_id}}`` shape.
+
+    The message is the turn's own for an IN-BAND failure — the driver already wrote it as
+    user-facing text (``server.chat._fail_turn``) and stored it in the transcript, and
+    ``/v1`` shows it too. Only when ``chat()`` itself RAISED (``raised=True``) and the
+    failure is our own (500) is the exception text replaced by a generic message: that
+    text never went through the driver's classifier. Either way the server log carries the
+    ``error_id`` beside the real message, so a client report joins up with the log."""
     status, headers = _turn_error_status(err)
     message = err.get("message") or "the turn failed"
-    if status == 500:
-        error_id = uuid.uuid4().hex[:8]
-        log.error(
-            "[api-chat] turn for session %s failed (error id %s): %s",
-            session_id,
-            error_id,
-            message,
-            exc_info=exc,
-        )
+    error_id = uuid.uuid4().hex[:8]
+    log.log(
+        logging.ERROR if status == 500 else logging.WARNING,
+        "[api-chat] turn for session %s failed with HTTP %s (error id %s): %s",
+        session_id,
+        status,
+        error_id,
+        message,
+        exc_info=exc,
+    )
+    if raised and status == 500:
         message = f"The turn failed with an internal error (error id {error_id}); the details are in the server log."
     return HTTPException(
         status_code=status,
@@ -470,6 +483,7 @@ def _api_chat_error(err: dict, session_id: str, exc: BaseException | None = None
             "message": message,
             "upstream_status": err.get("upstream_status"),
             "session_id": session_id,
+            "error_id": error_id,
         },
     )
 
@@ -578,7 +592,7 @@ def register_chat_routes(app, ui: str) -> None:
                 origin="api-chat",
             )
         except Exception as exc:
-            raise _api_chat_error(turn_error(exc), session_id, exc) from exc
+            raise _api_chat_error(turn_error(exc), session_id, exc, raised=True) from exc
         turn_err = next((m["error"] for m in result if isinstance(m.get("error"), dict)), None)
         if turn_err:
             raise _api_chat_error(turn_err, session_id)

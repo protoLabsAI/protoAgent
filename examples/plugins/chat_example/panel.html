@@ -129,6 +129,18 @@
   // The documented NON-STREAMING path (one request, full reply). A production
   // panel streams via A2A SendStreamingMessage and reconciles with tasks/get —
   // see the ADR 0045 conformance checklist before shipping one for real.
+  // The readable reason out of an error response body. `/api/chat` answers a failed
+  // turn with an OBJECT detail ({code, message, upstream_status, session_id, error_id});
+  // other routes send a string detail, and a validation error (422) a list. Read the
+  // message — never render "[object Object]".
+  function errorDetail(body, fallback) {
+    const d = body && body.detail;
+    if (typeof d === "string" && d) return d;
+    if (d && typeof d === "object" && !Array.isArray(d) && typeof d.message === "string" && d.message) return d.message;
+    if (Array.isArray(d) && d[0] && typeof d[0].msg === "string") return d[0].msg;
+    return fallback;
+  }
+
   async function sendTurn(message) {
     const pending = bubble("assistant pending", "thinking…");
     try {
@@ -142,7 +154,7 @@
       });
       if (!res.ok) {
         let detail = res.status + " " + res.statusText;
-        try { detail = (await res.json()).detail || detail; } catch { /* keep status */ }
+        try { detail = errorDetail(await res.json(), detail); } catch { /* keep status */ }
         throw new Error(detail);
       }
       const data = await res.json();
