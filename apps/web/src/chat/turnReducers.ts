@@ -7,6 +7,7 @@
 
 import type { ChatMessage, ComponentSpec, ToolCall, ToolEvent, TurnUsage } from "../lib/types";
 import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
+import { isTaskPaused } from "./taskState";
 
 export function applyText(message: ChatMessage, text: string, append: boolean): ChatMessage {
   return {
@@ -117,7 +118,7 @@ export function unpauseBubble(m: ChatMessage): ChatMessage {
 /** Whether a turn state is PARKED on the operator — input-required / auth-required. Not
  *  over (the operator's answer continues the same task) and not working either. */
 export function isParkedState(state: string | undefined): boolean {
-  return /input.required|auth.required/i.test(state ?? "");
+  return isTaskPaused(state);
 }
 
 /** The bubble a LIVE stream leaves behind when it closes (#3956).

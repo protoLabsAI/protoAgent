@@ -49,16 +49,15 @@ import {
   applyUsage,
   pauseBubble,
 } from "./turnReducers";
+import { isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 
 export { pauseBubble, unpauseBubble } from "./turnReducers";
 
-// Kept in sync with streamWatchdog.ts TERMINAL_RE.
-const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
-// PAUSED, not over: the server parked the turn waiting on the operator (a HITL
-// form/approval, or an auth grant). The task resumes with the operator's answer,
-// so the message keeps its status — only the session un-busies.
-const PAUSED = /input.required|auth.required/i;
+// Task states come from taskState.ts, shared with every surface that settles a turn. A
+// PAUSED task is not over: the server parked the turn waiting on the operator (a HITL
+// form/approval, or an auth grant). The task resumes with the operator's answer, so the
+// message keeps its status — only the session un-busies.
 // Cold-agent / transient-transport signatures worth retrying (mirrors the
 // query client's retry policy for member boots).
 const COLD = /\b(409|502|503|504)\b|Failed to fetch|NetworkError|Load failed|network/i;
@@ -189,7 +188,9 @@ function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => a
 }
 
 function finalize(sessionId: string, assistantId: string, state: string, text: string) {
-  const failed = /fail|cancel/i.test(state);
+  // failed / canceled / rejected — the one failure set every settling surface shares
+  // (#3957: this read `/fail|cancel/`, so a REJECTED turn settled as done).
+  const failed = isTaskFailed(state);
   const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (cur) {
     // Reconcile the ORDERED parts against the authoritative full-turn text, not
@@ -368,7 +369,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         if (!COLD.test(String(err))) sawTask = false; // gone/rejected — un-stick below
       }
       if (cancelled) return;
-      if (PAUSED.test(state)) {
+      if (isTaskPaused(state)) {
         // Paused on operator input — stop polling NOW (this used to spin the
         // full MAX_POLLS budget holding the session "streaming", which kept the
         // re-rendered HITL form's buttons disabled) and free the composer. No
@@ -378,7 +379,10 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         chatStore.setSessionStatus(sessionId, "idle");
         return;
       }
-      if (!sawTask || !state || TERMINAL.test(state)) {
+      // Over, gone, or a state the server cannot name (`unknown` / UNSPECIFIED): nothing
+      // will ever move it on, so settle now rather than holding the session "streaming"
+      // for the whole MAX_POLLS budget (#3957).
+      if (!sawTask || !state || isTaskTerminal(state) || isTaskStateUnknown(state)) {
         const { state: s2, text, supersededBy } = await api
           .getTask(taskId)
           .catch(() => ({ state: "", text: "", supersededBy: undefined }));
@@ -404,7 +408,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       ]),
     ) as TurnStreamHandlers),
     onTaskState: (state) => {
-      if (detached || !PAUSED.test(state)) return;
+      if (detached || !isTaskPaused(state)) return;
       paused = true;
       detached = true;
       onPaused();
@@ -455,7 +459,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
         // Send live), inviting a second concurrent turn into this slot.
         if (cancelled) return;
-        if (PAUSED.test(state)) {
+        if (isTaskPaused(state)) {
           // Paused with no paused frame on the stream (an older server, or a stream that
           // closed as the task parked): same settle.
           settlePaused();

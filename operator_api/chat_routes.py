@@ -129,6 +129,92 @@ async def _record_chat_tombstone(conn, session_id: str) -> None:
     )
 
 
+async def _newest_turn_summary(conn, session_id: str) -> tuple[int, Any, str | None]:
+    """``(turn_count, last_updated, last_state)`` for one context, where ``last_state`` is
+    the state of its newest-CREATED turn (``task_newest_first``, #3963/#3965)."""
+    from sqlalchemy import func, select
+
+    from a2a.server.tasks.database_task_store import TaskModel
+
+    agg = (
+        await conn.execute(
+            select(func.count(TaskModel.id), func.max(TaskModel.last_updated)).where(
+                TaskModel.context_id == session_id
+            )
+        )
+    ).first()
+    count = int(agg[0] or 0) if agg else 0
+    last = agg[1] if agg else None
+    newest = None
+    if count:
+        newest = (
+            await conn.execute(
+                select(TaskModel.status)
+                .where(TaskModel.context_id == session_id)
+                .order_by(*task_newest_first(TaskModel, conn.dialect.name))
+                .limit(1)
+            )
+        ).first()
+    status = newest[0] if newest else None
+    state = ((status or {}).get("state") or None) if isinstance(status, dict) else None
+    return count, last, state
+
+
+# The stored spellings of a turn parked on the operator: A2A 1.0's, and 0.3's for a row
+# an older store wrote.
+_PARKED_STORED_STATES = (
+    "TASK_STATE_INPUT_REQUIRED",
+    "TASK_STATE_AUTH_REQUIRED",
+    "input-required",
+    "auth-required",
+)
+
+
+async def _parked_sessions(engine, limit: int) -> list[dict]:
+    """Up to ``limit`` console chat sessions whose NEWEST turn is parked on the operator,
+    newest parked first (#3957).
+
+    A context holding a parked row is only a candidate: a pause moved to a newer task, or
+    an orphan a later turn ran past, leaves the context's newest turn elsewhere — so each
+    candidate is confirmed off its newest-created turn, the way ``session_summary`` reads
+    ``last_state``. Candidates are bounded (``4 × limit``), so a store full of stale
+    parked rows cannot turn one index read into an unbounded scan."""
+    from sqlalchemy import exists, func, select
+
+    from a2a.server.tasks.database_task_store import TaskModel
+
+    state = TaskModel.status["state"].as_string()
+    async with engine.begin() as conn:
+        tombstones = await _ensure_chat_tombstones(conn)
+        candidates = (
+            await conn.execute(
+                select(TaskModel.context_id, func.max(TaskModel.last_updated).label("parked_at"))
+                .where(TaskModel.context_id.like("chat-%"))
+                .where(state.in_(_PARKED_STORED_STATES))
+                .where(~exists(select(1).where(tombstones.c.context_id == TaskModel.context_id)))
+                .group_by(TaskModel.context_id)
+                .order_by(func.max(TaskModel.last_updated).desc().nulls_last(), TaskModel.context_id.desc())
+                .limit(limit * 4)
+            )
+        ).fetchall()
+        out: list[dict] = []
+        for row in candidates:
+            count, last, last_state = await _newest_turn_summary(conn, row.context_id)
+            if not last_state or not _PAUSED_TASK_STATE.search(last_state):
+                continue
+            out.append(
+                {
+                    "session_id": row.context_id,
+                    "last_updated": last.isoformat() if last else None,
+                    "turn_count": count,
+                    "last_state": last_state,
+                }
+            )
+            if len(out) >= limit:
+                break
+    return out
+
+
 async def session_summary(session_id: str) -> dict | None:
     """``{session_id, active, turn_count, last_updated, last_state}`` for one chat session,
     or ``None`` when the server has never seen it (no stored turn, none running) or it was
@@ -147,41 +233,20 @@ async def session_summary(session_id: str) -> dict | None:
     engine = getattr(STATE, "a2a_task_engine", None)
     if engine is None:
         return base
-    from sqlalchemy import func, select
-
-    from a2a.server.tasks.database_task_store import TaskModel
+    from sqlalchemy import select
 
     async with engine.begin() as conn:
         tombstones = await _ensure_chat_tombstones(conn)
         if (await conn.execute(select(tombstones.c.context_id).where(tombstones.c.context_id == session_id))).first():
             return None
-        agg = (
-            await conn.execute(
-                select(func.count(TaskModel.id), func.max(TaskModel.last_updated)).where(
-                    TaskModel.context_id == session_id
-                )
-            )
-        ).first()
-        count = int(agg[0] or 0) if agg else 0
-        last = agg[1] if agg else None
-        newest = None
-        if count:
-            newest = (
-                await conn.execute(
-                    select(TaskModel.status)
-                    .where(TaskModel.context_id == session_id)
-                    .order_by(*task_newest_first(TaskModel, conn.dialect.name))
-                    .limit(1)
-                )
-            ).first()
+        count, last, last_state = await _newest_turn_summary(conn, session_id)
     if not count and not active:
         return None
-    status = newest[0] if newest else None
     return {
         **base,
         "turn_count": count,
         "last_updated": last.isoformat() if last else None,
-        "last_state": ((status or {}).get("state") or None) if isinstance(status, dict) else None,
+        "last_state": last_state,
     }
 
 
@@ -610,18 +675,30 @@ def register_chat_routes(app, ui: str) -> None:
         return await export_session(session_id, title=title)
 
     @app.get("/api/chat/sessions")
-    async def _api_chat_sessions(limit: int = 50):
+    async def _api_chat_sessions(limit: int = 50, parked: bool = False):
         """Recent server-known chat sessions from the A2A task store (#2888).
 
         This is the bounded discovery half of ADR 0104: a fresh browser has no
         local session ids with which to call the per-session ``/turns`` reader.
         Newest activity comes first; the console decides which missing/empty
         local sessions need the heavier turn payloads.
+
+        ``parked=true`` (#3957) lists instead only the sessions PARKED on the operator —
+        whose newest turn waits on an ``ask_human`` answer, an approval or an auth grant —
+        newest first, each row also carrying ``last_state``. The newest-``limit`` index
+        alone can leave an older parked session out, and a fresh browser would then never
+        draw the question still waiting for its answer.
         """
         engine = getattr(STATE, "a2a_task_engine", None)
         if engine is None:
             return {"sessions": [], "reason": "task store not initialized"}
         limit = max(1, min(int(limit), 200))
+        if parked:
+            try:
+                return {"sessions": await _parked_sessions(engine, limit)}
+            except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
+                log.warning("[chat] parked session index read failed: %s", exc)
+                return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
         try:
             from sqlalchemy import exists, func, select
 

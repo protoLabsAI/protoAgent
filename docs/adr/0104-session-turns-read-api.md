@@ -36,6 +36,14 @@ only fetches turns for server-only or locally empty sessions.
 Only `chat-` contexts are indexed: the same task store also contains Activity,
 delegation, Fleet Room, and API contexts, none of which are console chat tabs.
 
+`?parked=true` (#3957) narrows the index to the sessions whose **newest-created** turn
+is parked on the operator (input-required / auth-required), newest first, each row
+also carrying `last_state`. The newest-N cut alone can leave an older session that is
+still waiting on an `ask_human` answer or an approval out of a fresh browser's restored
+set. The console reads both indexes and pins up to 20 parked sessions into its 50, so a
+pile of parked chats never crowds out the newest ones. A server that predates the flag
+ignores it, and its rows carry no `last_state`, so the console pins nothing from them.
+
 It reads the **A2A task store** (the SDK's `tasks` table — turns are keyed by
 `context_id`, which IS the console session id) via the engine the server
 already exposes (`STATE.a2a_task_engine`), ordered by `last_updated`, and

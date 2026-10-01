@@ -35,6 +35,22 @@ import {
 } from "./a2aStream";
 import { isDesktopWebview, tauriCore } from "./desktop";
 
+type GetTaskResult = NonNullable<A2AFrame["result"]>;
+
+/** The Task a unary `GetTask` answered with, or undefined (#3957).
+ *
+ *  A2A 1.0 serves the task FLAT on `result`, untagged; A2A 0.3 tags it `kind: "task"`; a
+ *  StreamResponse-style `{task}` wrapper is read too. Every reader used to spell this
+ *  `result.task ?? (result.kind === "task" ? result : result)` — a ternary whose both arms
+ *  were `result`, so the `kind` check meant nothing and any tagged result (a 0.3 message,
+ *  a status or artifact update) passed for the task. Untagged or `kind: "task"` is a task;
+ *  any other tag is not. */
+export function taskFromGetTask(result: A2AFrame["result"] | undefined): GetTaskResult | undefined {
+  if (!result) return undefined;
+  if (result.task) return result.task as GetTaskResult;
+  return result.kind === undefined || result.kind === "task" ? result : undefined;
+}
+
 export const chatApi = {
   // #1701 Slice 2: redeem a plugin composer-form — POST the field values back to the
   // plugin's on_submit. Returns a reply note, or the next form for a multi-step wizard.
@@ -113,9 +129,12 @@ export const chatApi = {
 
   // Bounded discovery + turn reads for ADR 0104 recovery. The index carries no
   // transcript content; callers fetch turns only for sessions missing locally.
-  chatSessions(limit = 50) {
+  // `parked` (#3957): only the sessions whose newest turn waits on the operator, each with
+  // its `last_state` — a server that predates it ignores the flag and serves the newest.
+  chatSessions(limit = 50, opts: { parked?: boolean } = {}) {
+    const parked = opts.parked ? "&parked=true" : "";
     return request<{ sessions: DurableChatSession[]; reason?: string }>(
-      `/api/chat/sessions?limit=${Math.max(1, Math.min(limit, 200))}`,
+      `/api/chat/sessions?limit=${Math.max(1, Math.min(limit, 200))}${parked}`,
     );
   },
 
@@ -510,10 +529,7 @@ export const chatApi = {
       headers: { "A2A-Version": "1.0" },
       body: { jsonrpc: "2.0", id: `get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
     });
-    const result = res.result;
-    const task = (result?.task ?? (result?.kind === "task" ? result : result)) as
-      | NonNullable<A2AFrame["result"]>
-      | undefined;
+    const task = taskFromGetTask(res.result);
     if (!task) return { state: "", text: "" };
     const state = (task.status?.state || "").toString();
     const supersededBy = supersededByFromStatus(task.status);
@@ -529,8 +545,7 @@ export const chatApi = {
       headers: { "A2A-Version": "1.0" },
       body: { jsonrpc: "2.0", id: `turn-${Date.now()}`, method: "GetTask", params: { id: taskId } },
     });
-    const result = res.result;
-    const task = (result?.task ?? result) as
+    const task = taskFromGetTask(res.result) as
       | (NonNullable<A2AFrame["result"]> & { history?: DurableChatTurn["history"] })
       | undefined;
     if (!task?.status) return null;
@@ -558,10 +573,7 @@ export const chatApi = {
       headers: { "A2A-Version": "1.0" },
       body: { jsonrpc: "2.0", id: `steer-get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
     });
-    const result = res.result;
-    const task = (result?.task ?? (result?.kind === "task" ? result : result)) as
-      | NonNullable<A2AFrame["result"]>
-      | undefined;
+    const task = taskFromGetTask(res.result);
     if (!task) return { state: "", consumed: [] };
     const history = ((task as { history?: Array<{ parts?: RawPart[] }> }).history || []) as Array<{
       parts?: RawPart[];
@@ -640,9 +652,7 @@ export const chatApi = {
       headers: { "A2A-Version": "1.0" },
       body: { jsonrpc: "2.0", id: `get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
     });
-    const result = res.result;
-    if (!result) return "";
-    const task = (result.task ?? (result.kind === "task" ? result : result)) as NonNullable<A2AFrame["result"]>;
+    const task = taskFromGetTask(res.result);
     if (!task?.status) return "";
     const dispatch = makeA2ADispatcher(sessionId, handlers);
     // GetTask results aren't context-stamped frames — wrap as a task frame; the
