@@ -371,6 +371,42 @@ def test_social_marketing_archetype_is_held() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+def test_brand_launch_archetype_is_held() -> None:
+    """The Brand & Launch archetype (a launch manager for any app: campaign plan, scripted
+    recordings, GIFs, cards, copy drafts, operator-only approval) ships HELD — the operator
+    decides when it reaches the picker. It is the successor candidate to the held
+    ``social-marketing`` row, which stays parked beside it. Pins BOTH directions, like
+    social-marketing: not served in ``archetypes``, and intact in ``held`` (soul preset
+    resolves, bundle URL kept, `_held` note present) so listing it is one move."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+
+    assert "brand-launch" not in ids, f"'brand-launch' is held from release — it must not be in archetypes, got {ids}"
+
+    held = [a["id"] for a in catalog.get("held") or []]
+    assert held.count("brand-launch") == 1, f"'brand-launch' must be parked exactly once in `held`, got {held}"
+    assert "social-marketing" in held, "Brand & Launch is a successor CANDIDATE — social-marketing stays parked, not deleted"
+    (row,) = (a for a in catalog["held"] if a["id"] == "brand-launch")
+    assert row.get("_held"), "a held row carries the `_held` note saying why and how to restore it"
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"held archetype 'brand-launch' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — listing the row would silently seed nothing."
+    )
+    assert row.get("bundle") == "https://github.com/protoLabsAI/brand-launch-archetype", (
+        "the held row must keep its bundle URL so listing it is one move"
+    )
+
+    # Draft-only doctrine: the persona must keep its hard rules (never posts, never invents a
+    # number, operator is the only approver, nothing private on screen, sourced norms).
+    soul = preset.read_text().lower()
+    for needle in ("never post", "never invent a number", "only approver", "competitor",
+                   "home paths", "sources", "one checkpoint per phase"):
+        assert needle in soul, f"brand-launch persona lost a hard rule: {needle!r}"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def _sidecar_cli_hidden_imports() -> set[str]:
     """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""

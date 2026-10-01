@@ -79,6 +79,21 @@
       ],
       "blurb": "A social marketing manager — brand voice, a balanced calendar, native drafts per platform, and a copy-ready pack. Never posts on its own.",
       "soul_preset": "social-marketing"
+    },
+    {
+      "_held": "Successor candidate to `social-marketing` (2026-10-01): Brand & Launch plans a launch campaign, produces the media (scripted recordings, GIFs, stills, cards) AND drafts the copy through the same Social Studio plugin, so it covers everything Social Marketing did plus production. Held until Josh decides it ships to the picker; `social-marketing` stays parked beside it, untouched. To list it, move this row into `archetypes` before `custom`, drop this `_held` note, and invert test_brand_launch_archetype_is_held.",
+      "id": "brand-launch",
+      "label": "Brand & Launch",
+      "icon": "Rocket",
+      "bundle": "https://github.com/protoLabsAI/brand-launch-archetype",
+      "blurb": "A launch manager for any app — turns a brief into a campaign plan, shoots scripted screen recordings, GIFs and social cards, drafts the copy, and tracks every asset to your approval. Never posts on its own.",
+      "soul_preset": "brand-launch",
+      "requires_tools": [
+        "campaign_create",
+        "campaign_asset_update",
+        "social_queue_add",
+        "browser_open"
+      ]
     }
   ]
 }

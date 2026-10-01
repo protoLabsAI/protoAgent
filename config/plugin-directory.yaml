@@ -444,6 +444,10 @@ archetype_repos:
     repo: protoLabsAI/social-archetype
     archetype: social-marketing
     tagline: "Social Marketing — brand voice, balanced calendar, native drafts per platform. Draft-only."
+  - id: brand-launch-archetype
+    repo: protoLabsAI/brand-launch-archetype
+    archetype: brand-launch   # held from the picker (archetype-catalog.json `held`) — successor candidate to social-marketing
+    tagline: "Brand & Launch — a launch campaign for any app: plan, scripted recordings, GIFs, cards, copy drafts, operator approval. Draft-only."
   - id: project-manager-archetype
     repo: protoLabsAI/project-manager-archetype
     archetype: project-manager
