@@ -52,6 +52,21 @@ test("the install dialog's form guards an empty URL", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Install", exact: true })).toBeDisabled();
 });
 
+test("the install dialog's URL field takes the full row, so a typical URL isn't clipped", async ({ page }) => {
+  await openInstallDialog(page);
+  const urlField = page.getByLabel("plugin git URL");
+  await urlField.fill("https://github.com/protoLabsAI/terminal-plugin");
+  // The whole URL fits — no horizontal scroll inside the field (it showed only
+  // "…ub.com/protoLabsAI/terminal-plugin" when it shared a row with the ref field).
+  const fits = await urlField.evaluate((el: HTMLInputElement) => el.scrollWidth <= el.clientWidth);
+  expect(fits).toBe(true);
+  const form = await page.locator(".plugin-install-form").boundingBox();
+  const field = await urlField.boundingBox();
+  const refField = await page.getByLabel("git ref").boundingBox();
+  expect(field!.width).toBeGreaterThan(form!.width * 0.95);
+  expect(refField!.y).toBeGreaterThan(field!.y);
+});
+
 test("Discover cards show what a plugin adds and link its docs, like the website (#2910)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();

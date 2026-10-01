@@ -110,6 +110,7 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           aria-label="plugin git URL"
+          className="plugin-install-url"
         />
         <Input
           type="text"
@@ -117,7 +118,7 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
           value={ref}
           onChange={(e) => setRef(e.target.value)}
           aria-label="git ref"
-          style={{ maxWidth: 200 }}
+          className="plugin-install-ref"
         />
         <Button
           variant="primary"
