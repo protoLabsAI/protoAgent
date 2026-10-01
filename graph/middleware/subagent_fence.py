@@ -26,6 +26,15 @@ Fence rules (one place, so the drivers and the steering fold agree):
   approval-gated tool (``run_command``, ``delete_file``, …): a resumer whose fence
   excludes it cannot approve it — its resume is a DECLINE (the tool doesn't run; the
   model reads a declined result, not an error).
+* **The model is only SHOWN the fence.** Blocking at call time alone left every bound
+  tool's schema on every model call of a fenced run: a detached ``social_researcher``
+  with a 6-tool allowlist carried all 120 of its lead's schemas (~42k prompt tokens,
+  ~80% of each call's fixed floor), and spent rounds calling tools it could see but
+  never use. ``wrap_model_call`` trims ``request.tools`` to the fence, the same way
+  ``ToolDeferralMiddleware`` trims to its base set — the ToolNode still holds every
+  tool, so execution is untouched. A deny-all fence, or a fence naming no bound tool,
+  leaves the schemas as they were (a provider rejects a history with tool calls and no
+  ``tools``); the call-time block still applies there.
 """
 
 from __future__ import annotations
@@ -93,6 +102,33 @@ def _state_fence(request) -> list:
         return []
 
 
+def _bound_tool_name(tool) -> str | None:
+    """Name of a ``ModelRequest.tools`` entry — a BaseTool or a provider tool-spec dict."""
+    name = getattr(tool, "name", None)
+    if name:
+        return str(name)
+    if isinstance(tool, dict):
+        return tool.get("name") or (tool.get("function") or {}).get("name")
+    return None
+
+
+def fence_tools(request):
+    """``request`` with its bound tools trimmed to the turn's fence (or unchanged).
+
+    Unfenced, deny-all, or no bound tool inside the fence → the request as-is. An entry
+    whose name can't be read is kept (never drop what we can't identify)."""
+    fence = _state_fence(request)
+    allowed = {t for t in fence if t != FENCE_DENY_ALL}
+    tools = getattr(request, "tools", None)
+    if not allowed or not tools:
+        return request
+    kept = [t for t in tools if (name := _bound_tool_name(t)) is None or name in allowed]
+    if len(kept) == len(tools) or not any(_bound_tool_name(t) in allowed for t in kept):
+        return request
+    logger.debug("[subagent-fence] binding %d/%d tools for this fenced call", len(kept), len(tools))
+    return request.override(tools=kept)
+
+
 def _answer_tools() -> frozenset[str]:
     """The answer-type HITL tools (their interrupt asks a question; the resume is an
     ANSWER, not an approval) — the registry the subagent HITL deny uses too."""
@@ -150,6 +186,12 @@ class SubagentFenceMiddleware(AgentMiddleware):
             tool_call_id=request.tool_call.get("id", ""),
             status="error",  # render as a failure card, matching the enforcement gate
         )
+
+    def wrap_model_call(self, request, handler):
+        return handler(fence_tools(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(fence_tools(request))
 
     def wrap_tool_call(self, request, handler):
         declined = self._declined(request)
