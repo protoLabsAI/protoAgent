@@ -186,6 +186,13 @@ def test_card_description_default(monkeypatch):
     assert card.description == a2a._DEFAULT_CARD_DESCRIPTION
 
 
+def test_default_card_description_is_not_template_placeholder():
+    """A fresh install's public card must describe protoAgent, not ask to be replaced."""
+    text = a2a._DEFAULT_CARD_DESCRIPTION.lower()
+    assert "protoagent" in text
+    assert "replace this" not in text and "template" not in text
+
+
 # ── protocol-version advertisement (A2A version negotiation) ─────────────────
 
 

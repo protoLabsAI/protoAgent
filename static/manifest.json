@@ -1,7 +1,7 @@
 {
   "name": "protoAgent — protoLabs",
   "short_name": "protoAgent",
-  "description": "LangGraph + A2A agent built on the protoAgent template",
+  "description": "Self-hosted LangGraph agent runtime with A2A 1.0 and an operator console",
   "id": "/app/",
   "start_url": "/app/",
   "scope": "/app/",

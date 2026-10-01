@@ -524,10 +524,14 @@ def assert_routable_card_url() -> None:
     log.info("[a2a] card URL %s is routable (require_routable_url check passed)", url)
 
 
-# Template default card description — used when a fork sets no ``a2a.description``
-# in config (#570). Forks override via config, not by editing this file.
+# Default card description — used when an instance sets no ``a2a.description`` in
+# config (#570). It describes the runtime itself, since that is what an unconfigured
+# install IS (and what a stranger curling ``/.well-known/agent-card.json`` sees).
+# Forks override via config, not by editing this file.
 _DEFAULT_CARD_DESCRIPTION = (
-    "protoAgent template — A2A 1.0 LangGraph agent. Replace this description with your agent's actual purpose."
+    "protoAgent — an open-source (MIT), self-hosted LangGraph agent runtime. "
+    "Speaks A2A 1.0 and an OpenAI-compatible /v1 API, and is extended with tools, "
+    "skills, subagents and console views through drop-in plugins."
 )
 
 

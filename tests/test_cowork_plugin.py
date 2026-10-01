@@ -251,7 +251,7 @@ def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch
 
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+    with caplog.at_level(logging.INFO, logger="protoagent.plugins"):
         res = loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
     meta = next(m for m in res.meta if m["id"] == "cowork")
     assert meta["loaded"], "the pack still loads — a missing doc library must not disable it"
@@ -259,6 +259,9 @@ def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch
     # is the one place a BUNDLED plugin's gap exists, since the inventory has no row for it.
     assert meta["deps_missing"] == ["openpyxl", "pypdf", "python-docx", "python-pptx", "reportlab"]
     assert "install-deps cowork" in caplog.text  # …and the log names the fix
+    # …at INFO: an optional-only gap is not a fault, so a bare `uvx … protoagent serve`
+    # must not open with a WARNING about it. (A missing REQUIRED dep still warns.)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and "cowork" in r.getMessage()]
     # No GLOBAL banner: every cowork dep is optional-tier, whose contract is "runs
     # without them" — six of the ten skills need none of these libraries.
     assert not [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
