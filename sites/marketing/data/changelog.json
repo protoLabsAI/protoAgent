@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.188.0",
+    "date": "2026-10-01",
+    "changes": [
+      "A long /<workflow> step is no longer cancelled for being quiet (#3940).",
+      "A /<workflow> whose output step failed ends its turn as failed (#3940, #3957).",
+      "Workflow runs record why they stopped (#3940, #3957).",
+      "Steering and workflow cleanup (#3940).",
+      "Restart, schedule and watch edge cases no longer leave stale state or 500s (#3943).",
+      "A rejected chat turn now shows as failed, and parked chats come back in a fresh browser (#3957).",
+      "Smoke follow-ups: honest telemetry, explicit model-override errors, and error statuses (#3957).",
+      "Desktop agents keep their note after upgrading (#3967)."
+    ]
+  },
+  {
     "version": "v0.187.0",
     "date": "2026-10-01",
     "changes": [
