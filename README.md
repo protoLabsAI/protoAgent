@@ -7,7 +7,7 @@
 <p align="center">
   A private, plugin-extensible desktop agent. It plans and remembers, and it gives the coding
   to the CLI agents you already use, over the Agent Client Protocol. Your chats, memory and
-  tasks stay in SQLite on your disk. No analytics or tracking SDKs.
+  tasks stay in SQLite on your disk. No analytics, tracking or telemetry — <a href="./docs/explanation/network-egress.md">what it does call out to</a>.
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 ## Get it running
 
 **Desktop app (beta)** — [download for macOS, Windows or Linux](https://agent.protolabs.studio/download).
-About 100 MB installed with the server bundled; nothing is fetched at first launch. The macOS
+About 100 MB installed with the server bundled; no Python, Node or other runtime is downloaded at first launch. The macOS
 build (Apple Silicon) is signed and notarized; the Windows and Linux builds are unsigned for now.
 
 **One command** — with [uv](https://docs.astral.sh/uv/) installed:

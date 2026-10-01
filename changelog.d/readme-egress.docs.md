@@ -1,0 +1,1 @@
+- **README states the privacy claim the egress audit backs (#ISSUE).** The hero links the [network-egress](docs/explanation/network-egress.md) page, and the desktop line now says no runtime is downloaded at first launch instead of "nothing is fetched" — the app does check for updates and the console loads its fonts.
