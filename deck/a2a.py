@@ -624,6 +624,16 @@ def apply_frame(turn: Turn, frame: dict) -> None:
             turn.context = ctx
 
 
+def live_row_last(rows: list[dict]) -> list[dict]:
+    """The durable rows with the one the server marks ``live`` moved last (#3963). The
+    conversation continues — attaches to, answers — its LAST exchange, and the running turn
+    is not always the newest row: a turn queued behind it (a scheduled fire, another client)
+    is created, and marked working, before it waits its turn. Rows from a server that marks
+    none keep their order."""
+    live = next((r for r in rows if isinstance(r, dict) and r.get("live") is True), None)
+    return rows if live is None else [r for r in rows if r is not live] + [live]
+
+
 def turn_from_durable(context_id: str, durable: dict) -> Turn:
     """A :class:`Turn` from one row of ``GET /api/chat/sessions/<id>/turns`` (ADR 0104):
     the same status / artifacts / history shapes the stream carries, so the snapshot

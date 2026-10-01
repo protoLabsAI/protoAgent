@@ -1272,10 +1272,12 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
 
             await conn.execute(
                 TaskModel.__table__.insert(),
+                # Inserted in CREATION order, as the SDK store writes them (a task row is
+                # inserted once, when the task starts) — the route orders by that (#3963).
                 [
+                    row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
                     row("t-2", 5, "TASK_STATE_COMPLETED", "second answer"),
                     row("t-3", 5, "TASK_STATE_WORKING", "latest partial"),
-                    row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
                     {  # a different session must not leak in
                         "id": "t-x",
                         "context_id": "sess-OTHER",
@@ -1296,8 +1298,9 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
     c = _client(monkeypatch)
     body = c.get("/api/chat/sessions/sess-1/turns?limit=2").json()
     # The bounded tail includes the newest/nonterminal task, then returns it in
-    # chronology. Equal timestamps break by task id deterministically.
+    # chronology (creation order), and names the turn still in flight.
     assert [t["task_id"] for t in body["turns"]] == ["t-2", "t-3"]
+    assert body["live_task_id"] == "t-3"
     assert body["turns"][0]["text"] == "second answer"
     assert body["turns"][1]["state"] == "TASK_STATE_WORKING"
     assert all(t["task_id"] != "t-x" for t in body["turns"])

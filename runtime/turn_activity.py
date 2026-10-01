@@ -15,9 +15,14 @@ per-process; a restart has no turns in flight by definition.
 from __future__ import annotations
 
 import threading
+from contextlib import asynccontextmanager
 
 _LOCK = threading.Lock()
 _ACTIVE: dict[str, int] = {}
+# session id → the A2A task that holds the session's thread lock right now (#3963). A turn
+# is created (and marked working) BEFORE it waits for that lock, so a queued turn's row is
+# newer than the running one's; this names the one actually running.
+_HOLDERS: dict[str, str] = {}
 
 
 def begin(session_id: str) -> None:
@@ -47,3 +52,30 @@ def is_active(session_id: str) -> bool:
 def active_sessions() -> list[str]:
     with _LOCK:
         return sorted(_ACTIVE)
+
+
+@asynccontextmanager
+async def holding(session_id: str, task_id: str):
+    """Record ``task_id`` as the task running on ``session_id`` for the body's duration —
+    entered once the turn holds the session's thread lock. A no-op without both ids."""
+    if not session_id or not task_id:
+        yield
+        return
+    with _LOCK:
+        previous = _HOLDERS.get(session_id)
+        _HOLDERS[session_id] = task_id
+    try:
+        yield
+    finally:
+        with _LOCK:
+            if _HOLDERS.get(session_id) == task_id:
+                if previous:
+                    _HOLDERS[session_id] = previous
+                else:
+                    _HOLDERS.pop(session_id, None)
+
+
+def holding_task(session_id: str) -> str | None:
+    """The A2A task running on ``session_id`` (holding its thread lock), or None."""
+    with _LOCK:
+        return _HOLDERS.get(session_id)

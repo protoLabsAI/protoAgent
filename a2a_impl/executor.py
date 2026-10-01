@@ -495,7 +495,10 @@ class ProtoAgentExecutor(AgentExecutor):
         if is_settle:
             if superseded_by is not None:
                 await updater.complete(
-                    message=updater.new_agent_message([_text_part(f"Continued in task {superseded_by}.")])
+                    message=updater.new_agent_message(
+                        [_text_part(f"Continued in task {superseded_by}.")],
+                        metadata={hitl_routing.SUPERSEDED_BY: superseded_by},
+                    )
                 )
             else:
                 logger.info("[a2a] stale settle for task %s ignored", context.task_id)

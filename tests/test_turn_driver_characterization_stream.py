@@ -542,6 +542,22 @@ async def test_request_metadata_threads_into_the_graph_input(env):
 
 
 @pytest.mark.asyncio
+async def test_the_turn_holding_the_thread_lock_is_named_while_it_runs(env):
+    """#3963: a turn's task row is created (and marked working) BEFORE it waits for the
+    session's thread lock, so the durable turns reader cannot tell the running turn from one
+    queued behind it by row order. The turn names itself once it holds the lock."""
+    from runtime import turn_activity
+
+    env.install(streams=[[text("r1", "a")]])
+    gen = chat_mod._chat_langgraph_stream("hello", "s1", request_metadata={"a2a.task_id": "task-running"})
+    await gen.__anext__()
+    assert turn_activity.holding_task("s1") == "task-running"
+    async for _ in gen:
+        pass
+    assert turn_activity.holding_task("s1") is None
+
+
+@pytest.mark.asyncio
 async def test_a_non_list_fence_is_ignored(env):
     g = env.install(streams=[[text("r1", "a")]])
 
@@ -1108,6 +1124,22 @@ async def test_overflow_compacts_then_retries_once_with_the_recovery_prompt(env,
     assert retry_input["messages"][-1].content == chat_mod._OVERFLOW_RETRY_PROMPT
     assert retry_input["model"] == "m1"  # the retry keeps the request's metadata
     assert g.updates == []  # a recovered turn is not a failed one
+
+
+@pytest.mark.asyncio
+async def test_the_overflow_retry_still_names_the_turn_holding_the_lock(env, compaction):
+    """#3963: the retry re-takes the thread lock for the same task, so it names itself as the
+    holder again — otherwise the durable turns reader falls back to row order mid-retry."""
+    from runtime import turn_activity
+
+    env.install(streams=[[Raise(ValueError(_OVERFLOW))], [text("r1", "recovered")]])
+    gen = chat_mod._chat_langgraph_stream("big ask", "s-ovf", request_metadata={"a2a.task_id": "task-ovf"})
+    seen = []
+    async for frame in gen:
+        if frame[0] == "text":
+            seen.append(turn_activity.holding_task("s-ovf"))
+    assert seen == ["task-ovf"]
+    assert turn_activity.holding_task("s-ovf") is None
 
 
 @pytest.mark.asyncio
