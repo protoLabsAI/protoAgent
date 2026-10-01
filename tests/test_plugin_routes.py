@@ -59,6 +59,12 @@ def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=(), official=(), 
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_meta", meta, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_router_keys", set(router_keys), raising=False)
+    # No surface reconcile in flight, nothing stuck — a test that needs one seeds it.
+    monkeypatch.setattr(rs.STATE, "plugin_surface_reconcile", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_stuck", {}, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surface_handles", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_started", False, raising=False)
     return captured
 
 
@@ -506,36 +512,53 @@ def test_fresh_install_hot_mounts_no_restart(monkeypatch):
     assert body["restart_recommended"] is False
 
 
-def test_force_reinstall_over_mounted_router_recommends_restart(monkeypatch):
-    # The plugin's router is already mounted → the reload re-registers it and the
-    # mount DROPS the new one (FastAPI can't swap in place) — the fresh routes don't
-    # serve until a process restart. The response must say so, not claim hot-mount.
+def test_force_reinstall_over_mounted_router_is_live(monkeypatch):
+    # The reload re-mounts an already-mounted router with the fresh code (ADR 0096 —
+    # #942's "the first mount wins" is retired), so a force re-install over a live
+    # view plugin needs no restart. tests/test_plugin_lifecycle_real_process.py proves
+    # it against a real server.
     from graph.plugins import installer
 
     _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[], router_keys={("boardy", "/plugins/boardy")})
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
     body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
     assert body["reloaded"] is True
-    assert body["restart_recommended"] is True
+    assert body["restart_recommended"] is False
 
 
-def test_force_reinstall_over_disabled_lingering_router_recommends_restart(monkeypatch):
-    # Disable doesn't unmount, so the router lingers with NO plugin_meta entry —
-    # the mount registry is the signal that survives (the meta check alone misses it).
+def test_force_reinstall_flags_a_restart_when_a_surface_would_not_stop(monkeypatch):
+    # The one contribution a reload can't take over: a surface whose old task the
+    # reconcile couldn't end (STATE.plugin_surfaces_stuck).
+    import runtime.state as rs
     from graph.plugins import installer
 
-    _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[], router_keys={("boardy", "/plugins/boardy")})
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[])
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_stuck", {("boardy", "sweep"): "did not stop"})
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
     body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
     assert body["restart_recommended"] is True
 
 
-def test_bundle_reinstall_flags_restart_only_for_mounted_members(monkeypatch):
-    # A bundle re-install over one live member + one fresh member → restart (the
-    # live member's routes are stale); builtin members are never fetched → ignored.
+def test_bundle_reinstall_flags_restart_only_for_a_member_with_a_stale_surface(monkeypatch):
+    # Members' routers re-mount live; a member whose RUNNING surface isn't its current
+    # registration (kept on its reload hook, or restored after a failed restart) is
+    # still on the old code → restart. A member with no surfaces never is.
+    import runtime.state as rs
     from graph.plugins import installer
 
     _wire(monkeypatch, enabled=["board"], disabled=[], meta=[], router_keys={("board", "/plugins/board")})
+
+    def new_start():
+        return None
+
+    def old_start():
+        return None
+
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_started", True)
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces", [{"plugin_id": "board", "name": "sync", "start": new_start}])
+    monkeypatch.setattr(
+        rs.STATE, "plugin_surface_handles", [{"plugin_id": "board", "name": "sync", "start": old_start}]
+    )
     monkeypatch.setattr(
         installer,
         "install",
@@ -547,6 +570,13 @@ def test_bundle_reinstall_flags_restart_only_for_mounted_members(monkeypatch):
     )
     body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack", "force": True}).json()
     assert body["restart_recommended"] is True
+
+    # Same bundle once the running surface IS the current registration → live.
+    monkeypatch.setattr(
+        rs.STATE, "plugin_surface_handles", [{"plugin_id": "board", "name": "sync", "start": new_start}]
+    )
+    body = _client().post("/api/plugins/install", json={"url": "https://x/pm-stack", "force": True}).json()
+    assert body["restart_recommended"] is False
 
 
 def test_force_reinstall_purges_module_subtree(monkeypatch):
@@ -625,9 +655,9 @@ def test_sync_surfaces_reload_failure_without_500(monkeypatch):
     assert body["reloaded"] is False and "graph compile failed" in body["reload_error"]
 
 
-def test_update_route_flags_restart_for_disabled_lingering_router(monkeypatch):
-    # The update route's restart heuristic also reads the mount registry now — a
-    # disabled-but-still-mounted plugin (no meta) updating at its ref needs a restart.
+def test_update_route_flags_restart_for_a_live_plugin_it_did_not_reload(monkeypatch):
+    # Not in plugins.enabled → the update doesn't reload. If the plugin is live anyway
+    # (a router still mounted), the old code keeps serving until a restart.
     from graph.plugins import installer
 
     _wire(monkeypatch, enabled=[], disabled=["boardy"], meta=[], router_keys={("boardy", "/plugins/boardy")})
@@ -640,6 +670,13 @@ def test_update_route_flags_restart_for_disabled_lingering_router(monkeypatch):
     body = _client().post("/api/plugins/boardy/update").json()
     assert body["reloaded"] is False  # disabled → nothing to reload
     assert body["restart_recommended"] is True
+
+    # The normal disabled plugin: unmounted on disable, nothing live → nothing to restart.
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "plugin_router_keys", set())
+    body = _client().post("/api/plugins/boardy/update").json()
+    assert body["reloaded"] is False and body["restart_recommended"] is False
 
 
 # ── uninstall teardown (#1955) ────────────────────────────────────────────────
@@ -660,10 +697,23 @@ def test_uninstall_enabled_plugin_purges_reloads_and_scrubs_enabled_list(monkeyp
     assert body["restart_recommended"] is False  # plain plugin: no views, never mounted
 
 
-def test_uninstall_enabled_view_plugin_recommends_restart(monkeypatch):
+def test_uninstall_enabled_view_plugin_is_live(monkeypatch):
+    # The reload unmounts its routes (ADR 0096) and stops its surfaces → no restart.
     from graph.plugins import installer, loader
 
     _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[{"id": "boardy", "views": [{"id": "b"}]}])
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    monkeypatch.setattr(installer, "uninstall", lambda pid, purge=False: {"id": pid, "removed": True})
+    body = _client().delete("/api/plugins/boardy").json()
+    assert body["reloaded"] is True and body["restart_recommended"] is False
+
+
+def test_uninstall_flags_a_restart_when_its_surface_would_not_stop(monkeypatch):
+    import runtime.state as rs
+    from graph.plugins import installer, loader
+
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[{"id": "boardy", "views": [{"id": "b"}]}])
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_stuck", {("boardy", "sweep"): "did not stop"})
     monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
     monkeypatch.setattr(installer, "uninstall", lambda pid, purge=False: {"id": pid, "removed": True})
     body = _client().delete("/api/plugins/boardy").json()
@@ -1091,9 +1141,10 @@ def test_uninstall_bundle_route_maps_other_failures_to_400(monkeypatch):
     assert res.status_code == 400 and "lock write refused" in res.json()["detail"]
 
 
-def test_update_bundle_route_flags_stale_router_restart(monkeypatch):
-    """A force re-install over a LIVE mounted router serves stale routes until
-    restart (#942) — the bundle update route must flag it like the single-plugin one."""
+def test_update_bundle_route_re_mounts_live_and_flags_only_a_stuck_surface(monkeypatch):
+    """A bundle update over a LIVE mounted router re-mounts it with the new code
+    (ADR 0096) — no restart. A member surface that wouldn't stop still asks for one."""
+    import runtime.state as rs
     from graph.plugins import installer
 
     _wire(monkeypatch, enabled=[], disabled=[], meta=[], router_keys={("board", "/api/plugins/board")})
@@ -1109,7 +1160,11 @@ def test_update_bundle_route_flags_stale_router_restart(monkeypatch):
     )
     monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: [])
     body = _client().post("/api/plugins/bundles/stacky/update").json()
-    assert body["restart_recommended"] is True  # live router → old routes until restart
+    assert body["restart_recommended"] is False  # router re-mounted with the new code
+
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_stuck", {("board", "sync"): "did not stop"})
+    body = _client().post("/api/plugins/bundles/stacky/update").json()
+    assert body["restart_recommended"] is True
 
 
 def test_installed_route_emits_the_bundle_registry(monkeypatch):

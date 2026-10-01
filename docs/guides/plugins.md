@@ -692,7 +692,10 @@ lacks a `reload` hook and hands back a different `stop` (fresh closures over a f
 dispatcher/queue) is **stopped, then started from the new registration** — otherwise the
 old loop would keep driving the old objects while the new routes use the new ones
 (#3593). The old task gets a grace period, then a cancel; one that still won't end is
-kept, and its replacement is not started. Declare `reload` to keep a surface running across saves,
+kept, and its replacement is not started. A disabled or uninstalled plugin's surface gets the
+same grace and cancel. A surface that outlives all of it is the one plugin contribution that
+needs a process restart, and the console's install / update / toggle / uninstall response says
+so (`restart_recommended`). Declare `reload` to keep a surface running across saves,
 or register module-level/singleton `start`/`stop` so a re-register is the same surface. Everything is best-effort: a failing
 plugin/route/surface logs and never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
@@ -736,7 +739,11 @@ edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers app
 immediately. That includes a plugin's **console view** and **background surface**: enabling
 mounts its router on the live app (the view's rail icon appears) and starts its surfaces;
 disabling unmounts the router and stops them. Neither direction needs a restart. Installing
-from a git URL auto-enables through the same reload, so a fresh install is live too.
+from a git URL auto-enables through the same reload, so a fresh install is live too, and
+**Update** / uninstall are live the same way (the router re-mounts with the new code or
+leaves). The exception is a background surface the reload can't swap: one whose task won't
+stop, or one that stays on its `reload(cfg)` hook across an update and so keeps running the
+old code. The toast asks for a restart then.
 
 Plugin tools that would shadow a core or MCP tool name are skipped (logged).
 Bundled skills load as `disk`-source [skills](./skills.md), re-seeded each boot.

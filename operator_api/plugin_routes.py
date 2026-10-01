@@ -16,19 +16,23 @@ router route) — is hot-mounted on the same reload (``_mount_plugin_routers`` i
 ``server.plugin_wiring``, #822). So enabling a view-contributing plugin needs no
 restart; ``restart_recommended`` stays False for enable.
 
-DISABLE no longer lingers: the reload reconcile stops surfaces (ADR 0018) and
-``_mount_plugin_routers`` now UNMOUNTS a roster-absent plugin's routes (ADR 0096
-live QA), so ``restart_recommended`` stays False on disable too.
+DISABLE and UNINSTALL are live too: the reload reconcile stops surfaces (ADR 0018) and
+``_mount_plugin_routers`` UNMOUNTS a roster-absent plugin's routes (ADR 0096 live QA).
+UPDATE / FORCE RE-INSTALL / bundle update are live: modules are purged, the reload
+re-mounts the router with the new code (retiring #942's "the first mount wins") and the
+reconcile restarts or reloads the surfaces.
 
-FORCE RE-INSTALL (and UPDATE, which is a force re-install at the recorded ref) is
-the other residual case (#942): the reload re-registers the plugin's router, but the
-mount keeps the FIRST one (FastAPI can't swap in place) — the freshly installed
-routes don't serve until a process restart, so both routes flag it.
+So ``restart_recommended`` is set by one thing: a background surface the reload could
+not replace or end (``_restart_needed``) — a stop that didn't finish in the grace period,
+or a surface left on its ``reload(cfg)`` hook across a code change. Uninstalling a plugin
+that is live without being in ``plugins.enabled`` (no reload runs) is flagged too.
+tests/test_plugin_lifecycle_real_process.py proves the live half against a real server.
 """
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import re
 
@@ -112,32 +116,67 @@ def _install_no_enable() -> bool:
 
 
 # The install summary → enabled/installed-id parsing moved into ``ops.plugins`` (ADR 0075
-# D2) with the install_and_activate op; ``_has_surface`` / ``_mounted_router_ids`` stay here
-# — they read the LIVE app (mount registry + plugin meta), a REST-surface concern the enable
-# and update routes also use.
-def _has_surface(meta: dict | None) -> bool:
-    """True when the plugin contributed a view / router / background surface — the
-    contributions FastAPI can't unmount or swap in place (restart territory)."""
-    return bool(meta and (meta.get("views") or meta.get("routers") or meta.get("surfaces")))
+# D2) with the install_and_activate op. What stays here reads the LIVE app state after a
+# reload — a REST-surface concern every lifecycle route shares.
+
+# How long a route waits for the surface reconcile its reload scheduled. A surface that
+# won't stop costs the reconcile its restart grace + cancel grace (10 s + 2 s in
+# server.plugin_wiring); this leaves room for a couple of them plus the starts.
+_RECONCILE_WAIT_S = 30.0
 
 
-def _lingers_on_disable(meta: dict | None) -> bool:
-    """True when DISABLING the plugin leaves something that outlives the reload.
+async def _restart_needed(plugin_ids) -> bool:
+    """Whether the reload just applied left any of ``plugin_ids`` needing a process restart.
 
-    Nothing does anymore: surfaces stop on the reload reconcile (ADR 0018), and
-    routers/views now UNMOUNT on it too (``_mount_plugin_routers`` removes a
-    roster-absent plugin's Route objects — ADR 0096 live QA retired the last
-    "FastAPI can't unmount" linger). Kept as the single seam deciding
-    ``restart_recommended`` so a future lingering contribution has one home."""
+    Routers never do: ``_mount_plugin_routers`` re-mounts a re-registered router with the
+    current code and removes a dropped plugin's routes (ADR 0096). Surfaces are the one
+    contribution that can outlive a reload, so this waits for the surface reconcile and
+    then checks, per plugin:
+
+    - a surface the reconcile could not end (``STATE.plugin_surfaces_stuck``): its task is
+      still running, and a re-registration of it was not started;
+    - a wanted surface whose running instance is not the current registration — kept
+      after a failed stop, restored after a failed start, left on its ``reload(cfg)`` hook
+      across a code change, or not running at all.
+
+    Call it only after a reload that re-ran the plugins' ``register()`` (install, update,
+    toggle, uninstall). A reconcile still running after ``_RECONCILE_WAIT_S`` answers True
+    for a plugin with surfaces, since nothing proves they came over."""
+    ids = {p for p in plugin_ids if p}
+    if not ids:
+        return False
+    pending = getattr(STATE, "plugin_surface_reconcile", None)
+    if pending is not None:
+        try:
+            waitable = asyncio.wrap_future(pending) if isinstance(pending, concurrent.futures.Future) else pending
+            await asyncio.wait_for(asyncio.shield(waitable), timeout=_RECONCILE_WAIT_S)
+        except asyncio.TimeoutError:
+            log.warning("[plugins] surface reconcile still running after %.0fs", _RECONCILE_WAIT_S)
+            return any(s.get("plugin_id") in ids for s in (STATE.plugin_surfaces or []))
+        except Exception:  # noqa: BLE001 — the reconcile logs its own failures
+            pass
+    stuck = getattr(STATE, "plugin_surfaces_stuck", None) or {}
+    if any(pid in ids for (pid, _name) in stuck):
+        return True
+    if not getattr(STATE, "plugin_surfaces_started", False):
+        return False  # boot's startup hook starts the current registrations itself
+    running = {(h.get("plugin_id"), h.get("name")): h for h in (STATE.plugin_surface_handles or [])}
+    for spec in STATE.plugin_surfaces or []:
+        if spec.get("plugin_id") not in ids:
+            continue
+        handle = running.get((spec.get("plugin_id"), spec.get("name")))
+        if handle is None or handle.get("start") != spec.get("start"):
+            return True
     return False
 
 
-def _mounted_router_ids() -> set[str]:
-    """Plugin ids with a router currently mounted on the live app. This is the mount
-    ground truth (``_mount_plugin_routers``'s registry) — unlike ``plugin_meta`` it
-    survives a disable, whose router lingers mounted with no meta entry."""
+def _is_live(plugin_id: str) -> bool:
+    """The plugin is running in this process: loaded (``plugin_meta``) or with a router
+    on the live app (``_mount_plugin_routers``'s registry)."""
+    if any(p.get("id") == plugin_id for p in (STATE.plugin_meta or [])):
+        return True
     keys = getattr(STATE, "plugin_router_keys", None) or set()
-    return {pid for (pid, _prefix) in keys}
+    return any(pid == plugin_id for (pid, _prefix) in keys)
 
 
 def _purge_plugin_modules(plugin_id: str) -> None:
@@ -445,12 +484,6 @@ def register_plugin_routes(app) -> None:
         ref = str(body.get("ref", "")).strip() or None
         force = bool(body.get("force"))
 
-        # Snapshot the live app BEFORE the op reloads: which just-(re)installed plugins are
-        # already LIVE — a mounted router (mount registry; survives disable) or a loaded
-        # view/router/surface (meta). For those the reload can't deliver fresh routes (the
-        # re-registered router is dropped for the mounted one — FastAPI can't swap in place,
-        # #942), so the OLD code keeps serving → restart. Install (git clone) doesn't touch
-        # the live registry/meta — only the reload does — so this pre-op snapshot is exact.
         # Consent gate (ADR 0071 D3 S4, #2721): an untrusted source needs the one-time
         # "this runs code" ack BEFORE anything is fetched. 200-with-needs_ack, not a
         # 4xx — the client turns it into the confirm dialog and retries after
@@ -462,9 +495,6 @@ def register_plugin_routes(app) -> None:
             needs_ack = _consent_needs_ack(url)
             if needs_ack is not None:
                 return needs_ack
-
-        mounted_before = _mounted_router_ids()
-        prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
 
         from ops import OpContext
         from ops.plugins import install_and_activate
@@ -501,9 +531,10 @@ def register_plugin_routes(app) -> None:
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        stale_after_reload = [
-            pid for pid in result.installed_ids if pid in mounted_before or _has_surface(prev_meta.get(pid))
-        ]
+        # Routers re-mount with the fresh code (ADR 0096), so a fresh install and a force
+        # re-install over a live plugin are both live; only a surface the reload couldn't
+        # replace asks for a restart.
+        restart = bool(result.reloaded and await _restart_needed(result.installed_ids))
         deps_needed = await asyncio.to_thread(_deps_needed, result.installed_ids)
         if result.enable_error:
             log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
@@ -513,9 +544,7 @@ def register_plugin_routes(app) -> None:
             "installed": result.summary,
             "enabled": result.enabled,  # the ids now live
             "reloaded": result.reloaded,
-            # A FIRST install hot-mounts fully live (#822); a force re-install over a
-            # live router serves stale routes until restart (#942).
-            "restart_recommended": bool(stale_after_reload),
+            "restart_recommended": restart,
             "enable_error": result.enable_error,
             # Per-plugin import failures from the post-enable reload (#2716) — an id in
             # `enabled` whose entry is here is in plugins.enabled but NOT running.
@@ -543,12 +572,10 @@ def register_plugin_routes(app) -> None:
 
         DISABLE is live too: the reload unmounts the plugin's router (``_mount_plugin_routers``
         removes a roster-absent plugin's routes, ADR 0096) and stops its surfaces (ADR 0018),
-        so ``restart_recommended`` is False here as well. ``_lingers_on_disable`` stays the
-        one seam that would set it if a future contribution outlived the reload.
+        so ``restart_recommended`` is False here as well — unless a surface would not stop
+        (``_restart_needed``).
         """
         want = bool((body or {}).get("enabled"))
-        # Snapshot the plugin's pre-reload meta — on DISABLE the reload clears its views
-        # from STATE.plugin_meta, so we must read "did it contribute a surface?" first.
         prev_meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
         # A builtin (core runtime infrastructure, e.g. the delegate registry) always
         # loads regardless of plugins.disabled — refuse to disable it rather than write a
@@ -576,10 +603,9 @@ def register_plugin_routes(app) -> None:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
 
         # Enabling hot-mounts the router that serves the view (#822); disabling unmounts it
-        # (ADR 0096) and the reconcile stops its surfaces (ADR 0018) — live both ways.
-        # Only a contribution that outlives the reload would recommend a restart, and
-        # _lingers_on_disable says none does today.
-        restart = bool(not want and _lingers_on_disable(prev_meta))
+        # (ADR 0096) and the reconcile stops its surfaces (ADR 0018) — live both ways. A
+        # surface that won't stop is the one thing that outlives the reload.
+        restart = await _restart_needed([plugin_id])
         out: dict = {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
         if want:
             # The one UI moment to mention missing packages (#3450): the operator just
@@ -657,9 +683,6 @@ def register_plugin_routes(app) -> None:
         explicit disable) + config/mcp defaults, retire members the new manifest
         dropped, hot-reload. The lock's ``bundles`` row is rewritten — this is the
         re-pin surface ADR 0049 D4 deferred."""
-        mounted_before = _mounted_router_ids()
-        prev_meta = {p.get("id"): p for p in (STATE.plugin_meta or [])}
-
         from ops import OpContext
         from ops.plugins import update_bundle
 
@@ -683,18 +706,16 @@ def register_plugin_routes(app) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         inst = res.install
-        # Same #942 truth as single-plugin update: a force re-install over a LIVE
-        # router keeps serving the old routes until restart.
-        stale_after_reload = [
-            pid for pid in inst.installed_ids if pid in mounted_before or _has_surface(prev_meta.get(pid))
-        ]
+        # Same truth as the single-plugin update: routers re-mount live; only a member's
+        # surface the reload couldn't replace asks for a restart.
+        restart = bool(inst.reloaded and await _restart_needed(inst.installed_ids))
         for pid, err in inst.load_errors.items():
             log.warning("[plugins] bundle %s member %s updated but FAILED to load: %s", bundle_id, pid, err)
         return {
             "installed": inst.summary,
             "enabled": inst.enabled,
             "reloaded": inst.reloaded,
-            "restart_recommended": bool(stale_after_reload),
+            "restart_recommended": restart,
             "enable_error": inst.enable_error,
             "load_errors": inst.load_errors,
             "mcp_seeded": inst.mcp_seeded,
@@ -806,7 +827,6 @@ def register_plugin_routes(app) -> None:
 
         cfg = STATE.graph_config
         is_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
-        meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
 
         reloaded = False
         if is_enabled:
@@ -825,16 +845,16 @@ def register_plugin_routes(app) -> None:
                 raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
             reloaded = True
 
-        # FastAPI can't swap an already-mounted router in place, so a view/route-
-        # contributing plugin's OLD route lingers until a process restart — flag it.
-        # The mount registry catches the disabled-but-still-mounted case meta misses.
+        # The reload re-mounted the router with the new code (ADR 0096) and reconciled the
+        # surfaces; only one it couldn't replace asks for a restart. With no reload (not in
+        # plugins.enabled), a plugin that is nonetheless live keeps running the old code.
         return {
             "ok": True,
             "id": plugin_id,
             "version": summary.get("version"),
             "resolved_sha": summary.get("resolved_sha"),
             "reloaded": reloaded,
-            "restart_recommended": bool(_has_surface(meta) or plugin_id in _mounted_router_ids()),
+            "restart_recommended": await _restart_needed([plugin_id]) if reloaded else _is_live(plugin_id),
         }
 
     @app.delete("/api/plugins/{plugin_id}")
@@ -842,8 +862,9 @@ def register_plugin_routes(app) -> None:
         # purge=true also removes the plugin's config section + secrets (ADR 0027).
         cfg = STATE.graph_config
         was_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
-        meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
-        was_mounted = plugin_id in _mounted_router_ids()
+        # Loaded or mounted right now — e.g. enabled by its own manifest rather than
+        # plugins.enabled, which no reload below would take down.
+        was_live = _is_live(plugin_id)
         try:
             # Off the event loop: it removes the checkout and scrubs the YAML under the
             # config write lock (#2743), which a concurrent reload can hold for seconds.
@@ -859,8 +880,8 @@ def register_plugin_routes(app) -> None:
                 return {"ok": True, **report, "reloaded": False, "restart_recommended": False}
             # …unless this process was STILL running the removed copy (protoAgent was
             # upgraded under it without a restart): its files just went, so unload it like
-            # any removal — purge + reload brings the bundled copy up in its place — and a
-            # router it mounted keeps serving the old code until a restart (#942).
+            # any removal — purge + reload brings the bundled copy up in its place, its
+            # router re-mounted (ADR 0096). Without a reload the removed copy keeps running.
             _purge_plugin_modules(plugin_id)
             reloaded = False
             if was_enabled:
@@ -874,7 +895,7 @@ def register_plugin_routes(app) -> None:
                 "ok": True,
                 **report,
                 "reloaded": reloaded,
-                "restart_recommended": bool(_has_surface(meta) or was_mounted),
+                "restart_recommended": await _restart_needed([plugin_id]) if reloaded else was_live,
             }
 
         # Teardown, mirroring _update (#1955): the files are gone, so stale module
@@ -904,10 +925,12 @@ def register_plugin_routes(app) -> None:
                 raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
             reloaded = True
 
-        # Same contract as _update's flag: a mounted router lingers until restart.
+        # The reload unmounted its routes (ADR 0096) and stopped its surfaces; only one
+        # that wouldn't stop asks for a restart. With no reload (it wasn't in
+        # plugins.enabled), whatever was live keeps running until one.
         return {
             "ok": True,
             **report,
             "reloaded": reloaded,
-            "restart_recommended": bool(_has_surface(meta) or was_mounted),
+            "restart_recommended": await _restart_needed([plugin_id]) if reloaded else was_live,
         }

@@ -304,12 +304,70 @@ async def test_a_surface_that_will_not_end_is_kept_and_not_doubled(monkeypatch):
     old_task = asyncio.ensure_future(_immortal())
     old = _handle("p", "s", stop=lambda: None, handle=old_task)
     _restart_state(monkeypatch, old, _spec("p", "s", start=lambda: started.append(1), stop=lambda: None))
+    monkeypatch.setattr(STATE, "plugin_surfaces_stuck", {}, raising=False)
 
     ai._reload_plugin_surfaces(object())
     await _settle()
 
     assert started == []  # replacement NOT started beside a live old one
     assert STATE.plugin_surface_handles == [old]  # old kept, so it's still tracked/stoppable
+    # …and recorded, so the plugin routes answer restart_recommended for it.
+    assert ("p", "s") in STATE.plugin_surfaces_stuck
+    release.set()
+    await _settle(5)
+
+
+@pytest.mark.asyncio
+async def test_a_removed_surface_whose_task_ignores_stop_is_cancelled(monkeypatch):
+    # Disable / uninstall used to call stop() and drop the handle, so a task that
+    # ignored stop() ran on with nothing tracking it. It now gets the restart path's
+    # grace + cancel, and only one that survives even that is recorded as stuck.
+    monkeypatch.setattr(pw, "_SURFACE_RESTART_GRACE_S", 0.02)
+    log: list = []
+
+    async def _stubborn():  # ignores stop(), but honours cancel
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            log.append("cancelled")
+            raise
+
+    task = asyncio.ensure_future(_stubborn())
+    _restart_state(monkeypatch, _handle("p", "s", stop=lambda: None, handle=task), None)
+    monkeypatch.setattr(STATE, "plugin_surfaces", [], raising=False)  # the plugin went away
+    monkeypatch.setattr(STATE, "plugin_surfaces_stuck", {}, raising=False)
+
+    ai._reload_plugin_surfaces(object())
+    await _settle()
+
+    assert log == ["cancelled"] and task.done()
+    assert STATE.plugin_surface_handles == []
+    assert STATE.plugin_surfaces_stuck == {}
+
+
+@pytest.mark.asyncio
+async def test_a_removed_surface_that_will_not_end_is_recorded_stuck(monkeypatch):
+    monkeypatch.setattr(pw, "_SURFACE_RESTART_GRACE_S", 0.02)
+    monkeypatch.setattr(pw, "_SURFACE_CANCEL_GRACE_S", 0.02)
+    release = asyncio.Event()
+
+    async def _immortal():
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+
+    task = asyncio.ensure_future(_immortal())
+    _restart_state(monkeypatch, _handle("p", "s", stop=lambda: None, handle=task), None)
+    monkeypatch.setattr(STATE, "plugin_surfaces", [], raising=False)
+    monkeypatch.setattr(STATE, "plugin_surfaces_stuck", {}, raising=False)
+
+    ai._reload_plugin_surfaces(object())
+    await _settle()
+
+    assert STATE.plugin_surface_handles == []  # no longer wanted, so no longer tracked…
+    assert ("p", "s") in STATE.plugin_surfaces_stuck  # …but its task is still running
     release.set()
     await _settle(5)
 

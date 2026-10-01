@@ -100,6 +100,17 @@ def _isolate_injection_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_surface_reconcile_state(monkeypatch):
+    """A surface reconcile leaves its task (bound to that test's loop) and any stuck
+    surfaces on STATE; the plugin routes read both to answer ``restart_recommended``.
+    Start every test with neither, so one test's reconcile can't flip another's flag."""
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "plugin_surface_reconcile", None, raising=False)
+    monkeypatch.setattr(STATE, "plugin_surfaces_stuck", {}, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_prompt_snapshots(tmp_path, monkeypatch):
     """Point the prompt snapshot store (#2243) at a per-test temp DB.
 
