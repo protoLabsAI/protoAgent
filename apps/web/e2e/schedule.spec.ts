@@ -165,7 +165,9 @@ test("switching a zoned job to UTC sends timezone: null, not an omitted key (#39
   await page.getByTestId("schedule-detail-edit").click();
   const detail = page.getByTestId("schedule-detail");
   await detail.locator("#schedule-tz").click();
-  await page.getByRole("menuitemradio", { name: "UTC", exact: true }).click();
+  // The leading "UTC" item is the reset option (value ""); hosts whose zone list also
+  // carries an IANA "UTC" render a second item with the same label.
+  await page.getByRole("menuitemradio", { name: "UTC", exact: true }).first().click();
   await expect(page.getByTestId("schedule-detail-save")).toBeEnabled();
   const put = page.waitForRequest((r) => r.method() === "PUT" && r.url().includes("/api/scheduler/jobs/job-1"));
   await page.getByTestId("schedule-detail-save").click();
