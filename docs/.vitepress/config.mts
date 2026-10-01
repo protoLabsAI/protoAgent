@@ -287,6 +287,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Security & trust model", link: "/explanation/security-and-trust" },
+            { text: "Network egress", link: "/explanation/network-egress" },
             { text: "Tuning & cost", link: "/explanation/tuning-and-cost" },
           ],
         },

@@ -36,6 +36,7 @@ Understanding-oriented. Read these when you want to know *why* the template is s
 | Page | Question it answers |
 |---|---|
 | [Security & trust model](/explanation/security-and-trust) | What's the trust posture — auth, redaction, origin checks, sandboxing? |
+| [Network egress](/explanation/network-egress) | What does protoAgent contact on its own, when, and how do I turn it off? |
 | [Tuning & cost](/explanation/tuning-and-cost) | Which cost/perf levers (compaction, aux-model routing, execute_code, prefix caching, failover) exist, and when to flip them? |
 
 ## Architecture decisions

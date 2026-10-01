@@ -468,6 +468,10 @@
           "title": "Security & trust model"
         },
         {
+          "path": "explanation/network-egress.md",
+          "title": "Network egress"
+        },
+        {
           "path": "explanation/tuning-and-cost.md",
           "title": "Tuning & cost"
         }
