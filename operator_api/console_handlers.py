@@ -419,24 +419,47 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
 
 
 async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
+    """Edit a job in place — a PARTIAL update (#3957).
+
+    ``req`` carries only the fields the caller sent: an omitted ``prompt`` /
+    ``schedule`` / ``timezone`` keeps the job's current value, so rescheduling no
+    longer means restating the prompt (that 422'd). A field that IS sent is still
+    validated — an empty prompt or schedule is refused, and the merged schedule /
+    timezone go through the backend's own validation (ValueError → 400). An explicit
+    ``timezone: null`` clears the timezone back to UTC."""
     import asyncio
 
     if STATE.scheduler is None:
         raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
-    prompt = (req.get("prompt") or "").strip()
-    schedule = (req.get("schedule") or "").strip()
-    if not prompt:
-        raise ValueError("prompt is required")
-    if not schedule:
-        raise ValueError("schedule is required")
+    fields = {k: req[k] for k in ("prompt", "schedule", "timezone") if k in req}
+    if not fields:
+        raise ValueError("nothing to update: send at least one of prompt, schedule, timezone")
+    for key in ("prompt", "schedule"):
+        if key in fields and not (fields[key] or "").strip():
+            raise ValueError(f"{key} cannot be empty")
+    current = await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id)
+    if current is None:
+        raise ValueError(f"no job {job_id!r} to update")
+    prompt = fields["prompt"].strip() if "prompt" in fields else current.prompt
+    schedule = fields["schedule"].strip() if "schedule" in fields else current.schedule
+    timezone = (fields["timezone"] or None) if "timezone" in fields else getattr(current, "timezone", None)
     job = await asyncio.to_thread(
         STATE.scheduler.update_job,
         job_id,
         prompt,
         schedule,
-        timezone=req.get("timezone") or None,
+        timezone=timezone,
     )
     return job.as_dict()
+
+
+def _scheduler_job(scheduler, job_id: str):
+    """One job by id — ``get_job`` where the backend has it, else a ``list_jobs`` scan
+    (``get_job`` isn't part of the minimal ``SchedulerBackend`` protocol)."""
+    getter = getattr(scheduler, "get_job", None)
+    if callable(getter):
+        return getter(job_id)
+    return next((j for j in scheduler.list_jobs() if j.id == job_id), None)
 
 
 async def _operator_goals_list() -> dict:

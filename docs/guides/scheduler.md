@@ -58,10 +58,16 @@ cancel. It's backed by these operator-API endpoints:
 |---|---|---|
 | `GET` | `/api/scheduler/jobs` | List jobs (`{jobs, backend}`) |
 | `POST` | `/api/scheduler/jobs` | Create — `{prompt, schedule, job_id?, timezone?}` → `{job}` |
-| `PUT` | `/api/scheduler/jobs/{id}` | Edit in place — `{prompt, schedule, timezone?}` → `{job}` (id/created_at/last_fire preserved, next_fire recomputed) |
+| `PUT` | `/api/scheduler/jobs/{id}` | Edit in place — a **partial** update: `{prompt?, schedule?, timezone?}` → `{job}` (id/created_at/last_fire preserved, next_fire recomputed) |
 | `DELETE` | `/api/scheduler/jobs/{id}` | Cancel → `{canceled}` |
 
-A malformed `schedule` returns `400` and leaves the job untouched.
+`PUT` changes only the fields you send. An omitted field keeps the job's current
+value, so `{"schedule": "0 17 * * 1-5"}` reschedules without restating the prompt.
+`"timezone": null` (or `""`) is an explicit change back to UTC, which is different
+from leaving `timezone` out (that keeps the current zone). A field you do send is
+still validated: an empty `prompt` or `schedule`, or a body with no fields, returns `400`.
+
+A malformed `schedule` or `timezone` returns `400` and leaves the job untouched.
 
 ## Plugin-owned recurring jobs
 

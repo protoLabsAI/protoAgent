@@ -110,7 +110,9 @@ export const automationApi = {
     });
   },
 
-  updateSchedule(jobId: string, body: { prompt: string; schedule: string; timezone?: string }) {
+  // A PARTIAL update server-side (#3957): an omitted key keeps the job's current value,
+  // so the console always sends `timezone` — `null` means "back to UTC", not "unchanged".
+  updateSchedule(jobId: string, body: { prompt: string; schedule: string; timezone: string | null }) {
     return request<{ job: ScheduledJob }>(`/api/scheduler/jobs/${encodeURIComponent(jobId)}`, {
       method: "PUT",
       body,

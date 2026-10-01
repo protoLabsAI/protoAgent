@@ -26,6 +26,7 @@ STATUSES = ("running", "completed", "failed", "canceled")
 _TERMINAL = ("completed", "failed", "canceled")
 # The `error` a job reconciled at startup carries (#3945): its detached turn died with the process.
 INTERRUPTED_ERROR = "interrupted: the server restarted before the job finished"
+INTERRUPTED_RESULT = "Interrupted — the background turn did not complete before a restart."
 
 
 @dataclass
@@ -306,6 +307,7 @@ class BackgroundStore:
         now: datetime | None = None,
         cost_usd: float | None = None,
         error: str = "",
+        record_duration: bool = True,
     ) -> bool:
         """Transition a job to a terminal state, idempotently.
 
@@ -319,6 +321,10 @@ class BackgroundStore:
 
         ``error`` is why a non-completed job ended (#3945) — stored beside ``result``, which
         stays the turn's own output. Ignored for a ``completed`` job.
+
+        ``record_duration=False`` settles the ledger edge WITHOUT a duration — for a job
+        whose end time isn't known (restart reconciliation: "now" minus "created" would
+        record the server's downtime as the job's work time).
         """
         if status not in _TERMINAL:
             raise ValueError(f"mark_complete status must be terminal, got {status!r}")
@@ -350,7 +356,7 @@ class BackgroundStore:
 
                 row = self.get(job_id)
                 elapsed = None
-                if row is not None and getattr(row, "created_at", None):
+                if record_duration and row is not None and getattr(row, "created_at", None):
                     try:
                         started = datetime.fromisoformat(row.created_at)
                         elapsed = max(0, int((datetime.fromisoformat(completed) - started).total_seconds() * 1000))
@@ -454,20 +460,29 @@ class BackgroundStore:
     def reconcile_interrupted(self) -> int:
         """Fail any job still ``running`` at startup — its detached turn died with
         the process. Returns the number of jobs reconciled. (Mirrors the A2A task
-        store's restart reconciliation.)"""
-        now = datetime.now(UTC).isoformat()
+        store's restart reconciliation.)
+
+        Each job is settled through ``mark_complete`` — the one funnel that also closes
+        the delegation-ledger edge the job opened at spawn (#3943). A bulk ``UPDATE``
+        here used to skip it, so every job a restart interrupted kept an open edge and
+        the org chart showed it running forever."""
+        now = datetime.now(UTC)
         db = self._connect()
         try:
-            cur = db.execute(
-                "UPDATE background_jobs SET status = 'failed', "
-                "result = 'Interrupted — the background turn did not complete before a restart.', "
-                "error = ?, completed_at = ? WHERE status = 'running'",
-                (INTERRUPTED_ERROR, now),
-            )
-            db.commit()
-            return cur.rowcount
+            ids = [r["id"] for r in db.execute("SELECT id FROM background_jobs WHERE status = 'running'").fetchall()]
         finally:
             db.close()
+        reconciled = 0
+        for job_id in ids:
+            # Idempotent per row: a job that settles between the SELECT and here is
+            # left alone (``mark_complete`` only transitions a still-``running`` row).
+            # No duration: the job died at some unknown point before the restart, and
+            # boot-time minus spawn-time would record the downtime as its work time.
+            if self.mark_complete(
+                job_id, "failed", INTERRUPTED_RESULT, now=now, error=INTERRUPTED_ERROR, record_duration=False
+            ):
+                reconciled += 1
+        return reconciled
 
     # ── reads ───────────────────────────────────────────────────────────────
 
