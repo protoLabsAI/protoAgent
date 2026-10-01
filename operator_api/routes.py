@@ -5,16 +5,38 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
+from graph.goals.types import MAX_GOAL_ITERATIONS, MAX_GOAL_NO_PROGRESS_LIMIT
 from runtime.session_ids import SessionId, optional_session_id
 
 log = logging.getLogger(__name__)
+
+# The most tasks one ``POST /api/subagents/batch`` may fan out (#3973). Each task is a
+# full subagent run (its own model calls and tool loop); the semaphore bounds how many
+# run AT ONCE, but nothing bounded how many a single request could queue. 20 is well
+# above any console use (the batch form sends a handful) and far below "a request that
+# ties the agent up for hours". A longer list is a 422, not a silent truncation.
+MAX_BATCH_TASKS = 20
+
+# Background job ids are strictly ``bg-<12 hex>`` (background/store.py). Every
+# ``/api/background/{job_id}`` route checks this before the id reaches the store.
+_BG_JOB_ID = re.compile(r"bg-[a-f0-9]{12}")
+
+
+class NotFoundError(LookupError):
+    """The resource a route names does not exist — ``_http_error`` answers 404.
+
+    Raised by the console handlers (a scheduler job that isn't there) and the task-store
+    adapter (an issue id the store doesn't know), so a missing id is a 404 rather than a
+    400 or an AttributeError/KeyError 500 (#3973)."""
 
 
 class SubagentRunRequest(BaseModel):
@@ -28,11 +50,31 @@ class SubagentRunRequest(BaseModel):
     _check_session_id = field_validator("session_id")(optional_session_id)
 
 
+class SubagentBatchTask(BaseModel):
+    """One task of a manual subagent batch — the same keys the lead agent's ``task_batch``
+    tool takes. ``type`` and ``subagent_type`` are aliases (``subagent_type`` wins)."""
+
+    prompt: str = Field(min_length=1)
+    description: str = ""
+    type: str | None = None
+    subagent_type: str | None = None
+
+
 class SubagentBatchRequest(BaseModel):
     session_id: str = "manual-subagent"
-    tasks: list[dict[str, Any]]
+    # At most MAX_BATCH_TASKS tasks (#3973) — see MAX_BATCH_TASKS for the cap's reasoning.
+    # An empty list still reaches the batch runner, which answers its own 400.
+    tasks: list[SubagentBatchTask] = Field(max_length=MAX_BATCH_TASKS)
 
     _check_session_id = field_validator("session_id")(optional_session_id)
+
+    def payload(self) -> dict[str, Any]:
+        """The handler's dict: unset per-task keys are dropped, so the batch runner's
+        ``spec.get("type", "researcher")`` default still applies to a task without one."""
+        return {
+            "session_id": self.session_id,
+            "tasks": [t.model_dump(exclude_none=True) for t in self.tasks],
+        }
 
 
 class ScheduleAddRequest(BaseModel):
@@ -40,6 +82,59 @@ class ScheduleAddRequest(BaseModel):
     schedule: str  # 5-field cron expression OR an ISO-8601 datetime
     job_id: str | None = None
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
+
+
+def _schedule_problem(schedule: str | None, timezone: str | None) -> str | None:
+    """Why a schedule / timezone a scheduler route was sent is malformed, or ``None``
+    (#3973). A format check at the route, so the caller gets a clear 400 naming the
+    field before anything reaches the backend; the backend still validates semantics (and
+    normalises its own errors to 400, #3969). ``None`` means "not sent" — the update
+    route's partial edit leaves that field alone."""
+    if timezone:
+        from zoneinfo import ZoneInfo
+
+        try:
+            ZoneInfo(timezone)
+        except Exception:  # noqa: BLE001 — ZoneInfoNotFoundError, ValueError, a bad path …
+            return f"invalid timezone {timezone!r}: expected an IANA name like 'America/Chicago'"
+    if schedule is None:
+        return None
+    text = schedule.strip()
+    if not text:
+        return "schedule cannot be empty"
+    from scheduler.interface import is_cron, parse_iso_to_utc
+
+    bad = f"invalid schedule {text!r} (malformed): expected a 5-field cron expression or an ISO-8601 datetime"
+    if is_cron(text):
+        from croniter import croniter
+
+        return None if croniter.is_valid(text) else bad
+    try:
+        parse_iso_to_utc(text)
+    except (ValueError, OverflowError):
+        return bad
+    return None
+
+
+class GoalSetRequest(BaseModel):
+    """``POST /api/goals`` (ADR 0066/0073). The wire shape is the one the route has always
+    taken as a bare dict, now typed (#3973): every field is optional here because the
+    handler owns the "required" answers (a 400 with its own message, as before), and
+    unknown keys are ignored as they always were. What changes is that a WRONG type — a
+    string ``max_iterations``, a list ``verifier`` — is a 422 at the door instead of a
+    stored goal that breaks on its next turn."""
+
+    session_id: str = ""
+    condition: str | None = None
+    verifier: dict[str, Any] | None = None
+    max_iterations: int | None = Field(default=None, ge=1, le=MAX_GOAL_ITERATIONS, strict=True)
+    no_progress_limit: int | None = Field(default=None, ge=1, le=MAX_GOAL_NO_PROGRESS_LIMIT, strict=True)
+    outcome: str | None = None
+    # A single string is still accepted and coerced to a 1-element list by the handler.
+    constraints: list[str] | str | None = None
+    boundaries: list[str] | str | None = None
+    stop_when: str | None = None
+    kick: bool = True
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -122,28 +217,55 @@ async def _sse_event_stream(
                 continue
             except StopAsyncIteration:
                 break
-            seq = evt.get("seq")
-            prefix = f"id: {seq}\n" if seq is not None else ""
-            # Default (unnamed) SSE frame carrying the topic in the payload, so the client
-            # routes by topic with wildcard matching (ADR 0039) — one catch-all `onmessage`
-            # instead of per-name listeners. The `id:` lets EventSource auto-send Last-Event-ID
-            # on reconnect → the route replays missed events from the ring buffer.
-            frame = {"topic": evt["event"], "data": evt["data"]}
-            if seq is not None:
-                frame["seq"] = seq
-            if isinstance(evt.get("ts"), (int, float)):
-                frame["ts"] = evt["ts"]  # when it happened — a replaying client must not stamp it "now"
-            yield f"{prefix}data: {json.dumps(frame)}\n\n"
+            # One malformed bus event (no `event` key, a non-dict, a payload json can't
+            # encode) must not end the console's only push channel (#3973): it is logged
+            # and skipped, and the stream carries on with the next event.
+            try:
+                text = _sse_frame(evt)
+            except Exception:  # noqa: BLE001 — per-event guard; see above
+                log.warning("[events] skipping a malformed bus event: %r", evt, exc_info=True)
+                continue
+            yield text
     finally:
         await agen.aclose()
 
 
+def _sse_frame(evt: dict[str, Any]) -> str:
+    """One bus event as SSE text. Raises on a malformed event — the caller skips it."""
+    seq = evt.get("seq")
+    prefix = f"id: {seq}\n" if seq is not None else ""
+    # Default (unnamed) SSE frame carrying the topic in the payload, so the client
+    # routes by topic with wildcard matching (ADR 0039) — one catch-all `onmessage`
+    # instead of per-name listeners. The `id:` lets EventSource auto-send Last-Event-ID
+    # on reconnect → the route replays missed events from the ring buffer.
+    frame = {"topic": evt["event"], "data": evt["data"]}
+    if seq is not None:
+        frame["seq"] = seq
+    if isinstance(evt.get("ts"), (int, float)):
+        frame["ts"] = evt["ts"]  # when it happened — a replaying client must not stamp it "now"
+    return f"{prefix}data: {json.dumps(frame)}\n\n"
+
+
 def _http_error(exc: Exception) -> HTTPException:
+    """Map a handler's exception to an HTTP error.
+
+    ``ValueError`` (the caller's input) is a 400 and ``NotFoundError`` a 404, both with the
+    handler's own message; a "not loaded" ``RuntimeError`` is a 409. Anything else is a
+    fault in our code: it is logged here with its traceback under a short error id, and the
+    client gets a generic message carrying that id (#3973) — never ``str(exc)``, which
+    leaked file paths and library internals to whoever made the request."""
     if isinstance(exc, ValueError):
         return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, NotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, RuntimeError) and "not loaded" in str(exc).lower():
         return HTTPException(status_code=409, detail=str(exc))
-    return HTTPException(status_code=500, detail=str(exc))
+    error_id = uuid.uuid4().hex[:8]
+    log.error("[operator-api] request failed (error id %s)", error_id, exc_info=exc)
+    return HTTPException(
+        status_code=500,
+        detail=f"Internal server error (error id {error_id}); the details are in the server log.",
+    )
 
 
 def _subagent_http_error(exc: Exception) -> HTTPException:
@@ -202,8 +324,14 @@ class _TaskStoreAdapter:
     def __init__(self, store: Any):
         self._s = store
 
+    @property
+    def enabled(self) -> bool:
+        return self._s is not None
+
     def status(self, project_path: str) -> dict[str, bool]:
-        return {"initialized": True}
+        # Honest when no store is wired (#3973): the routes are still registered (they
+        # answer 503), but the board is NOT initialized.
+        return {"initialized": self.enabled}
 
     def init(self, project_path: str, prefix: str | None = None) -> dict[str, bool]:
         return {"initialized": True, "already_initialized": True}
@@ -226,13 +354,29 @@ class _TaskStoreAdapter:
             for k, v in update.items()
             if k in ("title", "description", "status", "priority", "issue_type", "type", "assignee") and v is not None
         }
-        return self._s.update(issue_id, **fields)
+        try:
+            return self._s.update(issue_id, **fields)
+        except KeyError as exc:  # TaskStore's "unknown issue" — a 404, not a 500 (#3973)
+            raise NotFoundError(f"No task {issue_id!r}.") from exc
 
     def close(self, project_path: str, issue_id: str, reason: str | None = None) -> dict[str, Any]:
-        return self._s.close(issue_id, reason=reason)
+        try:
+            return self._s.close(issue_id, reason=reason)
+        except KeyError as exc:
+            raise NotFoundError(f"No task {issue_id!r}.") from exc
 
     def delete(self, project_path: str, issue_id: str) -> dict[str, Any]:
-        return {"deleted": self._s.delete(issue_id)}
+        # The store answers False for an id it doesn't have; that used to be a 200
+        # `{deleted: false}`, indistinguishable from success to a client that reads the
+        # status (#3973). The success body is unchanged.
+        if not self._s.delete(issue_id):
+            raise NotFoundError(f"No task {issue_id!r}.")
+        return {"deleted": True}
+
+
+def _check_bg_job_id(job_id: str) -> None:
+    if not _BG_JOB_ID.fullmatch(job_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid background job id.")
 
 
 def register_operator_routes(
@@ -280,17 +424,31 @@ def register_operator_routes(
     # The agent + console share one instance-scoped task board (in-process store).
     task_svc = _TaskStoreAdapter(tasks_store)
 
+    def _require_tasks() -> None:
+        # No store wired (#3973): the task routes stay registered — so the console gets
+        # a clear answer, not a 404 that reads as "wrong server" — but every data route
+        # answers 503 instead of an AttributeError 500, and /api/tasks/status reports
+        # `initialized: false`.
+        if not task_svc.enabled:
+            raise HTTPException(status_code=503, detail="tasks not enabled")
+
     @app.get("/api/runtime/status")
     async def _runtime_status():
         # The console handler is async (it offloads the per-poll `ps` co-location
         # probe off the loop, #875); accept a plain dict too so sync test doubles
         # and forks that wire a sync accessor keep working.
-        res = runtime_status()
-        return await res if asyncio.iscoroutine(res) else res
+        try:
+            res = runtime_status()
+            return await res if asyncio.iscoroutine(res) else res
+        except Exception as exc:
+            raise _http_error(exc) from exc
 
     @app.get("/api/subagents")
     async def _subagents():
-        return {"subagents": subagent_list()}
+        try:
+            return {"subagents": subagent_list()}
+        except Exception as exc:
+            raise _http_error(exc) from exc
 
     @app.get("/api/tools")
     async def _tools():
@@ -301,9 +459,14 @@ def register_operator_routes(
         """Background subagent jobs (ADR 0050) — read-only list for the console.
 
         Filters by ``session`` (originating chat session) and/or ``status``
-        (running|completed|failed). Returns ``{"jobs": [...], "enabled": bool}``."""
+        (running|completed|failed|canceled — the store's ``STATUSES``; anything else is a
+        400, #3973, where it used to quietly match nothing). Returns
+        ``{"jobs": [...], "enabled": bool}``."""
+        from background.store import STATUSES
         from runtime.state import STATE
 
+        if status and status not in STATUSES:
+            raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(STATUSES)}.")
         mgr = getattr(STATE, "background_mgr", None)
         if mgr is None:
             return {"jobs": [], "enabled": False}
@@ -327,12 +490,9 @@ def register_operator_routes(
         row + report are retained and the card can always reopen the full report. Job ids
         are strictly ``bg-<12 hex>`` (background/store.py), so anything else is rejected
         before it reaches the store."""
-        import re as _re
-
         from runtime.state import STATE
 
-        if not _re.fullmatch(r"bg-[a-f0-9]{12}", job_id or ""):
-            raise HTTPException(status_code=400, detail="Invalid background job id.")
+        _check_bg_job_id(job_id)
         mgr = getattr(STATE, "background_mgr", None)
         if mgr is None:
             raise HTTPException(status_code=404, detail="Background jobs are not available.")
@@ -349,6 +509,7 @@ def register_operator_routes(
         """Stop a running background job (ADR 0051) — cancels its detached A2A turn."""
         from runtime.state import STATE
 
+        _check_bg_job_id(job_id)
         mgr = getattr(STATE, "background_mgr", None)
         if mgr is None:
             return {"ok": False, "detail": "Background jobs are not available."}
@@ -366,6 +527,7 @@ def register_operator_routes(
         newly dismissed; the key is kept for API compatibility)."""
         from runtime.state import STATE
 
+        _check_bg_job_id(job_id)
         mgr = getattr(STATE, "background_mgr", None)
         if mgr is None:
             return {"ok": False, "detail": "Background jobs are not available."}
@@ -402,7 +564,7 @@ def register_operator_routes(
     @app.post("/api/subagents/batch")
     async def _subagent_batch(req: SubagentBatchRequest):
         try:
-            output = await subagent_batch(_model_payload(req))
+            output = await subagent_batch(req.payload())
             return {"ok": True, "session_id": req.session_id, "output": output}
         except Exception as exc:
             raise _subagent_http_error(exc) from exc
@@ -416,6 +578,7 @@ def register_operator_routes(
 
     @app.post("/api/tasks/init")
     async def _tasks_init(req: TaskInitRequest):
+        _require_tasks()
         try:
             return await asyncio.to_thread(task_svc.init, req.project_path, req.prefix)
         except Exception as exc:
@@ -423,6 +586,7 @@ def register_operator_routes(
 
     @app.get("/api/tasks/issues")
     async def _tasks_list(project_path: str = ""):
+        _require_tasks()
         try:
             issues = await asyncio.to_thread(task_svc.list, project_path)
             return {"issues": issues}
@@ -431,6 +595,7 @@ def register_operator_routes(
 
     @app.post("/api/tasks/issues")
     async def _tasks_create(req: TaskCreateRequest):
+        _require_tasks()
         try:
             issue = await asyncio.to_thread(task_svc.create, req.project_path, _model_payload(req))
             return {"issue": issue}
@@ -439,6 +604,7 @@ def register_operator_routes(
 
     @app.patch("/api/tasks/issues/{issue_id}")
     async def _tasks_update(issue_id: str, req: TaskUpdateRequest):
+        _require_tasks()
         try:
             issue = await asyncio.to_thread(task_svc.update, req.project_path, issue_id, _model_payload(req))
             return {"issue": issue}
@@ -447,6 +613,7 @@ def register_operator_routes(
 
     @app.post("/api/tasks/issues/{issue_id}/close")
     async def _tasks_close(issue_id: str, req: TaskCloseRequest):
+        _require_tasks()
         try:
             issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
             try:
@@ -461,6 +628,7 @@ def register_operator_routes(
 
     @app.delete("/api/tasks/issues/{issue_id}")
     async def _tasks_delete(issue_id: str, project_path: str = ""):
+        _require_tasks()
         try:
             return await asyncio.to_thread(task_svc.delete, project_path, issue_id)
         except Exception as exc:
@@ -483,6 +651,8 @@ def register_operator_routes(
 
         @app.post("/api/scheduler/jobs")
         async def _scheduler_add(req: ScheduleAddRequest):
+            if problem := _schedule_problem(req.schedule, req.timezone):
+                raise HTTPException(status_code=400, detail=problem)
             try:
                 return {"job": await scheduler_add(_model_payload(req))}
             except Exception as exc:
@@ -492,6 +662,8 @@ def register_operator_routes(
 
         @app.put("/api/scheduler/jobs/{job_id}")
         async def _scheduler_update(job_id: str, req: ScheduleUpdateRequest):
+            if problem := _schedule_problem(req.schedule, req.timezone):
+                raise HTTPException(status_code=400, detail=problem)
             try:
                 # Only the fields the caller sent — the handler keeps the rest (#3957).
                 return {"job": await scheduler_update(job_id, req.model_dump(exclude_unset=True))}
@@ -503,9 +675,14 @@ def register_operator_routes(
         @app.delete("/api/scheduler/jobs/{job_id}")
         async def _scheduler_cancel(job_id: str):
             try:
-                return await scheduler_cancel(job_id)
+                res = await scheduler_cancel(job_id)
             except Exception as exc:
                 raise _http_error(exc) from exc
+            # Nothing was canceled because there was no such job → 404 (#3973). It used to
+            # be a 200 `{canceled: false}`, which a client reading the status took as done.
+            if isinstance(res, dict) and res.get("canceled") is False:
+                raise HTTPException(status_code=404, detail=f"No scheduled job {job_id!r}.")
+            return res
 
     # --- Goals ---------------------------------------------------------------
     # List goals across sessions + clear one. Goals are *set* in chat (`/goal`);
@@ -542,19 +719,24 @@ def register_operator_routes(
 
         if STATE.goal_controller is None:
             return {"enabled": False, "goal": None, "plan": ""}
-        store = STATE.goal_controller.store
-        state = await asyncio.to_thread(store.get, session_id)
-        plan = await asyncio.to_thread(store.read_plan, session_id) if state else ""
-        return {"enabled": True, "goal": state.to_dict() if state else None, "plan": plan or ""}
+        try:
+            store = STATE.goal_controller.store
+            state = await asyncio.to_thread(store.get, session_id)
+            plan = await asyncio.to_thread(store.read_plan, session_id) if state else ""
+            return {"enabled": True, "goal": state.to_dict() if state else None, "plan": plan or ""}
+        except Exception as exc:
+            raise _http_error(exc) from exc
 
     # Programmatic goal-set (ADR 0028 D3) — accepts ONLY a `plugin` verifier;
     # command/test/ci/data stay operator-only (/goal). 400 on a rejected verifier.
     if goal_set is not None:
 
         @app.post("/api/goals")
-        async def _goal_set(body: dict):
+        async def _goal_set(req: GoalSetRequest):
             try:
-                res = await goal_set(body or {})
+                # Only the keys the caller sent — the handler's defaults (kick=True, …)
+                # apply to the rest exactly as they did for the bare-dict body.
+                res = await goal_set(req.model_dump(exclude_unset=True))
             except Exception as exc:
                 raise _http_error(exc) from exc
             if not res.get("ok"):

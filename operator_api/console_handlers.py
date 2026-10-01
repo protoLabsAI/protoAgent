@@ -415,7 +415,16 @@ async def _operator_scheduler_cancel(job_id: str) -> dict:
     if STATE.scheduler is None:
         raise RuntimeError("scheduler is not loaded (disabled or setup incomplete)")
     canceled = await asyncio.to_thread(STATE.scheduler.cancel_job, job_id)
-    return {"canceled": bool(canceled)}
+    if not canceled:
+        # `cancel_job` answers False both for "no such job" and for a store error it
+        # swallowed; only the first is a 404 (#3973). A job that is still there was NOT
+        # canceled, and saying "not found" about it would be a lie.
+        from operator_api.routes import NotFoundError
+
+        if await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id) is None:
+            raise NotFoundError(f"No scheduled job {job_id!r}.")
+        raise RuntimeError(f"scheduler could not cancel job {job_id!r}")
+    return {"canceled": True}
 
 
 async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
@@ -439,7 +448,9 @@ async def _operator_scheduler_update(job_id: str, req: dict) -> dict:
             raise ValueError(f"{key} cannot be empty")
     current = await asyncio.to_thread(_scheduler_job, STATE.scheduler, job_id)
     if current is None:
-        raise ValueError(f"no job {job_id!r} to update")
+        from operator_api.routes import NotFoundError
+
+        raise NotFoundError(f"No scheduled job {job_id!r}.")  # a 404, not a 400 (#3973)
     prompt = fields["prompt"].strip() if "prompt" in fields else current.prompt
     schedule = fields["schedule"].strip() if "schedule" in fields else current.schedule
     timezone = (fields["timezone"] or None) if "timezone" in fields else getattr(current, "timezone", None)

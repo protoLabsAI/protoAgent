@@ -259,10 +259,11 @@ def test_put_still_validates_provided_fields(tmp_path, monkeypatch, body, detail
     assert sched.get_job("j1").prompt == "p" and sched.get_job("j1").schedule == "0 9 * * *"
 
 
-def test_put_partial_on_a_missing_job_is_400(tmp_path, monkeypatch):
+def test_put_partial_on_a_missing_job_is_404(tmp_path, monkeypatch):
+    # Was a 400 "no job …"; a missing id is a 404 (#3973).
     client, _sched = _real_scheduler_client(tmp_path, monkeypatch)
     resp = client.put("/api/scheduler/jobs/nope", json={"schedule": "0 9 * * *"})
-    assert resp.status_code == 400 and "no job" in resp.json()["detail"]
+    assert resp.status_code == 404 and "nope" in resp.json()["detail"]
 
 
 # --- 3. watch clear() vs an in-flight evaluate() ---------------------------------------
