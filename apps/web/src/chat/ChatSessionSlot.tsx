@@ -1175,7 +1175,11 @@ export function ChatSessionSlot({
             chatStore.updateMessages(
               session.id,
               latest.messages.map((item) =>
-                item.id === assistantId ? { ...item, content: friendly, status: "error" } : item,
+                item.id === assistantId
+                  ? // Keep what the turn said before it failed (#3940) — a failed workflow
+                    // streams its whole output, then a one-line error; the error goes under it.
+                    { ...item, content: item.content?.trim() ? `${item.content.trimEnd()}\n\n${friendly}` : friendly, status: "error" }
+                  : item,
               ),
             );
           }

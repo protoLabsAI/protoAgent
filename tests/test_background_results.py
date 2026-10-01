@@ -443,7 +443,7 @@ class TestServerTurnControlPlane:
         from graph import steering
 
         turn_control = importlib.import_module("server.turn_control")
-        steering._QUEUES.clear()
+        steering._reset()
         turn_control._LIVE_SERVER_TURNS.clear()
         turn_control._ATTENDED_SESSIONS.clear()
 
@@ -453,7 +453,7 @@ class TestServerTurnControlPlane:
         from graph import steering
 
         turn_control = importlib.import_module("server.turn_control")
-        steering._QUEUES.clear()
+        steering._reset()
         turn_control._LIVE_SERVER_TURNS.clear()
         turn_control._ATTENDED_SESSIONS.clear()
 

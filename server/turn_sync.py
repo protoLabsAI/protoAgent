@@ -439,6 +439,7 @@ async def _chat_langgraph_impl(
             )
             last_frame: tuple | None = None
             delegated_usage: list[dict] = []
+            streamed_text = ""
             try:
                 async with contextlib.aclosing(
                     _chat_dispatch._pre_turn_dispatch(pre, session_id, None)
@@ -450,6 +451,10 @@ async def _chat_langgraph_impl(
                             delegated_usage.append(frame[1])
                             continue
                         last_frame = frame
+                        if frame[0] == "text" and isinstance(frame[1], str):
+                            # A failed `/<workflow>` streams its output, then a one-line
+                            # error (#3940) — the reply keeps both.
+                            streamed_text += frame[1]
             finally:
                 # Handed over even when the dispatch raised: a failed slash run's row
                 # still bills what it spent before it failed.
@@ -463,7 +468,11 @@ async def _chat_langgraph_impl(
                     _telemetry_sink["short_circuit"] = True
                     if last_frame is not None and last_frame[0] == "input_required":
                         _telemetry_sink["state"] = "input_required"
-                return _traced(_chat_dispatch._short_circuit_reply(last_frame))
+                    elif last_frame is not None and last_frame[0] == "error":
+                        # A short-circuit that ended FAILED — a `/<workflow>` with a failed
+                        # step (#3957) — is a failed row here too, as on the A2A surface.
+                        _telemetry_sink["state"] = "failed"
+                return _traced(_chat_dispatch._short_circuit_reply(last_frame, streamed_text))
             message = pre.message
 
             # Non-native runtime (ADR 0033) — the switch itself is shared (see

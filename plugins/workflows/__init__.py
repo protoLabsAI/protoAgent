@@ -32,7 +32,13 @@ from langchain_core.tools import tool
 from graph import sdk
 from plugins.workflows.engine import execute_workflow, render_template, resolve_inputs, validate_recipe
 from plugins.workflows.registry import WorkflowRegistry
-from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_PAUSED, WorkflowRunStore
+from plugins.workflows.run_state import (
+    STATUS_CANCELLED,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PAUSED,
+    WorkflowRunStore,
+)
 
 log = logging.getLogger("protoagent.plugins.workflows")
 
@@ -183,7 +189,10 @@ async def _run_prepared(
                 seed_outputs=seed_outputs,
             )
             _trace_outcome(traced, result)
-    except BaseException:  # a cancelled run too, or its record is left "running" forever
+    except asyncio.CancelledError:
+        _finish_stopped(run_store)
+        raise
+    except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
@@ -255,6 +264,17 @@ async def _start_background(
 
     _spawn(_run())
     return run_id
+
+
+def _finish_stopped(run_store: WorkflowRunStore) -> None:
+    """Close out a run whose task was cancelled. A cancel is its own terminal state
+    (#3957) — stopped, not broken — EXCEPT when the stall guard sent it (#3940): that
+    turn failed ("The turn stalled …"), so the run did too, and says why."""
+    stalled = sdk.turn_stop_reason()
+    if stalled:
+        run_store.finish(STATUS_FAILED, error=stalled)
+    else:
+        run_store.finish(STATUS_CANCELLED)
 
 
 async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str) -> str:
@@ -433,7 +453,10 @@ async def _resume(
         ) as traced:
             result = await execute_workflow(recipe, inputs, **kwargs)
             _trace_outcome(traced, result)
-    except BaseException:  # a cancelled run too, or its record is left "running" forever
+    except asyncio.CancelledError:
+        _finish_stopped(run_store)
+        raise
+    except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal

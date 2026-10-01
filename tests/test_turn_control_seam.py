@@ -244,7 +244,7 @@ async def test_hitl_hold_reads_the_pending_interrupt_through_server_chat(monkeyp
         )
         assert resume is turn_control._HITL_RESUME
     finally:
-        steering._QUEUES.pop("s-hold", None)
+        steering.forget("s-hold")
 
 
 @pytest.mark.asyncio

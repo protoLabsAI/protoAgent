@@ -884,7 +884,7 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     # cancels a still-queued message, and a second DELETE reports too-late.
     from graph import steering
 
-    steering._QUEUES.clear()
+    steering._reset()
     c = _client(monkeypatch)
     posted = c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "do X instead"}).json()
     assert posted == {"ok": True, "id": "m1", "pending": 1}
@@ -897,7 +897,7 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": True, "pending": 0}
     # ✕ again (or after it's drained) → too late, nothing removed.
     assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": False, "pending": 0}
-    steering._QUEUES.clear()
+    steering._reset()
 
 
 def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
@@ -908,8 +908,7 @@ def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
     from graph import steering
     from graph.middleware.steering import SteeringMiddleware
 
-    steering._QUEUES.clear()
-    steering._DRAINED.clear()
+    steering._reset()
     c = _client(monkeypatch)
     try:
         c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "yes 2024 as proposed"})
@@ -921,8 +920,7 @@ def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
         read = c.get("/api/chat/sessions/s1/steer").json()
         assert read["pending"] == [] and read["drained"] == ["m1"]
     finally:
-        steering._QUEUES.clear()
-        steering._DRAINED.clear()
+        steering._reset()
 
 
 def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
@@ -931,7 +929,7 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
     from graph import steering
 
     turn_control = importlib.import_module("server.turn_control")
-    steering._QUEUES.clear()
+    steering._reset()
     turn_control._LIVE_SERVER_TURNS.clear()
     turn_control._ATTENDED_SESSIONS.clear()
     c = _client(monkeypatch)
@@ -965,7 +963,7 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
         ).json()
         assert stale == {"ok": False, "reason": "not_live", "pending": 0}
     finally:
-        steering._QUEUES.clear()
+        steering._reset()
         turn_control._LIVE_SERVER_TURNS.clear()
         turn_control._ATTENDED_SESSIONS.clear()
 

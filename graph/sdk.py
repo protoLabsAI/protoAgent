@@ -151,6 +151,18 @@ async def run_subagent(
     )
 
 
+def turn_stop_reason() -> str:
+    """Why the turn this code runs under was stopped from above, or ``""``.
+
+    Read it on a ``CancelledError`` to tell the two apart (#3940): ``""`` is a plain
+    cancel (an operator's A2A ``CancelTask``, a shutdown); otherwise the stall guard ended
+    the turn because it stopped making progress, and this is its message — a failure,
+    not a cancel. See ``graph.turn_liveness``."""
+    from graph.turn_liveness import turn_stop_reason as _reason
+
+    return _reason()
+
+
 async def complete(prompt: str, *, system: str | None = None, model_name: str | None = None) -> str:
     """Run a single **bare** LLM completion and return the text — no tools, no agent
     loop, no persona, no memory. The clean primitive for a plugin that just needs the

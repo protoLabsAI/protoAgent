@@ -320,3 +320,70 @@ def test_workflows_plugin_config_section_does_not_collide_with_core(caplog):
     assert len(mine) == 1 and mine[0].section not in _RESERVED_SECTIONS
     assert mine[0].defaults.get("max_runs") == 200
     assert not [r for r in caplog.records if "collides with a built-in" in r.getMessage()]
+
+
+# --- a cancelled run is recorded as cancelled, not failed (#3957) ---------------
+
+
+def _blocking_gather(started: asyncio.Event):
+    async def run_subagent(subagent_type, prompt, description=""):
+        if description.endswith(":gather"):
+            started.set()
+            await asyncio.sleep(3600)
+        return "brief-out"
+
+    return run_subagent
+
+
+def test_a_cancelled_run_is_recorded_cancelled_with_its_in_flight_step(tmp_path, monkeypatch):
+    """A run stopped from outside — its turn ended (CancelTask, the stall guard) — was
+    recorded ``failed``, indistinguishable from a step that broke. It is ``cancelled``,
+    and the step that was running is marked cancelled rather than left ``running`` on a
+    terminal record."""
+
+    async def scenario():
+        started = asyncio.Event()
+        _patch_sdk(monkeypatch, _blocking_gather(started))
+        store = WorkflowRunStore(tmp_path)
+        task = asyncio.create_task(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return store
+
+    store = asyncio.run(scenario())
+    state = store.load(store.run_id)
+    assert state["status"] == "cancelled"
+    assert state["step_meta"]["gather"]["status"] == "cancelled"
+    assert state["step_meta"]["gather"].get("finished_at")
+
+
+def test_a_cancelled_run_is_terminal_for_pruning(tmp_path):
+    from plugins.workflows.run_state import STATUS_CANCELLED, TERMINAL
+
+    assert STATUS_CANCELLED in TERMINAL
+    store = WorkflowRunStore(tmp_path)
+    for _ in range(3):
+        store.start("demo", {})
+        store.finish(STATUS_CANCELLED)
+    assert store.prune(keep=1) == 2
+
+
+def test_a_run_that_raises_is_still_recorded_failed(tmp_path, monkeypatch):
+    """Only a cancel is ``cancelled`` — a run that crashes outside the engine's inline
+    step-failure handling is still ``failed``."""
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        return "out"
+
+    _patch_sdk(monkeypatch, run_subagent)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("engine crashed")
+
+    monkeypatch.setattr(wf, "execute_workflow", _boom)
+    store = WorkflowRunStore(tmp_path)
+    with pytest.raises(RuntimeError):
+        asyncio.run(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+    assert store.load(store.run_id)["status"] == STATUS_FAILED

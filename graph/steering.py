@@ -115,16 +115,42 @@ def drain(session_id: str) -> list[dict]:
 # interjection is the task history's steer-consumed marker).
 _DRAINED: dict[str, list[str]] = {}
 _DRAINED_CAP = 50
+# Bounded in session COUNT too (#3940), with the same rules as ``_QUEUES``: each log
+# remembers when it was last written, and every drain that records ids first evicts logs
+# untouched for ``_QUEUE_TTL_S`` and, for a NEW session at ``_QUEUES_MAX`` logs, the least
+# recently written one. Before this only ``forget`` (a deleted chat) ever removed a row,
+# so every server-fired context that ever folded a message in kept one for the life of
+# the process. Dropping a log loses nothing durable — the task history keeps the marker.
+_DRAINED_TOUCHED: dict[str, float] = {}
+
+
+def _evict_stale_drained(incoming: str) -> None:
+    now = _now()
+    while _DRAINED_TOUCHED:
+        sid, touched = next(iter(_DRAINED_TOUCHED.items()))
+        if now - touched < _QUEUE_TTL_S:
+            break
+        _DRAINED_TOUCHED.pop(sid, None)
+        _DRAINED.pop(sid, None)
+    if incoming in _DRAINED:
+        return
+    while len(_DRAINED) >= _QUEUES_MAX and _DRAINED_TOUCHED:
+        sid = next(iter(_DRAINED_TOUCHED))
+        _DRAINED_TOUCHED.pop(sid, None)
+        _DRAINED.pop(sid, None)
 
 
 def _note_drained(session_id: str, ids: list[str]) -> None:
     kept = [mid for mid in ids if mid]
     if not kept:
         return
+    _evict_stale_drained(session_id)
     log = _DRAINED.setdefault(session_id, [])
     log.extend(kept)
     if len(log) > _DRAINED_CAP:
         del log[: len(log) - _DRAINED_CAP]
+    _DRAINED_TOUCHED.pop(session_id, None)
+    _DRAINED_TOUCHED[session_id] = _now()
 
 
 def drained(session_id: str) -> list[str]:
@@ -144,6 +170,17 @@ def forget(session_id: str) -> None:
     _QUEUES.pop(sid, None)
     _QUEUE_TOUCHED.pop(sid, None)
     _DRAINED.pop(sid, None)
+    _DRAINED_TOUCHED.pop(sid, None)
+
+
+def _reset() -> None:
+    """Clear ALL of this module's process state — every queue, drain log, and their
+    eviction clocks. For tests: a fixture that cleared only some of these dicts left the
+    others (the ``*_TOUCHED`` clocks) to leak into the next test (#3940)."""
+    _QUEUES.clear()
+    _QUEUE_TOUCHED.clear()
+    _DRAINED.clear()
+    _DRAINED_TOUCHED.clear()
 
 
 def dequeue(session_id: str, msg_id: str) -> bool:

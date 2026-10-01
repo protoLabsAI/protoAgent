@@ -23,7 +23,7 @@ the module's own.
 
 ## Contents
 
-**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types)
+**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
 
 **Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
@@ -111,6 +111,19 @@ chat drivers), so a workflow step follows the model the operator picked for the
 turn — under the one precedence: the subagent's pin > the override >
 `routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
 none and the step resolves pin > aux > main, as before.
+
+### `sdk.turn_stop_reason` {#sdk-turn-stop-reason}
+
+```python
+sdk.turn_stop_reason() -> str
+```
+
+Why the turn this code runs under was stopped from above, or `""`.
+
+Read it on a `CancelledError` to tell the two apart ([#3940](https://github.com/protoLabsAI/protoAgent/issues/3940)): `""` is a plain
+cancel (an operator's A2A `CancelTask`, a shutdown); otherwise the stall guard ended
+the turn because it stopped making progress, and this is its message — a failure,
+not a cancel. See `graph.turn_liveness`.
 
 ### `sdk.complete` {#sdk-complete}
 

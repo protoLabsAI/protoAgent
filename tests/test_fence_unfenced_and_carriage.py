@@ -50,9 +50,9 @@ _OVERFLOW = "Error code: 400 - This model's maximum context length is 128000 tok
 
 @pytest.fixture(autouse=True)
 def _clean_queues():
-    steering._QUEUES.clear()
+    steering._reset()
     yield
-    steering._QUEUES.clear()
+    steering._reset()
 
 
 @pytest.fixture(autouse=True)

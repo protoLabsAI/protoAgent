@@ -261,7 +261,9 @@ async def execute_workflow(
     """Run the recipe's step DAG. ``run_step(subagent, prompt, step_id) -> output``.
 
     Returns ``{"output": str, "steps": {id: output}, "failed": [ids],
-    "degraded": [ids], "timings": {id: seconds}}``. Step failures are recorded inline
+    "degraded": [ids], "timings": {id: seconds}, "output_steps": [ids],
+    "output_failed": bool}`` — ``output_failed`` is set when a step the output is
+    rendered from failed, or every step did. Step failures are recorded inline
     (the step's output becomes the error text) so independent branches still complete —
     matching task_batch semantics.
 
@@ -392,10 +394,25 @@ async def execute_workflow(
             pending.pop(sid)
 
     output_tpl = recipe.get("output") or f"{{{{steps.{steps[-1]['id']}.output}}}}"
+    # The steps the final output is rendered from (#3940). The DAG deliberately keeps
+    # going past a failed branch, so a run can fail a step and still deliver a valid
+    # answer from a later one: the RUN failed only when the output itself carries a
+    # failure, or nothing at all succeeded.
+    output_steps = [
+        ref[len("steps.") : -len(".output")]
+        for ref in _refs(output_tpl)
+        if ref.startswith("steps.") and ref.endswith(".output")
+    ]
+    failed_set = set(failed)
+    output_failed = any(sid in failed_set for sid in output_steps) or (
+        bool(failed_set) and all(s["id"] in failed_set for s in steps)
+    )
     return {
         "output": render_template(output_tpl, inputs, done),
         "steps": done,
         "failed": failed,
         "degraded": degraded,
         "timings": timings,
+        "output_steps": output_steps,
+        "output_failed": output_failed,
     }

@@ -78,8 +78,32 @@ def _parse_workflow_command(message: str):
     return name, _parse_workflow_inputs(recipe, rest)
 
 
+class WorkflowReply(str):
+    """A ``/<workflow>`` reply: the text, plus whether the RUN failed — so the turn can
+    end failed instead of completed (#3957) — and which steps failed. A ``str``, so every
+    caller that only wants the text (and every test fake returning a plain string) is
+    unchanged.
+
+    ``failed`` follows the engine's ``output_failed`` (#3940): a step the final output is
+    rendered from failed, or every step did. A run that lost one branch but still
+    produced its output is NOT failed — the engine keeps the DAG going past a failed
+    branch precisely so a later step can still deliver — and completes with the
+    failed-steps note."""
+
+    failed: bool = False
+    failed_steps: tuple[str, ...] = ()
+
+
+def _reply(text: str, *, failed: bool, failed_steps) -> WorkflowReply:
+    reply = WorkflowReply(text)
+    reply.failed = failed
+    reply.failed_steps = tuple(failed_steps)
+    return reply
+
+
 async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
-    """Run a workflow command and format its output as the assistant reply.
+    """Run a workflow command and format its output as the assistant reply — a
+    :class:`WorkflowReply` whose ``failed`` says the run failed (see its docstring).
 
     ``on_step`` is forwarded to the workflows plugin's runner (``STATE.workflow_run``,
     set when the plugin is enabled) so the caller can stream per-step progress (the
@@ -102,7 +126,9 @@ async def _run_parsed_workflow(name: str, inputs: dict, *, on_step=None) -> str:
     out = extract_output(raw) or raw or "(workflow produced no output)"
     failed = result.get("failed") or []
     if failed:
-        out += f"\n\n_(failed steps: {', '.join(failed)})_"
+        # An older runner without `output_failed` reads as failed — the safe side.
+        run_failed = bool(result.get("output_failed", True))
+        return _reply(f"{out}\n\n_(failed steps: {', '.join(failed)})_", failed=run_failed, failed_steps=failed)
     return out
 
 

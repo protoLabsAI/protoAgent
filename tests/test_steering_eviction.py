@@ -22,15 +22,11 @@ def _touched() -> dict:
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    steering._QUEUES.clear()
-    steering._DRAINED.clear()
-    _touched().clear()
+    steering._reset()
     clock = [1000.0]
     monkeypatch.setattr(steering, "_now", lambda: clock[0], raising=False)
     yield clock
-    steering._QUEUES.clear()
-    steering._DRAINED.clear()
-    _touched().clear()
+    steering._reset()
 
 
 def test_a_queue_idle_past_the_ttl_is_evicted_on_the_next_enqueue(_clean, monkeypatch, caplog):
@@ -105,3 +101,90 @@ def test_deleting_a_chat_drops_its_steering_queue(monkeypatch):
 
     assert steering.pending("gone") == 0 and "gone" not in _touched()
     assert steering.pending("kept") == 1
+
+
+# ── the drain log is bounded the same way (#3940) ────────────────────────────
+
+
+def _drained_touched() -> dict:
+    return getattr(steering, "_DRAINED_TOUCHED", {})
+
+
+def _fold_in(session_id: str, msg_id: str) -> None:
+    steering.enqueue(session_id, "read it", msg_id=msg_id)
+    steering.drain(session_id)
+
+
+def test_a_drain_log_idle_past_the_ttl_is_evicted_on_the_next_drain(_clean, monkeypatch):
+    """``_DRAINED`` was capped per session but never in session count: only ``forget``
+    removed a row, so every server-fired context that ever folded a message in kept one
+    for the life of the process. It now ages out on the same TTL as the queues."""
+    clock = _clean
+    monkeypatch.setattr(steering, "_QUEUE_TTL_S", 60.0, raising=False)
+    _fold_in("old", "o1")
+    clock[0] += 30
+    _fold_in("recent", "r1")
+    clock[0] += 31  # "old" is 61s idle, "recent" 31s
+
+    _fold_in("new", "n1")
+
+    assert steering.drained("old") == []
+    assert steering.drained("recent") == ["r1"] and steering.drained("new") == ["n1"]
+    assert set(_drained_touched()) == {"recent", "new"}
+
+
+def test_the_drain_log_registry_is_capped_by_evicting_the_least_recently_written(_clean, monkeypatch):
+    clock = _clean
+    monkeypatch.setattr(steering, "_QUEUES_MAX", 3, raising=False)
+    for sid in ("a", "b", "c"):
+        _fold_in(sid, f"{sid}1")
+        clock[0] += 1
+    _fold_in("a", "a2")  # a re-write makes "a" the most recent; "b" is now the oldest
+
+    _fold_in("d", "d1")  # a NEW session at the cap evicts "b"
+
+    assert set(steering._DRAINED) == {"a", "c", "d"}
+    assert steering.drained("a") == ["a1", "a2"]
+    # An existing session at the cap evicts nothing.
+    _fold_in("c", "c2")
+    assert set(steering._DRAINED) == {"a", "c", "d"}
+
+
+def test_forget_releases_the_drain_log_clock(_clean):
+    _fold_in("gone", "g1")
+    steering.forget("gone")
+    assert steering.drained("gone") == [] and _drained_touched() == {}
+
+
+# ── test hygiene: one reset for all of the module's state (#3940) ────────────
+
+
+def test_reset_clears_every_piece_of_module_state(_clean):
+    """A fixture that cleared ``_QUEUES``/``_DRAINED`` by hand left the eviction clocks
+    (``_QUEUE_TOUCHED``) behind to leak into the next test. ``_reset`` clears every
+    module-level dict, so a dict added later can't be forgotten by a fixture."""
+    _fold_in("s1", "m1")
+    steering.enqueue("s2", "pending", msg_id="m2")
+    state = {name: v for name, v in vars(steering).items() if isinstance(v, dict) and not name.startswith("__")}
+    assert state and all(state.values()), state  # every dict is populated
+
+    steering._reset()
+
+    assert all(not v for v in state.values()), {k: v for k, v in state.items() if v}
+
+
+def test_no_test_clears_steering_state_piecemeal():
+    """Tests reset steering through ``steering._reset()`` — a hand-rolled clear of some of
+    its dicts is how ``_QUEUE_TOUCHED`` leaked between tests."""
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    offenders = []
+    for path in sorted(here.parent.rglob("test_*.py")):
+        if path == here:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for needle in ("steering._QUEUES.clear()", "steering._DRAINED.clear()", "steering._QUEUES.pop("):
+            if needle in text:
+                offenders.append(f"{path.name}: {needle}")
+    assert not offenders, "use steering._reset() / steering.forget(sid): " + ", ".join(offenders)

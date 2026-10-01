@@ -593,10 +593,11 @@ export type WorkflowRecipe = {
   max_concurrency?: number;
 };
 
-export type WorkflowRunStatus = "running" | "done" | "failed" | "paused";
+// `cancelled`: stopped from outside (its turn ended, the server shut it down) — not a failure (#3957).
+export type WorkflowRunStatus = "running" | "done" | "failed" | "paused" | "cancelled";
 
 export type WorkflowStepMeta = {
-  status?: "running" | "done" | "failed";
+  status?: "running" | "done" | "failed" | "cancelled";
   started_at?: string;
   finished_at?: string;
   seconds?: number;
@@ -620,6 +621,8 @@ export type WorkflowRunRecord = {
   output?: string;
   failed?: string[];
   degraded?: string[];
+  // Why a run that never returned its envelope failed (e.g. its turn stalled, #3940).
+  error?: string;
 };
 
 // History summaries (GET /runs/all) — every recorded run, newest first.
