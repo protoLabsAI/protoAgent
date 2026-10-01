@@ -655,6 +655,84 @@ def test_a_box_rooted_server_never_adopts_the_operators_real_home_note(tmp_path,
     assert notes.read_note.invoke({}) == "box note"
 
 
+def test_a_desktop_member_adopts_its_note_from_the_home_dir(tmp_path, monkeypatch) -> None:
+    """Desktop regression (jobCoach lost its note on upgrade): the desktop app points a
+    member's box root at its Tauri config dir, but the pre-#3714 note was written to the
+    bare HOME path (~/.protoagent/notes/<inst>). When the box root IS a desktop box root,
+    that HOME note is adopted — with its history — instead of starting an empty note."""
+    import infra.paths
+
+    home, box = tmp_path / "home", tmp_path / "desktop-box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "jobCoach-2e97")
+    monkeypatch.setattr(infra.paths, "desktop_box_roots", lambda: [box])
+    _reset_instance_paths()
+
+    legacy = home / ".protoagent" / "notes" / "jobCoach-2e97"
+    (legacy / "history").mkdir(parents=True)
+    (legacy / "note.md").write_text("job leads", encoding="utf-8")
+    vid = "20250101T000000.000000Z-operator-abcd1234"
+    (legacy / "history" / f"{vid}.md").write_text("older leads", encoding="utf-8")
+
+    notes = _load_notes()
+    assert notes.read_note.invoke({}) == "job leads"
+
+    store = box / "jobCoach-2e97" / "notes"
+    assert (store / "note.md").read_text(encoding="utf-8") == "job leads"
+    assert not (legacy / "note.md").exists()  # moved, not copied
+    assert [v["id"] for v in notes._list_versions()] == [vid]
+
+
+def test_a_desktop_member_prefers_a_box_scoped_legacy_note(tmp_path, monkeypatch) -> None:
+    """When both legacy locations hold a note, the box-scoped one wins and the HOME one is
+    left untouched — the HOME source is only a fallback for the desktop sidecar's shape."""
+    import infra.paths
+
+    home, box = tmp_path / "home", tmp_path / "desktop-box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "onb")
+    monkeypatch.setattr(infra.paths, "desktop_box_roots", lambda: [box])
+    _reset_instance_paths()
+
+    box_legacy = box / "notes" / "onb"
+    box_legacy.mkdir(parents=True)
+    (box_legacy / "note.md").write_text("box legacy", encoding="utf-8")
+    home_legacy = home / ".protoagent" / "notes" / "onb"
+    home_legacy.mkdir(parents=True)
+    (home_legacy / "note.md").write_text("home legacy", encoding="utf-8")
+
+    notes = _load_notes()
+    assert notes.read_note.invoke({}) == "box legacy"
+    assert (home_legacy / "note.md").read_text(encoding="utf-8") == "home legacy"
+
+
+def test_an_unscoped_desktop_server_never_adopts_the_bare_home_note(tmp_path, monkeypatch) -> None:
+    """The bare ~/.protoagent/notes belongs to the unscoped CLI install: a desktop box with
+    no PROTOAGENT_INSTANCE must not reach into it."""
+    import infra.paths
+
+    home, box = tmp_path / "home", tmp_path / "desktop-box"
+    _pin_home(monkeypatch, home)
+    monkeypatch.delenv("NOTES_DIR", raising=False)
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setattr(infra.paths, "desktop_box_roots", lambda: [box])
+    _reset_instance_paths()
+
+    bare = home / ".protoagent" / "notes"
+    bare.mkdir(parents=True)
+    (bare / "note.md").write_text("cli note", encoding="utf-8")
+
+    notes = _load_notes()
+    notes.write_note.invoke({"content": "desktop note"})
+    assert (bare / "note.md").read_text(encoding="utf-8") == "cli note"
+    assert notes.read_note.invoke({}) == "desktop note"
+
+
 def test_no_migration_when_the_store_already_has_a_note(tmp_path, monkeypatch) -> None:
     """AC4: the store already holds a note → no migration runs, and the legacy files
     stay put."""

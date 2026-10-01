@@ -96,10 +96,49 @@ def _legacy_notes_dir() -> Path:
     return base / inst if inst else base
 
 
+def _desktop_home_legacy_dir() -> Path | None:
+    """The DESKTOP sidecar's pre-scoping note, or None when this isn't a desktop member.
+
+    Before #3714 the note path was a bare ``Path.home()/.protoagent/notes/<inst>`` — it
+    ignored ``PROTOAGENT_BOX_ROOT``. The desktop app points every member's box root at its
+    Tauri config dir (``desktop_box_roots()``), so a desktop member's real legacy note is
+    under HOME, not under ``box_root()/notes``, and the box-scoped lookup alone misses it:
+    the member silently starts an empty note (jobCoach, 2026-09-30). Gated on the box root
+    BEING a desktop box root — that's the operator's own install, not a throwaway box
+    sharing HOME, so the #3644 guarantee (an isolated server never adopts the operator's
+    home note) still holds. Also requires an instance id: the bare home dir belongs to the
+    unscoped CLI install and must never be adopted by a desktop member."""
+    inst = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+    if not inst:
+        return None
+    try:
+        from infra.paths import box_root, desktop_box_roots
+
+        box = box_root().resolve()
+        if not any(box == d.resolve() for d in desktop_box_roots()):
+            return None
+    except Exception:  # noqa: BLE001 — a lookup miss just means no extra legacy source
+        return None
+    return Path.home() / ".protoagent" / "notes" / inst
+
+
+def _legacy_sources() -> list[Path]:
+    """Every place a pre-scoping note may live, in adoption order: the box-scoped dir,
+    then (desktop members only) the HOME dir the desktop sidecar actually wrote to."""
+    sources = [_legacy_notes_dir()]
+    desktop = _desktop_home_legacy_dir()
+    if desktop is not None:
+        sources.append(desktop)
+    return sources
+
+
 def _legacy_note_path() -> Path:
     """The legacy note file, its dir created — the fallback used when the instance
     store can't be resolved. Note tools must never fail over where their file lives."""
-    d = _legacy_notes_dir()
+    sources = _legacy_sources()
+    # Keep using whichever legacy dir actually holds the note (a desktop member's adopt can
+    # fail too), else the box-scoped one.
+    d = next((s for s in sources if (s / "note.md").is_file()), sources[0])
     d.mkdir(parents=True, exist_ok=True)
     return d / "note.md"
 
@@ -114,12 +153,13 @@ def _adopt_legacy(target_dir: Path) -> None:
     has changed yet; once the note has moved, a failure to move ``history/`` is swallowed
     (the live note is what matters). Only THIS instance's note moves — a sibling instance
     subdir under the bare legacy dir is left untouched."""
-    legacy = _legacy_notes_dir()
-    if legacy.resolve() == target_dir.resolve():
-        return  # legacy IS the target (e.g. box_root == ~/.protoagent) — nothing to move
+    legacy = next(
+        (d for d in _legacy_sources() if (d / "note.md").is_file() and d.resolve() != target_dir.resolve()),
+        None,
+    )
+    if legacy is None:
+        return  # nothing to adopt (or legacy IS the target, e.g. box_root == ~/.protoagent)
     src_note = legacy / "note.md"
-    if not src_note.is_file():
-        return
     target_dir.mkdir(parents=True, exist_ok=True)
     os.replace(src_note, target_dir / "note.md")  # may raise OSError → caller falls back
     src_hist = legacy / "history"
