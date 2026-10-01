@@ -610,6 +610,23 @@ settings:
   - { key: api_key, label: "API key", type: secret, required: true }
 ```
 
+**Settings that name a program to spawn** — mark them `spawns: true`. An agent with
+the guarded `set_config` tool (`tools.self_config_enabled`) may retune your plugin's
+settings, but must never be able to point one at a binary your plugin then runs. The
+fence already refuses keys whose *name* says so — any `_`/`-`/camelCase token of
+`command` `cmd` `args` `argv` `binary` `bin` `exe` `executable` `interpreter`
+`entrypoint` (`local_gate_cmd`, `rh_bin`, `binary_path`) — so prefer such a name. When
+the natural name doesn't (`ffmpeg_path`), declare it:
+
+```yaml
+settings:
+  - { key: ffmpeg_path, label: "ffmpeg path", type: string, spawns: true }
+```
+
+Only the agent's writer is fenced; the operator still sets the key from Settings. Older
+cores ignore the field, so declaring it never breaks a load. See
+[ADR 0019 §3b](/adr/0019-plugin-config-settings-secrets).
+
 Read the resolved config (manifest defaults ⊕ YAML ⊕ secrets) in `register()`:
 
 ```python

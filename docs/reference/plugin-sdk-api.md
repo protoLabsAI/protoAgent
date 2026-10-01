@@ -45,6 +45,8 @@ the module's own.
 
 **Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
 
+**Managed Python runtime (ADR 0094 — the provisioned child interpreter)** — [`managed_python_exe()`](#sdk-managed-python-exe)
+
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
 
 ### `sdk.config` {#sdk-config}
@@ -753,3 +755,36 @@ understates every rollup built on the column.
 Best-effort and never raises: a ledger failure must not break a dispatch.
 
 Returns the new `edge_id`, or None when no store is wired or the write failed.
+
+## Managed Python runtime (ADR 0094 — the provisioned child interpreter)
+
+### `sdk.managed_python_exe` {#sdk-managed-python-exe}
+
+```python
+sdk.managed_python_exe() -> Path | None
+```
+
+The managed Python runtime's interpreter, or None when it isn't provisioned.
+
+This is the interpreter `execute_code` spawns on the packaged desktop app, where
+`sys.executable` is the frozen server binary and cannot run a script. It is a
+pinned CPython the host downloads on demand into the box-shared data dir
+(`runtime.python_install`), shared by every instance on the machine.
+
+Returns the interpreter's `Path` only when a *working* install is
+present — the executable actually exists — so a half-extracted, wiped or
+never-provisioned runtime reads as None rather than as a path that fails to spawn.
+On None, a source run can fall back to `sys.executable` (what `execute_code`
+itself does); a frozen one should tell the operator to provision the managed Python
+runtime rather than guess at a system Python of arbitrary version.
+
+Cheap (one `stat`), never spawns, never raises.
+
+```python
+import sys
+from graph import sdk
+
+exe = sdk.managed_python_exe()
+if exe is None and not getattr(sys, "frozen", False):
+    exe = Path(sys.executable)  # source run: this process's own interpreter
+```
