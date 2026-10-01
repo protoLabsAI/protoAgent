@@ -28,9 +28,11 @@ def upstream_unreachable(exc: BaseException | None) -> bool:
     back in that case, so :func:`upstream_status` is ``None`` and ``/v1`` used to call it
     an internal 500; it is a failed proxy hop and belongs with the other 502s.
 
-    Walks the ``__cause__``/``__context__`` chain, since the openai SDK's
-    ``APIConnectionError`` wraps the underlying ``httpx`` transport error (and a
-    framework layer may wrap it again). Bounded, so a cyclic chain can't spin."""
+    Walks the explicit ``__cause__`` chain only (``raise … from e``): the openai SDK's
+    ``APIConnectionError`` wraps the underlying ``httpx`` transport error that way, and a
+    framework layer may wrap it again. NOT the implicit ``__context__`` (#3957): a bug in our
+    own code raised inside an ``except`` that had handled a transport error would carry it
+    there and be mislabelled an upstream 502. Bounded, so a cyclic chain can't spin."""
     transport: tuple[type[BaseException], ...] = (ConnectionError,)
     try:
         import httpx
@@ -49,13 +51,14 @@ def upstream_unreachable(exc: BaseException | None) -> bool:
         if isinstance(exc, transport):
             return True
         seen.add(id(exc))
-        exc = exc.__cause__ or exc.__context__
+        exc = exc.__cause__
     return False
 
 
 def upstream_status_in_chain(exc: BaseException | None) -> int | None:
-    """:func:`upstream_status` of ``exc`` or the first exception in its ``__cause__`` /
-    ``__context__`` chain that carries one. A subagent run re-raises its provider failure
+    """:func:`upstream_status` of ``exc`` or the first exception in its explicit
+    ``__cause__`` chain that carries one (never the implicit ``__context__`` — see
+    :func:`upstream_unreachable`). A subagent run re-raises its provider failure
     wrapped (``SubagentError(...) from e``), so the status sits one link down. Bounded,
     so a cyclic chain can't spin."""
     seen: set[int] = set()
@@ -64,7 +67,7 @@ def upstream_status_in_chain(exc: BaseException | None) -> int | None:
         if code is not None:
             return code
         seen.add(id(exc))
-        exc = exc.__cause__ or exc.__context__
+        exc = exc.__cause__
     return None
 
 

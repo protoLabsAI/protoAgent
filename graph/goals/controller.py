@@ -32,6 +32,7 @@ from graph.goals.verifiers import (
     is_safe_workspace_relative_data_path,
     run_verifier,
 )
+from graph.subagent_model import current_turn_model
 
 log = logging.getLogger(__name__)
 
@@ -159,6 +160,8 @@ class GoalController:
             spec = {**spec, "workspace_relative": True}
         state = GoalState(
             session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
             condition=condition,
             verifier=spec,
             fresh_context=fresh_context,
@@ -290,6 +293,8 @@ class GoalController:
             return (False, err)
         state = GoalState(
             session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
             condition=condition,
             verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
@@ -338,6 +343,8 @@ class GoalController:
             return (False, err)
         state = GoalState(
             session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
             condition=condition,
             verifier=verifier,
             max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),

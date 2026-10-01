@@ -433,8 +433,10 @@ def _v1_error_response(err: dict) -> JSONResponse:
       names it — ``upstream_status`` carries the original.
     - **Gateway unreachable ⇒ 502** (#3946) — connection refused / DNS / timeout carries
       no HTTP status, but it is still the hop behind us failing, not our own code.
-    - **The request itself was invalid ⇒ 400** (#3957) — a ``model`` the agent can't
-      build (an unknown connection prefix, say) fails the turn before any hop is called.
+    - **The request itself was invalid ⇒ 400** (#3957) — a ``model`` naming a connection
+      the agent doesn't have fails the turn before any hop is called.
+    - **A known model connection that could not be set up ⇒ 503** (#3957) — e.g. its
+      sign-in token failed to refresh; retryable.
     - **No HTTP status at all ⇒ 500** — that's a fault in our own turn, not a proxy hop.
     """
     upstream = err.get("upstream_status")
@@ -442,6 +444,10 @@ def _v1_error_response(err: dict) -> JSONResponse:
         status = 429
     elif isinstance(upstream, int) or err.get("upstream_unreachable"):
         status = 502
+    elif err.get("model_unavailable"):
+        # The turn's model pick names a known connection that could not be set up right
+        # now (#3957) — a sign-in refresh that failed, say. Retryable, not the caller's fault.
+        status = 503
     elif err.get("type") == "invalid_request_error":
         # Our own refusal of the request as sent — e.g. a `model` naming a connection this
         # agent doesn't have (#3957). No hop failed; the caller's input did.
@@ -545,42 +551,35 @@ def register_chat_routes(app, ui: str) -> None:
         with one of this chat's threads as their ``source``. Not the memories the
         agent was asked to keep (``memory_ingest``, hot memory), and not rows
         written before provenance existed (a fact stored with the legacy
-        ``source="harvest"`` names no thread). It runs AFTER retirement (#3957) but
-        only removes rows written before the delete began, so a harvest ticked
-        alongside it writes a fresh summary that survives.
+        ``source="harvest"`` names no thread). Two phases around retirement (#3957):
+        the rows are hidden first and hard-deleted last, so a failed retirement
+        forgets nothing and a harvest ticked alongside keeps exactly what it derives.
 
         Both ``a2a:{session_id}`` and the legacy ``chat:{session_id}`` threads are
         retired (non-streaming turns keyed ``chat:`` before ADR 0069 unified the
         prefix) with cascade so goal-mode ``:goal-iter-N`` sub-threads are not
         orphaned."""
-        # The forget cutoff is taken BEFORE retirement and the forget runs AFTER it (#3957).
-        # Forgetting first meant a retirement that then raised (a checkpoint delete failing)
-        # left the chat in place with its memory already gone — the delete reported failure
-        # and the console kept the tab, but the hard-deleted rows could not come back. Now
-        # a failed retirement forgets nothing, and a failed forget leaves a retired chat the
-        # operator can delete again (retirement is idempotent). The cutoff is what keeps a
-        # harvest ticked alongside the forget: its fresh summary is written during
-        # retirement, after the cutoff, so the forget — which only removes rows created
-        # before the delete began — leaves it alone.
-        forget_before = datetime.now(timezone.utc)
-        chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
-        await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
-        forgotten = 0
-        if forget and STATE.knowledge_store is not None:
-            from graph.conversation_harvest import forget_conversation_memory
+        # Forget in two phases around retirement (#3957; graph.conversation_harvest):
+        # hide the chat's memory rows, retire (a harvest ticked alongside runs against a
+        # store that no longer shows them, so it writes everything it derives afresh),
+        # and hard-delete exactly the hidden rows as the LAST step. A failed retirement
+        # un-hides them; any later failure leaves them hidden for the retry to finish.
+        from graph import conversation_harvest as _harvest
 
-            # Not best-effort: if this raises, the delete fails and the console keeps
-            # the tab, rather than reporting a chat's memory gone while it is still there.
-            forgotten = await asyncio.to_thread(
-                forget_conversation_memory,
-                STATE.knowledge_store,
-                session_id,
-                [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)],
-                before=forget_before,
-            )
+        forget_tids = [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)]
+        store = STATE.knowledge_store
+        forget = forget and store is not None
+        # Not best-effort: if this raises, the delete fails before anything is retired.
+        marker = await asyncio.to_thread(_harvest.begin_forget, store, session_id, forget_tids) if forget else None
+        try:
+            chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
+            await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
+        except BaseException:
+            if marker:
+                await asyncio.to_thread(_harvest.abort_forget, store, marker)
+            raise
         # Ephemeral chat attachments are session-scoped (ADR 0021) — drop them so a
         # deleted chat leaves nothing indexed behind.
-        store = STATE.knowledge_store
         if store is not None and hasattr(store, "delete_by_namespace"):
             try:
                 await asyncio.to_thread(store.delete_by_namespace, f"attach:{session_id}")
@@ -657,6 +656,17 @@ def register_chat_routes(app, ui: str) -> None:
         from graph import steering
 
         steering.forget(session_id)
+        # Phase 2 of the forget, last: nothing after it can fail and strand a retry that
+        # would then hide (and delete) what this attempt's harvest just wrote.
+        forgotten = 0
+        if marker:
+            forgotten = await asyncio.to_thread(_harvest.finish_forget, store, marker)
+        elif forget:
+            # A store that can't hide rows (a plugin backend): the one-step delete, after
+            # retirement so a failed retirement still forgets nothing.
+            forgotten = await asyncio.to_thread(
+                _harvest.forget_conversation_memory, store, session_id, forget_tids
+            )
         return {"deleted": True, "harvested": chunk_id is not None, "forgotten": forgotten}
 
     @app.post("/api/chat/sessions/{session_id}/compact")

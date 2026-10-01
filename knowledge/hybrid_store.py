@@ -419,12 +419,38 @@ class HybridKnowledgeStore(KnowledgeStore):
                 db.close()
         return super().delete_by_namespace(namespace)
 
-    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False, before=None) -> int:
+    def mark_forget_pending(self, marker: str, *, namespace: str = "", sources=(), source_types=None) -> int:
+        """Drop the vectors of the already-invalidated rows phase 1 hard-deletes (no FK
+        cascade on the side table), then delegate. Hidden rows keep their vectors until
+        :meth:`delete_forget_pending` — a restore must bring them back whole."""
+        from knowledge.store import _forget_selection
+
+        where, params = _forget_selection(namespace, sources, source_types)
+        if marker and where:
+            self._drop_vectors(f"SELECT id FROM chunks WHERE ({where}) AND invalidated_at IS NOT NULL", params)
+        return super().mark_forget_pending(marker, namespace=namespace, sources=sources, source_types=source_types)
+
+    def delete_forget_pending(self, marker: str) -> int:
+        if marker:
+            self._drop_vectors("SELECT id FROM chunks WHERE invalidation_reason = ?", [marker])
+        return super().delete_forget_pending(marker)
+
+    def _drop_vectors(self, id_select: str, params) -> None:
+        db = self._get_db()
+        if db is None:
+            return
+        try:
+            db.execute(f"DELETE FROM chunk_vectors WHERE chunk_id IN ({id_select})", params)
+            db.commit()
+        finally:
+            db.close()
+
+    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False) -> int:
         """Drop the matching chunks AND their vectors (no FK cascade on the side
         table) — the :meth:`delete_by_namespace` pattern, same predicate for both."""
         from knowledge.store import _source_clause
 
-        where, params = _source_clause(source, source_types, prefix, before)
+        where, params = _source_clause(source, source_types, prefix)
         if not where:
             return 0
         db = self._get_db()
@@ -436,7 +462,7 @@ class HybridKnowledgeStore(KnowledgeStore):
                 log.warning("[knowledge] delete_by_source vectors failed: %s", exc)
             finally:
                 db.close()
-        return super().delete_by_source(source, source_types=source_types, prefix=prefix, before=before)
+        return super().delete_by_source(source, source_types=source_types, prefix=prefix)
 
     def purge_domain(self, domain: str, *, before=None) -> int:
         """Purge the domain's chunks AND their vectors (#1634) — the

@@ -248,16 +248,12 @@ def _escape_like(text: str) -> str:
     )
 
 
-def _source_clause(source: str, source_types=None, prefix: bool = False, before=None) -> tuple[str, list[str]]:
+def _source_clause(source: str, source_types=None, prefix: bool = False) -> tuple[str, list[str]]:
     """SQL predicate + params selecting chunks by ``source`` (exact, or a prefix match
-    when ``prefix``), optionally narrowed to ``source_types`` and to rows created strictly
-    ``before`` a cutoff. ``("", [])`` means "match nothing": an empty source, an EMPTY
-    type list, or an unparseable cutoff is never widened into a delete of every row."""
+    when ``prefix``), optionally narrowed to ``source_types``. ``("", [])`` means
+    "match nothing": an empty source, or an EMPTY type list, is never widened into a
+    delete of every row."""
     if not source or not str(source).strip():
-        return "", []
-    try:
-        cutoff = _normalize_before(before)
-    except ValueError:
         return "", []
     if prefix:
         clauses = [f"source LIKE ? ESCAPE '{_LIKE_ESCAPE}'"]
@@ -271,10 +267,23 @@ def _source_clause(source: str, source_types=None, prefix: bool = False, before=
             return "", []
         clauses.append(f"source_type IN ({', '.join('?' * len(types))})")
         params.extend(types)
-    if cutoff is not None:
-        clauses.append("created_at < ?")
-        params.append(cutoff)
     return " AND ".join(clauses), params
+
+
+def _forget_selection(namespace: str, sources, source_types) -> tuple[str, list]:
+    """``OR`` of ``namespace = ?`` and each ``(source, prefix)`` source clause (see
+    :func:`_source_clause`); ``("", [])`` when nothing is selected."""
+    clauses: list[str] = []
+    params: list = []
+    if namespace and str(namespace).strip():
+        clauses.append("namespace = ?")
+        params.append(str(namespace))
+    for source, prefix in sources or ():
+        where, p = _source_clause(source, source_types, prefix)
+        if where:
+            clauses.append(f"({where})")
+            params.extend(p)
+    return " OR ".join(clauses), params
 
 
 def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace") -> tuple[str, list[str]]:
@@ -1623,19 +1632,17 @@ class KnowledgeStore:
         finally:
             db.close()
 
-    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False, before=None) -> int:
+    def delete_by_source(self, source: str, *, source_types=None, prefix: bool = False) -> int:
         """HARD-delete every chunk whose ``source`` is ``source`` (or starts with it,
         when ``prefix``), superseded rows included, optionally only those whose
-        ``source_type`` is in ``source_types`` and — with ``before`` (an ISO-8601
-        timestamp or a datetime; naive = UTC) — only rows created strictly before it.
-        Returns the count removed.
+        ``source_type`` is in ``source_types``. Returns the count removed.
 
         Explicit-intent path like :meth:`delete_by_namespace`: the delete-chat
         dialog's "forget what this chat saved" (#3493) removes the summaries and
         facts harvested from a chat's thread. Unlike :meth:`invalidate_by_source`
         (the console's reversible bulk delete), nothing is kept for an Undo. An
         empty ``source`` or an empty ``source_types`` list removes nothing."""
-        where, params = _source_clause(source, source_types, prefix, before)
+        where, params = _source_clause(source, source_types, prefix)
         if not where:
             return 0
         db = self._get_db()
@@ -1648,6 +1655,75 @@ class KnowledgeStore:
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] delete_by_source failed: %s", exc)
             return 0
+        finally:
+            db.close()
+
+    # ── forget-on-delete, in two phases (#3957) ──────────────────────────────────
+    # The chat delete's "forget what this chat saved" must neither lose memory when the
+    # chat's retirement fails nor delete what a harvest ticked alongside it produces. So
+    # the rows are first HIDDEN (stamped ``invalidated_at`` with a per-session marker —
+    # recall and fact dedupe skip invalidated rows, so the harvest re-derives against a
+    # store that no longer holds them), the chat is retired, and only then are exactly the
+    # hidden rows hard-deleted. A failed retirement restores them.
+
+    def mark_forget_pending(self, marker: str, *, namespace: str = "", sources=(), source_types=None) -> int:
+        """Phase 1: hide every VALID chunk in ``namespace`` or matching one of
+        ``sources`` (``(source, prefix)`` pairs, narrowed to ``source_types``) by stamping
+        ``invalidated_at`` + ``invalidation_reason = marker``. Rows already invalidated in
+        that selection (supersession history, a pending bulk delete) are never recalled and
+        are hard-deleted here — restoring them could only resurrect stale facts. Returns
+        the count hidden. An empty marker or selection does nothing."""
+        where, params = _forget_selection(namespace, sources, source_types)
+        if not marker or not where:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            now = _now_iso()
+            db.execute(f"DELETE FROM chunks WHERE ({where}) AND invalidated_at IS NOT NULL", params)
+            cur = db.execute(
+                "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
+                f"WHERE ({where}) AND invalidated_at IS NULL",
+                [now, marker, now, *params],
+            )
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def count_forget_pending(self, marker: str) -> int:
+        """How many chunks are still hidden under ``marker`` (a previous attempt's)."""
+        return self._forget_pending_exec("SELECT COUNT(*) FROM chunks WHERE invalidation_reason = ?", marker, count=True)
+
+    def restore_forget_pending(self, marker: str) -> int:
+        """Undo phase 1 — the retirement failed: un-hide every chunk under ``marker``."""
+        return self._forget_pending_exec(
+            "UPDATE chunks SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?", marker
+        )
+
+    def delete_forget_pending(self, marker: str) -> int:
+        """Phase 2 — the chat is retired: HARD-delete exactly the chunks under ``marker``."""
+        return self._forget_pending_exec("DELETE FROM chunks WHERE invalidation_reason = ?", marker)
+
+    def _forget_pending_exec(self, sql: str, marker: str, *, count: bool = False) -> int:
+        """Run one marker-scoped statement. Raises on a database error: these back an
+        explicit delete that must fail loudly rather than report memory gone (or kept)
+        when it isn't."""
+        if not marker:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            cur = db.execute(sql, (marker,))
+            if count:
+                return int(cur.fetchone()[0])
+            db.commit()
+            return int(cur.rowcount)
         finally:
             db.close()
 

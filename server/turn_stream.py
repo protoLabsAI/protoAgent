@@ -681,9 +681,12 @@ async def _run_turn_stream(
             # persists in the checkpointer, so an omitted key would silently
             # inherit a previous turn's value instead of the caller's intent.
             "incognito": bool(incognito),
-            # Per-tab model + reasoning-effort override (ModelOverrideMiddleware reads
-            # both); omit each key when unset so the configured default applies.
-            **({"model": model} if model else {}),
+            # Per-tab model override (ModelOverrideMiddleware reads it): always stamped,
+            # like incognito (#3957) — an omitted key inherited the previous turn's pick
+            # from the checkpoint, so a pick that could no longer be built failed every
+            # later turn on the chat. "" = the configured default.
+            "model": model or "",
+            # Reasoning effort: omitted when unset (a failed effort degrades softly).
             **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
             # Per-turn tool fence (#1639/#2972) — SubagentFenceMiddleware blocks tool
             # calls outside it. Always stamped, like incognito: the channel persists in

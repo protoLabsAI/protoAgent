@@ -96,3 +96,40 @@ async def test_recording_the_note_never_raises(state, monkeypatch):  # noqa: F81
     monkeypatch.setattr(state, "graph", _Broken(), raising=False)
     cfg = {"configurable": {"thread_id": "a2a:s1"}}
     assert await goal_loop.record_goal_note(cfg, "note", pass_config=cfg) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["stream", "sync"])
+async def test_the_pause_note_is_written_under_the_thread_lock(state, monkeypatch, surface):  # noqa: F811
+    """The non-streaming driver locks the thread per pass, not across the drive; the
+    note's checkpoint write takes the lock itself (the streaming driver already holds it)."""
+    import importlib
+
+    from server import turn_control
+    from tests._turn_driver_fakes import text, turn_result
+
+    held: list[bool] = []
+
+    class _LockSpy(_CheckpointedGraph):
+        async def aupdate_state(self, config, values):
+            if values and any(
+                (getattr(m, "additional_kwargs", None) or {}).get("protoagent_goal_note")
+                for m in values.get("messages", [])
+            ):
+                held.append(turn_control._thread_lock(config["configurable"]["thread_id"]).locked())
+            return await super().aupdate_state(config, values)
+
+    monkeypatch.setattr(state, "goal_controller", _NeverMet(), raising=False)
+    if surface == "stream":
+        g = _LockSpy(streams=[[text("r0", "pass0")]])
+    else:
+        g = _LockSpy(invokes=[turn_result(AIMessage(content="pass0"))])
+    g.on_call = _capping_hook({1})
+    monkeypatch.setattr(state, "graph", g, raising=False)
+    chat = importlib.import_module("server.chat")
+    if surface == "stream":
+        [f async for f in chat._chat_langgraph_stream("go", "s1", request_metadata={})]
+    else:
+        await chat.chat("go", "s1")
+
+    assert held == [True]

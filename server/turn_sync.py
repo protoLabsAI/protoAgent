@@ -145,7 +145,12 @@ async def _native_turn(
     if goal_active:
         # A goal-driven turn also runs under the fence of the turn that SET the goal.
         tool_fence = _goal_loop.goal_fenced(_goal_state, tool_fence)
-        state_extra = {**state_extra, "subagent_fence": tool_fence}
+        # ...and, absent a pick of its own, on the model of the turn that set it (#3957).
+        state_extra = {
+            **state_extra,
+            "subagent_fence": tool_fence,
+            "model": _goal_loop.goal_model(_goal_state, state_extra.get("model")),
+        }
     # The streaming driver's request metadata, as far as this surface has it (#3891 F2):
     # the origin (autonomy) and the operator's HITL-answer marker.
     turn_metadata: dict[str, Any] = {"origin": origin}
@@ -276,6 +281,9 @@ async def _native_turn(
     # verifier notes are skipped and only the terminal note reaches the reply.
     drive = _goal_loop.GoalDrive(session_id, config, response)
     drive.last_pass = goal_pass  # a round-capped pass pauses the drive (#3957)
+    # This driver locks the thread per pass, not across the drive: the pause note's
+    # checkpoint write takes the lock itself, like any other writer to the thread.
+    drive.note_lock = lambda: _turn_control._thread_lock(config["configurable"]["thread_id"])
     # The fence each continuation runs under: the turn's own, narrowed by any fenced
     # message an earlier pass folded in (steering, #2972) — refreshed from the previous
     # pass's checkpoint, never the turn's original (wider) one. Same as the streaming driver.
@@ -362,7 +370,11 @@ async def _chat_langgraph_impl(
     # Per-turn model override (ModelOverrideMiddleware reads state["model"]).
     # Incognito is stamped explicitly every turn (the channel persists in the
     # checkpointer — an omitted key would inherit the previous turn's value).
-    _state_extra = {"model": model} if (model or "").strip() else {}
+    # Stamped EVERY turn, like incognito below (#3957): `model` is a checkpointed channel,
+    # so omitting it on a no-pick turn inherited the previous turn's pick — and a pick that
+    # can no longer be built then failed every later turn on the chat, with no way back
+    # ("Default" sends nothing). "" = the configured default.
+    _state_extra: dict[str, Any] = {"model": (model or "").strip()}
     _state_extra["incognito"] = bool(incognito)
     # The tool fence (#2972) is stamped every turn for the same reason: a fenced
     # turn on a session must not leave the NEXT (unfenced) turn on that session

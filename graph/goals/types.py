@@ -99,6 +99,10 @@ class GoalState:
     # (plugin ``on_achieved``/``on_failed`` reactions, the self-improvement review) run
     # under it, so a goal a fenced turn set never reacts unfenced. ``[]`` = unfenced.
     fence: list[str] = field(default_factory=list)
+    # The model override of the turn that set the goal (#3957), ``""`` for none. A turn
+    # that drives the goal without a pick of its own (a watch / schedule fire, a
+    # background nudge) runs on it — the pick is not inherited from the thread any more.
+    model: str = ""
     started_at: float = field(default_factory=time)
     finished_at: float | None = None
 

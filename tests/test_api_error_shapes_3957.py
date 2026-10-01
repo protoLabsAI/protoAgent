@@ -4,9 +4,12 @@
    mirrors 429 (with the provider's ``Retry-After``) and maps any other upstream failure,
    or an unreachable gateway, to 502 — the same policy ``/v1`` uses.
 2. A per-turn model override that cannot be built (``/v1``'s ``model``, a console tab's
-   pick, an A2A ``metadata.model`` — e.g. an unknown provider prefix) silently ran the
-   turn on the DEFAULT model ("could not switch … using default"). It now fails the turn
-   with an error naming the pick, on every surface; ``/v1`` answers it 400.
+   pick, an A2A ``metadata.model``) silently ran the turn on the DEFAULT model ("could
+   not switch … using default"). It now fails the turn with a short error naming the pick,
+   on every surface: an unknown connection prefix is the caller's error (``/v1`` 400), a
+   known connection that could not be built right now — a sign-in refresh — is not
+   (``/v1`` 503).
+3. Upstream classification follows only the explicit ``__cause__`` chain.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from graph.config import LangGraphConfig
-from graph.middleware.model_override import ModelOverrideError, ModelOverrideMiddleware
+from graph.middleware.model_override import ModelOverrideError, ModelOverrideMiddleware, ModelUnavailableError
 
 # ── 1. /api/subagents/run|batch ────────────────────────────────────────────────────
 
@@ -126,7 +129,7 @@ def _missing_credentials(*_a, **_k):
     raise RuntimeError("Missing credentials. Please pass an `api_key`")
 
 
-def test_an_explicit_override_that_cannot_build_raises_naming_the_pick(monkeypatch):
+def test_an_unknown_connection_prefix_raises_a_short_caller_error(monkeypatch):
     monkeypatch.setattr("graph.llm.create_llm", _missing_credentials)
     mw = ModelOverrideMiddleware(LangGraphConfig())
 
@@ -135,16 +138,26 @@ def test_an_explicit_override_that_cannot_build_raises_naming_the_pick(monkeypat
 
     msg = str(ei.value)
     assert ei.value.model == "nonexistent-provider:bogus-model-xyz"
-    assert "'nonexistent-provider' is not a registered connection" in msg  # not "Missing credentials"
-    assert "anthropic-oauth" in msg and "gateway" in msg
+    assert msg == "model 'nonexistent-provider:bogus-model-xyz' is not available: 'nonexistent-provider' is not a known connection."
+    # Neither the build error nor the agent's connection list reaches the caller.
+    assert "Missing credentials" not in msg and "anthropic-oauth" not in msg and "gateway" not in msg
 
 
-def test_an_unbuildable_registered_pick_reports_the_build_error(monkeypatch):
-    monkeypatch.setattr("graph.llm.create_llm", _missing_credentials)
+def test_a_known_connection_that_cannot_build_is_unavailable_not_a_caller_error(monkeypatch):
+    """A sign-in refresh failing (often transient) is not the caller's fault: not a 400."""
+
+    def _refresh_failed(*_a, **_k):
+        raise RuntimeError("token refresh failed: 503 from auth server; secret=abc123")
+
+    monkeypatch.setattr("graph.llm.create_llm", _refresh_failed)
     mw = ModelOverrideMiddleware(LangGraphConfig())
 
-    with pytest.raises(ModelOverrideError, match="Missing credentials"):
-        mw._override(_Req({"model": "gateway:protolabs/coder"}))
+    with pytest.raises(ModelUnavailableError) as ei:
+        mw._override(_Req({"model": "anthropic-oauth:claude-sonnet-4-6"}))
+
+    assert not isinstance(ei.value, ValueError)
+    assert "secret" not in str(ei.value) and "refresh" not in str(ei.value)
+    assert "could not be loaded right now" in str(ei.value)
 
 
 def test_an_effort_only_failure_still_degrades_to_the_current_model(monkeypatch):
@@ -155,30 +168,36 @@ def test_an_effort_only_failure_still_degrades_to_the_current_model(monkeypatch)
     assert mw._override(req) is req and req.overridden is None
 
 
-def test_turn_error_classifies_an_override_failure_as_invalid_request():
+def _rewrapped(inner: BaseException) -> BaseException:
+    try:
+        try:
+            raise inner
+        except type(inner) as e:
+            raise RuntimeError("graph node failed") from e  # a framework re-wrap
+    except RuntimeError as outer:
+        return outer
+
+
+def test_turn_error_classifies_pick_failures():
     import importlib
 
     chat_mod = importlib.import_module("server.chat")
-    try:
-        try:
-            raise ModelOverrideError("nope:x", RuntimeError("boom"))
-        except ModelOverrideError as inner:
-            raise RuntimeError("graph node failed") from inner  # a framework re-wrap
-    except RuntimeError as outer:
-        err = chat_mod.turn_error(outer)
 
-    assert err["type"] == "invalid_request_error" and err["param"] == "model"
-    assert err["upstream_status"] is None
+    bad = chat_mod.turn_error(_rewrapped(ModelOverrideError("nope:x", "nope")))
+    assert bad["type"] == "invalid_request_error" and bad["param"] == "model"
+    assert bad["message"] == "model 'nope:x' is not available: 'nope' is not a known connection."
+
+    down = chat_mod.turn_error(_rewrapped(ModelUnavailableError("anthropic-oauth:m")))
+    assert down["type"] == "server_error" and down["model_unavailable"] is True
 
 
-def test_v1_answers_an_override_failure_400(monkeypatch):
+def _v1_client(monkeypatch, exc):
     import importlib
 
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
     chat_mod = importlib.import_module("server.chat")
-    exc = ModelOverrideError("nonexistent-provider:bogus", RuntimeError("Missing credentials"), config=LangGraphConfig())
 
     async def _fake_chat(message, session_id, **_kw):
         msg = str(exc)
@@ -190,16 +209,52 @@ def test_v1_answers_an_override_failure_400(monkeypatch):
     monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
     app = FastAPI()
     cr.register_chat_routes(app, ui="none")
+    return TestClient(app)
 
-    r = TestClient(app).post(
-        "/v1/chat/completions",
-        json={"model": "nonexistent-provider:bogus", "messages": [{"role": "user", "content": "hi"}]},
-    )
 
-    assert r.status_code == 400  # was 200 on the default model (then 500 once it failed)
+def test_v1_answers_an_unknown_connection_400(monkeypatch):
+    c = _v1_client(monkeypatch, ModelOverrideError("nonexistent-provider:bogus", "nonexistent-provider"))
+
+    r = c.post("/v1/chat/completions", json={"model": "nonexistent-provider:bogus", "messages": [{"role": "user", "content": "hi"}]})
+
+    assert r.status_code == 400  # was 200 on the default model
     body = r.json()["error"]
     assert body["type"] == "invalid_request_error" and body["param"] == "model"
-    assert "nonexistent-provider" in body["message"]
+    assert "not a known connection" in body["message"]
+
+
+def test_v1_answers_an_unbuildable_known_connection_503(monkeypatch):
+    c = _v1_client(monkeypatch, ModelUnavailableError("anthropic-oauth:claude-sonnet-4-6"))
+
+    r = c.post("/v1/chat/completions", json={"model": "x", "messages": [{"role": "user", "content": "hi"}]})
+
+    assert r.status_code == 503
+
+
+# ── 3. only the explicit cause chain is upstream evidence ──────────────────────────
+
+
+def test_an_own_bug_raised_while_handling_a_transport_error_is_not_upstream():
+    from graph.upstream_errors import upstream_http_status
+
+    try:
+        try:
+            raise httpx.ConnectError("refused")
+        except httpx.ConnectError:
+            {}["missing"]  # our own bug, raised inside the except: __context__ only
+    except KeyError as bug:
+        assert bug.__context__ is not None and bug.__cause__ is None
+        assert upstream_http_status(bug) is None  # a 500, not a mislabelled 502
+
+    try:
+        try:
+            raise _RateLimited()
+        except _RateLimited:
+            raise ValueError("bad input")
+    except ValueError as bug:
+        assert upstream_http_status(bug) is None
+
+    assert upstream_http_status(_wrapped(httpx.ConnectError("refused"))) == 502  # `from e`: followed
 
 
 def test_v1_upstream_statuses_are_unchanged():

@@ -271,15 +271,116 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     ]
 
 
-def test_delete_session_forget_is_opt_in_and_runs_after_retirement(monkeypatch):
-    """#3493: deleting a chat can forget what it already wrote to memory — only when
-    asked (`?forget=true`, the dialog's second switch), for this session's threads.
+def _forget_fixture(monkeypatch, tmp_path, *, retire=None):
+    """A real KnowledgeStore holding a chat's memory: an archive, a harvested summary and a
+    fact — plus another chat's fact that must never be touched. ``retire`` replaces the
+    retirement (default: a harvest that re-derives the SAME fact and a fresh summary, the
+    way ``harvest_thread`` does against whatever the store still shows)."""
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from graph.memory_facts import consolidate_and_store as _store_facts
+    from knowledge.store import KnowledgeStore
 
-    #3957: it runs AFTER retirement, cut off at the moment the delete began — so a
-    retirement that raises forgets nothing, and a harvest ticked alongside it (written
-    during retirement, after the cutoff) survives the forget."""
-    from datetime import datetime
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("archived turns", domain="conversation", namespace="chat-archive:s1", source="a2a:s1")
+    store.add_chunk("old summary", domain="conversation", source="a2a:s1", source_type="harvest")
+    _store_facts(store, ["The user's favourite colour is teal."], source="a2a:s1")
+    _store_facts(store, ["The user lives in Lisbon."], source="a2a:other")
+    calls: list[tuple] = []
 
+    retired: set[str] = set()
+
+    async def _harvesting_retire(thread_id, *, harvest=None, cascade=True):
+        calls.append((thread_id, harvest))
+        first = thread_id not in retired
+        retired.add(thread_id)  # its checkpoints are gone: a later harvest finds nothing
+        if harvest and first:
+            store.add_chunk("fresh summary", domain="conversation", source=thread_id, source_type="harvest")
+            # Dedupes against what the store SHOWS — so it only writes the fact if the
+            # chat's own earlier copy is hidden (the #3957 review's lost-fact bug).
+            _store_facts(store, ["The user's favourite colour is teal."], source=thread_id)
+        return "chunk" if harvest else None
+
+    monkeypatch.setattr(cr, "_retire_thread", retire or _harvesting_retire)
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
+    return c, store, calls
+
+
+def _contents(store):
+    return sorted(ch.content for ch in store.list_chunks(limit=500, include_invalidated=True))
+
+
+def test_delete_session_forget_is_opt_in(monkeypatch, tmp_path):
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+    before = _contents(store)
+
+    assert c.delete("/api/chat/sessions/s1").json() == {"deleted": True, "harvested": False, "forgotten": 0}
+    assert _contents(store) == before  # nothing forgotten unless asked
+
+
+def test_delete_session_forget_with_harvest_keeps_exactly_what_the_harvest_produced(monkeypatch, tmp_path):
+    """#3957 review: the harvest used to dedupe its facts against the chat's own older rows,
+    which the forget then deleted — so a re-derived fact vanished. Now the chat's rows are
+    hidden before retirement and deleted after it, and the harvest writes afresh."""
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+
+    body = c.delete("/api/chat/sessions/s1?forget=true&harvest=true").json()
+
+    assert body == {"deleted": True, "harvested": True, "forgotten": 3}
+    assert calls == [("a2a:s1", True), ("chat:s1", False)]
+    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+    (fact,) = [ch for ch in store.list_chunks(limit=500) if "teal" in ch.content]
+    assert fact.source == "a2a:s1" and fact.invalidated_at is None
+
+
+def test_delete_session_retirement_failure_forgets_nothing(monkeypatch, tmp_path):
+    import pytest
+
+    async def _boom(thread_id, *, harvest=None, cascade=True):
+        raise OSError("checkpoint db locked")
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=_boom)
+    visible = sorted(ch.content for ch in store.list_chunks(limit=500))
+
+    with pytest.raises(OSError, match="checkpoint db locked"):
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+
+    assert sorted(ch.content for ch in store.list_chunks(limit=500)) == visible  # un-hidden, all of it
+
+
+def test_delete_session_forget_retry_keeps_the_first_attempts_harvest(monkeypatch, tmp_path):
+    """#3957 review: a forget that failed AFTER retirement was retried with a fresh cutoff
+    and deleted the summary the first attempt had harvested. A retry now finishes the
+    earlier attempt's forget and hides nothing new."""
+    import pytest
+
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+    real_finish = store.delete_forget_pending
+    state = {"fail": True}
+
+    def _flaky_finish(marker):
+        if state.pop("fail", False):
+            raise RuntimeError("store locked")
+        return real_finish(marker)
+
+    store.delete_forget_pending = _flaky_finish
+    with pytest.raises(RuntimeError, match="store locked"):
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+    # The chat's old rows stay hidden meanwhile — out of recall, not yet gone.
+    assert "old summary" not in [ch.content for ch in store.list_chunks(limit=500)]
+
+    calls.clear()
+    body = c.delete("/api/chat/sessions/s1?forget=true&harvest=true").json()  # the retry
+
+    assert body["forgotten"] == 3
+    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+
+
+def test_delete_session_forget_falls_back_to_one_step_for_a_plain_store(monkeypatch):
+    """A store that can't hide rows (a plugin backend) gets the one-step delete — after
+    retirement, so a failed retirement still forgets nothing."""
     import graph.conversation_harvest as ch
     import operator_api.chat_routes as cr
     import runtime.state as rs
@@ -287,60 +388,20 @@ def test_delete_session_forget_is_opt_in_and_runs_after_retirement(monkeypatch):
     order: list[tuple] = []
 
     async def _fake_retire(thread_id, *, harvest=None, cascade=True):
-        order.append(("retire", thread_id, harvest))
-        return "chunk-1" if harvest else None
+        order.append(("retire", thread_id))
 
-    store = object()
-
-    def _fake_forget(knowledge_store, session_id, thread_ids, *, before=None):
-        order.append(("forget", knowledge_store is store, session_id, list(thread_ids), before))
+    def _fake_forget(knowledge_store, session_id, thread_ids):
+        order.append(("forget", session_id, list(thread_ids)))
         return 5
 
     monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
     monkeypatch.setattr(ch, "forget_conversation_memory", _fake_forget)
     c = _client(monkeypatch)
-    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
     monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
 
-    assert c.delete("/api/chat/sessions/s1").json()["forgotten"] == 0
-    assert not [o for o in order if o[0] == "forget"]  # default: nothing forgotten
-
-    order.clear()
-    body = c.delete("/api/chat/sessions/s2?forget=true&harvest=true").json()
-    assert body == {"deleted": True, "harvested": True, "forgotten": 5}
-    assert order[:2] == [("retire", "a2a:s2", True), ("retire", "chat:s2", False)]
-    assert order[2][:4] == ("forget", True, "s2", ["a2a:s2", "chat:s2", "a2a:s2"])
-    assert isinstance(order[2][4], datetime) and order[2][4].tzinfo is not None
-
-    order.clear()  # clear-but-keep-tab takes the same opt-in
-    assert c.delete("/api/chat/sessions/s3?forget=true&retire=false").json()["forgotten"] == 5
-    assert order[-1][:3] == ("forget", True, "s3")
-
-
-def test_delete_session_retirement_failure_forgets_nothing(monkeypatch):
-    """#3957: memory rows used to be hard-deleted BEFORE retirement ran, so a retirement
-    that raised left the chat in place with its memory already gone for good."""
-    import graph.conversation_harvest as ch
-    import operator_api.chat_routes as cr
-    import pytest
-    import runtime.state as rs
-
-    forgot: list[str] = []
-
-    async def _boom_retire(thread_id, *, harvest=None, cascade=True):
-        raise OSError("checkpoint db locked")
-
-    def _forget(knowledge_store, session_id, thread_ids, *, before=None):
-        forgot.append(session_id)
-        return 3
-
-    monkeypatch.setattr(cr, "_retire_thread", _boom_retire)
-    monkeypatch.setattr(ch, "forget_conversation_memory", _forget)
-    c = _client(monkeypatch)
-    monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
-    with pytest.raises(OSError, match="checkpoint db locked"):
-        c.delete("/api/chat/sessions/s1?forget=true")
-    assert forgot == []
+    assert c.delete("/api/chat/sessions/s2?forget=true").json()["forgotten"] == 5
+    assert order == [("retire", "a2a:s2"), ("retire", "chat:s2"), ("forget", "s2", ["a2a:s2", "chat:s2", "a2a:s2"])]
 
 
 def _seeded_task_engine(tmp_path, name, rows):
@@ -485,32 +546,6 @@ def test_session_summary_route_without_a_task_store_reports_known(monkeypatch):
         "last_updated": None,
         "last_state": None,
     }
-
-
-def test_delete_session_forget_failure_fails_the_delete(monkeypatch):
-    """A forget that fails must not report success: the delete fails, so the console
-    keeps the tab and the operator can retry. Retirement already ran (#3957 — it comes
-    first now) and is idempotent, so the retry retires nothing new and forgets again."""
-    import graph.conversation_harvest as ch
-    import operator_api.chat_routes as cr
-    import pytest
-    import runtime.state as rs
-
-    retired: list[str] = []
-
-    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
-        retired.append(thread_id)
-
-    def _boom(*_a, **_k):
-        raise RuntimeError("store locked")
-
-    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
-    monkeypatch.setattr(ch, "forget_conversation_memory", _boom)
-    c = _client(monkeypatch)
-    monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
-    with pytest.raises(RuntimeError, match="store locked"):
-        c.delete("/api/chat/sessions/s1?forget=true")
-    assert retired == ["a2a:s1", "chat:s1"]
 
 
 def test_delete_session_purges_prompt_snapshots(monkeypatch):

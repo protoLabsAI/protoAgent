@@ -173,8 +173,8 @@ def _subagent_http_error(exc: Exception) -> HTTPException:
 
 
 def _retry_after(exc: BaseException | None) -> str | None:
-    """The provider's ``Retry-After`` header off the first exception in the chain whose
-    ``response`` carries one, else ``None``. Best-effort."""
+    """The provider's ``Retry-After`` header off the first exception in the explicit
+    ``__cause__`` chain whose ``response`` carries one, else ``None``. Best-effort."""
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen and len(seen) < 16:
         try:
@@ -184,7 +184,7 @@ def _retry_after(exc: BaseException | None) -> str | None:
         if value:
             return str(value)
         seen.add(id(exc))
-        exc = exc.__cause__ or exc.__context__
+        exc = exc.__cause__
     return None
 
 

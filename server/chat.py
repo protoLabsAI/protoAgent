@@ -893,7 +893,7 @@ async def _run_native_turn(
     # Per-tab model + reasoning-effort override (the console puts the tab's chosen model +
     # the /effort level in the A2A request metadata). Threaded into every turn this stream
     # runs — initial, kicker, goal continuation. Unset → the configured default.
-    _model = ((request_metadata or {}).get("model") or "").strip() or None
+    _model = ((request_metadata or {}).get("model") or "").strip()
     _effort = ((request_metadata or {}).get("reasoning_effort") or "").strip() or None
     # Incognito thread (ADR 0069 D3b): the console/A2A caller sets metadata
     # `incognito: true` per message — no session persistence, no memory injection.
@@ -908,6 +908,8 @@ async def _run_native_turn(
     # prior_sessions on the initial turn + kicker, matching the continuation turns).
     _goal_state = _goal_loop.active_goal(session_id)
     goal_active = _goal_state is not None
+    # ...and, absent a pick of its own, on the model of the turn that set it (#3957).
+    _model = _goal_loop.goal_model(_goal_state, _model) or None
     # A goal-driven turn also runs under the fence of the turn that SET the goal.
     _turn_fence = {"fence": _goal_loop.goal_fenced(_goal_state, _fence)}
     # Kickoff injection (#1910) — shared with the non-streaming driver (server/goal_loop.py).
@@ -1596,19 +1598,20 @@ _upstream_status = _upstream_errors.upstream_status
 _upstream_unreachable = _upstream_errors.upstream_unreachable
 
 
-def _is_model_override_error(exc: BaseException | None) -> bool:
-    """True when ``exc`` (or anything in its cause chain) is the per-turn model override
-    failing to build (``graph.middleware.model_override.ModelOverrideError``, #3957). The
-    chain walk covers a framework layer that re-wraps the middleware's exception."""
-    from graph.middleware.model_override import ModelOverrideError
+def _model_pick_failure(exc: BaseException | None) -> BaseException | None:
+    """The per-turn model pick's own failure (#3957) — ``ModelOverrideError`` (an unknown
+    connection) or ``ModelUnavailableError`` (a known one that could not be built right
+    now) — found on ``exc`` or its explicit ``__cause__`` chain (a framework layer may
+    re-raise it ``from`` the original), else ``None``."""
+    from graph.middleware.model_override import ModelOverrideError, ModelUnavailableError
 
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen and len(seen) < 16:
-        if isinstance(exc, ModelOverrideError):
-            return True
+        if isinstance(exc, (ModelOverrideError, ModelUnavailableError)):
+            return exc
         seen.add(id(exc))
-        exc = exc.__cause__ or exc.__context__
-    return False
+        exc = exc.__cause__
+    return None
 
 
 async def record_failed_turn(session_id: str, text: str, *, thread_id: str | None = None) -> bool:
@@ -1669,11 +1672,21 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
         # None for a failure with no exception behind it (a turn that produced no reply, #3873).
         "exception": type(exc).__name__ if exc is not None else None,
     }
-    if _is_model_override_error(exc):
-        # The turn's model pick could not be built (#3957) — the caller's input, so /v1
-        # answers 400 rather than 500, and names the field the way OpenAI's errors do.
-        err["type"] = "invalid_request_error"
+    pick_failure = _model_pick_failure(exc)
+    if pick_failure is not None:
+        from graph.middleware.model_override import ModelOverrideError
+
+        # The turn's model pick failed to build (#3957). An unknown connection is the
+        # caller's input — /v1 answers 400; a known one that could not be built right now
+        # (a sign-in refresh, a network blip) is not their fault — /v1 answers 503. Either
+        # way the short message is the one shown; the cause is in the server log.
+        err["message"] = str(pick_failure)
         err["param"] = "model"
+        if isinstance(pick_failure, ModelOverrideError):
+            err["type"] = "invalid_request_error"
+        else:
+            err["type"] = "server_error"
+            err["model_unavailable"] = True
         return err
     if err["upstream_status"] is None and _upstream_unreachable(exc):
         # The gateway never answered (connection refused / DNS / timeout) — no status to

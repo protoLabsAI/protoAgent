@@ -36,6 +36,7 @@ There is no import-time edge back into ``server.chat``.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -148,6 +149,20 @@ def goal_fenced(goal_state, fence) -> list[str]:
     return intersect_fences(list(fence or []), normalize_fence(getattr(goal_state, "fence", None)))
 
 
+def goal_model(goal_state, model: str | None) -> str:
+    """The model a goal-driven pass runs on (#3957): the turn's own pick, else the pick of
+    the turn that SET the goal (``GoalState.model``), else ``""`` (the configured default).
+
+    The pick is no longer inherited from the thread's checkpoint (it is stamped on every
+    pass), so a goal re-driven by a turn that carries no pick — a watch / schedule fire, a
+    background nudge, a "Default" message — would otherwise drop to the default model.
+    The goal carries it explicitly instead; ``/goal clear`` ends it."""
+    own = (model or "").strip()
+    if own or goal_state is None:
+        return own
+    return str(getattr(goal_state, "model", "") or "").strip()
+
+
 def kickoff_message(goal_state, message: str, *, resume: bool, overflow_retry: bool = False) -> str:
     """Kickoff injection (#1910): the FIRST goal-driven turn (iteration 0, not a HITL
     resume) carries the goal condition — the raw user text folded into the kickoff prompt —
@@ -209,6 +224,10 @@ class GoalDrive:
         # The config the last pass ran on — the turn's own, or a fresh-context goal's
         # scoped ``…:goal-iter-N`` thread (``record_goal_note`` needs to know which).
         self.last_pass_config: dict | None = config
+        # An async-context-manager factory held around the pause-note write (#3957) — the
+        # thread lock, for a driver that does NOT already hold it across the drive (the
+        # non-streaming one locks per pass). ``None``: the caller already holds it.
+        self.note_lock = None
 
     async def steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
         if STATE.goal_controller is None or not STATE.goal_controller.active_goal(self.session_id):
@@ -239,7 +258,8 @@ class GoalDrive:
                 _record = getattr(STATE.goal_controller, "note_round_cap", None)
                 if _record is not None:
                     _record(self.session_id, note)
-                await record_goal_note(self.config, note, pass_config=self.last_pass_config)
+                async with self.note_lock() if self.note_lock is not None else contextlib.nullcontext():
+                    await record_goal_note(self.config, note, pass_config=self.last_pass_config)
                 yield GoalNote(note)
                 break
             step = GoalContinuation(decision.message, _chat()._goal_continuation_config(self.config, decision.state))
