@@ -1,63 +1,73 @@
 <p align="center">
-  <img src="docs/public/protoagent-banner.png" alt="protoAgent" width="100%">
+  <img src="docs/public/social-preview.png" alt="protoAgent" width="640">
 </p>
 
-# protoAgent
+<h3 align="center">Your local agent, handing real coding work to Claude Code and Codex.</h3>
 
-[![Checks](https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml/badge.svg)](https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Docs](https://img.shields.io/badge/docs-agent.protolabs.studio-9b87f2)](https://agent.protolabs.studio/docs/)
-[![GitHub Template](https://img.shields.io/badge/template-use%20this%20repo-9b87f2)](https://github.com/new?template_name=protoAgent&template_owner=protoLabsAI)
+<p align="center">
+  A private, plugin-extensible desktop agent. It plans and remembers, and it gives the coding
+  to the CLI agents you already use, over the Agent Client Protocol. Your chats, memory and
+  tasks stay in SQLite on your disk. No analytics or tracking SDKs.
+</p>
 
-A lean, A2A-native agent on LangGraph — ships a small core, grows with git-URL plugins.
-Run one agent or orchestrate a fleet; drive it from a console, the OpenAI-compatible API,
-or A2A. Local-first, yours to fork.
+<p align="center">
+  <a href="https://agent.protolabs.studio/download"><img src="https://img.shields.io/badge/download-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-9b87f2" alt="Download for macOS, Windows, Linux"></a>
+  <a href="https://pypi.org/project/protolabs-agent/"><img src="https://img.shields.io/pypi/v/protolabs-agent?label=PyPI" alt="PyPI: protolabs-agent"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://agent.protolabs.studio/docs/"><img src="https://img.shields.io/badge/docs-agent.protolabs.studio-9b87f2" alt="Docs"></a>
+  <a href="https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml"><img src="https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
+</p>
 
-It keeps the boring parts — A2A spec handling, cost/extension emission, tracing, the
-release pipeline — stable across every agent in the fleet, so forking an agent is close
-to a rewrite of `SOUL.md`, `graph/prompts.py`, and `tools/lg_tools.py` and not much else.
-You add capability as plugins instead of inheriting a pile of it.
+<!-- HERO: lane A clip — agent delegates to Claude Code over ACP, streams its work, tests pass -->
 
-**Canonical reference implementation**: [protoLabsAI/roxy](https://github.com/protoLabsAI/roxy).
-Roxy is a filled-in fork — an autonomous ProtoMaker portfolio manager with its
-own persona, A2A skills, and project registry — a good example of what a fork
-looks like end-to-end.
+## Get it running
 
-**Try it in 5 minutes:** clone, `uv sync && uv run python -m server`
-(or `pip install -r requirements.txt && python -m server`), open
-<http://localhost:7870>, and walk the
-setup wizard — no forking, no `sed`, no Docker required to get
-your first agent talking. See the [first-agent tutorial](./docs/tutorials/first-agent.md).
+**Desktop app (beta)** — [download for macOS, Windows or Linux](https://agent.protolabs.studio/download).
+About 100 MB installed with the server bundled; nothing is fetched at first launch. The macOS
+build (Apple Silicon) is signed and notarized; the Windows and Linux builds are unsigned for now.
 
-**When you're ready to ship your own:** click **"Use this template"**
-at the top of the GitHub repo, then follow [Customize &
-deploy](./docs/guides/customize-and-deploy.md) for the fork /
-rename / release-pipeline wiring.
+**One command** — with [uv](https://docs.astral.sh/uv/) installed:
 
-## What you get out of the box
+```bash
+uvx --from protolabs-agent protoagent serve
+```
 
-| Concern | Where it lives | What it does |
-|---|---|---|
-| A2A server | `server/a2a.py`, `a2a_impl/executor.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
-| Agent runtime | `graph/agent.py`, `server/` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
-| LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
-| Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one worked example ships — a `researcher` (web + memory, plan→search→synthesize→cite) |
-| Delegate to other agents | `plugins/delegates/`, `plugins/coding_agent/` | **`delegate_to`** routes a sub-task to another agent or endpoint over **a2a / openai / acp** — a **built-in** registry, managed + hot-swappable from the console (**Workspace settings ▸ Delegates**), with a health prober. The **acp** type spawns a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol. See [Delegates](./docs/guides/delegates.md), [Spawn CLI coding agents](./docs/guides/coding-agents.md), ADR [0024](./docs/adr/0024-spawn-cli-coding-agents-acp.md) / [0025](./docs/adr/0025-unified-delegate-registry-and-panel.md) |
-| Starter tools | `tools/lg_tools.py` (memory: `tools/memory_tools.py`; scheduler/tasks/watches: `tools/scheduler_tools.py`; goals: `tools/goal_tools.py`; curation/skill/SOUL/config editors + fleet diagnostics: `tools/self_edit_tools.py`) | What an agent has **before any plugin**. Always bound: 4 general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`), 2 lead-only HITL (`ask_human`, `request_user_input`), `show_component` (inline table/keyvalue/timeline widgets), `load_skill`, 3 curation (`recent_activity`/`list_skills`/`save_skill`), and `show_config` (read-only merged config, secrets masked). Bound with their store — all built by default: 7 memory/knowledge, 4 scheduler (incl. `wait`), 4 tasks, 1 inbox. Flag-gated: the goal + watch tools need their flag **and** a registered plugin verifier; `edit_soul` needs `soul.self_edit_enabled`; `onboard_project` needs `onboarding.enabled`; `search_tools` needs `tools.deferred.enabled`. **Not** in `get_all_tools`: notes/docs/artifact tools (on-by-default plugins), `delegate_to` (built-in `delegates` plugin), `task`/`task_batch` (subagent delegation), the fenced filesystem tools, GitHub tools (a separately installed plugin). Drop any via `tools.disabled`; add via a plugin. See [Starter tools](./docs/reference/starter-tools.md) |
-| File GitHub issues | `tools/gh_issue.py` | **`/issue`** — a user-only chat command **and** a 🐛 utility-bar form dialog that file a GitHub issue via the `gh` CLI, scaffolding + enforcing the required sections so it clears the repo's issue gate. **Not** an agent tool — creating issues stays in your hands (the `github` plugin's GitHub tools are read-only). Repos are a quick-toggle list configured under **Settings ▸ System ▸ GitHub** (`github.repos` + `github.default_repo`), pairing with the portfolio manager's many-repo setup. See [File GitHub issues](./docs/guides/file-github-issues.md) |
-| Knowledge store | `knowledge/store.py`, `knowledge/hybrid_store.py`, `ingestion/` | sqlite + FTS5 keyword search by default; an optional **hybrid** store adds embeddings + RRF fusion, and the **ingestion pipeline** pulls in txt/md/html/pdf/docx/web/YouTube/audio/video sources. One `chunks` table for operator notes and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
-| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/`, `plugins/` | Opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, loaded on demand), **MCP servers** (external tools over stdio/HTTP), and **plugins** — drop-in packages that add tools, skills, subagents, workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail views**, and their own config/secrets/Settings. Plugins are **installable from a git URL** (`protoagent plugin install <url>`, pinned in `plugins.lock`) and shareable as repos — a repo is a full bundle. The first-party **Telegram** (`plugins/telegram`) integration ships bundled; **Discord**, **Slack**, and **Google** Gmail/Calendar install as external plugins from their own repos. Start at **[Extend protoAgent](./docs/guides/extend.md)**; the API is documented in a generated, CI-gated reference ([manifest](./docs/reference/plugin-manifest.md), [registry](./docs/reference/plugin-registry-api.md), [SDK](./docs/reference/plugin-sdk-api.md), [view bridge](./docs/reference/plugin-view-bridge.md), [events](./docs/reference/plugin-events.md), [testkit](./docs/reference/plugin-testkit.md), [CLI](./docs/reference/plugin-cli.md)). See also [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md), [Install & publish plugins](./docs/guides/plugin-registry.md), ADR [0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) / [0018](./docs/adr/0018-plugin-surfaces-routes-subagents.md) / [0019](./docs/adr/0019-plugin-config-settings-secrets.md) / [0026](./docs/adr/0026-plugin-contributed-console-surfaces.md) / [0027](./docs/adr/0027-install-plugins-from-git-url.md) |
-| Media output channel | `infra/media.py`, `server/media.py`, `graph/multimodal.py` | Tool-generated binary artifacts, both directions: `registry.save_media()` persists an image/audio/video into a core store served by one `GET /media/<file>` route (per-file HMAC-signed URLs render inline in chat even under a bearer gate; `media.public` / `media.retention_days` config), and `multimodal_tool_result()` lets a tool return an image a **vision model actually sees** as ToolMessage content blocks (text-only models degrade to the caption/describe path). See [Plugins ▸ Tapping core deeper](./docs/guides/plugins.md#consumption-sdk) (#1929/#1930) |
-| Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by a bundled sqlite scheduler. Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
-| Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
-| Tracing | `observability/tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
-| Observability | `observability/metrics.py`, `observability/audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
-| Output protocol | `graph/output_format.py` | `<scratch_pad>` / `<output>` parsing so the model can think without it leaking to users |
-| UI | `apps/web/` (React console) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), plugin-contributed rail views, a ⌘⇧K command palette + presence-aware Fleet Room, `/export` (save a chat to Markdown) and `/btw` (a side question answered from the chat's context, saved nowhere), and a PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
-| Fleet deck | `deck/` (Textual TUI), `graph/fleet/cli.py` | The operator's terminal for the fleet — bare `protoagent fleet` / `protoagent top` over the running hub: the roster with the console's presence words, member detail, a fleet-wide work feed, member management (create / rename / delete / remotes / order through `ops/`), every hub on the box (`--all`: attach, or bring a stopped hub up), and conversations with members — steering, HITL answers, delegation cancel — over the same A2A / `/api` surface as the console. Live hub first, badged disk fallback. Bundled in the desktop sidecar. See [ADR 0042](./docs/adr/0042-fleet-supervisor-unified-console.md) (amendment) · [ADR 0075](./docs/adr/0075-external-interfaces-cli-mcp-api.md) (amendment) · [the `protoagent` command](./docs/guides/cli.md) |
-| Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
+then open <http://localhost:7870>.
 
-## Quickstart — from zero to chatting in 5 minutes
+**From source:**
+
+```bash
+git clone https://github.com/protoLabsAI/protoAgent.git && cd protoAgent
+uv sync && uv run python -m server
+```
+
+Whichever you pick, the setup wizard connects any OpenAI-compatible endpoint — a hosted
+provider, a LiteLLM gateway, or a local Ollama — then names your agent and picks an
+archetype. The [first-agent tutorial](./docs/tutorials/first-agent.md) walks every step.
+
+## Watch it
+
+| Your agent drives Claude Code / Codex | An autonomous dev team | A private desktop agent |
+| --- | --- | --- |
+| <!-- TILE: lane A --> | <!-- TILE: lane B --> | <!-- TILE: lane C --> |
+| `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
+
+If protoAgent saves you a step, a ⭐ helps other people find it.
+
+## Why it's built this way
+
+- **Local and inspectable.** Chats, memory, knowledge and tasks live in SQLite files on your
+  disk, and the code ships no analytics or tracking. Tracing (Langfuse) and metrics are
+  opt-in and point wherever you configure them.
+- **Plugins from any git URL.** `protoagent plugin install <url>` adds tools, skills,
+  subagents and console rail views, pinned in `plugins.lock` — no fork required.
+- **A2A 1.0 native.** Every agent serves an agent card and JSON-RPC over `/a2a`, so agents
+  delegate to each other over an open protocol ([ADR 0014](./docs/adr/0014-a2a-1.0-migration.md)).
+- **Headless if you want it.** Skip the console: an OpenAI-compatible `/v1` API, A2A, and
+  Prometheus `/metrics` — see [Run headless](#run-headless).
+- **MIT, built on LangGraph.** A small core you can read, extend with plugins, or fork.
+
+## From source, step by step
 
 ```bash
 # 1. Get the code (no fork needed for a first run)
@@ -84,8 +94,8 @@ open http://localhost:7870
 [First-agent tutorial](./docs/tutorials/first-agent.md) walks
 through every wizard step with screenshots.
 
-Once you're happy and want to ship it as your own image in your
-own GHCR: [Customize & deploy](./docs/guides/customize-and-deploy.md).
+Once you're happy and want to ship it as your own agent, see
+[Build your own agent](#build-your-own-agent).
 
 ## The `protoagent` command
 
@@ -134,33 +144,6 @@ curl localhost:7870/.well-known/agent-card.json
 
 `--ui` tiers: `console` (React + API, default) · `none` (headless). `full` is a
 deprecated alias for `console`. See [Run headless](./docs/guides/headless.md).
-
-## Architecture
-
-```
-┌──────────────┐     A2A JSON-RPC + SSE      ┌─────────────────┐
-│   Consumer   │ ──────────────────────────▶ │  A2A handler    │
-│  (any A2A    │                             │  (FastAPI)      │
-│   client)    │ ◀─── cost-v1 (metadata) ────│                 │
-└──────────────┘                             └────────┬────────┘
-                                                      │
-                                                      ▼
-                                            ┌─────────────────┐
-                                            │  graph/agent.py │
-                                            │  (LangGraph     │
-                                            │   create_agent) │
-                                            └────────┬────────┘
-                                                      │
-                                                      ▼
-                                            ┌─────────────────┐
-                                            │  LiteLLM        │  ← model selection
-                                            │  gateway        │    lives here,
-                                            └─────────────────┘    not in code
-```
-
-The A2A handler never talks to the LLM directly — it submits a
-message to the LangGraph runtime, which owns the tool loop, the
-subagent `task()` delegation, and the structured-output protocol.
 
 ## Plugins
 
@@ -219,6 +202,95 @@ Discover catalog and the website directory (the JSON files are generated; CI fai
 drift). See [Install & publish plugins](./docs/guides/plugin-registry.md),
 [Extend protoAgent](./docs/guides/extend.md), [Plugins](./docs/guides/plugins.md), [Console views](./docs/guides/plugin-views.md).
 
+## Architecture
+
+```
+┌──────────────┐     A2A JSON-RPC + SSE      ┌─────────────────┐
+│   Consumer   │ ──────────────────────────▶ │  A2A handler    │
+│  (any A2A    │                             │  (FastAPI)      │
+│   client)    │ ◀─── cost-v1 (metadata) ────│                 │
+└──────────────┘                             └────────┬────────┘
+                                                      │
+                                                      ▼
+                                            ┌─────────────────┐
+                                            │  graph/agent.py │
+                                            │  (LangGraph     │
+                                            │   create_agent) │
+                                            └────────┬────────┘
+                                                      │
+                                                      ▼
+                                            ┌─────────────────┐
+                                            │  LiteLLM        │  ← model selection
+                                            │  gateway        │    lives here,
+                                            └─────────────────┘    not in code
+```
+
+The A2A handler never talks to the LLM directly — it submits a
+message to the LangGraph runtime, which owns the tool loop and the
+subagent `task()` delegation.
+
+<details>
+<summary><b>Full feature map</b></summary>
+
+| Concern | Where it lives | What it does |
+|---|---|---|
+| A2A server | `server/a2a.py`, `a2a_impl/executor.py` | JSON-RPC 2.0 over `/a2a`, SSE streaming, `tasks/*` lifecycle, push notifications, well-known agent card, dual token-shape parsing |
+| Agent runtime | `graph/agent.py`, `server/` | LangGraph `create_agent()` wired to the A2A handler, with streaming token capture for cost-v1 |
+| LLM gateway | `graph/llm.py` | OpenAI-compatible client pointed at LiteLLM — swap models by editing the gateway config, not the fork |
+| Subagents | `graph/subagents/config.py` | DeerFlow-pattern delegation via a `task()` tool; one worked example ships — a `researcher` (web + memory, plan→search→synthesize→cite) |
+| Delegate to other agents | `plugins/delegates/`, `plugins/coding_agent/` | **`delegate_to`** routes a sub-task to another agent or endpoint over **a2a / openai / acp** — a **built-in** registry, managed + hot-swappable from the console (**Workspace settings ▸ Delegates**), with a health prober. The **acp** type spawns a CLI coding agent (e.g. protoCLI) over the Agent Client Protocol. See [Delegates](./docs/guides/delegates.md), [Spawn CLI coding agents](./docs/guides/coding-agents.md), ADR [0024](./docs/adr/0024-spawn-cli-coding-agents-acp.md) / [0025](./docs/adr/0025-unified-delegate-registry-and-panel.md) |
+| Starter tools | `tools/lg_tools.py` (memory: `tools/memory_tools.py`; scheduler/tasks/watches: `tools/scheduler_tools.py`; goals: `tools/goal_tools.py`; curation/skill/SOUL/config editors + fleet diagnostics: `tools/self_edit_tools.py`) | What an agent has **before any plugin**. Always bound: 4 general (`current_time`, `calculator` safe AST eval, `web_search` via DuckDuckGo, `fetch_url`), 2 lead-only HITL (`ask_human`, `request_user_input`), `show_component` (inline table/keyvalue/timeline widgets), `load_skill`, 3 curation (`recent_activity`/`list_skills`/`save_skill`), and `show_config` (read-only merged config, secrets masked). Bound with their store — all built by default: 7 memory/knowledge, 4 scheduler (incl. `wait`), 4 tasks, 1 inbox. Flag-gated: the goal + watch tools need their flag **and** a registered plugin verifier; `edit_soul` needs `soul.self_edit_enabled`; `onboard_project` needs `onboarding.enabled`; `search_tools` needs `tools.deferred.enabled`. **Not** in `get_all_tools`: notes/docs/artifact tools (on-by-default plugins), `delegate_to` (built-in `delegates` plugin), `task`/`task_batch` (subagent delegation), the fenced filesystem tools, GitHub tools (a separately installed plugin). Drop any via `tools.disabled`; add via a plugin. See [Starter tools](./docs/reference/starter-tools.md) |
+| File GitHub issues | `tools/gh_issue.py` | **`/issue`** — a user-only chat command **and** a 🐛 utility-bar form dialog that file a GitHub issue via the `gh` CLI, scaffolding + enforcing the required sections so it clears the repo's issue gate. **Not** an agent tool — creating issues stays in your hands (the `github` plugin's GitHub tools are read-only). Repos are a quick-toggle list configured under **Settings ▸ System ▸ GitHub** (`github.repos` + `github.default_repo`), pairing with the portfolio manager's many-repo setup. See [File GitHub issues](./docs/guides/file-github-issues.md) |
+| Knowledge store | `knowledge/store.py`, `knowledge/hybrid_store.py`, `ingestion/` | sqlite + FTS5 keyword search by default; an optional **hybrid** store adds embeddings + RRF fusion, and the **ingestion pipeline** pulls in txt/md/html/pdf/docx/web/YouTube/audio/video sources. One `chunks` table for operator notes and conversation findings. Default-on; turn off with `middleware.knowledge: false` |
+| Extensibility | `graph/skills/`, `tools/mcp_tools.py`, `graph/plugins/`, `plugins/` | Opt-in ways to extend a running agent without forking: **`SKILL.md` skills** (AgentSkills format, loaded on demand), **MCP servers** (external tools over stdio/HTTP), and **plugins** — drop-in packages that add tools, skills, subagents, workflows, FastAPI routes, background surfaces, managed MCP servers, **console rail views**, and their own config/secrets/Settings. Plugins are **installable from a git URL** (`protoagent plugin install <url>`, pinned in `plugins.lock`) and shareable as repos — a repo is a full bundle. The first-party **Telegram** (`plugins/telegram`) integration ships bundled; **Discord**, **Slack**, and **Google** Gmail/Calendar install as external plugins from their own repos. Start at **[Extend protoAgent](./docs/guides/extend.md)**; the API is documented in a generated, CI-gated reference ([manifest](./docs/reference/plugin-manifest.md), [registry](./docs/reference/plugin-registry-api.md), [SDK](./docs/reference/plugin-sdk-api.md), [view bridge](./docs/reference/plugin-view-bridge.md), [events](./docs/reference/plugin-events.md), [testkit](./docs/reference/plugin-testkit.md), [CLI](./docs/reference/plugin-cli.md)). See also [Skills](./docs/guides/skills.md), [MCP](./docs/guides/mcp.md), [Plugins](./docs/guides/plugins.md), [Install & publish plugins](./docs/guides/plugin-registry.md), ADR [0001](./docs/adr/0001-extensibility-and-plugin-architecture.md) / [0018](./docs/adr/0018-plugin-surfaces-routes-subagents.md) / [0019](./docs/adr/0019-plugin-config-settings-secrets.md) / [0026](./docs/adr/0026-plugin-contributed-console-surfaces.md) / [0027](./docs/adr/0027-install-plugins-from-git-url.md) |
+| Media output channel | `infra/media.py`, `server/media.py`, `graph/multimodal.py` | Tool-generated binary artifacts, both directions: `registry.save_media()` persists an image/audio/video into a core store served by one `GET /media/<file>` route (per-file HMAC-signed URLs render inline in chat even under a bearer gate; `media.public` / `media.retention_days` config), and `multimodal_tool_result()` lets a tool return an image a **vision model actually sees** as ToolMessage content blocks (text-only models degrade to the caption/describe path). See [Plugins ▸ Tapping core deeper](./docs/guides/plugins.md#consumption-sdk) (#1929/#1930) |
+| Scheduler | `scheduler/` | `schedule_task` / `list_schedules` / `cancel_schedule` tools backed by a bundled sqlite scheduler. Multi-agent-safe — every job is namespaced by `AGENT_NAME`. See [Schedule future work](./docs/guides/scheduler.md) |
+| Eval harness | `evals/` | Side-effect-verified A2A test harness — audit log + reply text + KB state. `python -m evals.runner` against a running agent. See [Eval your fork](./docs/guides/evals.md) |
+| Tracing | `observability/tracing.py` | Langfuse trace_session with distributed `a2a.trace` propagation and the OTel cross-context-detach filter |
+| Observability | `observability/metrics.py`, `observability/audit.py` | Prometheus metrics with per-agent prefix, JSONL audit log with trace IDs |
+| Reasoning-leak guard | `graph/output_format.py` | Reasoning streams on the gateway's native `reasoning_content` channel; `strip_reasoning` removes any raw `<think>` / `<scratch_pad>` blocks a provider leaks into the answer, so they never reach A2A artifacts, the console, or persisted memory |
+| UI | `apps/web/` (React console) | React operator console (the default `--ui console` tier + the Tauri desktop app) over the REST/A2A API — live token-by-token streaming, chat continuity across navigation (+ interrupted-stream self-heal), plugin-contributed rail views, a ⌘⇧K command palette + presence-aware Fleet Room, `/export` (save a chat to Markdown) and `/btw` (a side question answered from the chat's context, saved nowhere), and a PWA shell. See [ADR 0010](./docs/adr/0010-headless-setup-and-ui-tiers.md) |
+| Fleet deck | `deck/` (Textual TUI), `graph/fleet/cli.py` | The operator's terminal for the fleet — bare `protoagent fleet` / `protoagent top` over the running hub: the roster with the console's presence words, member detail, a fleet-wide work feed, member management (create / rename / delete / remotes / order through `ops/`), every hub on the box (`--all`: attach, or bring a stopped hub up), and conversations with members — steering, HITL answers, delegation cancel — over the same A2A / `/api` surface as the console. Live hub first, badged disk fallback. Bundled in the desktop sidecar. See [ADR 0042](./docs/adr/0042-fleet-supervisor-unified-console.md) (amendment) · [ADR 0075](./docs/adr/0075-external-interfaces-cli-mcp-api.md) (amendment) · [the `protoagent` command](./docs/guides/cli.md) |
+| Release pipeline | `.github/workflows/*.yml` | Autonomous semver bumps, GHCR image push, GitHub release with filtered notes, optional Discord post |
+
+</details>
+
+## Skill loop — agents that learn from experience
+
+protoAgent includes an end-to-end **skill loop**. **Human-authored skills**
+dropped in as [`SKILL.md`](./docs/guides/skills.md) folders are listed in the
+agent's context as an always-on `<available_skills>` index (name + summary); the
+agent **loads a skill's full procedure on demand** via the `load_skill` tool when
+it judges one fits the task ([progressive disclosure, ADR 0060](./docs/adr/0060-skill-progressive-disclosure.md)).
+The agent can also **author its own** skills from a proven workflow via `/distill`
+(it writes a new `SKILL.md`), and the skill curator periodically deduplicates,
+decays, and prunes non-pinned skills.
+
+| Component | Where it lives | What it does |
+|---|---|---|
+| `SKILL.md` skills | `config/skills/`, `<config>/skills/`, plugins | Human-authored skills (AgentSkills format) loaded into the index on boot (`source=disk`). Also how the agent self-authors skills, via `/distill`. See [Skills](./docs/guides/skills.md) |
+| Skill index | `/sandbox/skills.db` (→ `~/.protoagent`) | SQLite (FTS5) store of loaded skills, read by `KnowledgeMiddleware` |
+| Skill index injection | `graph/middleware/knowledge.py` | Lists the index (name + summary) as an always-on `<available_skills>` block; the agent pulls a skill's full body on demand via `load_skill` ([ADR 0060](./docs/adr/0060-skill-progressive-disclosure.md)) |
+| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes non-pinned skills (disk skills are pinned) |
+
+### Running the curator
+
+```bash
+# Dry-run — see what would change without touching the index
+python -m graph.skills.curator --dry-run
+
+# Full curation pass (deduplicate, decay, prune; writes an audit trail)
+python -m graph.skills.curator
+```
+
+The curator applies a **90-day confidence half-life** (confidence halves for
+every 90 days a skill goes unused), clusters near-duplicate skills by
+similarity and keeps the highest-confidence copy, and prunes any non-pinned
+skill whose confidence has fallen below 0.2 (disk `SKILL.md` skills are pinned).
+
+See the [Skills guide](./docs/guides/skills.md) and
+[architecture § Skill loop](./docs/explanation/architecture.md) for the details.
+
 ## A2A extensions shipped by default
 
 Since protolabs-a2a 0.3.0 these ride the **`metadata` map keyed by extension URI** — not
@@ -266,7 +338,36 @@ test suite covers both.
 | Langfuse traces | `LANGFUSE_*` env vars, or **Settings ▸ Tracing** (env wins) | Trace tag is `AGENT_NAME`, so filter by tag to find this agent's runs |
 | Container logs | `docker logs <container>` | INFO is the default — `LOG_LEVEL=DEBUG` for more |
 
-## Release pipeline
+## Requirements (from source)
+
+- Python 3.11+ (CI runs 3.12)
+- Docker (for the bundled deployment)
+- A LiteLLM-compatible OpenAI gateway somewhere on the network
+  (see `config/langgraph-config.yaml`)
+- Optional: Langfuse, Prometheus, Discord webhook
+
+## Build your own agent
+
+A lean, A2A-native agent on LangGraph — ships a small core, grows with git-URL plugins.
+Run one agent or orchestrate a fleet; drive it from a console, the OpenAI-compatible API,
+or A2A. Local-first, yours to fork.
+
+It keeps the boring parts — A2A spec handling, cost/extension emission, tracing, the
+release pipeline — stable across every agent in the fleet, so forking an agent is close
+to a rewrite of `SOUL.md`, `graph/prompts.py`, and `tools/lg_tools.py` and not much else.
+You add capability as plugins instead of inheriting a pile of it.
+
+Click **"Use this template"** at the top of the GitHub repo (or
+[start from the template](https://github.com/new?template_name=protoAgent&template_owner=protoLabsAI)),
+then follow [Customize & deploy](./docs/guides/customize-and-deploy.md) for the fork /
+rename / release-pipeline wiring.
+
+**Canonical reference implementation**: [protoLabsAI/roxy](https://github.com/protoLabsAI/roxy).
+Roxy is a filled-in fork — an autonomous ProtoMaker portfolio manager with its
+own persona, A2A skills, and project registry — a good example of what a fork
+looks like end-to-end.
+
+### Release pipeline
 
 The included GitHub Actions pipeline is optional but opinionated.
 
@@ -295,50 +396,6 @@ runner. The three release workflows (`docker-publish`, `prepare-release`,
 `release`) gate on `github.repository == 'protoLabsAI/<name>'` so they
 no-op on clones that haven't updated the owner — avoids surprise releases
 on forks. Update the repo check in all three when forking.
-
-## Requirements
-
-- Python 3.11+ (CI runs 3.12)
-- Docker (for the bundled deployment)
-- A LiteLLM-compatible OpenAI gateway somewhere on the network
-  (see `config/langgraph-config.yaml`)
-- Optional: Langfuse, Prometheus, Discord webhook
-
-## Skill loop — agents that learn from experience
-
-protoAgent includes an end-to-end **skill loop**. **Human-authored skills**
-dropped in as [`SKILL.md`](./docs/guides/skills.md) folders are listed in the
-agent's context as an always-on `<available_skills>` index (name + summary); the
-agent **loads a skill's full procedure on demand** via the `load_skill` tool when
-it judges one fits the task ([progressive disclosure, ADR 0060](./docs/adr/0060-skill-progressive-disclosure.md)).
-The agent can also **author its own** skills from a proven workflow via `/distill`
-(it writes a new `SKILL.md`), and the skill curator periodically deduplicates,
-decays, and prunes non-pinned skills.
-
-| Component | Where it lives | What it does |
-|---|---|---|
-| `SKILL.md` skills | `config/skills/`, `<config>/skills/`, plugins | Human-authored skills (AgentSkills format) loaded into the index on boot (`source=disk`). Also how the agent self-authors skills, via `/distill`. See [Skills](./docs/guides/skills.md) |
-| Skill index | `/sandbox/skills.db` (→ `~/.protoagent`) | SQLite (FTS5) store of loaded skills, read by `KnowledgeMiddleware` |
-| Skill index injection | `graph/middleware/knowledge.py` | Lists the index (name + summary) as an always-on `<available_skills>` block; the agent pulls a skill's full body on demand via `load_skill` ([ADR 0060](./docs/adr/0060-skill-progressive-disclosure.md)) |
-| Skill curator | `graph/skills/curator.py` | Periodic agent that deduplicates, decays, and prunes non-pinned skills (disk skills are pinned) |
-
-### Running the curator
-
-```bash
-# Dry-run — see what would change without touching the index
-python -m graph.skills.curator --dry-run
-
-# Full curation pass (deduplicate, decay, prune; writes an audit trail)
-python -m graph.skills.curator
-```
-
-The curator applies a **90-day confidence half-life** (confidence halves for
-every 90 days a skill goes unused), clusters near-duplicate skills by
-similarity and keeps the highest-confidence copy, and prunes any non-pinned
-skill whose confidence has fallen below 0.2 (disk `SKILL.md` skills are pinned).
-
-See the [Skills guide](./docs/guides/skills.md) and
-[architecture § Skill loop](./docs/explanation/architecture.md) for the details.
 
 ## Contributing
 
