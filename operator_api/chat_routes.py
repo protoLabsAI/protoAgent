@@ -566,9 +566,13 @@ def register_chat_routes(app, ui: str) -> None:
         # un-hides them; any later failure leaves them hidden for the retry to finish.
         from graph import conversation_harvest as _harvest
 
-        forget_tids = [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)]
         store = STATE.knowledge_store
         forget = forget and store is not None
+        # Resolved only when forgetting: a resolver replay without request metadata is a
+        # best-effort call this route otherwise makes exactly where it always did.
+        forget_tids = (
+            [f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)] if forget else []
+        )
         # Not best-effort: if this raises, the delete fails before anything is retired.
         marker = await asyncio.to_thread(_harvest.begin_forget, store, session_id, forget_tids) if forget else None
         try:
