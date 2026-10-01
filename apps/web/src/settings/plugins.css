@@ -36,8 +36,11 @@
 
 /* Plugins panel (ADR 0027) — install from a git URL, under Settings → Plugins. */
 .plugin-install-form { display: flex; gap: var(--pl-space-2); margin: var(--pl-space-2_5) 0; flex-wrap: wrap; }
-/* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input). */
-.plugin-install-form input { flex: 1; min-width: 220px; }
+/* DS Input owns its chrome; only the flex sizing is ours (don't re-skin .pl-input).
+   The URL takes the whole first row: sharing it with the ref field squeezed a
+   typical github URL down to its tail. Ref + Install wrap onto the row below. */
+.plugin-install-form .plugin-install-url { flex: 1 1 100%; min-width: 0; }
+.plugin-install-form .plugin-install-ref { flex: 1 1 180px; min-width: 0; }
 .plugin-install-status { font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-muted); margin: var(--pl-space-1) 0 var(--pl-space-2_5); }
 /* .plugin-sync-banner retired — the locked-but-missing notice is a DS <Alert status="warning"> now. */
 .plugin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--pl-space-2); }
