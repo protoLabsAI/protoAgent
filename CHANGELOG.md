@@ -15,6 +15,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.188.0] - 2026-10-01
+
+### Fixed
+- **A long `/<workflow>` step is no longer cancelled for being quiet (#3940).** Since #3938,
+  a workflow step that ran longer than the turn stall window (`turn_stall_timeout_seconds`,
+  900s) without a start/end frame had its whole run cancelled. Each step now reports
+  liveness whenever its subagent finishes a model call or tool round, and the stall guard
+  counts that. A step stuck inside one call still reports nothing, so the guard still ends
+  it, as it ends any stuck turn. A step that keeps working stays bounded by its subagent's
+  `max_turns` and the recipe's optional per-step `timeout`.
+- **A `/<workflow>` whose output step failed ends its turn as failed (#3940, #3957).** It
+  used to report a completed A2A task whose answer was the step's `Error: …` text. The turn
+  now fails only when a step the output is rendered from failed, or when every step failed.
+  The run's output is still the turn's answer, so chat, the Activity feed, scheduled
+  reports and background jobs keep it, and the error is one line naming the failed steps.
+  A run that lost a branch but still produced its output completes as before, with the
+  failed-steps note.
+- **Workflow runs record why they stopped (#3940, #3957).** A run stopped by an operator
+  or an API cancel is recorded as `cancelled`, not `failed`, and so are its in-flight
+  steps. A run stopped by the stall guard is recorded as `failed`, with the stall message
+  as its error. The Workflows console shows both.
+- **Steering and workflow cleanup (#3940).** The per-session log of delivered steering
+  messages is now evicted on the same TTL and session cap as the steering queues; before,
+  only deleting the chat removed its entry. When the stall guard cancels its own wait for
+  an abandoned workflow runner, the runner's late failure is still retrieved, so asyncio
+  no longer logs "Task exception was never retrieved".
+
+- **Restart, schedule and watch edge cases no longer leave stale state or 500s (#3943).**
+  A background job interrupted by a restart now closes its delegation-ledger edge as
+  `failed`, so the org chart stops showing it as running forever. A malformed schedule
+  (for example an ISO time outside the datetime range, or a non-string timezone) is now
+  always a clear `invalid schedule` error: the schedule tool reports it and the REST
+  routes return 400 instead of 500. Clearing a watch while its verifier is mid-check no
+  longer brings the watch back, and the check no longer overwrites a new watch created
+  under the same id. `PUT /api/scheduler/jobs/{id}` is now a partial update, so sending
+  only `schedule` keeps the current prompt and timezone instead of returning 422 (#3957).
+
+- **A rejected chat turn now shows as failed, and parked chats come back in a fresh browser (#3957).**
+  The console classified task states in several places, and they had drifted apart: a turn
+  the agent rejected was settled as done, and a turn whose state the server reported as
+  unknown kept the chat busy for up to 10 minutes. All of these surfaces now use one shared
+  classification. In a fresh browser profile, a chat waiting on an `ask_human` answer or an
+  approval is now restored even when it is older than the 50 newest chats. The new
+  `GET /api/chat/sessions?parked=true` lists those chats, and up to 20 of them are kept in
+  the restored set.
+
+- **Smoke follow-ups: honest telemetry, explicit model-override errors, and error statuses (#3957).**
+  A per-turn model pick that cannot be used now fails the turn with a short error naming it,
+  on `/v1`, the console and A2A, instead of silently running on the default model: `/v1`
+  answers 400 for an unknown connection, a rejected model id or a connection that needs
+  setting up, and 503 with `Retry-After` only for a transient cause (a network error, a
+  token refresh that could not reach the provider). The console also shows the fix-it
+  hint ("Run `codex login`"). **Behaviour change:** a pick now applies to its own turn
+  only — a turn without one (including a scheduled or watch fire into a chat) runs on the
+  default model instead of inheriting the chat's last pick. A goal keeps the pick it was
+  set with (an explicit pick on a later goal turn replaces it); if that model can no
+  longer be built, the goal's turns run on the default with a one-line notice instead of
+  failing. `/api/subagents/run` and `/batch` answer a provider 429 as 429 (with
+  `Retry-After`) and other upstream failures as 502, not 500. Telemetry rows name the
+  requested model when no call reported one, and `/<subagent>` and `/<workflow>` turns
+  bill their model calls and tokens. `/goal` with an unknown verifier type says so. The
+  "goal paused — round cap reached" note is in the transcript export. Deleting a chat with
+  "forget" hides its memory, retires it, then deletes exactly what it hid: a failed
+  retirement loses nothing, a harvest ticked alongside keeps everything it derives, and an
+  interrupted forget is settled by the maintenance sweep.
+
+- **Desktop agents keep their note after upgrading (#3967).** The one-time Notes
+  migration looked for the old note under the desktop app's box root, but the desktop
+  sidecar had written it to `~/.protoagent/notes/<instance>` — so a desktop agent came
+  up with an empty note. The migration now also adopts it from there (desktop members
+  only; an isolated server still never touches the operator's home note).
+
 ## [0.187.0] - 2026-10-01
 
 ### Added
