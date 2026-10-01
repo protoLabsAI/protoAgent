@@ -1558,7 +1558,8 @@ async def _chat_langgraph_stream_impl(
                             request_metadata=request_metadata,
                             resume=resume,
                             images=images,
-                            model_notice=_model_notice,
+                            # Only when there is one: keeps the call shape the seam fakes pin.
+                            **({"model_notice": _model_notice} if _model_notice else {}),
                         )
                     ) as _native_frames:
                         async for frame in _native_frames:
@@ -1601,7 +1602,8 @@ async def _chat_langgraph_stream_impl(
                                     images=None,
                                     overflow_retry=True,
                                     fence=_retry_fence,
-                                    model_notice=_model_notice,
+                                    # Only when there is one: keeps the call shape the seam fakes pin.
+                            **({"model_notice": _model_notice} if _model_notice else {}),
                                 )
                             ) as _retry_frames:
                                 async for frame in _retry_frames:
