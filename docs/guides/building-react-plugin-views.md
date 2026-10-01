@@ -561,8 +561,9 @@ git URL.
 
 - Views appear for **enabled** plugins; disabling one (or a config reload that drops it) removes its
   rail icon and, if you were on it, falls back to Chat.
-- Adding a view to an existing plugin needs a **restart** (routes mount once at init) — but the rail
-  picks up the declaration from `runtime-status` with **no console rebuild**.
+- Adding a view to an existing plugin needs **no restart**: the next reload re-runs `register()` and
+  re-mounts the plugin's router with the current code (**Update** also purges its cached submodules),
+  and the rail picks up the declaration from `runtime-status` with **no console rebuild**.
 
 ## Fork components (no plugin, no iframe)
 

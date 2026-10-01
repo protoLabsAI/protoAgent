@@ -150,6 +150,17 @@ export function depsButtonState(rowId: string, busyId: string | null): "idle" | 
   return busyId === rowId ? "installing" : "blocked";
 }
 
+/** The hint beside the Plugins tab's Restart server button. Install, enable and disable all
+ *  run the config hot-reload: tools / middleware / MCP rebuild with the graph, the plugin's
+ *  routers (which serve its console view) mount or unmount on the live app (ADR 0096), and
+ *  its background surfaces start or stop on the reconcile (ADR 0018) — no restart. A running
+ *  server can't pick up process env / launch flags. Update / force re-install / uninstall
+ *  answer `restart_recommended` per call, and their toast says when it's set. */
+export const PLUGIN_RESTART_HINT =
+  "Installing, enabling or disabling a plugin applies live — its tools, console view, routes and " +
+  "background surface load or unload with no restart. A restart is needed for env / launch-flag " +
+  "changes, and after an update or uninstall whose toast asks for one.";
+
 /** The toast after an enable/disable toggle. Enabling is the one UI moment to mention a
  *  plugin's missing Python packages (#3450): the operator is looking at the row that has
  *  the Install deps button. An enable written to YAML or by an agent has no such moment;

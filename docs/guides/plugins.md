@@ -716,8 +716,10 @@ status chips filter to All / Loaded / Disabled / **Attention** (error, unfinishe
 update available, or missing pip deps), and plugins installed by a bundle carry the bundle's
 name as a chip (searchable too). Each row has a one-click **Enable / Disable** toggle — it
 edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers apply
-immediately. A plugin that serves a **console view** or runs a **background surface**
-(its router mounts at startup) needs a restart to finish — the toggle says so.
+immediately. That includes a plugin's **console view** and **background surface**: enabling
+mounts its router on the live app (the view's rail icon appears) and starts its surfaces;
+disabling unmounts the router and stops them. Neither direction needs a restart. Installing
+from a git URL auto-enables through the same reload, so a fresh install is live too.
 
 Plugin tools that would shadow a core or MCP tool name are skipped (logged).
 Bundled skills load as `disk`-source [skills](./skills.md), re-seeded each boot.
