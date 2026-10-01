@@ -43,8 +43,14 @@ class ScheduleAddRequest(BaseModel):
 
 
 class ScheduleUpdateRequest(BaseModel):
-    prompt: str
-    schedule: str  # 5-field cron expression OR an ISO-8601 datetime
+    """A PARTIAL edit (#3957): every field is optional and an omitted one keeps the
+    job's current value — so ``{"schedule": "0 17 * * *"}`` reschedules without
+    restating the prompt. The route forwards only the fields the caller actually
+    sent (``exclude_unset``), which is how an explicit ``"timezone": null`` (back to
+    UTC) stays distinguishable from leaving the timezone alone."""
+
+    prompt: str | None = None
+    schedule: str | None = None  # 5-field cron expression OR an ISO-8601 datetime
     timezone: str | None = None  # IANA tz for cron eval (None = UTC)
 
 
@@ -445,7 +451,8 @@ def register_operator_routes(
         @app.put("/api/scheduler/jobs/{job_id}")
         async def _scheduler_update(job_id: str, req: ScheduleUpdateRequest):
             try:
-                return {"job": await scheduler_update(job_id, _model_payload(req))}
+                # Only the fields the caller sent — the handler keeps the rest (#3957).
+                return {"job": await scheduler_update(job_id, req.model_dump(exclude_unset=True))}
             except Exception as exc:
                 raise _http_error(exc) from exc
 

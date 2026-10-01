@@ -243,6 +243,10 @@ def _compute_next_fire(
     for one-shot ISO schedules (those carry their own offset).
     """
     after = after or datetime.now(UTC)
+    if not isinstance(schedule, str):
+        raise ValueError(f"invalid schedule {schedule!r}: expected a cron expression or ISO-8601 datetime string")
+    if tz is not None and not isinstance(tz, str):
+        raise ValueError(f"invalid timezone {tz!r}: expected an IANA name like 'America/Chicago'")
     if is_cron(schedule):
         base = after
         if tz:
@@ -252,8 +256,22 @@ def _compute_next_fire(
                 base = after.astimezone(ZoneInfo(tz))
             except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
                 raise ValueError(f"invalid timezone {tz!r}: {exc}") from exc
-        return croniter(schedule, base).get_next(datetime).astimezone(UTC).isoformat()
-    return parse_iso_to_utc(schedule).isoformat()
+        kind, compute = "cron expression", lambda: croniter(schedule, base).get_next(datetime).astimezone(UTC)
+    else:
+        kind, compute = "ISO-8601 datetime", lambda: parse_iso_to_utc(schedule)
+    # The documented contract is ValueError for any malformed schedule (#3943): every
+    # caller — the schedule tools, the REST routes, the SDK — catches exactly that. The
+    # parsers mostly comply (croniter's errors subclass ValueError), but not always: an
+    # ISO time whose UTC conversion leaves datetime's range raises OverflowError, and
+    # a parser upgrade can add others. Normalise them here, the one place every
+    # add/update/reschedule computes a fire time, so a bad schedule is a 400 and an
+    # "Error:" tool result — never a 500 or a crashed tool call.
+    try:
+        return compute().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"invalid schedule {schedule!r} ({kind}): {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — normalised to the contract's ValueError
+        raise ValueError(f"invalid schedule {schedule!r} ({kind}): {type(exc).__name__}: {exc}") from exc
 
 
 _SCHEMA = """

@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import threading
 
 from graph.goals.verifiers import VERIFIERS, VerifierInvoker, VerifyContext, run_verifier
 from graph.watches.store import WatchStore
@@ -49,6 +50,36 @@ class WatchController:
         self._config = config
         self._store = store or WatchStore()
         self._locks: dict[str, asyncio.Lock] = {}
+        # Per-id generation (#3943). `clear` and `create` bump it; an `evaluate`/`update`
+        # pins it when it starts and only writes the watch back while it is unchanged. Not
+        # the asyncio lock: `clear` is sync and runs off the loop (the operator route and
+        # the `clear_watch` tool both reach it from a worker thread, the tick's prune from
+        # `to_thread`), so it cannot await that lock. A stale evaluate that finishes after
+        # its watch was cleared would otherwise write the watch straight back to disk —
+        # resurrecting it — or clobber a new watch created under the same id meanwhile.
+        # `_write_guard` (a THREADING lock, held only across the check + one file write)
+        # makes the check-then-write atomic against a `clear` on another thread.
+        self._generation: dict[str, int] = {}
+        self._write_guard = threading.Lock()
+
+    def _gen(self, watch_id: str) -> int:
+        return self._generation.get(watch_id, 0)
+
+    def _bump(self, watch_id: str) -> None:
+        # Caller holds `_write_guard`. Never popped: a counter that reset on clear would let
+        # a stale writer's pinned generation match again (ABA).
+        self._generation[watch_id] = self._gen(watch_id) + 1
+
+    def _write_if_current(self, watch: Watch, gen: int) -> bool:
+        """Persist ``watch`` only if no ``clear``/``create`` has touched its id since ``gen``
+        was pinned. Returns whether it was written — ``False`` means the watch this caller
+        was working on is gone (or replaced), so it must not react either."""
+        with self._write_guard:
+            if self._gen(watch.id) != gen:
+                log.info("[watch] %s was cleared or replaced mid-evaluation; dropping the stale write", watch.id)
+                return False
+            self._store.set(watch)
+            return True
 
     def _lock_for(self, watch_id: str) -> asyncio.Lock:
         lock = self._locks.get(watch_id)
@@ -67,8 +98,12 @@ class WatchController:
         return self._store.all()
 
     def clear(self, watch_id: str) -> bool:
-        self._locks.pop(watch_id, None)
-        return self._store.clear(watch_id)
+        # Bump + delete under the write guard, so an in-flight evaluate can't slip its
+        # write-back in between (and resurrect the watch) — see `_write_if_current`.
+        with self._write_guard:
+            self._bump(watch_id)
+            self._locks.pop(watch_id, None)
+            return self._store.clear(watch_id)
 
     # --- create ------------------------------------------------------------
 
@@ -119,7 +154,11 @@ class WatchController:
             # The creating turn's tool fence (``[]`` outside a turn) — see ``_react``.
             fence=_calling_fence(),
         )
-        self._store.set(watch)
+        # A create REPLACES any watch on this id (idempotent derived ids), so it also
+        # invalidates an evaluate still running against the old one.
+        with self._write_guard:
+            self._bump(wid)
+            self._store.set(watch)
         return (True, f"Watch created. {watch.status_line()}", watch)
 
     # --- update --------------------------------------------------------------
@@ -162,6 +201,7 @@ class WatchController:
         otherwise read-modify-write over the verifier result (or lose the edit entirely).
         Returns ``(ok, message, watch|None)``."""
         async with self._lock_for(watch_id):
+            gen = self._gen(watch_id)
             watch = self._store.get(watch_id)
             if watch is None:
                 return (False, f"no watch {watch_id!r}.", None)
@@ -227,7 +267,8 @@ class WatchController:
             from graph.middleware.subagent_fence import intersect_fences
 
             watch.fence = intersect_fences(watch.fence, _calling_fence())
-            self._store.set(watch)
+            if not self._write_if_current(watch, gen):
+                return (False, f"no watch {watch_id!r}.", None)
             return (True, f"Watch updated. {watch.status_line()}", watch)
 
     def _validate_verifier(self, verifier: dict, *, trusted: bool) -> tuple[bool, str]:
@@ -297,6 +338,9 @@ class WatchController:
             return await self._evaluate_unlocked(watch_id)
 
     async def _evaluate_unlocked(self, watch_id: str) -> str | None:
+        # Pinned BEFORE the read: the verifier below awaits (it can take seconds), and a
+        # `clear` landing in that window must make every write-back here a no-op.
+        gen = self._gen(watch_id)
         watch = self._store.get(watch_id)
         if watch is None or not watch.active:
             return None
@@ -357,19 +401,23 @@ class WatchController:
                 watch.stall_streak = 0
                 watch.stalled_notified = False
                 flapping = self._note_flap(watch)
-                self._store.set(watch)
-                await self._react(watch, reason, flapping=flapping)
+                if self._write_if_current(watch, gen):
+                    await self._react(watch, reason, flapping=flapping)
                 return None
-            return await self._finish(watch, "met", reason, result.evidence)
+            return await self._finish(watch, "met", reason, result.evidence, gen=gen)
 
         if watch.deadline is not None and now >= watch.deadline:
-            return await self._finish(watch, "expired", "deadline passed before the watch met", result.evidence)
+            return await self._finish(
+                watch, "expired", "deadline passed before the watch met", result.evidence, gen=gen
+            )
 
         unchanged = not changed
         watch.stall_streak = (watch.stall_streak + 1) if unchanged else 0
         if not unchanged:
             watch.stalled_notified = False
         if watch.stall_after and watch.stall_streak >= watch.stall_after and not watch.stalled_notified:
+            if self._gen(watch_id) != gen:  # cleared mid-evaluation — nothing left to stall
+                return None
             watch.stalled_notified = True
             from graph.watches.hooks import fire_watch_hook
 
@@ -378,7 +426,7 @@ class WatchController:
         watch.last_reason = result.reason
         watch.last_evidence = result.evidence
         watch.last_checked = now
-        self._store.set(watch)
+        self._write_if_current(watch, gen)
         return None
 
     async def evaluate_now(self, watch_id: str) -> str | None:
@@ -553,7 +601,9 @@ class WatchController:
             await fire_watch_hook("on_met", watch)
             self._publish("watch.met", watch, reason)
 
-    async def _finish(self, watch: Watch, status: str, reason: str, evidence: str = "") -> str:
+    async def _finish(
+        self, watch: Watch, status: str, reason: str, evidence: str = "", *, gen: int | None = None
+    ) -> str | None:
         from time import time
 
         from graph.fence_scope import fence_scope
@@ -564,7 +614,11 @@ class WatchController:
         if evidence:
             watch.last_evidence = evidence
         watch.finished_at = time()
-        self._store.set(watch)
+        if gen is None:
+            self._store.set(watch)
+        elif not self._write_if_current(watch, gen):
+            # Cleared (or replaced) while its verifier ran: it didn't finish, it was removed.
+            return None
 
         if status == "met":
             await self._react(watch, reason)
