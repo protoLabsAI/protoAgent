@@ -10,7 +10,7 @@ import { ChatMessageView } from "../chat/ChatMessageView";
 import { addToolRef, appendReasoning, appendText, replaceText } from "../chat/parts";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
-import { isTaskFailed, isTaskTerminal } from "../chat/taskState";
+import { isTaskFailed, isTaskStateUnknown, isTaskTerminal } from "../chat/taskState";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
 import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
@@ -133,7 +133,10 @@ export function PaletteChat({
         return; // best-effort — leave it for the next open to retry
       }
       if (cancelled) return;
-      if (!res.state || isTaskTerminal(res.state)) {
+      // Settled: gone from the store (no state), terminal, or a state the server cannot
+      // name (`unknown` / UNSPECIFIED) — no producer will ever move that one on, so polling
+      // it only holds the composer locked for the whole budget (taskState.ts, #3972).
+      if (!res.state || isTaskTerminal(res.state) || isTaskStateUnknown(res.state)) {
         const failed = isTaskFailed(res.state);
         update((m) => ({ ...finalize(m), content: res.text || m.content, status: failed ? "error" : "done" }));
         setStreaming(false);

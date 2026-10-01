@@ -755,6 +755,15 @@ function handleApiGet(
   }
 }
 
+// A held turn whose durable task reports a chosen state (#3972): the stalled-stream
+// watchdog consults GetTask once the frames stop, so the state it reads there is what the
+// spec drives — `rejected` must settle as an error, `unspecified` must not spin forever.
+const HELD_TASK = /^task-e2e-held-([a-z_]+)$/;
+function heldTaskId(prompt) {
+  const m = /hold the turn open, task ([a-z_]+)/i.exec(prompt);
+  return m ? `task-e2e-held-${m[1].toLowerCase()}` : null;
+}
+
 // POST /a2a message/stream → SSE of the canned frames for this prompt.
 async function handleA2AStream(req, res, body) {
   const params = body.params || {};
@@ -774,7 +783,9 @@ async function handleA2AStream(req, res, body) {
     // whose contextId != its sessionId (frameIsForeign, #1399); a mock that didn't echo the
     // real contextId would have all its frames rejected and render nothing.
     contextId: sessionId,
-    taskId: "task-e2e-1",
+    // "hold the turn open, task STATE": the held turn's task reports STATE on GetTask (see
+    // HELD_TASK) — what the stalled-stream watchdog reads when the frames stop (#3972).
+    taskId: heldTaskId(prompt) ?? "task-e2e-1",
     prompt,
   });
 
@@ -1151,6 +1162,14 @@ const server = createServer(async (req, res) => {
       }
       if (String(body.params?.id || "").includes("paused")) {
         return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pausedTask(body.params?.id) });
+      }
+      const held = HELD_TASK.exec(String(body.params?.id || ""));
+      if (held) {
+        return sendJson(res, {
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { id: body.params.id, status: { state: `TASK_STATE_${held[1].toUpperCase()}` }, artifacts: [] },
+        });
       }
       // A task id carrying "history" also returns a durable history with a
       // tool-call-v1 frame — the Swap & Resume replay path (reattach.ts) must
