@@ -439,6 +439,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         try:
             db.execute(f"DELETE FROM chunk_vectors WHERE chunk_id IN ({id_select})", params)
             db.commit()
+        except sqlite3.DatabaseError as exc:
+            # Same degrade as the sibling vector cleanups: a vector-table error must
+            # not abort the caller's chunk delete — the chunk still goes (#3973).
+            log.warning("[knowledge] drop vectors failed: %s", exc)
         finally:
             db.close()
 

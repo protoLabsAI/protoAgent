@@ -173,6 +173,29 @@ def test_two_phase_forget_drops_hybrid_vectors(tmp_path):
     assert _contents(store) == ["kept"]
 
 
+def test_forget_delete_degrades_to_chunk_only_on_a_vector_table_error(tmp_path):
+    """#3973: a vector-table error in ``_drop_vectors`` (the forget-delete's vector
+    cleanup) must degrade like the sibling cleanups — chunk-only delete — not abort."""
+    from graph.conversation_harvest import begin_forget
+    from knowledge.hybrid_store import HybridKnowledgeStore
+
+    db = tmp_path / "kb.db"
+    store = HybridKnowledgeStore(db, embed_fn=lambda t: [1.0, 0.0])
+    store.add_chunk("gone", domain="fact", source="a2a:s1", source_type="extracted")
+    store.add_chunk("kept", domain="fact", source="a2a:s2", source_type="extracted")
+    marker = begin_forget(store, "s1", ["a2a:s1"])
+
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("DROP TABLE chunk_vectors")  # any vector-table DatabaseError
+        conn.commit()
+    finally:
+        conn.close()
+
+    store.delete_forget_pending(marker)
+    assert _contents(store) == ["kept"]
+
+
 def test_begin_forget_declines_a_store_without_the_primitives():
     from graph.conversation_harvest import begin_forget
 

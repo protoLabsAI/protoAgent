@@ -228,6 +228,11 @@ async def _native_turn(
             result = await auto.settle(
                 config, result, lambda cmd: STATE.graph.ainvoke(cmd, config=config)
             )
+        # Read the pending interrupt (handled below) while still holding the thread lock,
+        # as the streaming driver does and as the continuation check further down does
+        # (#3973). Released first, a queued writer on this thread could resume the ask —
+        # or park its own — in between, and this turn would report a state it didn't leave.
+        interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(config)
     raw = _last_ai(result)
     response = extract_output(raw)
 
@@ -241,8 +246,8 @@ async def _native_turn(
     # driven (below) into a thread still waiting for its answer. Returning here is the
     # streaming driver's `turn["paused"]` stop: no goal drive past a parked interrupt.
     # An autonomous turn never parks — ``auto.settle`` above answered or cleared its
-    # asks — so, as for a continuation, only an attended turn is checked.
-    interrupt_val = None if auto.autonomous else await _chat()._pending_interrupt_value(config)
+    # asks — so, as for a continuation, only an attended turn is checked. (Read under the
+    # thread lock above.)
     if interrupt_val is not None:
         _parked()
         return [
