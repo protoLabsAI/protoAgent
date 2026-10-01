@@ -55,7 +55,7 @@ def quiet_state(monkeypatch):
     )
     monkeypatch.setattr(chat_commands, "_parse_slash_command", lambda m: ("", ""))
     monkeypatch.setattr(chat_commands, "_parse_workflow_command", lambda m: ("brief", {"topic": "x"}))
-    monkeypatch.setattr(chat_dispatch, "_WORKFLOW_PROGRESS_MIN_INTERVAL_S", 0.0, raising=False)
+    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 0.0, raising=False)
 
 
 @pytest.fixture
@@ -149,7 +149,7 @@ async def test_a_step_that_keeps_working_outlives_the_stall_window(quiet_state, 
 
 
 async def test_liveness_frames_are_rate_limited(quiet_state, busy_step, monkeypatch):
-    monkeypatch.setattr(chat_dispatch, "_WORKFLOW_PROGRESS_MIN_INTERVAL_S", 3600.0, raising=False)
+    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 3600.0, raising=False)
     _pre, frames = await _guarded_frames(stall_s=0)  # guard off: count frames only
 
     assert len(busy_step) == ROUNDS

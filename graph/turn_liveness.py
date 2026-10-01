@@ -5,9 +5,9 @@
 A subagent run (``graph.agent._run_subagent_inner``) streams its sub-graph's state one
 super-step at a time — each model call, each tool round. A caller that runs subagents
 OUTSIDE a lead graph (the ``/<workflow>`` short-circuit, whose steps go through
-``graph.sdk.run_subagent``) otherwise sees nothing between a step's start and its end,
-and the A2A stall guard (``a2a_impl.executor._stall_guarded``) reads that silence as a
-hang. Binding a listener with :class:`progress_scope` lets such a caller hear each
+``graph.sdk.run_subagent``, and the ``/<subagent>`` short-circuit, #3977) otherwise sees
+nothing between a run's start and its end, and the A2A stall guard
+(``a2a_impl.executor._stall_guarded``) reads that silence as a hang. Binding a listener with :class:`progress_scope` lets such a caller hear each
 super-step and turn it into a frame the stall guard counts.
 
 The signal is REAL progress, never a timer: a step wedged inside ONE tool call (or one
