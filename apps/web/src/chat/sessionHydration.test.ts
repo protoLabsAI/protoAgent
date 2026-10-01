@@ -11,10 +11,14 @@ import {
 import type { ChatMessage } from "../lib/types";
 import {
   HYDRATION_CONCURRENCY,
+  SESSION_INDEX_LIMIT,
+  SESSION_PARKED_LIMIT,
   hydrateDurableChatSessions,
   messagesFromDurableTurn,
+  pinParkedSessions,
   sessionFromDurableTurns,
 } from "./sessionHydration";
+import { MAX_SESSIONS } from "./chat-store";
 import { applyText, applyToolEvent } from "./turnReducers";
 import { applyCanonicalTurnText } from "./turnText";
 
@@ -1173,5 +1177,141 @@ describe("boot hydration", () => {
     expect(
       messages.filter((m) => m.role === "assistant" && m.content.includes(ANSWER)).map((m) => m.id),
     ).toEqual(["msg-authored"]);
+  });
+});
+
+describe("a rejected durable turn (#3957)", () => {
+  it("rebuilds as an error, like failed and canceled — not as a clean answer", () => {
+    for (const state of ["TASK_STATE_REJECTED", "TASK_STATE_FAILED", "TASK_STATE_CANCELED"]) {
+      const assistant = messagesFromDurableTurn(turn({ state, status: { state } })).find((m) => m.role === "assistant");
+      expect(assistant?.status, state).toBe("error");
+    }
+  });
+});
+
+describe("parked sessions survive the hydration cap (#3957)", () => {
+  const PARKED = "TASK_STATE_INPUT_REQUIRED";
+  const at = (minute: number) => new Date(Date.UTC(2026, 8, 1, 12, minute)).toISOString();
+  const newest = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      session_id: `chat-new-${i}`,
+      last_updated: at(59 - (i % 59)),
+      turn_count: 1,
+    }));
+  const parkedRow = (id: string, state = PARKED): DurableChatSession => ({
+    session_id: id,
+    last_updated: at(0),
+    turn_count: 1,
+    last_state: state,
+  });
+  const parkedTurn = (id: string) =>
+    turn({
+      task_id: `task-${id}`,
+      state: PARKED,
+      status: { state: PARKED },
+      text: "",
+      artifacts: [],
+      history: [{ role: "ROLE_USER", parts: [{ text: `pick a fruit for ${id}` }] }],
+    });
+
+  it("pins every parked session into the index, ahead of the newest, within the cap", () => {
+    const rows = pinParkedSessions(newest(SESSION_INDEX_LIMIT), [parkedRow("chat-parked")]);
+    expect(rows).toHaveLength(SESSION_INDEX_LIMIT);
+    expect(rows[0].session_id).toBe("chat-parked");
+    // The oldest of the newest gave its place up.
+    expect(rows.map((row) => row.session_id)).not.toContain(`chat-new-${SESSION_INDEX_LIMIT - 1}`);
+  });
+
+  it("bounds the parked set, so many parked sessions never crowd out the newest", () => {
+    const many = Array.from({ length: 80 }, (_, i) => parkedRow(`chat-parked-${i}`));
+    const rows = pinParkedSessions(newest(SESSION_INDEX_LIMIT), many);
+    expect(rows).toHaveLength(SESSION_INDEX_LIMIT);
+    expect(rows.filter((row) => row.session_id.startsWith("chat-parked-"))).toHaveLength(SESSION_PARKED_LIMIT);
+    expect(rows.filter((row) => row.session_id.startsWith("chat-new-"))).toHaveLength(
+      SESSION_INDEX_LIMIT - SESSION_PARKED_LIMIT,
+    );
+  });
+
+  it("ignores rows that do not say they are parked (a server that predates the parked index)", () => {
+    const base = newest(SESSION_INDEX_LIMIT);
+    const legacy = [{ session_id: "chat-stale", last_updated: at(0), turn_count: 1 }];
+    expect(pinParkedSessions(base, legacy)).toEqual(base);
+    expect(pinParkedSessions(base, [parkedRow("chat-done", "TASK_STATE_COMPLETED")])).toEqual(base);
+  });
+
+  it("counts a parked session that is already among the newest once", () => {
+    const base = newest(3);
+    const rows = pinParkedSessions(base, [{ ...base[2], last_state: PARKED }]);
+    expect(rows.map((row) => row.session_id)).toEqual(["chat-new-2", "chat-new-0", "chat-new-1"]);
+  });
+
+  it("a fresh profile hydrates the parked session the newest-50 index left out", async () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    const index = vi.spyOn(api, "chatSessions").mockImplementation(async (limit, opts) =>
+      opts?.parked ? { sessions: [parkedRow("chat-parked")] } : { sessions: newest(limit ?? 50) },
+    );
+    vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) =>
+      id === "chat-parked"
+        ? { turns: [parkedTurn(id)], live_task_id: `task-${id}` }
+        : { turns: [turn({ task_id: `task-${id}` })], live_task_id: null },
+    );
+
+    await hydrateDurableChatSessions();
+
+    expect(index).toHaveBeenCalledWith(SESSION_INDEX_LIMIT);
+    expect(index).toHaveBeenCalledWith(SESSION_PARKED_LIMIT, { parked: true });
+    const hydrated = commit.mock.calls[0][0];
+    expect(hydrated).toHaveLength(SESSION_INDEX_LIMIT);
+    const parked = hydrated.find((session) => session.id === "chat-parked");
+    expect(parked?.messages[parked.messages.length - 1]).toMatchObject({ status: "streaming", paused: true, taskId: "task-chat-parked" });
+  });
+
+  it("still hydrates the newest when the parked index read fails", async () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockImplementation(async (limit, opts) => {
+      if (opts?.parked) throw new Error("member cold");
+      return { sessions: newest(Math.min(limit ?? 50, 3)) };
+    });
+    vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) => ({ turns: [turn({ task_id: `task-${id}` })] }));
+
+    await hydrateDurableChatSessions();
+    expect(commit.mock.calls[0][0]).toHaveLength(3);
+  });
+
+  it("the store keeps a parked session over newer ones when the free slots run out", () => {
+    const local = Array.from({ length: MAX_SESSIONS - 2 }, (_, i) => ({
+      id: `chat-local-${i}`,
+      title: "Local",
+      messages: [{ id: `u-${i}`, role: "user", content: "local", status: "done" }],
+      createdAt: 1,
+      updatedAt: 1,
+    })) as ChatSession[];
+    const parked = sessionFromDurableTurns(parkedRow("chat-parked"), [parkedTurn("chat-parked")], "task-chat-parked");
+    const newer = [0, 1, 2].map((i) =>
+      sessionFromDurableTurns(
+        { session_id: `chat-newer-${i}`, last_updated: at(30 + i), turn_count: 1 },
+        [turn({ task_id: `task-newer-${i}`, last_updated: at(30 + i) })],
+      ),
+    );
+    const merged = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: local,
+        currentSessionId: local[0].id,
+        activeSessions: [local[0].id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+        serverTurnControls: {},
+      } as never,
+      [parked!, ...newer.map((session) => session!)],
+    );
+    const ids = merged.sessions.map((session) => session.id);
+    expect(ids).toHaveLength(MAX_SESSIONS);
+    expect(ids).toContain("chat-parked");
+    expect(ids).toContain("chat-newer-2");
+    expect(ids).not.toContain("chat-newer-0");
   });
 });

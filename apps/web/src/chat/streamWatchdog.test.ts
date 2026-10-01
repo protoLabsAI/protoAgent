@@ -37,6 +37,9 @@ describe("isTerminalTaskState", () => {
       "rejected",
       "TASK_STATE_REJECTED",
       "",
+      // A state the server cannot name: nothing will move it on (#3957).
+      "unknown",
+      "TASK_STATE_UNSPECIFIED",
     ]) {
       expect(isTerminalTaskState(s)).toBe(true);
     }

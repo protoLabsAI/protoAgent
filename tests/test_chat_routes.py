@@ -1236,6 +1236,73 @@ def test_session_index_breaks_equal_timestamps_by_context_id(monkeypatch, tmp_pa
     assert [row["session_id"] for row in rows] == ["chat-b", "chat-a"]
 
 
+def test_session_index_parked_lists_sessions_whose_newest_turn_waits(monkeypatch, tmp_path):
+    """``?parked=true`` (#3957): only console sessions whose NEWEST turn is parked on the
+    operator, newest first, each with ``last_state`` — however old, so a fresh browser can
+    pin them past the newest-N index. A context whose parked row is not its newest turn
+    (a pause moved on, or an orphan a later turn ran past), a non-console context and a
+    deleted session are left out; ``limit`` bounds the list."""
+    from datetime import datetime, timedelta, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    t0 = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    at = lambda minutes: t0 + timedelta(minutes=minutes)  # noqa: E731
+    rows = [
+        # Parked long ago, then 60 newer sessions bury it under the newest-N index.
+        {"id": "old-1", "context_id": "chat-old-parked", "state": "TASK_STATE_COMPLETED", "at": at(0)},
+        {"id": "old-2", "context_id": "chat-old-parked", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(1)},
+        {"id": "auth-1", "context_id": "chat-auth", "state": "TASK_STATE_AUTH_REQUIRED", "at": at(2)},
+        # A parked row a newer turn ran past: the session is not parked.
+        {"id": "past-1", "context_id": "chat-ran-past", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(3)},
+        {"id": "past-2", "context_id": "chat-ran-past", "state": "TASK_STATE_COMPLETED", "at": at(4)},
+        {"id": "act-1", "context_id": "activity:scheduler", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(5)},
+        {"id": "del-1", "context_id": "chat-deleted", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(6)},
+    ] + [
+        {"id": f"bulk-{i}", "context_id": f"chat-bulk-{i:02d}", "state": "TASK_STATE_COMPLETED", "at": at(10 + i)}
+        for i in range(60)
+    ]
+    engine = _seeded_task_engine(tmp_path, "parked-index", rows)
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    assert client.delete("/api/chat/sessions/chat-deleted").json()["deleted"] is True
+
+    newest = client.get("/api/chat/sessions?limit=50").json()["sessions"]
+    assert "chat-old-parked" not in {row["session_id"] for row in newest}  # the bug's premise
+
+    body = client.get("/api/chat/sessions?limit=50&parked=true").json()
+    assert body["sessions"] == [
+        {
+            "session_id": "chat-auth",
+            "last_updated": "2026-09-01T12:02:00",
+            "turn_count": 1,
+            "last_state": "TASK_STATE_AUTH_REQUIRED",
+        },
+        {
+            "session_id": "chat-old-parked",
+            "last_updated": "2026-09-01T12:01:00",
+            "turn_count": 2,
+            "last_state": "TASK_STATE_INPUT_REQUIRED",
+        },
+    ]
+    capped = client.get("/api/chat/sessions?limit=1&parked=true").json()["sessions"]
+    assert [row["session_id"] for row in capped] == ["chat-auth"]
+
+
+def test_session_index_parked_degrades_without_a_store(monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    body = _client(monkeypatch).get("/api/chat/sessions?parked=true").json()
+    assert body["sessions"] == [] and "not initialized" in body["reason"]
+
+
 def test_session_index_degrades_without_a_store(monkeypatch):
     import runtime.state as rs
 

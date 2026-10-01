@@ -74,6 +74,8 @@ export type DurableChatSession = {
   session_id: string;
   last_updated: string | null;
   turn_count: number;
+  /** The newest turn's state — served on the `parked` index (#3957), absent otherwise. */
+  last_state?: string | null;
 };
 
 export type DurableChatTurn = {

@@ -20,12 +20,8 @@ import {
 } from "./chat-store";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
+import { isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble } from "./turnReducers";
-
-const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
-const FAILED = /failed|canceled|cancelled/i;
-// Parked on the operator (input-required / auth-required): not over, but not working.
-const PAUSED = /input.required|auth.required/i;
 
 function timestamp(value: string | null): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -109,7 +105,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // interjection itself. The turn's trailing bubble keeps the anchor id, so the halves
   // frozen ahead of it name it in `splitOf` — one turn, several bubbles (turnText.ts).
   const settled: ChatMessage[] = [];
-  const terminal = TERMINAL.test(turn.state);
+  const terminal = isTaskTerminal(turn.state);
   replayDurableChatTurn(turn, "", {
     onText: (text, append) => {
       assistant = applyText(assistant, text, append);
@@ -178,7 +174,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     assistant = {
       ...assistant,
       ...(repliedAt !== undefined ? { createdAt: repliedAt } : {}),
-      status: FAILED.test(turn.state) ? "error" : "done",
+      status: isTaskFailed(turn.state) ? "error" : "done",
       toolCalls: assistant.toolCalls?.map((call) =>
         call.status === "running" ? { ...call, status: "done" as const } : call,
       ),
@@ -203,7 +199,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // A turn PARKED on the operator renders as waiting from the first paint (#3946) — even
     // in a session whose slot never mounts a reattach. The reattach re-marks it off the
     // live snapshot; the answer that continues the turn clears it.
-    if (PAUSED.test(turn.state)) assistant = pauseBubble(assistant);
+    if (isTaskPaused(turn.state)) assistant = pauseBubble(assistant);
   }
   // A turn the agent had nothing left to say after — everything it did came before the
   // last interjection — would otherwise settle as a blank row under it (the live path's
@@ -248,7 +244,7 @@ export function planDurableTurns(
     live = liveTaskId ? turns.find((turn) => turn.task_id === liveTaskId) : undefined;
   } else {
     let at = turns.length - 1;
-    while (at >= 0 && TERMINAL.test(turns[at].state)) at -= 1;
+    while (at >= 0 && isTaskTerminal(turns[at].state)) at -= 1;
     if (at >= 0 && turns.slice(at + 1).every((turn) => supersededByFromStatus(turn.status))) live = turns[at];
   }
   if (!live && liveTaskId === undefined) return { turns, queued: new Set() };
@@ -256,11 +252,11 @@ export function planDurableTurns(
   // are queued behind it (a parked one there lost its pause, below).
   const liveAt = live ? turns.indexOf(live) : -1;
   const queued = live && liveTaskId !== undefined
-    ? turns.filter((turn, index) => index > liveAt && !TERMINAL.test(turn.state) && !PAUSED.test(turn.state))
+    ? turns.filter((turn, index) => index > liveAt && !isTaskTerminal(turn.state) && !isTaskPaused(turn.state))
     : [];
   const settled = turns
     .filter((turn) => turn !== live && !queued.includes(turn))
-    .map((turn) => (PAUSED.test(turn.state) ? { ...turn, state: "TASK_STATE_COMPLETED" } : turn));
+    .map((turn) => (isTaskPaused(turn.state) ? { ...turn, state: "TASK_STATE_COMPLETED" } : turn));
   return {
     turns: [...settled, ...(live ? [live] : []), ...queued],
     queued: new Set(queued.map((turn) => turn.task_id)),
@@ -307,8 +303,35 @@ export function sessionFromDurableTurns(
 }
 
 export const SESSION_INDEX_LIMIT = 50;
+/** At most this many PARKED sessions are pinned into the index (#3957) — the rest of the
+ *  SESSION_INDEX_LIMIT stays the newest sessions, so many parked chats never crowd them out
+ *  or grow the load past the cap. */
+export const SESSION_PARKED_LIMIT = 20;
 export const SESSION_TURN_LIMIT = 50;
 export const HYDRATION_CONCURRENCY = 4;
+
+/** The sessions a fresh profile hydrates (#3957): every PARKED session the server named
+ *  (up to SESSION_PARKED_LIMIT), then the newest ones, SESSION_INDEX_LIMIT in all.
+ *
+ *  The newest-N index alone can leave out an older session still waiting on an `ask_human`
+ *  answer or an approval, and its question never came back as a tab. A parked row counts
+ *  only when it says it is parked (`last_state`): a server that predates the `parked` index
+ *  ignores the flag and serves plain newest rows, which must not displace anything. */
+export function pinParkedSessions(
+  newest: DurableChatSession[],
+  parked: DurableChatSession[],
+  limit = SESSION_INDEX_LIMIT,
+): DurableChatSession[] {
+  const pinned = parked.filter((row) => isTaskPaused(row.last_state ?? "")).slice(0, SESSION_PARKED_LIMIT);
+  const seen = new Set<string>();
+  const out: DurableChatSession[] = [];
+  for (const row of [...pinned, ...newest]) {
+    if (seen.has(row.session_id)) continue;
+    seen.add(row.session_id);
+    out.push(row);
+  }
+  return out.slice(0, limit);
+}
 
 /** Fetch only server-only or locally empty sessions, with bounded fan-out.
  * Every read is best-effort: an offline/cold fleet member leaves local chat
@@ -316,7 +339,12 @@ export const HYDRATION_CONCURRENCY = 4;
 export async function hydrateDurableChatSessions(): Promise<void> {
   let summaries: DurableChatSession[];
   try {
-    summaries = (await api.chatSessions(SESSION_INDEX_LIMIT)).sessions;
+    const [newest, parked] = await Promise.all([
+      api.chatSessions(SESSION_INDEX_LIMIT),
+      // Best-effort: without it the newest index still hydrates, as before.
+      api.chatSessions(SESSION_PARKED_LIMIT, { parked: true }).catch(() => ({ sessions: [] })),
+    ]);
+    summaries = pinParkedSessions(newest.sessions, parked.sessions ?? []);
   } catch {
     return;
   }

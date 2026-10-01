@@ -10,6 +10,7 @@ import { ChatMessageView } from "../chat/ChatMessageView";
 import { addToolRef, appendReasoning, appendText, replaceText } from "../chat/parts";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
+import { isTaskFailed, isTaskTerminal } from "../chat/taskState";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
 import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
@@ -119,7 +120,6 @@ export function PaletteChat({
     const last = messagesRef.current[messagesRef.current.length - 1];
     if (!last || last.role !== "assistant" || last.status !== "streaming" || !last.taskId) return;
     const taskId = last.taskId;
-    const TERMINAL = /completed|failed|canceled|cancelled/i;
     let cancelled = false;
     let polls = 0;
     const MAX_POLLS = 40; // ~2 min at 3s, then unlock and let the next open re-poll
@@ -133,8 +133,8 @@ export function PaletteChat({
         return; // best-effort — leave it for the next open to retry
       }
       if (cancelled) return;
-      if (!res.state || TERMINAL.test(res.state)) {
-        const failed = /fail|cancel/i.test(res.state);
+      if (!res.state || isTaskTerminal(res.state)) {
+        const failed = isTaskFailed(res.state);
         update((m) => ({ ...finalize(m), content: res.text || m.content, status: failed ? "error" : "done" }));
         setStreaming(false);
         return;

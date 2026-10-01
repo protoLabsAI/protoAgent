@@ -46,6 +46,7 @@ import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { registerSlashDispatcher } from "./slashDispatch";
+import { isTaskFailed } from "./taskState";
 import { resolveComposerUp } from "./queuedRecall";
 import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
@@ -1088,7 +1089,7 @@ export function ChatSessionSlot({
     const WATCHDOG_IDLE_MS = 45_000;
     let settledByWatchdog = false;
     const finalizeFromTask = (state: string, text: string) => {
-      const failed = /fail|cancel/i.test(state);
+      const failed = isTaskFailed(state);
       const latest = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
       if (latest) {
         const now = Date.now();

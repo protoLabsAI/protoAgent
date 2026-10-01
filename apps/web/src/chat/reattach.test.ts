@@ -821,7 +821,7 @@ describe("reattach fallbackPoll(): paused and rejected states", () => {
     expect(sessionStatus(sessionId)).toBe("idle");
   });
 
-  it("treats rejected as TERMINAL: finalizes on the first poll instead of looping", async () => {
+  it("treats rejected as TERMINAL and FAILED: finalizes on the first poll as an error (#3957)", async () => {
     const sessionId = seedStuckSession();
     resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
     replayTask.mockResolvedValue("TASK_STATE_REJECTED");
@@ -831,10 +831,58 @@ describe("reattach fallbackPoll(): paused and rejected states", () => {
     await settle();
 
     expect(replayTask).toHaveBeenCalledTimes(1);
-    expect(sessionStatus(sessionId)).toBe("idle");
-    // Rejected is settled — the bubble must not stay `streaming`.
-    expect(assistantMessage(sessionId)?.status).toBe("done");
+    // Rejected is settled — the bubble must not stay `streaming` — and it is a failure,
+    // not a clean "done": the TERMINAL set held `rejected` but the failure check read
+    // `/fail|cancel/`, so a rejected turn used to settle as done (#3957).
+    expect(assistantMessage(sessionId)?.status).toBe("error");
+    expect(sessionStatus(sessionId)).toBe("error");
   });
+
+  it("settles a rejected 0.3 `rejected` state the stream-close path reads as an error too", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "rejected", text: "" });
+
+    attach(sessionId);
+    await settle();
+
+    expect(assistantMessage(sessionId)?.status).toBe("error");
+    expect(sessionStatus(sessionId)).toBe("error");
+  });
+
+  it("stops polling on auth-required like input-required: paused, idle, not finalized", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
+    replayTask.mockResolvedValue("TASK_STATE_AUTH_REQUIRED");
+
+    attach(sessionId);
+    await settle();
+
+    expect(replayTask).toHaveBeenCalledTimes(1);
+    expect(getTask).not.toHaveBeenCalled();
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+    expect(assistantMessage(sessionId)?.paused).toBe(true);
+  });
+
+  for (const state of ["unknown", "TASK_STATE_UNSPECIFIED"]) {
+    it(`settles a task whose state is ${state} on the first poll instead of spinning MAX_POLLS (#3957)`, async () => {
+      const sessionId = seedStuckSession();
+      resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
+      replayTask.mockResolvedValue(state);
+      getTask.mockResolvedValue({ state, text: "" });
+
+      attach(sessionId);
+      await settle();
+
+      // One poll, then settled like a task that is gone: nothing will ever move an
+      // indeterminate task on, so the session is not held "streaming" for 10 minutes.
+      expect(replayTask).toHaveBeenCalledTimes(1);
+      expect(getTask).toHaveBeenCalledTimes(1);
+      expect(assistantMessage(sessionId)?.status).toBe("done");
+      expect(sessionStatus(sessionId)).toBe("idle");
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

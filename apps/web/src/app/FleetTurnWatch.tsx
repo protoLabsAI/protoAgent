@@ -1,6 +1,7 @@
 import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
+import { isTaskFailed, isTaskTerminal } from "../chat/taskState";
 import { api, authToken, currentSlug } from "../lib/api";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
@@ -18,7 +19,6 @@ import type { ChatMessage } from "../lib/types";
 //   • storage event: the owning window (still open) finalized the turn itself.
 
 const POLL_MS = 5000;
-const TERMINAL = /completed|failed|canceled|cancelled/i;
 const NOTIFIED_KEY = "protoagent.turnwatch.notified"; // sessionStorage — survives soft reloads
 
 type Watch = { slug: string; taskId: string; title: string };
@@ -107,7 +107,7 @@ export function FleetTurnWatch() {
       if (notifiedSet().has(w.taskId)) return;
       markNotified(w.taskId);
       const name = await displayName(w.slug);
-      const failed = /fail|cancel/i.test(state);
+      const failed = isTaskFailed(state);
       toast({
         tone: failed ? "error" : "success",
         title: `${name} finished a turn`,
@@ -128,7 +128,7 @@ export function FleetTurnWatch() {
       for (const w of candidates) {
         try {
           const state = await taskState(w.slug, w.taskId);
-          if (TERMINAL.test(state)) {
+          if (isTaskTerminal(state)) {
             void announce(w, state);
             prev = prev.filter((p) => p.taskId !== w.taskId);
           }

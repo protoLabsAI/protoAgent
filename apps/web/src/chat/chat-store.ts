@@ -373,10 +373,17 @@ export function mergeSessions(
   return out.slice(0, MAX_SESSIONS);
 }
 
+/** A session whose live turn is parked on the operator: its lead bubble is still open
+ *  (`streaming`) and marked paused (an `ask_human` question, a form, an approval). */
+function isParkedSession(session: ChatSession): boolean {
+  const last = [...session.messages].reverse().find((message) => message.role === "assistant");
+  return Boolean(last?.status === "streaming" && last.paused && last.taskId);
+}
+
 /** Fold server-recovered sessions into the local-first store (#2888).
  * Non-empty local transcripts always win because they carry richer ordered
  * parts and client-only annotations. A locally empty copy may be recovered,
- * and server-only sessions fill only the remaining cap. The sole auto-created
+ * and server-only sessions fill only the remaining cap (parked ones first, #3957). The sole auto-created
  * blank tab is a boot placeholder, so a successful recovery replaces it. */
 export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[]): ChatState {
   if (!incoming.length) return current;
@@ -423,7 +430,15 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   const missing = incoming
     .filter((session) => session.messages.length > 0 && !existingIds.has(session.id))
     .sort((a, b) => a.updatedAt - b.updatedAt);
-  const additions = slots ? missing.slice(-slots) : [];
+  // The newest fill the free slots — but a session PARKED on the operator (its question
+  // or approval still waiting) is kept first, however old: dropping it here would lose the
+  // one tab that still needs the operator (#3957). Drawn oldest-first either way.
+  const kept = new Set(
+    [...missing.filter(isParkedSession).reverse(), ...missing.filter((session) => !isParkedSession(session)).reverse()]
+      .slice(0, slots)
+      .map((session) => session.id),
+  );
+  const additions = missing.filter((session) => kept.has(session.id));
   for (const session of additions) {
     byId.set(session.id, session);
     hydratedIds.add(session.id);

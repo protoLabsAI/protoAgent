@@ -24,19 +24,17 @@
 // the RPCs and applies the plan.
 
 import type { QueuedSteer } from "../lib/types";
+import { isTaskPaused, isTaskTerminal } from "./taskState";
 
 /** Where the server turn an interjection was sent to stands, per its durable task. */
 export type ServerTurnPhase = "live" | "paused" | "ended" | "unknown";
 
-// Kept in step with reattach.ts / streamWatchdog.ts.
-const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
-const PAUSED = /input.required|auth.required/i;
 
 /** Classify a task state from `GetTask`. Empty means the read told us nothing. */
 export function serverTurnPhase(state: string): ServerTurnPhase {
   if (!state) return "unknown";
-  if (PAUSED.test(state)) return "paused";
-  if (TERMINAL.test(state)) return "ended";
+  if (isTaskPaused(state)) return "paused";
+  if (isTaskTerminal(state)) return "ended";
   return "live";
 }
 

@@ -16,20 +16,21 @@
 // legitimately quiet (a slow tool) — keep waiting. It never fabricates a
 // completion the server didn't record.
 
+import { isTaskStateUnknown, isTaskTerminal } from "./taskState";
+
 export type WatchdogTaskState = { state: string; text: string };
 
-// Kept in sync with reattach.ts TERMINAL. Paused states (input-required /
-// auth-required) are deliberately NOT here: the turn resumes with the
-// operator's answer, so the watchdog keeps waiting rather than fabricating a
-// completion — a paused live turn settles via the stream closing (onDone).
-const TERMINAL_RE = /completed|failed|canceled|cancelled|rejected/i;
-
 /**
- * True when a task should be treated as settled. A missing/empty state means the
- * task is gone from the store — un-stick the turn rather than spin forever.
+ * True when a task should be treated as settled (taskState.ts, shared with reattach.ts).
+ * A missing/empty state means the task is gone from the store, and an `unknown` /
+ * UNSPECIFIED one is a state no producer will move on — un-stick the turn rather than
+ * spin forever. Paused states (input-required / auth-required) are deliberately NOT
+ * settled: the turn resumes with the operator's answer, so the watchdog keeps waiting
+ * rather than fabricating a completion — a paused live turn settles via the stream
+ * closing (onDone).
  */
 export function isTerminalTaskState(state: string): boolean {
-  return !state || TERMINAL_RE.test(state);
+  return !state || isTaskTerminal(state) || isTaskStateUnknown(state);
 }
 
 export interface StreamWatchdogOptions {

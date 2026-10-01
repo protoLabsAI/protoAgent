@@ -1293,6 +1293,60 @@ const server = createServer(async (req, res) => {
           sessions: [{ session_id: "chat-recovered", last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }],
         });
       }
+      // #3957: a session that parked live and then sank below the newest-N session index —
+      // `limit` newer finished sessions bury it, as a busy agent's index does. Only the
+      // `parked=true` index names it (with its newest turn's `last_state`), the way the
+      // real server answers. Header-gated to the one session a spec names.
+      const buriedParked = req.headers["x-e2e-buried-parked-session"];
+      if (buriedParked && pathname === "/api/chat/sessions") {
+        const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 50), 200));
+        if (url.searchParams.get("parked") === "true") {
+          const rows = durableTurns.get(buriedParked) ?? [];
+          const newestRow = rows.at(-1);
+          const parked = newestRow && /input.required|auth.required/i.test(newestRow.state);
+          return sendJson(res, {
+            sessions: parked
+              ? [{
+                  session_id: buriedParked,
+                  last_updated: "2020-01-01T00:00:00Z",
+                  turn_count: rows.length,
+                  last_state: newestRow.state,
+                }]
+              : [],
+          });
+        }
+        return sendJson(res, {
+          sessions: Array.from({ length: limit }, (_, i) => ({
+            session_id: `chat-buried-newer-${String(i).padStart(3, "0")}`,
+            last_updated: `2099-01-01T00:${String(59 - (i % 60)).padStart(2, "0")}:00Z`,
+            turn_count: 1,
+          })),
+        });
+      }
+      if (buriedParked && pathname === `/api/chat/sessions/${buriedParked}/turns`) {
+        const rows = durableTurns.get(buriedParked) ?? [];
+        const live = [...rows].reverse().find((r) => /input.required|auth.required/i.test(r.state));
+        return sendJson(res, {
+          turns: rows.map((r) => ({ ...r, last_updated: "2020-01-01T00:00:00Z", live: r === live })),
+          live_task_id: live?.task_id ?? null,
+        });
+      }
+      const buriedNewer = buriedParked && /^\/api\/chat\/sessions\/(chat-buried-newer-\d+)\/turns$/.exec(pathname);
+      if (buriedNewer) {
+        const id = buriedNewer[1];
+        return sendJson(res, {
+          turns: [{
+            task_id: `task-${id}`,
+            state: "TASK_STATE_COMPLETED",
+            last_updated: "2099-01-01T00:00:00Z",
+            text: `Answer for ${id}.`,
+            status: { state: "TASK_STATE_COMPLETED" },
+            artifacts: [{ parts: [{ text: `Answer for ${id}.` }] }],
+            history: [{ role: "ROLE_USER", parts: [{ text: `Question ${id}` }] }],
+          }],
+          live_task_id: null,
+        });
+      }
       // #3963: a session that parked live, as a FRESH profile finds it — header-gated to
       // the one session a spec names, so no other spec grows a recovered tab.
       const reparkSession = req.headers["x-e2e-repark-session"];
