@@ -462,12 +462,27 @@ def test_bomb_attachment_is_dropped_with_a_note(monkeypatch):
     assert any("omitted" in b.get("text", "") for b in msg.content)
 
 
-def test_multimodal_tool_result_rejects_a_bomb():
-    from graph.multimodal import multimodal_tool_result, render_multimodal_content
+def test_multimodal_tool_result_degrades_a_bomb_instead_of_failing_the_tool(caplog):
+    """A plugin-facing SDK helper: one unsafe image must not fail the whole tool call.
+    It becomes a note; the good image and the text survive."""
+    from graph.multimodal import multimodal_tool_result, parse_multimodal_result, render_multimodal_content
 
     bomb = _b64(_bare_png_header(13000, 13000))
-    with pytest.raises(ValueError, match="too large"):
-        multimodal_tool_result("x", images=[{"b64": bomb}])
+    good = _b64(_png(800, 600))
+    with caplog.at_level("WARNING", logger="graph.multimodal"):
+        env = parse_multimodal_result(
+            multimodal_tool_result("campaign view", images=[{"b64": bomb}, {"b64": good, "mime": "image/png"}])
+        )
+    assert [i["b64"] for i in env["images"]] == [good]
+    assert env["text"].startswith("campaign view\n[image omitted: image 1 too large to send safely")
+    assert env["text"].endswith(", campaign view]")
+    assert any("replaced with a note" in r.getMessage() for r in caplog.records)
+    rendered = render_multimodal_content(env, vision=True)
+    assert rendered[0]["text"] == env["text"] and rendered[1]["type"] == "image_url"
+
+    # Only unsafe image(s): still a result, never an exception.
+    env = parse_multimodal_result(multimodal_tool_result("x", images=[{"b64": bomb}]))
+    assert env["images"] == [] and "[image omitted:" in env["text"]
     rendered = render_multimodal_content({"text": "x", "images": [{"b64": bomb}]}, vision=True)
     assert isinstance(rendered, str) and "dropped" in rendered
 
