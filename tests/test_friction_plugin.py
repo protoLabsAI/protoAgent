@@ -1342,3 +1342,106 @@ def test_a_duplicate_hint_says_which_tool_to_use(wired):
     (item,) = friction.open_friction_work()
     assert item["title"] == "used `grep` via run_command — search_files does this"
     assert item["hint"] == "use search_files"
+
+
+# ── resolve_friction must be able to find what the agent logged ──────────────
+#
+# Live repro (brandLaunch, v0.189.0): the agent logged "Campaign Studio shot scripts
+# can't target elements inside an iframe; plugin rail views …", resolved it successfully,
+# then — with the Friction view still showing the row (it never refetched) — retried three
+# times, down to plain "iframe". Every retry said "no matching entries found", because a
+# match that was ALREADY resolved counted as no match at all. The agent concluded the tool
+# was broken. These drive the real record → resolve tool path.
+
+_IFRAME = ("Campaign Studio shot scripts can't target elements inside an iframe; "
+           "plugin rail views (terminal-plugin) render in an iframe")
+
+
+def _resolve(**args):
+    return asyncio.run(resolve_friction.ainvoke(args))
+
+
+def test_resolving_an_already_resolved_entry_says_so_not_no_match(ledger):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": _IFRAME, "severity": "major",
+                                         "detail": "wait_for text timed out inside <iframe>"}))
+    first = _resolve(summary="Campaign Studio shot scripts can't target elements inside an iframe",
+                     reason="fixed in v0.2.4")
+    assert first.startswith("resolved 1 entry")
+    again = _resolve(summary="iframe", reason="fixed in v0.2.4")
+    assert "no matching entries" not in again
+    assert "already resolved" in again
+    assert _IFRAME[:40] in again
+
+
+def test_resolve_by_a_substring_of_what_was_logged(ledger):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": _IFRAME}))
+    assert _resolve(summary="target elements inside an iframe").startswith("resolved 1 entry")
+    assert not grouped_entries()
+
+
+def test_resolve_match_ignores_case_whitespace_and_quote_style(ledger):
+    _record("harness", "Shot scripts can’t reach into an IFrame")
+    assert _resolve(summary="  can't   reach into an iframe ").startswith("resolved 1 entry")
+
+
+def test_resolve_with_the_full_text_of_a_summary_the_ledger_clipped(ledger):
+    long = "browser_click cannot target the inner document " + "x" * 220 + " tail words"
+    _record("harness", long)
+    assert _recs(ledger)[0]["summary"].endswith("…")  # stored clipped
+    assert _resolve(summary=long).startswith("resolved 1 entry")
+
+
+def test_resolve_falls_back_to_a_unique_detail_match(ledger):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "wait_for timed out",
+                                         "detail": "the target lives in a plugin view iframe"}))
+    _record("harness", "something unrelated")
+    assert _resolve(summary="plugin view iframe").startswith("resolved 1 entry")
+    assert [g["summary"] for g in grouped_entries()] == ["something unrelated"]
+
+
+def test_an_ambiguous_detail_match_resolves_nothing_and_lists_candidates(ledger):
+    for s in ("wait_for timed out", "click missed"):
+        asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": s, "detail": "inside an iframe"}))
+    out = _resolve(summary="inside an iframe")
+    assert "no open friction matches" in out
+    assert len(grouped_entries()) == 2
+
+
+def test_review_lists_ids_and_resolve_by_id_hits_exactly_that_row(ledger):
+    _record("harness", "read_file truncates")
+    _record("harness", "read_file truncates long lines too")
+    groups = {g["summary"]: g["id"] for g in grouped_entries()}
+    assert len(set(groups.values())) == 2
+    target = groups["read_file truncates"]
+    assert target in asyncio.run(friction_review.ainvoke({}))
+    out = _resolve(id=target)
+    assert out.startswith("resolved 1 entry")
+    assert [g["summary"] for g in grouped_entries()] == ["read_file truncates long lines too"]
+
+
+def test_an_id_is_stable_across_repeats_of_the_same_friction(ledger):
+    _record("model", "took a wrong path")
+    a = grouped_entries()[0]["id"]
+    _record("model", "took a wrong path")  # a repeat joins the group, same id
+    assert grouped_entries()[0]["id"] == a
+
+
+def test_no_match_lists_the_open_items_so_the_agent_can_retry(ledger):
+    _record("harness", "read_file truncates")
+    _record("model", "took a wrong path")
+    out = _resolve(summary="never recorded")
+    assert "no open friction matches" in out
+    for g in grouped_entries():
+        assert g["id"] in out and g["summary"] in out
+    assert all(not r.get("resolved_at") for r in _recs(ledger))
+
+
+def test_unknown_id_lists_the_open_items(ledger):
+    _record("harness", "read_file truncates")
+    out = _resolve(id="deadbeef")
+    assert "deadbeef" in out and grouped_entries()[0]["id"] in out
+
+
+def test_resolve_requires_summary_or_id(ledger):
+    _record("harness", "read_file truncates")
+    assert "required" in _resolve()
