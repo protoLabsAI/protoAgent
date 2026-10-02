@@ -316,9 +316,9 @@ function LocalTab() {
       // state, console- or agent-initiated (ADR 0096 D8).
       refreshAll();
       // Enable hot-mounts the plugin's router (#822) and starts its surfaces; disable
-      // unmounts the router (ADR 0096) and stops them (ADR 0018), so the server answers
-      // restart_recommended=false both ways — toggleToast keeps the branch for a future
-      // contribution that lingers (operator_api/plugin_routes.py _lingers_on_disable).
+      // unmounts the router (ADR 0096) and stops them (ADR 0018). restart_recommended is
+      // set only for a surface the reload couldn't swap or stop (_restart_needed in
+      // operator_api/plugin_routes.py), and toggleToast says so.
       // On an enable, the response carries the plugin's missing packages (#3450), and
       // the toast names them — once, while the operator is looking at its row.
       toast(toggleToast(p.name, res));
@@ -427,7 +427,7 @@ function LocalTab() {
         toast({
           tone: res.restart_recommended ? "info" : "success",
           title: "Bundle updated",
-          message: `${b.name} re-pinned.${retired}${res.restart_recommended ? " Restart to serve the fresh routes." : ""}`,
+          message: `${b.name} re-pinned.${retired}${res.restart_recommended ? " A member's background surface couldn't be swapped live — restart to finish." : ""}`,
         });
       }
     },
@@ -669,9 +669,9 @@ function LocalTab() {
           </div>
         )}
 
-        {/* Server restart — install / enable / disable hot-reload a plugin (views, routes and
-            surfaces included); env / launch flags only load at boot. The console reconnects
-            on its own. */}
+        {/* Server restart — every plugin lifecycle action hot-reloads (views, routes and
+            surfaces included); env / launch flags only load at boot, and a surface that
+            can't be swapped live is flagged on its toast. The console reconnects on its own. */}
         <div className="plugin-restart-row">
           <span className="settings-section-sub">{PLUGIN_RESTART_HINT}</span>
           <Button

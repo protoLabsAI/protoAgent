@@ -150,16 +150,25 @@ export function depsButtonState(rowId: string, busyId: string | null): "idle" | 
   return busyId === rowId ? "installing" : "blocked";
 }
 
-/** The hint beside the Plugins tab's Restart server button. Install, enable and disable all
- *  run the config hot-reload: tools / middleware / MCP rebuild with the graph, the plugin's
- *  routers (which serve its console view) mount or unmount on the live app (ADR 0096), and
- *  its background surfaces start or stop on the reconcile (ADR 0018) — no restart. A running
- *  server can't pick up process env / launch flags. Update / force re-install / uninstall
- *  answer `restart_recommended` per call, and their toast says when it's set. */
+/** The hint beside the Plugins tab's Restart server button. Every plugin lifecycle action
+ *  runs the config hot-reload: tools / middleware / MCP rebuild with the graph, the plugin's
+ *  routers (which serve its console view) mount, re-mount with new code, or unmount on the
+ *  live app (ADR 0096), and its background surfaces start, restart or stop on the reconcile
+ *  (ADR 0018) — proven against a real server in tests/test_plugin_lifecycle_real_process.py.
+ *  What can't happen live: process env / launch flags, and a surface the reconcile can't
+ *  swap (its task won't stop, or it stays on its `reload` hook across an update). The server
+ *  answers `restart_recommended` for exactly that surface case, and the toast says so. */
 export const PLUGIN_RESTART_HINT =
-  "Installing, enabling or disabling a plugin applies live — its tools, console view, routes and " +
-  "background surface load or unload with no restart. A restart is needed for env / launch-flag " +
-  "changes, and after an update or uninstall whose toast asks for one.";
+  "Installing, updating, enabling, disabling or uninstalling a plugin applies live — its tools, " +
+  "console view, routes and background surface load, reload or unload with no restart. A restart " +
+  "is needed for env / launch-flag changes, and when a plugin's background surface can't be " +
+  "swapped live; its toast says so.";
+
+/** Toast copy for `restart_recommended`: the one thing a reload can't take over is a
+ *  background surface — on update / install it couldn't be swapped for the new code (it
+ *  won't stop, or it stays on its reload hook); on disable / uninstall it won't stop. */
+export const SURFACE_SWAP_RESTART = "Its background surface couldn't be swapped live — restart to finish.";
+export const SURFACE_STOP_RESTART = "Its background surface didn't stop — restart to end it.";
 
 /** The toast after an enable/disable toggle. Enabling is the one UI moment to mention a
  *  plugin's missing Python packages (#3450): the operator is looking at the row that has
@@ -172,8 +181,8 @@ export function toggleToast(
   if (res.restart_recommended) {
     return {
       tone: "info",
-      title: "Plugin disabled",
-      message: `${name} — restart to fully remove its console view or background surface.`,
+      title: `Plugin ${res.enabled ? "enabled" : "disabled"}`,
+      message: `${name} is ${res.enabled ? "live" : "off"}. ${res.enabled ? SURFACE_SWAP_RESTART : SURFACE_STOP_RESTART}`,
     };
   }
   const deps = res.enabled ? (res.deps_missing ?? []) : [];
@@ -195,13 +204,14 @@ export function toggleToast(
  *  ignored old copy went and the built-in keeps running — not "removed". */
 export function uninstallToast(
   name: string,
-  res: { superseded_by_bundled?: string } | undefined,
+  res: { superseded_by_bundled?: string; restart_recommended?: boolean } | undefined,
 ): { title: string; message: string } {
+  const restart = res?.restart_recommended ? ` ${SURFACE_STOP_RESTART}` : "";
   if (res?.superseded_by_bundled) {
     return {
       title: "Old copy removed",
-      message: `${name} keeps running — it ships with protoAgent (v${res.superseded_by_bundled}).`,
+      message: `${name} keeps running — it ships with protoAgent (v${res.superseded_by_bundled}).${restart}`,
     };
   }
-  return { title: "Plugin uninstalled", message: `${name} removed.` };
+  return { title: "Plugin uninstalled", message: `${name} removed.${restart}` };
 }

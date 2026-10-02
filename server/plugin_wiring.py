@@ -461,7 +461,12 @@ def _reload_plugin_surfaces(new_config) -> None:
     if not STATE.plugin_surfaces_started:
         return  # the pending startup hook will start the already-updated STATE.plugin_surfaces
 
-    async def _stop(h) -> None:
+    async def _ended(h, what: str) -> bool:
+        """Call ``h``'s stop and confirm its task ended (grace, then cancel). A surface
+        that still won't end is recorded in ``STATE.plugin_surfaces_stuck`` — its old task
+        keeps running, which only a process restart clears (the one case the plugin routes
+        still answer ``restart_recommended`` for)."""
+        stop_ok = True
         stop_cb = h.get("stop")
         if callable(stop_cb):
             try:
@@ -469,7 +474,33 @@ def _reload_plugin_surfaces(new_config) -> None:
                 if asyncio.iscoroutine(res):
                     await res
             except Exception:
-                log.exception("[plugins] surface %s stop-on-reload failed", h.get("name"))
+                log.exception("[plugins] surface %s %s failed", h.get("name"), what)
+                stop_ok = False
+        task = h.get("handle")
+        if isinstance(task, asyncio.Future):
+            # A stop() that only sets an event returns while the old tick still runs.
+            if not task.done():
+                await asyncio.wait({task}, timeout=_SURFACE_RESTART_GRACE_S)
+            if not task.done():
+                task.cancel()
+                await asyncio.wait({task}, timeout=_SURFACE_CANCEL_GRACE_S)
+            ended = task.done()
+        else:
+            # No task to watch: the stop callback's success is the only evidence it ended.
+            ended = stop_ok
+        key = _surface_key(h)
+        if ended:
+            STATE.plugin_surfaces_stuck.pop(key, None)
+        else:
+            STATE.plugin_surfaces_stuck[key] = f"did not stop ({what})"
+        return ended
+
+    async def _stop(h) -> None:
+        if not await _ended(h, "stop-on-reload"):
+            log.error(
+                "[plugins] surface %s did not stop — its task is still running; restart the agent to end it",
+                h.get("name"),
+            )
         if h in STATE.plugin_surface_handles:
             STATE.plugin_surface_handles.remove(h)
 
@@ -496,28 +527,7 @@ def _reload_plugin_surfaces(new_config) -> None:
     async def _stopped_for_restart(h) -> bool:
         """Stop ``h`` and confirm it ended. True → safe to start its replacement. On False
         the old handle stays in ``plugin_surface_handles`` (it may still be running)."""
-        stop_ok = True
-        stop_cb = h.get("stop")
-        try:
-            res = stop_cb()
-            if asyncio.iscoroutine(res):
-                await res
-        except Exception:
-            log.exception("[plugins] surface %s stop-on-restart failed", h.get("name"))
-            stop_ok = False
-        task = h.get("handle")
-        if isinstance(task, asyncio.Future):
-            # A stop() that only sets an event returns while the old tick still runs.
-            if not task.done():
-                await asyncio.wait({task}, timeout=_SURFACE_RESTART_GRACE_S)
-            if not task.done():
-                task.cancel()
-                await asyncio.wait({task}, timeout=_SURFACE_CANCEL_GRACE_S)
-            ended = task.done()
-        else:
-            # No task to watch: the stop callback's success is the only evidence it ended.
-            ended = stop_ok
-        if not ended:
+        if not await _ended(h, "stop-on-restart"):
             log.error(
                 "[plugins] surface %s did not stop — keeping it and NOT starting its replacement; "
                 "restart the agent to pick up the plugin's new registration",
@@ -577,4 +587,6 @@ def _reload_plugin_surfaces(new_config) -> None:
 
     # agent_init owns the loop marshal (the scheduler uses it too) — looked up there at
     # call time so a patch on agent_init._run_on_server_loop intercepts this caller.
-    _agent_init()._run_on_server_loop(lambda: _run(), "surface reconcile")
+    # The handle is kept on STATE so a plugin route that just reloaded can wait for the
+    # reconcile before it answers ``restart_recommended``.
+    STATE.plugin_surface_reconcile = _agent_init()._run_on_server_loop(lambda: _run(), "surface reconcile")

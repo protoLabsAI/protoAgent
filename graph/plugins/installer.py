@@ -21,10 +21,12 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1134,7 +1136,7 @@ def install(
                     summary["warnings"] = warnings
                 return summary
 
-        shutil.rmtree(staging / ".git", ignore_errors=True)  # drop git metadata; lock holds provenance
+        _force_rmtree(staging / ".git")  # drop git metadata; lock holds provenance
 
         # Land the staged tree with a swap, not rmtree-then-move (#3075): the old sequence
         # deleted the installed copy first, so a move that died mid-copy (disk full,
@@ -1142,12 +1144,11 @@ def install(
         # aside instead — same parent dir, so it's an atomic same-filesystem rename — move
         # the staged tree in, and only then drop the backup; any failure renames the old
         # version back. (`plugins.lock` already lands atomically via `_write_lock`.)
-        backup = target.parent / (target.name + ".bak")
-        _discard(backup)  # leftover from a previously interrupted swap
+        backup = _free_backup_path(target)  # clears leftovers; never collides with one
         backed_up = False
         if target.exists() or _is_link(target):
             try:
-                os.rename(target, backup)
+                _rename(target, backup)
                 backed_up = True
             except OSError as exc:
                 raise InstallError(
@@ -1158,11 +1159,11 @@ def install(
             shutil.move(str(staging), str(target))
         except Exception as exc:
             # A cross-filesystem move copies then deletes — it can fail half-copied.
-            shutil.rmtree(target, ignore_errors=True)
+            _force_rmtree(target)
             restored = ""
             if backed_up:
                 try:
-                    os.rename(backup, target)
+                    _rename(backup, target)
                     restored = " — the previous version was restored"
                 except OSError:
                     restored = f" — the previous version was left at {backup}"
@@ -1542,6 +1543,112 @@ def _plain_copy_refusal(
     )
 
 
+# Windows refuses to delete a read-only file (git writes its objects read-only) and,
+# for a moment, one another process holds open (an AV scan of a freshly written .pyc): a
+# plain ``rmtree(ignore_errors=True)`` left the whole folder behind SILENTLY. Each pass
+# clears read-only bits as it goes; a pass that still leaves something waits and retries.
+_RMTREE_ATTEMPTS = 4
+_RMTREE_BACKOFF_S = 0.1
+
+
+def _force_rmtree(path: Path) -> bool:
+    """Delete a real directory tree, Windows-robustly. True when it's gone. Never raises:
+    a tree that survives every attempt is logged with the error that kept it."""
+    errors: list[BaseException] = []
+
+    def _on_error(func, failed, exc) -> None:
+        # The failing entry may be read-only (Windows), or its directory may lack write
+        # permission (POSIX) — make both writable and try the same operation once more.
+        # Only a removal is retried here: rmtree also reports a failed ``os.open`` /
+        # ``os.scandir`` of an unreadable directory, and ``os.open(path)`` without flags
+        # raises TypeError. Those just get the chmod — the next pass re-walks the tree. And
+        # nothing may escape: this helper must never raise (a leftover .bak would 500 every
+        # update, and the failed-move rollback would skip restoring the backup).
+        exc = exc[1] if isinstance(exc, tuple) else exc  # onerror passes exc_info
+        try:
+            os.chmod(failed, stat.S_IRWXU if os.path.isdir(failed) else stat.S_IREAD | stat.S_IWRITE)
+            parent = os.path.dirname(failed)
+            if parent:
+                os.chmod(parent, stat.S_IRWXU)
+            if func in (os.unlink, os.rmdir, os.remove):
+                func(failed)
+            else:
+                errors.append(exc)
+        except FileNotFoundError:
+            pass
+        except Exception as again:  # noqa: BLE001 — recorded + logged below, never raised
+            errors.append(again or exc)
+
+    for attempt in range(_RMTREE_ATTEMPTS):
+        if not os.path.lexists(path):
+            return True
+        errors.clear()
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=_on_error)
+            else:  # pragma: no cover — 3.11
+                shutil.rmtree(path, onerror=_on_error)
+        except Exception as exc:  # noqa: BLE001 — e.g. a link, which rmtree refuses before any callback
+            errors.append(exc)
+        if not os.path.lexists(path):
+            return True
+        if attempt + 1 < _RMTREE_ATTEMPTS:
+            time.sleep(_RMTREE_BACKOFF_S * (2**attempt))
+    log.warning(
+        "[plugins] could not delete %s: %s — it is inert (*.bak is never loaded); remove it by hand",
+        path,
+        errors[-1] if errors else "still present",
+    )
+    return False
+
+
+def _rename(src: Path, dst: Path) -> None:
+    """``os.rename`` that rides out a transient Windows sharing violation (another process
+    briefly holding a file inside ``src``). A real failure — including ``dst`` existing,
+    which Windows refuses outright — raises after the last attempt."""
+    for attempt in range(_RMTREE_ATTEMPTS):
+        try:
+            os.rename(src, dst)
+            return
+        except FileExistsError:
+            raise
+        except PermissionError as exc:
+            # Only a Windows sharing violation / access-denied (``winerror`` 32 / 5) can
+            # clear on its own; a POSIX EACCES is permanent, so it raises at once.
+            if getattr(exc, "winerror", None) not in (5, 32) or attempt + 1 == _RMTREE_ATTEMPTS:
+                raise
+            time.sleep(_RMTREE_BACKOFF_S * (2**attempt))
+
+
+def _backup_leftovers(target: Path) -> list[Path]:
+    """Every swap leftover for ``target``: ``<id>.bak`` and the uniquely named
+    ``<id>.<n>.bak`` used when that one couldn't be cleared."""
+    parent = target.parent
+    if not parent.is_dir():
+        return []
+    return [
+        p
+        for p in parent.iterdir()
+        if p.name == target.name + ".bak" or (p.name.startswith(target.name + ".") and p.name.endswith(".bak"))
+    ]
+
+
+def _free_backup_path(target: Path) -> Path:
+    """Clear ``target``'s swap leftovers (best effort) and return a set-aside path that
+    is FREE. Windows ``os.rename`` refuses an existing destination, so a ``<id>.bak`` an
+    earlier swap couldn't delete used to fail every later update and uninstall of that
+    plugin with WinError 183; a leftover that still won't go now just gets a unique
+    sibling (``<id>.<n>.bak`` — still ``*.bak``, so never discovered or loaded)."""
+    for leftover in _backup_leftovers(target):
+        _discard(leftover)
+    backup = target.parent / (target.name + ".bak")
+    n = 1
+    while os.path.lexists(backup):
+        backup = target.parent / f"{target.name}.{n}.bak"
+        n += 1
+    return backup
+
+
 def _discard(path: Path) -> None:
     """Best-effort removal of an install/uninstall swap leftover (``<id>.bak``). A
     link (symlink or junction) is unlinked, never followed — ``shutil.rmtree`` refuses
@@ -1550,7 +1657,7 @@ def _discard(path: Path) -> None:
         if _is_link(path):
             _unlink_link(path)
         elif path.exists():
-            shutil.rmtree(path, ignore_errors=True)
+            _force_rmtree(path)
     except OSError:
         log.warning("[plugins] could not remove %s — delete it by hand", path, exc_info=True)
 
@@ -1564,19 +1671,16 @@ def _remove_installed_copy(target: Path) -> None:
     if _is_link(target):  # re-checked HERE, at delete time — a folder swapped for a link since the guards ran
         _unlink_link(target)
         return
-    backup = target.parent / (target.name + ".bak")
-    _discard(backup)
+    backup = _free_backup_path(target)
     try:
-        os.rename(target, backup)
+        _rename(target, backup)
     except OSError as exc:
         # Callers (the REST routes, the ops layer, the CLI) handle InstallError; a bare
         # OSError escaping from here is a 500 / traceback instead of "couldn't remove it".
         raise InstallError(
             f"could not remove the installed copy at {target} (it was left in place): {exc}"
         ) from exc
-    _discard(backup)
-    if backup.exists() or _is_link(backup):
-        log.warning("[plugins] %s could not be fully deleted — it is inert (*.bak is never loaded); remove it by hand", backup)
+    _discard(backup)  # logs (with the cause) if it survives; the next swap retries it
 
 
 def _running_copy_is(plugin_id: str, target: Path) -> bool:

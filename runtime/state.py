@@ -105,6 +105,12 @@ class AppState:
     # updated list — don't hot-start, or they'd double-start) from "startup done"
     # (reconcile: hot-start newly-enabled, stop removed) — ADR 0018 surface hot-reload.
     plugin_surfaces_started: bool = False
+    # The latest surface reconcile (a future/task on the server loop, or None): a plugin
+    # route that just reloaded waits on it before deciding ``restart_recommended``.
+    plugin_surface_reconcile: Any = None
+    # Surfaces a reconcile could NOT end — ``(plugin_id, name)`` → reason. Their task is
+    # still running the old code, so only a process restart clears them.
+    plugin_surfaces_stuck: dict = field(default_factory=dict)
     plugin_meta: list = field(default_factory=list)
     # Background subsystems + handles.
     scheduler: Any = None

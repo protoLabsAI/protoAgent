@@ -936,7 +936,7 @@ def _resolve_skills_db(configured: str, *, shared: bool = False, commons=None) -
     return str(db)
 
 
-def _run_on_server_loop(make_coro, what: str) -> None:
+def _run_on_server_loop(make_coro, what: str):
     """Fire-and-forget a coroutine onto the server's event loop.
 
     Works whether we're called **on** the loop (a direct, on-loop reload) or
@@ -947,6 +947,10 @@ def _run_on_server_loop(make_coro, what: str) -> None:
     ``run_coroutine_threadsafe``. ``make_coro`` is a zero-arg factory so the
     coroutine is only created once we have a loop to run it on (no
     "coroutine was never awaited" leak when none is available).
+
+    Returns what it scheduled, so a caller that needs the outcome can wait on it: the
+    ``asyncio.Task`` (on-loop), the ``concurrent.futures.Future`` (from a thread), or
+    None when nothing was scheduled.
     """
     import asyncio
 
@@ -957,19 +961,20 @@ def _run_on_server_loop(make_coro, what: str) -> None:
 
     if loop is not None:
         try:
-            loop.create_task(make_coro())
+            return loop.create_task(make_coro())
         except Exception:
             log.exception("[reload] %s failed", what)
-        return
+        return None
 
     if STATE.main_loop is not None and STATE.main_loop.is_running():
         try:
-            asyncio.run_coroutine_threadsafe(make_coro(), STATE.main_loop)
+            return asyncio.run_coroutine_threadsafe(make_coro(), STATE.main_loop)
         except Exception:
             log.exception("[reload] %s failed (threadsafe)", what)
-        return
+        return None
 
     log.warning("[reload] no event loop available; %s deferred to next process boot", what)
+    return None
 
 
 def _start_scheduler_async(backend: "SchedulerBackend") -> None:

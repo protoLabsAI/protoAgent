@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 from pathlib import Path
 
@@ -1491,6 +1493,165 @@ def test_stale_backup_from_an_interrupted_swap_is_cleared(env):
     installer.install(str(repo))
     assert not stale.exists()
     assert (installer.live_plugins_dir() / "demo_ext" / "extra.py").exists()
+
+
+def _windows_rename(real_rename):
+    """``os.rename`` with Windows semantics on every platform: an existing destination is
+    refused (WinError 183) instead of replaced (POSIX replaces an empty dir silently)."""
+
+    def _rename(src, dst, *a, **k):
+        if os.path.lexists(dst):
+            raise FileExistsError(183, "Cannot create a file when that file already exists", str(dst))
+        return real_rename(src, dst, *a, **k)
+
+    return _rename
+
+
+def test_a_backup_that_cannot_be_deleted_never_blocks_update_or_uninstall(env, monkeypatch):
+    """#3990 Windows CI: a `<id>.bak` an earlier swap couldn't delete (a read-only git
+    object, a file another process held open) made Windows `os.rename` refuse the next
+    set-aside — so the 2nd update of a plugin, and an uninstall after an update, 400'd.
+    With Windows rename semantics and a leftover that will NOT delete, update twice +
+    uninstall must all still succeed; the leftover just stays inert (`*.bak`)."""
+    live = installer.live_plugins_dir()
+    stuck = live / "demo_ext.bak"
+    real_rmtree = installer._force_rmtree
+
+    def _locked(path):  # this one leftover is "in use": it never deletes
+        if Path(path) == stuck:
+            return False
+        return real_rmtree(path)
+
+    monkeypatch.setattr(os, "rename", _windows_rename(os.rename))
+    monkeypatch.setattr(installer, "_force_rmtree", _locked)
+
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    stuck.mkdir()
+    (stuck / "locked.pyd").write_text("in use")
+
+    _commit_update(repo)
+    installer.install(str(repo))  # 1st update
+    (repo / "more.py").write_text("y = 2\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "again")
+    second = installer.install(str(repo))  # 2nd update
+    target = live / "demo_ext"
+    assert (target / "extra.py").exists() and (target / "more.py").exists()
+    assert installer._read_lock()["plugins"][0]["resolved_sha"] == second["resolved_sha"]
+
+    installer.uninstall("demo_ext")
+    assert not target.exists()
+    # Only the undeletable leftover remains — inert, never discovered as a plugin.
+    assert sorted(p.name for p in live.iterdir()) == ["demo_ext.bak"]
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permission bits")
+def test_a_read_only_leftover_is_cleared(env):
+    """A plain `rmtree(ignore_errors=True)` silently left a tree with read-only entries
+    (Windows: read-only files, e.g. git objects; POSIX: a read-only directory) — the
+    leftover the 2nd swap then tripped over. It's cleared now."""
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    stale = installer.live_plugins_dir() / "demo_ext.bak"
+    sub = stale / "objects" / "ab"
+    sub.mkdir(parents=True)
+    (sub / "cdef").write_text("blob")
+    os.chmod(sub / "cdef", stat.S_IREAD)
+    os.chmod(sub, stat.S_IREAD | stat.S_IEXEC)
+    try:
+        _commit_update(repo)
+        installer.install(str(repo))
+        assert not stale.exists()
+        installer.uninstall("demo_ext")
+        assert list(installer.live_plugins_dir().iterdir()) == []
+    finally:
+        if sub.exists():
+            os.chmod(sub, stat.S_IRWXU)
+
+
+_ROOT_SKIP = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permission bits")
+
+
+@_ROOT_SKIP
+def test_force_rmtree_never_raises_on_an_unreadable_directory(tmp_path, monkeypatch, caplog):
+    """rmtree reports a mode-000 directory through ``os.open`` / ``os.scandir``; retrying
+    ``os.open(path)`` without flags raised TypeError straight out of the "never raises"
+    helper (#3990 adversarial review). It must not raise, and must log what kept it."""
+    tree = tmp_path / "t"
+    locked = tree / "locked"
+    locked.mkdir(parents=True)
+    (locked / "f").write_text("x")
+    os.chmod(locked, 0)
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    try:
+        # Normal case: the chmod lets the next pass in, so the tree goes.
+        assert installer._force_rmtree(tree) is True
+        assert not tree.exists()
+
+        # A directory that stays unreadable (chmod can't help): no raise, logged, False.
+        locked.mkdir(parents=True)
+        os.chmod(locked, 0)
+        monkeypatch.setattr(installer.os, "chmod", lambda *a, **k: None)
+        with caplog.at_level("WARNING", logger=installer.log.name):
+            assert installer._force_rmtree(tree) is False
+        assert "could not delete" in caplog.text
+    finally:
+        monkeypatch.undo()
+        if locked.exists():
+            os.chmod(locked, stat.S_IRWXU)
+
+
+@_ROOT_SKIP
+def test_failed_move_restores_the_backup_even_over_an_unreadable_half_copy(env, monkeypatch):
+    """The rollback path cleans the half-moved tree with ``_force_rmtree`` before renaming
+    the backup back. A mode-000 dir in that half copy used to raise out of it, so the
+    previous version was never restored."""
+    import shutil
+
+    repo = _make_plugin_repo(env)
+    first = installer.install(str(repo))
+    _commit_update(repo)
+    target = installer.live_plugins_dir() / "demo_ext"
+    real_move = shutil.move
+
+    def half_then_die(src, dst, *a, **k):
+        if Path(dst) == target:
+            (target / "half" / "locked").mkdir(parents=True)
+            os.chmod(target / "half" / "locked", 0)
+            raise OSError("simulated: died mid-move")
+        return real_move(src, dst, *a, **k)
+
+    monkeypatch.setattr(shutil, "move", half_then_die)
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    with pytest.raises(installer.InstallError, match="previous version was restored"):
+        installer.install(str(repo))
+    assert (target / "protoagent.plugin.yaml").exists() and not (target / "half").exists()
+    assert not (target / "extra.py").exists()
+    assert [e["resolved_sha"] for e in installer._read_lock()["plugins"]] == [first["resolved_sha"]]
+
+
+def test_force_rmtree_retries_a_transient_failure(tmp_path, monkeypatch):
+    """A file another process holds for a moment (an AV scan on Windows) fails one
+    pass; the next pass, after a short wait, removes the tree."""
+    import shutil
+
+    tree = tmp_path / "t"
+    (tree / "d").mkdir(parents=True)
+    (tree / "d" / "f").write_text("x")
+    real = shutil.rmtree
+    calls: list[int] = []
+
+    def flaky(path, *a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            return None  # the first pass leaves everything (the file was "busy")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(shutil, "rmtree", flaky)
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    assert installer._force_rmtree(tree) is True
+    assert not tree.exists() and len(calls) == 2
 
 
 def test_uninstall_removes_via_rename_aside_and_leaves_no_backup(env):
