@@ -486,3 +486,72 @@ def test_stamp_on_a_hostile_repo_executes_nothing(tmp_path, monkeypatch):
     r = _stamp(_client(monkeypatch, root))
     assert r.status_code == 200 and r.json()["is_git"] is True
     assert sorted(p.name for p in markers.iterdir()) == []
+
+
+# Content-hashing git commands: porcelain `status`/`diff` re-hash every stat-dirty tracked file
+# to prove it clean, and with GIT_OPTIONAL_LOCKS=0 they can never save the refreshed stat — so a
+# `touch`-ed 800 MB of tracked files was re-read on EVERY 2 s poll (~2 s each, measured).
+_HASHING_SUBCOMMANDS = {"status", "diff", "add", "update-index", "commit", "stash"}
+
+
+def test_stamp_never_runs_a_content_hashing_git_command(tmp_path, monkeypatch):
+    root = _repo(tmp_path / "repo")
+    seen: list[str] = []
+    real_run = git_read._Git.run
+
+    def spy(self, *args, **kw):
+        seen.append(args[0])
+        return real_run(self, *args, **kw)
+
+    monkeypatch.setattr(git_read._Git, "run", spy)
+    os.utime(root / "src" / "app.py", (7, 7))  # stat-dirty, content unchanged
+    (root / "new.txt").write_bytes(b"x\n")
+    assert git_read.working_tree_stamp(root)
+    assert seen and not (set(seen) & _HASHING_SUBCOMMANDS), seen
+
+
+def test_touched_but_unchanged_tracked_files_give_a_stable_stamp_that_still_moves_on_edits(tmp_path, monkeypatch):
+    """A formatter no-op save / `touch` / rsync: new mtime, same bytes. The stamp moves ONCE
+    (the touch) and then holds still poll after poll — it does not re-derive cleanliness by
+    hashing — and a real edit to that file still moves it."""
+    root = _repo(tmp_path / "repo")
+    client = _client(monkeypatch, root)
+    before = _stamp(client).json()["stamp"]
+    os.utime(root / "src" / "app.py", (11, 11))
+    os.utime(root / "old_name.txt", (12, 12))
+    touched = _stamp(client).json()
+    assert touched["stamp"] != before
+    assert [_stamp(client).json()["stamp"] for _ in range(3)] == [touched["stamp"]] * 3
+    (root / "src" / "app.py").write_bytes(b"one\nTWO\nthree\n")
+    assert _stamp(client).json()["stamp"] != touched["stamp"]
+    # Staging alone (index vs HEAD) moves it too.
+    staged_before = _stamp(client).json()["stamp"]
+    _git(root, "add", "src/app.py")
+    assert _stamp(client).json()["stamp"] != staged_before
+
+
+def test_stamp_reports_elapsed_and_slow(tmp_path, monkeypatch):
+    root = _repo(tmp_path / "repo")
+    client = _client(monkeypatch, root)
+    body = _stamp(client).json()
+    assert isinstance(body["elapsed_ms"], int) and body["slow"] is False
+
+    def slow_stamp(r, timeout=git_read.STAMP_TIMEOUT_S):
+        import time
+
+        time.sleep(git_read.STAMP_SLOW_MS / 1000 + 0.05)
+        return "s"
+
+    monkeypatch.setattr(git_read, "working_tree_stamp", slow_stamp)
+    assert _stamp(client).json()["slow"] is True
+
+
+def test_stamp_of_a_project_inside_a_bigger_repo_ignores_siblings(tmp_path, monkeypatch):
+    repo = _repo(tmp_path / "repo")
+    client = _client(monkeypatch, repo / "src", name="sub")
+    before = _stamp(client, "sub").json()["stamp"]
+    (repo / "gone.txt").write_bytes(b"changed outside the project\n")
+    (repo / "sibling.txt").write_bytes(b"untracked sibling\n")
+    assert _stamp(client, "sub").json()["stamp"] == before
+    (repo / "src" / "app.py").write_bytes(b"inside\n")
+    assert _stamp(client, "sub").json()["stamp"] != before

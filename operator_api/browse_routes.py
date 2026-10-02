@@ -286,6 +286,9 @@ def register_browse_routes(app) -> None:
     def _stamp(project: str, path: str) -> dict:
         import hashlib
         import os
+        import time
+
+        from tools.git_read import STAMP_SLOW_MS
 
         from tools.fs_secrets import is_secret_path
         from tools.git_read import working_tree_stamp
@@ -294,6 +297,7 @@ def register_browse_routes(app) -> None:
             root, _ = _fence(project, ".")
         except ValueError as exc:
             raise _fs_error(400, "bad_path", str(exc)) from exc
+        started = time.monotonic()
         tree = working_tree_stamp(root)
         parts = [tree or "not-git"]
         if path:
@@ -310,15 +314,25 @@ def register_browse_routes(app) -> None:
             except (ValueError, OSError):
                 parts.append("-")
         stamp = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
-        return {"project": project, "is_git": tree is not None, "stamp": stamp}
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # `slow` tells the console's poll to back off (exponentially, up to ~30 s): a huge
+        # repo's stamp must not cost a core per open pane.
+        return {
+            "project": project,
+            "is_git": tree is not None,
+            "stamp": stamp,
+            "elapsed_ms": elapsed_ms,
+            "slow": elapsed_ms > STAMP_SLOW_MS,
+        }
 
     @app.get("/api/fs/stamp")
     async def _api_fs_stamp(project: str, path: str = ""):
         """A cheap fingerprint of the project's working tree (and, with ``path``, of that
         one file) for the code pane's fallback poll: the console asks every ~2 s while the
         pane is on screen and refetches ``/api/fs/diff`` / ``/api/fs/file`` only when the
-        stamp moves — catching edits no tool reported (a terminal, an editor). One hardened
-        ``git status`` plus ``lstat``s; never reads file content (ADR 0112)."""
+        stamp moves — catching edits no tool reported (a terminal, an editor). Hardened git
+        plumbing that never hashes content, plus ``lstat``s; ``slow: true`` past
+        ``STAMP_SLOW_MS`` makes the console back off (ADR 0112)."""
         import asyncio
 
         from tools.git_read import GitError, GitTimeout

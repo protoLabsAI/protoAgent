@@ -307,20 +307,36 @@ itself; Refresh stays as a manual escape hatch.
   `write_file`/`edit_file`/`delete_file` (`source: "agent"`). The console (`CodeChangeWatch`)
   debounces (300 ms, ≤ 1 s under a steady stream) and coalesces them, then re-fetches the
   project's diff and any open file it names.
+  *Follow-up (2026-10-01):* writes are announced only by a delegate that writes to THIS
+  machine — an ACP subprocess, or an A2A peer on loopback that is not the hub's
+  `/agents/<slug>/a2a` proxy (which can front a remote, LAN-paired member). A remote peer's
+  `args.path` names a file on its own disk; trusting it let any peer forge `fs.changed` storms
+  and Follow jumps in every open console (500 forged frames → 500 events). Its real edits still
+  surface through the stamp poll. Each tracker also coalesces its writes to ≤ 2 events/s
+  (trailing, flushed when the run finishes).
 - **Follow mode follows delegates.** A `delegate` change with Follow on (not pinned, desktop)
   switches the pane to the Diff tab on that project with the file picked, from its first hunk —
   same throttle as the tool-stream follower. `agent` changes don't jump from here: the live tool
   stream already follows them (onto the File tab, as D6 says).
 - **Fallback poll for edits nothing reports** (a terminal, an editor, a coder's shell command):
-  `GET /api/fs/stamp?project=P[&path=REL]` → `{project, is_git, stamp}`, a fingerprint of `HEAD`,
-  the porcelain status and each listed file's `lstat` size + mtime (plus the open file's, which is
-  the only signal in a non-git project; never for a secret-like name). Hardened like D3 — `git
-  status` runs clean filters, so they are neutralised here too — and it reads no content. The
+  `GET /api/fs/stamp?project=P[&path=REL]` → `{project, is_git, stamp, elapsed_ms, slow}`, a
+  fingerprint of `HEAD` plus three git **plumbing** listings — `diff-files --name-only` (tracked
+  files whose STAT differs), `diff-index --cached` (staged vs `HEAD`) and `ls-files --others
+  --exclude-standard` (untracked) — and each listed file's `lstat` size + mtime (plus the open
+  file's, the only signal in a non-git project; never for a secret-like name). None of these
+  hashes content. *Follow-up (2026-10-01):* the first version used porcelain `git status`, which
+  re-hashes every stat-dirty tracked file to prove it clean and, under `GIT_OPTIONAL_LOCKS=0`,
+  can never save the refreshed stat — so `touch`-ing 4 × 200 MB of tracked files made **every**
+  2 s poll take ~2 s (a core per open pane); the plumbing stamp takes ~0.08 s on the same repo,
+  and a touched-but-unchanged file simply stays listed with a stable `lstat`. Hardened like D3
+  (filters still neutralised, fsmonitor/hooks off, env scrubbed) and it reads no content. The
   console asks every 2 s **only while the pane is mounted and the browser tab visible**, and
-  re-fetches the diff/file only when the stamp moves; a 404 stops it, other errors back off to
-  10 s. Chosen over a server-side watcher: no new dependency (neither `watchfiles` nor `watchdog`
-  is in the lock), no watcher threads or subscription bookkeeping, zero cost when nobody is
-  looking, and one `git status` is far cheaper than the full diff it saves re-fetching.
+  re-fetches the diff/file only when the stamp moves; a stamp past 500 ms comes back `slow` and
+  the poll doubles its interval (up to 30 s), resetting on a change or a fast answer; a 404
+  stops it, other errors back off to 10 s. Chosen over a server-side watcher: no new dependency
+  (neither `watchfiles` nor `watchdog` is in the lock), no watcher threads or subscription
+  bookkeeping, zero cost when nobody is looking, and the stamp is far cheaper than the full diff
+  it saves re-fetching.
 
 ## Consequences
 

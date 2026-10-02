@@ -9,6 +9,7 @@ but only for paths inside a registered project and only while the pane is on.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import SimpleNamespace
 
@@ -190,6 +191,83 @@ def test_map_to_projects_handles_nesting_dupes_and_the_cap(tmp_path):
     out = fs_changes.map_to_projects([str(inner / "a.py"), str(inner / "a.py"), *many], roots)
     assert out["inner"][0] == "a.py" and out["outer"][0] == "pkg/a.py"
     assert len(out["inner"]) == fs_changes.MAX_PATHS
+
+
+# ── a remote A2A peer can't forge writes; a flood is coalesced ───────────────────
+
+
+def _forged_frames(project, n):
+    """What a hostile streaming A2A peer can send: tool-call extension frames naming files
+    on OUR disk (``args.path`` is entirely peer-supplied)."""
+    from plugins.delegates.a2a_progress import TOOL_CALL_EXT_URI
+
+    for i in range(n):
+        for phase in ("started", "completed"):
+            call = {"toolCallId": f"c{i}", "name": "write_file", "phase": phase}
+            if phase == "started":
+                call["args"] = {"path": str(project / "src" / f"f{i}.py")}
+            yield {"statusUpdate": {"status": {"state": "TASK_STATE_WORKING", "message": {
+                "role": "ROLE_AGENT", "parts": [], "metadata": {TOOL_CALL_EXT_URI: call}}}}}
+
+
+async def test_a_remote_a2a_peer_cannot_forge_fs_changed(bus, project):
+    """500 forged frames from a non-local peer → zero events (was: 500 events, each a diff
+    refetch + a Follow jump in every open console)."""
+    from plugins.delegates.a2a_progress import A2AProgressFeed
+
+    t = dp.DelegateProgress("peer", _noop_sink, announce_writes=False)
+    feed = A2AProgressFeed(t)
+    for frame in _forged_frames(project, 500):
+        await feed.frame(frame)
+    await t.finish(ok=True)
+    assert bus.sent == []
+    assert t.tool_count == 500  # the card still shows the peer's work
+
+
+async def test_a_flood_of_writes_is_coalesced_to_at_most_two_events_a_second(bus, project):
+    """Even from a trusted (local) delegate, 500 settled writes in a burst publish the first
+    at once and coalesce the rest into ONE trailing event — not 500."""
+    from plugins.delegates.a2a_progress import A2AProgressFeed
+
+    t = dp.DelegateProgress("peer", _noop_sink, write_interval=0.2)
+    feed = A2AProgressFeed(t)
+    for frame in _forged_frames(project, 500):
+        await feed.frame(frame)
+    assert len(bus.sent) == 1
+    await asyncio.sleep(0.35)  # past the interval: the trailing flush lands on its own
+    assert len(bus.sent) == 2
+    second = bus.sent[1][1]
+    assert second["project"] == "app" and len(second["paths"]) == fs_changes.MAX_PATHS
+    t.close()
+
+
+async def test_finish_flushes_coalesced_writes_and_close_drops_the_trailing_task(bus, project):
+    t = dp.DelegateProgress("coder", _noop_sink, write_interval=60.0)
+    for i in range(3):
+        await t.on_tool({"phase": "start", "id": f"e{i}", "name": "Edit", "kind": "edit",
+                         "locations": [{"path": str(project / f"f{i}.py")}]})
+        await t.on_tool({"phase": "end", "id": f"e{i}", "status": "completed"})
+    assert [d["paths"] for _, d, _ in bus.sent] == [["f0.py"]]
+    await t.finish(ok=True)  # the run is over — its last edits must not wait out 60 s
+    assert [d["paths"] for _, d, _ in bus.sent] == [["f0.py"], ["f1.py", "f2.py"]]
+
+
+@pytest.mark.parametrize(
+    "url, local",
+    [
+        ("http://127.0.0.1:7870/a2a", True),
+        ("http://localhost:7871/a2a", True),
+        ("http://127.0.0.1:7870/agents/host/a2a", True),
+        # the hub's proxy to a member — which may be a remote, LAN-paired instance
+        ("http://127.0.0.1:7870/agents/navaengineer/a2a", False),
+        ("http://10.0.0.5:7870/a2a", False),
+        ("https://peer.example.com/a2a", False),
+    ],
+)
+def test_only_a_loopback_non_proxied_a2a_peer_announces_writes(url, local):
+    from plugins.delegates.a2a import _writes_are_local
+
+    assert _writes_are_local(url) is local
 
 
 # ── protoAgent's own write tools ──────────────────────────────────────────────────
