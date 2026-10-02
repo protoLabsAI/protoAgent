@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from graph.goals.goal_turn import is_closing_call_event
 from runtime.state import STATE
 
 # Same logger as server.chat, so the moved log lines keep their channel.
@@ -356,7 +357,10 @@ def _on_chat_model_stream(st: _TurnStreamState, event: dict, name: str, parent_t
     # before the call is fully formed or executed — so the UI shows
     # "<tool> · running" instead of a bare loading wheel. Keyed by the
     # tool_call id; on_chat_model_end fills the args, on_tool_end closes it.
-    for tcc in getattr(chunk, "tool_call_chunks", None) or []:
+    # A goal's tool-less closing call (graph/middleware/goal_checkpoint.py) has its tool
+    # calls dropped — never card one, or the card would stay "running" forever.
+    closing = is_closing_call_event(event.get("metadata"))
+    for tcc in () if closing else (getattr(chunk, "tool_call_chunks", None) or []):
         tcid, tcname = tcc.get("id"), tcc.get("name")
         # A `delegate_to` gets NO tool card — it renders as an authored room
         # bubble at on_tool_end instead (#3042). Marked announced so neither this
@@ -443,7 +447,8 @@ def _on_chat_model_end(st: _TurnStreamState, event: dict, name: str, parent_tool
     # `announced_tools` is scoped to THIS turn: this pass also surfaces a card
     # for any tool the stream path didn't announce (e.g. a non-streaming model)
     # without re-emitting an early start already sent earlier this turn.
-    for tc in getattr(output, "tool_calls", None) or []:
+    closing = is_closing_call_event(event.get("metadata"))  # its tool calls are dropped
+    for tc in () if closing else (getattr(output, "tool_calls", None) or []):
         tcid = tc.get("id")
         if tcid and tc.get("name") == "delegate_to":
             st.announced_tools.add(tcid)  # room bubble, not a card (#3042)

@@ -57,6 +57,7 @@ class _ScriptedFake(GenericFakeChatModel):
     calls: int = 0
     side_effects: dict = {}
     clock: object = None
+    raises: dict = {}
     bound: list = []
     _pending_bound: int = 0
 
@@ -72,9 +73,12 @@ class _ScriptedFake(GenericFakeChatModel):
         if self.clock is not None:
             self.clock.t += self.clock.per_call
         effect = self.side_effects.get(self.calls)
+        error = self.raises.get(self.calls)
         self.calls += 1
         if effect:
             effect()
+        if error is not None:
+            raise error
         message = next(self.messages)
         chunks = [
             {"name": tc["name"], "args": json.dumps(tc["args"]), "id": tc["id"], "index": i, "type": "tool_call_chunk"}
@@ -90,7 +94,7 @@ def _call(name: str, text: str, call_id: str, args: dict | None = None) -> AIMes
 SUMMARY = "Fixed apply_discount to take a percentage; both tests pass."
 
 
-def _install(monkeypatch, tmp_path, script, side_effects, *, per_call: float = 3.0):
+def _install(monkeypatch, tmp_path, script, side_effects, *, per_call: float = 3.0, raises=None):
     """A real lead graph on ``script`` + a real GoalController with a flag-file command goal.
     The DEFAULT probe debounce runs on a fake clock at ``per_call`` seconds per model round."""
     import runtime.state as rs
@@ -103,6 +107,7 @@ def _install(monkeypatch, tmp_path, script, side_effects, *, per_call: float = 3
         messages=iter(script),
         side_effects={k: (lambda: flag.write_text("x")) for k in side_effects},
         clock=clock,
+        raises=dict(raises or {}),
         bound=[],
     )
     cfg = LangGraphConfig(goal_max_iterations=8)
@@ -188,6 +193,41 @@ async def test_review_repro_default_debounce_closes_right_after_the_fix(monkeypa
 
     _assert_closed(fake, ctrl, done, closing_call=2)
     assert await _tools_after_the_pass(g) == []
+    # The closing call's (dropped) tool call never opened a card: every card closes.
+    starts = {p["id"] for k, p in frames if k == "tool_start" and isinstance(p, dict)}
+    ends = {p["id"] for k, p in frames if k == "tool_end" and isinstance(p, dict)}
+    assert starts and starts <= ends, f"unmatched tool_start: {starts - ends}"
+    assert "t3" not in starts
     # The probe said so on the live stream — as a goal status line, never a tool_start.
     assert any(k == "goal_status" and "checking the goal" in str(p) for k, p in frames)
     assert not any(k == "tool_start" and "🎯" in str(p) for k, p in frames)
+
+
+class _RateLimited(Exception):
+    status_code = 429
+
+
+@pytest.mark.asyncio
+async def test_a_failed_closing_call_still_ends_the_turn_achieved(monkeypatch, tmp_path):
+    """The goal is recorded achieved before the closing call, so a 429 on that call must
+    not fail the turn: no `error` frame, the stream ends `done` with the achieved note,
+    the goal is achieved exactly once, and the call is not retried."""
+    script = [
+        _call("current_time", "Looking around.", "t1"),
+        _call("calculator", "Applying the fix.", "t2", {"expression": "1+1"}),
+        AIMessage(content="never reached"),
+    ]
+    fake, ctrl, g = _install(
+        monkeypatch, tmp_path, script, side_effects={1}, raises={2: _RateLimited("Error code: 429 - rate limited")}
+    )
+
+    frames, done = await _drive()
+
+    kinds = [k for k, _ in frames]
+    assert "error" not in kinds and kinds[-1] == "done"
+    assert done.rstrip().endswith("✓ goal achieved: command exited 0")
+    assert fake.calls == 3  # the closing call ran once — not retried
+    state = ctrl.store.get("gc1")
+    assert state.status == "achieved" and len(state.history) == 1
+    snap = await g.aget_state({"configurable": {"thread_id": "a2a:gc1"}})
+    assert snap.values["messages"][-1].content == "Goal met: command exited 0."

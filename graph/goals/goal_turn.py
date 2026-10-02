@@ -51,6 +51,11 @@ class GoalTurn:
     # until the one tool-less closing model call has run.
     achieved_note: str = ""
     closing: bool = False
+    # The verifier's reason (the closing call's fallback text if the call fails), and the
+    # LangGraph step the closing call runs on — the turn stream drops any tool call that
+    # step streams, so a dropped call never leaves a tool card open.
+    closing_reason: str = ""
+    closing_step: int | None = None
 
     @property
     def capped(self) -> bool:
@@ -79,6 +84,15 @@ def record_round_cap(rounds: int, cap: int, cap_key: str) -> None:
 def current_goal_turn() -> GoalTurn | None:
     """The running goal-driven pass's marker, or ``None`` outside a goal turn."""
     return _goal_turn_ctx.get()
+
+
+def is_closing_call_event(metadata: dict | None) -> bool:
+    """Whether a model event (by its LangGraph ``metadata``) belongs to the running pass's
+    tool-less closing call (``graph.middleware.goal_checkpoint.closing_call``)."""
+    marker = _goal_turn_ctx.get()
+    if marker is None or marker.closing_step is None:
+        return False
+    return (metadata or {}).get("langgraph_step") == marker.closing_step
 
 
 @contextlib.contextmanager

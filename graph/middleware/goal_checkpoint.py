@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 
 from langchain_core.messages import AIMessage, ToolMessage
 
@@ -155,18 +156,40 @@ async def goal_checkpoint(state) -> dict | None:
         return {"jump_to": "end"}  # the goal went away meanwhile (cleared): just stop
     marker.achieved_note = note
     marker.closing = True
+    marker.closing_reason = reason
     log.info("[goal] verifier passed mid-turn for %s (%s) — closing the turn", sid, reason)
     return {"messages": [guard_note(GUARD, summary_note(reason))]}
 
 
 async def closing_call(request, handler):
     """``awrap_model_call`` body: the closing call after a mid-turn pass runs with NO tools
-    bound, and any tool call it still produces is dropped — it can only reply."""
+    bound, and any tool call it still produces is dropped — it can only reply. The turn
+    stream drops that step's streamed tool calls too (``is_closing_call_event``), so no
+    tool card opens that nothing would close.
+
+    The goal is already recorded achieved, so a failing closing call (a 429, a timeout)
+    must not fail the turn: it is logged with an error id and replaced by a one-line
+    fallback reply — never retried — and the drive reports the pass as usual."""
     marker = current_goal_turn()
     if marker is None or not marker.closing:
         return await handler(request)
     marker.closing = False
-    response = await handler(request.override(tools=[]))
+    try:
+        from langgraph.config import get_config
+
+        marker.closing_step = (get_config().get("metadata") or {}).get("langgraph_step")
+    except Exception:  # noqa: BLE001 — outside a graph run: nothing streams anyway
+        marker.closing_step = None
+    try:
+        response = await handler(request.override(tools=[]))
+    except Exception as exc:  # noqa: BLE001 — the goal is already met; never fail the turn now
+        from langchain.agents.middleware.types import ModelResponse
+
+        err_id = uuid.uuid4().hex[:8]
+        log.warning(
+            "[goal] closing call failed (error id %s): %s — ending on a fallback reply", err_id, exc, exc_info=True
+        )
+        return ModelResponse(result=[AIMessage(content=f"Goal met: {marker.closing_reason or 'verifier passed'}.")])
     for msg in getattr(response, "result", None) or ([response] if isinstance(response, AIMessage) else []):
         if isinstance(msg, AIMessage) and msg.tool_calls:
             msg.tool_calls = []
