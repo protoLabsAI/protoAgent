@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import pytest
@@ -87,7 +88,9 @@ def test_all_folders_missing_warns_with_paths_but_stays_bound(caplog):
         tools = build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}]))
     assert "read_file" in {t.name for t in tools}
     msgs = [r.getMessage() for r in caplog.records]
-    assert any("'x'" in m and "/nope/zzz" in m for m in msgs), msgs
+    # The log names the RESOLVED path — `D:\\nope\\zzz` on Windows, `/nope/zzz` elsewhere.
+    shown = str(Path("/nope/zzz").resolve())
+    assert any("'x'" in m and shown in m for m in msgs), msgs
 
 
 def test_junk_only_config_warns_not_bound(caplog):
