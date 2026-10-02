@@ -237,6 +237,15 @@ try:
             """
             payload = super()._get_request_payload(*args, **kwargs)
             payload["system"] = shape_oauth_system(payload.get("system"))
+            # Every inline image inside Anthropic's limits (a 400 on one oversized image in
+            # the checkpointed history otherwise poisons the session for good). Builds new
+            # containers, so the stored history is untouched; never breaks a request.
+            try:
+                from graph.image_limits import clamp_request_images
+
+                payload = clamp_request_images(payload, wire="anthropic")
+            except Exception:  # noqa: BLE001 — clamping must never be what fails a turn
+                log.warning("[anthropic-oauth] image clamping skipped", exc_info=True)
             return payload
 
         def _lane_key(self) -> str:

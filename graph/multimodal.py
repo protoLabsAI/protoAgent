@@ -22,9 +22,13 @@ How it works (the ``graph/components.py`` sentinel idiom):
 
 Limits (context cost — enforced in ``render_multimodal_content`` and documented
 in the plugin devkit): at most ``MAX_IMAGES_PER_RESULT`` images per tool result
-and ``MAX_IMAGE_BYTES`` decoded bytes per image. An image over a limit is
-dropped with an inline note (no downscaling — that would need an image
-dependency core doesn't carry); the text part always survives.
+and ``MAX_IMAGE_BYTES`` decoded bytes per image. Every image is first fitted by
+``graph.image_limits.fit_image`` — downscaled to ``model.image_max_side`` (default
+1568 px long side) and re-encoded when it is larger — because an oversized image
+in the checkpointed history poisons every later turn once the provider's
+many-image limit kicks in. Downscaling uses Pillow when it is installed; without
+it the original is kept and the request boundary guards it. An image still over
+a limit after fitting is dropped with an inline note; the text part always survives.
 """
 
 from __future__ import annotations
@@ -32,6 +36,8 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable
+
+from graph.image_limits import fit_image
 
 # Marker (record-separator char) prepended to the tool's return value — the same
 # out-of-band idiom as graph/components.py, so envelope detection is one
@@ -81,10 +87,13 @@ def multimodal_tool_result(text: str, images: list[dict]) -> str:
             b64 = base64.b64encode(raw).decode()
         else:
             raise ValueError(f"image #{i} must carry 'b64' or 'path'")
+        fitted, mime = fit_image(raw, mime, max_bytes=MAX_IMAGE_BYTES)
+        if fitted is not raw:
+            raw, b64 = fitted, base64.b64encode(fitted).decode()
         if len(raw) > MAX_IMAGE_BYTES:
             raise ValueError(
-                f"image #{i} is {len(raw)} bytes > MAX_IMAGE_BYTES={MAX_IMAGE_BYTES} — "
-                "downscale it in the tool before returning"
+                f"image #{i} is {len(raw)} bytes > MAX_IMAGE_BYTES={MAX_IMAGE_BYTES} even after "
+                "fitting — downscale it in the tool before returning"
             )
         out.append({"b64": b64, "mime": mime})
     return _SENTINEL + json.dumps({"text": str(text or ""), "images": out}, ensure_ascii=False)
@@ -161,6 +170,9 @@ def render_multimodal_content(env: dict, *, vision: bool, describe_fn: DescribeF
         except (ValueError, TypeError, OSError) as e:
             notes.append(f"[image {i} dropped: {e}]")
             continue
+        fitted, mime = fit_image(raw, mime, max_bytes=MAX_IMAGE_BYTES)
+        if fitted is not raw:
+            raw, b64 = fitted, base64.b64encode(fitted).decode()
         if len(raw) > MAX_IMAGE_BYTES:
             notes.append(
                 f"[image {i} dropped: {len(raw)} bytes exceeds the {MAX_IMAGE_BYTES}-byte limit — "

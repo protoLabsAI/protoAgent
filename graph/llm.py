@@ -22,7 +22,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import Field
 
-from graph import llm_limiter
+from graph import image_limits, llm_limiter
 from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider, resolve_model_route
 from graph.providers.identity import tag_model_provider
 
@@ -653,6 +653,14 @@ class _ReasoningChatOpenAI(ChatOpenAI):
                         extra = getattr(msg, "additional_kwargs", None) or {}
                         msg_dict["reasoning_content"] = extra.get("reasoning_content") or ""
         try:
+            # The gateway routes to Anthropic (and others) behind one wire, so inline
+            # images are held to the strictest provider's limits here too — the same
+            # session-poisoning guard the anthropic-oauth client applies. Copy-on-write:
+            # the stored history is never mutated.
+            payload = image_limits.clamp_request_images(payload, wire="openai")
+        except Exception:  # noqa: BLE001 — clamping must never be what fails a request
+            log.warning("[llm] image clamping skipped", exc_info=True)
+        try:
             _fit_output_budget(payload, self._window_key())
         except Exception:  # noqa: BLE001 — sizing must never break a request; send it as configured
             log.debug("[llm] output-budget sizing skipped", exc_info=True)
@@ -993,6 +1001,12 @@ def create_llm(
         limit=config.llm_max_inflight,
         queue_timeout=config.llm_inflight_queue_timeout,
         interactive_reserve=config.llm_inflight_interactive_reserve,
+    )
+    # Same seam for the image limits (graph/image_limits.py): the source-side fit and
+    # the request-boundary clamp read these module-level knobs.
+    image_limits.configure(
+        max_side=getattr(config, "image_max_side", None),
+        max_images_per_request=getattr(config, "max_images_per_request", None),
     )
     # Explicit per-slot ACP override: an `acp:<agent>` model name (e.g. `aux_model: acp:claude`,
     # `goal.eval_model: acp:claude`, `compaction.model: acp:claude`, or a subagent's model) routes
