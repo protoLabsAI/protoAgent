@@ -143,6 +143,23 @@ def _is_sse_query_token_path(path: str) -> bool:
 # parser, which applies the same boundary).
 _PLUGIN_NS_RE = re.compile(r"^/(?:api/)?plugins/[^/]+/")
 
+# CORE routes that live INSIDE a plugin's ``/api/plugins/<id>/`` namespace: the per-plugin
+# operator lifecycle routes (``POST /api/plugins/<id>/update`` + ``/enabled``) and the
+# bundle routes (``/api/plugins/bundles/…``). A manifest ``public_paths`` /
+# ``federation_paths`` prefix of ``/api/plugins/<id>/`` legitimately covers the plugin's
+# own data routes — and used to cover these too, so an installed plugin could make its
+# own update / enable / disable callable with no credential (or by a federation peer).
+# They are never exempt and never lose the operator ceiling, whatever a plugin declares.
+# Mirrored by ``graph.plugins.manifest`` (which drops such entries at parse time) and
+# pinned against the live route table by tests/test_core_plugin_routes_never_exempt.py.
+_CORE_PLUGIN_ROUTE_RE = re.compile(r"^/api/plugins/(?:[^/]+/(?:enabled|update)/?$|bundles(?:/|$))")
+
+
+def is_core_plugin_route(path: str) -> bool:
+    """True for a core-owned operator route inside the ``/api/plugins/<id>/`` namespace —
+    which no plugin-declared public / federation prefix may lower."""
+    return bool(_CORE_PLUGIN_ROUTE_RE.match(path))
+
 
 def set_public_prefixes(prefixes) -> None:
     """Replace the plugin-declared public-prefix set (idempotent + reload-safe).
@@ -254,7 +271,7 @@ def _is_public(path: str) -> bool:
     m = _AGENTS_RE.match(path)
     if m and any(m.group(2).startswith(p) for p in _PUBLIC_PREFIXES):
         return True
-    if any(path.startswith(p) for p in _PLUGIN_PUBLIC):
+    if any(path.startswith(p) for p in _PLUGIN_PUBLIC) and not is_core_plugin_route(path):
         return True
     if path.startswith("/metrics") and _metrics_public():
         return True
@@ -275,7 +292,7 @@ def _requires_operator(path: str) -> bool:
     ``federation_paths`` (#2747) — matched as a direct prefix, so the proxied variants
     stay operator-only; the plugin route itself still sees a verified credential and
     reads the tier from ``request.state.trust_tier``."""
-    if any(path.startswith(p) for p in _PLUGIN_FEDERATION):
+    if any(path.startswith(p) for p in _PLUGIN_FEDERATION) and not is_core_plugin_route(path):
         return False
     return "/api/" in path or path == "/api" or path.endswith("/api")
 

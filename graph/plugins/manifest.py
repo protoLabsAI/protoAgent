@@ -163,7 +163,9 @@ class PluginManifest:
     # through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer
     # — the plugin verifies its own signature) or a public view page that must load
     # in a browser iframe under a token-gated deployment. Namespace-scoped by the
-    # parser so a plugin can never exempt a core route.
+    # parser so a plugin can never exempt a core route — including the core operator
+    # routes core mounts inside that namespace (/api/plugins/<id>/update and
+    # /api/plugins/<id>/enabled), which stay gated even under a /api/plugins/<id>/ prefix.
     public_paths: list[str] = field(default_factory=list)
     # Federation-tier paths (#2747) — prefixes under THIS plugin's own namespace that
     # accept the *federation* credential (ADR 0066) where the ``/api`` operator ceiling
@@ -874,7 +876,20 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
 # ``/api/plugins/<verb>`` management route — otherwise its ``public_paths`` could
 # prefix-match and exempt that core route (e.g. install = RCE) from the auth gate.
 _VALID_PLUGIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-_RESERVED_PLUGIN_IDS = frozenset({"install", "installed", "sync", "updates", "catalog", "enabled"})
+# Every core ``/api/plugins/<verb>`` route, including ``bundles`` — the namespace of the
+# core ``/api/plugins/bundles/<id>/update`` and ``DELETE /api/plugins/bundles/<id>`` routes,
+# which a plugin id ``bundles`` declaring ``public_paths: [/api/plugins/bundles/]`` used to
+# exempt from auth.
+_RESERVED_PLUGIN_IDS = frozenset(
+    {"install", "installed", "sync", "updates", "catalog", "enabled", "bundles", "ack", "install-deps"}
+)
+
+# Core-owned operator routes INSIDE a plugin's own ``/api/plugins/<id>/`` subtree
+# (``…/update``, ``…/enabled``) and the bundle routes. A public / federation path that
+# lands on one is dropped here; a broader prefix such as ``/api/plugins/<id>/`` is kept for
+# the plugin's own routes, and the auth middleware carves these out of it regardless
+# (``a2a_impl.auth.is_core_plugin_route`` — the same pattern, defence in depth).
+_CORE_PLUGIN_ROUTE_RE = re.compile(r"^/api/plugins/(?:[^/]+/(?:enabled|update)/?$|bundles(?:/|$))")
 
 
 def _parse_public_paths(paths, plugin_id: str, *, kind: str = "public_path") -> list[str]:
@@ -894,7 +909,12 @@ def _parse_public_paths(paths, plugin_id: str, *, kind: str = "public_path") -> 
     kept: list[str] = []
     for p in paths:
         s = str(p).strip()
-        if s.startswith(roots):
+        if s.startswith(roots) and _CORE_PLUGIN_ROUTE_RE.match(s):
+            log.warning(
+                "[plugins] %s: %s %r is a core operator route (plugin update / enable) — ignored",
+                plugin_id, kind, s,
+            )
+        elif s.startswith(roots):
             kept.append(s)
         elif s:
             log.warning(
