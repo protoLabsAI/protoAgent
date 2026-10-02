@@ -51,6 +51,7 @@ import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { MemorySurface } from "../memory/MemorySurface";
+import { CodeChangeWatch } from "../codeviewer/CodeChangeWatch";
 import { CodeSurface } from "../codeviewer/CodeSurface";
 import { codePaneEnabledFrom, setCodePaneEnabled } from "../codeviewer/enabled";
 import { CODE_SURFACE_ID } from "../codeviewer/open";
@@ -933,6 +934,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           autoupdate sweep publish plugin.changed/plugin.updated — refetch the plugin
           queries so a rail view the agent just enabled appears without a manual refresh. */}
       <PluginChangeWatch />
+      {/* Code pane live updates (ADR 0112): `fs.changed` — a coding delegate's or the agent's
+          own edit inside a registered project — re-fetches the pane's diff + open file, and
+          moves a following pane to a delegate's edit. No Refresh click needed. */}
+      <CodeChangeWatch />
       {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
           a fork booted on the old port), drop the previous tenant's persisted chat view.
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps

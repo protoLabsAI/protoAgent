@@ -52,6 +52,14 @@ export type FsDiff = {
   truncated?: boolean;
 };
 
+/** GET /api/fs/stamp (ADR 0112) — a cheap fingerprint of the project's working tree (and,
+ *  with `path`, of that file) for the code pane's fallback poll. Compare, never parse. */
+export type FsStamp = {
+  project: string;
+  is_git: boolean;
+  stamp: string;
+};
+
 export const workspaceApi = {
   // Server-side directory listing behind the path pickers. Deliberately the SERVER's
   // filesystem: the console may be configuring a different machine, and the browser's
@@ -80,6 +88,11 @@ export const workspaceApi = {
   },
   fsDiff(project: string) {
     return request<FsDiff>(`/api/fs/diff?${new URLSearchParams({ project }).toString()}`);
+  },
+  fsStamp(project: string, path?: string) {
+    const qs = new URLSearchParams({ project });
+    if (path) qs.set("path", path);
+    return request<FsStamp>(`/api/fs/stamp?${qs.toString()}`);
   },
   // The artifact plugin's chip metadata (#3617): for each id still in the store, its lifetime
   // version count and the oldest version it still keeps. An evicted/deleted id is absent.

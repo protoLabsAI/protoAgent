@@ -42,6 +42,9 @@ type CodeViewerState = {
   tab: CodeTab;
   /** Diff tab: which project it shows (defaults to the current file's). */
   diffProject: string | null;
+  /** Diff tab: a file follow mode moved to (a delegate edited it). `seq` bumps per move, so
+   *  the same file edited twice re-picks it and re-scrolls to its first hunk. */
+  diffFocus: { project: string; path: string; seq: number } | null;
   /** Follow mode — the live tool stream moves the pane. Opt-in, default OFF. */
   follow: boolean;
   /** Pinned — follow is on but must not move the pane away from what's being read. */
@@ -80,6 +83,7 @@ export const useCodeViewer = create<CodeViewerState>(() => ({
   seq: 0,
   tab: "file",
   diffProject: null,
+  diffFocus: null,
   follow: false,
   pinned: false,
 }));
@@ -155,6 +159,18 @@ export function setDiffProject(project: string | null): void {
   useCodeViewer.setState({ diffProject: project });
 }
 
+/** Put `path`'s changes in front of the pane: the Diff tab, on `project`, with that file
+ *  picked (follow mode for a delegate's edit — `followDiff` in open.ts). Pure store write. */
+export function focusDiffFile(project: string, path: string): void {
+  const p = tidyPath(path);
+  if (!project || !p) return;
+  useCodeViewer.setState((s) => ({
+    tab: "diff",
+    diffProject: project,
+    diffFocus: { project, path: p, seq: (s.diffFocus?.seq ?? 0) + 1 },
+  }));
+}
+
 export function setFollow(on: boolean): void {
   // Turning follow off also drops the pin — a pin only means something while following.
   useCodeViewer.setState(on ? { follow: true } : { follow: false, pinned: false });
@@ -172,6 +188,7 @@ export function resetCodeViewer(): void {
     recent: [],
     tab: "file",
     diffProject: null,
+    diffFocus: null,
     follow: false,
     pinned: false,
   });

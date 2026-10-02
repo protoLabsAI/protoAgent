@@ -43,7 +43,7 @@ export {
 // types and helpers that used to be defined here alongside it.
 export { isDesktopWebview } from "./api/desktop";
 export type { PairAddress, PairedDevice, PairHost, PairingStart } from "./api/runtime";
-export type { FsDiff, FsDiffFile, FsFile } from "./api/workspace";
+export type { FsDiff, FsDiffFile, FsFile, FsStamp } from "./api/workspace";
 
 /** Boot hook (ADR 0042 slug routing → #806): a window opening `/app/agent/<slug>/` ensures
  * its agent is RUNNING — `POST /api/fleet/<name>/activate` resumes a cold agent from its

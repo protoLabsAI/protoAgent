@@ -1300,7 +1300,24 @@ const server = createServer(async (req, res) => {
          setTimeout(() => frame("turn.resumed", { task_id: "t-hitl", context_id: "sess-hitl" }), 1800),
          setTimeout(() => frame("turn.usage", { task_id: "t-hitl", context_id: "sess-hitl", state: "completed", input_tokens: 10, output_tokens: 5 }), 3200)]
       : [];
-    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); turns.forEach(clearTimeout); hitl.forEach(clearTimeout); });
+    // Code pane live updates (ADR 0112): `fs.changed` for the `<project>:<path>` the spec
+    // names in `x-e2e-fs-change` (`;<source>` optional, default delegate), repeated so a slow
+    // connect can't miss it. Header-gated: only that spec's stream carries it.
+    const fsChange = String(req.headers["x-e2e-fs-change"] || "");
+    const fsTimer = fsChange
+      ? setInterval(() => {
+          const [where, source = "delegate"] = fsChange.split(";");
+          const [project, path] = where.split(":");
+          frame("fs.changed", { project, paths: [path], source, target: "claude-code" });
+        }, 600)
+      : null;
+    req.on("close", () => {
+      clearInterval(t);
+      goals.forEach(clearTimeout);
+      turns.forEach(clearTimeout);
+      hitl.forEach(clearTimeout);
+      if (fsTimer) clearInterval(fsTimer);
+    });
     return;
   }
   if (pathname.startsWith("/api/")) {

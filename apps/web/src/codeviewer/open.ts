@@ -4,7 +4,7 @@ import { openView } from "../app/palette/nav";
 import { chatStore } from "../chat/chat-store";
 import { useUI } from "../state/uiStore";
 import { isCodePaneEnabled } from "./enabled";
-import { showCodeRef, useCodeViewer, type CodeRef } from "./store";
+import { focusDiffFile, showCodeRef, useCodeViewer, type CodeRef } from "./store";
 
 // Routing the code pane onto a dock (ADR 0112). The store (store.ts) says WHAT to show; this
 // says WHERE — and is the one place the placement rule, the one-time widen and the mobile
@@ -120,42 +120,60 @@ export function openCode(ref: CodeRef, opts: OpenCodeOptions = {}): void {
 // ── Follow mode ─────────────────────────────────────────────────────────────────────────
 let lastJump = 0;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingRef: CodeRef | null = null;
+let pendingJump: (() => void) | null = null;
 
-/** A live tool call touched `ref` — move the pane there if follow is on and not pinned.
- *  Throttled: at most one jump per FOLLOW_THROTTLE_MS, trailing, so a burst of reads lands
- *  on the LAST one instead of strobing through all of them. Desktop only, and it never
- *  re-routes docks: follow updates the pane the operator already opened. */
-export function followCode(ref: Omit<CodeRef, "source">, now: number = Date.now()): void {
+function followAllowed(): boolean {
   const s = useCodeViewer.getState();
-  if (!isCodePaneEnabled() || !s.follow || s.pinned || isMobileViewport()) return;
-  const next: CodeRef = withOrigin({ ...ref, source: "follow" });
+  return isCodePaneEnabled() && s.follow && !s.pinned && !isMobileViewport();
+}
+
+/** The throttle both followers share: at most one jump per FOLLOW_THROTTLE_MS, trailing, so
+ *  a burst lands on the LAST one instead of strobing through all of them. The opt-in and the
+ *  pin are re-checked when a trailing jump fires. */
+function throttledJump(jump: () => void, now: number): void {
   const wait = lastJump + FOLLOW_THROTTLE_MS - now;
   if (wait <= 0 && !pendingTimer) {
     lastJump = now;
-    showCodeRef(next);
+    jump();
     return;
   }
-  pendingRef = next;
+  pendingJump = jump;
   if (pendingTimer) return;
   pendingTimer = setTimeout(
     () => {
       pendingTimer = null;
-      const r = pendingRef;
-      pendingRef = null;
-      const st = useCodeViewer.getState();
-      if (!r || !isCodePaneEnabled() || !st.follow || st.pinned) return;
+      const j = pendingJump;
+      pendingJump = null;
+      if (!j || !followAllowed()) return;
       lastJump = Date.now();
-      showCodeRef(r);
+      j();
     },
     Math.max(0, wait),
   );
+}
+
+/** A live tool call touched `ref` — move the pane there if follow is on and not pinned.
+ *  Throttled (`throttledJump`). Desktop only, and it never re-routes docks: follow updates
+ *  the pane the operator already opened. */
+export function followCode(ref: Omit<CodeRef, "source">, now: number = Date.now()): void {
+  if (!followAllowed()) return;
+  const next: CodeRef = withOrigin({ ...ref, source: "follow" });
+  throttledJump(() => showCodeRef(next), now);
+}
+
+/** A coding DELEGATE edited `path` in `project` (an `fs.changed` on the bus) — with follow
+ *  on, switch the pane to that file's changes: the Diff tab, that file picked, scrolled to
+ *  its first hunk. The agent's OWN edits follow through `followCode` (the live tool stream)
+ *  onto the File tab, as before. Same opt-in, pin, throttle and no-dock-routing rules. */
+export function followDiff(project: string, path: string, now: number = Date.now()): void {
+  if (!project || !path || !followAllowed()) return;
+  throttledJump(() => focusDiffFile(project, path), now);
 }
 
 /** Test-only: forget the follow throttle. */
 export function resetFollowThrottle(): void {
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = null;
-  pendingRef = null;
+  pendingJump = null;
   lastJump = 0;
 }

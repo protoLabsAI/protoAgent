@@ -377,3 +377,112 @@ def test_rename_with_edits_reports_its_line_counts(tmp_path, monkeypatch):
     p.write_bytes(p.read_bytes().replace(b"line 3\n", b"") + b"added 1\nadded 2\n")
     f = {f["path"]: f for f in _diff(_client(monkeypatch, root)).json()["files"]}["new_name.txt"]
     assert (f["status"], f["old_path"], f["additions"], f["deletions"]) == ("R", "old_name.txt", 2, 1)
+
+
+# ── /api/fs/stamp: the fallback poll's cheap fingerprint ─────────────────────
+
+
+def _stamp(client, project="repo", path=""):
+    params = {"project": project}
+    if path:
+        params["path"] = path
+    return client.get("/api/fs/stamp", params=params)
+
+
+def test_stamp_code_pane_off_is_404_disabled(monkeypatch, tmp_path):
+    root = _repo(tmp_path / "repo")
+    cfg = LangGraphConfig(filesystem_projects=[{"name": "repo", "path": str(root)}])
+    monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
+    app = FastAPI()
+    register_browse_routes(app)
+    r = _stamp(TestClient(app))
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "disabled"
+
+
+def test_stamp_moves_on_every_kind_of_change_and_holds_still_otherwise(tmp_path, monkeypatch):
+    """The poll only refetches the diff when the stamp moves — so it must move on a first
+    edit, on a SECOND edit of an already-dirty file (same status letter), on a new
+    untracked file and on a commit, and must NOT move when nothing changed."""
+    root = _repo(tmp_path / "repo")
+    client = _client(monkeypatch, root)
+    first = _stamp(client).json()
+    assert first["is_git"] is True and first["stamp"]
+    assert _stamp(client).json()["stamp"] == first["stamp"]
+
+    seen = {first["stamp"]}
+
+    def moved() -> None:
+        s = _stamp(client).json()["stamp"]
+        assert s not in seen
+        seen.add(s)
+
+    (root / "src" / "app.py").write_bytes(b"one\nTWO\nthree\n")
+    moved()
+    (root / "src" / "app.py").write_bytes(b"one\nTWO\nthree\nfour\n")  # still just " M"
+    moved()
+    (root / "new.txt").write_bytes(b"hi\n")
+    moved()
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "more")
+    moved()
+
+
+def test_stamp_with_a_path_tracks_that_file_in_a_non_git_project(tmp_path, monkeypatch):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / "a.txt").write_bytes(b"one\n")
+    client = _client(monkeypatch, root, name="plain")
+    first = _stamp(client, "plain", "a.txt").json()
+    assert first["is_git"] is False
+    assert _stamp(client, "plain", "a.txt").json()["stamp"] == first["stamp"]
+    (root / "a.txt").write_bytes(b"one\ntwo\n")
+    assert _stamp(client, "plain", "a.txt").json()["stamp"] != first["stamp"]
+
+
+def test_stamp_never_stats_a_secret_and_fences_paths(tmp_path, monkeypatch):
+    root = tmp_path / "plain"
+    root.mkdir()
+    (root / ".env").write_bytes(b"K=1\n")
+    client = _client(monkeypatch, root, name="plain")
+    before = _stamp(client, "plain", ".env").json()["stamp"]
+    # A secret's own metadata is not a signal the pane gets.
+    (root / ".env").write_bytes(b"K=2 and longer\n")
+    assert _stamp(client, "plain", ".env").json()["stamp"] == before
+    assert _stamp(client, "nope").status_code == 400
+    # An escape is just "-" in the hash — never a stat outside the fence.
+    assert _stamp(client, "plain", "../outside").status_code == 200
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the marker commands and hook are POSIX sh")
+def test_stamp_on_a_hostile_repo_executes_nothing(tmp_path, monkeypatch):
+    """``git status`` runs clean filters (and fsmonitor, hooks) — the stamp must be
+    hardened exactly like the diff."""
+    root = _repo(tmp_path / "repo")
+    markers = tmp_path / "markers"
+    markers.mkdir()
+
+    def cmd(tag: str, then: str = "") -> str:
+        target = (markers / tag).as_posix()
+        return f"touch '{target}'{'; ' + then if then else ''}"
+
+    (root / ".gitattributes").write_bytes(b"* filter=evil\n")
+    _git(root, "config", "filter.evil.clean", cmd("filter-clean", "cat"))
+    _git(root, "config", "filter.evil.required", "true")
+    _git(root, "config", "core.fsmonitor", cmd("fsmonitor", "true"))
+    hook = root / ".git" / "hooks" / "post-index-change"
+    hook.write_text(f"#!/bin/sh\n{cmd('hook')}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    (root / "src" / "app.py").write_bytes(b"one\nTWO\nthree\n")
+    os.utime(root / "gone.txt", (1, 1))
+
+    subprocess.run(["git", "status", "--porcelain"], cwd=root, env=_ENV, capture_output=True, check=False)
+    assert sorted(p.name for p in markers.iterdir()), "stock git ran nothing — the test would prove nothing"
+    for p in markers.iterdir():
+        p.unlink()
+    os.utime(root / "src" / "app.py", (2, 2))
+    os.utime(root / "gone.txt", (3, 3))
+
+    r = _stamp(_client(monkeypatch, root))
+    assert r.status_code == 200 and r.json()["is_git"] is True
+    assert sorted(p.name for p in markers.iterdir()) == []
