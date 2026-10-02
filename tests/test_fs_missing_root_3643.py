@@ -107,7 +107,7 @@ def test_root_deleted_mid_session_then_restored(two_projects):
 
 
 def test_missing_root_never_resolves_and_is_never_recreated(two_projects):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     shutil.rmtree(b)
     t = _tools(cfg)
     out = t["write_file"].invoke({"project": "beta", "path": "new.txt", "content": "x"})
