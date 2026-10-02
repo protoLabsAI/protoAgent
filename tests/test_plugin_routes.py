@@ -1197,3 +1197,30 @@ def test_installed_route_emits_the_bundle_registry(monkeypatch):
     body = _client().get("/api/plugins/installed").json()
     assert body["plugins"] == []
     assert body["bundles"] == [{"id": "ghost_stack", "name": "Ghost"}]
+
+
+def test_installed_listing_survives_a_manifest_vanishing_mid_read(monkeypatch):
+    """A concurrent uninstall can pull a plugin's tree between list_installed() and the
+    manifest read. That row loses its manifest; the listing must still answer 200."""
+    from pathlib import Path
+
+    import operator_api.plugin_routes as pr
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: Path("/nonexistent-plugins-dir"))
+    monkeypatch.setattr(installer, "_read_lock", lambda: {"plugins": [], "bundles": []})
+    monkeypatch.setattr(
+        installer,
+        "list_installed",
+        lambda: [{"id": "gone", "source_url": "https://x/gone", "present": True}, {"id": "kept", "present": False}],
+    )
+
+    def _vanished(path):
+        raise FileNotFoundError(f"{path} removed mid-read")
+
+    monkeypatch.setattr(pr, "load_manifest", _vanished)
+    resp = _client().get("/api/plugins/installed")
+    assert resp.status_code == 200
+    rows = {r["id"]: r for r in resp.json()["plugins"]}
+    assert set(rows) == {"gone", "kept"} and "manifest" not in rows["gone"]

@@ -35,6 +35,7 @@ import asyncio
 import concurrent.futures
 import logging
 import re
+from collections.abc import Iterable
 
 from fastapi import HTTPException
 
@@ -125,7 +126,7 @@ def _install_no_enable() -> bool:
 _RECONCILE_WAIT_S = 30.0
 
 
-async def _restart_needed(plugin_ids) -> bool:
+async def _restart_needed(plugin_ids: Iterable[str]) -> bool:
     """Whether the reload just applied left any of ``plugin_ids`` needing a process restart.
 
     Routers never do: ``_mount_plugin_routers`` re-mounts a re-registered router with the
@@ -327,7 +328,14 @@ def register_plugin_routes(app) -> None:
             }
             if e["id"] in bundle_by_member:
                 item["bundle"] = bundle_by_member[e["id"]]
-            m = (running.get(e["id"]) or load_manifest(root / e["id"])) if e.get("present") else None
+            try:
+                m = (running.get(e["id"]) or load_manifest(root / e["id"])) if e.get("present") else None
+            except Exception:  # noqa: BLE001 — one row's manifest must never 500 the listing
+                # A concurrent uninstall can pull the folder between list_installed() and
+                # this read; load_manifest doesn't raise for a missing file, but a half-
+                # removed tree can fail anywhere under it. The row stays, manifest-less.
+                log.warning("[plugins] %s: manifest unreadable while listing", e["id"], exc_info=True)
+                m = None
             if m is not None:
                 item["manifest"] = {
                     "name": m.name,
