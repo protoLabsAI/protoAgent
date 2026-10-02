@@ -251,6 +251,11 @@ export function takeGoalKickoff(sessionId: string): string | null {
   return prompt ?? null;
 }
 
+/** Whether `sessionId` has a kickoff queued (the slot's gate reads it before deciding). */
+export function hasGoalKickoff(sessionId: string): boolean {
+  return pendingGoalKickoffs.has(sessionId);
+}
+
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -375,7 +380,7 @@ export function mergeSessions(
 
 /** A session whose live turn is parked on the operator: its lead bubble is still open
  *  (`streaming`) and marked paused (an `ask_human` question, a form, an approval). */
-function isParkedSession(session: ChatSession): boolean {
+export function isParkedSession(session: ChatSession): boolean {
   const last = [...session.messages].reverse().find((message) => message.role === "assistant");
   return Boolean(last?.status === "streaming" && last.paused && last.taskId);
 }

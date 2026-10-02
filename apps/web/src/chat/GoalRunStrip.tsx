@@ -42,15 +42,21 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
   if (!state) return null;
   const { goal, phase } = state;
   const verifier = verifierLabel(goal.verifier);
+  // The live region is ONLY the state text (`Goal driving · iteration i/n`, `Goal achieved`):
+  // the outcome line carries a relative time ("3m ago") that `useNow` re-renders every minute,
+  // and a role="status" around it would re-announce the whole strip to screen readers each tick.
 
   if (phase === "driving") {
     const progress = `iteration ${goal.iteration ?? 0}/${goal.max_iterations ?? "∞"}`;
     return (
-      <div className="chat-goal-strip" role="status" data-testid="chat-goal-strip" data-status="active">
+      <div className="chat-goal-strip" data-testid="chat-goal-strip" data-status="active">
         <Spinner size={12} />
         <Target size={13} aria-hidden className="chat-goal-strip-icon" />
         <span className="chat-goal-strip-text" title={`${goal.condition}\n${verifier}`}>
-          <strong>Goal driving</strong> · {progress} · {goal.condition}
+          <span role="status" data-testid="chat-goal-strip-state">
+            <strong>Goal driving</strong> · {progress}
+          </span>{" "}
+          · {goal.condition}
         </span>
       </div>
     );
@@ -61,7 +67,6 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
   return (
     <div
       className={`chat-goal-strip chat-goal-strip--${phase}`}
-      role="status"
       data-testid="chat-goal-strip"
       data-status={goal.status}
     >
@@ -71,7 +76,10 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
         <CircleX size={14} aria-hidden className="chat-goal-strip-icon" />
       )}
       <span className="chat-goal-strip-text" title={`${goal.condition}\n${line}`}>
-        <strong>{achieved ? "Goal achieved" : `Goal ${goal.status}`}</strong> · {goal.condition}
+        <span role="status" data-testid="chat-goal-strip-state">
+          <strong>{achieved ? "Goal achieved" : `Goal ${goal.status}`}</strong>
+        </span>{" "}
+        · {goal.condition}
         <span className="chat-goal-strip-outcome"> — {line}</span>
       </span>
       <Button

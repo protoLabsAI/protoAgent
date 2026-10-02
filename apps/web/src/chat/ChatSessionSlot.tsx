@@ -19,8 +19,6 @@ import {
   useChatState,
   effectiveReasoningEffort,
   sessionCast,
-  subscribeGoalKickoff,
-  takeGoalKickoff,
   type SessionStatus,
 } from "./chat-store";
 import { PublishDialog } from "./PublishDialog";
@@ -73,6 +71,7 @@ import {
   unpauseBubble,
 } from "./reattach";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
+import { watchGoalKickoff, type GoalKickoffWatch } from "./goalKickoffWatch";
 import { loadDraft, loadScroll, saveDraft, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { composerPlaceholder } from "./composerPlaceholder";
@@ -210,20 +209,30 @@ export function ChatSessionSlot({
   // The live turn's reveal-queue flush (#2993): stop() settles bubbles outside
   // runTurn's closure, and it must drain any withheld answer tail first.
   const revealFlushRef = useRef<(() => void) | null>(null);
-  // Auto-drive a goal created from the Work panel: that flow opens this tab (`kick:false`)
-  // and, once the goal is set on the server, registers a kickoff on the chat-store seam. Fire
-  // it as a HIDDEN turn so the drive loop streams live INTO this tab (the server's iteration-0
-  // kickoff injection re-states the goal). `check()` also covers a kickoff registered before
-  // this slot mounted; `takeGoalKickoff` is idempotent, so it fires exactly once.
+  // Auto-drive a goal created from the Work panel or `/goal new`: that flow drives the goal
+  // in this tab (`kick:false`) and, once the goal is set on the server, registers a kickoff on
+  // the chat-store seam. Fire it as a HIDDEN turn so the drive loop streams live INTO this tab
+  // (the server's iteration-0 kickoff injection re-states the goal). `watchGoalKickoff` is the
+  // single owner of that start: it holds the kickoff while this tab is streaming, a local
+  // turn is still unwinding, a turn is parked on the operator (or the HITL panel is up), or
+  // a queued message is waiting for the turn-end reconcile to re-send it — and fires it once,
+  // after. `runTurnRef` makes a deferred kickoff run the CURRENT render's runTurn.
+  const runTurnRef = useRef(runTurn);
+  runTurnRef.current = runTurn;
+  const kickoffWatchRef = useRef<GoalKickoffWatch | null>(null);
+  const pokeGoalKickoff = () => kickoffWatchRef.current?.poke();
   useEffect(() => {
-    const check = () => {
-      const kickoff = takeGoalKickoff(sessionId);
-      if (kickoff) void runTurn(kickoff, { hidden: true });
+    const watch = watchGoalKickoff(
+      sessionId,
+      (kickoff) => void runTurnRef.current(kickoff, { hidden: true }),
+      () => Boolean(hitlRef.current) || steerQueueRef.current.some((q) => !q.serverTaskId),
+    );
+    kickoffWatchRef.current = watch;
+    return () => {
+      watch.stop();
+      if (kickoffWatchRef.current === watch) kickoffWatchRef.current = null;
     };
-    check();
-    return subscribeGoalKickoff(check);
-    // runTurn is a stable per-render closure that reads the live store; sessionId is the key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the gate reads refs; sessionId is the key
   }, [sessionId]);
   // Client composer-form (#1701): a form a CLIENT command opens in the composer (e.g.
   // `/effort`'s picker), rendered through the same HitlForm but resolved LOCALLY — no
@@ -639,6 +648,9 @@ export function ChatSessionSlot({
     abortRef,
     recordSubmitted,
   });
+  // The goal-kickoff gate reads the steer queue + HITL panel: re-check when either clears.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- pokeGoalKickoff reads a ref
+  useEffect(() => pokeGoalKickoff(), [steerQueue.length, hitl]);
 
   // Sendable with text OR at least one ready attachment (file-only send, e.g.
   // "describe this image" with no caption). Matches the DS PromptInput gate,
@@ -1522,7 +1534,9 @@ export function ChatSessionSlot({
       }
       chatStore.setSessionStatus(session.id, "idle");
       setStatusMessage("idle");
-      void reconcileSteer();
+      // A queued message re-sent by the reconcile owns the next turn; the goal kickoff (if
+      // one is waiting) re-checks once the reconcile has settled.
+      void reconcileSteer().finally(pokeGoalKickoff);
     } catch (exc) {
       if (controller.signal.aborted) {
         // A user Stop OR a watchdog self-heal (which aborts to free a stalled
@@ -1578,6 +1592,9 @@ export function ChatSessionSlot({
       // The stream's end: every exit above settles the status itself, so this is a no-op
       // unless something left "streaming" behind with nothing live to settle it.
       reconcileSessionStatus(session.id);
+      // The local-turn claim is released only here, after idle was set — re-check a
+      // waiting goal kickoff now that the slot is genuinely free.
+      pokeGoalKickoff();
     }
   }
 

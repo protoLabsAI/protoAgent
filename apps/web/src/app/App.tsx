@@ -100,7 +100,7 @@ import { StatusPill } from "./StatusPill";
 import { WorkPanel } from "./WorkPanel";
 import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
-import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, queryKeys, runtimeStatusQuery } from "../lib/queries";
+import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, refreshGoalsOnEvent, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, useForwardedPaletteNotices, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
@@ -550,10 +550,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // card and the Goals panel subscribe only while open, so a goal set (from `/goal new` in
   // chat, say) while they were closed left a stale cache: opening Work then painted
   // "No active goals" over a goal that was driving, until the refetch landed.
-  // `refetchType: "all"` refetches the query even with no observer mounted.
+  // `refreshGoalsOnEvent` refetches the LIST even with no observer mounted (detail drawers
+  // only while open).
   useEffect(() => {
-    const refresh = () =>
-      void queryClient.invalidateQueries({ queryKey: queryKeys.goals, refetchType: "all" });
+    const refresh = () => refreshGoalsOnEvent(queryClient);
     const offs = ["goal.changed", "goal.iteration", "goal.achieved", "goal.failed"].map((t) =>
       onServerEvent(t, refresh),
     );
