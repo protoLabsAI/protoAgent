@@ -33,7 +33,7 @@ dependencies = [
   # QR library and the pairing URL is assembled in exactly one place. Pure Python; the only
   # hard dep is colorama on Windows (pillow/pypng are extras we do not pull).
   "qrcode>=8",
-  "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
+  "a2a-sdk[http-server,fastapi,sqlite]>=1.2.1",
   # protolabs-a2a is published to PyPI (was a git+https direct ref, which PyPI
   # rejects on upload). 0.3.0+ carries the URI-keyed extension model: the four
   # telemetry extensions ride the metadata map keyed by their extension URI

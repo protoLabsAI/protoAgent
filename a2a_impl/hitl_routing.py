@@ -69,7 +69,7 @@ from typing import Any
 
 from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 from a2a.types.a2a_pb2 import ListTasksRequest
-from a2a.utils.errors import InvalidParamsError
+from a2a.utils.errors import InvalidParamsError, UnsupportedOperationError
 
 from runtime.session_ids import session_id_problem
 
@@ -85,6 +85,14 @@ _TERMINAL = (
     TaskState.TASK_STATE_CANCELED,
     TaskState.TASK_STATE_REJECTED,
 )
+
+# What the SDK (and the executor's backstop) raise when a message reaches a task that has
+# already ENDED. a2a-sdk >= 1.2 refuses terminal-task operations with
+# UnsupportedOperationError (a2aproject/a2a-python#1268, per the A2A spec); 1.1 used
+# InvalidParamsError, which the SDK still raises for other refusals of a named task (a
+# contextId that disagrees with it, #1270). Both reach ``reroute_ended_answer``, which
+# re-routes only when the named task really is terminal (or gone).
+_ENDED_TASK_REFUSALS = (UnsupportedOperationError, InvalidParamsError)
 
 # Metadata key marking a settle message. The executor never runs the graph for a message
 # carrying it (see settle_decision) — a forged one is a no-op, never an answer.
@@ -488,7 +496,7 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
                 task_id = router.claim_task(params.message.task_id)
                 try:
                     result = await send(params, context)
-                except InvalidParamsError:
+                except _ENDED_TASK_REFUSALS:
                     if attempt or not await router.reroute_ended_answer(params, context):
                         raise
                     continue
@@ -514,7 +522,7 @@ def install_parked_task_routing(handler: Any) -> ParkedTaskRouter | None:
                     async for event in send_stream(params, context):
                         yielded = True
                         yield event
-                except InvalidParamsError:
+                except _ENDED_TASK_REFUSALS:
                     if yielded or attempt or not await router.reroute_ended_answer(params, context):
                         raise
                     continue

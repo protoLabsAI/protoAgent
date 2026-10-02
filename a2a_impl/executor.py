@@ -46,7 +46,7 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import Message, Part, Task, TaskState, TaskStatus
-from a2a.utils.errors import InvalidParamsError
+from a2a.utils.errors import InvalidParamsError, UnsupportedOperationError
 from google.protobuf import json_format, struct_pb2
 
 import protolabs_a2a as pa
@@ -545,10 +545,11 @@ class ProtoAgentExecutor(AgentExecutor):
         # A message reaching a task that has already ENDED (a double-submitted answer that
         # queued behind the one that completed it) must not reopen it as a fresh turn — and
         # must not vanish behind a 200 either: refuse it, like the SDK refuses a message
-        # naming a task that had ended before it arrived. (The routing wrapper re-routes a
-        # refused HITL answer to the context's current pause.)
+        # naming a task that had ended before it arrived — with the same error it uses
+        # (UnsupportedOperationError, a2a-sdk >= 1.2 / the A2A spec's terminal-task error).
+        # (The routing wrapper re-routes a refused HITL answer to the context's current pause.)
         if context.current_task is not None and _is_terminal(context.current_task):
-            raise InvalidParamsError(message=f"Task {context.task_id} has already ended")
+            raise UnsupportedOperationError(message=f"Task {context.task_id} has already ended")
         # Backstop only: the entry-point check (hitl_routing.check_context_id, installed on
         # the handler's send methods) refuses an unusable contextId before the SDK creates a
         # task. Reaching here means a handler without that wrapper — the turn is still

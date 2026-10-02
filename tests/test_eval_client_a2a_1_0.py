@@ -120,19 +120,48 @@ async def test_stream_round_trips_against_a2a_1_0(routed_client):
     assert final.text == "hello world"
 
 
+def _ctx_recording_stream(seen: list):
+    """A ``_hello_stream`` that records the contextId (= session id) each turn ran under."""
+
+    async def _stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        seen.append(ctx)
+        async for frame in _hello_stream(text, ctx, resume=resume, caller_trace=caller_trace, **kwargs):
+            yield frame
+
+    return _stream
+
+
 @pytest.mark.asyncio
-async def test_ask_with_context_id_round_trips(routed_client):
-    # contextId is a field of Message in 1.0 — at params level it's a -32602.
-    client, _ = routed_client
-    r = await client.ask("hi", timeout_s=5, context_id="ctx-1")
+async def test_ask_with_context_id_pins_the_session(monkeypatch):
+    """``ask(context_id=…)`` must actually run the turn under that contextId — goal-mode
+    cases set a goal on one turn and trigger it on the next, in the same session. A green
+    round trip alone proves nothing here: a misplaced contextId (params level) is silently
+    ignored by a2a-sdk >= 1.2 and the turn still completes, in a fresh context."""
+    seen: list = []
+    app = _build_app(_ctx_recording_stream(seen))
+    orig = ec.httpx.AsyncClient
+
+    def _patched(*a, **kw):
+        kw["transport"] = httpx.ASGITransport(app=app)
+        kw.setdefault("base_url", "http://test")
+        return orig(*a, **kw)
+
+    monkeypatch.setattr(ec.httpx, "AsyncClient", _patched)
+    r = await ec.AgentClient(base_url="http://test").ask("hi", timeout_s=5, context_id="ctx-1")
     assert r.state == "completed"
     assert r.text == "hello world"
+    assert seen == ["ctx-1"]
 
 
 @pytest.mark.asyncio
-async def test_params_level_context_id_is_rejected(routed_client):
-    """Pins that contextId belongs inside the message, not on the request."""
-    _, app = routed_client
+async def test_params_level_context_id_does_not_pin_the_session():
+    """Pins WHY contextId belongs inside the message: ``SendMessageRequest`` has no
+    contextId field. a2a-sdk 1.1 rejected the unknown field (-32602); since 1.2 the
+    JSON-RPC dispatcher ignores unrecognized request fields for forward compatibility
+    (a2aproject/a2a-python#1273, #3950), so the request succeeds — in a FRESH context.
+    Either way a params-level contextId never selects the session."""
+    seen: list = []
+    app = _build_app(_ctx_recording_stream(seen))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5) as c:
         r = await c.post(
             "/a2a",
@@ -147,7 +176,11 @@ async def test_params_level_context_id_is_rejected(routed_client):
                 },
             },
         )
-    assert r.json().get("error", {}).get("code") == -32602
+    body = r.json()
+    assert "error" not in body, body
+    task = body["result"]["task"]
+    assert task["contextId"] and task["contextId"] != "ctx-1"
+    assert seen == [task["contextId"]]
 
 
 @pytest.mark.asyncio

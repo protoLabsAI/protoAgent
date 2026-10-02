@@ -19,7 +19,7 @@ qrcode>=8
 # top. http-server + fastapi extras pull starlette / sse-starlette for the route
 # builders; the sqlite extra pulls SQLAlchemy + aiosqlite for the durable
 # DatabaseTaskStore / DatabasePushNotificationConfigStore wired in a2a_stores.py.
-a2a-sdk[http-server,fastapi,sqlite]>=1.1
+a2a-sdk[http-server,fastapi,sqlite]>=1.2.1
 # protoLabs fleet A2A conventions — the four custom extensions (cost /
 # confidence / worldstate-delta / tool-call), agent-card builder, and auth
 # schemes that keep every fleet agent interoperable byte-for-byte. Consumed from

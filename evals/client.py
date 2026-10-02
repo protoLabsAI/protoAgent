@@ -160,8 +160,8 @@ class AgentClient:
             "messageId": mid,
         }
         # contextId is a field of Message in 1.0 — SendMessageRequest itself only
-        # has {tenant, message, configuration, metadata}, so putting it at params
-        # level is a -32602.
+        # has {tenant, message, configuration, metadata}. At params level a2a-sdk
+        # >= 1.2 silently ignores it (an unknown field) and runs a fresh context.
         if context_id is not None:
             message["contextId"] = context_id
         payload = {
