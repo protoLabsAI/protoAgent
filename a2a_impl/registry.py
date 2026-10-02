@@ -30,7 +30,10 @@ This intentionally reaches into a2a-sdk private attributes (``_producer_task``,
 supplies only the ``AgentExecutor``, and the producer task is created inside
 ``ActiveTask.start()``. Every access is guarded so an SDK upgrade that moves the
 internals degrades to a logged warning + stock behavior, never a crash. Re-verify (and
-ideally delete this module) when bumping past a2a-sdk 1.1.0 — see the upstream issues.
+ideally delete this module) on each a2a-sdk bump — see the upstream issues. Re-verified
+at 1.2.1 (#3950): the producer's ``finally`` still parks on
+``_event_queue_subscribers.close(immediate=False)`` and the stock cleanup still only
+schedules ``_remove_task``, so the hardening stays.
 """
 
 from __future__ import annotations
@@ -152,6 +155,11 @@ def harden_active_task_registry(handler: object) -> bool:
             agent_executor=current._agent_executor,
             task_store=current._task_store,
             push_sender=current._push_sender,
+            # a2a-sdk >= 1.2 (cluster mode): the stock registry holds the handler's
+            # VersionedTaskStore view (a LegacyTaskStoreAdapter around a plain store) and
+            # the optional cross-replica event stream. Carry both over unchanged — the
+            # _task_store above is already that adapter, not handler.task_store.
+            event_stream=current._event_stream,
         )
     except Exception:
         log.warning(

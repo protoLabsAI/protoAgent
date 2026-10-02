@@ -1324,10 +1324,18 @@ async def test_harden_swaps_registry_preserving_wiring():
     handler = app.state.a2a_handler
     reg = handler._active_task_registry
     assert isinstance(reg, OwnedProducerActiveTaskRegistry)
-    # Same executor/store the stock registry was built with — only the cleanup
-    # behavior changes.
+    # Same executor/store/stream the stock registry was built with — only the
+    # cleanup behavior changes. Since a2a-sdk 1.2 (#3950) the handler hands its
+    # registry a VersionedTaskStore view (_versioned_store: a LegacyTaskStoreAdapter
+    # around the plain handler.task_store), plus the optional cluster event stream.
+    from a2a.server.cluster.task_store import LegacyTaskStoreAdapter
+
     assert reg._agent_executor is handler.agent_executor
-    assert reg._task_store is handler.task_store
+    assert reg._task_store is handler._versioned_store
+    assert isinstance(reg._task_store, LegacyTaskStoreAdapter)
+    assert reg._task_store.store is handler.task_store
+    assert reg._push_sender is handler._push_sender
+    assert reg._event_stream is handler._event_stream
 
 
 def test_harden_degrades_gracefully_on_moved_internals():

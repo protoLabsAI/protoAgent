@@ -66,7 +66,7 @@ The practical consequence: **you cannot detect a version problem with a malforme
 
 **3. Parts are untyped, roles and states are enum-spelled.** 0.3's `{"kind": "text", "text": "…"}` becomes `{"text": "…"}`. `"role": "user"` becomes `"role": "ROLE_USER"`. Task states are `TASK_STATE_COMPLETED`, not `"completed"`. The template's `tools/a2a_parse.py::_is_terminal` accepts both spellings so a fork can talk to mixed-version peers.
 
-One more sharp edge: **`contextId` lives inside the message, not on `params`.** Putting it at params level is a `-32602 Invalid params` (pinned by `test_params_level_context_id_is_rejected`).
+One more sharp edge: **`contextId` lives inside the message, not on `params`.** Since a2a-sdk 1.2 the server ignores unknown request fields (forward compatibility), so a params-level `contextId` is *silently dropped*: the turn runs in a fresh context, with no error (pinned by `test_params_level_context_id_does_not_pin_the_session`). 1.1 rejected it with `-32602`.
 
 ## SSE frames are a oneof, not a `kind` discriminator
 

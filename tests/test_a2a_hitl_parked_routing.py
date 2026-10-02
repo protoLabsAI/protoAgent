@@ -462,8 +462,11 @@ async def test_a_settle_never_completes_a_task_an_answer_is_headed_to():
 @pytest.mark.asyncio
 async def test_a_message_to_an_ended_task_is_not_silently_accepted():
     """A plain message naming a task that already ended is refused, not swallowed behind
-    a 200; a HITL answer naming one is re-routed to the context's current pause."""
-    from a2a.utils.errors import InvalidParamsError
+    a 200; a HITL answer naming one is re-routed to the context's current pause.
+
+    The refusal is UnsupportedOperationError (JSON-RPC -32004): a2a-sdk >= 1.2 rejects
+    terminal-task operations with it, per the A2A spec (a2a-python#1268, #3950)."""
+    from a2a.utils.errors import UnsupportedOperationError
 
     calls: list = []
     handler, router = _handler(_form_stream(calls))
@@ -472,12 +475,41 @@ async def test_a_message_to_an_ended_task_is_not_silently_accepted():
     assert done.status.state == TaskState.TASK_STATE_COMPLETED
     await router.drain()
 
-    with pytest.raises(InvalidParamsError):
+    with pytest.raises(UnsupportedOperationError):
         await handler.on_message_send(_msg("hello?", mid="m3", task_id=p1.id), CALL)
     assert "hello?" not in [c["text"] for c in calls]
 
     p2 = await handler.on_message_send(_msg("ask again", mid="m4"), CALL)
     answer = await handler.on_message_send(_msg("mango", mid="m5", task_id=p1.id, hitl_resume=True), CALL)
     await router.drain()
+    assert answer.id == p2.id and answer.status.state == TaskState.TASK_STATE_COMPLETED
+    assert {"text": "mango", "resume": True} in calls
+
+
+@pytest.mark.asyncio
+async def test_an_answer_whose_task_ends_after_routing_is_rerouted(monkeypatch):
+    """The named task ends between the routing check and the SDK (the race the retry in
+    install_parked_task_routing exists for): the SDK refuses the ended task and the answer
+    is re-routed to the context's current pause — whichever error the refusal carries
+    (UnsupportedOperationError since a2a-sdk 1.2, #3950; InvalidParamsError before)."""
+    calls: list = []
+    handler, router = _handler(_form_stream(calls))
+    p1 = await handler.on_message_send(_msg("ask", mid="m1"), CALL)
+    await handler.on_message_send(_msg("kiwi", mid="m2", task_id=p1.id, hitl_resume=True), CALL)
+    await router.drain()
+    p2 = await handler.on_message_send(_msg("ask again", mid="m3"), CALL)
+
+    real_route = router.route
+    routed: list = []
+
+    async def _racy_route(params, context):
+        routed.append(params.message.task_id)
+        if len(routed) > 1:  # the first check saw p1 still paused; the retry routes for real
+            await real_route(params, context)
+
+    monkeypatch.setattr(router, "route", _racy_route)
+    answer = await handler.on_message_send(_msg("mango", mid="m4", task_id=p1.id, hitl_resume=True), CALL)
+    await router.drain()
+    assert routed[0] == p1.id and len(routed) == 2
     assert answer.id == p2.id and answer.status.state == TaskState.TASK_STATE_COMPLETED
     assert {"text": "mango", "resume": True} in calls
