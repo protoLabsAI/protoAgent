@@ -70,7 +70,9 @@ class PluginManifest:
     #   config_section: the top-level YAML section the plugin claims (default: id)
     #   config:    defaults for that section (key → default value)
     #   secrets:   keys in the section routed to the secrets.yaml overlay
-    #   settings:  Settings-schema field specs ({key, label, type, ...})
+    #   settings:  Settings-schema field specs ({key, label, type, ...}); ``spawns: true``
+    #              marks one that names a program the plugin runs, which the agent's
+    #              set_config tool then refuses to write (ADR 0019 §3b)
     config_section: str = ""
     config: dict = field(default_factory=dict)
     secrets: list[str] = field(default_factory=list)

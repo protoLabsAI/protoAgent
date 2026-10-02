@@ -987,9 +987,19 @@ do rather than how it behaves:
 | `soul` | persona has its own guarded path (`edit_soul`) |
 | `tools` | including `self_config_enabled` itself — no widening its own fence |
 
-A key whose leaf name is `command`, `args`, `argv`, `executable`, `binary`, `cmd`, `entrypoint`,
-or `interpreter` is refused in **any** section, including plugin ones — those can't be enumerated
-in advance, and any plugin may grow a key naming a binary. The line is that an agent may *choose*
+Plugin sections can't be enumerated in advance, and any plugin may grow a key naming a binary,
+so below the section the fence refuses a key that **names a program to run**, in any section:
+
+- a key segment that *is*, or has as a `_`/`-`/camelCase token, one of `command`, `cmd`, `args`,
+  `argv`, `binary`, `bin`, `exe`, `executable`, `interpreter`, `entrypoint` —
+  `coder.command`, `local_gate_cmd`, `rh_bin`, `binary_path`, `browserArgs`;
+- a plugin setting its manifest marks [`spawns: true`](/adr/0019-plugin-config-settings-secrets) — for names the rule
+  above can't see, like `ffmpeg_path`. Read from every *installed* plugin, enabled or not; if
+  that lookup fails, plugin-section writes are refused rather than guessed at.
+
+Nested values are checked too: `{"some_plugin": {"command": …}}` is the same write as
+`{"some_plugin.command": …}`. `*_path` keys in general are **not** refused — most name data
+(`brand_kit_path`), which is the agent's to repoint. The line is that an agent may *choose*
 among the executables its operator provisioned (`project_board.coder: proto`) but never *define*
 one.
 

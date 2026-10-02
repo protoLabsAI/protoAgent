@@ -31,7 +31,7 @@ See [Plugins](/guides/plugins) for how to use these fields, and
 | [`config_section`](#field-config-section) | `str` | `''` | the top-level YAML section the plugin claims (default: id) |
 | [`config`](#field-config) | `dict` | `{}` | defaults for that section (key → default value) |
 | [`secrets`](#field-secrets) | `list[str]` | `[]` | keys in the section routed to the secrets.yaml overlay |
-| [`settings`](#field-settings) | `list[dict]` | `[]` | Settings-schema field specs ({key, label, type, ...}) |
+| [`settings`](#field-settings) | `list[dict]` | `[]` | Settings-schema field specs ({key, label, type, ...}); `spawns: true` marks one that names a program the plugin runs, which the agent's set_config tool then refuses to write ([ADR… |
 | [`settings_tabs`](#field-settings-tabs) | `list[dict]` | `[]` | Ordered Configure-dialog tabs ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)/#3180) |
 | [`test`](#field-test) | `bool` | `False` | Test action ([ADR 0029](/adr/0029-communication-plugins-standard)) — when true, the plugin serves a credential check at `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts… |
 | [`guide_url`](#field-guide-url) | `str` | `''` | Optional setup-guide URL ([ADR 0059](/adr/0059-unified-plugin-manager)) — the console renders a generic "Setup guide" link next to the plugin's settings, so no per-plugin frontend is needed |
@@ -129,7 +129,7 @@ keys in the section routed to the secrets.yaml overlay
 
 - **Type** `list[dict]` · **Default** `[]`
 
-Settings-schema field specs ({key, label, type, ...})
+Settings-schema field specs ({key, label, type, ...}); `spawns: true` marks one that names a program the plugin runs, which the agent's set_config tool then refuses to write ([ADR 0019](/adr/0019-plugin-config-settings-secrets) §3b)
 
 ### `settings_tabs` {#field-settings-tabs}
 

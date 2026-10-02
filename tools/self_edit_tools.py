@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from typing import Annotated, Any
 
 from langchain_core.tools import tool
@@ -434,12 +435,87 @@ _CONFIG_WRITE_DENIED = (
 
 # Section denial can't be the whole story: plugin config sections are named after their
 # plugin, so the fence can't enumerate them, and any plugin is free to grow a key naming a
-# binary. Denying these leaf names everywhere catches that class without having to predict
-# which plugin does it — an agent may CHOOSE among the executables its operator provisioned
-# (`project_board.coder: proto`) but never DEFINE one.
+# binary. So below the section the fence works on NAMES, in three layers:
+#
+# 1. a key segment that IS one of these words (``coder.command``);
+# 2. a key segment with one of these words as a ``_``/``-``/camelCase TOKEN
+#    (``local_gate_cmd``, ``proxy_command``, ``rh_bin``, ``binary_path``, ``browserArgs``),
+#    which catches the conventional spellings without a list of every plugin's keys; and
+# 3. a plugin setting its manifest marks ``spawns: true`` — for the names convention can't
+#    see (``ffmpeg_path``). The marker is read from EVERY installed plugin, enabled or not,
+#    so a value can't be planted while the plugin is off and spawned once the operator
+#    turns it on; if discovery fails, plugin-section writes are refused (fail closed).
+#
+# A blanket ``*_path`` rule was considered and rejected: most ``*_path`` settings name DATA
+# (``brand_kit_path`` in two plugins), which an agent should keep being able to repoint. An
+# agent may CHOOSE among the executables its operator provisioned
+# (``project_board.coder: proto``) but never DEFINE one.
 _CONFIG_WRITE_DENIED_LEAVES = frozenset(
-    {"args", "argv", "binary", "cmd", "command", "entrypoint", "executable", "interpreter"}
+    {"args", "argv", "bin", "binary", "cmd", "command", "entrypoint", "exe", "executable", "interpreter"}
 )
+
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9]+")
+_MAX_WRITE_DEPTH = 32
+
+
+def _key_tokens(segment: str) -> set[str]:
+    """``localGate_CMD`` → ``{"local", "gate", "cmd"}`` — the words a key segment is built from."""
+    return {t for t in _TOKEN_SPLIT.split(_CAMEL_BOUNDARY.sub(r"\1_\2", segment).lower()) if t}
+
+
+def _write_paths(updates: dict) -> list[str]:
+    """Every dotted path a write would touch — including keys hidden INSIDE a dict or list
+    value. ``{"campaign": {"ffmpeg_path": "/bin/sh"}}`` writes ``campaign.ffmpeg_path`` just
+    as surely as the flat spelling does (``nest_updates`` keeps the dict), so the fence has
+    to see through it or the nested spelling is a bypass. A payload nested past
+    ``_MAX_WRITE_DEPTH`` yields a ``<too-deep>`` marker the caller refuses."""
+    out: list[str] = []
+
+    def walk(prefix: str, value: Any, depth: int) -> None:
+        out.append(prefix)
+        if depth > _MAX_WRITE_DEPTH:
+            out.append(f"{prefix}.<too-deep>")
+            return
+        if isinstance(value, dict):
+            for k, v in value.items():
+                walk(f"{prefix}.{str(k).strip()}", v, depth + 1)
+        elif isinstance(value, (list, tuple)):
+            for i, v in enumerate(value):
+                if isinstance(v, (dict, list, tuple)):
+                    walk(f"{prefix}.{i}", v, depth + 1)
+
+    for key, value in updates.items():
+        walk(".".join(part.strip() for part in str(key).split(".")), value, 0)
+    return out
+
+
+def _names_a_program(path: str) -> bool:
+    """True when any segment BELOW the section names a program to run (layers 1 + 2)."""
+    for segment in path.split(".")[1:]:
+        if segment.lower() in _CONFIG_WRITE_DENIED_LEAVES or _key_tokens(segment) & _CONFIG_WRITE_DENIED_LEAVES:
+            return True
+    return False
+
+
+def _core_sections() -> set[str]:
+    """Top-level sections core itself owns — writes there never need plugin discovery."""
+    from graph.settings_schema import FIELDS, SETTINGS_EXEMPT_SECTIONS
+
+    return {f.key.split(".", 1)[0] for f in FIELDS} | set(SETTINGS_EXEMPT_SECTIONS)
+
+
+def _spawn_marked_keys() -> set[str]:
+    """``<section>.<key>`` (lowercased) for every plugin setting marked ``spawns: true``,
+    across every INSTALLED plugin. Raises when discovery fails — the caller fails closed."""
+    from graph.plugins.pconfig import installed_plugin_config_schemas
+
+    marked: set[str] = set()
+    for sch in installed_plugin_config_schemas(strict=True):
+        for spec in sch.settings or []:
+            if isinstance(spec, dict) and spec.get("key") and spec.get("spawns"):
+                marked.add(f"{sch.section}.{spec['key']}".lower())
+    return marked
 
 
 def _config_write_refusal(updates: dict) -> str | None:
@@ -447,9 +523,12 @@ def _config_write_refusal(updates: dict) -> str | None:
 
     Checks the TOP-LEVEL section of each dotted key. Deliberately coarse: a denied section
     is denied entirely, because "which sub-key of `filesystem` is safe" is exactly the
-    judgement call that shouldn't live in a tool the agent can call.
+    judgement call that shouldn't live in a tool the agent can call. Below the section,
+    every path the write touches — nested values included — is checked for a name that
+    defines a program to run.
     """
-    denied = sorted({k.split(".", 1)[0] for k in updates if k.split(".", 1)[0] in _CONFIG_WRITE_DENIED})
+    paths = _write_paths(updates)
+    denied = sorted({p.split(".", 1)[0] for p in paths if p.split(".", 1)[0] in _CONFIG_WRITE_DENIED})
     if denied:
         return (
             f"Refused: {', '.join(denied)} is outside what you may change. Those settings decide what "
@@ -457,10 +536,37 @@ def _config_write_refusal(updates: dict) -> str | None:
             f"you, the executables that get spawned, operator credentials) — only your operator can "
             f"change them, from Settings. Everything else (models, routing, plugin behavior) is yours."
         )
-    executable = sorted({k for k in updates if k.rsplit(".", 1)[-1].lower() in _CONFIG_WRITE_DENIED_LEAVES})
+    executable = {p for p in paths if p.endswith(".<too-deep>") or _names_a_program(p)}
+
+    # Layer 3, the manifest marker. Only a plugin section can carry one, so a pure core
+    # write never pays for discovery.
+    try:
+        core = _core_sections()
+    except Exception:  # noqa: BLE001 — schema unavailable: treat every section as a plugin's
+        core = set()
+    plugin_paths = [p for p in paths if p.split(".", 1)[0] not in core]
+    if plugin_paths and not executable:
+        try:
+            marked = _spawn_marked_keys()
+        except Exception:  # noqa: BLE001 — can't tell which settings spawn: refuse, don't guess
+            log.warning("[set_config] plugin settings discovery failed; refusing the plugin-section write", exc_info=True)
+            sections = ", ".join(sorted({p.split(".", 1)[0] for p in plugin_paths}))
+            return (
+                f"Refused: couldn't verify which {sections} settings name a program to run, so "
+                f"nothing was applied. Try again, or ask your operator to make the change."
+            )
+        for p in plugin_paths:
+            low = p.lower()
+            if any(low == m or low.startswith(m + ".") for m in marked):
+                executable.add(p)
+
     if executable:
+        # Name the keys as the agent wrote them, not every nested path under them.
+        shown = sorted(
+            {k for k in updates if any(p == k or p.startswith(f"{k}.") for p in executable)} or executable
+        )
         return (
-            f"Refused: {', '.join(executable)} names a program to run. You may choose among the "
+            f"Refused: {', '.join(shown)} names a program to run. You may choose among the "
             f"executables your operator has already provisioned (e.g. a coder by name), but defining "
             f"one is theirs to do."
         )
@@ -514,7 +620,7 @@ def _build_config_editor_tool() -> list:
         try:
             from graph.settings_schema import _SECRET_KEYS
 
-            secrets = sorted(k for k in flat if k in _SECRET_KEYS)
+            secrets = sorted(p for p in _write_paths(flat) if p in _SECRET_KEYS)  # nested values too
         except Exception:  # noqa: BLE001 — schema unavailable (standalone/tests): fall through
             secrets = []
         if secrets:

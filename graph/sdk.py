@@ -1539,3 +1539,45 @@ def record_delegation(
         cost_usd=cost_usd,
         origin=origin,
     )
+
+
+# ── managed Python runtime (ADR 0094 — the provisioned child interpreter) ─────────────
+# A plugin that spawns Python of its own (a helper script, a Playwright install) needs the
+# SAME interpreter `execute_code` spawns: on the packaged desktop app `sys.executable` is
+# the frozen server binary, not a Python. Plugins were importing `infra.python_runtime`
+# for it — an internal with no compatibility promise. This is the seam.
+
+
+def managed_python_exe() -> Path | None:
+    """The managed Python runtime's interpreter, or None when it isn't provisioned.
+
+    This is the interpreter ``execute_code`` spawns on the packaged desktop app, where
+    ``sys.executable`` is the frozen server binary and cannot run a script. It is a
+    pinned CPython the host downloads on demand into the box-shared data dir
+    (``runtime.python_install``), shared by every instance on the machine.
+
+    Returns the interpreter's :class:`~pathlib.Path` only when a *working* install is
+    present — the executable actually exists — so a half-extracted, wiped or
+    never-provisioned runtime reads as None rather than as a path that fails to spawn.
+    On None, a source run can fall back to ``sys.executable`` (what ``execute_code``
+    itself does); a frozen one should tell the operator to provision the managed Python
+    runtime rather than guess at a system Python of arbitrary version.
+
+    Cheap (one ``stat``), never spawns, never raises.
+
+    ```python
+    import sys
+    from graph import sdk
+
+    exe = sdk.managed_python_exe()
+    if exe is None and not getattr(sys, "frozen", False):
+        exe = Path(sys.executable)  # source run: this process's own interpreter
+    ```
+    """
+    try:
+        from infra.python_runtime import managed_python_exe as _exe
+
+        return _exe()
+    except Exception:  # noqa: BLE001 — a lookup failure reads as "not provisioned"
+        log.debug("[sdk] managed_python_exe lookup failed", exc_info=True)
+        return None
