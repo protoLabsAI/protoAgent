@@ -187,6 +187,40 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
     ]);
   });
 
+  it("completes a lead run cut off MID-PARAGRAPH in place — never splits a word across the tool card", () => {
+    // [reasoning, "Let me check the con", tools] + "Let me check the config.\n\nAll good.": the
+    // shown run was cut off before the tool frame. "fig." continues it (no paragraph break), so
+    // it completes the run ABOVE the tools; only the text after the break lands below.
+    const p: ChatPart[] = [
+      { kind: "reasoning", text: "think" },
+      { kind: "text", text: "Let me check the con" },
+      { kind: "tools", ids: ["t1"] },
+    ];
+    expect(replaceText(p, "Let me check the config.\n\nAll good.")).toEqual([
+      { kind: "reasoning", text: "think" },
+      { kind: "text", text: "Let me check the config." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "All good." },
+    ]);
+  });
+
+  it("completes a cut-off run in place even when nothing follows the break", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Let me check " }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Let me check the config.")).toEqual([
+      { kind: "text", text: "Let me check the config." },
+      { kind: "tools", ids: ["t1"] },
+    ]);
+  });
+
+  it("a tail opening with a paragraph break is NEW text — it lands below the tools", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Let me check." }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Let me check.\n\nAll good.\n\nMore.")).toEqual([
+      { kind: "text", text: "Let me check." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "All good.\n\nMore." },
+    ]);
+  });
+
   it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {
     expect(replaceText(undefined, "full answer")).toEqual([{ kind: "text", text: "full answer" }]);
   });

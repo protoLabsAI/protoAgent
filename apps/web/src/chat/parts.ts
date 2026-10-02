@@ -78,7 +78,8 @@ export function rendersText(runs: string[], canonical: string): boolean {
  *  keep them untouched, preserving the text↔tool interleaving. When they render a PREFIX of
  *  it (the terminal frame carries text whose deltas never streamed — e.g. a reattached turn
  *  that only saw the pre-tool preamble), extend: the missing tail lands after what is
- *  already shown, and the shown text stays where it is. Visible text is never moved or
+ *  already shown, and the shown text stays where it is — a run cut off mid-paragraph is
+ *  completed in place rather than split across the tool card after it. Visible text is never moved or
  *  yanked to make room for text it already matches. Only on a real divergence (frames
  *  lost/duplicated en route) do we rebuild — drop every prior text run and land the
  *  canonical text as one trailing run. That trades the (already unreliable) interleaving
@@ -94,8 +95,28 @@ export function replaceText(parts: ChatPart[] | undefined, text: string): ChatPa
   if (end >= 0) {
     const rest = text.slice(end);
     if (!rest.trim()) return next;
-    // The open run matched only up to its trimmed body; its trailing whitespace (if any) is
-    // re-supplied verbatim by `rest`, so drop it before extending.
+    // Where does the missing tail attach? If it opens with a paragraph break, the shown text
+    // ended at a boundary and the tail is new text: it lands after everything already shown.
+    // Otherwise the tail CONTINUES the last shown run mid-paragraph ("…check the con" +
+    // "fig.") — that run was cut off, and splitting it across whatever followed it (a tool
+    // card) would render half a word above the card and half below. So the continuation up
+    // to the next paragraph break completes that run IN PLACE, and only what follows the
+    // break lands at the end.
+    const lastTextAt = next.map((p) => p.kind).lastIndexOf("text");
+    const continues = lastTextAt >= 0 && !/^\s*\n\s*\n/.test(rest);
+    let head = rest;
+    let tail = "";
+    if (continues && lastTextAt !== next.length - 1) {
+      const brk = rest.search(/\n\s*\n/);
+      if (brk >= 0) [head, tail] = [rest.slice(0, brk), rest.slice(brk)];
+    }
+    if (continues) {
+      // The run matched only up to its trimmed body; its trailing whitespace (if any) is
+      // re-supplied verbatim by `rest`, so drop it before extending.
+      const run = next[lastTextAt] as Extract<ChatPart, { kind: "text" }>;
+      next[lastTextAt] = { kind: "text", text: run.text.trimEnd() + head };
+      return tail.trim() ? appendText(next, tail, true) : next;
+    }
     const last = next[next.length - 1];
     if (last?.kind === "text") next[next.length - 1] = { kind: "text", text: last.text.trimEnd() };
     return appendText(next, rest, true);

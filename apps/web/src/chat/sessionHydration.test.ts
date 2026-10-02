@@ -20,6 +20,7 @@ import {
 } from "./sessionHydration";
 import { MAX_SESSIONS } from "./chat-store";
 import { applyText, applyToolEvent } from "./turnReducers";
+import { foldPlan, textRuns } from "./parts";
 import { applyCanonicalTurnText } from "./turnText";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
@@ -1313,5 +1314,82 @@ describe("parked sessions survive the hydration cap (#3957)", () => {
     expect(ids).toContain("chat-parked");
     expect(ids).toContain("chat-newer-2");
     expect(ids).not.toContain("chat-newer-0");
+  });
+});
+
+// A re-hydrated turn renders the same as the live one (parts.ts foldPlan's lead): text that
+// streamed before the first tool comes back ABOVE it. The durable artifact flattens the
+// answer, so the work frames carry the offset they streamed at (a2a_impl TEXT_OFFSET_META)
+// and the replay slices the text back into stream order.
+describe("durable replay keeps stream order — the pre-tool sentence stays the lead", () => {
+  const OFFSET = "protoagent/textOffset";
+  const SENTENCE = "I am protoAgent 👋, a desktop agent.";
+  const ANSWER = `${SENTENCE}\n\nDone — noted.`;
+  const at = SENTENCE.length; // JS string length — UTF-16 units, emoji counts twice
+  const history = (withOffsets: boolean) => [
+    { role: "ROLE_USER", parts: [{ text: "Say hi, then note it." }] },
+    {
+      role: "ROLE_AGENT",
+      parts: [{ data: { text: "plan" }, metadata: { mimeType: REASONING } }],
+      ...(withOffsets ? { metadata: { [OFFSET]: 0 } } : {}),
+    },
+    {
+      role: "ROLE_AGENT",
+      metadata: { [TOOL]: { toolCallId: "n1", name: "append_note", phase: "started", args: "{}" }, ...(withOffsets ? { [OFFSET]: at } : {}) },
+    },
+    {
+      role: "ROLE_AGENT",
+      metadata: { [TOOL]: { toolCallId: "n1", name: "append_note", phase: "completed", result: "ok" }, ...(withOffsets ? { [OFFSET]: at } : {}) },
+    },
+  ];
+
+  it("a settled reload: [reasoning, sentence, tools, answer] — the sentence leads, nothing doubled", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(true) }),
+    );
+    expect(assistant.parts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+      { kind: "tools", ids: ["n1"] },
+      { kind: "text", text: "Done — noted." },
+    ]);
+    expect(foldPlan(assistant.parts!, false).leadParts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+    ]);
+  });
+
+  it("a turn still WORKING (mid-turn reload): the sentence leads while the tool runs", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({
+        state: "TASK_STATE_WORKING",
+        status: { state: "TASK_STATE_WORKING" },
+        text: SENTENCE,
+        artifacts: [{ parts: [{ text: SENTENCE }] }],
+        history: history(true).slice(0, 3),
+      }),
+    );
+    expect(assistant.status).toBe("streaming");
+    expect(foldPlan(assistant.parts!, true)).toMatchObject({
+      fold: true,
+      leadParts: [{ kind: "reasoning", text: "plan" }, { kind: "text", text: SENTENCE }],
+    });
+  });
+
+  it("a turn recorded before the offsets existed keeps the old order (frames, then text)", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(false) }),
+    );
+    expect(assistant.parts?.map((p) => p.kind)).toEqual(["reasoning", "tools", "text"]);
+  });
+
+  it("an offset past the artifact (a rewritten final text) is ignored — the answer lands once", () => {
+    const h = history(true);
+    (h[2].metadata as Record<string, unknown>)[OFFSET] = 9999;
+    (h[3].metadata as Record<string, unknown>)[OFFSET] = 9999;
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: h }),
+    );
+    expect(textRuns(assistant.parts).join("")).toBe(ANSWER);
   });
 });

@@ -98,6 +98,19 @@ GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json"
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
 from graph.components import COMPONENT_MIME  # noqa: E402
 
+# Where a work frame (tool call, reasoning run, component) fell in the turn's answer text,
+# stamped on its status MESSAGE metadata: the length of the text streamed before it. The
+# durable task keeps answer text as ONE flattened artifact and the work frames in
+# `history`, so without this a reattach / reload can't tell which text preceded which tool
+# and replays every frame first, the text after — folding a pre-tool sentence the live view
+# showed above the tool into the "Working…" block. Counted in UTF-16 code units, the
+# console's string indexing, so an emoji before a tool doesn't shift the split.
+TEXT_OFFSET_META = "protoagent/textOffset"
+
+
+def _text_offset_meta(accumulated: str) -> dict[str, int]:
+    return {TEXT_OFFSET_META: len(accumulated.encode("utf-16-le")) // 2}
+
 
 class TurnStalled(RuntimeError):
     """The agent stream produced no event for the whole stall window.
@@ -723,7 +736,10 @@ class ProtoAgentExecutor(AgentExecutor):
             _reasoning_flushed_at = time.monotonic()
             await updater.update_status(
                 TaskState.TASK_STATE_WORKING,
-                message=updater.new_agent_message([_data_part_proto({"text": payload_text}, REASONING_MIME)]),
+                message=updater.new_agent_message(
+                    [_data_part_proto({"text": payload_text}, REASONING_MIME)],
+                    metadata=_text_offset_meta(accumulated),
+                ),
             )
 
         async def _flush_text() -> None:
@@ -942,6 +958,8 @@ class ProtoAgentExecutor(AgentExecutor):
                             if end_name and isinstance(duration_ms, int) and duration_ms > 0:
                                 tool_durations.setdefault(end_name, []).append(duration_ms)
                     part, tc_meta = _tool_call_frame(event_type, payload)
+                    if tc_meta is not None:
+                        tc_meta = {**tc_meta, **_text_offset_meta(accumulated)}
                     if part is not None or tc_meta is not None:
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
@@ -1035,7 +1053,9 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
-                            message=updater.new_agent_message([_data_part_proto(payload, COMPONENT_MIME)]),
+                            message=updater.new_agent_message(
+                                [_data_part_proto(payload, COMPONENT_MIME)], metadata=_text_offset_meta(accumulated)
+                            ),
                         )
 
                 elif event_type == "reasoning":

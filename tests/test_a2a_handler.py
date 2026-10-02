@@ -1556,3 +1556,44 @@ def test_task_id_from_response_reads_both_wire_shapes():
     assert task_id_from_response(None) == ""
     assert task_id_from_response("not a dict") == ""
 
+
+
+@pytest.mark.asyncio
+async def test_work_frames_carry_the_text_offset_they_streamed_at(tmp_path):
+    """Durable history keeps the answer as ONE flattened artifact and the work frames
+    separately, so each work frame (reasoning run, tool call) is stamped with the length
+    of the answer text streamed before it (TEXT_OFFSET_META). That is what lets a
+    reattach / reload replay a pre-tool sentence ABOVE the tool, as the live turn drew it,
+    instead of folding it into the "Working…" block. Coalescing keeps the run head's
+    stamp; the offset counts UTF-16 code units (the console's string indexing)."""
+    from a2a_impl.executor import TEXT_OFFSET_META
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+
+    sentence = "I am protoAgent 👋, a desktop agent."
+    answer = f"{sentence}\n\nDone — noted."
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("reasoning", "The operator wants a sentence ")
+        yield ("reasoning", "and then a note.")
+        yield ("text", sentence)
+        yield ("tool_start", {"id": "n1", "name": "append_note", "input": '{"text": "hi"}'})
+        yield ("tool_end", {"id": "n1", "name": "append_note", "output": "ok"})
+        yield ("text", "\n\nDone — noted.")
+        yield ("done", answer)
+
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(str(tmp_path / "a2a-tasks.db")))
+    await store.initialize()
+    app = _build_app(stream, task_store=store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    history = final.get("history") or []
+    utf16 = len(sentence.encode("utf-16-le")) // 2
+    assert utf16 == len(sentence) + 1  # the emoji is a surrogate pair — two JS code units
+    reasoning = [m for m in history if _reasoning_texts_from_history([m])]
+    assert len(reasoning) == 1 and reasoning[0]["metadata"][TEXT_OFFSET_META] == 0
+    tools = [m for m in history if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
+    assert [m["metadata"][TEXT_OFFSET_META] for m in tools] == [utf16, utf16]
+    assert final["artifacts"][0]["parts"][0]["text"] == answer

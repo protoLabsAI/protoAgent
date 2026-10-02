@@ -17,6 +17,8 @@ import { landResumedTurn } from "../app/ChatResumeWatch";
 import { resumedTurnRender, settleResumedTurn } from "../app/resumedTurn";
 import { applyProgressFrame } from "../app/serverTurnProgress";
 import { api } from "../lib/api";
+import { makeA2ADispatcher } from "../lib/api/a2aStream";
+import { foldPlan } from "./parts";
 import { chatStore } from "./chat-store";
 import { reattachKeyForMessages, reattachOrReconcile, reattachTurn, settleAnsweredPause } from "./reattach";
 import { liveMessageId } from "./server-turn-store";
@@ -984,7 +986,9 @@ describe("reattach: a completed multi-part turn replays its trailing text", () =
     // answer re-sends it. It must appear exactly once — and, being already on screen, stay
     // where it is (above the tools), with only the unstreamed tail landing after them.
     const preamble = "Deploying now. ";
-    const full = `${preamble}${ANSWER}`;
+    // The server opens each model call after a tool with a paragraph break
+    // (server/turn_stream.py), so the post-tool answer is NEW text below the tools.
+    const full = `${preamble.trim()}\n\n${ANSWER}`;
     const sessionId = seedStuckMultiPartSession(preamble);
     resumeTask.mockResolvedValue(undefined);
     getTask.mockResolvedValue({ state: "TASK_STATE_COMPLETED", text: full });
@@ -997,6 +1001,24 @@ describe("reattach: a completed multi-part turn replays its trailing text", () =
     expect(textParts.map((p) => (p.kind === "text" ? p.text : ""))).toEqual([preamble, ANSWER]);
     expect(parts[0]).toEqual({ kind: "text", text: preamble });
     expect(trailingText(sessionId)).toBe(ANSWER);
+  });
+
+  it("a preamble cut off mid-paragraph is completed IN PLACE above the tools — never split across them", async () => {
+    // Only "Deploying no" streamed before the tool; the canonical text continues the same
+    // paragraph. Completing the run above the card beats "…no" above it and "w. …" below.
+    const sessionId = seedStuckMultiPartSession("Deploying no");
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "TASK_STATE_COMPLETED", text: `Deploying now.\n\n${ANSWER}` });
+
+    attach(sessionId);
+    await settle();
+
+    const parts = assistantMessage(sessionId)?.parts ?? [];
+    expect(parts).toEqual([
+      { kind: "text", text: "Deploying now." },
+      { kind: "tools", ids: ["c1"] },
+      { kind: "text", text: ANSWER },
+    ]);
   });
 
 });
@@ -1082,5 +1104,59 @@ describe("reattach: a paused settle renders the bubble as waiting (#3946)", () =
     await settle();
 
     expect(assistantMessage(sessionId)?.paused).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reattach MID-TURN keeps stream order: the pre-tool sentence stays the lead
+// ---------------------------------------------------------------------------
+
+describe("reattach: a mid-turn snapshot replays text in stream order", () => {
+  it("the sentence that streamed before the running tool comes back ABOVE it, not folded into Working…", async () => {
+    const SENTENCE = "I am protoAgent, a desktop agent.";
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(async (_taskId, sid, handlers) => {
+      // The REAL snapshot replay (a2aStream replayTaskSnapshot) into reattach's handlers.
+      makeA2ADispatcher(sid, handlers ?? {})({
+        result: {
+          task: {
+            id: TASK_ID,
+            contextId: sid,
+            status: { state: "TASK_STATE_WORKING" },
+            artifacts: [{ parts: [{ text: SENTENCE }] }],
+            history: [
+              { role: "ROLE_USER", parts: [{ text: "deploy the release" }] },
+              {
+                role: "ROLE_AGENT",
+                parts: [{ data: { text: "plan" }, metadata: { mimeType: "application/vnd.protolabs.reasoning-v1+json" } }],
+                metadata: { "protoagent/textOffset": 0 },
+              },
+              {
+                role: "ROLE_AGENT",
+                metadata: {
+                  "https://proto-labs.ai/a2a/ext/tool-call-v1": { toolCallId: "n1", name: "append_note", phase: "started", args: "{}" },
+                  "protoagent/textOffset": SENTENCE.length,
+                },
+              },
+            ],
+          },
+        },
+      } as never);
+      return new Promise(() => {}); // the stream stays open — the turn is still running
+    });
+
+    cancels.push(reattachTurn(sessionId, ASSISTANT_ID, TASK_ID));
+    await settle();
+
+    const parts = assistantMessage(sessionId)?.parts ?? [];
+    expect(parts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+      { kind: "tools", ids: ["n1"] },
+    ]);
+    expect(foldPlan(parts, true).leadParts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+    ]);
   });
 });
