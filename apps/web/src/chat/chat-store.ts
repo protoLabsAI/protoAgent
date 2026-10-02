@@ -251,6 +251,38 @@ export function takeGoalKickoff(sessionId: string): string | null {
   return prompt ?? null;
 }
 
+/** The slot's kickoff consumer: run `sessionId`'s pending kickoff via `run` — but only while
+ *  the tab is IDLE. A kickoff registered while the tab is streaming (e.g. the operator sent a
+ *  message while `/goal new`'s set-goal POST was in flight) stays queued and fires once the
+ *  turn ends, so a slot never runs two turns at once. Re-checks on every kickoff registration
+ *  and every store change. The run is posted to a macrotask and re-checked there: the store
+ *  flips a turn to idle from INSIDE that turn's runTurn, whose `finally` still has cleanup to
+ *  do (abortRef, watchdog, claim) — starting the next turn synchronously would let it clobber
+ *  the new turn's handles. `takeGoalKickoff` removes it as it fires, so it runs exactly once
+ *  and is never dropped. Returns the unsubscribe fn. */
+export function watchGoalKickoff(sessionId: string, run: (prompt: string) => void): () => void {
+  const idle = () => chatStore.getSnapshot().sessionStatusMap[sessionId] !== "streaming";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const fire = () => {
+    timer = null;
+    if (!idle()) return; // a turn started in the gap — wait for its end (the store re-checks)
+    const prompt = takeGoalKickoff(sessionId);
+    if (prompt) run(prompt);
+  };
+  const check = () => {
+    if (timer !== null || !pendingGoalKickoffs.has(sessionId) || !idle()) return;
+    timer = setTimeout(fire, 0);
+  };
+  const offKickoff = subscribeGoalKickoff(check);
+  const offStore = chatStore.subscribe(check);
+  check();
+  return () => {
+    offKickoff();
+    offStore();
+    if (timer !== null) clearTimeout(timer);
+  };
+}
+
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

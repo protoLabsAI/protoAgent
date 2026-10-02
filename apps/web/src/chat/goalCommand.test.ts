@@ -77,3 +77,77 @@ describe("/goal new submit drives in this tab", () => {
     vi.restoreAllMocks();
   });
 });
+
+// Review of #4008: `/goal new` reads the tab's busy state BEFORE the set-goal POST. If the
+// operator starts a turn while the POST is in flight, the set goes out `kick:false` and the
+// kickoff lands while the tab is streaming. The slot's consumer (watchGoalKickoff) must defer
+// it until the tab is idle — never a second concurrent turn, never dropped, never run twice.
+describe("/goal new kickoff while the tab turned busy mid-request", () => {
+  it("defers the kickoff until idle, then runs it exactly once", async () => {
+    const { api } = await import("../lib/api");
+    const { chatStore, watchGoalKickoff } = await import("./chat-store");
+    const session = chatStore.createSession();
+    const sid = session.id;
+    let release!: () => void;
+    vi.spyOn(api, "setGoal").mockImplementation(
+      () => new Promise((resolve) => (release = () => resolve({ ok: true, message: "goal set" } as never))),
+    );
+    vi.spyOn(api, "verifiers").mockRejectedValue(new Error("offline"));
+
+    // The slot's consumer, with a runTurn that records overlap the way the real one would
+    // collide: it flips the tab to streaming for the turn's duration.
+    let concurrent = 0;
+    const run = vi.fn((_prompt: string) => {
+      if (chatStore.getSnapshot().sessionStatusMap[sid] === "streaming") concurrent += 1;
+      chatStore.setSessionStatus(sid, "streaming");
+    });
+    const off = watchGoalKickoff(sid, run);
+
+    const openForm = vi.fn();
+    const noteToThread = vi.fn();
+    findSlashCommand("goal")!.run({
+      rest: "new",
+      sessionId: sid,
+      noteToThread,
+      setDraft: vi.fn(),
+      focusComposer: vi.fn(),
+      openForm,
+      flagOn: () => true,
+      serverCommands: [],
+    } as never);
+    await vi.waitFor(() => expect(openForm).toHaveBeenCalledTimes(1));
+    openForm.mock.calls[0][0].onSubmit({ condition: "tests pass", verifier: "command", verify_command: "pytest -q" });
+    expect(api.setGoal).toHaveBeenCalledWith(expect.objectContaining({ kick: false }));
+
+    // The operator sends a message while the POST is in flight → the tab is streaming.
+    chatStore.setSessionStatus(sid, "streaming");
+    release();
+    await vi.waitFor(() => expect(noteToThread).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 10));
+    expect(run).not.toHaveBeenCalled(); // deferred, not fired into the busy tab
+
+    // The operator's turn ends → the kickoff runs once, on an idle tab.
+    chatStore.setSessionStatus(sid, "idle");
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(run.mock.calls[0][0]).toContain("tests pass");
+    expect(concurrent).toBe(0);
+
+    // More store churn (the kickoff's own turn ending, other updates) never re-fires it.
+    chatStore.setSessionStatus(sid, "idle");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(run).toHaveBeenCalledTimes(1);
+    off();
+    vi.restoreAllMocks();
+  });
+
+  it("a kickoff registered on an idle tab still fires (Work-panel flow)", async () => {
+    const { chatStore, registerGoalKickoff, watchGoalKickoff } = await import("./chat-store");
+    const sid = chatStore.createSession().id;
+    chatStore.setSessionStatus(sid, "idle");
+    const run = vi.fn();
+    const off = watchGoalKickoff(sid, run);
+    registerGoalKickoff(sid, "Start working toward the goal: ship it");
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    off();
+  });
+});

@@ -19,8 +19,7 @@ import {
   useChatState,
   effectiveReasoningEffort,
   sessionCast,
-  subscribeGoalKickoff,
-  takeGoalKickoff,
+  watchGoalKickoff,
   type SessionStatus,
 } from "./chat-store";
 import { PublishDialog } from "./PublishDialog";
@@ -210,21 +209,20 @@ export function ChatSessionSlot({
   // The live turn's reveal-queue flush (#2993): stop() settles bubbles outside
   // runTurn's closure, and it must drain any withheld answer tail first.
   const revealFlushRef = useRef<(() => void) | null>(null);
-  // Auto-drive a goal created from the Work panel: that flow opens this tab (`kick:false`)
-  // and, once the goal is set on the server, registers a kickoff on the chat-store seam. Fire
-  // it as a HIDDEN turn so the drive loop streams live INTO this tab (the server's iteration-0
-  // kickoff injection re-states the goal). `check()` also covers a kickoff registered before
-  // this slot mounted; `takeGoalKickoff` is idempotent, so it fires exactly once.
-  useEffect(() => {
-    const check = () => {
-      const kickoff = takeGoalKickoff(sessionId);
-      if (kickoff) void runTurn(kickoff, { hidden: true });
-    };
-    check();
-    return subscribeGoalKickoff(check);
-    // runTurn is a stable per-render closure that reads the live store; sessionId is the key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  // Auto-drive a goal created from the Work panel or `/goal new`: that flow drives the goal
+  // in this tab (`kick:false`) and, once the goal is set on the server, registers a kickoff on
+  // the chat-store seam. Fire it as a HIDDEN turn so the drive loop streams live INTO this tab
+  // (the server's iteration-0 kickoff injection re-states the goal). `watchGoalKickoff` also
+  // covers a kickoff registered before this slot mounted, and DEFERS it while this tab is
+  // streaming (a turn started while the set-goal POST was in flight) — it fires once, after
+  // the turn ends, never as a second concurrent turn. It goes through `runTurnRef` so a
+  // deferred kickoff runs the CURRENT render's runTurn, not the mount-time closure.
+  const runTurnRef = useRef(runTurn);
+  runTurnRef.current = runTurn;
+  useEffect(
+    () => watchGoalKickoff(sessionId, (kickoff) => void runTurnRef.current(kickoff, { hidden: true })),
+    [sessionId],
+  );
   // Client composer-form (#1701): a form a CLIENT command opens in the composer (e.g.
   // `/effort`'s picker), rendered through the same HitlForm but resolved LOCALLY — no
   // agent round-trip. Kept DISTINCT from the agent `hitl` interrupt so the two never

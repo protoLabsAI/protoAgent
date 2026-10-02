@@ -24,6 +24,18 @@ function load(): Set<string> {
 
 let snapshot: Set<string> = load();
 
+// Another browser tab dismissed (or reset) a goal: the `storage` event fires in every OTHER
+// tab of this origin, so re-read and notify — a dismissal in one tab hides it in all of them.
+try {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== KEY && e.key !== null) return; // null = storage.clear()
+    snapshot = load();
+    listeners.forEach((l) => l());
+  });
+} catch {
+  // non-browser context — nothing to sync
+}
+
 /** Hide a finished goal (by its `goalDismissKey`) from the card + chat strip. */
 export function dismissGoal(key: string) {
   const next = new Set(snapshot);

@@ -207,6 +207,15 @@ export const goalDetailQuery = (sessionId: string) =>
     queryFn: () => api.goalDetail(sessionId),
   });
 
+/** The app-wide `goal.*` bus refresh (App.tsx). The goals LIST refetches even with no
+ *  observer mounted (`refetchType: "all"`, exact key), so the Work card / chat strip are fresh
+ *  the moment they mount. Detail drawers share the `goals` prefix but refetch only while
+ *  ACTIVE — an `"all"` on the prefix refetched every cached-but-closed drawer on every event. */
+export function refreshGoalsOnEvent(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.goals, exact: true, refetchType: "all" });
+  void queryClient.invalidateQueries({ queryKey: [...queryKeys.goals, "detail"] });
+}
+
 // Passive watches (ADR 0067) — verifier-only objectives polled out-of-band. Lives in the
 // Work hub; the panel invalidates this on the `watch.*` bus pushes (created/checked/met/
 // expired/stalled) instead of a poll — same pattern as goals.
