@@ -61,7 +61,7 @@ def _read(t, project, path="src/f.txt"):
 
 
 def test_missing_root_at_build_keeps_the_other_projects(two_projects, caplog):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     shutil.rmtree(b)
     with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
         t = _tools(cfg)
@@ -94,7 +94,7 @@ def test_all_roots_missing_still_binds_and_rebinds_when_back(two_projects):
 
 
 def test_root_deleted_mid_session_then_restored(two_projects):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     t = _tools(cfg)
     assert "beta file" in _read(t, "beta")
     shutil.rmtree(b)
@@ -118,7 +118,7 @@ def test_missing_root_never_resolves_and_is_never_recreated(two_projects):
 
 
 def test_fence_still_refuses_escapes_after_a_root_comes_back(two_projects):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     shutil.rmtree(b)
     t = _tools(cfg)
     b.mkdir()
@@ -130,14 +130,14 @@ def test_fence_still_refuses_escapes_after_a_root_comes_back(two_projects):
 
 
 def test_unknown_project_is_still_unknown(two_projects):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     shutil.rmtree(b)
     t = _tools(cfg)
     assert "unknown project" in _read(t, "gamma")
 
 
 def test_runtime_warning_names_missing_project_and_clears(two_projects):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     assert missing_projects_warning(cfg) is None
     shutil.rmtree(b)
     warn = missing_projects_warning(cfg)
@@ -147,7 +147,7 @@ def test_runtime_warning_names_missing_project_and_clears(two_projects):
 
 
 def test_runtime_warning_quiet_when_fs_disabled(two_projects):
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     shutil.rmtree(b)
     cfg.filesystem_enabled = False
     assert missing_projects_warning(cfg) is None
@@ -157,7 +157,7 @@ async def test_runtime_status_carries_missing_folder_warning(two_projects, monke
     import runtime.state as rs
     from operator_api import console_handlers as ch
 
-    cfg, a, b = two_projects
+    cfg, _, b = two_projects
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     shutil.rmtree(b)
     status = await ch._operator_runtime_status()
