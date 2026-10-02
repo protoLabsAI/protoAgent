@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.190.0",
+    "date": "2026-10-02",
+    "changes": [
+      "The code pane updates itself — no more Refresh to see a delegate's edits (#4006).",
+      "A foreground delegate_to that times out on a still-working A2A peer now hands back a collectable task (#3775).",
+      "A2A runs on a2a-sdk 1.2.1, and a HITL answer is still re-routed when its task ends mid-flight (#3950).",
+      "resolve_friction now finds what the agent logged and says when it is already resolved (#4000).",
+      "Context compaction no longer fails anthropic-oauth turns with a fake 429 (#4001).",
+      "An @<name> address now bills the peer's reported spend, and turns no model ran stay out of the per-model breakdown (#4004).",
+      "One oversized image no longer breaks every later turn of a session (#4005).",
+      "The code pane's change poll no longer re-reads touched files, and A2A peers can't fake file changes (#4007).",
+      "A goal now visibly goes green when its verifier passes (#4008).",
+      "/goal new can no longer start a second turn in a tab that is already busy, and goal events refresh only the goals list (#4009).",
+      "A streaming A2A peer's delegation card no longer types out the peer's final answer before the chat renders it (#4010).",
+      "A goal's turn now stops once its check passes, ends on a short summary, and prints \"Goal set.\" once (#4012).",
+      "A2A refuses a send whose contextId / taskId sits on params instead of the message (#4013).",
+      "The fleet console proxy now forwards the raw member path and rejects ambiguous encodings (#3999)."
+    ]
+  },
+  {
     "version": "v0.189.0",
     "date": "2026-10-02",
     "changes": [
