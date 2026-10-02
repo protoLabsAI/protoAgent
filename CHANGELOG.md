@@ -15,6 +15,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.190.0] - 2026-10-02
+
+### Added
+- **The code pane updates itself — no more Refresh to see a delegate's edits (#4006).**
+  While `@claude-code` (or any coding delegate) edited a registered project, the Diff tab
+  kept saying "No changes vs HEAD" until Refresh was clicked. A delegate's edit tool calls
+  and the agent's own `write_file`/`edit_file`/`delete_file` now publish `fs.changed` on the
+  event bus, and the pane re-fetches the diff and the open file (debounced, coalesced). With
+  Follow on, a delegate's edit moves the pane to that file on the Diff tab. Edits nothing
+  reports, such as a terminal or an editor, are caught by a cheap `/api/fs/stamp` poll that
+  runs only while the pane is on screen.
+
+### Fixed
+- **A foreground `delegate_to` that times out on a still-working A2A peer now hands back a collectable task (#3775).**
+  The tool result names the peer's task id, last state and status message, and the exact
+  `delegate_to(target=…, query=…, resume_task_id=…)` call that collects it; it no longer reads
+  as "failed". `resume_task_id` on a task that is still working now waits on that same task with
+  `GetTask` only (never re-sending the work) and returns its answer once it lands, and a lead
+  that collects it this way stands down the room's own late collection so it isn't delivered twice.
+
+- **A2A runs on a2a-sdk 1.2.1, and a HITL answer is still re-routed when its task ends mid-flight (#3950).**
+  a2a-sdk 1.2 now refuses a message to an ended task with `UnsupportedOperationError` (-32004) instead of
+  `InvalidParamsError`. The parked-task router only retried on the old error, so an answer whose task ended
+  between routing and the SDK came back as an error instead of reaching the context's current pause. The
+  router now retries on both. The executor's own ended-task check raises the same error as the SDK. The
+  hardened task registry now also keeps the SDK's new task-store view and event stream. The floor is now
+  `a2a-sdk>=1.2.1`. A `contextId` placed on the request params, not on the message, is now ignored rather
+  than rejected with -32602. This matches upstream's forward-compatibility rule. Every sender in this repo
+  puts `contextId` on the message.
+
+- **`resolve_friction` now finds what the agent logged and says when it is already resolved (#4000).**
+  Re-resolving a row that was already resolved used to return "no matching entries found", so an agent
+  whose first resolve had worked (while a stale Friction view still showed the row) concluded the tool was
+  broken. The tool now answers "already resolved". Rows carry a stable id (in `friction_review`, the read
+  API and the working-state hint) that `resolve_friction(id=...)` takes. Text matching ignores case,
+  whitespace and quote style, and accepts the full text of a clipped summary. A no-match reply lists the
+  open rows' ids and summaries. The Friction view re-reads the ledger on focus and every 30s.
+
+- **Context compaction no longer fails `anthropic-oauth` turns with a fake 429 (#4001).**
+  With `compaction.trigger` set, an agent on a Claude subscription (`anthropic-oauth`) failed
+  turns with `429 rate_limit_error: "Error"` raised from `CountingSummarizationMiddleware.before_model`,
+  even with quota to spare. langchain's summarizer calls the model directly, with no system prompt, so the
+  request never got the exact Claude Code identity first block that Anthropic's OAuth enforcement
+  requires (ADR 0097, #2763). The OAuth client now adds that block to the body of every request it
+  sends, which covers summarization, titles, memory distill, judges, subagents and any future direct
+  call. A summarization call that fails for any reason is now logged, and the turn continues without
+  compacting instead of failing. After a failure, auto-compaction pauses on that thread instead of
+  retrying before every model step. The pause starts at 1 minute and doubles up to 30 minutes, and
+  the warning is logged once per pause. The summary call now retries only transient errors
+  (429, 5xx, timeouts), once. If the context window overflows while compaction is failing, the
+  error now names that compaction failure as the cause.
+
+- **An `@<name>` address now bills the peer's reported spend, and turns no model ran stay out of the per-model breakdown (#4004).**
+  An `@`-addressed turn skips the lead model, so its telemetry row read 0 LLM calls and 0 tokens
+  while still carrying a model label. When the addressed peer is a protoAgent that reports its own
+  cost, that spend now lands on the row the way a `delegate_to` call's does. A turn on which no
+  model of this agent ran (an address to a peer that reports no cost, a slash command's canned
+  reply) is now left out of `/api/telemetry/summary`'s `by_model` cache, cost and latency split,
+  and the new `no_model_turns` field counts how many were left out. The store-wide totals still
+  include them.
+
+- **One oversized image no longer breaks every later turn of a session (#4005).**
+  A tool screenshot (for example 2560×1600 from `campaign_view` or `agent_browser`) was stored in the
+  conversation history at full size. Once the conversation held more than 20 images, Anthropic
+  rejected every request with `400 … image dimensions exceed max allowed size for many-image requests: 2000 pixels`.
+  Because the image was in the checkpointed history, the session kept failing on every turn.
+  Images from tool results and chat attachments are now downscaled before they are stored, to
+  `model.image_max_side` (default 1568 px on the long side, never more than 2000). Every outgoing
+  request is also clamped to the provider's limits: anthropic-oauth, the gateway, and the Codex /
+  Responses API. URL images now count toward the 20-image limit too. Only the newest
+  `model.max_images_per_request` images (default 20) are sent, and older ones become an
+  `[image omitted: …]` note. The stored history is never changed, so sessions that were already
+  broken work again. A tiny file that declares a huge canvas is refused from its header before
+  it is decoded. 16-bit images keep their tones instead of turning white. Pillow is now a core
+  dependency, so server and Docker installs downscale too.
+
+- **The code pane's change poll no longer re-reads touched files, and A2A peers can't fake file changes (#4007).**
+  `/api/fs/stamp` used `git status`, which re-hashed every tracked file whose mtime changed
+  without its content changing (a `touch`, a formatter no-op save, rsync). It could never
+  save the refreshed stat, so it re-read them on every 2 s poll: about 2 s of a core per
+  open pane on a repo with 800 MB of such files. The stamp now uses git plumbing that never
+  hashes content (~0.08 s on the same repo). The console also backs off, up to 30 s, while
+  the server reports slow stamps. Separately, a remote A2A peer's tool-call paths no longer
+  become `fs.changed` events, which had let any peer trigger refetch storms and Follow
+  jumps in every open console. Only local delegates announce writes, and each delegation
+  is limited to 2 change events per second.
+
+- **A goal now visibly goes green when its verifier passes (#4008).** The Work ▸ Goals card
+  used to drop from "1 driving" straight to "No active goals" the moment a goal was achieved,
+  so the success was never shown. Finished goals now stay under a **Recent** divider for 30
+  minutes. An achieved goal shows a green check and `achieved · command: pytest -q · just now`;
+  a goal that stopped short shows its reason. Each can be dismissed, and the card flips live
+  without a refresh. A chat tab that is driving a goal now shows its status above the composer,
+  from "driving · iteration i/n" to "Goal achieved ✓". `/goal new` now runs the goal in its own
+  tab, so the work streams live there instead of arriving as a collapsed "Scheduled task" card.
+  Goal turns that run in the background also stay full-size, labelled as goal runs.
+
+- **`/goal new` can no longer start a second turn in a tab that is already busy, and goal events refresh only the goals list (#4009).**
+  If you sent a message while `/goal new` was still setting the goal, the goal's kickoff
+  turn ran at the same time as your turn, in the same tab. Now the kickoff waits until that
+  turn ends and then runs once. This applies to goals started from the Work panel too.
+  Every goal event also used to refetch every goal-detail drawer still in the cache, even
+  closed ones. Now it refetches the goals list and only the drawers that are open. The chat
+  goal strip no longer re-announces itself to screen readers every minute, and dismissing a
+  finished goal in one browser tab hides it in your other tabs too.
+
+- **A streaming A2A peer's delegation card no longer types out the peer's final answer before the chat renders it (#4010).**
+  The card showed every chunk of the peer's reply text as it arrived, so the answer streamed into the card and then appeared again in the chat. Delegate text is now held until a later tool call proves it was narration, and dropped when the run ends. The card shows the tool calls, the plan, produced artifacts and the narration between tool calls, but never the final reply, whether the delegate is an A2A peer or an ACP coder. The final `done` snapshot no longer carries the answer either.
+
+- **A goal's turn now stops once its check passes, ends on a short summary, and prints "Goal set." once (#4012).**
+  A goal started with `/goal new` used to keep running after the work was done. The agent
+  fixed the bug and saw the tests pass, then re-explored the repo and said "the goal is
+  already complete" two or three more times before the turn ended. In the chat this looked
+  like several runs stacked in one reply.
+  Now the goal's check (command, test, CI, data or plugin; never the LLM judge) runs after
+  each tool step of a goal turn. A fast check runs almost every step. A slow one waits at
+  least twice its own run time before running again. When the check passes, the goal is
+  marked achieved straight away, and the agent writes one or two sentences on what it
+  changed. It can't call tools or start new work at that point.
+  While a check runs, the goal status line reads "checking the goal…". These goal status
+  lines no longer count as tool calls or show up as text in a delegating agent's card. The
+  goal's set confirmation, in chat and in the Goals and Work panel toasts, no longer says
+  "Goal set." twice.
+
+- **A2A refuses a send whose `contextId` / `taskId` sits on `params` instead of the message (#4013).** Since a2a-sdk 1.2 the
+  SDK ignores unknown request fields, so a misplaced `contextId` silently started a fresh
+  session. `/a2a` now answers `-32602` naming the fix for exactly these keys on
+  `SendMessage` / `SendStreamingMessage` and v0.3 `message/send` / `message/stream`; other
+  unknown fields still pass through.
+
+### Security
+- **The fleet console proxy now forwards the raw member path and rejects ambiguous encodings (#3999).**
+  `graph/fleet/proxy.py` captured the `/agents/<slug>/…` sub-path decoded and let httpx/`websockets`
+  re-handle it, so the path the hub authorised (public-prefix / `member_public` / SSE-token checks)
+  could differ from the one the member's router dispatched — e.g. `…/plugins/foo/%2e%2e/%2e%2e/api/config`
+  was admitted anonymously under the public `/plugins/foo/` prefix, then collapsed to `/api/config`
+  upstream. The member's own default-deny auth already 401'd these (not exploitable), but the hub now
+  forwards the raw path (member decodes exactly once, as for a direct caller) and refuses encoded
+  separators, encoded dots, double-encoding, encoded NUL, literal `..`, and backslashes with 400 on
+  both the HTTP and WebSocket lanes.
+
 ## [0.189.0] - 2026-10-02
 
 ### Added
