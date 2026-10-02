@@ -66,6 +66,20 @@ _OUTLIER_MIN_COHORT = 3
 #: rows are excluded from it — see the function's docstring for why they have to be (#3041).
 _ALL_PRICED = "all priced turns"
 
+#: SQL predicate: a resolved turn on which no model of this agent reported usage (#4004).
+#: `models` is the comma-joined list of models that reported usage, in call order. A row
+#: with no models, no calls and no spend recorded nothing at all; a leading `peer:` marker
+#: (`tools.a2a_parse.PEER_MODEL_PREFIX`, #3016) means the first spend was a peer's — a lead
+#: model always calls before any `delegate_to`, so such a row is an `@<name>` address
+#: billed with the peer's own numbers. A FAILED turn stays in its lane: one rejected on
+#: its first call did try that model.
+_NO_MODEL_RAN = (
+    "(COALESCE(state, '') != 'failed' AND ("
+    "(COALESCE(models, '') = '' AND COALESCE(llm_calls, 0) = 0"
+    " AND COALESCE(total_tokens, 0) = 0 AND COALESCE(cost_usd, 0) = 0)"
+    " OR COALESCE(models, '') LIKE 'peer:%'))"
+)
+
 
 class TelemetryStore:
     def __init__(self, db_path: str) -> None:
@@ -318,6 +332,16 @@ class TelemetryStore:
             ]
             out["max_context_tokens"] = fills[-1] if fills else 0
             out["p95_context_tokens"] = _percentile(fills, 95)
+            # A turn on which no model of THIS agent ran (#4004) — an `@<name>` address the
+            # delegate answered, a slash command's canned reply — still carries a model
+            # label (the requested or configured one, #3957), but it is no sample of that
+            # lane: counting it adds a zero-token turn to the lane's cache/cost split and
+            # the delegate's wall time to the lane's latency. Left out of `by_model` (the
+            # whole-store totals above keep it) and counted, so the gap stays visible.
+            lane_where = f"{where} {'AND' if where else 'WHERE'} NOT {_NO_MODEL_RAN}"
+            out["no_model_turns"] = db.execute(
+                f"SELECT COUNT(*) FROM turns {where} {'AND' if where else 'WHERE'} {_NO_MODEL_RAN}", params
+            ).fetchone()[0]
             by_model = db.execute(
                 f"""
                 SELECT model,
@@ -332,7 +356,7 @@ class TelemetryStore:
                        COALESCE(SUM(input_tokens),0) AS input_tokens,
                        COALESCE(SUM(cache_read_input_tokens),0) AS cache_read_input_tokens,
                        COALESCE(SUM(cache_creation_input_tokens),0) AS cache_creation_input_tokens
-                FROM turns {where}
+                FROM turns {lane_where}
                 GROUP BY model ORDER BY cost_usd DESC
                 """,
                 params,
@@ -352,7 +376,7 @@ class TelemetryStore:
             # fill, not the store's. Zero rows excluded for the same reason as the
             # turn-level series above — absent, not empty.
             fills_by_model: dict[str | None, list[int]] = {}
-            for r in db.execute(f"SELECT model, duration_ms, context_tokens FROM turns {where}", params).fetchall():
+            for r in db.execute(f"SELECT model, duration_ms, context_tokens FROM turns {lane_where}", params).fetchall():
                 if r["duration_ms"] is not None:
                     durations_by_model.setdefault(r["model"], []).append(r["duration_ms"])
                 if r["context_tokens"]:

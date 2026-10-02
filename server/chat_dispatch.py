@@ -420,13 +420,23 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         yield ("tool_start", _mention_tool)
 
     _at_reply, _at_outcome = None, None
+    # A peer's own reported spend (cost-v1) is billed to the calling turn through a
+    # LangChain custom event when `delegate_to` runs inside the lead graph (#3016). An
+    # address has no graph run for that event to ride, so the adapter notes it on this
+    # collector instead and it comes out as `usage` frames — the lane a `/<subagent>`
+    # run bills through (#3957). Without it the row read 0 calls, 0 tokens (#4004).
+    _mention_usage: list[dict] = []
     try:
-        async for _frame in _mention_exchange_with_progress(message, session_id, request_metadata, _mention_tool):
-            if _frame[0] == "__result__":
-                _at_reply, _at_outcome = _frame[1]
-            else:
-                yield _frame
+        with delegation_usage.collect() as _mention_usage:
+            async for _frame in _mention_exchange_with_progress(message, session_id, request_metadata, _mention_tool):
+                if _frame[0] == "__result__":
+                    _at_reply, _at_outcome = _frame[1]
+                else:
+                    yield _frame
     except Exception as exc:
+        # Bill what the peers reported before the exchange failed.
+        for _row in _usage_frames(_mention_usage):
+            yield _row
         # Most adapter failures are ordinary room outcomes, but an unexpected
         # exchange failure still flows to the turn-level error handler below.
         # Settle the card first so the console cannot strand it as running.
@@ -441,6 +451,8 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                 },
             )
         raise
+    for _row in _usage_frames(_mention_usage):
+        yield _row
     if _mention_tool is not None:
         _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
         # Distinct participants, not dispatches: over three rounds two delegates
