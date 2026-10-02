@@ -667,8 +667,10 @@ def register_config_routes(app) -> None:
                 claimed.add(key)
             projects.append(row)
 
-        # A configured registry where NO row feeds the fence resolves to an empty fence,
-        # and build_fs_tools then unbinds the entire toolset (#2251). Reporting
+        # A configured registry where NO row feeds the fence resolves to an empty fence:
+        # with every entry `fs: false` build_fs_tools binds nothing, and with every
+        # folder missing the tools stay bound but can reach nothing until one is back
+        # (#2251, #3643). Reporting
         # "registry" there would claim the registry is driving a fence that doesn't
         # exist. Two distinct ways to land here, both worth naming rather than hiding:
         # every entry opted out with `fs: false` (deliberate), or every folder is

@@ -354,9 +354,9 @@ function ManagedProjectsList() {
               </>
             ) : (
               <>
-                None of these projects' folders exist, so the filesystem tools are{" "}
-                <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
-                <code>list_dir</code> at all. Fix the paths in your config file.
+                None of these projects' folders exist, so the agent's filesystem tools{" "}
+                <strong>can't reach anything</strong> until one is back. Restore the folders
+                or fix the paths in your config file.
               </>
             )}
           </span>
@@ -430,7 +430,7 @@ function FsProjectsEditor() {
           <AlertTriangle size={14} />
           <span>
             {allMissing
-              ? "None of these folders exist, so the filesystem tools are unbound — the agent has no read_file / list_dir at all. Fix or remove the paths below."
+              ? "None of these folders exist, so the agent's filesystem tools can't reach anything until one is back. Restore the folders, or fix or remove the paths below."
               : `${missing.length} folder${missing.length > 1 ? "s are" : " is"} missing and skipped — the agent can't reach ${missing.length > 1 ? "them" : "it"}.`}
           </span>
         </p>
