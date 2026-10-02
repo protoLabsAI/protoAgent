@@ -165,7 +165,7 @@ Palette commands ([ADR 0057](/adr/0057-command-palette)) — declarative command
 
 - **Type** `list[str]` · **Default** `[]`
 
-Auth-exempt paths — prefixes under THIS plugin's own /plugins/&lt;id&gt;/ (or /api/plugins/&lt;id&gt;/) namespace that the default-deny auth middleware lets through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer — the plugin verifies its own signature) or a public view page that must load in a browser iframe under a token-gated deployment. Namespace-scoped by the parser so a plugin can never exempt a core route.
+Auth-exempt paths — prefixes under THIS plugin's own /plugins/&lt;id&gt;/ (or /api/plugins/&lt;id&gt;/) namespace that the default-deny auth middleware lets through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer — the plugin verifies its own signature) or a public view page that must load in a browser iframe under a token-gated deployment. Namespace-scoped by the parser so a plugin can never exempt a core route — including the core operator routes core mounts inside that namespace (/api/plugins/&lt;id&gt;/update and /api/plugins/&lt;id&gt;/enabled), which stay gated even under a /api/plugins/&lt;id&gt;/ prefix.
 
 ### `federation_paths` {#field-federation-paths}
 
