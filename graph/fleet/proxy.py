@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import time
 
 import httpx
@@ -45,6 +46,57 @@ _HOP = {
     "proxy-authorization",
     "proxy-authenticate",
 }
+
+
+# --- Path confusion defence (security) ------------------------------------------------------
+#
+# The route captures ``{path:path}`` DECODED, and both httpx (HTTP) and ``urllib.quote`` (WS)
+# then re-handle it before dialling the member. That double-handling splits the path the hub
+# makes its auth/exemption decision on from the path the member's router actually dispatches:
+#
+#   * The hub's public allowlist / ``member_public`` resolver / SSE-token matcher all key on
+#     the ONCE-decoded ``request.url.path`` (e.g. ``/agents/<slug>/plugins/foo/../../api/config``
+#     is admitted anonymously because it *starts with* the public ``/plugins/foo/`` prefix).
+#   * httpx then COLLAPSES the ``..`` segments, so the member receives ``/api/config`` — a path
+#     the hub never authorised. Today the member's own default-deny auth re-checks and 401s, so
+#     this is contained, not exploitable — but it is fragile defence-in-depth: the hub is
+#     green-lighting one resource and forwarding another.
+#
+# Remove the ambiguity at the source. We forward the RAW sub-path exactly as the client sent it
+# (so the member decodes it exactly once, identically to a direct caller, and the hub's decision
+# bytes equal the member's received bytes), and we reject the encodings that only exist to make
+# the two differ — encoded separators (``%2f``/``%5c``), any encoded dot (``%2e`` — covers
+# ``%2e%2e``), double-encoding (``%25``), encoded NUL (``%00``), a literal ``..`` segment, and a
+# literal backslash. None occur in legitimate console / plugin / a2a / ``/media`` traffic, whose
+# paths are plain segments.
+_AMBIGUOUS_ESC = re.compile(r"%(?:2[efEF]|5[cC]|25|00)", re.IGNORECASE)
+
+
+def _raw_subpath(scope, slug: str, decoded: str) -> str:
+    """The RAW (still percent-encoded) sub-path after ``/agents/<slug>/``.
+
+    Taken from the ASGI ``raw_path`` (undecoded, query already stripped) so the member gets the
+    exact bytes the client sent. Falls back to the decoded route param only if ``raw_path`` is
+    absent or malformed (never in practice for a matched route)."""
+    raw = scope.get("raw_path")
+    if raw:
+        raw_str = raw.decode("latin-1")
+        prefix = "/agents/"
+        if raw_str.startswith(prefix):
+            _slug, sep, rest = raw_str[len(prefix) :].partition("/")
+            if sep:
+                return rest
+    return decoded
+
+
+def _ambiguous_path(raw_rest: str) -> bool:
+    """True when the raw sub-path carries an encoding that would make the hub's decision path
+    diverge from what the member dispatches (see the module note above)."""
+    if _AMBIGUOUS_ESC.search(raw_rest):
+        return True
+    if "\\" in raw_rest:
+        return True
+    return any(seg == ".." for seg in raw_rest.split("/"))
 
 
 # Read-timeout lanes for proxied traffic (#2590).
@@ -264,6 +316,14 @@ async def forward_to(slug: str, request, path: str):
     """Reverse-proxy to the agent named by ``slug`` (/agents/<slug>/* route, ADR 0042 slug
     routing). ``host`` targets this instance; a remote member targets its URL; 409 if the
     agent isn't running/registered."""
+    # Forward the path exactly as received, and refuse encodings that would let the hub's
+    # auth/exemption decision (keyed on the once-decoded ``path``) diverge from what the member
+    # dispatches (see the module note on ``_ambiguous_path``).
+    raw_path = _raw_subpath(getattr(request, "scope", {}) or {}, slug, path)
+    if _ambiguous_path(raw_path):
+        _log_refusal(slug, "ambiguous path encoding", request.headers)
+        return JSONResponse({"detail": "Bad Request: ambiguous path encoding"}, status_code=400)
+
     target = _target_for_slug(slug)
     if target is None:
         return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
@@ -335,8 +395,8 @@ async def forward_to(slug: str, request, path: str):
         with contextlib.suppress(Exception):
             supervisor.touch(slug)
     if drop_params:
-        return await _forward_to_base(base, request, path, extra, drop_params=drop_params)
-    return await _forward_to_base(base, request, path, extra)
+        return await _forward_to_base(base, request, raw_path, extra, drop_params=drop_params)
+    return await _forward_to_base(base, request, raw_path, extra)
 
 
 async def _pump_ws(client_ws, upstream) -> None:
@@ -574,6 +634,14 @@ async def forward_ws(slug: str, ws, path: str) -> None:
     """
     import websockets
 
+    # Refuse path-confusion encodings before any credential handling or dial (same contract as
+    # the HTTP proxy — see ``_ambiguous_path``). Closing before ``accept`` rejects the handshake.
+    raw_path = _raw_subpath(getattr(ws, "scope", {}) or {}, slug, path)
+    if _ambiguous_path(raw_path):
+        _log_refusal(slug, "ambiguous path encoding", ws.headers)
+        await ws.close(code=1008, reason="ambiguous path encoding")
+        return
+
     # Uncached, and the URL comes from the same record as the stored token: a cached target
     # that went stale between "which kind is this?" and "where do I dial?" must not be able to
     # send one member's credential to another.
@@ -618,13 +686,11 @@ async def forward_ws(slug: str, ws, path: str) -> None:
             await ws.close(code=1008, reason="unauthorized")
             return
         headers = {"authorization": auth} if auth else {}
-    # ``path`` arrives DECODED from the route (``%23`` → ``#``, ``%3F`` → ``?``); re-quote it
-    # (keeping ``/``) so a caller can't turn path bytes into a fragment or a second query —
-    # which also made ``websockets`` raise InvalidURI quoting the whole URL, stored token and
-    # all, into the log below.
-    from urllib.parse import quote
-
-    upstream_url = f"{ws_base}/{quote(path, safe='/')}" + (f"?{query}" if query else "")
+    # Forward the RAW sub-path (already percent-encoded, query stripped) rather than re-quoting
+    # the decoded route param: the member then decodes it exactly once, as it would for a direct
+    # caller, and a caller can't turn path bytes into a fragment or a second query. Ambiguous
+    # encodings were refused above, so no ``..``/encoded-separator survives to confuse the dial.
+    upstream_url = f"{ws_base}/{raw_path}" + (f"?{query}" if query else "")
 
     sub = ws.headers.get("sec-websocket-protocol")
     subprotocols = [s.strip() for s in sub.split(",") if s.strip()] if sub else None
