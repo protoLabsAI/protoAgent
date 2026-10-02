@@ -243,7 +243,7 @@ try:
             try:
                 from graph.image_limits import clamp_request_images
 
-                payload = clamp_request_images(payload, wire="anthropic")
+                payload = clamp_request_images(payload)
             except Exception:  # noqa: BLE001 — clamping must never be what fails a turn
                 log.warning("[anthropic-oauth] image clamping skipped", exc_info=True)
             return payload
@@ -272,8 +272,10 @@ try:
             # `super()._agenerate` hands off to `self._astream` (which also wraps this lane)
             # it reuses THIS slot instead of asking for a second one and deadlocking a
             # `max_inflight: 1` lane. `max_inflight` 0 (the default) keeps it a pass-through.
+            from graph.image_limits import aprewarm
             from graph.llm import _held_lane_slot
 
+            await aprewarm(args[0] if args else kwargs.get("messages"))  # off-loop image work
             async with _held_lane_slot(self._lane_key()):
                 return await super()._agenerate(*args, **kwargs)
 
@@ -290,7 +292,10 @@ try:
             # per attempt, outside the guard so wait time never counts toward request_timeout
             # (D4). Imported lazily to keep this module's import off the default gateway path
             # (and clear of any import cycle with graph.llm).
+            from graph.image_limits import aprewarm
             from graph.llm import _guarded_reconnecting_stream, _stream_timeout_s
+
+            await aprewarm(args[0] if args else kwargs.get("messages"))  # off-loop image work
 
             async for chunk in _guarded_reconnecting_stream(
                 lambda: super(_OAuthChatAnthropic, self)._astream(*args, **kwargs),

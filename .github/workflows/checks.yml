@@ -242,12 +242,9 @@ jobs:
         # via `uv run pytest`, which falls back to a global binary when the venv
         # has none. (python-docx needs no separate install: it's a core dependency,
         # so `uv sync` brings it and tests/test_ingestion_docx.py gates, never skips.)
-        # Pillow is OPTIONAL at runtime (graph/image_limits.py downscales with it when
-        # present — the desktop bundles it — and degrades to omitting images without it),
-        # so it is installed here to make tests/test_image_limits.py gate, not skip.
         run: |
           uv sync --frozen --python 3.12
-          uv pip install pytest pytest-asyncio pytest-xdist==3.8.0 pillow
+          uv pip install pytest pytest-asyncio pytest-xdist==3.8.0
       - name: Run tests
         # Kept as a bare pytest call (not `python scripts/gate.py`) so lint and
         # tests stay separate jobs with parallel execution and clear failure

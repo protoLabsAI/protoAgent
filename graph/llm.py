@@ -653,11 +653,13 @@ class _ReasoningChatOpenAI(ChatOpenAI):
                         extra = getattr(msg, "additional_kwargs", None) or {}
                         msg_dict["reasoning_content"] = extra.get("reasoning_content") or ""
         try:
-            # The gateway routes to Anthropic (and others) behind one wire, so inline
-            # images are held to the strictest provider's limits here too — the same
-            # session-poisoning guard the anthropic-oauth client applies. Copy-on-write:
-            # the stored history is never mutated.
-            payload = image_limits.clamp_request_images(payload, wire="openai")
+            # The gateway routes to Anthropic (and others) behind one wire, so images are
+            # held to the strictest provider's limits here too — the same session-poisoning
+            # guard the anthropic-oauth client applies. Covers both the chat-completions
+            # (`messages`) and Responses (`input`: the Codex client, and
+            # PROTOAGENT_GATEWAY_RESPONSES_API) bodies. Copy-on-write: the stored history
+            # is never mutated.
+            payload = image_limits.clamp_request_images(payload)
         except Exception:  # noqa: BLE001 — clamping must never be what fails a request
             log.warning("[llm] image clamping skipped", exc_info=True)
         try:
@@ -677,6 +679,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         A context overflow that states the provider's shared window is retried ONCE with
         the output budget that fits, when this conversation's measurements can size it
         (#3502); otherwise the error propagates exactly as before."""
+        await image_limits.aprewarm(args[0] if args else kwargs.get("messages"))  # off-loop image work
         state: dict = {}
         try:
             async for chunk in self._stream_measured(args, kwargs, state):
@@ -730,6 +733,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         the lane held (:func:`_held_lane_slot`), so if a langchain version whose
         ``_agenerate`` hands off to ``self._astream`` reuses THIS slot rather than deadlocking
         on a second acquire of the same lane."""
+        await image_limits.aprewarm(args[0] if args else kwargs.get("messages"))  # off-loop image work
         async with _held_lane_slot(self._lane_key()):
             return await super()._agenerate(*args, **kwargs)
 

@@ -16,18 +16,21 @@ Two layers, both here:
    before it is stored. ``graph.multimodal`` (tool results) and ``server/chat.py``
    (user attachments) call it.
 2. **At the request boundary** — :func:`clamp_request_images` rewrites an OUTGOING
-   request body (Anthropic Messages wire or OpenAI chat wire) so every inline image
-   honours the hard limits, the oldest images past ``max_images_per_request`` become a
-   short ``[image omitted: …]`` note, and the images' total size stays inside a
-   request budget. It builds new containers instead of mutating, so the stored history
-   is never touched — which is what UNPOISONS a session that is already broken: its
-   checkpoint still holds the big image, but no request carries it any more.
+   request body (Anthropic Messages, OpenAI chat-completions or OpenAI Responses) so
+   every image honours the hard limits: all images — inline and provider-fetched —
+   count toward the many-image rule, the oldest past ``max_images_per_request`` become
+   a short ``[image omitted: …]`` note, and the total stays inside a request budget. It
+   builds new containers instead of mutating, so the stored history is never touched —
+   which is what UNPOISONS a session that is already broken: its checkpoint still holds
+   the big image, but no request carries it any more.
 
-Downscaling needs Pillow, which core imports lazily and does not require (the desktop
-runtime bundles it). Without it, :func:`fit_image` keeps the original (the boundary is
-the safety net) and the boundary replaces an image that breaks a HARD limit with the
-omitted-image note — degraded, but the turn goes through. Dimensions are always known:
-they are read from the PNG/JPEG/GIF/WebP header in pure Python.
+Downscaling uses Pillow (a core dependency). Decoding is bounded: a canvas over
+:data:`MAX_DECODE_PIXELS` is refused from its header before any pixel is decoded, so a
+tiny file declaring a gigantic image can't balloon memory on the request path. If
+Pillow is somehow unavailable (a broken install), the same rules hold without it:
+an image that would break the many-image limit is dropped at storage time and replaced
+by the omitted note at the boundary — degraded, but never a poisoned session.
+Dimensions are always read from the PNG/JPEG/GIF/WebP header in pure Python.
 """
 
 from __future__ import annotations
@@ -163,13 +166,19 @@ def b64_dimensions(data: str) -> tuple[int, int] | None:
     return dims
 
 
-# ── Downscaling (Pillow, optional) ─────────────────────────────────────────────────────
+# ── Downscaling (Pillow) ───────────────────────────────────────────────────────────────
+
+#: The most pixels we will ever DECODE. A small file can declare a huge canvas (a
+#: 13000×13000 PNG compresses to under 1 MB and decodes to ~500 MB of RGB), so anything
+#: past this is refused from its header, before a single pixel is decoded. 40 MP is
+#: above every real screenshot/photo a tool or user sends (an 8K frame is 33 MP).
+MAX_DECODE_PIXELS = 40_000_000
 
 
 def _pil():
     try:
         from PIL import Image, ImageOps
-    except Exception:  # noqa: BLE001 — Pillow absent (lean install) → callers degrade
+    except Exception:  # noqa: BLE001 — Pillow missing (it is a core dep; a broken install) → callers degrade
         return None
     return Image, ImageOps
 
@@ -178,29 +187,57 @@ def pillow_available() -> bool:
     return _pil() is not None
 
 
+def _too_many_pixels(dims: tuple[int, int] | None) -> bool:
+    return dims is not None and dims[0] * dims[1] > MAX_DECODE_PIXELS
+
+
+def _to_8bit(im):
+    """Bring a high-bit-depth single-channel image (``I;16*``, ``I``, ``F``) into 8-bit ``L``.
+
+    Pillow's ``convert("L"/"RGB")`` CLIPS these modes rather than scaling them, so a
+    16-bit PNG came out almost entirely white. 16-bit data is scaled by 1/257 (keeps the
+    absolute brightness); anything wider is scaled by its own maximum."""
+    if im.mode.startswith("I;16"):
+        im = im.convert("I")
+    if im.mode not in ("I", "F"):
+        return im
+    lo, hi = im.getextrema()
+    if hi > 255:
+        divisor = 257.0 if hi <= 65535 else hi / 255.0
+        im = im.point(lambda v: v * (1.0 / divisor))
+    return im.convert("L")
+
+
 def downscale(raw: bytes, *, max_side: int, max_bytes: int) -> tuple[bytes, str] | None:
     """Re-encode ``raw`` to fit ``max_side`` (long side, aspect preserved) and
     ``max_bytes``. JPEG for opaque images, PNG (then WebP) for ones with transparency.
-    Returns ``(bytes, mime)``, or None when Pillow is missing or the image can't be
-    decoded/fitted (callers then keep or omit the original)."""
+    Returns ``(bytes, mime)``, or None when Pillow is missing, the canvas is over
+    :data:`MAX_DECODE_PIXELS`, or the image can't be decoded/fitted."""
     pil = _pil()
     if pil is None:
         return None
     Image, ImageOps = pil
     try:
         with Image.open(BytesIO(raw)) as src:
+            # ``open`` reads only the header: refuse a decompression bomb BEFORE decoding
+            # (covers formats the pure-Python sniffer doesn't know, too).
+            w0, h0 = src.size
+            if w0 * h0 > MAX_DECODE_PIXELS:
+                return None
             src.seek(0)  # first frame of an animation
+            if src.format == "JPEG":
+                # Let libjpeg decode at 1/2, 1/4 or 1/8 scale — never below the target.
+                scale = min(1.0, max_side / max(w0, h0))
+                src.draft("RGB", (max(1, int(w0 * scale) + 1), max(1, int(h0 * scale) + 1)))
             im = ImageOps.exif_transpose(src) or src
             im.load()
             has_alpha = im.mode in ("RGBA", "LA", "PA") or (im.mode == "P" and "transparency" in im.info)
+            im = _to_8bit(im)
             im = im.convert("RGBA" if has_alpha else "RGB")
             side = max_side
             for _ in range(6):
-                w, h = im.size
-                scale = min(1.0, side / max(w, h))
-                frame = im if scale >= 1.0 else im.resize(
-                    (max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS
-                )
+                frame = im.copy()
+                frame.thumbnail((side, side), Image.LANCZOS, reducing_gap=3.0)
                 encodings = (
                     [("PNG", "image/png", {"optimize": True}), ("WEBP", "image/webp", {"quality": 85})]
                     if has_alpha
@@ -214,41 +251,57 @@ def downscale(raw: bytes, *, max_side: int, max_bytes: int) -> tuple[bytes, str]
                 side = int(max(frame.size) * 0.75)
                 if side < 64:
                     return None
-    except Exception:  # noqa: BLE001 — undecodable / decompression bomb / codec gap
+    except Exception:  # noqa: BLE001 — undecodable / Pillow's own bomb guard / codec gap
         log.debug("[image_limits] downscale failed", exc_info=True)
     return None
 
 
-def fit_image(raw: bytes, mime: str, *, max_side: int | None = None, max_bytes: int = DEFAULT_MAX_BYTES) -> tuple[bytes, str]:
-    """Source-side fit: the image unchanged when it is already within ``max_side`` and
-    ``max_bytes``, else a downscaled re-encode. Without Pillow (or for an image Pillow
-    can't read) the ORIGINAL comes back — the request boundary still guards it."""
+def fit_image(
+    raw: bytes, mime: str, *, max_side: int | None = None, max_bytes: int = DEFAULT_MAX_BYTES
+) -> tuple[bytes, str] | None:
+    """Source-side fit, run before an image is STORED in the history.
+
+    Returns the image unchanged when it is already within ``max_side`` and
+    ``max_bytes``, else a downscaled re-encode. Returns **None** — the caller must drop
+    the image, with a note — when it can't be made safe: a canvas over
+    :data:`MAX_DECODE_PIXELS`, or an image over the 2000 px many-image limit that could
+    not be downscaled (undecodable, or Pillow missing from a broken install). Storing
+    such an image is what poisons a session, so it is never kept. An image whose only
+    problem is unknown dimensions or bytes comes back unchanged; the caller's own byte
+    cap and the request boundary still apply."""
     side = max_side or _limits["max_side"]
     dims = image_dimensions(raw)
+    if _too_many_pixels(dims):
+        return None
     if dims is not None and max(dims) <= side and len(raw) <= max_bytes:
-        return raw, mime
-    if dims is None and len(raw) <= max_bytes and not pillow_available():
         return raw, mime
     out = downscale(raw, max_side=side, max_bytes=max_bytes)
     if out is None:
+        if dims is not None and max(dims) > MANY_IMAGES_MAX_SIDE:
+            return None
         return raw, mime
     if dims is not None and max(dims) <= side and len(out[0]) >= len(raw):
         return raw, mime  # nothing to gain
     return out
 
 
-def fit_data_uri(uri: str, *, max_side: int | None = None, max_bytes: int = DEFAULT_MAX_BYTES) -> str:
+def fit_data_uri(uri: str, *, max_side: int | None = None, max_bytes: int = DEFAULT_MAX_BYTES) -> str | None:
     """:func:`fit_image` for a ``data:<mime>;base64,…`` URI. Any other URI (http, a
-    malformed data URI) is returned unchanged."""
+    malformed data URI) is returned unchanged; None means the image must be dropped."""
     parsed = _parse_data_uri(uri)
     if parsed is None:
         return uri
     mime, data = parsed
+    if _too_many_pixels(b64_dimensions(data)):
+        return None
     try:
         raw = base64.b64decode(data, validate=False)
     except (binascii.Error, ValueError):
         return uri
-    new_raw, new_mime = fit_image(raw, mime, max_side=max_side, max_bytes=max_bytes)
+    fitted = fit_image(raw, mime, max_side=max_side, max_bytes=max_bytes)
+    if fitted is None:
+        return None
+    new_raw, new_mime = fitted
     if new_raw is raw:
         return uri
     return f"data:{new_mime};base64,{base64.b64encode(new_raw).decode()}"
@@ -277,6 +330,9 @@ def _fit_b64_hard(data: str, mime: str, side_limit: int) -> tuple[str, str] | No
     """``(data, mime)`` unchanged when inside the hard limits, a downscaled copy when not,
     or None when it breaks a limit and can't be fixed (→ the caller omits it)."""
     dims = b64_dimensions(data)
+    if _too_many_pixels(dims):
+        log.warning("[image_limits] an image of %dx%d px exceeds the decode cap; sending a placeholder", *dims)
+        return None
     if dims is not None and max(dims) <= side_limit and len(data) <= HARD_MAX_IMAGE_B64_CHARS:
         return data, mime
     if dims is None and len(data) <= HARD_MAX_IMAGE_B64_CHARS:
@@ -298,156 +354,253 @@ def _fit_b64_hard(data: str, mime: str, side_limit: int) -> tuple[str, str] | No
     if result is None:
         log.warning(
             "[image_limits] an image (%s, %s b64 chars) breaks the provider limit and could not be "
-            "downscaled%s; sending a placeholder instead",
+            "downscaled; sending a placeholder instead",
             f"{dims[0]}x{dims[1]}" if dims else "unknown size",
             len(data),
-            "" if pillow_available() else " (Pillow is not installed)",
         )
     return result
 
 
-def _image_ref(block: Any, wire: str) -> tuple[str, str] | None:
-    """``(mime, base64)`` for an inline image block of ``wire``, else None."""
+def _image_kind(block: Any) -> tuple[str, str | None, str | None] | None:
+    """Classify an image block in ANY of the three wires this runtime speaks:
+
+    - Anthropic Messages ``{"type": "image", "source": {...}}``
+    - OpenAI chat ``{"type": "image_url", "image_url": {"url": ...}}``
+    - OpenAI Responses ``{"type": "input_image", "image_url": "...", "file_id"?}``
+
+    → ``("b64", mime, data)`` for an inline base64 image (measurable, downscalable),
+    ``("ref", None, None)`` for one the provider fetches itself (http URL, file id — it
+    still COUNTS toward the many-image limit, but can't be measured or resized), or
+    None for a non-image block."""
     if not isinstance(block, dict):
         return None
-    if wire == "anthropic":
-        src = block.get("source") if block.get("type") == "image" else None
-        if isinstance(src, dict) and src.get("type") == "base64" and isinstance(src.get("data"), str):
-            return str(src.get("media_type") or "image/png"), src["data"]
-        return None
-    if block.get("type") == "image_url":
+    kind = block.get("type")
+    if kind == "image":
+        src = block.get("source")
+        if isinstance(src, dict):  # Anthropic wire
+            if src.get("type") == "base64" and isinstance(src.get("data"), str):
+                return "b64", str(src.get("media_type") or "image/png"), src["data"]
+            return "ref", None, None
+        # LangChain standard blocks (seen on stored messages, before wire conversion):
+        # v1 ``{"base64": …}`` / v0 ``{"source_type": "base64", "data": …}``.
+        data = block.get("base64") or (block.get("data") if block.get("source_type") == "base64" else None)
+        if isinstance(data, str):
+            return "b64", str(block.get("mime_type") or "image/png"), data
+        return "ref", None, None
+    if kind == "image_url":
         iu = block.get("image_url")
-        url = iu.get("url") if isinstance(iu, dict) else iu
-        return _parse_data_uri(url)
+        parsed = _parse_data_uri(iu.get("url") if isinstance(iu, dict) else iu)
+        return ("b64", *parsed) if parsed else ("ref", None, None)
+    if kind == "input_image":
+        parsed = _parse_data_uri(block.get("image_url"))
+        return ("b64", *parsed) if parsed else ("ref", None, None)
     return None
 
 
-def _with_image(block: dict, wire: str, data: str, mime: str) -> dict:
-    if wire == "anthropic":
-        return {**block, "source": {**block["source"], "media_type": mime, "data": data}}
-    iu = block.get("image_url")
+def _with_image(block: dict, data: str, mime: str) -> dict:
     uri = f"data:{mime};base64,{data}"
+    kind = block.get("type")
+    if kind == "image":
+        if isinstance(block.get("source"), dict):
+            return {**block, "source": {**block["source"], "media_type": mime, "data": data}}
+        return {**block, ("base64" if "base64" in block else "data"): data, "mime_type": mime}
+    if kind == "input_image":
+        return {**block, "image_url": uri}
+    iu = block.get("image_url")
     return {**block, "image_url": {**iu, "url": uri} if isinstance(iu, dict) else uri}
 
 
 def _caption(content: list) -> str:
     for b in content:
-        if isinstance(b, dict) and b.get("type") == "text" and str(b.get("text") or "").strip():
-            text = " ".join(str(b["text"]).split())
-            return text[:117] + "…" if len(text) > 120 else text
-        if isinstance(b, str) and b.strip():
-            text = " ".join(b.split())
+        text = ""
+        if isinstance(b, dict) and b.get("type") in ("text", "input_text"):
+            text = str(b.get("text") or "")
+        elif isinstance(b, str):
+            text = b
+        text = " ".join(text.split())
+        if text:
             return text[:117] + "…" if len(text) > 120 else text
     return "earlier image"
 
 
-def _iter_images(messages: list, wire: str):
-    """Yield ``(msg_idx, path)`` for every inline image, in conversation order. ``path``
-    is a tuple of content indexes (one level of ``tool_result`` nesting on Anthropic)."""
-    for mi, msg in enumerate(messages):
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if not isinstance(content, list):
+# A content list is addressed as (top_key, item_idx, field, outer_idx); outer_idx is the
+# index of an Anthropic ``tool_result`` block whose nested ``content`` holds the list, or
+# None for the item's own list. An image is that address plus its index in the list.
+_TOP_FIELDS = {"messages": ("content",), "input": ("content", "output")}
+
+
+def _content_lists(payload: dict):
+    for top, fields in _TOP_FIELDS.items():
+        items = payload.get(top)
+        if not isinstance(items, list):
             continue
-        for bi, block in enumerate(content):
-            if _image_ref(block, wire):
-                yield mi, (bi,)
-            elif isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("content"), list):
-                for ci, inner in enumerate(block["content"]):
-                    if _image_ref(inner, wire):
-                        yield mi, (bi, ci)
+        for mi, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            for field in fields:
+                content = item.get(field)
+                if not isinstance(content, list):
+                    continue
+                yield (top, mi, field, None), content
+                for bi, block in enumerate(content):
+                    if isinstance(block, dict) and block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                        yield (top, mi, field, bi), block["content"]
 
 
-def clamp_request_images(payload: dict, *, wire: str, max_images: int | None = None) -> dict:
-    """Return ``payload`` with every inline image inside the provider limits.
+def _plan(kinds: list[str], max_images: int | None = None) -> tuple[int, int, bool, int]:
+    """``(cap, n_drop, omit_refs, side_limit)`` for a request whose images, oldest
+    first, are of ``kinds`` (``"b64"`` / ``"ref"``) — shared by the clamp and the
+    off-loop prewarm so both reach the same side limit (and so the same cache keys)."""
+    cap = _limits["max_images"] if max_images is None else max(0, int(max_images))
+    n_drop = len(kinds) - cap if cap and len(kinds) > cap else 0
+    kept = kinds[n_drop:]
+    omit_refs = len(kept) > MANY_IMAGES_THRESHOLD
+    n_kept = len(kept) - (kept.count("ref") if omit_refs else 0)
+    return cap, n_drop, omit_refs, MANY_IMAGES_MAX_SIDE if n_kept > MANY_IMAGES_THRESHOLD else HARD_MAX_SIDE
 
-    ``wire`` is ``"anthropic"`` (Messages API ``image`` blocks, including those nested in
-    ``tool_result``) or ``"openai"`` (chat-completions ``image_url`` data URIs). Steps:
 
-    1. Keep the newest ``max_images`` images (default ``model.max_images_per_request``);
-       older ones become ``[image omitted: <caption>]`` text.
-    2. Each kept image must fit the hard side limit (2000 px when more than 20 images
-       remain, else 8000) and the per-image size cap — downscaled when it doesn't, or
-       replaced by the note when it can't be.
-    3. Newest-first, images past the request's total image budget are omitted too.
+def _needs_work(data: str, side_limit: int) -> bool:
+    dims = b64_dimensions(data)
+    if _too_many_pixels(dims):
+        return False  # refused from the header: no decode, nothing to precompute
+    return len(data) > HARD_MAX_IMAGE_B64_CHARS or (dims is not None and max(dims) > side_limit)
 
-    Copy-on-write: only the messages/blocks that change are rebuilt, so the message
-    objects the caller built from (the checkpointed history) are never mutated. A
-    payload with no images is returned as the same object.
+
+async def aprewarm(messages: Any) -> None:
+    """Do the expensive part of :func:`clamp_request_images` OFF the event loop.
+
+    The clamp runs inside the client's synchronous ``_get_request_payload``, which the
+    async stream path calls on the loop; decoding and re-encoding a large image there
+    would stall every other coroutine. The async entry points await this first: it reads
+    headers (cheap), and only if some image actually needs downscaling does it fill the
+    fit cache in a worker thread, so the clamp then finds every result cached. Never
+    raises — on any problem the clamp simply does the work itself."""
+    try:
+        images: list[tuple[str, str | None, str | None]] = []
+        for msg in messages or []:
+            content = getattr(msg, "content", None)
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                kind = _image_kind(block)
+                if kind:
+                    images.append(kind)
+        if not images:
+            return
+        _cap, n_drop, _omit_refs, side_limit = _plan([k[0] for k in images])
+        todo = [(data, mime) for kind, mime, data in images[n_drop:] if kind == "b64" and _needs_work(data, side_limit)]
+        if not todo:
+            return
+        import asyncio
+
+        await asyncio.to_thread(lambda: [_fit_b64_hard(data, mime, side_limit) for data, mime in todo])
+    except Exception:  # noqa: BLE001 — prewarming is an optimisation, never a failure
+        log.debug("[image_limits] prewarm skipped", exc_info=True)
+
+
+def clamp_request_images(payload: dict, *, max_images: int | None = None) -> dict:
+    """Return ``payload`` with every image inside the provider limits.
+
+    Works on an Anthropic Messages body (``image`` blocks, including those nested in
+    ``tool_result``), an OpenAI chat-completions body (``image_url``) and an OpenAI
+    Responses body (``input`` items' ``input_image`` in ``content``/``output``). Steps:
+
+    1. EVERY image counts — inline base64 and provider-fetched (URL / file id) alike.
+       Keep the newest ``max_images`` (default ``model.max_images_per_request``); older
+       ones become ``[image omitted: <caption>]`` text.
+    2. If more than 20 images remain, the provider applies its 2000 px many-image limit
+       to all of them — including the URL images it fetches, which we can neither
+       measure nor resize, so those are omitted too in that case.
+    3. Each kept inline image must fit the side limit (2000 px when more than 20 remain,
+       else 8000) and the per-image size cap — downscaled when it doesn't, or omitted
+       when it can't be (including any canvas over :data:`MAX_DECODE_PIXELS`).
+    4. Newest-first, inline images past the request's total image budget are omitted.
+
+    Copy-on-write: only the items/blocks that change are rebuilt, so the message objects
+    the caller built from (the checkpointed history) are never mutated. A payload with
+    no images is returned as the same object.
     """
-    messages = payload.get("messages") if isinstance(payload, dict) else None
-    if not isinstance(messages, list):
+    if not isinstance(payload, dict):
         return payload
-    refs = list(_iter_images(messages, wire))
+    lists = list(_content_lists(payload))
+    refs: list[tuple[tuple, int, tuple]] = []  # (list address, index, kind)
+    for addr, content in lists:
+        for i, block in enumerate(content):
+            kind = _image_kind(block)
+            if kind:
+                refs.append((addr, i, kind))
     if not refs:
         return payload
 
-    cap = _limits["max_images"] if max_images is None else max(0, int(max_images))
-    n_drop = len(refs) - cap if cap and len(refs) > cap else 0
-    kept = len(refs) - n_drop
-    side_limit = MANY_IMAGES_MAX_SIDE if kept > MANY_IMAGES_THRESHOLD else HARD_MAX_SIDE
+    cap, n_drop, omit_refs, side_limit = _plan([k[0] for _a, _i, k in refs], max_images)
+    omit: set[tuple] = {(addr, i) for addr, i, _k in refs[:n_drop]}
+    kept = refs[n_drop:]
+    if omit_refs:
+        omit.update((addr, i) for addr, i, k in kept if k[0] == "ref")
+        kept = [r for r in kept if (r[0], r[1]) not in omit]
 
-    def _block_at(mi: int, path: tuple) -> dict:
-        b = messages[mi]["content"][path[0]]
-        return b["content"][path[1]] if len(path) == 2 else b
-
-    # replacement per image: ("omit", None) | ("image", (data, mime)) | None (unchanged)
-    decisions: dict[tuple, tuple[str, Any] | None] = {}
+    replace: dict[tuple, tuple[str, str]] = {}
     budget = REQUEST_IMAGE_B64_BUDGET
-    for idx in range(len(refs) - 1, -1, -1):  # newest first, so the budget favours recent
-        mi, path = refs[idx]
-        if idx < n_drop or budget <= 0:
-            decisions[(mi, path)] = ("omit", None)
+    for addr, i, (kind, mime, data) in reversed(kept):  # newest first: the budget favours recent
+        if kind != "b64":
             continue
-        block = _block_at(mi, path)
-        mime, data = _image_ref(block, wire)
-        fitted = _fit_b64_hard(data, mime, side_limit)
+        fitted = _fit_b64_hard(data, mime, side_limit) if budget > 0 else None
         if fitted is None or len(fitted[0]) > budget:
-            decisions[(mi, path)] = ("omit", None)
+            omit.add((addr, i))
             continue
         budget -= len(fitted[0])
-        decisions[(mi, path)] = None if fitted == (data, mime) else ("image", fitted)
+        if fitted != (data, mime):
+            replace[(addr, i)] = fitted
 
-    if not any(decisions.values()):
+    if not omit and not replace:
         return payload
 
-    def _rebuild(content: list, prefix: tuple, mi: int) -> list:
+    content_by_addr = dict(lists)
+
+    def _rebuilt(addr: tuple) -> list:
+        content = content_by_addr[addr]
         out = []
         for i, block in enumerate(content):
-            key = (mi, (*prefix, i))
-            if key in decisions and decisions[key] is not None:
-                kind, val = decisions[key]
-                if kind == "omit":
-                    note = {"type": "text", "text": f"[image omitted: {_caption(content)}]"}
-                    if isinstance(block, dict) and "cache_control" in block:
-                        note["cache_control"] = block["cache_control"]  # keep the cache breakpoint
-                    out.append(note)
-                else:
-                    out.append(_with_image(block, wire, val[0], val[1]))
-            elif (
-                not prefix
-                and isinstance(block, dict)
-                and block.get("type") == "tool_result"
-                and isinstance(block.get("content"), list)
-                and any(k[0] == mi and len(k[1]) == 2 and k[1][0] == i and v for k, v in decisions.items())
-            ):
-                out.append({**block, "content": _rebuild(block["content"], (i,), mi)})
+            key = (addr, i)
+            if key in omit:
+                note = {
+                    "type": "input_text" if block.get("type") == "input_image" else "text",
+                    "text": f"[image omitted: {_caption(content)}]",
+                }
+                if "cache_control" in block:
+                    note["cache_control"] = block["cache_control"]  # keep the cache breakpoint
+                out.append(note)
+            elif key in replace:
+                out.append(_with_image(block, *replace[key]))
+            elif addr[3] is None and (addr[:3] + (i,)) in touched_addrs:
+                out.append({**block, "content": _rebuilt(addr[:3] + (i,))})
             else:
                 out.append(block)
         return out
 
-    touched = {mi for (mi, _p), v in decisions.items() if v is not None}
-    new_messages = [
-        {**msg, "content": _rebuild(msg["content"], (), mi)} if mi in touched else msg
-        for mi, msg in enumerate(messages)
-    ]
-    omitted = sum(1 for v in decisions.values() if v and v[0] == "omit")
-    resized = sum(1 for v in decisions.values() if v and v[0] == "image")
+    touched_addrs = {addr for addr, _i in (*omit, *replace)}
+    new_payload = dict(payload)
+    for top in _TOP_FIELDS:
+        items = payload.get(top)
+        if not isinstance(items, list):
+            continue
+        touched_items = {a[1] for a in touched_addrs if a[0] == top}
+        if not touched_items:
+            continue
+        new_items = list(items)
+        for mi in touched_items:
+            item = dict(items[mi])
+            for field in {a[2] for a in touched_addrs if a[0] == top and a[1] == mi}:
+                item[field] = _rebuilt((top, mi, field, None))
+            new_items[mi] = item
+        new_payload[top] = new_items
+
     log.info(
         "[image_limits] request images: %d total, %d downscaled, %d omitted (cap %s, side ≤ %d)",
         len(refs),
-        resized,
-        omitted,
+        len(replace),
+        len(omit),
         cap or "none",
         side_limit,
     )
-    return {**payload, "messages": new_messages}
+    return new_payload

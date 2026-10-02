@@ -202,7 +202,7 @@ FIELDS: list[Field] = [
         "Images a tool returns or you attach are downscaled so their longest side is at most "
         "this many pixels before they enter the conversation (1568 is Anthropic's recommended "
         "size). Capped at 2000: a larger image in the history makes every later request fail "
-        "once the conversation holds more than 20 images. Needs Pillow to downscale.",
+        "once the conversation holds more than 20 images.",
         minimum=64,
         maximum=2000,
     ),

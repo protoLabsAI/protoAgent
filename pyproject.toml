@@ -102,6 +102,12 @@ dependencies = [
   "python-docx>=1.1",
   # Markdown → HTML for the `docs` plugin's reader view (server-side render, offline).
   "markdown-it-py>=3.0",
+  # Image downscaling (graph/image_limits.py). Correctness-critical, not cosmetic: an image
+  # over 2000 px stored in the checkpointed history makes every later request 400 once
+  # the conversation passes 20 images (Anthropic's many-image limit), poisoning the
+  # session. Tool screenshots and attachments are downscaled before they are stored, and
+  # every outgoing request is clamped. The desktop sidecar already bundled it.
+  "pillow>=10",
   # search_files(regex=true) (#2755) compiles a model-supplied pattern — stdlib `re`
   # has no match timeout, so a catastrophic-backtracking pattern (e.g. `(a|a)+b`) can
   # hang the process for a caller-controlled amount of time (verified: ~30 chars of
