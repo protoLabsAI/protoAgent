@@ -20,9 +20,12 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import time
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from graph.config import LangGraphConfig
 
@@ -105,6 +108,13 @@ def oauth_llm(monkeypatch):
     llm.max_retries = 0
     yield llm
     ao._reset_token_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_sleep(monkeypatch):
+    import graph.middleware.compaction as comp
+
+    monkeypatch.setattr(comp, "_SUMMARY_RETRY_DELAY_S", 0.0)
 
 
 def _summarizer(model):
@@ -233,3 +243,172 @@ def test_graph_control_flow_still_propagates_from_compaction(monkeypatch):
     monkeypatch.setattr(SummarizationMiddleware, "before_model", _boom)
     with pytest.raises(GraphInterrupt):
         object.__new__(CountingSummarizationMiddleware).before_model({"messages": []}, None)
+
+
+# ── identity-prefix edge cases (review of #4001) ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "system, expected",
+    [
+        # Trailing whitespace only → no blank second block.
+        (IDENTITY + " ", [{"type": "text", "text": IDENTITY}]),
+        (IDENTITY + "\n\n  \n", [{"type": "text", "text": IDENTITY}]),
+        ("   ", [{"type": "text", "text": IDENTITY}]),
+        # Not followed by whitespace → a different sentence, never split mid-word.
+        (IDENTITY + "ai rules", [{"type": "text", "text": IDENTITY}, {"type": "text", "text": IDENTITY + "ai rules"}]),
+        # Remainder is stripped.
+        (IDENTITY + " \n You are Aria. \n", [{"type": "text", "text": IDENTITY}, {"type": "text", "text": "You are Aria."}]),
+    ],
+)
+def test_shape_oauth_system_string_edges(system, expected):
+    from graph.providers.anthropic_oauth import shape_oauth_system
+
+    assert shape_oauth_system(system) == expected
+
+
+def test_shape_oauth_system_empty_remainder_moves_cache_control():
+    from graph.providers.anthropic_oauth import shape_oauth_system
+
+    cc = {"type": "ephemeral"}
+    out = shape_oauth_system(
+        [{"type": "text", "text": IDENTITY + "  ", "cache_control": cc}, {"type": "text", "text": "You are Aria."}]
+    )
+    assert out == [
+        {"type": "text", "text": IDENTITY},
+        {"type": "text", "text": "You are Aria.", "cache_control": cc},
+    ]
+    # Alone: dropped entirely, the identity block stays key-exact.
+    assert shape_oauth_system([{"type": "text", "text": IDENTITY + "\n", "cache_control": cc}]) == [
+        {"type": "text", "text": IDENTITY}
+    ]
+    # Mid-word in a list block: untouched, identity prepended.
+    block = {"type": "text", "text": IDENTITY + "ai", "cache_control": cc}
+    assert shape_oauth_system([block]) == [{"type": "text", "text": IDENTITY}, block]
+
+
+# ── compaction failure policy (review of #4001) ───────────────────────────────
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code: int, text: str | None = None):
+        super().__init__(text or f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+class _ScriptedModel(BaseChatModel):
+    """Counts calls; raises ``error`` (if set) else answers with a summary."""
+
+    calls: int = 0
+    error: Exception | None = None
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return ChatResult(generations=[ChatGeneration(message=AIMessage("a summary"))])
+
+
+@pytest.mark.parametrize("status, expected_calls", [(400, 1), (401, 1), (403, 1), (429, 2), (503, 2)])
+def test_summary_retries_only_transient_errors(status, expected_calls):
+    model = _ScriptedModel(error=_StatusError(status))
+    assert _summarizer(model).before_model(_long_state(), None) is None
+    assert model.calls == expected_calls
+
+
+def test_persistent_failure_backs_off_instead_of_retrying_every_step(caplog):
+    """The confirmed review repro: before_model 3x on an always-failing model was 9
+    calls + ~11.6s of sleeps. Now: one failed attempt, then the thread is paused."""
+    import graph.middleware.compaction as comp
+
+    model = _ScriptedModel(error=_StatusError(400))
+    mw = _summarizer(model)
+    with caplog.at_level(logging.WARNING, logger="graph.middleware.compaction"):
+        for _ in range(3):
+            assert mw.before_model(_long_state(), None) is None
+    assert model.calls == 1
+    paused = [r for r in caplog.records if "over the compaction trigger" in r.getMessage()]
+    assert len(paused) == 1, "the skip warning is emitted once per backoff window, not per step"
+
+    # Window expires → retried; a second failure doubles the window.
+    mw._backoff["s-test"]["until"] = 0
+    assert mw.before_model(_long_state(), None) is None
+    assert model.calls == 2
+    assert mw._backoff["s-test"]["failures"] == 2
+    remaining = mw._backoff["s-test"]["until"] - time.monotonic()
+    assert remaining > comp._BACKOFF_BASE_S * 1.5  # 2x base
+
+    # Recovery: expiry + a working model compacts and clears the backoff.
+    mw._backoff["s-test"]["until"] = 0
+    model.error = None
+    assert mw.before_model(_long_state(), None) is not None
+    assert "s-test" not in mw._backoff
+
+
+@pytest.mark.asyncio
+async def test_persistent_failure_backs_off_async():
+    model = _ScriptedModel(error=_StatusError(401))
+    mw = _summarizer(model)
+    for _ in range(3):
+        assert await mw.abefore_model(_long_state(), None) is None
+    assert model.calls == 1
+
+
+def test_backoff_is_per_thread():
+    model = _ScriptedModel(error=_StatusError(400))
+    mw = _summarizer(model)
+    mw.before_model(_long_state(), None)
+    mw.before_model({**_long_state(), "session_id": "s-other"}, None)
+    assert model.calls == 2  # a different thread is not paused by s-test's failure
+
+
+class _Req:
+    def __init__(self, state):
+        self.state = state
+
+
+def test_overflow_during_backoff_names_the_compaction_failure():
+    from graph.llm import is_context_overflow_error
+    from graph.middleware.compaction import CompactionFailedContextOverflow
+
+    mw = _summarizer(_ScriptedModel(error=_StatusError(429)))
+    mw.before_model(_long_state(), None)  # fails → backoff
+
+    overflow = _StatusError(400, "prompt is too long: 210000 tokens > 200000 maximum")
+
+    def _handler(_req):
+        raise overflow
+
+    with pytest.raises(CompactionFailedContextOverflow) as ei:
+        mw.wrap_model_call(_Req(_long_state()), _handler)
+    msg = str(ei.value)
+    assert "prompt is too long" in msg and "auto-compaction has been failing" in msg and "HTTP 429" in msg
+    assert ei.value.__cause__ is overflow
+    assert is_context_overflow_error(ei.value)  # server overflow recovery still matches
+
+    # Unrelated errors, and overflows on a healthy thread, pass through untouched.
+    def _other(_req):
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        mw.wrap_model_call(_Req(_long_state()), _other)
+    with pytest.raises(_StatusError):
+        mw.wrap_model_call(_Req({"session_id": "s-healthy"}), _handler)
+
+
+@pytest.mark.asyncio
+async def test_overflow_during_backoff_async():
+    from graph.middleware.compaction import CompactionFailedContextOverflow
+
+    mw = _summarizer(_ScriptedModel(error=_StatusError(400)))
+    await mw.abefore_model(_long_state(), None)
+
+    async def _handler(_req):
+        raise RuntimeError("Error code: 400 - prompt is too long")
+
+    with pytest.raises(CompactionFailedContextOverflow):
+        await mw.awrap_model_call(_Req(_long_state()), _handler)

@@ -51,12 +51,22 @@ def _split_leading_prefix(text: str) -> str | None:
     """The remainder of ``text`` after a leading identity line, or None if absent.
 
     Handles the merged ``"{prefix}\\n\\n{rest}"`` shape so an already-"prefixed"
-    prompt is REPAIRED into the exact-block shape rather than skipped as done.
+    prompt is REPAIRED into the exact-block shape rather than skipped as done. The
+    line only counts as a prefix when followed by whitespace or the end of the text
+    (``"{prefix}ai ..."`` is some other sentence, not the identity line), and the
+    remainder is stripped — "" means nothing is left.
     """
     stripped = text.lstrip()
     if not stripped.startswith(CLAUDE_CODE_SYSTEM_PREFIX):
         return None
-    return stripped[len(CLAUDE_CODE_SYSTEM_PREFIX) :].lstrip("\n")
+    rest = stripped[len(CLAUDE_CODE_SYSTEM_PREFIX) :]
+    if rest and not rest[0].isspace():
+        return None
+    return rest.strip()
+
+
+def _is_blank_block(block: Any) -> bool:
+    return isinstance(block, dict) and block.get("type", "text") == "text" and not str(block.get("text", "")).strip()
 
 
 def shape_oauth_system(system: Any) -> list[Any]:
@@ -65,11 +75,13 @@ def shape_oauth_system(system: Any) -> list[Any]:
     The single source of the OAuth system-prompt shape (ADR 0097, #2763): the FIRST
     block must be byte-exactly :data:`CLAUDE_CODE_SYSTEM_PREFIX`, on its own, with no
     extra keys — anything else (no system at all, a string, a merged first block) is
-    refused with a fake 429. Idempotent, never stacks the line, and keeps a merged
-    block's other keys (e.g. ``cache_control``) on the REMAINDER, not the identity line.
+    refused with a fake 429. Idempotent, never stacks the line, never emits a blank
+    text block, and keeps a merged block's other keys (e.g. ``cache_control``) on the
+    REMAINDER, not the identity line — or, when nothing remains, moves its
+    ``cache_control`` to the last non-blank block so the breakpoint isn't lost.
     """
     prefix_block = {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
-    if system is None or system == "" or system == []:
+    if system is None or system == [] or (isinstance(system, str) and not system.strip()):
         return [prefix_block]
     if isinstance(system, str):
         rest = _split_leading_prefix(system)
@@ -79,15 +91,23 @@ def shape_oauth_system(system: Any) -> list[Any]:
         first = system[0]
         if first == prefix_block:
             return list(system)
-        first_text = first.get("text", "") if isinstance(first, dict) else str(first)
-        rest = _split_leading_prefix(first_text) if isinstance(first, dict) else None
-        if rest is not None:
-            # Covers both "starts with the line + more" and "exactly the line but
-            # with extra keys" (e.g. cache_control on the identity block).
-            tail = [{**first, "text": rest}] if rest else []
-            return [prefix_block, *tail, *system[1:]]
-        return [prefix_block, *system]
+        rest = _split_leading_prefix(str(first.get("text", ""))) if isinstance(first, dict) and first.get("type", "text") == "text" else None
+        if rest is None:
+            return [prefix_block, *system]
+        if rest:
+            return [prefix_block, {**first, "text": rest}, *system[1:]]
+        # Nothing left of the first block (it was the line, maybe with whitespace or
+        # extra keys): drop it, carrying a cache breakpoint to the last real block.
+        tail = [dict(b) if isinstance(b, dict) else b for b in system[1:]]
+        cache = first.get("cache_control")
+        if cache is not None:
+            for block in reversed(tail):
+                if isinstance(block, dict) and not _is_blank_block(block):
+                    block.setdefault("cache_control", cache)
+                    break
+        return [prefix_block, *tail]
     return [prefix_block]
+
 
 # How long a resolved OAuth token is reused before the credential store is re-read.
 # Resolution can shell out to the macOS Keychain (`security find-generic-password`), so
