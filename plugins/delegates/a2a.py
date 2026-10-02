@@ -18,6 +18,7 @@ import uuid
 from contextvars import ContextVar
 
 from .base import (
+    KIND_STILL_RUNNING,
     KIND_TIMEOUT,
     KIND_UNREACHABLE,
     Adapter,
@@ -283,17 +284,21 @@ def _still_running_message(
             "(its configurable poll_timeout_s)"
         )
         raise_hint = "raise this delegate's poll_timeout_s"
+    # The exact call that collects it (#3775): a ``resume_task_id`` on a task that is still
+    # WORKING waits on that same task with ``GetTask`` only — it never re-sends the work.
+    collect = f"delegate_to(target={d.name!r}, query='collect the result', resume_task_id={task_id!r})"
     if auto_delivered:
         delivery = (
-            "Its answer will be delivered automatically if it finishes; do NOT re-send this work "
-            f"(that double-boards it). To pick it up sooner, resume with delegate_to(..., "
-            f"resume_task_id={task_id!r})"
+            "Its answer will be delivered automatically on a later turn if it finishes; do NOT "
+            f"re-send this work (that double-boards it). To collect it sooner, call {collect} — that "
+            "waits on the SAME task (re-sending nothing) and returns its answer once it lands"
         )
     else:
         delivery = (
-            "Nothing is polling it now, so its answer will NOT arrive on its own — pick it up with "
-            f"delegate_to(..., resume_task_id={task_id!r}) once it finishes; do NOT re-send this work "
-            "(that double-boards it on a peer still busy with the first task)"
+            "Nothing is polling it now, so its answer will NOT arrive on its own — collect it with "
+            f"{collect}, which waits on the SAME task (re-sending nothing) and returns its answer once "
+            "it lands; do NOT re-send this work (that double-boards it on a peer still busy with the "
+            "first task)"
         )
     return (
         f"{head} — the peer may still be working on task {task_id} (state={state}{last_status}). "
@@ -1037,29 +1042,43 @@ class A2aAdapter(Adapter):
         # than ``poll_timeout_s`` (one long tool call streams nothing between its start and
         # end frames). Without one, the no-progress ``poll_timeout`` is the bound.
         hard_deadline = (started if started is not None else t0) + send_timeout if send_timeout is not None else None
+        # A resume_task_id naming a task that is still WORKING collects it instead of resuming.
+        collecting = False
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
                 parked = await _rpc_tracked(client, "GetTask", {"id": resume_task_id})
                 ptask = parked.get("task", parked) or {}
                 pstate = (ptask.get("status") or {}).get("state")
                 if _is_terminal(pstate):
+                    # Collected here, so a room collection of the same task stands down (#3775).
+                    conversations.forget_pending_task(d.name, d.url, str(resume_task_id), credential)
                     done_text = _extract_text(parked)
                     return (
                         f"(task {resume_task_id} had already finished — state {pstate}; nothing to resume)"
                         + (f"\n\n{done_text}" if done_text else "")
                     )
-                if not _is_input_required(pstate):
+                if not _is_input_required(pstate) and not pstate:
                     raise DelegateError(
-                        f"delegate {d.name!r}: task {resume_task_id} is {pstate or 'unknown'}, not parked "
+                        f"delegate {d.name!r}: task {resume_task_id} is in an unknown state, not parked "
                         "for input — it can't be resumed with an answer."
                     )
-                if ptask.get("contextId"):
+                if not _is_input_required(pstate):
+                    # Still WORKING (or SUBMITTED): this is a COLLECTION of a task an earlier
+                    # call stopped waiting on (#3775), not an answer to a park. Send nothing —
+                    # a SendMessage would hand the peer the "answer" as new input on a task
+                    # still busy — and just wait on the SAME task with GetTask, under this
+                    # call's bounds, through the ordinary poll / classification below.
+                    collecting = True
+                elif ptask.get("contextId"):
                     # Wins over any remembered room context (set above): a resume answers
                     # THIS parked task, and the peer resumes it only under the context it
                     # parked in. Sending the room's context here would open a new task in
                     # a different conversation and leave the park waiting forever.
                     send_params["message"]["contextId"] = ptask["contextId"]
-            result = await _rpc_tracked(client, "SendMessage", send_params)
+            if collecting:
+                result = parked
+            else:
+                result = await _rpc_tracked(client, "SendMessage", send_params)
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
@@ -1115,6 +1134,10 @@ class A2aAdapter(Adapter):
                 if (not observed_task_id or observed_task_id == task_id) and next_fingerprint != progress_fingerprint:
                     progress_fingerprint = next_fingerprint
                     deadline = time.monotonic() + poll_timeout
+            if collecting and (_is_terminal(state) or _is_input_required(state)):
+                # The lead collected this task itself, so a room collection still polling it
+                # must not deliver the same outcome a second time (#3775).
+                conversations.forget_pending_task(d.name, d.url, str(resume_task_id), credential)
             if _is_input_required(state):
                 # The peer parked on an input interrupt. The HITL delegation chain
                 # (operator decision, 2026-08-20): the QUESTION comes back to the
@@ -1207,6 +1230,12 @@ class A2aAdapter(Adapter):
                 # also the one thing the deadline message must not get wrong: only then is a
                 # collection left running for ``late.collect`` to deliver on its own (#3700).
                 left_pending_for_room = bool(d.conversation_key) and not resume_task_id
+                if collecting and not left_pending_for_room:
+                    # A collection that ran out of time again: a room collection may still be
+                    # polling this same task, and then the answer DOES arrive on its own.
+                    left_pending_for_room = conversations.pending_task_held(
+                        d.name, d.url, str(resume_task_id), credential
+                    )
                 if not resume_task_id:
                     conversations.remember_pending(
                         d.conversation_key,
@@ -1258,7 +1287,8 @@ class A2aAdapter(Adapter):
                             poll_timeout=poll_timeout,
                             send_timeout=send_timeout,
                             auto_delivered=left_pending_for_room,
-                        )
+                        ),
+                        kind=KIND_STILL_RUNNING,
                     )
                 raise DelegateError(
                     _still_running_message(
@@ -1268,7 +1298,8 @@ class A2aAdapter(Adapter):
                         last_status_text,
                         poll_timeout=poll_timeout,
                         auto_delivered=left_pending_for_room,
-                    )
+                    ),
+                    kind=KIND_STILL_RUNNING,
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
 

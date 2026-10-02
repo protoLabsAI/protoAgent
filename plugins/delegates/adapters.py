@@ -53,6 +53,7 @@ from .acp_adapter import _INCOMPLETE_STOP_REASONS, AcpAdapter, _mark_incomplete 
 from .base import (  # noqa: F401 — re-exported
     _SECRETISH,
     _TOKEN_SPLIT,
+    KIND_STILL_RUNNING,
     KIND_TIMEOUT,
     KIND_UNREACHABLE,
     Adapter,

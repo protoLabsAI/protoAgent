@@ -641,6 +641,15 @@ class LangGraphConfig:
     # images as native multimodal parts straight to the model instead of routing
     # them through the extraction pipeline. Off → images go through the pipeline.
     model_vision: bool = False
+    # Image limits (graph/image_limits.py). ``image_max_side`` — the long side, in px,
+    # an image a tool returns or a user attaches is downscaled to before it enters the
+    # history (1568 = Anthropic's recommended size; clamped to ≤ 2000 at use so no
+    # setting can store an image that breaks a many-image request).
+    # ``max_images_per_request`` — only the newest N inline images ride a model request;
+    # older ones become an ``[image omitted: …]`` note (0 = no count cap; the per-image
+    # provider limits still apply).
+    image_max_side: int = 1568
+    max_images_per_request: int = 20
     # Pinned go-to models (#1957) — the chat `/model` quick-switch shows these (in
     # order) instead of the gateway's full list. Console-consumed via the settings
     # schema; empty = no favorites, /model falls back to the full model list.
@@ -1905,6 +1914,8 @@ class LangGraphConfig:
             temperature=model.get("temperature", cls.temperature),
             max_tokens=model.get("max_tokens", cls.max_tokens),
             model_vision=model.get("vision", cls.model_vision),
+            image_max_side=model.get("image_max_side", cls.image_max_side),
+            max_images_per_request=model.get("max_images_per_request", cls.max_images_per_request),
             model_favorites=list(model.get("favorites", []) or []),
             providers=_parse_providers(data.get("providers"), secrets),
             max_iterations=model.get("max_iterations", cls.max_iterations),

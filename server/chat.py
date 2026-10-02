@@ -36,6 +36,7 @@ from typing import Any
 
 from graph import upstream_errors as _upstream_errors
 from graph.fence_scope import fence_scope
+from graph.image_limits import fit_data_uri
 from graph.middleware.redaction import redact as _redact
 from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
@@ -758,7 +759,15 @@ def _vision_human_message(
     note = "" if incognito else _bridge_attachment_ids(images, session_id)
     if images and getattr(STATE.graph_config, "model_vision", False):
         blocks: list[dict] = [{"type": "text", "text": message}] if message else []
-        blocks += [{"type": "image_url", "image_url": {"url": uri}} for _mt, uri in images]
+        # Fit each inline image before it enters the checkpointed history: an oversized
+        # attachment would otherwise poison every later turn once the provider's
+        # many-image limit applies (graph/image_limits.py). http URLs pass through.
+        # An image that can't be made safe (decode-cap canvas, unshrinkable) is dropped
+        # with a note rather than stored.
+        fitted = [fit_data_uri(uri) for _mt, uri in images]
+        blocks += [{"type": "image_url", "image_url": {"url": uri}} for uri in fitted if uri is not None]
+        if any(uri is None for uri in fitted):
+            blocks.append({"type": "text", "text": "[an attached image was omitted: too large to send to the model]"})
         if note:
             blocks.append({"type": "text", "text": note})
         return HumanMessage(content=blocks)
