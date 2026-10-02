@@ -9,15 +9,21 @@ normalized feeds:
 
 * a status message's **tool-call-v1** extension (protoAgent peers emit one per tool
   start/end, keyed by ``toolCallId``)          → ``on_tool`` start / end;
-* a status message's text, while WORKING        → ``on_text``;
+* a status message's text, while WORKING        → ``on_text`` (which shows it only once a
+  later tool call proves it was narration — ``graph.delegate_progress``);
 * a peer's own **delegate-progress-v1** DataPart (the peer is itself delegating to a
   coder) — its plan                             → ``on_plan``;
-* an artifact update's text (the answer streaming in) → ``on_text``; a non-text artifact
-  → one finished "produced artifact" activity;
+* an artifact update's text (a protoAgent peer's whole reply: narration AND answer)
+                                                → ``on_text``, held the same way — only text
+  a later tool call follows ever shows; a non-text artifact → one finished "produced
+  artifact" activity;
 * a terminal / input-required state             → ``settled`` (wakes the result poll).
 
 Reasoning, cost-v1 and worldstate-delta frames are deliberately ignored: none of them is
-"what is it doing now".
+"what is it doing now". The final answer never reaches the card either: the chat renders
+it the moment the delegation returns, and a card that typed it out first showed it twice.
+The tracker guarantees that — text is shown only once a later tool call proves it was
+narration, and what is still held when the run settles (the answer) is dropped.
 
 **Why subscribe rather than send over ``SendStreamingMessage``.** The adapter's send →
 ``GetTask`` poll path owns everything a delegation's RESULT depends on — conversation
@@ -164,6 +170,11 @@ class A2AProgressFeed:
         parts = artifact.get("parts")
         text = _parts_text(parts)
         if text:
+            # The reply streaming in. A protoAgent peer puts ALL its reply text here —
+            # narration before a tool call and the final answer alike (flushed ahead of each
+            # tool frame) — so it goes to ``on_text``, which HOLDS it: the next tool start
+            # commits it as narration, and the run settling drops it as the answer. The
+            # card never shows the final reply.
             # An artifact's FIRST chunk carries no `append`; so does the terminal frame, which
             # re-sends the whole canonical answer the appends already delivered — feeding that
             # again would double it. So: a non-append chunk of an artifact already seen is the

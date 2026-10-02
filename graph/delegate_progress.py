@@ -11,7 +11,8 @@ renders, whatever the transport:
 * ``current_tool``  — what it is doing right now: ``{id, name, kind, status, locations}``
   (``kind`` is ACP's read/edit/execute/search/…; ``locations`` are ``{path, line}``);
 * ``recent_tools``  — the last few of those, newest last, capped;
-* ``text``          — the tail of what it has said so far;
+* ``text``          — the tail of its NARRATION: text it said before a later tool call
+  (see "Narration, never the answer" below);
 * ``tool_count`` / ``done`` / ``ok`` — how much, and whether it is over and how.
 
 Before this a delegation's card showed a spinner and a clock for the whole run (the ACP
@@ -25,6 +26,15 @@ shape kept here.
 * ``on_tool(event)``     — ``{phase: start|update|end, id, name, kind?, status?, locations?}``
   (``update`` refines an open call's name/kind/locations in place; ``end`` settles it);
 * ``on_text(delta)``     — streamed reply text.
+
+**Narration, never the answer.** A delegate's reply text arrives on the same feed whether
+it is narration between tool calls ("I'll look at calc.py first.") or the final answer —
+no transport marks the difference while it streams. The answer is rendered by the chat the
+moment the delegation returns, so a card that typed it out first showed it twice (the
+answer streaming into the card, then appearing in the chat). So ``on_text`` only BUFFERS:
+the buffer is committed to ``text`` when a later tool call starts — proof it was
+intermediate — and is dropped when the run settles, because text with no tool call after
+it is the answer. Neither a live snapshot nor the ``done`` one ever carries it.
 
 An adapter maps its wire onto those and nothing else — ``acp_prompt_callbacks()`` is the
 ACP mapping (``AcpClient`` already emits exactly these shapes); an A2A, an OpenAI
@@ -167,6 +177,9 @@ class DelegateProgress:
         self.recent_tools: deque[dict] = deque(maxlen=RECENT_TOOLS_MAX)
         self.tool_count = 0
         self.text = ""
+        # Reply text not yet proven to be narration (no tool call after it yet) — never
+        # emitted; committed to ``text`` by the next tool start, dropped at the end.
+        self._pending = ""
         # Work happened since the last text: the next narration starts a new paragraph,
         # as the delegate's own reply does (#3408), instead of "…the plan.Plan created."
         self._paragraph = False
@@ -197,13 +210,21 @@ class DelegateProgress:
         await self._changed(urgent=True)
 
     async def on_text(self, delta: str) -> None:
-        if not delta:
+        # Buffered, not shown: until a tool call follows, this may be the final answer.
+        # Nothing visible changed, so nothing is emitted.
+        if not delta or self.done:
+            return
+        self._pending = (self._pending + delta)[-TEXT_TAIL_MAX:]
+
+    def _commit_text(self) -> None:
+        """A tool call started: the text before it was narration — show it."""
+        delta, self._pending = self._pending, ""
+        if not delta.strip():
             return
         if self._paragraph and self.text and not self.text.endswith("\n"):
             delta = "\n\n" + delta
         self._paragraph = False
         self.text = (self.text + delta)[-TEXT_TAIL_MAX:]
-        await self._changed()
 
     async def on_tool(self, event: dict) -> None:
         phase = str(event.get("phase") or "")
@@ -219,6 +240,7 @@ class DelegateProgress:
                 self._open_paths.pop(next(iter(self._open_paths)))
         cur = self.current_tool
         if phase == "start":
+            self._commit_text()
             self._paragraph = True
             self.tool_count += 1
             self.current_tool = {"id": tid, "name": name, "kind": kind, "status": "running", "locations": locs}
@@ -347,6 +369,7 @@ class DelegateProgress:
         self.close()
         if self.done:
             return
+        self._pending = ""  # no tool call followed it: that text is the answer
         self.done, self.ok = True, ok
         if self.current_tool and self.current_tool.get("status") == "running":
             self.current_tool["status"] = "completed" if ok else "failed"
