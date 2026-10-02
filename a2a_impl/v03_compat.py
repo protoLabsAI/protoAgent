@@ -67,11 +67,24 @@ def harden_v03_error_codes(routes: list[Any]) -> bool:
 
 
 def create_a2a_jsonrpc_routes(request_handler: Any, rpc_url: str = "/a2a") -> list[Any]:
-    """``create_jsonrpc_routes`` with v0.3 compat ON and its error codes fixed.
+    """``create_jsonrpc_routes`` with v0.3 compat ON, its error codes fixed, and a send
+    whose ``contextId`` / ``taskId`` sits on ``params`` refused (see
+    :mod:`a2a_impl.request_guard`).
 
     The one place production (and the tests that mirror it) builds the JSON-RPC routes."""
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 
+    from starlette.routing import request_response
+
+    from a2a_impl.request_guard import guard_misplaced_ids
+
     routes = create_jsonrpc_routes(request_handler, rpc_url=rpc_url, enable_v0_3_compat=True)
-    harden_v03_error_codes(routes)
+    harden_v03_error_codes(routes)  # finds the adapter via endpoint.__self__ — before wrapping
+    for route in routes:
+        endpoint = getattr(route, "endpoint", None)
+        if endpoint is None or getattr(endpoint, "_protoagent_misplaced_id_guard", False):
+            continue
+        # FastAPI re-registers from ``endpoint``; a Starlette mount serves ``app``.
+        route.endpoint = guard_misplaced_ids(endpoint)
+        route.app = request_response(route.endpoint)
     return routes

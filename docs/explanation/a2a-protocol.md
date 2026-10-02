@@ -66,7 +66,7 @@ The practical consequence: **you cannot detect a version problem with a malforme
 
 **3. Parts are untyped, roles and states are enum-spelled.** 0.3's `{"kind": "text", "text": "…"}` becomes `{"text": "…"}`. `"role": "user"` becomes `"role": "ROLE_USER"`. Task states are `TASK_STATE_COMPLETED`, not `"completed"`. The template's `tools/a2a_parse.py::_is_terminal` accepts both spellings so a fork can talk to mixed-version peers.
 
-One more sharp edge: **`contextId` lives inside the message, not on `params`.** Since a2a-sdk 1.2 the server ignores unknown request fields (forward compatibility), so a params-level `contextId` is *silently dropped*: the turn runs in a fresh context, with no error (pinned by `test_params_level_context_id_does_not_pin_the_session`). 1.1 rejected it with `-32602`.
+One more sharp edge: **`contextId` lives inside the message, not on `params`.** Since a2a-sdk 1.2 the SDK ignores unknown request fields (forward compatibility), so on a stock server a params-level `contextId` is *silently dropped* and the turn runs in a fresh context with no error. protoAgent refuses it instead: a `SendMessage` / `SendStreamingMessage` (or v0.3 `message/send` / `message/stream`) carrying `contextId` or `taskId` on `params` gets `-32602` with a message naming the fix (`a2a_impl/request_guard.py`, pinned by `tests/test_a2a_misplaced_ids.py`). Other unknown fields still pass through.
 
 ## SSE frames are a oneof, not a `kind` discriminator
 
