@@ -45,6 +45,11 @@ export function beginLocalTurn(sessionId: string): () => void {
   return claim(localTurns, sessionId);
 }
 
+/** Whether a local turn (runTurn, from its claim to its `finally`) is in flight for `sessionId`. */
+export function localTurnInFlight(sessionId: string): boolean {
+  return localTurns.has(sessionId);
+}
+
 /** Register a reattach as in flight for `sessionId`. Returns its end. */
 export function beginReattach(sessionId: string): () => void {
   return claim(reattaches, sessionId);

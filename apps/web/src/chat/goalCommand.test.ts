@@ -85,7 +85,8 @@ describe("/goal new submit drives in this tab", () => {
 describe("/goal new kickoff while the tab turned busy mid-request", () => {
   it("defers the kickoff until idle, then runs it exactly once", async () => {
     const { api } = await import("../lib/api");
-    const { chatStore, watchGoalKickoff } = await import("./chat-store");
+    const { chatStore } = await import("./chat-store");
+    const { watchGoalKickoff } = await import("./goalKickoffWatch");
     const session = chatStore.createSession();
     const sid = session.id;
     let release!: () => void;
@@ -101,7 +102,7 @@ describe("/goal new kickoff while the tab turned busy mid-request", () => {
       if (chatStore.getSnapshot().sessionStatusMap[sid] === "streaming") concurrent += 1;
       chatStore.setSessionStatus(sid, "streaming");
     });
-    const off = watchGoalKickoff(sid, run);
+    const off = watchGoalKickoff(sid, run).stop;
 
     const openForm = vi.fn();
     const noteToThread = vi.fn();
@@ -141,13 +142,91 @@ describe("/goal new kickoff while the tab turned busy mid-request", () => {
   });
 
   it("a kickoff registered on an idle tab still fires (Work-panel flow)", async () => {
-    const { chatStore, registerGoalKickoff, watchGoalKickoff } = await import("./chat-store");
+    const { chatStore, registerGoalKickoff } = await import("./chat-store");
+    const { watchGoalKickoff } = await import("./goalKickoffWatch");
     const sid = chatStore.createSession().id;
     chatStore.setSessionStatus(sid, "idle");
     const run = vi.fn();
-    const off = watchGoalKickoff(sid, run);
+    const off = watchGoalKickoff(sid, run).stop;
     registerGoalKickoff(sid, "Start working toward the goal: ship it");
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     off();
+  });
+});
+
+// Adversarial review of #4009: the kickoff watcher treated only "streaming" as busy. Two
+// other owners of "the next turn" raced it at turn end — the steer reconcile re-sending a
+// queued message, and a turn PARKED on the operator (a pending interrupt).
+describe("goal kickoff waits for every owner of the next turn", () => {
+  const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+
+  async function setup() {
+    const { chatStore, registerGoalKickoff } = await import("./chat-store");
+    const { watchGoalKickoff } = await import("./goalKickoffWatch");
+    const { beginLocalTurn, localTurnInFlight } = await import("./sessionLiveness");
+    const sid = chatStore.createSession().id;
+    // Make the session non-pristine so createSession hands the next test a fresh one.
+    chatStore.updateMessages(sid, [{ id: `u-${sid}`, role: "user", content: "hi", createdAt: 1, status: "done" }]);
+    let concurrent = 0;
+    const turn = () => {
+      const snap = chatStore.getSnapshot();
+      if (snap.sessionStatusMap[sid] === "streaming" || localTurnInFlight(sid)) concurrent += 1;
+      chatStore.setSessionStatus(sid, "streaming");
+    };
+    const run = vi.fn((_prompt: string) => turn());
+    return { chatStore, registerGoalKickoff, watchGoalKickoff, beginLocalTurn, sid, run, turn, concurrent: () => concurrent };
+  }
+
+  it("a queued message re-sent by the turn-end reconcile goes first; the kickoff runs once, after", async () => {
+    const t = await setup();
+    const queue = ["queued while the goal POST was in flight"];
+    t.chatStore.setSessionStatus(t.sid, "streaming");
+    const w = t.watchGoalKickoff(t.sid, t.run, () => queue.length > 0); // the slot's blocked(): steer queue
+    t.registerGoalKickoff(t.sid, "Start working toward the goal: tests pass");
+    t.chatStore.setSessionStatus(t.sid, "idle"); // the operator's turn ends…
+    await tick(5); // …and the reconcile's pendingSteer fetch returns 5ms later
+    queue.length = 0;
+    t.turn(); // reconcile re-sends the queued message as a fresh turn
+    w.poke(); // reconcileSteer().finally(poke)
+    await tick();
+    expect(t.run).not.toHaveBeenCalled();
+    t.chatStore.setSessionStatus(t.sid, "idle"); // that turn ends
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(1));
+    expect(t.concurrent()).toBe(0);
+    w.stop();
+  });
+
+  it("a turn parked on the operator keeps the kickoff queued until it is answered", async () => {
+    const t = await setup();
+    const w = t.watchGoalKickoff(t.sid, t.run);
+    t.chatStore.setSessionStatus(t.sid, "streaming");
+    t.registerGoalKickoff(t.sid, "Start working toward the goal: tests pass");
+    const base = t.chatStore.getSnapshot().sessions.find((s) => s.id === t.sid)!.messages;
+    const parked = { id: "a-park", role: "assistant" as const, content: "Approve?", createdAt: 2, status: "streaming" as const, paused: true, taskId: "task-1" };
+    t.chatStore.updateMessages(t.sid, [...base, parked]);
+    t.chatStore.setSessionStatus(t.sid, "idle"); // the paused-turn path idles the session
+    await tick();
+    expect(t.run).not.toHaveBeenCalled(); // never abandons the pending interrupt
+    // The operator answers; the resumed turn settles the bubble → the kickoff runs once.
+    t.chatStore.updateMessages(t.sid, [...base, { ...parked, status: "done" as const, paused: false }]);
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(1));
+    expect(t.concurrent()).toBe(0);
+    w.stop();
+  });
+
+  it("idle set inside a still-unwinding local turn waits for its finally", async () => {
+    const t = await setup();
+    const w = t.watchGoalKickoff(t.sid, t.run);
+    t.chatStore.setSessionStatus(t.sid, "streaming");
+    const endLocalTurn = t.beginLocalTurn(t.sid);
+    t.registerGoalKickoff(t.sid, "Start working toward the goal: tests pass");
+    t.chatStore.setSessionStatus(t.sid, "idle");
+    await tick();
+    expect(t.run).not.toHaveBeenCalled();
+    endLocalTurn();
+    w.poke(); // runTurn's finally pokes after releasing its claim
+    await vi.waitFor(() => expect(t.run).toHaveBeenCalledTimes(1));
+    expect(t.concurrent()).toBe(0);
+    w.stop();
   });
 });
