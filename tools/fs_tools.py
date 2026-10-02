@@ -277,6 +277,11 @@ class Project:
     #   write:true,  no_delete:true  → read-write-no-delete (create/edit, never delete)
     # ``no_delete`` only bites on ``delete_file``; a read-only project already refuses it.
     no_delete: bool = False
+    # Only the agent's OWN implicit default workspace (nothing configured) sets this: the
+    # tools created that folder, so they may create it again if it's deleted mid-session
+    # (#3643 review). A configured / onboarded root NEVER does — a vanished checkout must
+    # stay missing rather than be mkdir'd back as an empty directory.
+    recreate_root: bool = False
 
 
 def _is_dir(path: Path) -> bool:
@@ -295,6 +300,24 @@ def _missing_root_message(project: str, root: Path) -> str:
         "don't work around it with execute_code or run_command. It becomes available again, in this "
         "same session, as soon as the folder exists."
     )
+
+
+def _recreate_default_workspace(root: Path) -> bool:
+    """Re-create the implicit default workspace at ``root``; True when it's a directory again.
+
+    Goes through ``workspace_dir(create=True)`` (the same creator the build uses) and only
+    when that IS ``root`` — so it can never mkdir anything but the agent's own workspace."""
+    try:
+        from infra.paths import workspace_dir
+
+        if workspace_dir().expanduser().resolve() != root:
+            return False
+        workspace_dir(create=True)
+    except Exception:  # noqa: BLE001 — fall through to the "missing" answer
+        log.warning("[fs] could not recreate the default workspace %s", root, exc_info=True)
+        return False
+    log.info("[fs] default workspace %s was deleted — recreated", root)
+    return _is_dir(root)
 
 
 class ProjectRegistry:
@@ -334,7 +357,7 @@ class ProjectRegistry:
             raise ValueError(f"unknown project {project!r}. Known: {', '.join(self._by_name) or '(none)'}")
         # Checked per call, not just at build: a root deleted mid-session must not stay
         # "resolvable" — a write would otherwise mkdir the vanished root back into being.
-        if not _is_dir(proj.root):
+        if not _is_dir(proj.root) and not (proj.recreate_root and _recreate_default_workspace(proj.root)):
             raise ValueError(_missing_root_message(project, proj.root))
         rel = (rel_path or ".").strip()
         if rel.startswith("/") or rel.startswith("~"):
@@ -358,7 +381,7 @@ def _approved(decision) -> bool:
     return str(decision).strip().lower() in {"approve", "approved", "yes", "y", "true", "ok"}
 
 
-def _configured_entries(config, *, create: bool = False) -> list[dict]:
+def _configured_entries(config, *, create: bool = False, quiet: bool = False) -> list[dict]:
     """The fence entries this config actually asks for — explicit
     ``filesystem.projects``, else the ADR 0095 ``projects:`` registry projected
     onto the fence, else the default workspace. The warning path below reports
@@ -369,7 +392,7 @@ def _configured_entries(config, *, create: bool = False) -> list[dict]:
     ever sees them — which is why it does its own WARNING logging rather than
     deferring to the warning below."""
     entries = (
-        config.effective_filesystem_projects(create=create)
+        config.effective_filesystem_projects(create=create, quiet=quiet)
         if hasattr(config, "effective_filesystem_projects")
         else (getattr(config, "filesystem_projects", []) or [])
     )
@@ -487,16 +510,24 @@ def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -
     missing: dict[str, Path] = {}
     # Explicit projects, or the default workspace dir (created) when none are
     # configured — the on-by-default fenced workspace.
-    entries = _configured_entries(config, create=create)
+    entries = _configured_entries(config, create=create, quiet=quiet)
+    # The implicit default: a real config with nothing configured gets the single
+    # `workspace` entry from effective_filesystem_projects — the only root the tools own.
+    implicit_default = (
+        hasattr(config, "effective_filesystem_projects")
+        and not getattr(config, "filesystem_projects", None)
+        and not getattr(config, "projects", None)
+    )
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
         raw_path = str(entry.get("path") or "").strip()
         if not name or not raw_path:
-            log.warning("[fs] skipping project missing name/path: %r", entry)
+            (log.debug if quiet else log.warning)("[fs] skipping project missing name/path: %r", entry)
             continue
         root = Path(raw_path).expanduser().resolve()
+        recreate_root = bool(implicit_default and name == "workspace")
         if not _is_dir(root):
             # Skipped from the fence, NOT forgotten (#3643): the other projects keep
             # working, a call into this one says its folder is missing, and
@@ -516,6 +547,7 @@ def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -
                 root=root,
                 write=bool(entry.get("write", False)),
                 no_delete=bool(entry.get("no_delete", False)),
+                recreate_root=recreate_root,
             )
         )
     return ProjectRegistry(projects, missing)

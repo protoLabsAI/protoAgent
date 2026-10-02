@@ -165,3 +165,71 @@ async def test_runtime_status_carries_missing_folder_warning(two_projects, monke
     b.mkdir()
     status = await ch._operator_runtime_status()
     assert not any(str(b) in w for w in status["warnings"])
+
+
+# ── review follow-ups (#4017) ─────────────────────────────────────────────────
+
+
+def _default_cfg(monkeypatch, tmp_path):
+    from graph.config import LangGraphConfig
+
+    ws = tmp_path / "ws"
+    monkeypatch.setenv("PROTOAGENT_WORKSPACE", str(ws))
+    cfg = LangGraphConfig.app_defaults()
+    cfg.filesystem_enabled = True
+    cfg.filesystem_projects = []
+    cfg.projects = []
+    return cfg, ws
+
+
+def test_default_workspace_deleted_mid_session_recreates_itself(monkeypatch, tmp_path):
+    """The agent's OWN default workspace (nothing configured) is the tools' to create, so a
+    `rm -rf` / dev-reset against a live server must not leave it dead for the session."""
+    cfg, ws = _default_cfg(monkeypatch, tmp_path)
+    t = _tools(cfg)
+    assert ws.is_dir()
+    assert not t["write_file"].invoke({"project": "workspace", "path": "a.txt", "content": "x"}).startswith("Error")
+    shutil.rmtree(ws)
+    out = t["write_file"].invoke({"project": "workspace", "path": "a.txt", "content": "y"})
+    assert not out.startswith("Error"), out
+    assert (ws / "a.txt").read_text() == "y"
+    shutil.rmtree(ws)
+    assert "(empty)" in t["list_dir"].invoke({"project": "workspace", "path": "."})
+    assert missing_projects_warning(cfg) is None
+
+
+def test_configured_root_named_workspace_is_never_recreated(tmp_path):
+    """The recreate path is only for the IMPLICIT default — a configured project root
+    (even one called `workspace`) stays missing and is never mkdir'd back."""
+    root = (tmp_path / "workspace").resolve()
+    root.mkdir()
+    cfg = _Cfg(filesystem_projects=[{"name": "workspace", "path": str(root), "write": True}])
+    t = _tools(cfg)
+    shutil.rmtree(root)
+    out = t["write_file"].invoke({"project": "workspace", "path": "a.txt", "content": "x"})
+    assert out.startswith("Error:") and "missing" in out
+    assert not root.exists()
+
+
+def test_status_poll_does_not_repeat_registry_config_warnings(tmp_path, caplog):
+    """The banner is polled; the registry's malformed/duplicate-entry WARNINGs belong to
+    boot/build, so polling must not re-log them on every poll."""
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig.app_defaults()
+    cfg.filesystem_enabled = True
+    cfg.projects = [
+        {"name": "gone", "path": str(tmp_path / "gone")},
+        {"name": "bad"},
+        {"name": "gone", "path": str(tmp_path)},
+    ]
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            assert "gone" in (missing_projects_warning(cfg) or "")
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING], [r.getMessage() for r in caplog.records]
+    # The build (boot) path still reports them.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        build_fs_tools(cfg)
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("missing name/path" in m for m in msgs) and any("duplicate project name" in m for m in msgs), msgs

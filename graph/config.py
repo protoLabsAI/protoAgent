@@ -1674,7 +1674,7 @@ class LangGraphConfig:
         it before graph build."""
         return _detect_incoherent_slots(self)
 
-    def fenced_projects(self) -> list[dict]:
+    def fenced_projects(self, *, quiet: bool = False) -> list[dict]:
         """The ADR 0095 ``projects:`` registry projected onto the fs-fence shape.
 
         Entries opt out with ``fs: false``; everything else is fenced read-write
@@ -1697,12 +1697,17 @@ class LangGraphConfig:
           outright for the reason the work-folders POST route already refuses it:
           it resolves against the server's CWD (``/`` under the desktop sidecar),
           never the operator's.
+
+        ``quiet=True`` drops those warnings to DEBUG for POLLED callers (the
+        runtime-status banner, #3643) — the build/boot path reports them; a poll
+        repeating them every few seconds would bury them.
         """
+        warn = log.debug if quiet else log.warning
         fenced: list[dict] = []
         seen: set[str] = set()
         for entry in self.projects or []:
             if not isinstance(entry, dict):
-                log.warning("[projects] skipping non-object entry: %r", entry)
+                warn("[projects] skipping non-object entry: %r", entry)
                 continue
             name = str(entry.get("name") or "").strip()
             path = str(entry.get("path") or "").strip()
@@ -1711,12 +1716,12 @@ class LangGraphConfig:
             # to be opted out is the same invisibility the warnings exist to end. A
             # WELL-FORMED opt-out below stays silent — that one is deliberate, not a typo.
             if not name or not path:
-                log.warning("[projects] skipping entry missing name/path: %r", entry)
+                warn("[projects] skipping entry missing name/path: %r", entry)
                 continue
             if _falsey(entry.get("fs"), default=False):
                 continue  # registered for other consumers; no filesystem reach
             if name in seen:
-                log.warning(
+                warn(
                     "[projects] duplicate project name %r — keeping the first, dropping this one. "
                     "Names are the fence's identifier; two entries can't share one.",
                     name,
@@ -1728,7 +1733,7 @@ class LangGraphConfig:
             # this rejects.
             expanded = Path(path).expanduser()
             if not expanded.is_absolute():
-                log.warning(
+                warn(
                     "[projects] project %r path is not absolute: %s — skipped. A relative path "
                     "resolves against the SERVER's working directory, never yours.",
                     name,
@@ -1751,12 +1756,13 @@ class LangGraphConfig:
             fenced.append(projected)
         return fenced
 
-    def effective_filesystem_projects(self, *, create: bool = False) -> list[dict]:
+    def effective_filesystem_projects(self, *, create: bool = False, quiet: bool = False) -> list[dict]:
         """The fs project registry the agent actually gets. Explicit
         ``filesystem_projects`` win; then the ADR 0095 ``projects:`` registry
         projected onto the fence; otherwise (when filesystem is enabled) a
         single default ``workspace`` project so the on-by-default fs toolset has a
-        fenced place to work. ``create=True`` mkdirs the workspace dir."""
+        fenced place to work. ``create=True`` mkdirs the workspace dir;
+        ``quiet`` is passed to :meth:`fenced_projects` (polled callers)."""
         if self.filesystem_projects:
             return self.filesystem_projects
         if not self.filesystem_enabled:
@@ -1775,7 +1781,7 @@ class LangGraphConfig:
         # An ABSENT registry still gets the workspace default below — that's the
         # default-install path and it is deliberately unchanged.
         if self.projects:
-            return self.fenced_projects()
+            return self.fenced_projects(quiet=quiet)
         from infra.paths import workspace_dir
 
         return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
