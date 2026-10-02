@@ -1139,6 +1139,18 @@ function scenarioFor(prompt) {
       output: "[200] https://example.com\n\nExample Domain. This domain is for use in examples.",
       answer: "Fetched example.com.",
     };
+  if (t.includes("MDFLASH"))
+    // A tool turn whose whole markdown answer lands at once after the tool — the launch-demo
+    // frame that painted `- **bold** … \`code\`` as raw source while the lazily split markdown
+    // renderer was still loading (LazyMarkdown.tsx). The answer must never show its source.
+    return {
+      reasoning: "The operator wants a note appended, then a summary.",
+      name: "append_note",
+      input: { text: "protoAgent summary" },
+      output: "Appended to the note.",
+      answer:
+        "Done — appended to your notes:\n\n- **protoAgent** — private, plugin-extensible desktop agent\n- **Extended via plugins** — pinned in `plugins.lock`, no fork needed",
+    };
   if (t.includes("THINKPRE"))
     // A reasoning model's turn: think → stream a sentence → call a tool → answer. The sentence
     // renders unfolded (no tool yet), so when the tool call folds the reason+tool turn into the

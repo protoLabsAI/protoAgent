@@ -127,3 +127,45 @@ test("text streamed before a tool call never disappears when the turn folds (THI
   expect(shown.indexOf(true)).toBeGreaterThanOrEqual(0);
   expect(shown.slice(shown.indexOf(true))).toEqual([true]);
 });
+
+// The launch-demo flash: a tool turn's whole markdown answer lands at once, and on a fresh page
+// that answer is the FIRST Markdown mount. The lazy renderer suspended there and its fallback
+// painted the raw SOURCE — `Done — … - **protoAgent** … \`plugins.lock\`` on one line — for
+// ~0.3s (React's fallback reveal throttle) before the rendered list replaced it. A per-frame
+// probe asserts the bubble never shows markdown syntax, and that the answer still renders.
+test("a markdown answer never paints as raw source on its first frames (MDFLASH)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __raw: string[]; __frames: number };
+    w.__raw = [];
+    w.__frames = 0;
+    const tick = () => {
+      w.__frames++;
+      for (const el of document.querySelectorAll(".pl-message--assistant .markdown")) {
+        const text = (el as HTMLElement).innerText ?? "";
+        if (/\*\*|`|(^|\n)- /.test(text)) w.__raw.push(text.slice(0, 120));
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  await composer.fill("MDFLASH then append a note");
+  await composer.press("Enter");
+
+  const msg = page.locator(".pl-message--assistant").last();
+  await expect(msg.getByRole("button", { name: "Copy" })).toBeVisible(); // settled
+  await expect(msg.locator(".markdown [data-streamdown=\"strong\"]", { hasText: "protoAgent" })).toBeVisible();
+  await expect(msg.locator(".markdown li")).toHaveCount(2);
+  await expect(msg.locator(".markdown [data-streamdown=\"inline-code\"]", { hasText: "plugins.lock" })).toBeVisible();
+
+  const { raw, frames } = await page.evaluate(() => {
+    const w = window as unknown as { __raw: string[]; __frames: number };
+    return { raw: w.__raw, frames: w.__frames };
+  });
+  expect(frames).toBeGreaterThan(10); // the probe really ran through the turn
+  expect(raw).toEqual([]);
+});
