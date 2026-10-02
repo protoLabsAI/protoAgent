@@ -33,6 +33,7 @@ path is `$FRICTION_LOG` or, by default, `instance_paths().store("friction")`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -427,6 +428,43 @@ def read_entries(kind: str = "", include_resolved: bool = False) -> list[dict]:
     return out
 
 
+def entry_id(kind: str, summary: str) -> str:
+    """A short, stable handle for one grouped row — what ``resolve_friction(id=…)`` takes.
+
+    Derived from ``(kind, summary)``, the same key ``grouped_entries`` groups by, so it
+    needs no stored field: every ledger written before ids existed has them already, a
+    repeat of the same friction gets the same id, and resolving an id resolves exactly the
+    row the agent saw listed — never a neighbour whose text happens to overlap."""
+    return hashlib.sha1(f"{kind}\x00{summary}".encode("utf-8")).hexdigest()[:8]
+
+
+# Agents retype what they logged, and the retyping drifts: "can't" comes back as "can’t",
+# "IFrame" as "iframe", a double space as one. None of that is a different friction.
+_QUOTE_FOLD = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "`": "'"})
+
+
+def _norm(text: object) -> str:
+    """Case-, whitespace- and quote-style-insensitive form for forgiving text matching."""
+    return " ".join(str(text or "").translate(_QUOTE_FOLD).casefold().split())
+
+
+def _summary_hit(needle_norm: str, summary: object) -> bool:
+    """Does a (normalized) needle identify this summary?
+
+    A substring of it, or — because ``_log`` clips a summary to 200 chars and marks the
+    clip with an ellipsis — the FULL original text of a clipped one. An agent resolving
+    what it logged naturally passes back what it wrote, and the stored copy is shorter."""
+    if not needle_norm:
+        return False
+    s = _norm(summary)
+    if needle_norm in s:
+        return True
+    if s.endswith("…"):
+        stem = s[:-1].rstrip()
+        return len(stem) >= 20 and needle_norm.startswith(stem)
+    return False
+
+
 def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict]:
     """Ledger records grouped by (kind, summary), newest-seen first.
 
@@ -443,6 +481,7 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
         g = groups.get(key)
         if g is None:
             groups[key] = {
+                "id": entry_id(*key),
                 "kind": key[0],
                 "summary": key[1],
                 "severity": rec.get("severity", "minor"),
@@ -521,50 +560,37 @@ def _rewrite_ledger(path: Path, lines: list[str]) -> None:
     os.replace(tmp, path)
 
 
-def set_resolved(
-    summary: str, *, resolved: bool = True, reason: str = "", kind: str = "", exact: bool = False
-) -> int:
-    """Stamp (or clear) ``resolved_at`` on matching entries in place; returns the count.
+def _apply_resolution(match, *, resolved: bool, reason: str = "") -> tuple[int, list[dict]]:
+    """Stamp (or clear) ``resolved_at`` on every record ``match(rec)`` accepts, in place.
 
-    ``exact`` is the difference between the two callers, and it matters. The agent's
-    ``resolve_friction`` tool matches a SUBSTRING — it is fixing a rough edge it just
-    described and wants every phrasing of it to drop out of the backlog. The console
-    acts on one grouped row, keyed by ``(kind, summary)``; a substring match from there
-    would silently resolve every OTHER row whose summary happens to contain this one's
-    text (``"tool 'task' raised"`` is a substring of nothing, but
-    ``"reached for escape hatch 'shell'"`` sits inside a longer agent-written summary
-    the operator never looked at). The console therefore matches the full summary and
-    the kind, and touches exactly the row that was clicked.
-
-    Nothing is ever deleted — un-resolving clears the stamp, so a row reopened by
-    mistake is recoverable and the ledger stays append-only in shape."""
+    Returns ``(changed, hits)``: how many records actually flipped, and EVERY matching
+    record (changed or not). The two differ exactly when the match was already in the
+    requested state — and a caller that only sees ``changed`` cannot tell "already
+    resolved" from "matched nothing", which is how an agent re-resolving a fixed item was
+    told its own entry did not exist (see ``resolve_friction``)."""
     path = _ledger_path()
     if not path.exists():
-        return 0
+        return 0, []
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return 0
-    needle = summary.strip()
+        return 0, []
     stamp = datetime.now(timezone.utc).isoformat()
     out_lines: list[str] = []
-    matched = 0
+    hits: list[dict] = []
+    changed = 0
     for line in text.splitlines():
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             out_lines.append(line)  # foreign lines pass through untouched
             continue
-        if not isinstance(rec, dict):
+        if not isinstance(rec, dict) or not match(rec):
             out_lines.append(line)
             continue
-        rec_summary = str(rec.get("summary", ""))
-        hit = rec_summary == needle if exact else needle in rec_summary
-        if hit and kind and str(rec.get("kind", "")) != kind:
-            hit = False
         # Only flip entries that are not already in the requested state, so the count
         # reports real changes rather than rows that were already there.
-        if hit and bool(rec.get("resolved_at")) != resolved:
+        if bool(rec.get("resolved_at")) != resolved:
             if resolved:
                 rec["resolved_at"] = stamp
                 if reason.strip():
@@ -573,33 +599,128 @@ def set_resolved(
                 rec.pop("resolved_at", None)
                 rec.pop("resolved_reason", None)
             out_lines.append(json.dumps(rec, default=str))
-            matched += 1
+            changed += 1
         else:
             out_lines.append(line)
-    if matched:
+        hits.append(rec)
+    if changed:
         _rewrite_ledger(path, out_lines)
+    return changed, hits
+
+
+def set_resolved(
+    summary: str, *, resolved: bool = True, reason: str = "", kind: str = "", exact: bool = False
+) -> int:
+    """Stamp (or clear) ``resolved_at`` on matching entries in place; returns the count.
+
+    ``exact`` is the difference between the two callers, and it matters. The agent's
+    ``resolve_friction`` tool matches FORGIVINGLY (``_summary_hit``: a case-, whitespace-
+    and quote-insensitive substring) — it is fixing a rough edge it described and wants
+    every phrasing of it to drop out of the backlog. The console acts on one grouped row,
+    keyed by ``(kind, summary)``; a substring match from there would silently resolve
+    every OTHER row whose summary happens to contain this one's text
+    (``"reached for escape hatch 'shell'"`` sits inside a longer agent-written summary
+    the operator never looked at). The console therefore matches the full summary and
+    the kind, and touches exactly the row that was clicked.
+
+    Nothing is ever deleted — un-resolving clears the stamp, so a row reopened by
+    mistake is recoverable and the ledger stays append-only in shape."""
+    needle = summary.strip()
+    needle_norm = _norm(needle)
+
+    def match(rec: dict) -> bool:
+        rec_summary = str(rec.get("summary", ""))
+        hit = rec_summary == needle if exact else _summary_hit(needle_norm, rec_summary)
+        return hit and not (kind and str(rec.get("kind", "")) != kind)
+
+    changed, _ = _apply_resolution(match, resolved=resolved, reason=reason)
+    if changed:
         _emit("resolved" if resolved else "reopened",
-              {"summary": needle, "kind": kind, "count": matched, "reason": _clip(reason.strip(), 300)})
-    return matched
+              {"summary": needle, "kind": kind, "count": changed, "reason": _clip(reason.strip(), 300)})
+    return changed
+
+
+def _row_line(g: dict) -> str:
+    return f"  - [{g.get('id') or entry_id(str(g.get('kind', '')), str(g.get('summary', '')))}] " \
+           f"({g.get('kind', '?')}) {g.get('summary', '')}"
+
+
+def _open_listing(limit: int = 15) -> str:
+    """The open backlog as ``[id] (kind) summary`` lines — what a failed resolve hands back
+    so the agent can retry with an exact id instead of guessing at phrasing again."""
+    groups = grouped_entries()
+    if not groups:
+        return "There is no open friction — the backlog is empty."
+    lines = [f"Open friction ({len(groups)}) — retry with resolve_friction(id=...):"]
+    lines += [_row_line(g) for g in groups[:limit]]
+    if len(groups) > limit:
+        lines.append(f"  - …and {len(groups) - limit} more (friction_review lists them)")
+    return "\n".join(lines)
+
+
+def _groups_of(recs: list[dict]) -> list[dict]:
+    """Collapse matched records to their (kind, summary) rows, first-seen order."""
+    seen: dict[tuple[str, str], dict] = {}
+    for r in recs:
+        key = (str(r.get("kind", "")), str(r.get("summary", "")))
+        g = seen.setdefault(key, {"id": entry_id(*key), "kind": key[0], "summary": key[1], "resolved_at": ""})
+        g["resolved_at"] = max(g["resolved_at"], str(r.get("resolved_at") or ""))
+    return list(seen.values())
 
 
 @tool
-async def resolve_friction(summary: str, reason: str = "") -> str:
+async def resolve_friction(summary: str = "", reason: str = "", id: str = "") -> str:
     """Mark friction entries as resolved so they drop out of the review backlog — call this
     once the underlying rough edge is actually fixed, not to silence a live signal.
 
-    ``summary`` is a substring match: EVERY unresolved entry whose summary contains it is
-    stamped with a ``resolved_at`` timestamp (and ``reason``, if given) in place. Nothing
-    is deleted — the ledger stays append-only and the audit trail survives."""
-    if not summary.strip():
-        return "summary is required (a substring of the entries to resolve)"
+    Identify the entry by ``id`` (the ``[abcd1234]`` shown by friction_review, or in a
+    previous resolve_friction reply) — exact, the most reliable — or by ``summary``: any
+    part of the text you logged, case/whitespace/quote-insensitive (if no summary matches,
+    a phrase that appears in exactly one entry's detail is accepted). Every matching
+    record is stamped ``resolved_at`` (and ``reason``) in place; nothing is deleted. If
+    nothing matches, the reply lists the open items' ids and summaries."""
+    eid = id.strip().strip("[]").lower()
+    needle = summary.strip()
+    if not eid and not needle:
+        return ("summary or id is required — pass id= from friction_review, or part of the "
+                "logged summary.\n" + _open_listing())
     if not _ledger_path().exists():
         return "no matching entries found — the friction backlog is empty."
-    needle = summary.strip()
-    matched = set_resolved(needle, resolved=True, reason=reason)
-    if not matched:
-        return f"no matching entries found for \u201c{needle}\u201d."
-    return f"resolved {matched} {'entry' if matched == 1 else 'entries'} matching \u201c{needle}\u201d."
+    label = eid or needle
+
+    match = None
+    if eid:
+        match = lambda rec: entry_id(str(rec.get("kind", "")), str(rec.get("summary", ""))) == eid  # noqa: E731
+    else:
+        needle_norm = _norm(needle)
+        every = read_entries(include_resolved=True)
+        if any(_summary_hit(needle_norm, r.get("summary", "")) for r in every):
+            match = lambda rec: _summary_hit(needle_norm, rec.get("summary", ""))  # noqa: E731
+        else:
+            # The agent remembers the friction, not necessarily the one-line summary it
+            # chose — the specific error is usually in the detail. Accepted only when it
+            # pins down ONE row; a phrase common to several is a guess, not a target.
+            keys = {(str(r.get("kind", "")), str(r.get("summary", "")))
+                    for r in every if needle_norm and needle_norm in _norm(r.get("detail", ""))}
+            if len(keys) == 1:
+                (key,) = keys
+                match = lambda rec: (str(rec.get("kind", "")), str(rec.get("summary", ""))) == key  # noqa: E731
+
+    changed, hits = (0, []) if match is None else _apply_resolution(match, resolved=True, reason=reason)
+    rows = _groups_of(hits)
+    if changed:
+        _emit("resolved", {"summary": label, "kind": "", "count": changed, "reason": _clip(reason.strip(), 300)})
+        return "\n".join([f"resolved {changed} {'entry' if changed == 1 else 'entries'} matching \u201c{label}\u201d:"]
+                         + [_row_line(g) for g in rows])
+    if rows:
+        # Matched, but every match was already resolved. Saying "no matching entries" here
+        # is what convinced an agent its resolve was broken — it had worked, minutes before.
+        lines = [f"already resolved \u2014 nothing left open matching \u201c{label}\u201d:"]
+        lines += [_row_line(g) + f" (resolved {g['resolved_at'][:19]})" for g in rows]
+        lines.append("Nothing to do. If the Friction view still lists it, refresh the view.")
+        return "\n".join(lines)
+    what = f"id \u201c{eid}\u201d" if eid else f"\u201c{needle}\u201d"
+    return f"no matching entries found — no open friction matches {what}.\n" + _open_listing()
 
 
 @tool
@@ -619,8 +740,10 @@ async def friction_review(kind: str = "", include_resolved: bool = False) -> str
     model = sum(1 for r in recs if r.get("kind") == "model")
     lines = [f"friction backlog: {len(recs)} total  ·  harness={harness}  model={model}", ""]
     for r in recs[-12:]:
-        lines.append(f"  [{r.get('kind', '?'):<7} {r.get('severity', '?'):<5} {r.get('source', '?'):<5}] "
+        rid = entry_id(str(r.get("kind", "")), str(r.get("summary", "")))
+        lines.append(f"  [{rid}] [{r.get('kind', '?'):<7} {r.get('severity', '?'):<5} {r.get('source', '?'):<5}] "
                      f"{r.get('summary', '')}{' [resolved]' if r.get('resolved_at') else ''}")
+    lines += ["", "resolve one once it is fixed: resolve_friction(id=\"<the [id] above>\", reason=...)"]
     return "\n".join(lines)
 
 
@@ -689,7 +812,7 @@ def open_friction_work() -> list[dict]:
             # actionable half and it is the half the agent is being asked to fix.
             hint = f"tool: {g['tool']}"
         else:
-            hint = "resolve_friction when fixed"
+            hint = f"resolve_friction id={g.get('id') or entry_id(str(g.get('kind', '')), str(g.get('summary', '')))} when fixed"
         out.append({"state": state, "title": str(g.get("summary") or ""), "hint": hint})
     return out
 
@@ -846,7 +969,7 @@ async def _friction_command(rest: str, _session_id: str):
         # phrasing of it. But a bulk action whose blast radius is invisible is how you
         # resolve six signals meaning to resolve one, so NAME what went. Each row can be
         # reopened individually from the Friction view; nothing is ever deleted.
-        hit = [g for g in grouped_entries() if needle in str(g.get("summary", ""))]
+        hit = [g for g in grouped_entries() if _summary_hit(_norm(needle), g.get("summary", ""))]
         changed = set_resolved(needle, resolved=True, reason="resolved by the operator via /friction")
         if not changed:
             return f"No open friction matching “{needle}”. `/friction` lists what is open."

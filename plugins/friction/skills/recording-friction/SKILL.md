@@ -80,5 +80,10 @@ trail survives) and drops the entry from the backlog and from the operator's con
 alike. Do not use it to quiet a signal you have not fixed; a live problem marked
 resolved is worse than one never recorded, because now nobody is looking.
 
+Resolve by the `[id]` that `friction_review` (or the OPEN FRICTION hint) shows —
+`resolve_friction(id="abcd1234", reason=...)` — or by any part of the summary you
+logged. "already resolved" means it worked earlier; it is not a failure. If nothing
+matches, the reply lists the open ids: retry with one of them.
+
 If a friction point warrants a tracked fix, file it in the repo that owns the fix
 and say so in the resolve reason.
