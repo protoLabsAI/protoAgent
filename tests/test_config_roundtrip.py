@@ -249,6 +249,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     # legacy-lane floor never speaks for it (#3128).
     "providers_declared": True,
     "model_vision": False,
+    "image_max_side": 1568,
+    "max_images_per_request": 20,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",
     "operator_mcp_enabled": False,

@@ -22,16 +22,25 @@ How it works (the ``graph/components.py`` sentinel idiom):
 
 Limits (context cost — enforced in ``render_multimodal_content`` and documented
 in the plugin devkit): at most ``MAX_IMAGES_PER_RESULT`` images per tool result
-and ``MAX_IMAGE_BYTES`` decoded bytes per image. An image over a limit is
-dropped with an inline note (no downscaling — that would need an image
-dependency core doesn't carry); the text part always survives.
+and ``MAX_IMAGE_BYTES`` decoded bytes per image. Every image is first fitted by
+``graph.image_limits.fit_image`` — downscaled to ``model.image_max_side`` (default
+1568 px long side) and re-encoded when it is larger — because an oversized image
+in the checkpointed history poisons every later turn once the provider's
+many-image limit kicks in. An image that can't be made safe (a decompression-bomb
+canvas, or one over 2000 px that won't downscale) or is still over a limit after
+fitting is dropped with an inline note; the text part always survives.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import logging
 from collections.abc import Callable
+
+from graph.image_limits import fit_image
+
+logger = logging.getLogger(__name__)
 
 # Marker (record-separator char) prepended to the tool's return value — the same
 # out-of-band idiom as graph/components.py, so envelope detection is one
@@ -54,7 +63,11 @@ def multimodal_tool_result(text: str, images: list[dict]) -> str:
     Each image is ``{"b64": <base64 str>}`` or ``{"path": <file path>}`` plus an
     optional ``"mime"`` (default ``image/png``). Enforces the module limits
     eagerly — a ``ValueError`` here surfaces in the tool's own result, at the
-    source, instead of a silent drop later. Returns the sentinel-prefixed JSON
+    source, instead of a silent drop later. The exception: an image that can't be
+    made safe for the provider (a decode-cap canvas, or over 2000 px and not
+    downscalable) does NOT fail the call — it is replaced by an
+    ``[image omitted: <reason>, <caption>]`` note in the text (and logged), and the
+    other images and the text are kept. Returns the sentinel-prefixed JSON
     envelope the middleware rewrites; everything else about the tool (schema,
     docstring, registration) stays a plain string-returning tool.
     """
@@ -63,6 +76,8 @@ def multimodal_tool_result(text: str, images: list[dict]) -> str:
     if len(images) > MAX_IMAGES_PER_RESULT:
         raise ValueError(f"too many images: {len(images)} > MAX_IMAGES_PER_RESULT={MAX_IMAGES_PER_RESULT}")
     out: list[dict] = []
+    notes: list[str] = []
+    caption = " ".join(str(text or "").split())[:120] or "tool image"
     for i, img in enumerate(images, start=1):
         if not isinstance(img, dict):
             raise ValueError(f"image #{i} must be a dict with 'b64' or 'path'")
@@ -81,13 +96,25 @@ def multimodal_tool_result(text: str, images: list[dict]) -> str:
             b64 = base64.b64encode(raw).decode()
         else:
             raise ValueError(f"image #{i} must carry 'b64' or 'path'")
+        fit = fit_image(raw, mime, max_bytes=MAX_IMAGE_BYTES)
+        if fit is None:
+            # Degrade, don't raise: plugins (campaign_view, agent_browser, …) would see one
+            # unsafe image fail the whole tool call. Keep the text and the other images.
+            reason = f"image {i} too large to send safely (over the decode cap, or over 2000 px and not downscalable)"
+            logger.warning("[multimodal] %s; replaced with a note", reason)
+            notes.append(f"[image omitted: {reason}, {caption}]")
+            continue
+        if fit[0] is not raw:
+            raw, b64 = fit[0], base64.b64encode(fit[0]).decode()
+        mime = fit[1]
         if len(raw) > MAX_IMAGE_BYTES:
             raise ValueError(
-                f"image #{i} is {len(raw)} bytes > MAX_IMAGE_BYTES={MAX_IMAGE_BYTES} — "
-                "downscale it in the tool before returning"
+                f"image #{i} is {len(raw)} bytes > MAX_IMAGE_BYTES={MAX_IMAGE_BYTES} even after "
+                "fitting — downscale it in the tool before returning"
             )
         out.append({"b64": b64, "mime": mime})
-    return _SENTINEL + json.dumps({"text": str(text or ""), "images": out}, ensure_ascii=False)
+    full_text = "\n".join(s for s in (str(text or ""), *notes) if s)
+    return _SENTINEL + json.dumps({"text": full_text, "images": out}, ensure_ascii=False)
 
 
 def is_multimodal_result(content) -> bool:
@@ -161,6 +188,13 @@ def render_multimodal_content(env: dict, *, vision: bool, describe_fn: DescribeF
         except (ValueError, TypeError, OSError) as e:
             notes.append(f"[image {i} dropped: {e}]")
             continue
+        fit = fit_image(raw, mime, max_bytes=MAX_IMAGE_BYTES)
+        if fit is None:
+            notes.append(f"[image {i} dropped: too large to send safely and could not be downscaled]")
+            continue
+        if fit[0] is not raw:
+            raw, b64 = fit[0], base64.b64encode(fit[0]).decode()
+        mime = fit[1]
         if len(raw) > MAX_IMAGE_BYTES:
             notes.append(
                 f"[image {i} dropped: {len(raw)} bytes exceeds the {MAX_IMAGE_BYTES}-byte limit — "

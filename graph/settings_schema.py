@@ -194,6 +194,30 @@ FIELDS: list[Field] = [
         restart=True,
     ),
     Field(
+        "model.image_max_side",
+        "image_max_side",
+        "Image max size (px)",
+        "number",
+        "Model & runtime",
+        "Images a tool returns or you attach are downscaled so their longest side is at most "
+        "this many pixels before they enter the conversation (1568 is Anthropic's recommended "
+        "size). Capped at 2000: a larger image in the history makes every later request fail "
+        "once the conversation holds more than 20 images.",
+        minimum=64,
+        maximum=2000,
+    ),
+    Field(
+        "model.max_images_per_request",
+        "max_images_per_request",
+        "Max images per request",
+        "number",
+        "Model & runtime",
+        "Only the newest N images in the conversation are sent with each model request; "
+        "older ones are replaced by a short '[image omitted: …]' note, so long visual "
+        "sessions stay within the provider's request limits. 0 = no count cap.",
+        minimum=0,
+    ),
+    Field(
         "model.max_iterations",
         "max_iterations",
         "Max tool iterations",
