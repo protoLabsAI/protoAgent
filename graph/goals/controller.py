@@ -527,10 +527,15 @@ class GoalController:
             invoker=VerifierInvoker(kind="goal", id=state.session_id, session_id=state.session_id),
         )
 
+    def can_probe(self, session_id: str) -> bool:
+        """Whether :meth:`probe` would run a verifier for this session right now."""
+        state = self.active_goal(session_id)
+        return state is not None and (state.verifier or {}).get("type", "llm") in _PROBE_TYPES
+
     async def probe(self, session_id: str):
         """Run the active goal's verifier MID-TURN without touching the goal state — no
-        iteration, no history, no events. The goal-checkpoint middleware calls it when the
-        agent records its plan, so a turn that already met the goal ends there instead of
+        iteration, no history, no events. The goal-checkpoint middleware calls it (debounced)
+        after a tool round, so a turn that already met the goal ends there instead of
         narrating "the goal is already complete" for several more rounds before the
         post-turn ``evaluate`` (which still decides, and records, the outcome).
 

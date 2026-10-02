@@ -269,5 +269,7 @@ describe("/goal new prints 'Goal set.' once", () => {
     expect(goalSetDetail("goal [active] (iteration 0/8)")).toBe("goal [active] (iteration 0/8)");
     expect(goalSetDetail(undefined)).toBe("");
     expect(goalSetDetail("Goal set.")).toBe("");
+    // A word that merely starts with "goal set" is not the ack's prefix.
+    expect(goalSetDetail("Goal settings saved")).toBe("Goal settings saved");
   });
 });

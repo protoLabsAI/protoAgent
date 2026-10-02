@@ -281,7 +281,7 @@ export function verifierLabel(verifier?: Record<string, unknown> | null): string
  *  so passing the message through verbatim read "Goal set. Goal set. goal [active] …". */
 export function goalSetDetail(message: string | undefined | null): string {
   return String(message ?? "")
-    .replace(/^\s*goal set\.?\s*/i, "")
+    .replace(/^\s*goal set\b\.?\s*/i, "")
     .trim();
 }
 

@@ -40,9 +40,12 @@ class GoalTurn:
     round_cap: int = 0
     rounds: int = 0
     cap_key: str = ""
-    # Set when the goal-checkpoint middleware ended the pass because the verifier already
-    # passed mid-turn (``graph.middleware.goal_checkpoint``): the probe's reason.
-    met_reason: str = ""
+    # Mid-turn verifier probes (``graph.middleware.goal_checkpoint``), debounced per pass:
+    # the round (model-call count) last probed, the monotonic time before which no further
+    # probe runs, and how many ran.
+    probe_round: int = -1
+    probe_after: float = 0.0
+    probes: int = 0
 
     @property
     def capped(self) -> bool:
@@ -68,12 +71,9 @@ def record_round_cap(rounds: int, cap: int, cap_key: str) -> None:
         marker.round_cap, marker.rounds, marker.cap_key = int(cap), int(rounds), cap_key
 
 
-def record_goal_met(reason: str) -> None:
-    """Mark the current goal-driven pass as ended early because the goal's verifier
-    passed mid-turn. A no-op outside a goal turn."""
-    marker = _goal_turn_ctx.get()
-    if marker is not None:
-        marker.met_reason = str(reason or "verifier passed")
+def current_goal_turn() -> GoalTurn | None:
+    """The running goal-driven pass's marker, or ``None`` outside a goal turn."""
+    return _goal_turn_ctx.get()
 
 
 @contextlib.contextmanager

@@ -558,6 +558,17 @@ def _on_custom_delegate_progress(st: _TurnStreamState, event: dict, name: str, p
         yield ("delegate_progress", {**data, "id": rid})
 
 
+def _on_custom_goal_probe(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
+    # The goal checkpoint (graph/middleware/goal_checkpoint.py) is running the goal's
+    # verifier mid-turn — it can take a while and nothing else streams meanwhile, so say so
+    # as a transient status line (a plain-string tool_start, like the drive's 🎯 notes).
+    # Only the lead's own turn: a subagent's graph has no goal pass.
+    data = event.get("data")
+    text = str(data.get("text") or "") if isinstance(data, dict) else ""
+    if text and not parent_tool_id:
+        yield ("tool_start", f"🎯 {text}")
+
+
 # `astream_events` kind → handler. Kinds not listed produce nothing (skills are no
 # longer auto-retrieved per turn — ADR 0060 progressive disclosure; the model loads one
 # on demand via the `load_skill` tool, an ordinary tool card — so there is no
@@ -574,6 +585,7 @@ _CUSTOM_EVENT_HANDLERS: dict[str, Callable[..., _Frames]] = {
     "usage": _on_custom_usage,
     "steer_consumed": _on_custom_steer_consumed,
     "delegate_progress": _on_custom_delegate_progress,
+    "goal_probe": _on_custom_goal_probe,
 }
 
 
