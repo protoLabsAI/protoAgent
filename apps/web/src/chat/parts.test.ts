@@ -158,6 +158,35 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
     ]);
   });
 
+  it("EXTENDS a rendered prefix: the pre-tool text stays above the tools, the unstreamed answer lands below once", () => {
+    // The terminal frame carries the whole turn, but only the preamble streamed (the post-tool
+    // deltas never arrived — a reattach, or a server that sends the answer only in the replace).
+    // The preamble is already on screen ABOVE the tool card: it must stay there, not be moved
+    // into one trailing run below the tools (visible text is never yanked), and not be doubled.
+    let p: ChatPart[] | undefined;
+    p = appendReasoning(p, "think");
+    p = appendText(p, "protoAgent is a desktop agent.", true);
+    p = addToolRef(p, "note-1");
+    expect(replaceText(p, "protoAgent is a desktop agent.\n\nDone — noted.")).toEqual([
+      { kind: "reasoning", text: "think" },
+      { kind: "text", text: "protoAgent is a desktop agent." },
+      { kind: "tools", ids: ["note-1"] },
+      { kind: "text", text: "Done — noted." },
+    ]);
+  });
+
+  it("extends a truncated OPEN run in place instead of rebuilding it", () => {
+    let p: ChatPart[] | undefined;
+    p = appendText(p, "Let me check. ", true);
+    p = addToolRef(p, "t1");
+    p = appendText(p, "The an", true);
+    expect(replaceText(p, "Let me check. The answer.")).toEqual([
+      { kind: "text", text: "Let me check. " },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "The answer." },
+    ]);
+  });
+
   it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {
     expect(replaceText(undefined, "full answer")).toEqual([{ kind: "text", text: "full answer" }]);
   });
@@ -275,6 +304,7 @@ describe("foldPlan", () => {
     const parts = [reasoning("think"), tools("a"), text("the answer")];
     expect(foldPlan(parts, false)).toEqual({
       fold: true,
+      leadParts: [],
       workParts: [reasoning("think"), tools("a")],
       answerParts: [text("the answer")],
     });
@@ -284,7 +314,7 @@ describe("foldPlan", () => {
     // Interstitial narration after a tool, mid-turn — must NOT become the answer yet, or it
     // flashes into the main chat then jumps back into the WorkBlock when the next tool arrives.
     const parts = [reasoning("think"), tools("a"), text("let me try another tool")];
-    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, true)).toEqual({ fold: true, leadParts: [], workParts: parts, answerParts: [] });
   });
 
   it("surfaces a component IMMEDIATELY while streaming a folded turn — it is never work", () => {
@@ -293,6 +323,7 @@ describe("foldPlan", () => {
     const parts = [reasoning("think"), tools("a"), component()];
     expect(foldPlan(parts, true)).toEqual({
       fold: true,
+      leadParts: [],
       workParts: [reasoning("think"), tools("a")],
       answerParts: [component()],
     });
@@ -305,12 +336,14 @@ describe("foldPlan", () => {
     const parts = [reasoning("plan"), tools("a"), component(), reasoning("summarize"), text("the answer")];
     expect(foldPlan(parts, false)).toEqual({
       fold: true,
+      leadParts: [],
       workParts: [reasoning("plan"), tools("a"), reasoning("summarize")],
       answerParts: [component(), text("the answer")],
     });
     // …and while that final reasoning is still streaming, the component is already up.
     expect(foldPlan(parts.slice(0, 4), true)).toEqual({
       fold: true,
+      leadParts: [],
       workParts: [reasoning("plan"), tools("a"), reasoning("summarize")],
       answerParts: [component()],
     });
@@ -321,6 +354,7 @@ describe("foldPlan", () => {
     const parts = [reasoning("r1"), tools("a"), component(), tools("b"), text("done")];
     expect(foldPlan(parts, false)).toEqual({
       fold: true,
+      leadParts: [],
       workParts: [reasoning("r1"), tools("a"), tools("b")],
       answerParts: [component(), text("done")],
     });
@@ -330,30 +364,92 @@ describe("foldPlan", () => {
     const parts = [tools("a"), text("answer")];
     // No reasoning → not folded; the normal split applies, streaming or settled. The web_search
     // card renders directly rather than collapsing behind a "Worked" summary.
-    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: [tools("a")], answerParts: [text("answer")] });
-    expect(foldPlan(parts, false)).toEqual({ fold: false, workParts: [tools("a")], answerParts: [text("answer")] });
+    expect(foldPlan(parts, true)).toEqual({ fold: false, leadParts: [], workParts: [tools("a")], answerParts: [text("answer")] });
+    expect(foldPlan(parts, false)).toEqual({ fold: false, leadParts: [], workParts: [tools("a")], answerParts: [text("answer")] });
   });
 
   it("does NOT fold a tool+narration turn without reasoning — reverts to the inline render", () => {
     // tools + interim narration, no reasoning part → not folded; renders inline (the pre-#1417
     // behaviour). Trailing part is a tool, so everything is work and nothing is deferred.
     const parts = [tools("a"), text("running the next one"), tools("b")];
-    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, true)).toEqual({ fold: false, leadParts: [], workParts: parts, answerParts: [] });
   });
 
   it("does NOT fold a reasoning-only turn (no tools)", () => {
     const parts = [reasoning("think"), text("answer")];
-    expect(foldPlan(parts, true)).toEqual({ fold: false, workParts: [reasoning("think")], answerParts: [text("answer")] });
+    expect(foldPlan(parts, true)).toEqual({ fold: false, leadParts: [], workParts: [reasoning("think")], answerParts: [text("answer")] });
   });
 
   it("a plain text turn is all answer, never folded", () => {
-    expect(foldPlan([text("hi")], true)).toEqual({ fold: false, workParts: [], answerParts: [text("hi")] });
+    expect(foldPlan([text("hi")], true)).toEqual({ fold: false, leadParts: [], workParts: [], answerParts: [text("hi")] });
   });
 
   it("a folded turn with no answer yet keeps everything as work, settled or streaming", () => {
     const parts = [reasoning("think"), tools("a")];
-    expect(foldPlan(parts, false)).toEqual({ fold: true, workParts: parts, answerParts: [] });
-    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, false)).toEqual({ fold: true, leadParts: [], workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, true)).toEqual({ fold: true, leadParts: [], workParts: parts, answerParts: [] });
+  });
+
+  // ── Visible text is never yanked (the launch-demo glitch) ────────────────────────────────
+  // A reasoning model's `reasoning → "protoAgent is…" → append_note` turn: the sentence streams
+  // into the bubble while the turn is still unfolded (no tool yet). The tool call then completes
+  // the reason+tool pair and folds the turn — and the sentence used to vanish into the collapsed
+  // "Working…" block. It now stays inline above the WorkBlock (the lead), streaming and settled.
+
+  it("text streamed before the turn folded stays rendered once the tool call lands (streaming)", () => {
+    const before = [reasoning("think"), text("protoAgent is a desktop agent.")];
+    // Pre-tool: unfolded, the sentence renders as the answer.
+    expect(foldPlan(before, true)).toEqual({
+      fold: false,
+      leadParts: [],
+      workParts: [reasoning("think")],
+      answerParts: [text("protoAgent is a desktop agent.")],
+    });
+    // tool_start folds the turn — the sentence (and the reasoning card above it) stay inline.
+    const after = [...before, tools("note-1")];
+    expect(foldPlan(after, true)).toEqual({
+      fold: true,
+      leadParts: [reasoning("think"), text("protoAgent is a desktop agent.")],
+      workParts: [tools("note-1")],
+      answerParts: [],
+    });
+  });
+
+  it("the final answer lands below the WorkBlock without dropping or duplicating the lead", () => {
+    const parts = [reasoning("think"), text("protoAgent is a desktop agent."), tools("note-1"), text("Done — noted.")];
+    const settled = foldPlan(parts, false);
+    expect(settled).toEqual({
+      fold: true,
+      leadParts: [reasoning("think"), text("protoAgent is a desktop agent.")],
+      workParts: [tools("note-1")],
+      answerParts: [text("Done — noted.")],
+    });
+    // Every part renders exactly once across lead + work + answer.
+    expect([...settled.leadParts, ...settled.workParts, ...settled.answerParts]).toEqual(parts);
+    // While still streaming, the trailing answer stays work (settle guard) — but the lead holds.
+    expect(foldPlan(parts, true).leadParts).toEqual([reasoning("think"), text("protoAgent is a desktop agent.")]);
+  });
+
+  it("only text before the fold point leads — narration AFTER the fold still folds", () => {
+    // tools first (no reasoning yet → inline card + inline narration), then reasoning folds it.
+    const parts = [tools("a"), text("checked a"), reasoning("hmm"), tools("b"), text("mid"), tools("c"), text("done")];
+    expect(foldPlan(parts, false)).toEqual({
+      fold: true,
+      leadParts: [tools("a"), text("checked a")],
+      workParts: [reasoning("hmm"), tools("b"), text("mid"), tools("c")],
+      answerParts: [text("done")],
+    });
+  });
+
+  it("a reason → tool opening with no pre-tool text keeps the old fold (nothing leads)", () => {
+    const parts = [reasoning("think"), tools("a"), text("answer")];
+    expect(foldPlan(parts, true).leadParts).toEqual([]);
+    expect(foldPlan(parts, false).leadParts).toEqual([]);
+  });
+
+  it("whitespace-only text before the fold does not lead", () => {
+    const parts = [reasoning("think"), text("  "), tools("a")];
+    expect(foldPlan(parts, true)).toEqual({ fold: true, leadParts: [], workParts: parts, answerParts: [] });
   });
 });
 

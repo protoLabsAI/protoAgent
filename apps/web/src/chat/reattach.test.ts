@@ -979,9 +979,10 @@ describe("reattach: a completed multi-part turn replays its trailing text", () =
     expect(assistantMessage(sessionId)?.status).toBe("done");
   });
 
-  it("does not double a pre-tool preamble: replaceText drops the partial run and lands the whole answer once", async () => {
+  it("does not double or move a pre-tool preamble: the answer lands after the tools, the preamble stays put", async () => {
     // The client had rendered a preamble text part BEFORE the tools; the canonical
-    // answer re-sends it. It must appear exactly once (as the single trailing run).
+    // answer re-sends it. It must appear exactly once — and, being already on screen, stay
+    // where it is (above the tools), with only the unstreamed tail landing after them.
     const preamble = "Deploying now. ";
     const full = `${preamble}${ANSWER}`;
     const sessionId = seedStuckMultiPartSession(preamble);
@@ -993,10 +994,11 @@ describe("reattach: a completed multi-part turn replays its trailing text", () =
 
     const parts = assistantMessage(sessionId)?.parts ?? [];
     const textParts = parts.filter((p) => p.kind === "text");
-    // Exactly ONE text run (the trailing answer) — the preamble was rebuilt into it, not doubled.
-    expect(textParts).toHaveLength(1);
-    expect(trailingText(sessionId)).toBe(full);
+    expect(textParts.map((p) => (p.kind === "text" ? p.text : ""))).toEqual([preamble, ANSWER]);
+    expect(parts[0]).toEqual({ kind: "text", text: preamble });
+    expect(trailingText(sessionId)).toBe(ANSWER);
   });
+
 });
 
 // ---------------------------------------------------------------------------

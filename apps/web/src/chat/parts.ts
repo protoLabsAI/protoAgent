@@ -75,10 +75,14 @@ export function rendersText(runs: string[], canonical: string): boolean {
  *  only the trailing run would render the preamble twice.
  *
  *  When the parts already render the replacement (`rendersText`), they ARE canonical:
- *  keep them untouched, preserving the text↔tool interleaving. Only on a real
- *  divergence (frames lost/duplicated en route) do we rebuild — drop every prior text
- *  run and land the canonical text as one trailing run. That trades the (already
- *  unreliable) interleaving for the guarantee the answer renders exactly once.
+ *  keep them untouched, preserving the text↔tool interleaving. When they render a PREFIX of
+ *  it (the terminal frame carries text whose deltas never streamed — e.g. a reattached turn
+ *  that only saw the pre-tool preamble), extend: the missing tail lands after what is
+ *  already shown, and the shown text stays where it is. Visible text is never moved or
+ *  yanked to make room for text it already matches. Only on a real divergence (frames
+ *  lost/duplicated en route) do we rebuild — drop every prior text run and land the
+ *  canonical text as one trailing run. That trades the (already unreliable) interleaving
+ *  for the guarantee the answer renders exactly once.
  *
  *  Judged from the parts themselves, not from the flat `content`: the two disagree
  *  exactly where it matters — `content` keeps the server's paragraph break between
@@ -86,7 +90,16 @@ export function rendersText(runs: string[], canonical: string): boolean {
  *  render. */
 export function replaceText(parts: ChatPart[] | undefined, text: string): ChatPart[] {
   const next = [...(parts ?? [])];
-  if (rendersText(textRuns(next), text)) return next;
+  const end = renderedPrefixEnd(text, textRuns(next));
+  if (end >= 0) {
+    const rest = text.slice(end);
+    if (!rest.trim()) return next;
+    // The open run matched only up to its trimmed body; its trailing whitespace (if any) is
+    // re-supplied verbatim by `rest`, so drop it before extending.
+    const last = next[next.length - 1];
+    if (last?.kind === "text") next[next.length - 1] = { kind: "text", text: last.text.trimEnd() };
+    return appendText(next, rest, true);
+  }
   const kept = next.filter((p) => p.kind !== "text");
   const trimmed = text.replace(/^\s+/, "");
   if (!trimmed) return kept;
@@ -142,8 +155,9 @@ export function addComponent(parts: ChatPart[] | undefined, spec: ComponentSpec)
   return [...(parts ?? []), { kind: "component", spec }];
 }
 
-/** Split a turn's parts into the folded "work" (the reason→tool→interstitial timeline behind the
- *  WorkBlock) and the trailing "answer" (the final text/component run rendered below it).
+/** Split a turn's parts into the leading "lead" (text the bubble already showed before the turn
+ *  folded), the folded "work" (the reason→tool→interstitial timeline behind the WorkBlock) and the
+ *  trailing "answer" (the final text/component run rendered below it).
  *
  *  `fold` is true for a reason+tool turn — reasoning AND a tool call (the pre-#1417 condition):
  *  the WorkBlock keeps the streaming view clean — just "Working… [tally]" + the running-tool
@@ -157,16 +171,27 @@ export function addComponent(parts: ChatPart[] | undefined, spec: ComponentSpec)
  *  WorkBlock); only once the turn settles (`!streaming`) do we split the final text/component run
  *  out as the answer beneath the collapsed "Worked" summary. Promoting a trailing run eagerly made
  *  interstitial narration flash into the main chat, then jump back into the timeline when the next
- *  tool arrived. */
+ *  tool arrived.
+ *
+ *  Visible text is never yanked (the lead). Until the part that completes the reason+tool pair
+ *  arrives, the turn is NOT folded, so everything before it rendered inline — a reasoning model's
+ *  `reasoning → "protoAgent is…" → append_note` turn has already streamed that sentence into the
+ *  bubble when the tool call lands. Folding it then would make the answer visibly vanish into the
+ *  collapsed "Working…" block. So the parts up to the last text that preceded the fold point stay
+ *  inline, in place, ABOVE the WorkBlock — a pre-tool preamble renders above the tool cards, as the
+ *  ordered parts intend — and only what follows folds. This is a pure function of the parts, so the
+ *  live render, the settled render and a re-hydrated turn all agree. */
 export function foldPlan(
   parts: ChatPart[],
   streaming: boolean,
-): { fold: boolean; workParts: ChatPart[]; answerParts: ChatPart[] } {
+): { fold: boolean; leadParts: ChatPart[]; workParts: ChatPart[]; answerParts: ChatPart[] } {
   let split = parts.length;
   while (split > 0 && (parts[split - 1].kind === "text" || parts[split - 1].kind === "component")) split--;
   const baseWork = parts.slice(0, split);
   const fold = baseWork.some((p) => p.kind === "tools") && baseWork.some((p) => p.kind === "reasoning");
-  if (!fold) return { fold, workParts: baseWork, answerParts: parts.slice(split) };
+  if (!fold) return { fold, leadParts: [], workParts: baseWork, answerParts: parts.slice(split) };
+  const lead = parts.slice(0, foldLeadEnd(parts));
+  const rest = parts.slice(lead.length);
   // A folded turn NEVER hides a component. `show_component` is a render directive for the
   // user — "renders immediately" is its contract — and a reasoning model thinks between the
   // component and its final text (…component → reasoning → text), so the trailing-run walk
@@ -177,12 +202,37 @@ export function foldPlan(
   // order — while streaming too: a component can't "flash then jump back" the way interim
   // narration does (the settle guard's reason), because it is always promoted.
   const isComponent = (p: ChatPart) => p.kind === "component";
-  if (streaming) return { fold, workParts: parts.filter((p) => !isComponent(p)), answerParts: parts.filter(isComponent) };
+  if (streaming) {
+    return { fold, leadParts: lead, workParts: rest.filter((p) => !isComponent(p)), answerParts: rest.filter(isComponent) };
+  }
+  const restSplit = split - lead.length;
+  const restWork = rest.slice(0, restSplit);
   return {
     fold,
-    workParts: baseWork.filter((p) => !isComponent(p)),
-    answerParts: [...baseWork.filter(isComponent), ...parts.slice(split)],
+    leadParts: lead,
+    workParts: restWork.filter((p) => !isComponent(p)),
+    answerParts: [...restWork.filter(isComponent), ...rest.slice(restSplit)],
   };
+}
+
+/** How many leading parts of a folded turn stay inline: everything up to and including the last
+ *  visible text run (or component) that arrived BEFORE the turn folded — i.e. before the first
+ *  point where both a reasoning part and a tool group had been emitted. Before that point the
+ *  turn rendered unfolded, so those parts were on screen; folding them would yank them. 0 when no
+ *  text preceded the fold (the common `reasoning → tool` opening, whose reasoning card folds into
+ *  the block exactly as before). */
+function foldLeadEnd(parts: ChatPart[]): number {
+  let sawTools = false;
+  let sawReasoning = false;
+  let end = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.kind === "tools") sawTools = true;
+    else if (p.kind === "reasoning") sawReasoning = true;
+    if (sawTools && sawReasoning) return end; // this part folded the turn
+    if ((p.kind === "text" && p.text.trim()) || p.kind === "component") end = i + 1;
+  }
+  return end;
 }
 
 /** The tool calls to render for a `tools` part: its top-level calls (by id) plus any

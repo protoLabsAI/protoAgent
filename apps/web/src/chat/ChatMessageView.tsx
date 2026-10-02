@@ -190,36 +190,44 @@ export function ChatMessageView({
           // into the work timeline (#1323). Everything before is the work. While STREAMING a folded
           // (reason+tool) turn, foldPlan keeps an ambiguous trailing run as work so it can't flash
           // into the main chat and then jump back into the WorkBlock when the next tool arrives.
-          const { fold, workParts, answerParts } = foldPlan(parts, streaming);
+          // `leadParts` is text the bubble already showed before the turn folded (a reasoning
+          // model's pre-tool sentence): it stays inline above the WorkBlock — never yanked into it.
+          const { fold, leadParts, workParts, answerParts } = foldPlan(parts, streaming);
           const renderText = (part: ChatPart, key: string) =>
             part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
               renderUserText(part.text, key)
             ) : (
               <Markdown key={key}>{part.text}</Markdown>
             );
-          const renderInline = (part: ChatPart, i: number) =>
+          // Every part is keyed by its index in `parts` (foldPlan keeps the part objects), and
+          // lead + work + answer render as ONE keyed list. So when the first tool call folds the
+          // turn, the pre-tool sentence that was streaming as the answer becomes a lead part with
+          // the SAME key, and React keeps that node in place — no remount, no flicker.
+          const keyOf = (part: ChatPart) => `p${parts.indexOf(part)}`;
+          const lastWork = workParts[workParts.length - 1];
+          const renderInline = (part: ChatPart) =>
             part.kind === "tools" ? (
-              <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={streaming} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />
+              <ToolCalls key={keyOf(part)} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={streaming} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />
             ) : part.kind === "reasoning" ? (
               part.text.trim() ? (
-                <ReasoningCard key={i} text={part.text} streaming={streaming && i === workParts.length - 1} />
+                // Only the last UNFOLDED work part can still be streaming; a lead part always has
+                // more after it.
+                <ReasoningCard key={keyOf(part)} text={part.text} streaming={streaming && !fold && part === lastWork} />
               ) : null
             ) : part.kind === "component" ? (
-              <ChatComponent key={i} spec={part.spec} />
+              <ChatComponent key={keyOf(part)} spec={part.spec} />
             ) : (
-              renderText(part, `w${i}`)
+              renderText(part, keyOf(part))
             );
-          // An answer part is either streamed text or an inline component (rendered in order).
-          const renderAnswerPart = (part: ChatPart, i: number) =>
-            part.kind === "component" ? <ChatComponent key={`ac${i}`} spec={part.spec} /> : renderText(part, `a${i}`);
           return (
             <>
-              {fold ? (
-                <WorkBlock parts={workParts} toolCalls={message.toolCalls} streaming={streaming} />
-              ) : (
-                workParts.map(renderInline)
-              )}
-              {answerParts.map(renderAnswerPart)}
+              {[
+                ...leadParts.map(renderInline),
+                ...(fold
+                  ? [<WorkBlock key="work" parts={workParts} toolCalls={message.toolCalls} streaming={streaming} />]
+                  : workParts.map(renderInline)),
+                ...answerParts.map(renderInline),
+              ]}
             </>
           );
         })()
