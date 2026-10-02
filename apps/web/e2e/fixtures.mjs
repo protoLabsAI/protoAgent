@@ -16,6 +16,7 @@ export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 export const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
+export const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
 
 // The brief a DELEGATE_BG turn hands to `sonnet` — long on purpose: it is the wall of text the
 // delegation row keeps behind "Show brief" instead of rendering as a chat bubble.
@@ -1138,6 +1139,19 @@ function scenarioFor(prompt) {
       output: "[200] https://example.com\n\nExample Domain. This domain is for use in examples.",
       answer: "Fetched example.com.",
     };
+  if (t.includes("THINKPRE"))
+    // A reasoning model's turn: think → stream a sentence → call a tool → answer. The sentence
+    // renders unfolded (no tool yet), so when the tool call folds the reason+tool turn into the
+    // WorkBlock the sentence must STAY in the bubble above it — never vanish into the collapsed
+    // "Working…" block (the launch-demo glitch; parts.ts foldPlan's lead).
+    return {
+      reasoning: "The operator wants a sentence, then a note.",
+      preText: "I am protoAgent, a plugin-extensible desktop agent.",
+      name: "append_note",
+      input: { text: "hi" },
+      output: "Appended to the note.",
+      answer: "\n\nDone — the note says hi.",
+    };
   if (t.includes("PREAMBLE"))
     // Pre-tool narration (`preText`) streams as an answer artifact BEFORE the tool —
     // it must render ABOVE the tool card, with the final answer BELOW it (ordering fix).
@@ -1315,6 +1329,22 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
     wrap({ kind: "task", id: taskId, contextId, status: { state: "submitted" }, artifacts: [] }),
     statusFrame("working…", null),
   ];
+  // Streamed reasoning ("thinking") ahead of everything else — a reasoning-v1 DataPart on a
+  // working status frame, as a2a_impl's executor emits it.
+  if (scenario.reasoning) {
+    frames.push(
+      wrap({
+        kind: "status-update",
+        taskId,
+        contextId,
+        status: {
+          state: "working",
+          message: { role: "agent", parts: [{ kind: "data", data: { text: scenario.reasoning }, metadata: { mimeType: REASONING_MIME } }] },
+        },
+        final: false,
+      }),
+    );
+  }
   // Pre-tool answer text (ordering scenario) — streamed as an artifact BEFORE the
   // tool frames, mirroring the backend flushing buffered text before a tool frame.
   if (scenario.preText) {
