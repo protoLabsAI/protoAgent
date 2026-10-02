@@ -1140,16 +1140,21 @@ function scenarioFor(prompt) {
       answer: "Fetched example.com.",
     };
   if (t.includes("MDFLASH"))
-    // A tool turn whose whole markdown answer lands at once after the tool — the launch-demo
-    // frame that painted `- **bold** … \`code\`` as raw source while the lazily split markdown
-    // renderer was still loading (LazyMarkdown.tsx). The answer must never show its source.
+    // A tool turn with a markdown answer, on a fresh page — two launch-demo flashes:
+    //   1. the answer is the page's FIRST Markdown mount, and the lazy renderer's fallback once
+    //      painted it as raw source (`- **bold** … \`code\`` on one line — LazyMarkdown.tsx);
+    //   2. the answer STREAMS, and its very first delta is a bare `**` (then `- `, a lone
+    //      backtick): a marker with nothing after it yet, which streamdown's incomplete-markdown
+    //      repair leaves as a literal (danglingMarker.ts).
+    // The answer must never show markdown syntax on any frame. No reasoning: a tool-only turn
+    // doesn't fold, so its answer streams INLINE below the tool card (a folded turn keeps the
+    // streaming answer inside the collapsed WorkBlock until it settles — parts.ts foldPlan).
     return {
-      reasoning: "The operator wants a note appended, then a summary.",
       name: "append_note",
       input: { text: "protoAgent summary" },
       output: "Appended to the note.",
-      answer:
-        "Done — appended to your notes:\n\n- **protoAgent** — private, plugin-extensible desktop agent\n- **Extended via plugins** — pinned in `plugins.lock`, no fork needed",
+      streamChunks: ["**", "Done** — appended to your notes:\n\n- ", "**", "protoAgent** — private, plugin-extensible desktop agent\n- ", "**", "Extended via plugins** — pinned in `", "plugins.lock`, no fork needed"],
+      answer: "**Done** — appended to your notes:\n\n- **protoAgent** — private, plugin-extensible desktop agent\n- **Extended via plugins** — pinned in `plugins.lock`, no fork needed",
     };
   if (t.includes("THINKPRE"))
     // A reasoning model's turn: think → stream a sentence → call a tool → answer. The sentence

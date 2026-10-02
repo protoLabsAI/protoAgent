@@ -86,3 +86,30 @@ describe("ChatMessageView — pre-tool text stays put when the turn folds", () =
     expect(s.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+describe("ChatMessageView — a dangling markdown marker never paints while streaming", () => {
+  const md = () => [...container.querySelectorAll(".markdown")].map((el) => el.textContent ?? "").join("|");
+
+  it("holds back a bare `**` first delta, then renders the bold once it has content", () => {
+    render(msg([{ kind: "text", text: "**" }], "streaming"));
+    expect(md()).not.toContain("**");
+
+    render(msg([{ kind: "text", text: "Done:\n\n- **" }], "streaming"));
+    expect(md()).not.toContain("**");
+    expect(md()).toContain("Done:");
+
+    render(msg([{ kind: "text", text: "Done:\n\n- **protoAgent" }], "streaming"));
+    expect(container.querySelector('.markdown [data-streamdown="strong"]')?.textContent).toBe("protoAgent");
+  });
+
+  it("only the still-streaming LAST part is trimmed; settled text renders verbatim", () => {
+    const tools: ChatPart = { kind: "tools", ids: ["t1"] };
+    const calls: ToolCall[] = [{ id: "t1", name: "append_note", status: "done" }];
+    render(msg([{ kind: "text", text: "Rate: 5 **" }, tools, { kind: "text", text: "`" }], "streaming", calls));
+    expect(md()).toContain("Rate: 5 **");
+    expect(md()).not.toContain("`");
+
+    render(msg([{ kind: "text", text: "Rate: 5 **" }, tools, { kind: "text", text: "`" }], "done", calls));
+    expect(md()).toContain("`");
+  });
+});
