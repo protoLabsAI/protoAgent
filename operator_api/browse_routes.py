@@ -21,12 +21,13 @@ absolute path into the same field, and every ``/api`` route is already
 operator-authed. Kept narrow anyway — directory NAMES only, never file contents,
 never a write.
 
-**The code pane (ADR 0112)** lives here too — ``/api/fs/file`` and ``/api/fs/diff`` —
+**The code pane (ADR 0112)** lives here too — ``/api/fs/file``, ``/api/fs/diff`` and the
+fallback poll's ``/api/fs/stamp`` (a fingerprint only, never content) —
 but on the opposite side of that line: they return file CONTENT, so they never leave
 the fs fence (``tools.fs_tools.live_project_registry``, the ``read_file`` chokepoint),
 refuse secret-like names (``tools.fs_secrets``), and run git only through the hardened
 argv in ``tools.git_read``. Still read-only. They are an opt-in toolset
-(``filesystem.code_pane``, default off): off, both answer 404 ``{code: "disabled"}`` —
+(``filesystem.code_pane``, default off): off, all three answer 404 ``{code: "disabled"}`` —
 checked per request against the live config, so a settings save flips them without a
 restart.
 """
@@ -277,6 +278,58 @@ def register_browse_routes(app) -> None:
             raise
         except GitTimeout as exc:
             raise _fs_error(504, "timeout", "git took longer than 10s") from exc
+        except GitError as exc:
+            raise _fs_error(400, "git_error", str(exc)) from exc
+        except OSError as exc:
+            raise _fs_error(400, "unreadable", f"can't read {project}: {exc}") from exc
+
+    def _stamp(project: str, path: str) -> dict:
+        import hashlib
+        import os
+
+        from tools.fs_secrets import is_secret_path
+        from tools.git_read import working_tree_stamp
+
+        try:
+            root, _ = _fence(project, ".")
+        except ValueError as exc:
+            raise _fs_error(400, "bad_path", str(exc)) from exc
+        tree = working_tree_stamp(root)
+        parts = [tree or "not-git"]
+        if path:
+            # The open file too: in a non-git project (or past a clean→clean rewrite git
+            # can't see) its own size + mtime is the only change signal. Metadata only —
+            # and not even that for a secret-like name the pane refuses to show.
+            try:
+                _, target = _fence(project, path)
+                if is_secret_path(path) or is_secret_path(target.relative_to(root)):
+                    parts.append("denied")
+                else:
+                    st = os.stat(target)
+                    parts.append(f"{st.st_size}:{st.st_mtime_ns}")
+            except (ValueError, OSError):
+                parts.append("-")
+        stamp = hashlib.sha256("\0".join(parts).encode()).hexdigest()[:24]
+        return {"project": project, "is_git": tree is not None, "stamp": stamp}
+
+    @app.get("/api/fs/stamp")
+    async def _api_fs_stamp(project: str, path: str = ""):
+        """A cheap fingerprint of the project's working tree (and, with ``path``, of that
+        one file) for the code pane's fallback poll: the console asks every ~2 s while the
+        pane is on screen and refetches ``/api/fs/diff`` / ``/api/fs/file`` only when the
+        stamp moves — catching edits no tool reported (a terminal, an editor). One hardened
+        ``git status`` plus ``lstat``s; never reads file content (ADR 0112)."""
+        import asyncio
+
+        from tools.git_read import GitError, GitTimeout
+
+        _require_code_pane()
+        try:
+            return await asyncio.to_thread(_stamp, project, path)
+        except HTTPException:
+            raise
+        except GitTimeout as exc:
+            raise _fs_error(504, "timeout", "git took too long") from exc
         except GitError as exc:
             raise _fs_error(400, "git_error", str(exc)) from exc
         except OSError as exc:

@@ -281,7 +281,13 @@ class AcpAdapter(Adapter):
         # a card bound a sink. Read HERE, in the dispatching task: the callbacks fire on
         # the client's reader task, whose context predates this turn.
         sink = current_sink()
-        tracker = DelegateProgress(d.name, sink) if sink is not None else None
+        # workdir: what the coder's RELATIVE tool locations are relative to, so a write it
+        # reports can be mapped onto a registered project for the code pane (ADR 0112).
+        tracker = (
+            DelegateProgress(d.name, sink, workdir=os.path.expanduser(d.workdir) if d.workdir else None)
+            if sink is not None
+            else None
+        )
         callbacks = tracker.acp_prompt_callbacks() if tracker is not None else {}
         try:
             reply = await client.prompt(query, timeout=timeout or d.timeout_s, **callbacks)

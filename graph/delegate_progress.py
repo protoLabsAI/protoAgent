@@ -40,6 +40,12 @@ custom event), and a background job (``background.progress``). An adapter reads
 a transport's own reader task (a pooled ACP client's) has a context that predates the
 turn, which is why the sink is captured up front rather than looked up per update.
 
+**Writes feed the code pane.** A settled tool call that changed files (an ACP ``edit`` /
+``delete`` / ``move``, or a write-named tool from a kindless transport) and whose locations
+fall inside a registered project is also published as ``fs.changed`` (``graph.fs_changes``),
+so the console's Diff tab and open file refresh — and follow mode moves — without a manual
+Refresh (ADR 0112).
+
 Bounded on purpose: list sizes and string lengths are capped, and emission is throttled
 (at most one snapshot per ``min_interval`` seconds, with a trailing flush so the last
 change always lands, and a final ``done`` snapshot). A snapshot is a whole state, never a
@@ -67,6 +73,9 @@ RECENT_TOOLS_MAX = 6
 TOOL_NAME_MAX = 120
 LOCATIONS_MAX = 3
 TEXT_TAIL_MAX = 400
+#: Paths per tool call, and open calls, remembered for the code pane's change signal.
+WRITE_PATHS_MAX = 20
+OPEN_WRITES_MAX = 64
 #: Seconds between snapshots. A coder can fire dozens of updates a second while it
 #: streams text; the card needs a few frames a second at most.
 MIN_INTERVAL_S = 0.75
@@ -95,6 +104,18 @@ def _clip(value: object, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _raw_paths(raw: object) -> list[str]:
+    """The UNCLIPPED paths of a tool event's ``locations`` — for mapping a write onto a
+    registered project (``graph.fs_changes``), where a clipped path would name nothing."""
+    if not isinstance(raw, list):
+        return []
+    return [
+        loc["path"]
+        for loc in raw[:WRITE_PATHS_MAX]
+        if isinstance(loc, dict) and isinstance(loc.get("path"), str) and loc["path"]
+    ]
+
+
 def _locations(raw: object) -> list[dict]:
     out: list[dict] = []
     if isinstance(raw, list):
@@ -117,8 +138,11 @@ class DelegateProgress:
         *,
         min_interval: float = MIN_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
+        workdir: str | None = None,
     ) -> None:
         self.target = target
+        # The delegate's cwd — what a RELATIVE location in its tool calls is relative to.
+        self.workdir = workdir
         self._sink = sink
         self._min_interval = min_interval
         self._clock = clock
@@ -135,6 +159,9 @@ class DelegateProgress:
         self._last_emit: float | None = None
         self._dirty = False
         self._trailing: asyncio.Task | None = None
+        # Raw (unclipped) paths an open call named, by call id: an ACP coder often sends a
+        # call's locations on start/update and settles it with a bare status.
+        self._open_paths: dict[str, list[str]] = {}
 
     # -- the transport seam: normalized feeds (may run on a transport's reader task) --
 
@@ -168,6 +195,12 @@ class DelegateProgress:
         name = _clip(event.get("name") or "tool", TOOL_NAME_MAX)
         kind = str(event.get("kind") or "")[:32]
         locs = _locations(event.get("locations"))
+        raw_paths = _raw_paths(event.get("locations"))
+        if raw_paths and phase in ("start", "update"):
+            self._open_paths.pop(tid, None)
+            self._open_paths[tid] = raw_paths
+            while len(self._open_paths) > OPEN_WRITES_MAX:
+                self._open_paths.pop(next(iter(self._open_paths)))
         cur = self.current_tool
         if phase == "start":
             self._paragraph = True
@@ -196,9 +229,30 @@ class DelegateProgress:
                 # the client, so this is rare) — still worth a row.
                 self.tool_count += 1
                 self.recent_tools.append({"id": tid, "name": name, "kind": kind, "status": status, "locations": locs})
+            self._note_write(tid, event, status, raw_paths)
         else:
             return
         await self._changed(urgent=phase != "update")
+
+    def _note_write(self, tid: str, event: dict, status: str, raw_paths: list[str]) -> None:
+        """A settled call that WROTE files inside a registered project → ``fs.changed`` on
+        the bus, so the console's code pane refreshes (and follows) without a manual
+        Refresh (ADR 0112). Kind and name come from the call as the card knows it — the end
+        frame itself is often bare. Never raises: the card and the delegation come first."""
+        paths = raw_paths or self._open_paths.get(tid) or []
+        self._open_paths.pop(tid, None)
+        if status != "completed" or not paths:
+            return
+        row = next((r for r in [self.current_tool, *reversed(self.recent_tools)] if r and r.get("id") == tid), None)
+        kind = str(event.get("kind") or (row or {}).get("kind") or "")
+        name = str((row or {}).get("name") or event.get("name") or "")
+        try:
+            from graph.fs_changes import is_write_tool, notify_paths_changed
+
+            if is_write_tool(kind, name):
+                notify_paths_changed(paths, source="delegate", target=self.target, workdir=self.workdir)
+        except Exception:  # noqa: BLE001 — a live view must never cost the delegation
+            log.debug("[delegate-progress] fs change notify failed", exc_info=True)
 
     # -- emission --------------------------------------------------------------
 

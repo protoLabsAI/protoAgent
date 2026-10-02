@@ -601,6 +601,19 @@ class _RegistryRef:
         return self._cached_registry
 
 
+def _announce_change(project: str, root: Path, target: Path) -> None:
+    """Tell the console's code pane a file in ``project`` just changed (``fs.changed``, ADR
+    0112) so its Diff tab and open file refresh on their own. A no-op while the pane is off;
+    never raises into the tool."""
+    try:
+        from graph.fs_changes import publish_fs_changed
+
+        rel = target.relative_to(root).as_posix() if target != root else "."
+        publish_fs_changed(project, [rel], source="agent")
+    except Exception:  # noqa: BLE001 — a live view must never cost a write
+        log.debug("[fs] change announce failed", exc_info=True)
+
+
 def code_pane_enabled(config) -> bool:
     """The console code pane toolset is on (ADR 0112, ``filesystem.code_pane``, default off).
 
@@ -1104,6 +1117,7 @@ def build_fs_tools(config) -> list:
             _write_text_verbatim(target, content)
         except OSError as exc:
             return f"Error: cannot write {path}: {exc}"
+        _announce_change(project, proj.root, target)
         return f"{'Overwrote' if existed else 'Created'} {path} ({len(content)} chars)."
 
     @tool
@@ -1138,6 +1152,7 @@ def build_fs_tools(config) -> list:
                 _write_text_verbatim(target, text.replace(needle, replacement, 1))
             except OSError as exc:
                 return f"Error: cannot write {path}: {exc}"
+        _announce_change(project, proj.root, target)
         return f"Edited {path}."
 
     @tool
@@ -1188,6 +1203,7 @@ def build_fs_tools(config) -> list:
             target.unlink()
         except OSError as exc:
             return f"Error: cannot delete {path}: {exc}"
+        _announce_change(project, proj.root, target)
         return f"Deleted {path}."
 
     @tool

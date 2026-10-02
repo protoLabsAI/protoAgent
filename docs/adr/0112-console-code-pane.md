@@ -7,6 +7,8 @@
 - Amended: 2026-09-26 — placement: the pane opens on the dock the operator **keeps** it on and is
   never moved once it has one (not off chat's dock, not off the dock showing the plugin view that
   opened it). Only a hidden/missing Code surface is placed, away from chat. See D1.
+- Amended: 2026-10-01 — **live updates**: `fs.changed` on the bus, delegate-aware follow, and a
+  `/api/fs/stamp` fallback poll; see [Amendment](#amendment-live-updates)
 - Implemented in: the server half (this PR): `tools/fs_secrets.py`, `tools/fs_view.py`,
   `tools/git_read.py`, `operator_api/browse_routes.py` (`GET /api/fs/file`,
   `GET /api/fs/diff`), `tools/fs_tools.py` (`show_code`), `graph/components.py`
@@ -288,6 +290,37 @@ siblings under `filesystem.*`:
 
 The primitives stay core regardless of the toggle — `tools/fs_secrets.py`, `tools/fs_view.py`
 (`read_file`/`search_files` use its `split_lines`) and `tools/git_read.py`.
+
+## Amendment — live updates (2026-10-01) {#amendment-live-updates}
+
+Operator feedback: while `@claude-code` edited the registered project, the Diff tab kept saying
+"No changes vs HEAD" until Refresh was clicked — *"we shouldn't have to refresh the code panel to
+see the code appear"* — and Follow only tracked protoAgent's own fs tools. The pane now updates
+itself; Refresh stays as a manual escape hatch.
+
+- **`fs.changed` on the event bus** (`graph/fs_changes.py`), `{project, paths, source, target?}`,
+  live-only (`retain=False`), published only while the toolset is on and only for paths inside a
+  registered project root. Two producers: a coding delegate's settled tool call whose ACP kind
+  is `edit`/`delete`/`move` (or, for a kindless transport such as an A2A peer's tool-call frames,
+  a write-named tool), mapped from its `locations` — absolute, or relative to the delegate's
+  `workdir` — in `graph.delegate_progress` (`source: "delegate"`); and the agent's own
+  `write_file`/`edit_file`/`delete_file` (`source: "agent"`). The console (`CodeChangeWatch`)
+  debounces (300 ms, ≤ 1 s under a steady stream) and coalesces them, then re-fetches the
+  project's diff and any open file it names.
+- **Follow mode follows delegates.** A `delegate` change with Follow on (not pinned, desktop)
+  switches the pane to the Diff tab on that project with the file picked, from its first hunk —
+  same throttle as the tool-stream follower. `agent` changes don't jump from here: the live tool
+  stream already follows them (onto the File tab, as D6 says).
+- **Fallback poll for edits nothing reports** (a terminal, an editor, a coder's shell command):
+  `GET /api/fs/stamp?project=P[&path=REL]` → `{project, is_git, stamp}`, a fingerprint of `HEAD`,
+  the porcelain status and each listed file's `lstat` size + mtime (plus the open file's, which is
+  the only signal in a non-git project; never for a secret-like name). Hardened like D3 — `git
+  status` runs clean filters, so they are neutralised here too — and it reads no content. The
+  console asks every 2 s **only while the pane is mounted and the browser tab visible**, and
+  re-fetches the diff/file only when the stamp moves; a 404 stops it, other errors back off to
+  10 s. Chosen over a server-side watcher: no new dependency (neither `watchfiles` nor `watchdog`
+  is in the lock), no watcher threads or subscription bookkeeping, zero cost when nobody is
+  looking, and one `git status` is far cheaper than the full diff it saves re-fetching.
 
 ## Consequences
 
