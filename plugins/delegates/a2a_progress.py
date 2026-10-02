@@ -9,15 +9,18 @@ normalized feeds:
 
 * a status message's **tool-call-v1** extension (protoAgent peers emit one per tool
   start/end, keyed by ``toolCallId``)          → ``on_tool`` start / end;
-* a status message's text, while WORKING        → ``on_text``;
+* a status message's text, while WORKING        → ``on_text`` (which shows it only once a
+  later tool call proves it was narration — ``graph.delegate_progress``);
 * a peer's own **delegate-progress-v1** DataPart (the peer is itself delegating to a
   coder) — its plan                             → ``on_plan``;
-* an artifact update's text (the answer streaming in) → ``on_text``; a non-text artifact
-  → one finished "produced artifact" activity;
+* a non-text artifact                           → one finished "produced artifact" activity;
 * a terminal / input-required state             → ``settled`` (wakes the result poll).
 
 Reasoning, cost-v1 and worldstate-delta frames are deliberately ignored: none of them is
-"what is it doing now".
+"what is it doing now". So is an artifact's TEXT: that is the reply itself (a protoAgent
+peer streams its whole reply — narration and answer alike — into one answer artifact), and
+the chat renders it the moment the delegation returns. Fed to the card it typed the answer
+out there first, then again in the chat.
 
 **Why subscribe rather than send over ``SendStreamingMessage``.** The adapter's send →
 ``GetTask`` poll path owns everything a delegation's RESULT depends on — conversation
@@ -100,7 +103,6 @@ class A2AProgressFeed:
         self.tracker = tracker
         self.settled = asyncio.Event()
         self._tools_seen: set[str] = set()
-        self._artifacts_seen: set[str] = set()
 
     async def frame(self, result: dict) -> None:
         if not isinstance(result, dict):
@@ -162,16 +164,8 @@ class A2AProgressFeed:
     async def _artifact(self, update: dict) -> None:
         artifact = update.get("artifact") or {}
         parts = artifact.get("parts")
-        text = _parts_text(parts)
-        if text:
-            # An artifact's FIRST chunk carries no `append`; so does the terminal frame, which
-            # re-sends the whole canonical answer the appends already delivered — feeding that
-            # again would double it. So: a non-append chunk of an artifact already seen is the
-            # replace, and is skipped.
-            aid = str(artifact.get("artifactId") or "")
-            if update.get("append") is True or aid not in self._artifacts_seen:
-                self._artifacts_seen.add(aid)
-                await self.tracker.on_text(text[:_TEXT_MAX])
+        if _parts_text(parts):
+            # The reply streaming in — the chat's to render, never the card's.
             return
         name = str(artifact.get("name") or "").strip()
         if name and any(isinstance(p, dict) and ("data" in p or "file" in p or "url" in p) for p in parts or []):

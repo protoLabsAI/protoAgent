@@ -140,6 +140,48 @@ async def test_tracker_throttles_and_always_lands_the_final_state():
     assert len(sent) == 2
 
 
+async def test_text_shows_only_once_a_later_tool_call_proves_it_was_narration():
+    """The answer streams on the same feed as narration; a card that showed it typed the
+    reply out before the chat rendered it. Text is held until a tool call follows it, and
+    dropped when the run settles with none."""
+    sent = []
+
+    async def sink(snap):
+        sent.append(snap)
+
+    t = dp.DelegateProgress("peer", sink, min_interval=0.0)
+    await t.on_text("Let me check ")
+    await t.on_text("the file.")
+    assert sent == [] and t.snapshot()["text"] == ""  # held: nothing visible changed
+    await t.on_tool({"phase": "start", "id": "a", "name": "read_file"})
+    assert sent[-1]["text"] == "Let me check the file."  # a tool followed: narration
+    await t.on_tool({"phase": "end", "id": "a", "name": "read_file", "status": "completed"})
+    await t.on_text("It is fine.")
+    await t.on_tool({"phase": "start", "id": "b", "name": "run_tests"})
+    assert sent[-1]["text"] == "Let me check the file.\n\nIt is fine."
+    n = len(sent)
+    for word in ("All ", "tests ", "pass."):
+        await t.on_text(word)
+    assert len(sent) == n  # the answer streaming in emits nothing
+    await t.finish(ok=True)
+    final = sent[-1]
+    assert final["done"] is True and final["text"] == "Let me check the file.\n\nIt is fine."
+    assert not any("pass." in s["text"] for s in sent)
+
+
+async def test_a_reply_with_no_tool_calls_never_reaches_the_card():
+    sent = []
+
+    async def sink(snap):
+        sent.append(snap)
+
+    t = dp.DelegateProgress("peer", sink, min_interval=0.0)
+    await t.on_text("The answer is 42.")
+    await t.on_plan([{"content": "think", "status": "completed"}])  # a plan proves nothing
+    await t.finish(ok=True)
+    assert all(s["text"] == "" for s in sent) and sent[-1]["done"] is True
+
+
 async def test_tracker_trailing_flush_delivers_the_last_change():
     sent = []
 
@@ -266,7 +308,10 @@ async def test_adapter_reports_into_a_bound_sink_and_ends_with_a_done_snapshot(c
     assert final["recent_tools"][0]["name"] == "Read calc.py"
     assert final["recent_tools"][0]["locations"] == [{"path": "/w/calc.py", "line": 1}]
     assert final["current_tool"]["kind"] == "read"
-    assert "Added `subtract`" in final["text"]
+    # The narration before the tool call shows; the answer after the last one never does
+    # — not live, not in the done snapshot. The chat renders it, once.
+    assert final["text"] == "I'll look at the existing `calc.py` first."
+    assert not any("Added" in s["text"] or "Done." in s["text"] for s in snaps)
 
 
 async def test_adapter_without_a_sink_wires_no_callbacks(coder, tmp_path, monkeypatch):

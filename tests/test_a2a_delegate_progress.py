@@ -3,8 +3,8 @@
 The ACP half feeds ``graph.delegate_progress`` from a coder's ``session/update``s. This is
 the A2A half: when a peer's agent card advertises streaming, the adapter follows the task
 it handed over on ``SubscribeToTask`` (SSE) and translates the peer's frames — tool-call-v1
-extension frames, status text, artifact text, a nested delegation's plan — into the same
-three feeds. The poll still owns the answer; the stream only observes (and wakes the poll
+extension frames, status text, a nested delegation's plan, produced artifacts — into the
+same three feeds. Never the answer artifact's text: that is the reply, the chat's to render. The poll still owns the answer; the stream only observes (and wakes the poll
 early when it sees the task settle).
 
 Pinned two ways: the frame translation on crafted frames, and the whole path against a
@@ -83,7 +83,7 @@ async def test_tool_call_frames_become_tool_events_with_a_location_from_the_args
     assert tools[3]["status"] == "failed"
 
 
-async def test_text_plan_and_artifacts_map_and_a_canonical_replace_is_not_doubled():
+async def test_status_text_plan_and_produced_artifacts_map_but_answer_text_never_does():
     rec = _Recorder()
     feed = A2AProgressFeed(rec)
     await feed.frame(_status(parts=[{"text": "Looking at the repo."}]))
@@ -91,15 +91,48 @@ async def test_text_plan_and_artifacts_map_and_a_canonical_replace_is_not_double
     await feed.frame(
         _status(parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}])
     )
-    await feed.frame({"artifactUpdate": {"append": True, "artifact": {"parts": [{"text": " Done"}]}}})
-    # The terminal frame re-sends the WHOLE answer with append=false — already streamed.
-    await feed.frame({"artifactUpdate": {"append": False, "artifact": {"parts": [{"text": "Looking… Done"}]}}})
+    # The answer artifact streaming in (first chunk, appends, the terminal re-send): the
+    # reply itself — the chat renders it; the card never sees a word of it.
+    await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": "All"}]}}})
+    await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " Done"}]}}})
+    await feed.frame({"artifactUpdate": {"append": False, "artifact": {"artifactId": "ans", "parts": [{"text": "All Done"}]}}})
     await feed.frame({"artifactUpdate": {"artifact": {"name": "report.pdf", "artifactId": "a1", "parts": [{"url": "x"}]}}})
-    assert rec.text == "Looking at the repo. Done"
+    assert rec.text == "Looking at the repo."
     assert ("plan", nested["plan"]) in rec.calls
     produced = [e for kind, e in rec.calls if kind == "tool" and e["id"] == "artifact:a1"]
     assert [e["phase"] for e in produced] == ["start", "end"] and produced[0]["name"] == "produced report.pdf"
     assert not feed.settled.is_set()
+
+
+async def test_an_answer_artifact_stream_puts_no_text_on_the_card_but_tools_and_plan_still_do(monkeypatch):
+    """End to end through the real tracker: a peer that narrates in WORKING status text,
+    calls a tool, reports a nested plan, then streams its answer artifact. The card shows
+    the narration (a tool call followed it), the tool and the plan — never the answer."""
+    sent = []
+
+    async def sink(snap):
+        sent.append(snap)
+
+    tracker = dp.DelegateProgress("peer", sink, min_interval=0.0)
+    feed = A2AProgressFeed(tracker)
+    await feed.frame(_status(parts=[{"text": "Checking the tests."}]))
+    await feed.frame(_status(meta=_tool("started", "c1", "run_command")))
+    nested = {"id": "x", "target": "coder", "plan": [{"content": "Run tests", "status": "in_progress"}]}
+    await feed.frame(
+        _status(parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}])
+    )
+    await feed.frame(_status(meta=_tool("completed", "c1", "run_command")))
+    await feed.frame(_status(parts=[{"text": "Summing up."}]))  # status text no tool follows
+    for i, word in enumerate(("All ", "three ", "tests ", "pass.")):
+        await feed.frame({"artifactUpdate": {"append": i > 0, "artifact": {"artifactId": "ans", "parts": [{"text": word}]}}})
+    await feed.frame(_status("TASK_STATE_COMPLETED", parts=[{"text": "All three tests pass."}]))
+    await tracker.finish(ok=True)
+    assert feed.settled.is_set()
+    assert not any("pass" in s["text"] or "Summing" in s["text"] for s in sent)
+    final = sent[-1]
+    assert final["done"] is True and final["text"] == "Checking the tests."
+    assert [t["name"] for t in final["recent_tools"]] == ["run_command"]
+    assert final["plan"] == [{"content": "Run tests", "status": "in_progress"}]
 
 
 @pytest.mark.parametrize("state", ["TASK_STATE_COMPLETED", "TASK_STATE_FAILED", "TASK_STATE_INPUT_REQUIRED"])
@@ -210,7 +243,7 @@ def _delegate(url):
     return adapter, adapter.parse({"name": "peer", "type": "a2a", "url": url, "poll_timeout_s": 30})
 
 
-async def test_a_streaming_peer_reports_its_tools_and_answer_into_the_card(peer, monkeypatch):
+async def test_a_streaming_peer_reports_its_tools_but_not_its_answer_into_the_card(peer, monkeypatch):
     monkeypatch.setattr(dp, "MIN_INTERVAL_S", 0.0)
     adapter, d = _delegate(peer())
     snaps = []
@@ -231,7 +264,9 @@ async def test_a_streaming_peer_reports_its_tools_and_answer_into_the_card(peer,
     assert final["done"] is True and final["ok"] is True and final["target"] == "peer"
     assert final["tool_count"] == 2
     assert all(t["status"] == "completed" for t in final["recent_tools"])
-    assert final["text"] == "All three tests pass."  # the terminal re-send is not appended
+    # The answer streamed into the peer's answer artifact; the chat renders it — the card
+    # never showed a word of it, live or in the done snapshot.
+    assert all(s["text"] == "" for s in snaps)
 
 
 async def test_a_non_streaming_peer_keeps_todays_behaviour(peer):
