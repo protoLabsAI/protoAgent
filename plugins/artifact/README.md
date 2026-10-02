@@ -176,13 +176,18 @@ an embedded preview is not drawn.
 under a nonce Content-Security-Policy (no inline handlers, no `javascript:` URLs, `connect-src
 'none'`, images/fonts/media from `blob:`/`data:` only), and only plain `http(s)` links keep an
 `href` (the sandbox can't open them anyway). The frame can't authenticate, so the shell fetches the
-gated blob and transfers the bytes in. Caps, enforced twice — at save time from the zip directory
-(`_slides.py`, stamped on the version as `file.slides`) and in the frame on the actual inflated
-bytes (`PPTX_CAPS` in `shell.js`, drift-guarded against each other): 40 MB file, 4000 entries,
-32 MB per inflated entry, 256 MB inflated in total, a 200:1 compression ratio on big entries,
-1000 slides, and 50 megapixels per image (an over-cap image is replaced by a placeholder, never
-decoded). Parsing has a 20 s budget in the frame and a 45 s shell watchdog that swaps in the
-outline card if the frame never answers.
+gated blob and transfers the bytes in — and only for a version the save-time preflight
+**cleared**. That preflight (`_slides.py`) doesn't trust the zip's declared sizes: it inflates
+every entry's raw stream in bounded chunks against a running byte budget and a 15 s clock, then
+requires the real size and CRC to match the declared ones (a header that lies is a tampered
+zip). Its verdict is stamped on the version as `file.slides`, so a view never re-inflates
+anything; a refused deck, or one saved before slide previews existed, shows the outline. Caps
+(`PPTX_CAPS` in `shell.js` mirrors them, drift-guarded): 40 MB file, 4000 entries, 32 MB per
+inflated entry, 256 MB inflated in total, a 200:1 compression ratio on big entries, 1000 slides,
+50 megapixels per image and 150 MP across the deck (images past either become placeholders, never
+decoded). The frame re-applies them on its own inflate, one entry at a time so the first cap hit
+stops it, with a 20 s parse budget; a 45 s shell watchdog swaps in the outline card if the frame
+never answers.
 
 ## Configuration
 

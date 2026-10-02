@@ -625,13 +625,14 @@
     return rows;
   }
   var TABLE_MAX_ROWS=500;
-  // Does this version get the slide renderer? A .pptx whose save-time preflight (_slides.py)
-  // didn't refuse it. Versions saved before the preflight existed carry no verdict and render —
-  // the frame enforces the same caps on the decoded bytes either way.
+  // Does this version get the slide renderer? ONLY a .pptx the save-time preflight (_slides.py)
+  // cleared — it inflated every entry under a budget, so the frame never parses bytes the server
+  // hasn't measured. A refusal, or a version saved before the preflight existed (no verdict),
+  // gets the text outline card.
   function slidesOk(v){
     var f=v.file||{};
     if(previewKind(f.filename, f.mime)!=="slides") return false;
-    return !(f.slides && typeof f.slides==="object" && f.slides.render===false);
+    return !!(f.slides && typeof f.slides==="object" && f.slides.render===true);
   }
   // `note` (optional) forces the text card and says why the slides aren't shown.
   function fileCard(v, note){
@@ -639,7 +640,9 @@
     var pk=previewKind(name, mime);
     if(pk==="slides" && !note){
       if(slidesOk(v)) return slidesDoc(v);
-      note="Slide preview unavailable — "+String((f.slides&&f.slides.reason)||"the file failed the safety checks");
+      note="Slide preview unavailable — "+(f.slides&&typeof f.slides==="object"
+        ? String(f.slides.reason||"the file failed the safety checks")
+        : "this version was saved before slide previews; re-save the file to render its slides");
     }
     var cs=getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
@@ -709,6 +712,7 @@
     maxTotalBytes: 268435456,   // 256 MB — _slides.MAX_TOTAL_BYTES
     maxMediaBytes: 201326592,   // 192 MB of inflated media
     maxImagePixels: 50000000,   // _slides.MAX_IMAGE_PIXELS
+    maxDeckPixels: 150000000,   // _slides.MAX_DECK_PIXELS — all images together
     maxSlides: 1000,            // _slides.MAX_SLIDES
     parseMs: 20000,
     watchdogMs: 45000
@@ -896,12 +900,13 @@
       timer=setTimeout(function(){ fail("it took longer than "+Math.round(caps.parseMs/1000)+"s to read"); }, caps.parseMs);
       try{
         var files=await P.parseZip(buf, {maxEntries:caps.maxEntries, maxEntryUncompressedBytes:caps.maxEntryBytes,
-          maxTotalUncompressedBytes:caps.maxTotalBytes, maxMediaBytes:caps.maxMediaBytes, maxConcurrency:4});
+          maxTotalUncompressedBytes:caps.maxTotalBytes, maxMediaBytes:caps.maxMediaBytes, maxConcurrency:1});  // one entry at a time: the first cap hit ends it
         if(failed) return;
-        var big=0;
+        var big=0, pixels=0;
         if(files.media && files.media.forEach) files.media.forEach(function(bytes, key){
-          var d=dims(bytes);
-          if(d && d[0]*d[1]>caps.maxImagePixels){ files.media.set(key, placeholder()); big++; }
+          var d=dims(bytes), px=d ? d[0]*d[1] : 0;
+          if(px>caps.maxImagePixels || pixels+px>caps.maxDeckPixels){ files.media.set(key, placeholder()); big++; }
+          else pixels+=px;
         });
         var pres=P.buildPresentation(files, {lazySlides:true});
         count=(pres && pres.slides && pres.slides.length) || 0;

@@ -176,8 +176,9 @@ def test_shell_preview_kind_matches_python(monkeypatch, tmp_path):
 
 
 def test_shell_honours_a_refused_preflight(monkeypatch, tmp_path):
-    """slidesOk: a deck the preflight refused gets the outline card; a deck with no verdict
-    (saved before the preflight existed) still renders — the frame re-enforces the caps."""
+    """slidesOk: ONLY a deck the preflight cleared reaches the renderer. A refusal — or a version
+    with no verdict (saved before the preflight existed) — gets the outline card, so the frame
+    never parses bytes the server hasn't inflated under budget."""
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     versions = [
@@ -196,10 +197,11 @@ def test_shell_honours_a_refused_preflight(monkeypatch, tmp_path):
         + json.dumps(versions)
         + ".map(slidesOk)));"
     )
-    assert got == [True, False, True, False]
+    assert got == [True, False, False, False]
     card = _js_function(js, "fileCard")
     assert "if(slidesOk(v)) return slidesDoc(v);" in card
     assert "Slide preview unavailable" in card
+    assert "saved before slide previews" in card  # the no-verdict case says why
 
 
 # ── fallback when parsing fails ────────────────────────────────────────────────
@@ -275,7 +277,7 @@ def test_preflight_caps_total_inflation_and_entry_count(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     s = art._slides
     monkeypatch.setattr(s, "MAX_TOTAL_BYTES", 1024)
-    assert "inflates to" in s.preflight(_deck({"ppt/notes.xml": b"x" * 4096}))["reason"]
+    assert "inflates past" in s.preflight(_deck({"ppt/notes.xml": b"x" * 4096}))["reason"]
     monkeypatch.setattr(s, "MAX_TOTAL_BYTES", 256 * 1024 * 1024)
     monkeypatch.setattr(s, "MAX_ENTRIES", 5)
     assert "files in the archive" in s.preflight(_deck(slides=6))["reason"]
@@ -358,6 +360,7 @@ def test_js_caps_mirror_python(monkeypatch, tmp_path):
     assert caps["maxEntryBytes"] == s.MAX_ENTRY_BYTES
     assert caps["maxTotalBytes"] == s.MAX_TOTAL_BYTES
     assert caps["maxImagePixels"] == s.MAX_IMAGE_PIXELS
+    assert caps["maxDeckPixels"] == s.MAX_DECK_PIXELS
     assert caps["maxSlides"] == s.MAX_SLIDES
     assert 0 < caps["parseMs"] < caps["watchdogMs"]
     # the frame hands every one of them to the renderer's zip parser / its own checks
@@ -371,5 +374,109 @@ def test_js_caps_mirror_python(monkeypatch, tmp_path):
         "maxSlides",
     ):
         assert key in ctl, key
+    assert "maxConcurrency:1" in ctl  # sequential inflate: the first cap hit stops the rest
     # and the shell refuses to even fetch an over-cap file
     assert "PPTX_CAPS.maxBytes" in _js_function(_js(art), "pptxBytes")
+
+
+# ── lying-header bombs (security review of #4019) ─────────────────────────────
+
+
+def _lie(data: bytes, name: str, size: int, crc: int | None = None) -> bytes:
+    """Patch ``name``'s declared uncompressed size (and optionally CRC) in BOTH the local and
+    the central-directory header — what a hostile zip does to slip past size checks."""
+    out = bytearray(data)
+    needle = name.encode()
+    i = 0
+    while (i := out.find(needle, i)) >= 0:
+        if out[i - 30 : i - 26] == b"PK\x03\x04":  # local header: crc @14, usize @22
+            if crc is not None:
+                struct.pack_into("<I", out, i - 30 + 14, crc)
+            struct.pack_into("<I", out, i - 30 + 22, size)
+        if out[i - 46 : i - 42] == b"PK\x01\x02":  # central dir: crc @16, usize @24
+            if crc is not None:
+                struct.pack_into("<I", out, i - 46 + 16, crc)
+            struct.pack_into("<I", out, i - 46 + 24, size)
+        i += 1
+    return bytes(out)
+
+
+def _lying_bomb(entries: int = 4, mb: int = 48, crc_too: bool = False) -> bytes:
+    zeros = b"\0" * (mb * 1024 * 1024)
+    data = _deck({f"ppt/media/b{k}.bin": zeros for k in range(entries)})
+    crc = zlib.crc32(b"\0" * 100) if crc_too else None
+    for k in range(entries):
+        data = _lie(data, f"ppt/media/b{k}.bin", 100, crc)
+    return data
+
+
+def test_preflight_measures_what_a_lying_header_bomb_really_inflates_to(monkeypatch, tmp_path):
+    """The review's repro, scaled down: every entry claims 100 bytes but holds 48 MB of zeros.
+    The directory looks harmless; the preflight inflates the real stream under budget and
+    refuses it — without ever holding more than a chunk of it in memory."""
+    import tracemalloc
+
+    art = _load(monkeypatch, tmp_path)
+    data = _lying_bomb()
+    assert all(i.file_size <= 100 for i in zipfile.ZipFile(io.BytesIO(data)).infolist())  # it lies
+    tracemalloc.start()
+    v = art._slides.preflight(data)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert v["render"] is False and "per-file cap" in v["reason"]
+    assert peak < 48 * 1024 * 1024  # bounded by the per-entry cap, never the whole bomb
+
+
+def test_preflight_refuses_a_lie_even_when_the_crc_is_forged(monkeypatch, tmp_path):
+    """Declared size AND CRC forged to match the first 100 bytes (so Python's own ZipExtFile,
+    which stops at the declared size, would accept it): the raw stream still inflates past it."""
+    art = _load(monkeypatch, tmp_path)
+    v = art._slides.preflight(_lying_bomb(entries=1, crc_too=True))
+    assert v["render"] is False and "per-file cap" in v["reason"]
+    # under the caps, a size/CRC mismatch is still a tampered zip, not a deck
+    small = _lie(_deck({"ppt/media/a.bin": b"\x01" * 5000}), "ppt/media/a.bin", 100, zlib.crc32(b"\x01" * 100))
+    v = art._slides.preflight(small)
+    assert v["render"] is False and "declared size/CRC" in v["reason"]
+
+
+def test_lying_bomb_saved_as_an_artifact_gets_the_outline(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    p = tmp_path / "bomb.pptx"
+    p.write_bytes(_lying_bomb(entries=2))
+    art.save_file_artifact.invoke({"path": str(p)})
+    meta = _arts(art)[0]["versions"][0]["file"]
+    assert meta["slides"]["render"] is False  # → slidesOk false → the outline card, no frame parse
+
+
+def test_preflight_refuses_truncated_and_corrupt_streams(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    good = _deck({"ppt/media/a.bin": bytes(range(256)) * 200})
+    assert art._slides.preflight(good)["render"] is True
+    assert art._slides.preflight(good[: len(good) // 2])["render"] is False  # cut mid-archive
+    # flip bytes inside the deflate stream: inflate error or CRC mismatch, never a pass
+    i = good.index(b"ppt/media/a.bin") + len("ppt/media/a.bin") + 40
+    bad = good[:i] + bytes(b ^ 0x5A for b in good[i : i + 64]) + good[i + 64 :]
+    assert art._slides.preflight(bad)["render"] is False
+
+
+def test_honest_decks_still_render(monkeypatch, tmp_path):
+    """The inflate-everything pass must not cost honest decks anything: a deck with real,
+    incompressible media near the caps passes, and quickly."""
+    import os
+    import time
+
+    art = _load(monkeypatch, tmp_path)
+    media = {f"ppt/media/image{k}.png": _png(1920, 1080) + os.urandom(2 * 1024 * 1024) for k in range(8)}
+    t = time.monotonic()
+    v = art._slides.preflight(_deck(media, slides=40))
+    assert v == {"render": True, "reason": "", "count": 40, "big_images": 0}
+    assert time.monotonic() - t < 5
+
+
+def test_deck_pixel_budget_placeholders_the_overflow(monkeypatch, tmp_path):
+    """Many images just under the per-image cap still add up: past MAX_DECK_PIXELS the rest are
+    counted for placeholders (the frame applies the same running budget)."""
+    art = _load(monkeypatch, tmp_path)
+    media = {f"ppt/media/image{k}.png": _png(7000, 7000) for k in range(5)}  # 49 MP each
+    v = art._slides.preflight(_deck(media))
+    assert v["render"] is True and v["big_images"] == 2  # 3 × 49 MP fit in 150 MP
