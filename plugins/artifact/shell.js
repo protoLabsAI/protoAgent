@@ -103,14 +103,19 @@
       "sha512-6a1107rTlA4gYpgHAqbwLAtxmWipBdJFcq8y5S/aTge3Bp+VAklABm2LO+Kg51vOWR9JMZq1Ovjl5tpluNpTeQ=="],
     babel: ["babel.min.js",
       "sha512-bAHF//mCdqGSgyUBqhtDgaGLxsraipURsQRGG+3uNncZdsFA6/283u21SOwB6rzINUXSATUMoZaXm4IaV2Lw2Q=="],
+    // @aiden0z/pptx-renderer 1.3.0 (Apache-2.0), re-wrapped as an IIFE → window.PptxRenderer.
+    // Slide previews for .pptx file artifacts; notices in vendor/pptx-renderer.LICENSES.txt.
+    pptx: ["pptx-renderer.min.js",
+      "sha512-MyPAN9XW0LRMqC0rmeaTshNlkb1GW+ODchhz+wvoAT927kKbrkcDGm05cvGa1mVrgAmFlKfA42YE4CFwfzes3g=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
   // subresource loads are cross-origin — SRI on a cross-origin script without
   // crossorigin can't validate and the browser blocks it. The vendor route sends
   // Access-Control-Allow-Origin:* to satisfy the CORS fetch.
-  function cdn(name){ var c = LIB[name];
-    return '<script crossorigin="anonymous" integrity="' + c[1] + '" src="' + ORIGIN + '/plugins/artifact/vendor/' + c[0] + '"><\/script>'; }
+  function cdn(name, nonce){ var c = LIB[name];
+    return '<script crossorigin="anonymous" integrity="' + c[1] + '"' + (nonce ? ' nonce="' + nonce + '"' : '')
+      + ' src="' + ORIGIN + '/plugins/artifact/vendor/' + c[0] + '"><\/script>'; }
   // Curated ESM import map for `react` artifacts (offline-vendored, served same-origin with
   // CORS). Bare specifiers resolve to the vendored modules: react/react-dom via tiny shims that
   // re-export the UMD globals (so the artifact, the @pl/ui wrappers, and any lib share ONE
@@ -594,8 +599,12 @@
     var j=code.lastIndexOf("\n…", i); // the note's own lead-in, appended by _clip
     return {code:code.slice(0, j>=0?j:i), truncated:true};
   }
-  function previewKind(name){
+  // .pptx decks render as real slides (the vendored renderer, see slidesDoc); _slides.is_slides
+  // is the Python twin of this test (by extension, or the OOXML presentation mime).
+  var PPTX_MIME="application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  function previewKind(name, mime){
     var n=String(name||"").toLowerCase(), i=n.lastIndexOf("."), ext=i<0?"":n.slice(i+1);
+    if(ext==="pptx" || String(mime||"").toLowerCase()===PPTX_MIME) return "slides";
     if(ext==="csv"||ext==="tsv") return "table";
     if(ext==="md"||ext==="markdown") return "md";
     if(ext==="json") return "json";
@@ -616,20 +625,33 @@
     return rows;
   }
   var TABLE_MAX_ROWS=500;
-  function fileCard(v){
+  // Does this version get the slide renderer? A .pptx whose save-time preflight (_slides.py)
+  // didn't refuse it. Versions saved before the preflight existed carry no verdict and render —
+  // the frame enforces the same caps on the decoded bytes either way.
+  function slidesOk(v){
+    var f=v.file||{};
+    if(previewKind(f.filename, f.mime)!=="slides") return false;
+    return !(f.slides && typeof f.slides==="object" && f.slides.render===false);
+  }
+  // `note` (optional) forces the text card and says why the slides aren't shown.
+  function fileCard(v, note){
+    var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
+    var pk=previewKind(name, mime);
+    if(pk==="slides" && !note){
+      if(slidesOk(v)) return slidesDoc(v);
+      note="Slide preview unavailable — "+String((f.slides&&f.slides.reason)||"the file failed the safety checks");
+    }
     var cs=getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
     var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
         muted=tok("--pl-color-fg-muted","#9aa0aa"), border=tok("--pl-color-border","rgba(255,255,255,.12)");
-    var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
     var st=stripTrunc(v.code||""), code=st.code, truncated=st.truncated;
-    var pk=previewKind(name);
     if(pk==="md")
       return mdDoc(truncated ? code+"\n\n> *(preview truncated — download the file for the full document)*" : code);
     var thumb = f.thumb
       ? '<img src="'+f.thumb+'" alt="" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid '+border+'">'
       : '<div style="font-size:44px;line-height:1">📄</div>';
-    var body, pvl="Preview";
+    var body, pvl=note ? "Text outline" : "Preview";
     if(pk==="table"){
       var rows=parseDsv(code, name.slice(-4)===".tsv" ? "\t" : ",");
       if(truncated && rows.length>1) rows=rows.slice(0,-1); // last row may be mid-cut
@@ -662,9 +684,271 @@
       + '.tw th,.tw td{padding:6px 10px;border-right:1px solid '+border+';white-space:nowrap;max-width:28em;overflow:hidden;text-overflow:ellipsis}'
       + '.tw th:last-child,.tw td:last-child{border-right:0}'
       + '.tw tbody tr:nth-child(even){background:rgba(127,127,127,.06)}'
+      + '.note{font-size:12px;color:'+fg+';padding:8px 10px;border-radius:6px;border:1px solid '+border+';background:rgba(127,127,127,.1)}'
       + '</style><div class="wrap"><div class="hd">'+thumb
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div></div>'
+      + (note ? '<div class="note" role="status">'+esc(note)+'</div>' : '')
       + '<div class="pvl">'+esc(pvl)+'</div>'+body+'</div>';
+  }
+  // ── .pptx slide previews ──────────────────────────────────────────────────────────────
+  // A deck renders as REAL slides — the vendored @aiden0z/pptx-renderer (window.PptxRenderer)
+  // lays each slide out as HTML/SVG, so it stays sharp at any panel width or zoom. It runs in the
+  // same no-same-origin sandbox as every artifact, under a nonce CSP (no inline handlers, no
+  // javascript: URLs, no network: connect/img/media/font are blob:/data: only). The frame can't
+  // authenticate, so the SHELL fetches the gated blob and transfers the bytes in by postMessage.
+  //
+  // Caps — the mirror of _slides.py (drift-guarded by a test). The save-time preflight checks the
+  // zip's directory; the frame re-checks the ACTUAL inflated bytes (a hostile directory can lie):
+  // file size, entry count, per-entry / total / media inflation, slide count, and image pixels
+  // (an over-cap image is swapped for a placeholder, never decoded). parseMs bounds the frame's
+  // own parse; watchdogMs is the shell's backstop that swaps in the text outline.
+  var PPTX_CAPS={
+    maxBytes: 41943040,         // 40 MB — _slides.MAX_BYTES
+    maxEntries: 4000,           // _slides.MAX_ENTRIES
+    maxEntryBytes: 33554432,    // 32 MB — _slides.MAX_ENTRY_BYTES
+    maxTotalBytes: 268435456,   // 256 MB — _slides.MAX_TOTAL_BYTES
+    maxMediaBytes: 201326592,   // 192 MB of inflated media
+    maxImagePixels: 50000000,   // _slides.MAX_IMAGE_PIXELS
+    maxSlides: 1000,            // _slides.MAX_SLIDES
+    parseMs: 20000,
+    watchdogMs: 45000
+  };
+  function cspNonce(){
+    var a=new Uint8Array(18); crypto.getRandomValues(a);
+    return btoa(String.fromCharCode.apply(null, a)).replace(/[^A-Za-z0-9]/g, "");
+  }
+  // Script-free fallback is the text outline (the same projection the card always showed),
+  // kept in a <details> under the slides: a screen-reader-friendly read of the deck, and the
+  // whole view when the renderer can't parse the file.
+  function slidesDoc(v){
+    var cs=getComputedStyle(document.documentElement);
+    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
+    var f=v.file||{}, name=f.filename||"deck.pptx", mime=f.mime||PPTX_MIME, nonce=cspNonce();
+    var st=stripTrunc(v.code||"");
+    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src blob: data:; "
+      + "media-src blob:; font-src blob: data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
+      + "object-src 'none'; base-uri 'none'; form-action 'none'";
+    var tokens=":root{--pl-color-bg:"+tok("--pl-color-bg","#0a0a0c")+";--pl-color-fg:"+tok("--pl-color-fg","#ededed")
+      + ";--pl-color-fg-muted:"+tok("--pl-color-fg-muted","#9aa0aa")+";--pl-color-border:"+tok("--pl-color-border","rgba(255,255,255,.12)")
+      + ";--pl-color-accent:"+tok("--pl-color-accent","#9b87f2")+"}";
+    var cfg={caps:PPTX_CAPS, count:+((f.slides&&f.slides.count)||0)};
+    return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
+      + '<style>'+tokens+SLIDES_CSS+'</style>'
+      + '<div class="wrap"><div class="hd"><div class="ic" aria-hidden="true">PPTX</div>'
+      + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
+      + '<div class="nav" id="nav" hidden><button id="prev" type="button" aria-label="Previous slide" title="Previous slide (←)">‹</button>'
+      + '<span id="pos" aria-live="polite"></span>'
+      + '<button id="next" type="button" aria-label="Next slide" title="Next slide (→)">›</button></div></div>'
+      + '<div class="stage" id="stage" tabindex="0" role="group" aria-roledescription="slide deck" aria-label="Slides">'
+      + '<div id="main"></div><div id="status" class="st" role="status">Rendering slides…</div></div>'
+      + '<div class="strip" id="strip" role="tablist" aria-label="Slides" hidden></div>'
+      + '<details id="ol"><summary>Text outline</summary><pre class="pv">'+esc(st.code)
+      + (st.truncated?'\n… (preview truncated — download the file for the full content)':'')+'</pre></details></div>'
+      + '<div id="host" aria-hidden="true"></div>'
+      + cdn("pptx", nonce)
+      + '<script nonce="'+nonce+'">(' + artSlides.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script>';
+  }
+  var SLIDES_CSS='html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);'
+    + 'font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif);overflow:hidden}'
+    + '.wrap{display:flex;flex-direction:column;height:100%;box-sizing:border-box;padding:14px 16px;gap:10px}'
+    + '.hd{display:flex;gap:12px;align-items:center;flex:none}.meta{min-width:0;flex:1}'
+    + '.ic{flex:none;width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;'
+    + 'font:700 9px/1 var(--pl-font-sans,system-ui);letter-spacing:.04em;color:#fff;background:#c4532d}'
+    + '.nm{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    + '.mt{color:var(--pl-color-fg-muted);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    + '.nav{display:flex;align-items:center;gap:4px;flex:none}.nav[hidden]{display:none}'
+    + '.nav button{all:unset;box-sizing:border-box;width:28px;height:28px;border-radius:6px;text-align:center;font-size:18px;line-height:26px;'
+    + 'cursor:pointer;border:1px solid var(--pl-color-border)}'
+    + '.nav button:hover{background:rgba(127,127,127,.16)}.nav button[disabled]{opacity:.35;cursor:default}'
+    + '.nav button:focus-visible,.th:focus-visible,.stage:focus-visible,summary:focus-visible{outline:2px solid var(--pl-color-accent);outline-offset:2px}'
+    + '#pos{min-width:56px;text-align:center;font-size:12px;color:var(--pl-color-fg-muted);font-variant-numeric:tabular-nums}'
+    + '.stage{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;outline:none}'
+    + '.stage.failed{flex:none}'
+    + '#main{line-height:0;border-radius:6px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.25),0 8px 28px rgba(0,0,0,.28);cursor:pointer}'
+    + '#main:empty{display:none}'
+    + '.st{font-size:12px;color:var(--pl-color-fg-muted);padding:6px 0}.st:empty{display:none}'
+    + '.st.err{color:var(--pl-color-fg);padding:8px 10px;border-radius:6px;border:1px solid var(--pl-color-border);background:rgba(127,127,127,.1);align-self:stretch}'
+    + '.strip{flex:none;display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;padding:4px 2px 8px;scrollbar-width:thin}'
+    + '.strip[hidden]{display:none}'
+    + '.th{all:unset;box-sizing:border-box;position:relative;flex:none;width:112px;border-radius:5px;cursor:pointer;overflow:hidden;'
+    + 'line-height:0;background:rgba(127,127,127,.14);outline:1px solid var(--pl-color-border);outline-offset:0}'
+    + '.th[aria-selected="true"]{outline:2px solid var(--pl-color-accent);outline-offset:1px}'
+    + '.th .num{position:absolute;left:4px;bottom:4px;z-index:2;font:600 10px/14px var(--pl-font-sans,system-ui);padding:0 4px;border-radius:3px;'
+    + 'background:rgba(0,0,0,.55);color:#fff}'
+    + '.th .tb{pointer-events:none}'
+    + 'details{flex:none;font-size:12px;min-height:0}details[open]{flex:1;display:flex;flex-direction:column}'
+    + 'summary{cursor:pointer;color:var(--pl-color-fg-muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:2px 0}'
+    + 'pre.pv{flex:1;min-height:0;max-height:100%;overflow:auto;margin:6px 0 0;padding:12px;border:1px solid var(--pl-color-border);border-radius:8px;'
+    + 'background:rgba(127,127,127,.08);white-space:pre-wrap;word-break:break-word;'
+    + 'font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);font-size:12px;line-height:1.5}'
+    + '#host{position:absolute;left:-100000px;top:0;width:960px;height:540px;overflow:hidden;visibility:hidden}';
+
+  // The in-frame slide controller. Like artGraphics it's authored here and injected as SOURCE, so it
+  // may reference nothing outside itself. Keep `</` and `<!` out of it: it rides a srcdoc <script>.
+  function artSlides(cfg){
+    var D=document, W=window, P=W.PptxRenderer, caps=(cfg&&cfg.caps)||{};
+    function $(id){ return D.getElementById(id); }
+    var stage=$("stage"), main=$("main"), strip=$("strip"), status=$("status"), ol=$("ol"),
+        nav=$("nav"), pos=$("pos"), prev=$("prev"), next=$("next"), host=$("host");
+    var viewer=null, cur=0, count=0, ratio=9/16, mainHandle=null, thumbs=[], failed=false, timer=0, lastW=0;
+    function post(m){ try{ W.parent.postMessage(m, "*"); }catch(_){} }
+    function mb(n){ return Math.round(n/1048576)+" MB"; }
+    function fail(reason){
+      if(failed) return; failed=true; clearTimeout(timer);
+      status.textContent="Couldn't render these slides: "+reason+". The text outline is below.";
+      status.className="st err"; main.textContent=""; strip.hidden=true; nav.hidden=true;
+      stage.classList.add("failed"); ol.open=true;
+      post({type:"protoArtifact:pptx", state:"failed", reason:String(reason).slice(0,300)});
+    }
+    // A deck can carry hyperlinks; only plain web links stay clickable, and even those can't open
+    // anything (the sandbox grants no popups or top navigation). Anything else loses its href.
+    function tidy(root){
+      var as=root.querySelectorAll ? root.querySelectorAll("a[href]") : [];
+      for(var i=0;i<as.length;i++){ var h=String(as[i].getAttribute("href")||"");
+        if(!/^https?:/i.test(h)) as[i].removeAttribute("href"); }
+    }
+    new MutationObserver(function(ms){ ms.forEach(function(m){ m.addedNodes.forEach(function(n){
+      if(n.nodeType===1){ if(n.matches && n.matches("a[href]")) tidy(n.parentNode||n); else tidy(n); } }); }); })
+      .observe(D.body, {childList:true, subtree:true});
+
+    // Pixel dimensions from an image's header bytes (PNG / GIF / BMP / WebP / JPEG), or null.
+    function dims(b){
+      if(!b || b.length<30) return null;
+      function be16(i){ return (b[i]<<8)|b[i+1]; }
+      function be32(i){ return b[i]*16777216+((b[i+1]<<16)|(b[i+2]<<8)|b[i+3]); }
+      function le16(i){ return b[i]|(b[i+1]<<8); }
+      function le24(i){ return b[i]|(b[i+1]<<8)|(b[i+2]<<16); }
+      function le32s(i){ return b[i]|(b[i+1]<<8)|(b[i+2]<<16)|(b[i+3]<<24); }
+      if(b[0]===0x89&&b[1]===0x50&&b[2]===0x4E&&b[3]===0x47) return [be32(16), be32(20)];
+      if(b[0]===0x47&&b[1]===0x49&&b[2]===0x46) return [le16(6), le16(8)];
+      if(b[0]===0x42&&b[1]===0x4D) return [Math.abs(le32s(18)), Math.abs(le32s(22))];
+      if(b[0]===0x52&&b[1]===0x49&&b[2]===0x46&&b[3]===0x46&&b[8]===0x57&&b[9]===0x45&&b[10]===0x42&&b[11]===0x50){
+        var k=String.fromCharCode(b[12],b[13],b[14],b[15]);
+        if(k==="VP8X") return [le24(24)+1, le24(27)+1];
+        if(k==="VP8L"){ var bits=(b[21]|(b[22]<<8)|(b[23]<<16))+b[24]*16777216; return [(bits&0x3FFF)+1, (Math.floor(bits/16384)&0x3FFF)+1]; }
+        if(k==="VP8 ") return [le16(26)&0x3FFF, le16(28)&0x3FFF];
+        return null;
+      }
+      if(b[0]===0xFF&&b[1]===0xD8){
+        var i=2;
+        while(i+9<b.length){
+          if(b[i]!==0xFF){ i++; continue; }
+          var m=b[i+1];
+          if(m===0xD8||m===0x01||(m>=0xD0&&m<=0xD7)){ i+=2; continue; }
+          if(m>=0xC0&&m<=0xCF&&m!==0xC4&&m!==0xC8&&m!==0xCC) return [be16(i+7), be16(i+5)];
+          i+=2+be16(i+2);
+        }
+      }
+      return null;
+    }
+    var PLACEHOLDER="iVBORw0KGgoAAAANSUhEUgAAABAAAAAJCAIAAAC0SDtlAAAAGklEQVR4nGNsaOhgIAUwkaSaYVQDcYDkYAUAsYgBmnyVf/4AAAAASUVORK5CYII=";
+    function placeholder(){ var s=atob(PLACEHOLDER), u=new Uint8Array(s.length); for(var i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u; }
+
+    function fitWidth(){
+      var r=stage.getBoundingClientRect(), sh=status.textContent ? status.getBoundingClientRect().height : 0;
+      var w=Math.max(160, r.width-4), h=Math.max(90, r.height-sh-8);
+      return Math.floor(Math.min(w, h/ratio));
+    }
+    function show(i, focusThumb){
+      if(!viewer) return;
+      i=Math.max(0, Math.min(count-1, i)); cur=i;
+      if(mainHandle){ try{ mainHandle.dispose(); }catch(_){} mainHandle=null; }
+      main.textContent="";
+      lastW=fitWidth();
+      try{ mainHandle=viewer.renderThumbnailToContainer(i, main, {width:lastW}); }
+      catch(e){ main.textContent=""; status.textContent="Slide "+(i+1)+" couldn't be drawn: "+String((e&&e.message)||e).slice(0,160); }
+      pos.textContent=(i+1)+" / "+count;
+      stage.setAttribute("aria-label", "Slide "+(i+1)+" of "+count+". Arrow keys change slides.");
+      prev.disabled=i<=0; next.disabled=i>=count-1;
+      thumbs.forEach(function(t, j){ t.setAttribute("aria-selected", j===i ? "true" : "false"); t.tabIndex = j===i ? 0 : -1; });
+      var t=thumbs[i];
+      if(t){ try{ t.scrollIntoView({block:"nearest", inline:"nearest"}); }catch(_){} if(focusThumb) t.focus(); }
+    }
+    // Filmstrip: one cheap button per slide; a slide is laid out only while its button is near
+    // the visible strip and is disposed again when it scrolls away, so a 500-slide deck costs
+    // what the few visible thumbnails cost.
+    function buildStrip(){
+      var tw=112, th=Math.round(tw*ratio);
+      var io=new IntersectionObserver(function(es){ es.forEach(function(e){
+        var b=e.target, i=+b.getAttribute("data-i");
+        if(e.isIntersecting && !b.__h){
+          var box=D.createElement("div"); box.className="tb"; b.appendChild(box);
+          try{ b.__h=viewer.renderThumbnailToContainer(i, box, {width:tw}); }catch(_){ b.__h=null; }
+        } else if(!e.isIntersecting && b.__h){
+          try{ b.__h.dispose(); }catch(_){} b.__h=null;
+          var bx=b.querySelector(".tb"); if(bx) bx.remove();
+        }
+      }); }, {root:strip, rootMargin:"0px 360px"});
+      for(var i=0;i<count;i++){
+        var b=D.createElement("button"); b.type="button"; b.className="th"; b.style.height=th+"px";
+        b.setAttribute("role", "tab"); b.setAttribute("aria-label", "Slide "+(i+1)); b.setAttribute("data-i", String(i));
+        var n=D.createElement("span"); n.className="num"; n.textContent=String(i+1); b.appendChild(n);
+        b.addEventListener("click", function(ev){ show(+ev.currentTarget.getAttribute("data-i"), true); });
+        strip.appendChild(b); thumbs.push(b); io.observe(b);
+      }
+      strip.hidden = count<2;
+    }
+
+    async function load(buf){
+      if(failed || viewer) return;
+      if(!(buf instanceof ArrayBuffer)) return fail("no file data reached the preview");
+      if(buf.byteLength>caps.maxBytes) return fail("the file is over the "+mb(caps.maxBytes)+" preview cap");
+      timer=setTimeout(function(){ fail("it took longer than "+Math.round(caps.parseMs/1000)+"s to read"); }, caps.parseMs);
+      try{
+        var files=await P.parseZip(buf, {maxEntries:caps.maxEntries, maxEntryUncompressedBytes:caps.maxEntryBytes,
+          maxTotalUncompressedBytes:caps.maxTotalBytes, maxMediaBytes:caps.maxMediaBytes, maxConcurrency:4});
+        if(failed) return;
+        var big=0;
+        if(files.media && files.media.forEach) files.media.forEach(function(bytes, key){
+          var d=dims(bytes);
+          if(d && d[0]*d[1]>caps.maxImagePixels){ files.media.set(key, placeholder()); big++; }
+        });
+        var pres=P.buildPresentation(files, {lazySlides:true});
+        count=(pres && pres.slides && pres.slides.length) || 0;
+        if(!count) return fail("the deck has no slides");
+        if(count>caps.maxSlides) return fail(count+" slides is over the "+caps.maxSlides+"-slide preview cap");
+        viewer=new P.PptxViewer(host, {pdfjs:false, fitMode:"none"});
+        viewer.load(pres);
+        if(viewer.slideWidth>0 && viewer.slideHeight>0) ratio=viewer.slideHeight/viewer.slideWidth;
+        clearTimeout(timer);
+        status.textContent = big ? big+" oversized image"+(big>1?"s were":" was")+" replaced with a placeholder." : "";
+        nav.hidden=false; buildStrip(); show(0);
+        post({type:"protoArtifact:pptx", state:"rendered", count:count});
+      }catch(e){ fail(String((e&&e.message)||e).slice(0,200)); }
+    }
+
+    prev.addEventListener("click", function(){ show(cur-1); });
+    next.addEventListener("click", function(){ show(cur+1); });
+    // Click the slide: left third goes back, the rest goes forward (a presenter's clicker).
+    main.addEventListener("click", function(e){
+      var r=main.getBoundingClientRect(); show(e.clientX-r.left < r.width/3 ? cur-1 : cur+1);
+    });
+    D.addEventListener("keydown", function(e){
+      if(!viewer || e.altKey || e.ctrlKey || e.metaKey) return;
+      var t=e.target, inStrip=t && t.classList && t.classList.contains("th");
+      if(t && t.tagName==="SUMMARY") return;
+      var k=e.key, to=null;
+      if(k==="ArrowRight"||k==="ArrowDown"||k==="PageDown"||(k===" "&&!(t&&t.tagName==="BUTTON"))) to=cur+1;
+      else if(k==="ArrowLeft"||k==="ArrowUp"||k==="PageUp") to=cur-1;
+      else if(k==="Home") to=0; else if(k==="End") to=count-1;
+      if(to===null) return;
+      e.preventDefault(); show(to, inStrip);
+    });
+    if(W.ResizeObserver){ var rt=0; new ResizeObserver(function(){ clearTimeout(rt); rt=setTimeout(function(){
+      if(viewer && Math.abs(fitWidth()-lastW)>2) show(cur); }, 120); }).observe(stage); }
+
+    W.addEventListener("message", function(e){
+      if(e.source!==W.parent) return;
+      var m=e.data||{};
+      if(m.type==="protoArtifact:theme" && m.tokens && typeof m.tokens==="object"){
+        Object.keys(m.tokens).forEach(function(k){ if(/^--pl-color-[a-z-]+$/.test(k)) D.documentElement.style.setProperty(k, String(m.tokens[k])); });
+        return;
+      }
+      if(m.type==="protoArtifact:pptx:data"){ load(m.buf); return; }
+      if(m.type==="protoArtifact:pptx:error"){ fail(String(m.reason||"the file couldn't be fetched")); }
+    });
+    if(!P || typeof P.parseZip!=="function"){ fail("the slide renderer didn't load"); return; }
+    post({type:"protoArtifact:pptx", state:"need"});
   }
   var $art=document.getElementById("art"), $vprev=document.getElementById("vprev"),
       $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"),
@@ -723,6 +1007,8 @@
       // frame can open. Captured with the srcdoc so they always belong to what's on screen.
       renderingLinks = (a.kind==="mermaid" && v.links && typeof v.links==="object" && !Array.isArray(v.links)) ? v.links : null;
       linkLabels = null;
+      // A deck's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
+      pptxReset(a.kind==="file" && slidesOk(v) ? {id:a.id, vi:vi, v:v, key:key} : null);
       $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
       renderLinks(); }
   }
@@ -927,6 +1213,46 @@
     $run.disabled=false;
   });
 
+  // Slide previews, shell side. The deck's frame is sandboxed (opaque origin, no bearer), so it
+  // asks for its bytes ({state:"need"}) and the shell fetches the gated blob and TRANSFERS a copy
+  // in. The fetch is size-capped before and after, and cached per version so a re-render (theme,
+  // tab back) doesn't download again. The watchdog is the backstop for a frame that never answers
+  // (a renderer wedged on a hostile file): it swaps the frame for the plain text outline card.
+  var pptxCtx=null, pptxCache={key:"", buf:null}, pptxWatch=0;
+  function pptxReset(ctx){ clearTimeout(pptxWatch); pptxCtx=ctx; }
+  function pptxFallback(ctx, note){
+    if(pptxCtx!==ctx) return;  // the panel moved on to another version
+    pptxCtx=null; clearTimeout(pptxWatch);
+    $frame.srcdoc=fileCard(ctx.v, note);
+  }
+  async function pptxBytes(ctx){
+    if(pptxCache.key===ctx.key && pptxCache.buf) return pptxCache.buf;
+    var size=+((ctx.v.file||{}).size||0);
+    if(size>PPTX_CAPS.maxBytes) throw new Error("the file is over the "+Math.round(PPTX_CAPS.maxBytes/1048576)+" MB preview cap");
+    var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(ctx.id)+"/blob?version="+(ctx.vi+1));
+    if(!r.ok) throw new Error("the file couldn't be fetched ("+r.status+")");
+    var buf=await r.arrayBuffer();
+    if(buf.byteLength>PPTX_CAPS.maxBytes) throw new Error("the file is over the preview size cap");
+    pptxCache={key:ctx.key, buf:buf};
+    return buf;
+  }
+  async function pptxMessage(m){
+    var ctx=pptxCtx; if(!ctx) return;
+    if(m.state==="rendered"||m.state==="failed"){ clearTimeout(pptxWatch); return; }
+    if(m.state!=="need") return;
+    clearTimeout(pptxWatch);
+    pptxWatch=setTimeout(function(){ pptxFallback(ctx, "Slide preview unavailable — rendering took too long"); }, PPTX_CAPS.watchdogMs);
+    try{
+      var buf=await pptxBytes(ctx);
+      if(pptxCtx!==ctx) return;
+      var copy=buf.slice(0);  // transfer a copy; the cache keeps the original
+      $frame.contentWindow.postMessage({type:"protoArtifact:pptx:data", buf:copy}, "*", [copy]);
+    }catch(err){
+      if(pptxCtx!==ctx) return;
+      try{ $frame.contentWindow.postMessage({type:"protoArtifact:pptx:error", reason:String((err&&err.message)||err)}, "*"); }catch(_){}
+    }
+  }
+
   // Agent-callback bridge: an artifact's window.protoArtifact.ask(prompt) posts here;
   // we call the bearer-gated /ask endpoint (a bare agent completion) and post the
   // answer back INTO the artifact frame. e.source-guarded to only our artifact frame —
@@ -934,6 +1260,7 @@
   window.addEventListener("message", async function(e){
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
+    if(m.type==="protoArtifact:pptx"){ pptxMessage(m); return; }
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
     // create/edit reply + check_artifact can surface a render failure. Best-effort POST —
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,

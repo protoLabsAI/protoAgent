@@ -114,6 +114,7 @@ _VENDOR_FILES = {
     "react.production.min.js",
     "react-dom.production.min.js",
     "babel.min.js",
+    "pptx-renderer.min.js",  # @aiden0z/pptx-renderer as an IIFE (window.PptxRenderer) — slide previews
     # ESM modules (the `react` import map): curated libs …
     "d3.mjs",
     "chartjs.mjs",
