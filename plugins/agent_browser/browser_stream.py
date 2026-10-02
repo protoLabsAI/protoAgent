@@ -149,6 +149,38 @@ def input_to_cdp(msg: dict) -> tuple[str, dict] | None:
     return None
 
 
+def nav_state_from_history(result: dict | None) -> dict | None:
+    """``Page.getNavigationHistory`` result → the panel's address-bar state:
+    ``{url, title, canBack, canForward}``, or None when the reply is unusable. The
+    history is the one source that answers all four at once — the URL the tab is
+    actually on (after a redirect, a form POST, a link click or a back/forward), its
+    title, and whether back/forward have anywhere to go."""
+    if not isinstance(result, dict):
+        return None
+    entries = result.get("entries")
+    idx = result.get("currentIndex")
+    if not isinstance(entries, list) or not isinstance(idx, int) or not 0 <= idx < len(entries):
+        return None
+    cur = entries[idx] if isinstance(entries[idx], dict) else {}
+    return {"url": str(cur.get("url") or ""), "title": str(cur.get("title") or ""),
+            "canBack": idx > 0, "canForward": idx < len(entries) - 1}
+
+
+def is_top_frame_nav(method: str, params: dict, main_frame_id: str | None) -> bool:
+    """Does this CDP event move the TAB (not an iframe)? ``frameNavigated`` for a frame
+    with no ``parentId`` is the top document (a load, a redirect's final hop, a form
+    submit, a cross-document back/forward); ``navigatedWithinDocument`` is a same-document
+    move (pushState, #fragment, a same-document back/forward) and counts only for the main
+    frame — an ad iframe's pushState must not repaint the address bar. ``loadEventFired``
+    is page-level, and is when the title is reliably set."""
+    if method == "Page.frameNavigated":
+        frame = params.get("frame") or {}
+        return not frame.get("parentId")
+    if method == "Page.navigatedWithinDocument":
+        return main_frame_id is None or params.get("frameId") == main_frame_id
+    return method == "Page.loadEventFired"
+
+
 # ── the CDP client (IO) ────────────────────────────────────────────────────────
 
 def resolve_page_target(binary: str, timeout: float = 10.0) -> tuple[str | None, str]:
@@ -208,7 +240,9 @@ _NAV_DONE = frozenset((
 class CDPStream:
     """A minimal async CDP client over one page target: start a screencast, ack frames,
     resize the viewport to the panel, and dispatch input. ``frame_cb(jpeg, metadata)``
-    fires per ``Page.screencastFrame``. Requires ``websockets`` (a uvicorn extra).
+    fires per ``Page.screencastFrame``; ``nav_cb(state)`` (optional) fires whenever the
+    tab's ``{url, title, canBack, canForward}`` changes — the panel's address bar and
+    back/forward buttons. Requires ``websockets`` (a uvicorn extra).
 
     Two robustness details the naive version missed:
     - **Re-arm on navigation.** A cross-process navigation swaps the page's render widget
@@ -216,11 +250,21 @@ class CDPStream:
       top-frame ``Page.frameNavigated`` / ``Page.loadEventFired``. Without this you see the
       first page but nothing as the agent moves around or into sub-pages.
     - **One writer.** Frame acks + nav re-arms (reader task) and input/resize (request
-      task) both write to the socket, so a lock serializes sends."""
+      task) both write to the socket, so a lock serializes sends.
+    - **Navigation → address bar.** The screencast carries only pixels, so the panel never
+      learned where the tab went: its address bar sat on the placeholder while the agent
+      opened, clicked, submitted and redirected. Each top-frame navigation (and each load,
+      when the title lands) asks ``Page.getNavigationHistory``; the reply is picked up here
+      in the reader (never awaited — the reader IS what would deliver it) and a changed
+      state goes to ``nav_cb``."""
 
-    def __init__(self, page_ws_url: str, frame_cb, quality: int = 80):
+    def __init__(self, page_ws_url: str, frame_cb, quality: int = 80, nav_cb=None):
         self._url = page_ws_url
         self._frame_cb = frame_cb
+        self._nav_cb = nav_cb
+        self._history_ids: set[int] = set()   # in-flight Page.getNavigationHistory request ids
+        self._main_frame: str | None = None   # top frame id, learned from frameNavigated
+        self._last_nav: dict | None = None    # last state handed to nav_cb (dedupe)
         self._quality = max(1, min(int(quality or 80), 100))
         self._cast = (1280, 800)      # current screencast max frame size (device px)
         self._last_vp = None          # last applied (css_w, css_h, scale) — dedupe resize thrash
@@ -250,9 +294,11 @@ class CDPStream:
         instead of freezing until an idle-close."""
         return self._reader
 
-    async def _send(self, method: str, params: dict | None = None) -> int:
+    async def _send(self, method: str, params: dict | None = None, *, track: set | None = None) -> int:
         async with self._lock:  # serialize writes: reader (acks/re-arm) + request task (input/resize)
             self._id += 1
+            if track is not None:
+                track.add(self._id)   # registered BEFORE the send, so the reply can't beat it
             await self._ws.send(json.dumps({"id": self._id, "method": method, "params": params or {}}))
             return self._id
 
@@ -260,6 +306,18 @@ class CDPStream:
         mw, mh = self._cast
         await self._send("Page.startScreencast", {"format": "jpeg", "quality": self._quality,
                          "maxWidth": mw, "maxHeight": mh, "everyNthFrame": 1})
+
+    async def request_nav_state(self):
+        """Ask where the tab is; the reply is handled in ``_read_loop`` → ``nav_cb``."""
+        if self._nav_cb is not None:
+            await self._send("Page.getNavigationHistory", track=self._history_ids)
+
+    async def _on_history(self, result: dict | None):
+        state = nav_state_from_history(result)
+        if state is None or state == self._last_nav or self._nav_cb is None:
+            return
+        self._last_nav = state
+        await self._nav_cb(state)
 
     async def start_screencast(self, max_w: int = 1280, max_h: int = 800):
         await self._send("Page.enable")   # also enables frameNavigated / loadEventFired for re-arm
@@ -269,6 +327,7 @@ class CDPStream:
         await self._send("Emulation.setFocusEmulationEnabled", {"enabled": True})
         self._cast = (max_w, max_h)
         await self._arm_cast()
+        await self.request_nav_state()   # the page already open when the panel attached
 
     async def set_viewport(self, w, h, dpr=1.0):
         """Resize Chrome's layout viewport to the panel and re-arm the screencast at the
@@ -302,7 +361,22 @@ class CDPStream:
                 m = json.loads(raw)
             except Exception:  # noqa: BLE001
                 continue
-            method = m.get("method")
+            if m.get("id") in self._history_ids:
+                self._history_ids.discard(m["id"])
+                try:
+                    await self._on_history(m.get("result"))
+                except Exception:  # noqa: BLE001 — a closed panel socket must not kill the reader
+                    log.debug("[agent_browser] nav state delivery failed", exc_info=True)
+                continue
+            method = m.get("method") or ""
+            params = m.get("params") or {}
+            if method == "Page.frameNavigated" and not (params.get("frame") or {}).get("parentId"):
+                self._main_frame = (params.get("frame") or {}).get("id") or self._main_frame
+            if is_top_frame_nav(method, params, self._main_frame):
+                try:
+                    await self.request_nav_state()   # where did the tab go? → address bar
+                except Exception:  # noqa: BLE001 — transient during teardown
+                    pass
             if method == "Page.screencastFrame":
                 p = m["params"]
                 try:
