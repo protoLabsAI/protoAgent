@@ -44,3 +44,36 @@ describe("/goal client interception", () => {
     expect(goal!.run(ctx("make the build green"))).toBe(false);
   });
 });
+
+// `/goal new` drives the goal IN THIS TAB (ADR 0090 D1): the set goes out with `kick: false`
+// and the tab registers its own hidden kickoff, so the loop streams live here — the default
+// headless kick ran it as a server-fired turn that surfaced only as a collapsed card.
+describe("/goal new submit drives in this tab", () => {
+  it("sets with kick:false, then registers this tab's kickoff", async () => {
+    const { api } = await import("../lib/api");
+    const { takeGoalKickoff } = await import("./chat-store");
+    const setGoal = vi.spyOn(api, "setGoal").mockResolvedValue({ ok: true, message: "goal set" } as never);
+    vi.spyOn(api, "verifiers").mockRejectedValue(new Error("offline"));
+    const openForm = vi.fn();
+    const noteToThread = vi.fn();
+    const goal = findSlashCommand("goal");
+    goal?.run({
+      rest: "new",
+      sessionId: "tab-7",
+      noteToThread,
+      setDraft: vi.fn(),
+      focusComposer: vi.fn(),
+      openForm,
+      flagOn: () => true,
+      serverCommands: [],
+    } as never);
+    await vi.waitFor(() => expect(openForm).toHaveBeenCalledTimes(1));
+
+    openForm.mock.calls[0][0].onSubmit({ condition: "tests pass", verifier: "command", verify_command: "pytest -q" });
+    await vi.waitFor(() => expect(noteToThread).toHaveBeenCalled());
+
+    expect(setGoal.mock.calls[0][0]).toMatchObject({ session_id: "tab-7", condition: "tests pass", kick: false });
+    expect(takeGoalKickoff("tab-7")).toContain("tests pass");
+    vi.restoreAllMocks();
+  });
+});

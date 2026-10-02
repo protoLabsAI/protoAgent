@@ -1,0 +1,91 @@
+/* Goal status on the live surfaces — the Work overview card's "Recent" (finished) goal rows
+   and a chat tab's GoalRunStrip. One file so a goal reads the same green (or red) in both;
+   imported by WorkPanel.tsx and GoalRunStrip.tsx. */
+
+/* Goals card "Recent" (finished goals stay visible for a while): a small divider label,
+   then rows led by a status icon — green check for achieved, red cross for a goal that
+   stopped short — with the outcome line ("achieved · command: pytest -q · 4m ago")
+   under the title. */
+.work-row-section {
+  margin-top: var(--pl-space-1);
+  color: var(--pl-color-fg-subtle);
+  font-size: var(--pl-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.work-row-icon {
+  flex: none;
+}
+.work-row--goal-achieved .work-row-icon,
+.work-row--goal-achieved .work-row-outcome {
+  color: var(--pl-color-status-success);
+}
+.work-row--goal-failed .work-row-icon {
+  color: var(--pl-color-status-error);
+}
+.work-row-stack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.work-row-outcome {
+  min-width: 0;
+  color: var(--pl-color-fg-subtle);
+  font-size: var(--pl-font-size-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-row-dismiss {
+  flex: none;
+}
+
+/* The goal this chat drives (GoalRunStrip), above the composer: a quiet spinner row while
+   the loop runs, then a tinted success (or error) row when the verifier decides, so the
+   moment a goal goes green is visible in the chat that drove it. */
+.chat-goal-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+  margin: 0 0 var(--pl-space-1_5);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}
+.chat-goal-strip-icon {
+  flex: none;
+}
+.chat-goal-strip-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-goal-strip-text strong {
+  color: var(--pl-color-fg);
+}
+.chat-goal-strip-outcome {
+  color: var(--pl-color-fg-subtle);
+}
+.chat-goal-strip--achieved {
+  border-color: color-mix(in srgb, var(--pl-color-status-success) 45%, transparent);
+  background: color-mix(in srgb, var(--pl-color-status-success) 10%, transparent);
+}
+.chat-goal-strip--achieved .chat-goal-strip-icon,
+.chat-goal-strip--achieved strong {
+  color: var(--pl-color-status-success);
+}
+.chat-goal-strip--failed {
+  border-color: color-mix(in srgb, var(--pl-color-status-error) 45%, transparent);
+  background: color-mix(in srgb, var(--pl-color-status-error) 8%, transparent);
+}
+.chat-goal-strip--failed .chat-goal-strip-icon,
+.chat-goal-strip--failed strong {
+  color: var(--pl-color-status-error);
+}

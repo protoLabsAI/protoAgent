@@ -37,6 +37,7 @@ import {
   useServerTurn,
 } from "./server-turn-store";
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
+import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
 import { useAttachments } from "./useAttachments";
 import { useSlashAutocomplete } from "./useSlashAutocomplete";
@@ -1708,6 +1709,7 @@ export function ChatSessionSlot({
             acts only when addressed, and clicking a name is exactly that affordance
             (inserts `@name `). No remove control: history is not removable, and an X
             that gated nothing was confusion pretending to be a control. */}
+        <GoalRunStrip sessionId={sessionId} />
         <BackgroundWorkStrip sessionId={sessionId} />
         {cast.length ? (
           <div className="chat-roster" aria-label="In this chat">

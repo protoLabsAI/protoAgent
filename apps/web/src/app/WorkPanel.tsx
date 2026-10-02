@@ -9,7 +9,7 @@ import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-q
 import { Badge, Button, Empty, type Status } from "@protolabsai/ui/primitives";
 import { StatusDot } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
-import { ArrowLeft, Plus } from "lucide-react";
+import { ArrowLeft, CircleCheck, CircleX, Plus, X } from "lucide-react";
 
 import { StagePanel } from "./ErrorBoundary";
 import { GoalCreateDialog, GoalsPanel } from "./GoalsPanel";
@@ -19,6 +19,9 @@ import { TaskCreateDialog, TasksPanel } from "./TasksPanel";
 import { ScheduleModal, SchedulePanel } from "../schedule/SchedulePanel";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
+import { verifierLabel } from "../chat/goalForm";
+import { dismissGoal, useDismissedGoals } from "../goals/dismissedGoals";
+import { useNow } from "../goals/useNow";
 import { onServerEvent } from "../lib/events";
 import { tasksQuery, goalsQuery, schedulesQuery, watchesQuery, queryKeys } from "../lib/queries";
 import type { GoalSetBody } from "../chat/goalForm";
@@ -28,6 +31,9 @@ import type { IssueDraft } from "./tasks";
 import {
   activeGoals,
   activeWatches,
+  goalDismissKey,
+  goalOutcomeLine,
+  recentGoals,
   goalsPulse,
   schedulePulse,
   taskBuckets,
@@ -39,6 +45,7 @@ import {
 } from "./workOverview";
 
 import "./work.css";
+import "../goals/goal-status.css";
 
 type WorkView = "overview" | "goals" | "watches" | "tasks" | "schedule";
 type Confirm = ComponentProps<typeof TasksPanel>["confirm"];
@@ -71,6 +78,10 @@ export function WorkPanel({ confirm }: { confirm: Confirm }) {
     const offs = [
       onServerEvent("goal.changed", refresh(queryKeys.goals)),
       onServerEvent("goal.iteration", refresh(queryKeys.goals)),
+      // The terminal pushes too: `goal.changed` already covers the finishing write, but a
+      // card that flips green should not depend on which of the two lands first.
+      onServerEvent("goal.achieved", refresh(queryKeys.goals)),
+      onServerEvent("goal.failed", refresh(queryKeys.goals)),
       onServerEvent("watch.changed", refresh(queryKeys.watches)),
       onServerEvent("watch.met", refresh(queryKeys.watches)),
       onServerEvent("watch.expired", refresh(queryKeys.watches)),
@@ -120,8 +131,8 @@ export function WorkPanel({ confirm }: { confirm: Confirm }) {
   );
 }
 
-// Row-dot tones. Goals on the card are all in-flight (terminal ones are filtered), so the
-// dot reads "loop running"; watches carry their full status; tasks distinguish
+// Row-dot tones. The dotted goal rows are the in-flight ones (finished goals render under
+// "Recent" with their own check/cross icon), so the dot reads "loop running"; watches carry their full status; tasks distinguish
 // in-progress from ready.
 const goalDot = (status: string): Status => {
   if (status === "achieved") return "success";
@@ -203,7 +214,12 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.schedules }),
   });
 
+  const now = useNow();
+  const dismissed = useDismissedGoals();
   const active = activeGoals(goals);
+  // Finished goals stay on the card for a while (RECENT_GOAL_WINDOW_S) so a goal visibly
+  // goes green — it used to drop straight from "1 driving" to "No active goals".
+  const recent = recentGoals(goals, now, dismissed);
   const watchList = visibleWatches(watches);
   const { ready, inProgress } = taskBuckets(issues);
   const upcoming = upcomingJobs(jobs);
@@ -215,23 +231,31 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
           id="goals"
           title="Goals"
           count={active.length}
-          pulse={goalsPulse(goals)}
+          pulse={goalsPulse(goals, recent)}
           onOpen={() => onOpen("goals")}
           quickAdd={{ label: "Goal", testId: "work-add-goal", onAdd: () => setGoalOpen(true) }}
           empty={
-            active.length === 0
+            active.length === 0 && recent.length === 0
               ? { title: "No active goals", description: <>set one here, or in chat with <code>/goal …</code></> }
               : null
           }
         >
           {active.slice(0, 4).map((g: GoalState) => (
-            <li className="work-row" key={g.session_id}>
-              <StatusDot status={goalDot(g.status)} />
+            <li className="work-row" key={g.session_id} data-testid="work-goal-active">
+              <StatusDot status={goalDot(g.status)} pulse />
               <span className="work-row-title">{g.condition}</span>
               <span className="work-row-meta">
                 {g.iteration ?? 0}/{g.max_iterations ?? "∞"}
               </span>
             </li>
+          ))}
+          {recent.length ? (
+            <li className="work-row-section" aria-hidden>
+              Recent
+            </li>
+          ) : null}
+          {recent.map((g: GoalState) => (
+            <RecentGoalRow key={goalDismissKey(g)} goal={g} now={now} />
           ))}
         </OverviewCard>
 
@@ -333,6 +357,49 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
         busy={addSchedule.isPending}
       />
     </>
+  );
+}
+
+// A goal that just finished, under the card's "Recent" divider: a green check + "achieved ·
+// <verifier> · 4m ago" for a success, a red ✗ + the reason for an exhausted/unachievable one.
+// The × hides it from the card (and the chat strip) early; it stopPropagation()s so it never
+// navigates. The Goals panel keeps the full record either way.
+function RecentGoalRow({ goal, now }: { goal: GoalState; now: number }) {
+  const achieved = goal.status === "achieved";
+  const line = goalOutcomeLine(goal, verifierLabel(goal.verifier), now);
+  return (
+    <li
+      className={`work-row work-row--goal-${achieved ? "achieved" : "failed"}`}
+      data-testid="work-goal-recent"
+      data-status={goal.status}
+    >
+      {achieved ? (
+        <CircleCheck size={14} aria-label="achieved" className="work-row-icon" />
+      ) : (
+        <CircleX size={14} aria-label={goal.status} className="work-row-icon" />
+      )}
+      <span className="work-row-stack">
+        <span className="work-row-title">{goal.condition}</span>
+        <span className="work-row-outcome" title={line}>
+          {line}
+        </span>
+      </span>
+      <Button
+        variant="ghost"
+        size="xs"
+        icon
+        type="button"
+        className="work-row-dismiss"
+        title="Dismiss — it stays in the Goals panel"
+        aria-label={`Dismiss finished goal: ${goal.condition}`}
+        onClick={(e) => {
+          e.stopPropagation(); // dismissing is not navigating
+          dismissGoal(goalDismissKey(goal));
+        }}
+      >
+        <X size={13} />
+      </Button>
+    </li>
   );
 }
 

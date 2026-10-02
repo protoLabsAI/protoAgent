@@ -1311,8 +1311,17 @@ const server = createServer(async (req, res) => {
           frame("fs.changed", { project, paths: [path], source, target: "claude-code" });
         }, 600)
       : null;
+    // Goal transitions (driving → achieved): `goal.changed` for the session the spec names in
+    // `x-e2e-goal-changed`, repeated so a slow connect can't miss it. The spec owns the
+    // `/api/goals` payload (page.route) and flips it; this push is what makes the console
+    // refetch WITHOUT a reload. Header-gated: only that spec's stream carries it.
+    const goalChanged = String(req.headers["x-e2e-goal-changed"] || "");
+    const goalTimer = goalChanged
+      ? setInterval(() => frame("goal.changed", { session_id: goalChanged }), 600)
+      : null;
     req.on("close", () => {
       clearInterval(t);
+      if (goalTimer) clearInterval(goalTimer);
       goals.forEach(clearTimeout);
       turns.forEach(clearTimeout);
       hitl.forEach(clearTimeout);

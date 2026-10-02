@@ -8,7 +8,12 @@
 // partial narration, rendering as an ordinary bubble that trailed off mid-sentence, while
 // the reason sat unread in the task's terminal `status.message`.
 
-import { isLiveServerTurn, liveMessageId } from "../chat/server-turn-store";
+import {
+  effectiveOrigin,
+  GOAL_RUN_ORIGIN,
+  isLiveServerTurn,
+  liveMessageId,
+} from "../chat/server-turn-store";
 import { applyCanonicalTurnText, settleTurnBubbles, turnBubbleIndexes } from "../chat/turnText";
 import type { ChatMessage, ChatPart } from "../lib/types";
 
@@ -22,6 +27,8 @@ export type ResumedTurnEvent = {
    *  by the server (#3028) so the settled message can render as a compact result card. "" on an
    *  older backend, where ChatResumeWatch falls back to the server-turn store's remembered origin. */
   origin?: unknown;
+  /** The fire's job id. A `goal-run:` trigger marks a goal drive turn (see effectiveOrigin). */
+  trigger?: unknown;
 };
 
 export type ResumedTurnRender = {
@@ -52,7 +59,8 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
   const session = String(data.session_id ?? "");
   const text = String(data.text ?? "");
   const taskId = String(data.task_id ?? "");
-  const origin = String(data.origin ?? "");
+  const origin = effectiveOrigin(data.origin, data.trigger);
+  const goalRun = origin === GOAL_RUN_ORIGIN;
   // `||`, not `??`: an EMPTY state must fall back too. `??` would leave "" in place, and
   // "" !== "completed" reads as failed — so a payload from a publisher that sets the key
   // but not a value would put a false "Turn failed" on a turn that went fine. A signal
@@ -77,10 +85,16 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
     // streamed one park the bubble identically.
     status: failed ? "error" : "done",
     toast: failed
-      ? { tone: "error", title: "Task failed", message: error || "A server-fired turn ended without finishing." }
-      : { tone: "info", title: "Task resumed", message: "A waited task picked back up in this chat." },
+      ? {
+          tone: "error",
+          title: goalRun ? "Goal run failed" : "Task failed",
+          message: error || "A server-fired turn ended without finishing.",
+        }
+      : goalRun
+        ? { tone: "info", title: "Goal run finished", message: "A goal drive turn finished in this chat." }
+        : { tone: "info", title: "Task resumed", message: "A waited task picked back up in this chat." },
     notify: {
-      title: failed ? "Task failed" : "Task resumed",
+      title: failed ? (goalRun ? "Goal run failed" : "Task failed") : goalRun ? "Goal run finished" : "Task resumed",
       body: (failed ? error || content : text).slice(0, 80),
     },
   };

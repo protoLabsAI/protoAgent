@@ -100,7 +100,7 @@ import { StatusPill } from "./StatusPill";
 import { WorkPanel } from "./WorkPanel";
 import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
-import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
+import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, queryKeys, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, useForwardedPaletteNotices, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
@@ -545,6 +545,20 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       }));
     return () => { offDone(); offFail(); offMet(); offExpired(); };
   }, [toast]);
+
+  // Keep the goals cache LIVE app-wide, not just while a goal surface is mounted. The Work
+  // card and the Goals panel subscribe only while open, so a goal set (from `/goal new` in
+  // chat, say) while they were closed left a stale cache: opening Work then painted
+  // "No active goals" over a goal that was driving, until the refetch landed.
+  // `refetchType: "all"` refetches the query even with no observer mounted.
+  useEffect(() => {
+    const refresh = () =>
+      void queryClient.invalidateQueries({ queryKey: queryKeys.goals, refetchType: "all" });
+    const offs = ["goal.changed", "goal.iteration", "goal.achieved", "goal.failed"].map((t) =>
+      onServerEvent(t, refresh),
+    );
+    return () => offs.forEach((off) => off());
+  }, [queryClient]);
 
   // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +
   // rightCollapsed/onCollapse) — the hand-rolled mouse/keyboard handlers are gone.

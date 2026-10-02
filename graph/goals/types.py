@@ -24,6 +24,21 @@ from time import time
 #                   explicitly gave up with a reason)
 TERMINAL_STATUSES = ("achieved", "exhausted", "unachievable")
 
+# A headless goal drive turn (the operator-API kick, a detach-resume, a re-arm) is a
+# one-shot scheduler job. Its id carries this prefix so the fire is recognisable as a GOAL
+# RUN end to end: the scheduler gives it a goal wake header, and the console — which sees
+# the job id as the turn's ``trigger`` on ``turn.started`` / ``chat.resumed`` — streams it as
+# a goal run instead of folding it into a collapsed "Scheduled task" result card. The
+# scheduler matches the literal prefix (it doesn't import ``graph``); keep them in step.
+GOAL_RUN_JOB_PREFIX = "goal-run:"
+
+
+def goal_run_job_id(session_id: str) -> str:
+    """The stable one-shot job id for ``session_id``'s goal drive turn. Stable on purpose:
+    ``run_in_session`` REPLACES a pending job with the same id, so a resume clicked twice
+    queues one drive turn, not two."""
+    return f"{GOAL_RUN_JOB_PREFIX}{session_id}"
+
 # Accepted ranges for a goal's per-goal budgets when a caller sets them (#3973). Unset
 # (``None``) means "use the config default". Outside the range is refused, not clamped:
 # a string, a float, a bool, zero or a negative would otherwise reach ``GoalState`` and

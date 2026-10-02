@@ -557,9 +557,12 @@ def _safe_kick(session_id: str, prompt: str) -> bool:
     caller — the goal is already persisted, so a scheduler hiccup (or a non-dict return) must
     NOT 500 the request (QA #2091). Returns True only when the turn was actually enqueued."""
     try:
+        from graph.goals.types import goal_run_job_id
         from graph.sdk import run_in_session
 
-        res = run_in_session(session_id, prompt)
+        # The goal-run job id lets the console stream this as a goal run (not a collapsed
+        # "Scheduled task" card) and makes a repeated kick replace the pending one.
+        res = run_in_session(session_id, prompt, job_id=goal_run_job_id(session_id))
         return bool(isinstance(res, dict) and res.get("ok"))
     except Exception:  # noqa: BLE001 — a kickoff failure must not fail the goal op
         log.warning("[goals] run_in_session kick failed for %s", session_id, exc_info=True)
@@ -612,12 +615,7 @@ async def _operator_goals_rearm(session_id: str, body: dict) -> dict:
     # A reactivated (terminal → active) goal needs a turn to resume driving — enqueue a
     # one-shot turn; the chat kickoff injection (iteration 0) states the goal. Extending a
     # still-active goal needs no kick (its loop is live and picks up the higher cap).
-    kicked = False
-    if resumed:
-        from graph.sdk import run_in_session
-
-        res = run_in_session(session_id, "Resume working toward your active goal now.")
-        kicked = bool(res.get("ok"))
+    kicked = _safe_kick(session_id, "Resume working toward your active goal now.") if resumed else False
     return {"ok": True, "message": msg, "resumed": resumed, "kicked": kicked}
 
 
