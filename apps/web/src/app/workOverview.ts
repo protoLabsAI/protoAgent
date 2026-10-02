@@ -5,6 +5,17 @@
 
 import type { GoalState, ScheduledJob, Task, WatchState } from "../lib/types";
 
+// The finished-goal ("Recent") helpers live with the goals module so the chat strip can
+// share them; re-exported here for the overview card.
+export {
+  agoLabel,
+  goalDismissKey,
+  goalOutcomeLine,
+  RECENT_GOAL_LIMIT,
+  RECENT_GOAL_WINDOW_S,
+  recentGoals,
+} from "../goals/recentGoals";
+
 // ── goals ────────────────────────────────────────────────────────────────────
 
 /** Goals still in flight — status "active" is the only non-terminal state (the backend sets
@@ -14,13 +25,20 @@ export function activeGoals(goals: GoalState[]): GoalState[] {
   return goals.filter((g) => g.status === "active" && !g.finished_at);
 }
 
-/** "2 driving · iteration 3/6" — count of active goals + the furthest-along loop.
- *  Empty string when nothing is active (the card shows its Empty state instead). */
-export function goalsPulse(goals: GoalState[]): string {
+/** "2 driving · iteration 3/6", plus "· 1 achieved recently" when a goal just landed.
+ *  Empty string when there is nothing active or recent (the card shows its Empty state). */
+export function goalsPulse(goals: GoalState[], recent: GoalState[] = []): string {
   const active = activeGoals(goals);
-  if (!active.length) return "";
-  const lead = active.reduce((a, b) => ((b.iteration ?? 0) > (a.iteration ?? 0) ? b : a));
-  return `${active.length} driving · iteration ${lead.iteration ?? 0}/${lead.max_iterations ?? "∞"}`;
+  const parts: string[] = [];
+  if (active.length) {
+    const lead = active.reduce((a, b) => ((b.iteration ?? 0) > (a.iteration ?? 0) ? b : a));
+    parts.push(`${active.length} driving · iteration ${lead.iteration ?? 0}/${lead.max_iterations ?? "∞"}`);
+  }
+  const achieved = recent.filter((g) => g.status === "achieved").length;
+  if (achieved) parts.push(`${achieved} achieved recently`);
+  const failed = recent.length - achieved;
+  if (failed) parts.push(`${failed} stopped`);
+  return parts.join(" · ");
 }
 
 // ── watches ──────────────────────────────────────────────────────────────────

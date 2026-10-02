@@ -488,6 +488,34 @@ class TestFireTurnEvents:
             assert d["trigger"] == "watch-abc123"
 
     @pytest.mark.asyncio
+    async def test_goal_run_fire_keeps_scheduler_origin_and_goal_wake(self, tmp_path, monkeypatch):
+        """A headless goal drive turn (``goal-run:<session>``, graph.goals.types) stays a
+        ``scheduler`` origin — every server origin set keys off that — while its job id rides
+        ``trigger`` so the console can stream it as a goal run. Its wake header says it's
+        driving a goal, not a generic scheduled run."""
+        import httpx
+
+        posted: list = []
+
+        class _Capture(_FakeClient):
+            async def post(self, url, headers=None, json=None):
+                posted.append(json)
+                return self._response
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Capture(_FakeResponse(200)))
+        events: list = []
+        s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+        job = s.add_job("Resume working toward your active goal now.", _FUTURE_ISO, job_id="goal-run:chat-3", context_id="chat-3")
+
+        await s._fire(job)
+
+        started = next(d for (t, d) in events if t == "turn.started")
+        assert started["origin"] == "scheduler" and started["trigger"] == "goal-run:chat-3"
+        msg = posted[0]["params"]["message"]
+        assert msg["metadata"]["origin"] == "scheduler"
+        assert msg["parts"][0]["text"].startswith("[Autonomous wake — driving your active goal.")
+
+    @pytest.mark.asyncio
     async def test_fire_without_context_defaults_to_activity_thread(self, tmp_path, monkeypatch):
         import httpx
 

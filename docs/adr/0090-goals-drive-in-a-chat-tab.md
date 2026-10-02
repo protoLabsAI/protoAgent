@@ -49,6 +49,15 @@ owns the turn sees the whole loop token-by-token. `kick` defaults to `true` for
 programmatic / API callers with no UI (they keep the headless auto-start). **A goal set in
 chat with `/goal` stays in that chat — unchanged.**
 
+*Amendment (2026-10):* the chat `/goal new` form follows the same rule — it sets the goal with
+`kick: false` and fires the hidden kickoff from its own tab, so the loop streams there instead
+of arriving as a collapsed "Scheduled task" card (a tab already mid-turn keeps the headless
+kick). Every headless kick (API set, detach-resume, re-arm) is enqueued under the job id
+`goal-run:<session>` (`graph.goals.types.GOAL_RUN_JOB_PREFIX`); its origin stays `scheduler`,
+and the console reads the `goal-run:` trigger to stream and settle it as a **goal run**,
+full-size. The chat tab shows the goal's own status above the composer (driving → achieved ✓ /
+stopped), and the Work card keeps finished goals under **Recent** for 30 minutes.
+
 ### D2 — Attach / detach: closing the tab keeps the goal running (or stops it)
 
 The drive loop is bound to the tab's live stream — closing the tab aborts it. So closing a

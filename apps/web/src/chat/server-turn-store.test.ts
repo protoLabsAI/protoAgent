@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
 import {
+  effectiveOrigin,
+  GOAL_RUN_ORIGIN,
   labelForOrigin,
   noteTurnFinished,
   noteTurnStarted,
@@ -213,5 +215,25 @@ describe("rendersAsResultCard — which settled turns collapse into the card", (
   it("never carded an operator-initiated turn (no origin)", () => {
     expect(rendersAsResultCard(undefined)).toBe(false);
     expect(rendersAsResultCard("")).toBe(false);
+  });
+});
+
+// A headless goal drive turn is a `scheduler` fire on the wire; its `goal-run:<session>` job id
+// (the `trigger`) is what tells the console it's a goal run, which must stream + settle
+// full-size, never collapse into a "Scheduled task" result card.
+describe("goal runs", () => {
+  it("maps a goal-run trigger to the goal origin, leaving everything else alone", () => {
+    expect(effectiveOrigin("scheduler", "goal-run:chat-1")).toBe(GOAL_RUN_ORIGIN);
+    expect(effectiveOrigin("scheduler", "job-1")).toBe("scheduler");
+    expect(effectiveOrigin("watch", "watch-w1")).toBe("watch");
+    expect(effectiveOrigin(undefined, undefined)).toBe("");
+  });
+
+  it("labels and renders a goal run as the conversation, not a result card", () => {
+    expect(labelForOrigin(GOAL_RUN_ORIGIN)).toBe("driving the goal…");
+    expect(serverResultLabel(GOAL_RUN_ORIGIN)).toBe("Goal run");
+    expect(rendersAsResultCard(GOAL_RUN_ORIGIN)).toBe(false);
+    // A plain scheduled fire still collapses.
+    expect(rendersAsResultCard("scheduler")).toBe(true);
   });
 });

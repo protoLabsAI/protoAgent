@@ -14,11 +14,28 @@ import type { ChatMessage } from "../lib/types";
 // by trigger, without hijacking `sessionStatusMap` (which drives the composer/send loop)
 // or inserting a placeholder message. Additive and self-contained — clears on finish.
 
+// A goal DRIVE turn run headlessly (the operator-API kick, a detach-resume, a re-arm). On the
+// wire it is an ordinary `scheduler` fire — every server origin set keys off that — but its
+// job id carries the `goal-run:` prefix (graph.goals.types.GOAL_RUN_JOB_PREFIX), and the job
+// id travels as the turn's `trigger`. The console folds that into its own origin token so a
+// goal run streams and settles like a normal turn instead of collapsing into a "Scheduled
+// task" result card — the operator set the goal to watch it work.
+export const GOAL_RUN_ORIGIN = "goal";
+const GOAL_RUN_TRIGGER_PREFIX = "goal-run:";
+
+/** The origin the console renders a server turn under: `goal` for a goal drive turn (by its
+ *  `goal-run:` trigger), else the server's own origin token unchanged. */
+export function effectiveOrigin(origin: unknown, trigger: unknown): string {
+  if (String(trigger ?? "").startsWith(GOAL_RUN_TRIGGER_PREFIX)) return GOAL_RUN_ORIGIN;
+  return String(origin ?? "");
+}
+
 /** Human label for the typing indicator, derived from the turn's origin. A watch reaction
  *  arrives as `watch-<id>` (its scheduler job id); everything else is one of the two fixed
  *  origins. Unknown origins fall back to a generic phrasing so a new backend trigger still
  *  reads sensibly instead of showing a raw token. */
 export function labelForOrigin(origin: string): string {
+  if (origin === GOAL_RUN_ORIGIN) return "driving the goal…";
   if (origin === "background-resume") return "responding to background reports…";
   if (origin === "scheduler") return "running a scheduled task…";
   if (origin.startsWith("watch-") || origin === "watch") return "reacting to a triggered watch…";
@@ -56,7 +73,9 @@ export function originForSession(sessionId: string): string {
 
 // The agent's own conversation continuing, not a side-channel run: its turn in response to its
 // OWN background reports (ADR 0070 push-resume) or to a delegate's result. See rendersAsResultCard.
-const CONVERSATIONAL_ORIGINS = new Set(["background-resume", "delegate-result"]);
+// A goal run is the same: the operator set the goal to watch the agent work toward it, so its
+// turns stay full-size (tool cards and all) rather than folding into a collapsed card.
+const CONVERSATIONAL_ORIGINS = new Set(["background-resume", "delegate-result", GOAL_RUN_ORIGIN]);
 
 /** Whether a SETTLED server-initiated turn collapses into the compact result card (#3028).
  *  A scheduled fire, a watch reaction or an inbox/webhook trigger is a run the operator didn't
@@ -77,6 +96,7 @@ export function rendersAsResultCard(origin: string | undefined): boolean {
 export function serverResultLabel(origin: string): string | null {
   const o = origin.trim().toLowerCase();
   if (!o) return null;
+  if (o === GOAL_RUN_ORIGIN) return "Goal run";
   if (o === "scheduler") return "Scheduled task";
   if (o === "background-resume") return "Background report";
   if (o === "background") return "Background task";

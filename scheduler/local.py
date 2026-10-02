@@ -1027,6 +1027,10 @@ class LocalScheduler:
         # travels as `trigger`, so nothing loses the per-watch detail.
         is_watch = job.id.startswith("watch-")
         is_wait = job.id.startswith("wait:")
+        # A goal drive turn (graph.goals.types.GOAL_RUN_JOB_PREFIX — matched literally, the
+        # scheduler doesn't import graph). Its origin stays `scheduler` (every origin set keys
+        # off that); the job id travels as `trigger`, which is how the console tells it apart.
+        is_goal_run = job.id.startswith("goal-run:")
         fire_origin = "watch" if is_watch else "scheduler"
 
         # Turn-lifecycle events (#1767): a scheduled/watch fire holds the connection open
@@ -1048,6 +1052,8 @@ class LocalScheduler:
             wake_header = "[Autonomous wake — a watch you set has tripped. Orient from <working_state>, then:]"
         elif is_wait:
             wake_header = "[Autonomous wake — a wait you scheduled has elapsed. Continue:]"
+        elif is_goal_run:
+            wake_header = "[Autonomous wake — driving your active goal. Orient from <working_state>, then:]"
         else:
             wake_header = "[Autonomous wake — scheduled run. Orient from <working_state>, then:]"
         # Control-command jobs must remain slash-first: prepending the autonomous
