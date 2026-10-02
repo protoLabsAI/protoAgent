@@ -19,7 +19,7 @@ import { TaskCreateDialog, TasksPanel } from "./TasksPanel";
 import { ScheduleModal, SchedulePanel } from "../schedule/SchedulePanel";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { verifierLabel } from "../chat/goalForm";
+import { goalSetDetail, verifierLabel } from "../chat/goalForm";
 import { dismissGoal, useDismissedGoals } from "../goals/dismissedGoals";
 import { useNow } from "../goals/useNow";
 import { onServerEvent } from "../lib/events";
@@ -174,7 +174,7 @@ function WorkOverview({ onOpen }: { onOpen: (v: WorkView) => void }) {
     mutationFn: (body: GoalSetBody) => api.setGoal(body),
     onSuccess: (res) => {
       setGoalOpen(false);
-      toast({ tone: "success", title: "Goal set", message: res.message || "The agent has a new goal." });
+      toast({ tone: "success", title: "Goal set", message: goalSetDetail(res.message) || "The agent has a new goal." });
     },
     onError: (e) => toast({ tone: "error", title: "Couldn't set goal", message: errMsg(e) }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.goals }),

@@ -143,7 +143,9 @@ def _build_middleware(
     middleware.append(ToolCallRepairMiddleware())
 
     # End the turn after the `wait` tool runs (yield-and-resume instead of
-    # busy-polling). No-op on any turn that didn't call `wait`.
+    # busy-polling) — and end a goal-driven turn once its verifier passes, probed
+    # (debounced) after each tool round (graph/middleware/goal_checkpoint.py). No-op on
+    # any other turn.
     from graph.middleware.wait_yield import WaitYieldMiddleware
 
     middleware.append(WaitYieldMiddleware())

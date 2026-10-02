@@ -14,7 +14,7 @@ import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS, registerGoalKickoff } from "./chat-store";
 import { exportChatToFile } from "./exportChat";
 import { openPublishDialog } from "./publishDialogStore";
-import { buildGoalSetBody, goalFormPayload } from "./goalForm";
+import { buildGoalSetBody, goalFormPayload, goalSetDetail } from "./goalForm";
 import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
@@ -667,7 +667,7 @@ function openGoalForm(
         void api
           .setGoal({ ...body, kick: busy })
           .then((res) => {
-            ctx.noteToThread(`**Goal set.** ${res.message ?? ""}`.trim(), { tone: "success" });
+            ctx.noteToThread(`**Goal set.** ${goalSetDetail(res.message)}`.trim(), { tone: "success" });
             void queryClient.invalidateQueries({ queryKey: queryKeys.goals });
             if (!busy) registerGoalKickoff(sid, `Start working toward the goal: ${body.condition}`);
           })

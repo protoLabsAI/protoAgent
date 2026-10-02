@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from graph.goals.goal_turn import is_closing_call_event
 from runtime.state import STATE
 
 # Same logger as server.chat, so the moved log lines keep their channel.
@@ -356,7 +357,10 @@ def _on_chat_model_stream(st: _TurnStreamState, event: dict, name: str, parent_t
     # before the call is fully formed or executed — so the UI shows
     # "<tool> · running" instead of a bare loading wheel. Keyed by the
     # tool_call id; on_chat_model_end fills the args, on_tool_end closes it.
-    for tcc in getattr(chunk, "tool_call_chunks", None) or []:
+    # A goal's tool-less closing call (graph/middleware/goal_checkpoint.py) has its tool
+    # calls dropped — never card one, or the card would stay "running" forever.
+    closing = is_closing_call_event(event.get("metadata"))
+    for tcc in () if closing else (getattr(chunk, "tool_call_chunks", None) or []):
         tcid, tcname = tcc.get("id"), tcc.get("name")
         # A `delegate_to` gets NO tool card — it renders as an authored room
         # bubble at on_tool_end instead (#3042). Marked announced so neither this
@@ -443,7 +447,8 @@ def _on_chat_model_end(st: _TurnStreamState, event: dict, name: str, parent_tool
     # `announced_tools` is scoped to THIS turn: this pass also surfaces a card
     # for any tool the stream path didn't announce (e.g. a non-streaming model)
     # without re-emitting an early start already sent earlier this turn.
-    for tc in getattr(output, "tool_calls", None) or []:
+    closing = is_closing_call_event(event.get("metadata"))  # its tool calls are dropped
+    for tc in () if closing else (getattr(output, "tool_calls", None) or []):
         tcid = tc.get("id")
         if tcid and tc.get("name") == "delegate_to":
             st.announced_tools.add(tcid)  # room bubble, not a card (#3042)
@@ -558,6 +563,17 @@ def _on_custom_delegate_progress(st: _TurnStreamState, event: dict, name: str, p
         yield ("delegate_progress", {**data, "id": rid})
 
 
+def _on_custom_goal_probe(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
+    # The goal checkpoint (graph/middleware/goal_checkpoint.py) is running the goal's
+    # verifier mid-turn — it can take a while and nothing else streams meanwhile, so say so
+    # as a transient `goal_status` line (the executor's typed goal-status frame, like the
+    # drive's 🎯 notes — never a tool_start). Only the lead's own turn.
+    data = event.get("data")
+    text = str(data.get("text") or "") if isinstance(data, dict) else ""
+    if text and not parent_tool_id:
+        yield ("goal_status", {"text": f"🎯 {text}"})
+
+
 # `astream_events` kind → handler. Kinds not listed produce nothing (skills are no
 # longer auto-retrieved per turn — ADR 0060 progressive disclosure; the model loads one
 # on demand via the `load_skill` tool, an ordinary tool card — so there is no
@@ -574,6 +590,7 @@ _CUSTOM_EVENT_HANDLERS: dict[str, Callable[..., _Frames]] = {
     "usage": _on_custom_usage,
     "steer_consumed": _on_custom_steer_consumed,
     "delegate_progress": _on_custom_delegate_progress,
+    "goal_probe": _on_custom_goal_probe,
 }
 
 

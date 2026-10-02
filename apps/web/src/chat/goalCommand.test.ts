@@ -230,3 +230,46 @@ describe("goal kickoff waits for every owner of the next turn", () => {
     w.stop();
   });
 });
+
+// The server's set ack already starts with "Goal set." (SET_ACK_PREFIX); the note adds its
+// own bold label, so the ack's prefix is dropped — it used to read "Goal set. Goal set. …".
+describe("/goal new prints 'Goal set.' once", () => {
+  it("strips the server ack's own prefix from the note", async () => {
+    const { api } = await import("../lib/api");
+    const ack = "Goal set. goal [active] via command: 'tests pass' (iteration 0/8)";
+    vi.spyOn(api, "setGoal").mockResolvedValue({ ok: true, message: ack } as never);
+    vi.spyOn(api, "verifiers").mockRejectedValue(new Error("offline"));
+    const openForm = vi.fn();
+    const noteToThread = vi.fn();
+    findSlashCommand("goal")?.run({
+      rest: "new",
+      sessionId: "tab-8",
+      noteToThread,
+      setDraft: vi.fn(),
+      focusComposer: vi.fn(),
+      openForm,
+      flagOn: () => true,
+      serverCommands: [],
+    } as never);
+    await vi.waitFor(() => expect(openForm).toHaveBeenCalledTimes(1));
+    openForm.mock.calls[0][0].onSubmit({ condition: "tests pass", verifier: "command", verify_command: "pytest -q" });
+    await vi.waitFor(() => expect(noteToThread).toHaveBeenCalled());
+
+    const note = String(noteToThread.mock.calls[0][0]);
+    expect(note).toBe("**Goal set.** goal [active] via command: 'tests pass' (iteration 0/8)");
+    expect(note.match(/goal set/gi)).toHaveLength(1);
+    const { takeGoalKickoff } = await import("./chat-store");
+    takeGoalKickoff("tab-8");
+    vi.restoreAllMocks();
+  });
+
+  it("goalSetDetail drops only a leading ack prefix", async () => {
+    const { goalSetDetail } = await import("./goalForm");
+    expect(goalSetDetail("Goal set. goal [active] (iteration 0/8)")).toBe("goal [active] (iteration 0/8)");
+    expect(goalSetDetail("goal [active] (iteration 0/8)")).toBe("goal [active] (iteration 0/8)");
+    expect(goalSetDetail(undefined)).toBe("");
+    expect(goalSetDetail("Goal set.")).toBe("");
+    // A word that merely starts with "goal set" is not the ack's prefix.
+    expect(goalSetDetail("Goal settings saved")).toBe("Goal settings saved");
+  });
+});

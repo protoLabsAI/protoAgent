@@ -719,9 +719,9 @@ async def test_goal_kickoff_continuation_and_done_note(env, monkeypatch):
 
     assert frames == [
         ("text", "draft"),
-        ("tool_start", "🎯 1/8 — not yet"),
+        ("goal_status", {"text": "🎯 1/8 — not yet"}),
         ("text", "better"),
-        ("tool_start", "🎯 ✅ goal met"),
+        ("goal_status", {"text": "🎯 ✅ goal met"}),
         ("done", "better\n\n---\n✅ goal met"),
     ]
     assert goals.kickoffs == ["ship it"]
@@ -782,8 +782,8 @@ async def test_goal_pauses_when_the_agent_handed_off_to_a_watch(env, monkeypatch
     pause = "⏸ goal paused — handed off to a watch/schedule; will resume when it fires."
     assert frames == [
         ("text", "watching"),
-        ("tool_start", "🎯 not yet"),
-        ("tool_start", f"🎯 {pause}"),
+        ("goal_status", {"text": "🎯 not yet"}),
+        ("goal_status", {"text": f"🎯 {pause}"}),
         ("done", f"watching\n\n---\n{pause}"),
     ]
     assert len(g.stream_calls) == 1
@@ -843,10 +843,10 @@ async def test_goal_continuation_interrupt_is_auto_answered_on_an_autonomous_tur
 
     assert frames == [
         ("text", "draft"),
-        ("tool_start", "🎯 not yet"),
+        ("goal_status", {"text": "🎯 not yet"}),
         ("text", "Checking."),
         ("text", "\n\nDeployed."),
-        ("tool_start", "🎯 met"),
+        ("goal_status", {"text": "🎯 met"}),
         ("done", "Checking.\n\nDeployed.\n\n---\nmet"),
     ]
     assert g.resumes == [{"int-0": turn_control._AUTONOMOUS_HITL_SENTINEL}]
@@ -919,9 +919,9 @@ async def test_initial_passes_carried_text_does_not_leak_into_a_continuation(env
     assert frames == [
         ("text", "Checking."),
         ("text", "\n\nDeployed."),
-        ("tool_start", "🎯 not yet"),
+        ("goal_status", {"text": "🎯 not yet"}),
         ("text", "Verified."),
-        ("tool_start", "🎯 met"),
+        ("goal_status", {"text": "🎯 met"}),
         ("done", "Verified.\n\n---\nmet"),
     ]
     assert goals.evals == ["Checking.\n\nDeployed.", "Verified."]
@@ -962,7 +962,7 @@ async def test_goal_continuation_interrupt_parks_an_attended_turn_and_stops_the_
 
     assert frames == [
         ("text", "draft"),
-        ("tool_start", "🎯 not yet"),
+        ("goal_status", {"text": "🎯 not yet"}),
         ("text", "One thing:"),
         ("input_required", {"question": "Which env?"}),
     ]
