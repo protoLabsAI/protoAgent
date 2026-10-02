@@ -480,8 +480,10 @@ class AgentClient:
         The params are the **bare** ``TaskPushNotificationConfig``, not a wrapper
         request — and in A2A 1.0 that message is *flat*
         (``{tenant, id, task_id, url, token, authentication}``), so there is no
-        0.3-style ``pushNotificationConfig`` nesting. Since the dispatcher
-        ``ParseDict``s params strictly, an extra wrapper key is a ``-32602``.
+        0.3-style ``pushNotificationConfig`` nesting. Since a2a-sdk 1.2 the
+        dispatcher ignores unknown keys, so a wrapper is not refused for being
+        there: anything nested under it (token, authentication) is silently
+        dropped, and the call fails only if the top-level ``url`` is missing.
 
         The task must already exist server-side (the handler looks it up and
         raises TaskNotFound otherwise), so call this on an in-flight task —
