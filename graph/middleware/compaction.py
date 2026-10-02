@@ -26,6 +26,14 @@ two additions:
 2. **A Prometheus counter** on each real compaction (ADR 0006 — proves the
    lever fires, and how often).
 
+3. **A failing compaction never fails the turn.** The summary is a separate model
+   call made from ``before_model``; if it raises (a provider 429/5xx, a timeout, an
+   auth rejection — e.g. the anthropic-oauth fake 429 when the identity block was
+   missing), the parent's exception used to propagate out of the graph node and kill
+   the user's turn. Now it is logged loudly and the turn proceeds UNcompacted — the
+   history is untouched, and the next turn tries again. Graph control flow
+   (interrupts / ``GraphBubbleUp``) and cancellation still propagate.
+
 Telemetry and archiving are both best-effort: neither ever affects the model call.
 """
 
@@ -77,6 +85,24 @@ def _count() -> None:
         metrics.record_compaction()
     except Exception:  # noqa: BLE001 — telemetry must never break a model call
         pass
+
+
+def _is_control_flow(exc: BaseException) -> bool:
+    """Graph control-flow signals (interrupt, ParentCommand) must never be swallowed."""
+    try:
+        from langgraph.errors import GraphBubbleUp
+    except Exception:  # noqa: BLE001 — older/absent langgraph: nothing to exempt
+        return False
+    return isinstance(exc, GraphBubbleUp)
+
+
+def _log_compaction_failure(state) -> None:
+    log.warning(
+        "[compaction] summarization call FAILED for session %s — continuing the turn "
+        "WITHOUT compacting (history untouched; the next turn retries)",
+        str((state or {}).get("session_id") or "unknown"),
+        exc_info=True,
+    )
 
 
 class CountingSummarizationMiddleware(SummarizationMiddleware):
@@ -139,7 +165,13 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
     # ── hooks ────────────────────────────────────────────────────────────────
 
     def before_model(self, state, runtime):  # type: ignore[override]
-        result = super().before_model(state, runtime)
+        try:
+            result = super().before_model(state, runtime)
+        except Exception as exc:  # noqa: BLE001 — compaction must never fail the user's turn
+            if _is_control_flow(exc):
+                raise
+            _log_compaction_failure(state)
+            return None
         if result is not None:
             # The rewrite lands only when this update is RETURNED — archiving here
             # is before-commit, exactly like the manual path's ordering.
@@ -149,7 +181,13 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         return result
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
-        result = await super().abefore_model(state, runtime)
+        try:
+            result = await super().abefore_model(state, runtime)
+        except Exception as exc:  # noqa: BLE001 — compaction must never fail the user's turn
+            if _is_control_flow(exc):
+                raise
+            _log_compaction_failure(state)
+            return None
         if result is not None:
             import asyncio
 

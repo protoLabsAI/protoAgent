@@ -7,8 +7,12 @@ Anthropic's OAuth infrastructure routes on — the same set Claude Code sends:
 - ``Authorization: Bearer <token>`` (not ``x-api-key``)
 - ``anthropic-beta: claude-code-20250219,oauth-2025-04-20``
 - ``User-Agent: claude-code/<version> (external, cli)``
-- a system prompt whose FIRST block is the Claude Code identity line (added by
-  :class:`graph.middleware.claude_code_identity.ClaudeCodeIdentityMiddleware`, not here)
+- a system prompt whose FIRST block is exactly the Claude Code identity line —
+  enforced on every request body by ``_OAuthChatAnthropic._get_request_payload``
+  (:func:`shape_oauth_system`), so direct model calls that skip the middleware stack
+  (summarization, titles, distill, probes) are covered too;
+  :class:`graph.middleware.claude_code_identity.ClaudeCodeIdentityMiddleware` applies
+  the same shape earlier for the agent's main calls (visible to prompt capture)
 
 We get Bearer auth by subclassing ``ChatAnthropic`` and swapping ``api_key`` for the
 SDK's ``auth_token`` in the one place the client params are assembled. Everything else
@@ -41,6 +45,49 @@ _CLAUDE_CODE_VERSION_FALLBACK = "2.1.74"
 CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
 _version_cache: str | None = None
+
+
+def _split_leading_prefix(text: str) -> str | None:
+    """The remainder of ``text`` after a leading identity line, or None if absent.
+
+    Handles the merged ``"{prefix}\\n\\n{rest}"`` shape so an already-"prefixed"
+    prompt is REPAIRED into the exact-block shape rather than skipped as done.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith(CLAUDE_CODE_SYSTEM_PREFIX):
+        return None
+    return stripped[len(CLAUDE_CODE_SYSTEM_PREFIX) :].lstrip("\n")
+
+
+def shape_oauth_system(system: Any) -> list[Any]:
+    """Return ``system`` (Anthropic wire shape) with the identity line as its exact first block.
+
+    The single source of the OAuth system-prompt shape (ADR 0097, #2763): the FIRST
+    block must be byte-exactly :data:`CLAUDE_CODE_SYSTEM_PREFIX`, on its own, with no
+    extra keys — anything else (no system at all, a string, a merged first block) is
+    refused with a fake 429. Idempotent, never stacks the line, and keeps a merged
+    block's other keys (e.g. ``cache_control``) on the REMAINDER, not the identity line.
+    """
+    prefix_block = {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
+    if system is None or system == "" or system == []:
+        return [prefix_block]
+    if isinstance(system, str):
+        rest = _split_leading_prefix(system)
+        body = system if rest is None else rest
+        return [prefix_block] + ([{"type": "text", "text": body}] if body else [])
+    if isinstance(system, list):
+        first = system[0]
+        if first == prefix_block:
+            return list(system)
+        first_text = first.get("text", "") if isinstance(first, dict) else str(first)
+        rest = _split_leading_prefix(first_text) if isinstance(first, dict) else None
+        if rest is not None:
+            # Covers both "starts with the line + more" and "exactly the line but
+            # with extra keys" (e.g. cache_control on the identity block).
+            tail = [{**first, "text": rest}] if rest else []
+            return [prefix_block, *tail, *system[1:]]
+        return [prefix_block, *system]
+    return [prefix_block]
 
 # How long a resolved OAuth token is reused before the credential store is re-read.
 # Resolution can shell out to the macOS Keychain (`security find-generic-password`), so
@@ -154,6 +201,23 @@ try:
                 if client is not None:
                     client.auth_token = token
             log.info("[anthropic-oauth] the access token rotated — refreshed the live client")
+
+        def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict:
+            """Every request this client sends carries the exact identity first block.
+
+            Shaping lives HERE — the one place every Messages call (``invoke``/``stream``,
+            sync and async) assembles its body — not only in ``ClaudeCodeIdentityMiddleware``,
+            which sees just the agent's main model calls. Anything that calls the model
+            directly bypassed it: langchain's ``SummarizationMiddleware`` invokes it with a
+            bare string (no system at all), so with ``compaction.trigger`` set the compaction
+            call got the OAuth enforcement's fake 429 and killed the turn. Titles, memory
+            distill, judges and probes are the same shape; doing it at the client means a
+            new call site can't regress. If langchain-anthropic renames this hook,
+            ``tests/test_oauth_identity_every_call.py`` fails on the wire body.
+            """
+            payload = super()._get_request_payload(*args, **kwargs)
+            payload["system"] = shape_oauth_system(payload.get("system"))
+            return payload
 
         def _lane_key(self) -> str:
             """The ADR 0115 in-flight lane for this client: ``anthropic-oauth|<model>`` (D1,
