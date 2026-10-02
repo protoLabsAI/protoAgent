@@ -5,7 +5,7 @@
 // each test controls exactly when the module arrives.
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -23,6 +23,12 @@ vi.mock("./Markdown", async () => {
 });
 
 const SOURCE = "Done — appended:\n\n- **protoAgent** — pinned in `plugins.lock`";
+
+// vitest.setup.ts preloads the REAL LazyMarkdown for every suite; drop that instance so the
+// imports below get a fresh module wired to the gated stub.
+beforeAll(() => {
+  vi.resetModules();
+});
 
 let container: HTMLDivElement;
 let root: Root;
