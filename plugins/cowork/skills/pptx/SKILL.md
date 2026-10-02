@@ -20,6 +20,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 
 prs = Presentation()  # or Presentation(template_path) to inherit branding
+prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)  # 16:9 (the default is 4:3)
 title_slide = prs.slides.add_slide(prs.slide_layouts[0])
 title_slide.shapes.title.text = "Q3 Ops Review"
 title_slide.placeholders[1].text = "Prepared by …"
@@ -57,6 +58,7 @@ Re-open and count slides; read back the titles. Report "12 slides, saved to
 
 Once the file is written and verified, register it in the Artifact panel with
 `save_file_artifact(path, title=…)` when that tool is available (the artifact plugin, protoAgent
-v0.107.0+). It stores the bytes, shows a Download card with a readable preview (a slide outline), and keeps
+v0.107.0+). It stores the bytes, shows the deck as rendered slides (plus a text outline) with a
+Download button, and keeps
 an edit history — pass the same `artifact_id` to save a later revision as v2/v3. Report the saved
 path *and* that it's in the panel. If the tool isn't available, just report the path.

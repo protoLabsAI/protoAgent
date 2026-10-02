@@ -676,15 +676,16 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     html = art._SHELL_HTML + art._SHELL_JS
     assert "cdnjs.cloudflare.com" not in html  # no external CDN dependency
     assert "/plugins/artifact/vendor/" in html  # served same-origin
-    # all four libs present, each with an integrity hash.
+    # all five libs present, each with an integrity hash.
     for lib in (
         "mermaid.min.js",
         "react.production.min.js",
         "react-dom.production.min.js",
         "babel.min.js",
+        "pptx-renderer.min.js",
     ):
         assert lib in html
-    assert html.count("sha512-") == 4 and 'integrity="' in html
+    assert html.count("sha512-") == 5 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html
@@ -1091,7 +1092,7 @@ def test_save_file_artifact_registered_and_shell_has_filecard(monkeypatch, tmp_p
     assert "save_file_artifact" in names
     # the shell renders file kinds as a download card, hides Edit, and downloads via the blob route
     html = art._SHELL_HTML + art._SHELL_JS
-    assert "function fileCard(v)" in html
+    assert "function fileCard(v, note)" in html
     assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)' in html
     assert "/blob?version=" in html
 

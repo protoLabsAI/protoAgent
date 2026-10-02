@@ -7,3 +7,9 @@
 # true` per clone) so an upstream sync keeps YOUR curated changelog instead of
 # splicing upstream's whole changelog back in. See docs/guides/upstream-sync.md.
 CHANGELOG.md merge=union
+
+# Vendored artifact libs are SRI-pinned in plugins/artifact/shell.js (sha512 of the exact
+# bytes). Never let a checkout rewrite them: autocrlf on a Windows clone (the desktop build's
+# source) would turn LF into CRLF, change the hash, and the sandbox would refuse to run the
+# lib — slides/mermaid/react silently blank on Windows only.
+plugins/artifact/vendor/** -text -diff

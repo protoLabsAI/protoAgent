@@ -147,7 +147,8 @@ When a skill writes a real **file** to disk — a Word doc, a spreadsheet, a sli
 image — call **`save_file_artifact(path, title?, artifact_id?)`** right after, to put it in the Artifact panel as
 a **versioned download artifact**: the bytes are stored, a readable text preview is extracted
 (docx→text, xlsx→sheet table, pptx→slide outline, pdf→text; images get a thumbnail), and the panel
-shows a download card. Re-saving the same document as a new revision? Pass the prior
+shows a download card. A `.pptx` deck is shown as its **real slides** (a large current slide plus a
+filmstrip, arrow keys to page), with the outline kept underneath. Re-saving the same document as a new revision? Pass the prior
 `artifact_id` so it becomes v2, v3… of the same artifact instead of a new panel entry.
 
 ```text

@@ -154,6 +154,41 @@ are injected into every `html` / `react` / `markdown` artifact (via the host-ser
 `/_ds/plugin-kit.css`), so even plain elements (`className="pl-btn pl-btn--primary"`) follow the
 live theme — reach for a raw element with `className="pl-…"` for any component `@pl/ui` doesn't wrap.
 
+## Slide decks (.pptx)
+
+A `.pptx` saved with `save_file_artifact` previews as its **real slides**, not a text dump: a large
+current slide sized to the panel with a filmstrip under it. Arrow keys / PageUp / PageDown / Home /
+End page through it, clicking the slide advances (its left third goes back), and the filmstrip
+thumbnails jump. Slides are laid out as HTML/SVG, so text stays sharp at any width; the
+filmstrip only lays out the thumbnails near the visible strip, so a 300-slide deck opens as fast
+as a 6-slide one. The text outline stays under the slides (collapsed) for screen readers and
+copy-paste, and is the whole view when a deck can't be rendered.
+
+The renderer is [`@aiden0z/pptx-renderer`](https://github.com/aiden0z/pptx-renderer) 1.3.0
+(Apache-2.0; bundles JSZip, ECharts/ZRender and the MPL-2.0 `mtx-decompressor`, notices in
+`vendor/pptx-renderer.LICENSES.txt`), vendored as `vendor/pptx-renderer.min.js` and SRI-pinned like
+the other UMD libs. It supports theme colours and fonts, placeholders and master/layout
+inheritance, bullets, tables, images, preset shapes, gradients, charts and SmartArt fallbacks.
+Fonts a deck names but the machine lacks fall back to a system font, and EMF/WMF vector art without
+an embedded preview is not drawn.
+
+**Hostile files.** The deck renders inside the same no-same-origin sandbox as every artifact,
+under a nonce Content-Security-Policy (no inline handlers, no `javascript:` URLs, `connect-src
+'none'`, images/fonts/media from `blob:`/`data:` only), and only plain `http(s)` links keep an
+`href` (the sandbox can't open them anyway). The frame can't authenticate, so the shell fetches the
+gated blob and transfers the bytes in — and only for a version the save-time preflight
+**cleared**. That preflight (`_slides.py`) doesn't trust the zip's declared sizes: it inflates
+every entry's raw stream in bounded chunks against a running byte budget and a 15 s clock, then
+requires the real size and CRC to match the declared ones (a header that lies is a tampered
+zip). Its verdict is stamped on the version as `file.slides`, so a view never re-inflates
+anything; a refused deck, or one saved before slide previews existed, shows the outline. Caps
+(`PPTX_CAPS` in `shell.js` mirrors them, drift-guarded): 40 MB file, 4000 entries, 32 MB per
+inflated entry, 256 MB inflated in total, a 200:1 compression ratio on big entries, 1000 slides,
+50 megapixels per image and 150 MP across the deck (images past either become placeholders, never
+decoded). The frame re-applies them on its own inflate, one entry at a time so the first cap hit
+stops it, with a 20 s parse budget; a 45 s shell watchdog swaps in the outline card if the frame
+never answers.
+
 ## Configuration
 
 The operator-facing knobs are **Settings ▸ Plugins ▸ Artifact** fields (no restart) — and an
@@ -229,7 +264,7 @@ the page announces it is listening (`protoagent:ready`), targeted at the page's 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no
 > outbound network at all (`capabilities.network: []` is literally true):
-> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid (`*.min.js`). Pinned with **Subresource
+> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, and the `.pptx` slide renderer (`*.min.js`). Pinned with **Subresource
 >   Integrity** (`integrity` + `crossorigin="anonymous"` — required because the sandbox is an opaque
 >   origin, so the load is cross-origin); a tampered served file won't execute. To bump one, replace
 >   the file, recompute its `sha512`, and update the `LIB` map in the shell page.
