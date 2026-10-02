@@ -112,6 +112,29 @@ def _text_offset_meta(accumulated: str) -> dict[str, int]:
     return {TEXT_OFFSET_META: len(accumulated.encode("utf-16-le")) // 2}
 
 
+# What the offsets were measured AGAINST, stamped on the terminal answer artifact: the
+# streamed text's UTF-16 length + an FNV-1a hash of its UTF-16 code units. The stored
+# answer is not always that text — a goal drive's `done` carries only the last pass plus
+# the goal note, and output extraction strips — so an offset from an earlier pass can
+# land mid-word in it. The console interleaves only when the stored answer STARTS WITH
+# exactly the measured text (same length prefix, same hash); otherwise it falls back to
+# the old order (frames, then text).
+TEXT_FINGERPRINT_META = "protoagent/textFingerprint"
+
+
+def _utf16_fnv1a(text: str) -> int:
+    data = text.encode("utf-16-le")
+    h = 0x811C9DC5
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def _text_fingerprint_meta(measured: str) -> dict[str, dict[str, int]]:
+    return {TEXT_FINGERPRINT_META: {"length": len(measured.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(measured)}}
+
+
 class TurnStalled(RuntimeError):
     """The agent stream produced no event for the whole stall window.
 
@@ -817,6 +840,8 @@ class ProtoAgentExecutor(AgentExecutor):
             # but no text/context part must still emit the artifact (it would previously
             # have had a cost DataPart keeping `parts` non-empty).
             if parts or ext_meta:
+                if accumulated:
+                    ext_meta = {**(ext_meta or {}), **_text_fingerprint_meta(accumulated)}
                 await updater.add_artifact(
                     parts,
                     artifact_id=answer_aid,

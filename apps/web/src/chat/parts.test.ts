@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { lastOperatorAssistantId, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, renderedPrefixEnd, rendersText, replaceText, splitRevealChunks, textRuns, toolsForGroup } from "./parts";
+import { lastOperatorAssistantId, paragraphBreakOutsideFence, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, renderedPrefixEnd, rendersText, replaceText, splitRevealChunks, textRuns, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -219,6 +219,31 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "All good.\n\nMore." },
     ]);
+  });
+
+  it("never splits INSIDE a fenced code block: the fence closes above the card, the rest goes below", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Run" }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Run this:\n```py\na = 1\n\nb = 2\n```\n\nDone.")).toEqual([
+      { kind: "text", text: "Run this:\n```py\na = 1\n\nb = 2\n```" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Done." },
+    ]);
+  });
+
+  it("a shown run that ends INSIDE an open fence keeps continuing it, even across a blank line", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Run this:\n```py\na = 1" }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Run this:\n```py\na = 1\n\nb = 2\n```\n\nDone.")).toEqual([
+      { kind: "text", text: "Run this:\n```py\na = 1\n\nb = 2\n```" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Done." },
+    ]);
+  });
+
+  it("paragraphBreakOutsideFence skips breaks inside ``` and ~~~ fences", () => {
+    expect(paragraphBreakOutsideFence("a\n\nb", 0)).toBe(1);
+    expect(paragraphBreakOutsideFence("```\na\n\nb\n```\n\nc", 0)).toBe(12);
+    expect(paragraphBreakOutsideFence("~~~\na\n\nb", 0)).toBe(-1);
+    expect(paragraphBreakOutsideFence("a\n\nb\n\nc", 2)).toBe(4);
   });
 
   it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {

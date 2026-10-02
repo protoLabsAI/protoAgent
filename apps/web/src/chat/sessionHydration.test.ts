@@ -21,6 +21,7 @@ import {
 import { MAX_SESSIONS } from "./chat-store";
 import { applyText, applyToolEvent } from "./turnReducers";
 import { foldPlan, textRuns } from "./parts";
+import { utf16Fnv1a } from "../lib/api/a2aStream";
 import { applyCanonicalTurnText } from "./turnText";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
@@ -1323,9 +1324,12 @@ describe("parked sessions survive the hydration cap (#3957)", () => {
 // and the replay slices the text back into stream order.
 describe("durable replay keeps stream order — the pre-tool sentence stays the lead", () => {
   const OFFSET = "protoagent/textOffset";
+  const FINGERPRINT = "protoagent/textFingerprint";
   const SENTENCE = "I am protoAgent 👋, a desktop agent.";
   const ANSWER = `${SENTENCE}\n\nDone — noted.`;
   const at = SENTENCE.length; // JS string length — UTF-16 units, emoji counts twice
+  // A finished turn's answer artifact proves what the offsets were measured against.
+  const fp = (measured: string) => ({ [FINGERPRINT]: { length: measured.length, fnv1a: utf16Fnv1a(measured) } });
   const history = (withOffsets: boolean) => [
     { role: "ROLE_USER", parts: [{ text: "Say hi, then note it." }] },
     {
@@ -1345,7 +1349,7 @@ describe("durable replay keeps stream order — the pre-tool sentence stays the 
 
   it("a settled reload: [reasoning, sentence, tools, answer] — the sentence leads, nothing doubled", () => {
     const [, assistant] = messagesFromDurableTurn(
-      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(true) }),
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }], metadata: fp(ANSWER) }], history: history(true) }),
     );
     expect(assistant.parts).toEqual([
       { kind: "reasoning", text: "plan" },
@@ -1388,8 +1392,45 @@ describe("durable replay keeps stream order — the pre-tool sentence stays the 
     (h[2].metadata as Record<string, unknown>)[OFFSET] = 9999;
     (h[3].metadata as Record<string, unknown>)[OFFSET] = 9999;
     const [, assistant] = messagesFromDurableTurn(
-      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: h }),
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }], metadata: fp(ANSWER) }], history: h }),
     );
     expect(textRuns(assistant.parts).join("")).toBe(ANSWER);
+  });
+
+  it("a GOAL turn whose stored answer is not the streamed text never splits a word (falls back)", () => {
+    // Pass 1 streamed "Let me check the config." and called t1 at offset 24; the stored answer
+    // is only the last pass + the goal note. Offset 24 would cut it mid-word
+    // ("The config is fine and v" | tools | "erified…") — the fingerprint of the MEASURED
+    // text doesn't match the stored text's prefix, so the replay keeps the old order.
+    const streamed = "Let me check the config.The config is fine and verified.";
+    const stored = "The config is fine and verified.\n\n---\n🎯 Goal met";
+    const [, assistant] = messagesFromDurableTurn(
+      turn({
+        text: stored,
+        artifacts: [{ parts: [{ text: stored }], metadata: fp(streamed) }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "/goal verify the config" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "t1", name: "read_file", phase: "started", args: "{}" }, [OFFSET]: 24 } },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "t1", name: "read_file", phase: "completed", result: "ok" }, [OFFSET]: 24 } },
+        ],
+      }),
+    );
+    expect(assistant.parts).toEqual([
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: stored },
+    ]);
+  });
+
+  it("hashes UTF-16 code units exactly like the executor (_utf16_fnv1a parity constants)", () => {
+    expect(utf16Fnv1a("")).toBe(2166136261);
+    expect(utf16Fnv1a("I am protoAgent 👋, a desktop agent.")).toBe(3055660355);
+    expect(utf16Fnv1a("Let me check the config.")).toBe(2152712979);
+  });
+
+  it("a finished turn with offsets but NO fingerprint keeps the old order", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(true) }),
+    );
+    expect(assistant.parts?.map((p) => p.kind)).toEqual(["reasoning", "tools", "text"]);
   });
 });
