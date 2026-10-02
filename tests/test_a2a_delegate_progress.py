@@ -4,7 +4,9 @@ The ACP half feeds ``graph.delegate_progress`` from a coder's ``session/update``
 the A2A half: when a peer's agent card advertises streaming, the adapter follows the task
 it handed over on ``SubscribeToTask`` (SSE) and translates the peer's frames — tool-call-v1
 extension frames, status text, a nested delegation's plan, produced artifacts — into the
-same three feeds. Never the answer artifact's text: that is the reply, the chat's to render. The poll still owns the answer; the stream only observes (and wakes the poll
+same three feeds. The answer artifact's text feeds the tracker too (a protoAgent peer's
+narration lives there), and the tracker shows only what a later tool call follows — never
+the final answer, which is the chat's to render. The poll still owns the answer; the stream only observes (and wakes the poll
 early when it sees the task settle).
 
 Pinned two ways: the frame translation on crafted frames, and the whole path against a
@@ -83,7 +85,7 @@ async def test_tool_call_frames_become_tool_events_with_a_location_from_the_args
     assert tools[3]["status"] == "failed"
 
 
-async def test_status_text_plan_and_produced_artifacts_map_but_answer_text_never_does():
+async def test_text_plan_and_artifacts_map_and_a_canonical_replace_is_not_doubled():
     rec = _Recorder()
     feed = A2AProgressFeed(rec)
     await feed.frame(_status(parts=[{"text": "Looking at the repo."}]))
@@ -91,17 +93,65 @@ async def test_status_text_plan_and_produced_artifacts_map_but_answer_text_never
     await feed.frame(
         _status(parts=[{"data": nested, "metadata": {"mimeType": "application/vnd.protolabs.delegate-progress-v1+json"}}])
     )
-    # The answer artifact streaming in (first chunk, appends, the terminal re-send): the
-    # reply itself — the chat renders it; the card never sees a word of it.
-    await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": "All"}]}}})
+    await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": " All"}]}}})
     await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " Done"}]}}})
+    # The terminal frame re-sends the WHOLE answer with append=false — already streamed.
     await feed.frame({"artifactUpdate": {"append": False, "artifact": {"artifactId": "ans", "parts": [{"text": "All Done"}]}}})
     await feed.frame({"artifactUpdate": {"artifact": {"name": "report.pdf", "artifactId": "a1", "parts": [{"url": "x"}]}}})
-    assert rec.text == "Looking at the repo."
+    assert rec.text == "Looking at the repo. All Done"
     assert ("plan", nested["plan"]) in rec.calls
     produced = [e for kind, e in rec.calls if kind == "tool" and e["id"] == "artifact:a1"]
     assert [e["phase"] for e in produced] == ["start", "end"] and produced[0]["name"] == "produced report.pdf"
     assert not feed.settled.is_set()
+
+
+async def test_protoagent_peer_narration_before_a_tool_reaches_the_card():
+    """The real executor shape (a2a_impl/executor.py): ALL reply text — narration and
+    answer — streams into the answer artifact, flushed BEFORE each tool frame; status
+    messages carry no text. The narration a tool call follows shows; the answer doesn't."""
+    sent = []
+
+    async def sink(s):
+        sent.append(s)
+
+    t = dp.DelegateProgress("peer", sink, min_interval=0.0)
+    feed = A2AProgressFeed(t)
+    await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": "I'll check the tests first."}]}}})
+    await feed.frame(_status(meta=_tool("started", "c1", "run_command")))
+    await feed.frame(_status(meta=_tool("completed", "c1", "run_command")))
+    await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": " All pass."}]}}})
+    await t.finish(ok=True)
+    assert any("check the tests" in s["text"] for s in sent), [s["text"] for s in sent]
+    assert not any("All pass" in s["text"] for s in sent)
+    assert sent[-1]["done"] is True and sent[-1]["text"] == "I'll check the tests first."
+
+
+async def test_an_answer_streamed_in_many_appends_after_the_last_tool_never_shows():
+    """Checked after EVERY frame, not just at the end: the answer must not appear on the
+    card while it streams, nor in the done snapshot."""
+    sent = []
+
+    async def sink(s):
+        sent.append(s)
+
+    t = dp.DelegateProgress("peer", sink, min_interval=0.0)
+    feed = A2AProgressFeed(t)
+    await feed.frame({"artifactUpdate": {"artifact": {"artifactId": "ans", "parts": [{"text": "Running them."}]}}})
+    await feed.frame(_status(meta=_tool("started", "c1", "run_command")))
+    await feed.frame(_status(meta=_tool("completed", "c1", "run_command")))
+    words = [f" word{i}" for i in range(60)]
+    for w in words:
+        await feed.frame({"artifactUpdate": {"append": True, "artifact": {"artifactId": "ans", "parts": [{"text": w}]}}})
+        assert not any("word" in s["text"] for s in sent), "the answer reached the card mid-stream"
+        assert "word" not in t.snapshot()["text"]
+    await feed.frame(
+        {"artifactUpdate": {"append": False, "artifact": {"artifactId": "ans", "parts": [{"text": "Running them." + "".join(words)}]}}}
+    )
+    await feed.frame(_status("TASK_STATE_COMPLETED"))
+    await t.finish(ok=True)
+    assert not any("word" in s["text"] for s in sent)
+    assert sent[-1]["done"] is True and sent[-1]["text"] == "Running them."
+    assert [r["name"] for r in sent[-1]["recent_tools"]] == ["run_command"]
 
 
 async def test_an_answer_artifact_stream_puts_no_text_on_the_card_but_tools_and_plan_still_do(monkeypatch):
