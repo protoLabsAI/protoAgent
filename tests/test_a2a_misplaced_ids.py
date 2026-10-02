@@ -173,3 +173,22 @@ async def test_a_well_formed_streaming_send_still_streams_through_the_guard():
     assert r.headers["content-type"].startswith("text/event-stream")
     assert "hello world" in r.text
     assert seen == ["ctx-3"]
+
+
+@pytest.mark.asyncio
+async def test_refusal_echoes_only_a_valid_json_rpc_id():
+    r = await _post(
+        _app([]),
+        {"jsonrpc": "2.0", "id": {"not": "an id"}, "method": "SendMessage", "params": {"contextId": "c", "message": _v1_message()}},
+        _V1,
+    )
+    body = r.json()
+    assert body["error"]["code"] == -32602
+    assert body["id"] is None
+
+
+def test_the_guard_keeps_the_openapi_operation_and_request_body():
+    paths = _app([]).openapi()["paths"]
+    post = paths["/a2a"]["post"]
+    assert post["operationId"] == "handle_requests_a2a_post"  # unchanged by the wrapper
+    assert not any(p.get("name") == "request" for p in post.get("parameters", []))  # not a query param

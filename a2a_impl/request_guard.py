@@ -16,9 +16,15 @@ a plain Starlette mount serves ``route.app``, which is rebuilt from the wrapped 
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 from typing import Any
+
+# Module level, not inside the wrapper: with postponed annotations FastAPI resolves the
+# endpoint's ``request: Request`` from module globals when it builds the OpenAPI schema.
+from starlette.requests import Request
+from starlette.responses import Response
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +50,9 @@ def misplaced_id_keys(payload: Any) -> list[str]:
 
 def _refusal(request_id: Any, keys: list[str]) -> bytes:
     names = ", ".join(keys)
+    # Echo only what JSON-RPC allows as an id, as the SDK does (anything else → null).
+    if isinstance(request_id, bool) or not isinstance(request_id, (str, int)):
+        request_id = None
     return json.dumps(
         {
             "jsonrpc": "2.0",
@@ -62,17 +71,17 @@ def _refusal(request_id: Any, keys: list[str]) -> bytes:
 def guard_misplaced_ids(endpoint: Any) -> Any:
     """Wrap a JSON-RPC route's ``endpoint`` (``async (Request) -> Response``) with the
     misplaced-id refusal. The body is read once here; Starlette caches it on the request,
-    so the stock endpoint reads the identical bytes."""
-    from starlette.requests import Request
-    from starlette.responses import Response
+    so the stock endpoint reads the identical bytes. ``functools.wraps`` keeps the SDK
+    endpoint's name (so the OpenAPI operationId is unchanged) and signature."""
 
+    @functools.wraps(endpoint)
     async def guarded(request: Request) -> Response:
         if request.method == "POST":
             body = await request.body()
             try:
                 payload = json.loads(body) if body else None
-            except ValueError:
-                payload = None  # the SDK owns parse errors (-32700)
+            except (ValueError, RecursionError):
+                payload = None  # the SDK owns parse and nesting errors
             keys = misplaced_id_keys(payload)
             if keys:
                 log.info("[a2a] refused %s with %s on params (belongs on params.message)", payload.get("method"), keys)
@@ -81,5 +90,4 @@ def guard_misplaced_ids(endpoint: Any) -> Any:
         return await endpoint(request)
 
     guarded._protoagent_misplaced_id_guard = True  # type: ignore[attr-defined]
-    guarded.__wrapped__ = endpoint  # type: ignore[attr-defined]
     return guarded
