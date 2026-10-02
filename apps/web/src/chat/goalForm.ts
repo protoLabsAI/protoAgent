@@ -275,6 +275,16 @@ export function verifierLabel(verifier?: Record<string, unknown> | null): string
   return t;
 }
 
+/** The detail of a `POST /api/goals` ack, without its leading "Goal set." — the server's
+ *  ack (`graph/goals/controller.py` SET_ACK_PREFIX) already starts with it, and every
+ *  console host prints its own "Goal set" label (the `/goal new` note, the panel toasts),
+ *  so passing the message through verbatim read "Goal set. Goal set. goal [active] …". */
+export function goalSetDetail(message: string | undefined | null): string {
+  return String(message ?? "")
+    .replace(/^\s*goal set\.?\s*/i, "")
+    .trim();
+}
+
 /** Map the HitlForm answers → the `POST /api/goals` body for `session_id`. Returns `null`
  *  when there is no condition (the one required field) so callers can no-op rather than POST
  *  an unsatisfiable goal. Empty contract fields are omitted (backward-compatible). */

@@ -7,6 +7,11 @@ one turn). LangChain's ``create_agent`` has no built-in "a tool ended the turn"
 signal, so this middleware provides it: once ``wait`` has run, the next
 ``before_model`` jumps straight to ``end`` instead of looping back to the model.
 
+It is also where a GOAL-DRIVEN turn ends once the goal's verifier passes mid-turn
+(``graph.middleware.goal_checkpoint``): probed right after the agent records its plan, so
+a turn that already met its goal doesn't run on re-announcing "already complete". Async
+hook only — the verifier is async.
+
 Detection is precise — it only fires when a ``wait`` ToolMessage sits in the
 trailing tool-result block (i.e. ``wait`` just ran in *this* turn). On a fresh
 turn the last message is the new stimulus, so it's a no-op; it never short-
@@ -17,6 +22,8 @@ from __future__ import annotations
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import ToolMessage
+
+from graph.middleware.goal_checkpoint import goal_met_after_plan
 
 WAIT_TOOL_NAME = "wait"
 
@@ -51,5 +58,7 @@ class WaitYieldMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["end"])
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         if _just_waited(state.get("messages") or []):
+            return {"jump_to": "end"}
+        if await goal_met_after_plan(state):
             return {"jump_to": "end"}
         return None

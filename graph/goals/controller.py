@@ -45,6 +45,10 @@ _HISTORY_CAP = 50
 # to decide whether to KICK an initial goal-driven turn (#1910) — see ``is_set_ack``.
 SET_ACK_PREFIX = "Goal set. "
 
+# Verifier types the mid-turn probe (``GoalController.probe``) may run: the mechanical ones.
+# ``llm`` judges the turn's final text and costs a model call, so it waits for the turn to end.
+_PROBE_TYPES = frozenset({"command", "test", "ci", "data", "plugin"})
+
 # Appended to every kickoff + continuation prompt (ADR 0079): point the drive loop at the full
 # toolkit so it composes goals with tasks/watches/scheduling instead of spinning. The system
 # prompt carries the full operating model; this is the goal-loop-specific reminder.
@@ -442,16 +446,7 @@ class GoalController:
         # 1. Run the verifier first — ground truth overrides the model's
         # self-assessment. If the external world already satisfies the goal,
         # a same-turn abandon_goal give-up must not mask that.
-        ctx = VerifyContext(
-            config=self._config,
-            condition=state.condition,
-            last_text=last_text or "",
-            tool_summary=tool_summary or "",
-            cwd=os.getcwd(),
-            # A goal is keyed by its session (one per session), so id == session_id (#1641).
-            invoker=VerifierInvoker(kind="goal", id=state.session_id, session_id=state.session_id),
-        )
-        result = await run_verifier(state.verifier, ctx)
+        result = await run_verifier(state.verifier, self._verify_ctx(state, last_text, tool_summary))
 
         if result.met:
             return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
@@ -520,6 +515,39 @@ class GoalController:
             message=self._continuation(state, result),
             note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
         )
+
+    def _verify_ctx(self, state: GoalState, last_text: str = "", tool_summary: str = "") -> VerifyContext:
+        return VerifyContext(
+            config=self._config,
+            condition=state.condition,
+            last_text=last_text or "",
+            tool_summary=tool_summary or "",
+            cwd=os.getcwd(),
+            # A goal is keyed by its session (one per session), so id == session_id (#1641).
+            invoker=VerifierInvoker(kind="goal", id=state.session_id, session_id=state.session_id),
+        )
+
+    async def probe(self, session_id: str):
+        """Run the active goal's verifier MID-TURN without touching the goal state — no
+        iteration, no history, no events. The goal-checkpoint middleware calls it when the
+        agent records its plan, so a turn that already met the goal ends there instead of
+        narrating "the goal is already complete" for several more rounds before the
+        post-turn ``evaluate`` (which still decides, and records, the outcome).
+
+        Only the mechanical verifier types are probed: the ``llm`` judge reads the turn's
+        final text (which doesn't exist yet) and costs a model call. Returns the
+        ``VerifyResult``, or ``None`` when there is nothing to probe. Never raises."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return None
+        vtype = (state.verifier or {}).get("type", "llm")
+        if vtype not in _PROBE_TYPES:
+            return None
+        try:
+            return await run_verifier(state.verifier, self._verify_ctx(state))
+        except Exception:  # noqa: BLE001 — a probe is advisory; evaluate() is the ground truth
+            log.warning("[goal] mid-turn verifier probe failed for %s", session_id, exc_info=True)
+            return None
 
     @staticmethod
     def _record_history(state: GoalState, status: str, reason: str, evidence: str) -> None:
