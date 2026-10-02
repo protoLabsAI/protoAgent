@@ -602,7 +602,16 @@ async def _bill_peer_usage(result, delegate: str) -> None:
             return
         from langchain_core.callbacks import adispatch_custom_event
 
-        await adispatch_custom_event("usage", dict(row))
+        try:
+            await adispatch_custom_event("usage", dict(row))
+        except RuntimeError:
+            # No LangChain run to attach the event to. An `@<name>` address is the case
+            # that matters (#4004): it short-circuits the lead graph, so the turn has no
+            # run — but the pre-turn chain binds the same collector a `/<subagent>` run
+            # bills through (#3957). With nothing bound (the CLI runner) this is a no-op.
+            from graph import delegation_usage
+
+            delegation_usage.note([row])
     except Exception:  # noqa: BLE001 — telemetry must never break a delegation
         logger.debug("[delegates] peer usage row not billed to the turn stream", exc_info=True)
 
