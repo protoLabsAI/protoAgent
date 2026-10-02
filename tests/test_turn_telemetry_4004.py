@@ -155,23 +155,40 @@ def test_summary_by_model_leaves_out_turns_no_model_ran(env):
          total_tokens=755, output_tokens=55, cost_usd=0.0123, duration_ms=90_000)
     # A lead turn that also delegated keeps its place in its lane.
     _row(env, "lead+peer", models="claude-opus-5-5,peer:orbis")
+    # A resumed turn can re-run delegate_to BEFORE its lead model calls (batched approval,
+    # autostart consent): the peer arrives first, but the lead model still ran.
+    _row(env, "peer-then-lead", models="peer:orbis,claude-opus-5-5")
+    # Two peers and no lead model is still a turn no model of this agent ran.
+    _row(env, "two-peers", models="peer:orbis,peer:hermes", input_tokens=10,
+         cache_read_input_tokens=0, total_tokens=12, output_tokens=2, cost_usd=0.001)
 
     s = env.summary()
 
     (lane,) = s["by_model"]
     assert lane["model"] == "claude-opus-5-5"
-    assert lane["turns"] == 2  # metered + lead+peer
+    assert lane["turns"] == 3  # metered + lead+peer + peer-then-lead
     assert lane["p95_duration_ms"] == 2000  # the 300 s mention wait is not this model's latency
     assert lane["cache_hit_ratio"] == round(1000 / 1100, 4)
-    assert s["no_model_turns"] == 2
+    assert s["no_model_turns"] == 3  # mention + peer-only + two-peers
     # The whole-store totals still count every turn and every dollar.
-    assert s["turns"] == 4
-    assert s["cost_usd"] == pytest.approx(0.0323)
+    assert s["turns"] == 6
+    assert s["cost_usd"] == pytest.approx(0.0433)
 
 
 def test_a_failed_first_call_stays_in_its_lane(env):
     """A turn whose first call was rejected (#3957) did try that model — it is the lane's."""
     _row(env, "rejected", state="failed", success=0, models="", llm_calls=0, input_tokens=0,
+         output_tokens=0, total_tokens=0, cache_read_input_tokens=0, cost_usd=0.0)
+
+    s = env.summary()
+
+    assert [m["model"] for m in s["by_model"]] == ["claude-opus-5-5"]
+    assert s["no_model_turns"] == 0
+
+
+def test_a_canceled_zero_usage_turn_stays_in_its_lane(env):
+    """Canceled mid-stream before usage landed looks like "no model ran" — keep it visible."""
+    _row(env, "canceled", state="canceled", success=0, models="", llm_calls=0, input_tokens=0,
          output_tokens=0, total_tokens=0, cache_read_input_tokens=0, cost_usd=0.0)
 
     s = env.summary()

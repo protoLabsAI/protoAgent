@@ -66,18 +66,24 @@ _OUTLIER_MIN_COHORT = 3
 #: rows are excluded from it — see the function's docstring for why they have to be (#3041).
 _ALL_PRICED = "all priced turns"
 
-#: SQL predicate: a resolved turn on which no model of this agent reported usage (#4004).
-#: `models` is the comma-joined list of models that reported usage, in call order. A row
-#: with no models, no calls and no spend recorded nothing at all; a leading `peer:` marker
-#: (`tools.a2a_parse.PEER_MODEL_PREFIX`, #3016) means the first spend was a peer's — a lead
-#: model always calls before any `delegate_to`, so such a row is an `@<name>` address
-#: billed with the peer's own numbers. A FAILED turn stays in its lane: one rejected on
-#: its first call did try that model.
+#: SQL predicate: a COMPLETED turn on which no model of this agent ran (#4004).
+#: `models` is the comma-joined list of models that reported usage, in arrival order. A
+#: row with no models, no calls and no spend recorded nothing at all; a row whose EVERY
+#: entry carries the `peer:` marker (`tools.a2a_parse.PEER_MODEL_PREFIX`, #3016) was billed
+#: only with a peer's own numbers — an `@<name>` address. "Every", not "the first": a
+#: resumed turn (a batched approval, autostart consent) can re-run `delegate_to` before
+#: its lead model calls, so `peer:x,claude-…` is a real lead turn and stays in its lane.
+#: The entry count equals the `,peer:` count exactly when all entries are peers.
+#: Only completed turns qualify: a FAILED turn whose first call was rejected did try that
+#: model, and a CANCELED one may have been cut off mid-stream before usage landed, so both
+#: stay visible in their lane as zero-token samples rather than vanishing.
 _NO_MODEL_RAN = (
-    "(COALESCE(state, '') != 'failed' AND ("
+    "(COALESCE(state, '') = 'completed' AND ("
     "(COALESCE(models, '') = '' AND COALESCE(llm_calls, 0) = 0"
     " AND COALESCE(total_tokens, 0) = 0 AND COALESCE(cost_usd, 0) = 0)"
-    " OR COALESCE(models, '') LIKE 'peer:%'))"
+    " OR (COALESCE(models, '') != ''"
+    " AND LENGTH(models) - LENGTH(REPLACE(models, ',', '')) + 1"
+    " = (LENGTH(',' || models) - LENGTH(REPLACE(',' || models, ',peer:', ''))) / 6)))"
 )
 
 
