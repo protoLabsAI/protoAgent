@@ -840,8 +840,10 @@ class ProtoAgentExecutor(AgentExecutor):
             # but no text/context part must still emit the artifact (it would previously
             # have had a cost DataPart keeping `parts` non-empty).
             if parts or ext_meta:
-                if accumulated:
-                    ext_meta = {**(ext_meta or {}), **_text_fingerprint_meta(accumulated)}
+                # rstrip: the stored answer is `extract_output(...).strip()`, so a streamed
+                # trailing newline must not make a normal turn's fingerprint miss.
+                if accumulated.rstrip():
+                    ext_meta = {**(ext_meta or {}), **_text_fingerprint_meta(accumulated.rstrip())}
                 await updater.add_artifact(
                     parts,
                     artifact_id=answer_aid,

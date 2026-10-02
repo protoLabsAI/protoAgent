@@ -246,6 +246,20 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
     expect(paragraphBreakOutsideFence("a\n\nb\n\nc", 2)).toBe(4);
   });
 
+  it("a ```` fence wrapping an inner ``` block with a blank line is NOT closed by the inner fence (CommonMark lengths)", () => {
+    const md = "````md\n```py\na = 1\n\nb = 2\n```\n````\n\nDone.";
+    expect(paragraphBreakOutsideFence(md, 0)).toBe(md.indexOf("\n\nDone."));
+    const p: ChatPart[] = [{ kind: "text", text: "Example" }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, `Example:\n${md}`)).toEqual([
+      { kind: "text", text: "Example:\n````md\n```py\na = 1\n\nb = 2\n```\n````" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Done." },
+    ]);
+    // A different char never closes it either, nor a fence line with an info string.
+    expect(paragraphBreakOutsideFence("```\n~~~\n\nx\n```\n\ny", 0)).toBe(14);
+    expect(paragraphBreakOutsideFence("```\n```py\n\nx\n```\n\ny", 0)).toBe(16);
+  });
+
   it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {
     expect(replaceText(undefined, "full answer")).toEqual([{ kind: "text", text: "full answer" }]);
   });

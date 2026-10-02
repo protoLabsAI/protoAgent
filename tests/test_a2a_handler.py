@@ -1642,3 +1642,34 @@ async def test_goal_style_turn_fingerprints_the_streamed_text_not_the_stored_ans
     assert _utf16_fnv1a(stored[: int(fp["length"])]) != int(fp["fnv1a"])  # the console sees a mismatch → fallback
     tools = [m for m in final.get("history") or [] if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
     assert {m["metadata"][TEXT_OFFSET_META] for m in tools} == {24}
+
+
+@pytest.mark.asyncio
+async def test_normal_turn_fingerprint_matches_the_stripped_stored_answer():
+    """The stored answer is `extract_output(...).strip()`, so a streamed trailing newline
+    must not make a NORMAL turn's fingerprint miss — that would silently drop every settled
+    reload back to the old order. The fingerprint covers `accumulated.rstrip()`, which the
+    stored answer starts with exactly."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, _utf16_fnv1a
+
+    streamed = "Let me check the config.\n\nAll good.\n"
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "Let me check the config.")
+        yield ("tool_start", {"id": "t1", "name": "read_file", "input": "{}"})
+        yield ("tool_end", {"id": "t1", "name": "read_file", "output": "ok"})
+        yield ("text", "\n\nAll good.\n")
+        yield ("done", streamed.strip())
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    art = final["artifacts"][0]
+    stored = art["parts"][0]["text"]
+    fp = art["metadata"][TEXT_FINGERPRINT_META]
+    length = int(fp["length"])
+    assert length == len(streamed.rstrip())
+    # What the console checks: the stored answer's prefix of that length hashes the same.
+    assert _utf16_fnv1a(stored[:length]) == int(fp["fnv1a"])

@@ -79,10 +79,12 @@ export function paragraphBreakOutsideFence(text: string, from: number): number {
     const nl = text.indexOf("\n", lineStart);
     const lineEnd = nl < 0 ? text.length : nl;
     const line = text.slice(lineStart, lineEnd);
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (marker) {
-      if (fence === null) fence = marker[0];
-      else if (marker[0] === fence) fence = null;
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    // CommonMark: a fence closes only on the SAME char, at least as long as the opener, with
+    // nothing but whitespace after it — so a ```` fence wrapping an inner ``` block stays open.
+    const closes = marker && fence !== null && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim();
+    if (marker && (fence === null || closes)) {
+      fence = fence === null ? marker[1] : null;
       prevBlank = false;
     } else if (!line.trim()) {
       // A blank line: the break is the "\n" that ended the previous line.
