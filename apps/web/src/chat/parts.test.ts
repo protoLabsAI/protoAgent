@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { lastOperatorAssistantId, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, renderedPrefixEnd, rendersText, replaceText, splitRevealChunks, textRuns, toolsForGroup } from "./parts";
+import { lastOperatorAssistantId, paragraphBreakOutsideFence, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, renderedPrefixEnd, rendersText, replaceText, splitRevealChunks, textRuns, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -185,6 +185,79 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "The answer." },
     ]);
+  });
+
+  it("completes a lead run cut off MID-PARAGRAPH in place — never splits a word across the tool card", () => {
+    // [reasoning, "Let me check the con", tools] + "Let me check the config.\n\nAll good.": the
+    // shown run was cut off before the tool frame. "fig." continues it (no paragraph break), so
+    // it completes the run ABOVE the tools; only the text after the break lands below.
+    const p: ChatPart[] = [
+      { kind: "reasoning", text: "think" },
+      { kind: "text", text: "Let me check the con" },
+      { kind: "tools", ids: ["t1"] },
+    ];
+    expect(replaceText(p, "Let me check the config.\n\nAll good.")).toEqual([
+      { kind: "reasoning", text: "think" },
+      { kind: "text", text: "Let me check the config." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "All good." },
+    ]);
+  });
+
+  it("completes a cut-off run in place even when nothing follows the break", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Let me check " }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Let me check the config.")).toEqual([
+      { kind: "text", text: "Let me check the config." },
+      { kind: "tools", ids: ["t1"] },
+    ]);
+  });
+
+  it("a tail opening with a paragraph break is NEW text — it lands below the tools", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Let me check." }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Let me check.\n\nAll good.\n\nMore.")).toEqual([
+      { kind: "text", text: "Let me check." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "All good.\n\nMore." },
+    ]);
+  });
+
+  it("never splits INSIDE a fenced code block: the fence closes above the card, the rest goes below", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Run" }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Run this:\n```py\na = 1\n\nb = 2\n```\n\nDone.")).toEqual([
+      { kind: "text", text: "Run this:\n```py\na = 1\n\nb = 2\n```" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Done." },
+    ]);
+  });
+
+  it("a shown run that ends INSIDE an open fence keeps continuing it, even across a blank line", () => {
+    const p: ChatPart[] = [{ kind: "text", text: "Run this:\n```py\na = 1" }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, "Run this:\n```py\na = 1\n\nb = 2\n```\n\nDone.")).toEqual([
+      { kind: "text", text: "Run this:\n```py\na = 1\n\nb = 2\n```" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Done." },
+    ]);
+  });
+
+  it("paragraphBreakOutsideFence skips breaks inside ``` and ~~~ fences", () => {
+    expect(paragraphBreakOutsideFence("a\n\nb", 0)).toBe(1);
+    expect(paragraphBreakOutsideFence("```\na\n\nb\n```\n\nc", 0)).toBe(12);
+    expect(paragraphBreakOutsideFence("~~~\na\n\nb", 0)).toBe(-1);
+    expect(paragraphBreakOutsideFence("a\n\nb\n\nc", 2)).toBe(4);
+  });
+
+  it("a ```` fence wrapping an inner ``` block with a blank line is NOT closed by the inner fence (CommonMark lengths)", () => {
+    const md = "````md\n```py\na = 1\n\nb = 2\n```\n````\n\nDone.";
+    expect(paragraphBreakOutsideFence(md, 0)).toBe(md.indexOf("\n\nDone."));
+    const p: ChatPart[] = [{ kind: "text", text: "Example" }, { kind: "tools", ids: ["t1"] }];
+    expect(replaceText(p, `Example:\n${md}`)).toEqual([
+      { kind: "text", text: "Example:\n````md\n```py\na = 1\n\nb = 2\n```\n````" },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "Done." },
+    ]);
+    // A different char never closes it either, nor a fence line with an info string.
+    expect(paragraphBreakOutsideFence("```\n~~~\n\nx\n```\n\ny", 0)).toBe(14);
+    expect(paragraphBreakOutsideFence("```\n```py\n\nx\n```\n\ny", 0)).toBe(16);
   });
 
   it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {

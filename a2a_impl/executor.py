@@ -98,6 +98,42 @@ GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json"
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
 from graph.components import COMPONENT_MIME  # noqa: E402
 
+# Where a work frame (tool call, reasoning run, component) fell in the turn's answer text,
+# stamped on its status MESSAGE metadata: the length of the text streamed before it. The
+# durable task keeps answer text as ONE flattened artifact and the work frames in
+# `history`, so without this a reattach / reload can't tell which text preceded which tool
+# and replays every frame first, the text after — folding a pre-tool sentence the live view
+# showed above the tool into the "Working…" block. Counted in UTF-16 code units, the
+# console's string indexing, so an emoji before a tool doesn't shift the split.
+TEXT_OFFSET_META = "protoagent/textOffset"
+
+
+def _text_offset_meta(accumulated: str) -> dict[str, int]:
+    return {TEXT_OFFSET_META: len(accumulated.encode("utf-16-le")) // 2}
+
+
+# What the offsets were measured AGAINST, stamped on the terminal answer artifact: the
+# streamed text's UTF-16 length + an FNV-1a hash of its UTF-16 code units. The stored
+# answer is not always that text — a goal drive's `done` carries only the last pass plus
+# the goal note, and output extraction strips — so an offset from an earlier pass can
+# land mid-word in it. The console interleaves only when the stored answer STARTS WITH
+# exactly the measured text (same length prefix, same hash); otherwise it falls back to
+# the old order (frames, then text).
+TEXT_FINGERPRINT_META = "protoagent/textFingerprint"
+
+
+def _utf16_fnv1a(text: str) -> int:
+    data = text.encode("utf-16-le")
+    h = 0x811C9DC5
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def _text_fingerprint_meta(measured: str) -> dict[str, dict[str, int]]:
+    return {TEXT_FINGERPRINT_META: {"length": len(measured.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(measured)}}
+
 
 class TurnStalled(RuntimeError):
     """The agent stream produced no event for the whole stall window.
@@ -723,7 +759,10 @@ class ProtoAgentExecutor(AgentExecutor):
             _reasoning_flushed_at = time.monotonic()
             await updater.update_status(
                 TaskState.TASK_STATE_WORKING,
-                message=updater.new_agent_message([_data_part_proto({"text": payload_text}, REASONING_MIME)]),
+                message=updater.new_agent_message(
+                    [_data_part_proto({"text": payload_text}, REASONING_MIME)],
+                    metadata=_text_offset_meta(accumulated),
+                ),
             )
 
         async def _flush_text() -> None:
@@ -801,6 +840,10 @@ class ProtoAgentExecutor(AgentExecutor):
             # but no text/context part must still emit the artifact (it would previously
             # have had a cost DataPart keeping `parts` non-empty).
             if parts or ext_meta:
+                # rstrip: the stored answer is `extract_output(...).strip()`, so a streamed
+                # trailing newline must not make a normal turn's fingerprint miss.
+                if accumulated.rstrip():
+                    ext_meta = {**(ext_meta or {}), **_text_fingerprint_meta(accumulated.rstrip())}
                 await updater.add_artifact(
                     parts,
                     artifact_id=answer_aid,
@@ -942,6 +985,8 @@ class ProtoAgentExecutor(AgentExecutor):
                             if end_name and isinstance(duration_ms, int) and duration_ms > 0:
                                 tool_durations.setdefault(end_name, []).append(duration_ms)
                     part, tc_meta = _tool_call_frame(event_type, payload)
+                    if tc_meta is not None:
+                        tc_meta = {**tc_meta, **_text_offset_meta(accumulated)}
                     if part is not None or tc_meta is not None:
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
@@ -1035,7 +1080,9 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
-                            message=updater.new_agent_message([_data_part_proto(payload, COMPONENT_MIME)]),
+                            message=updater.new_agent_message(
+                                [_data_part_proto(payload, COMPONENT_MIME)], metadata=_text_offset_meta(accumulated)
+                            ),
                         )
 
                 elif event_type == "reasoning":

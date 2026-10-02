@@ -1556,3 +1556,120 @@ def test_task_id_from_response_reads_both_wire_shapes():
     assert task_id_from_response(None) == ""
     assert task_id_from_response("not a dict") == ""
 
+
+
+@pytest.mark.asyncio
+async def test_work_frames_carry_the_text_offset_they_streamed_at(tmp_path):
+    """Durable history keeps the answer as ONE flattened artifact and the work frames
+    separately, so each work frame (reasoning run, tool call) is stamped with the length
+    of the answer text streamed before it (TEXT_OFFSET_META). That is what lets a
+    reattach / reload replay a pre-tool sentence ABOVE the tool, as the live turn drew it,
+    instead of folding it into the "Working…" block. Coalescing keeps the run head's
+    stamp; the offset counts UTF-16 code units (the console's string indexing)."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, TEXT_OFFSET_META, _utf16_fnv1a
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+
+    sentence = "I am protoAgent 👋, a desktop agent."
+    answer = f"{sentence}\n\nDone — noted."
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("reasoning", "The operator wants a sentence ")
+        yield ("reasoning", "and then a note.")
+        yield ("text", sentence)
+        yield ("tool_start", {"id": "n1", "name": "append_note", "input": '{"text": "hi"}'})
+        yield ("tool_end", {"id": "n1", "name": "append_note", "output": "ok"})
+        yield ("text", "\n\nDone — noted.")
+        yield ("done", answer)
+
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(str(tmp_path / "a2a-tasks.db")))
+    await store.initialize()
+    app = _build_app(stream, task_store=store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    history = final.get("history") or []
+    utf16 = len(sentence.encode("utf-16-le")) // 2
+    assert utf16 == len(sentence) + 1  # the emoji is a surrogate pair — two JS code units
+    reasoning = [m for m in history if _reasoning_texts_from_history([m])]
+    assert len(reasoning) == 1 and reasoning[0]["metadata"][TEXT_OFFSET_META] == 0
+    tools = [m for m in history if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
+    assert [m["metadata"][TEXT_OFFSET_META] for m in tools] == [utf16, utf16]
+    assert final["artifacts"][0]["parts"][0]["text"] == answer
+    # The terminal artifact proves what the offsets were measured against: the streamed text
+    # (here identical to the stored answer), as a UTF-16 length + FNV-1a hash.
+    fp = final["artifacts"][0]["metadata"][TEXT_FINGERPRINT_META]
+    assert fp == {"length": len(answer.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(answer)}
+
+
+def test_utf16_fnv1a_parity_constants():
+    """The console recomputes this hash (a2aStream.ts utf16Fnv1a) — same constants there."""
+    from a2a_impl.executor import _utf16_fnv1a
+
+    assert _utf16_fnv1a("") == 2166136261
+    assert _utf16_fnv1a("I am protoAgent 👋, a desktop agent.") == 3055660355
+    assert _utf16_fnv1a("Let me check the config.") == 2152712979
+
+
+@pytest.mark.asyncio
+async def test_goal_style_turn_fingerprints_the_streamed_text_not_the_stored_answer():
+    """A goal drive streams several passes but stores only the last pass + the goal note.
+    The tool offsets index the STREAMED text, so the fingerprint must describe that text —
+    the console sees it doesn't prefix the stored answer and keeps the old order instead of
+    cutting the answer mid-word."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, TEXT_OFFSET_META, _utf16_fnv1a
+
+    streamed = "Let me check the config."
+    stored = "The config is fine and verified.\n\n---\n🎯 Goal met"
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", streamed)
+        yield ("tool_start", {"id": "t1", "name": "read_file", "input": "{}"})
+        yield ("tool_end", {"id": "t1", "name": "read_file", "output": "ok"})
+        yield ("done", stored)
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    art = final["artifacts"][0]
+    assert art["parts"][0]["text"] == stored
+    fp = art["metadata"][TEXT_FINGERPRINT_META]
+    assert fp == {"length": len(streamed), "fnv1a": _utf16_fnv1a(streamed)}
+    # Struct numbers round-trip as floats on the wire — the console reads them with Number().
+    assert _utf16_fnv1a(stored[: int(fp["length"])]) != int(fp["fnv1a"])  # the console sees a mismatch → fallback
+    tools = [m for m in final.get("history") or [] if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
+    assert {m["metadata"][TEXT_OFFSET_META] for m in tools} == {24}
+
+
+@pytest.mark.asyncio
+async def test_normal_turn_fingerprint_matches_the_stripped_stored_answer():
+    """The stored answer is `extract_output(...).strip()`, so a streamed trailing newline
+    must not make a NORMAL turn's fingerprint miss — that would silently drop every settled
+    reload back to the old order. The fingerprint covers `accumulated.rstrip()`, which the
+    stored answer starts with exactly."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, _utf16_fnv1a
+
+    streamed = "Let me check the config.\n\nAll good.\n"
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "Let me check the config.")
+        yield ("tool_start", {"id": "t1", "name": "read_file", "input": "{}"})
+        yield ("tool_end", {"id": "t1", "name": "read_file", "output": "ok"})
+        yield ("text", "\n\nAll good.\n")
+        yield ("done", streamed.strip())
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    art = final["artifacts"][0]
+    stored = art["parts"][0]["text"]
+    fp = art["metadata"][TEXT_FINGERPRINT_META]
+    length = int(fp["length"])
+    assert length == len(streamed.rstrip())
+    # What the console checks: the stored answer's prefix of that length hashes the same.
+    assert _utf16_fnv1a(stored[:length]) == int(fp["fnv1a"])

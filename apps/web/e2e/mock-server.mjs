@@ -764,6 +764,41 @@ function heldTaskId(prompt) {
   return m ? `task-e2e-held-${m[1].toLowerCase()}` : null;
 }
 
+// A turn still RUNNING when the browser reloads (x-e2e-pretool-midturn): a reasoning model
+// streamed a sentence, then called a tool that is still going. The durable task keeps the
+// answer as ONE flattened artifact and the work frames in history, each stamped with the
+// answer-text offset it streamed at (a2a_impl TEXT_OFFSET_META) — what lets the replay put
+// the sentence back ABOVE the tool, as the live turn drew it, instead of folding it into
+// "Working…". Served by the session turns route (cold hydration) and as the opening frame
+// of the held-open SubscribeToTask stream (the reattach).
+export const PRETOOL_SESSION = "chat-pretool";
+export const PRETOOL_TASK = "task-pretool-live";
+export const PRETOOL_SENTENCE = "I am protoAgent, a plugin-extensible desktop agent.";
+function pretoolTask() {
+  return {
+    id: PRETOOL_TASK,
+    contextId: PRETOOL_SESSION,
+    status: { state: "TASK_STATE_WORKING" },
+    artifacts: [{ parts: [{ text: PRETOOL_SENTENCE }] }],
+    history: [
+      { role: "ROLE_USER", parts: [{ text: "Introduce yourself, then note it" }] },
+      {
+        role: "ROLE_AGENT",
+        parts: [{ data: { text: "A sentence first, then the note." }, metadata: { mimeType: "application/vnd.protolabs.reasoning-v1+json" } }],
+        metadata: { "protoagent/textOffset": 0 },
+      },
+      {
+        role: "ROLE_AGENT",
+        parts: [],
+        metadata: {
+          "https://proto-labs.ai/a2a/ext/tool-call-v1": { toolCallId: "pretool-n1", name: "append_note", phase: "started", args: "{}" },
+          "protoagent/textOffset": PRETOOL_SENTENCE.length,
+        },
+      },
+    ],
+  };
+}
+
 // POST /a2a message/stream → SSE of the canned frames for this prompt.
 async function handleA2AStream(req, res, body) {
   const params = body.params || {};
@@ -1163,6 +1198,7 @@ const server = createServer(async (req, res) => {
       if (String(body.params?.id || "").includes("paused")) {
         return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pausedTask(body.params?.id) });
       }
+      if (body.params?.id === PRETOOL_TASK) return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pretoolTask() });
       const held = HELD_TASK.exec(String(body.params?.id || ""));
       if (held) {
         return sendJson(res, {
@@ -1205,6 +1241,11 @@ const server = createServer(async (req, res) => {
       });
     }
     if (body?.method === "SubscribeToTask") {
+      if (body.params?.id === PRETOOL_TASK) {
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
+        res.write(`data: ${JSON.stringify({ id: body.id, jsonrpc: "2.0", result: { task: pretoolTask() } })}\r\n\r\n`);
+        return; // still running — the server holds the subscription open
+      }
       // A PAUSED task (input-required) is interrupted, not terminal: the real server
       // (a2a-sdk 1.1.5) answers with the Task snapshot and then HOLDS the stream open
       // until the operator's answer continues the task (A2A §3.1.6 ends a subscription
@@ -1333,6 +1374,18 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET") {
       // ADR 0104/#2888 fresh-profile recovery. Header-gated so the durable
       // session fixture does not add a chat tab to every unrelated E2E spec.
+      if (req.headers["x-e2e-pretool-midturn"] === "1" && pathname === "/api/chat/sessions") {
+        return sendJson(res, { sessions: [{ session_id: PRETOOL_SESSION, last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }] });
+      }
+      if (req.headers["x-e2e-pretool-midturn"] === "1" && pathname === `/api/chat/sessions/${PRETOOL_SESSION}/turns`) {
+        const t = pretoolTask();
+        return sendJson(res, {
+          turns: [{
+            task_id: t.id, state: t.status.state, last_updated: "2026-08-20T12:00:00Z", text: PRETOOL_SENTENCE,
+            status: t.status, artifacts: t.artifacts, history: t.history,
+          }],
+        });
+      }
       if (req.headers["x-e2e-session-history"] === "1" && pathname === "/api/chat/sessions") {
         return sendJson(res, {
           sessions: [{ session_id: "chat-recovered", last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }],

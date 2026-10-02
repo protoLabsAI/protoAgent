@@ -486,6 +486,42 @@ export type TurnStreamHandlers = {
   onDone?: () => void;
 };
 
+/** The A2A role of a history message is a USER one (proto enum name or the JSON spelling). */
+function isUserRole(role?: string): boolean {
+  return (role || "").includes("USER") || role === "user";
+}
+
+/** The answer-text offset a work frame was emitted at (a2a_impl/executor.py
+ *  TEXT_OFFSET_META), or null when absent/malformed (frames recorded before it existed). */
+export const TEXT_OFFSET_META = "protoagent/textOffset";
+export function textOffsetFromMeta(metadata?: ExtMetadata): number | null {
+  const raw = (metadata as Record<string, unknown> | undefined)?.[TEXT_OFFSET_META];
+  const n = typeof raw === "string" ? Number(raw) : raw;
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+/** What the offsets were measured against (a2a_impl/executor.py TEXT_FINGERPRINT_META):
+ *  the streamed text's UTF-16 length + FNV-1a hash, stamped on the terminal artifact. */
+export const TEXT_FINGERPRINT_META = "protoagent/textFingerprint";
+export function textFingerprintFromMeta(metadata?: ExtMetadata): { length: number; fnv1a: number } | null {
+  const raw = (metadata as Record<string, unknown> | undefined)?.[TEXT_FINGERPRINT_META] as
+    | { length?: unknown; fnv1a?: unknown }
+    | undefined;
+  const length = Number(raw?.length);
+  const fnv1a = Number(raw?.fnv1a);
+  return raw && Number.isInteger(length) && length >= 0 && Number.isInteger(fnv1a) ? { length, fnv1a } : null;
+}
+
+/** FNV-1a (32-bit) over a string's UTF-16 code units — the executor's `_utf16_fnv1a`. */
+export function utf16Fnv1a(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
 // Replay a Task SNAPSHOT (the first frame of tasks/resubscribe, or a GetTask
 // result) into the handlers: accumulated artifact text, then the durable
 // history's tool/reasoning/component frames — everything the agent did while
@@ -500,13 +536,46 @@ function replayTaskSnapshot(
   const accumulated = joinArtifactTexts(arts.map((a) => textFromParts(a.parts)));
   const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
     []) as Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }>;
+  // Stream order. Each work frame carries the length of the answer text streamed before it
+  // (TEXT_OFFSET_META, a2a_impl/executor.py), so the flattened accumulation is replayed in
+  // the slices it actually arrived in — a sentence that streamed before the first tool
+  // comes back ABOVE that tool, exactly as the live turn drew it, instead of every frame
+  // first and all the text after (which folded that sentence into "Working…" on a
+  // reattach, and moved it below the block on a reload). Only for the shape where offsets
+  // are unambiguous — one answer artifact, and no interjection the rebuild splits the turn
+  // at (its trailing bubble takes the whole answer, see sessionHydration.ts). Otherwise, and
+  // for turns recorded before the offsets existed, the text lands after the frames as before.
+  const textArtifacts = arts.filter((a) => textFromParts(a.parts)).length;
+  const splitsTurn =
+    !!opts.replaySteers &&
+    history.some((m, i) => (isUserRole(m.role) && history.slice(0, i).some((p) => isUserRole(p.role))) || !!consumedSteersFromParts(m.parts));
+  // The offsets index the text the executor STREAMED. A finished turn's stored answer can
+  // differ (a goal drive keeps only its last pass + the goal note; output extraction strips),
+  // and an offset from an earlier pass would then cut it mid-word. So a finished turn
+  // interleaves only when its answer artifact's fingerprint proves the stored text starts
+  // with exactly the measured text; a turn still running stores the streamed text itself.
+  const fingerprint = arts.map((a) => textFingerprintFromMeta(a.metadata)).find((f) => f !== null) ?? null;
+  const measuredOk = fingerprint
+    ? fingerprint.length <= accumulated.length && utf16Fnv1a(accumulated.slice(0, fingerprint.length)) === fingerprint.fnv1a
+    : /working|submitted|input.required|auth.required/i.test((task.status?.state || "").toString());
+  const measuredLength = fingerprint ? fingerprint.length : accumulated.length;
+  const interleave = textArtifacts === 1 && !splitsTurn && measuredOk;
+  let emitted = 0;
+  const catchUpText = (metadata?: ExtMetadata) => {
+    if (!interleave) return;
+    const offset = textOffsetFromMeta(metadata);
+    if (offset === null || offset <= emitted || offset > measuredLength) return;
+    handlers.onText?.(accumulated.slice(emitted, offset), true);
+    emitted = offset;
+  };
   let openingSeen = false;
   for (const msg of history) {
-    if ((msg.role || "").includes("USER") || msg.role === "user") {
+    if (isUserRole(msg.role)) {
       if (opts.replaySteers && openingSeen) handlers.onContinuationMessage?.(msg);
       openingSeen = true;
       continue;
     }
+    catchUpText(msg.metadata);
     const toolEvent = toolEventFromMeta(msg.metadata);
     if (toolEvent) handlers.onToolCall?.(toolEvent);
     const reasoning = reasoningFromParts(msg.parts);
@@ -535,6 +604,9 @@ function replayTaskSnapshot(
     const context = contextFromParts(artifact.parts);
     if (context) handlers.onContext?.(context);
   }
+  // The rest of the stream-ordered text, then the canonical replace — which the parts now
+  // already render, so it is a no-op that keeps the interleaving (parts.ts replaceText).
+  if (emitted > 0 && emitted < accumulated.length) handlers.onText?.(accumulated.slice(emitted), true);
   if (accumulated) handlers.onText?.(accumulated, false);
   const state = (task.status?.state || "").toString();
   if (/input.required/i.test(state)) {

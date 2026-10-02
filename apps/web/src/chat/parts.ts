@@ -68,6 +68,37 @@ export function rendersText(runs: string[], canonical: string): boolean {
   return end >= 0 && !canonical.slice(end).trim();
 }
 
+/** The index of the first paragraph break (the "\n" that opens a blank line) at or after
+ *  `from` that is OUTSIDE a fenced code block (``` or ~~~, up to 3 spaces of indent), or -1.
+ *  A break inside an open fence is part of the code, never a place to split the text. */
+export function paragraphBreakOutsideFence(text: string, from: number): number {
+  let fence: string | null = null;
+  let lineStart = 0;
+  let prevBlank = false;
+  while (lineStart <= text.length) {
+    const nl = text.indexOf("\n", lineStart);
+    const lineEnd = nl < 0 ? text.length : nl;
+    const line = text.slice(lineStart, lineEnd);
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    // CommonMark: a fence closes only on the SAME char, at least as long as the opener, with
+    // nothing but whitespace after it — so a ```` fence wrapping an inner ``` block stays open.
+    const closes = marker && fence !== null && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim();
+    if (marker && (fence === null || closes)) {
+      fence = fence === null ? marker[1] : null;
+      prevBlank = false;
+    } else if (!line.trim()) {
+      // A blank line: the break is the "\n" that ended the previous line.
+      if (fence === null && !prevBlank && lineStart > 0 && lineStart - 1 >= from) return lineStart - 1;
+      prevBlank = true;
+    } else {
+      prevBlank = false;
+    }
+    if (nl < 0) break;
+    lineStart = nl + 1;
+  }
+  return -1;
+}
+
 /** REPLACE the turn's text with the canonical full-turn `text` (an A2A
  *  artifact-update with `append` absent/false — e.g. the terminal frame, which always
  *  re-sends the whole answer, #1709). The replacement spans EVERY text run — for a
@@ -78,7 +109,8 @@ export function rendersText(runs: string[], canonical: string): boolean {
  *  keep them untouched, preserving the text↔tool interleaving. When they render a PREFIX of
  *  it (the terminal frame carries text whose deltas never streamed — e.g. a reattached turn
  *  that only saw the pre-tool preamble), extend: the missing tail lands after what is
- *  already shown, and the shown text stays where it is. Visible text is never moved or
+ *  already shown, and the shown text stays where it is — a run cut off mid-paragraph is
+ *  completed in place rather than split across the tool card after it. Visible text is never moved or
  *  yanked to make room for text it already matches. Only on a real divergence (frames
  *  lost/duplicated en route) do we rebuild — drop every prior text run and land the
  *  canonical text as one trailing run. That trades the (already unreliable) interleaving
@@ -94,8 +126,36 @@ export function replaceText(parts: ChatPart[] | undefined, text: string): ChatPa
   if (end >= 0) {
     const rest = text.slice(end);
     if (!rest.trim()) return next;
-    // The open run matched only up to its trimmed body; its trailing whitespace (if any) is
-    // re-supplied verbatim by `rest`, so drop it before extending.
+    // Where does the missing tail attach? If it opens with a paragraph break, the shown text
+    // ended at a boundary and the tail is new text: it lands after everything already shown.
+    // Otherwise the tail CONTINUES the last shown run mid-paragraph ("…check the con" +
+    // "fig.") — that run was cut off, and splitting it across whatever followed it (a tool
+    // card) would render half a word above the card and half below. So the continuation up
+    // to the next paragraph break completes that run IN PLACE, and only what follows the
+    // break lands at the end.
+    // A paragraph break INSIDE a fenced code block is not a boundary: splitting there would
+    // leave an unclosed fence above the card and orphan its tail below it. So a run that
+    // ends inside an open fence always continues, and the split point is the first
+    // paragraph break OUTSIDE any fence.
+    const lastTextAt = next.map((p) => p.kind).lastIndexOf("text");
+    const runBody = lastTextAt >= 0 ? (next[lastTextAt] as Extract<ChatPart, { kind: "text" }>).text.trimEnd() : "";
+    // The tail is NEW text only when it opens with a paragraph break that sits outside any
+    // fence the shown run left open.
+    const opening = paragraphBreakOutsideFence(runBody + rest, runBody.length);
+    const atBoundary = /^\s*\n\s*\n/.test(rest) && opening >= 0 && !(runBody + rest).slice(runBody.length, opening).trim();
+    const continues = lastTextAt >= 0 && !atBoundary;
+    let head = rest;
+    let tail = "";
+    if (continues && lastTextAt !== next.length - 1) {
+      const brk = paragraphBreakOutsideFence(runBody + rest, runBody.length);
+      if (brk >= 0) [head, tail] = [rest.slice(0, brk - runBody.length), rest.slice(brk - runBody.length)];
+    }
+    if (continues) {
+      // The run matched only up to its trimmed body; its trailing whitespace (if any) is
+      // re-supplied verbatim by `rest`, so drop it before extending.
+      next[lastTextAt] = { kind: "text", text: runBody + head };
+      return tail.trim() ? appendText(next, tail, true) : next;
+    }
     const last = next[next.length - 1];
     if (last?.kind === "text") next[next.length - 1] = { kind: "text", text: last.text.trimEnd() };
     return appendText(next, rest, true);
