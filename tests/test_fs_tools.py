@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import pytest
@@ -74,18 +75,29 @@ def _tools(cfg):
 
 def test_no_tools_without_valid_projects():
     assert build_fs_tools(_Cfg(filesystem_projects=[])) == []
-    # Nonexistent path → skipped → no tools.
-    assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}])) == []
+    # No entry with both a name and a path → nothing could ever resolve → no tools.
+    assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x"}])) == []
 
 
-def test_all_folders_unusable_warns_with_paths(caplog):
-    """Configured-but-all-unusable unbinds every fs tool. That's an operator
-    mistake, so it logs at WARNING and names the offending folder; the inert default
-    (nothing configured) stays quiet at INFO."""
+def test_all_folders_missing_warns_with_paths_but_stays_bound(caplog):
+    """Configured-but-all-missing used to unbind every fs tool for the session (#2251),
+    and nothing re-bound them when the folder came back (#3643). The tools now stay bound
+    (each call says the folder is missing); the operator mistake still logs at WARNING
+    and names the folder."""
     with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
-        assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}])) == []
+        tools = build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}]))
+    assert "read_file" in {t.name for t in tools}
     msgs = [r.getMessage() for r in caplog.records]
-    assert any("NOT bound" in m and "/nope/zzz" in m for m in msgs), msgs
+    # The log names the RESOLVED path — `D:\\nope\\zzz` on Windows, `/nope/zzz` elsewhere.
+    shown = str(Path("/nope/zzz").resolve())
+    assert any("'x'" in m and shown in m for m in msgs), msgs
+
+
+def test_junk_only_config_warns_not_bound(caplog):
+    """An entry with no path can never come back — that one still unbinds, loudly."""
+    with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
+        assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x"}])) == []
+    assert any("NOT bound" in r.getMessage() for r in caplog.records)
 
 
 def test_read_list_find_search(workspace):

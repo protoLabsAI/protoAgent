@@ -277,14 +277,60 @@ class Project:
     #   write:true,  no_delete:true  → read-write-no-delete (create/edit, never delete)
     # ``no_delete`` only bites on ``delete_file``; a read-only project already refuses it.
     no_delete: bool = False
+    # Only the agent's OWN implicit default workspace (nothing configured) sets this: the
+    # tools created that folder, so they may create it again if it's deleted mid-session
+    # (#3643 review). A configured / onboarded root NEVER does — a vanished checkout must
+    # stay missing rather than be mkdir'd back as an empty directory.
+    recreate_root: bool = False
+
+
+def _is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:  # unreadable mount / permission — as good as gone for the fence
+        return False
+
+
+def _missing_root_message(project: str, root: Path) -> str:
+    """What a fs tool returns for a project whose folder is gone (#3643): names the
+    project and path, and tells the model to say so rather than route around the fence."""
+    return (
+        f"project {project!r}'s folder is missing: {root} — it was deleted, moved, or not cloned yet, "
+        "so its files are unavailable right now (other projects are unaffected). Tell the operator; "
+        "don't work around it with execute_code or run_command. It becomes available again, in this "
+        "same session, as soon as the folder exists."
+    )
+
+
+def _recreate_default_workspace(root: Path) -> bool:
+    """Re-create the implicit default workspace at ``root``; True when it's a directory again.
+
+    Goes through ``workspace_dir(create=True)`` (the same creator the build uses) and only
+    when that IS ``root`` — so it can never mkdir anything but the agent's own workspace."""
+    try:
+        from infra.paths import workspace_dir
+
+        if workspace_dir().expanduser().resolve() != root:
+            return False
+        workspace_dir(create=True)
+    except Exception:  # noqa: BLE001 — fall through to the "missing" answer
+        log.warning("[fs] could not recreate the default workspace %s", root, exc_info=True)
+        return False
+    log.info("[fs] default workspace %s was deleted — recreated", root)
+    return _is_dir(root)
 
 
 class ProjectRegistry:
     """Resolve ``(project, relative_path)`` to an absolute path fenced under the
     project's root. The single chokepoint every fs tool goes through."""
 
-    def __init__(self, projects: list[Project]):
+    def __init__(self, projects: list[Project], missing: dict[str, Path] | None = None):
         self._by_name = {p.name: p for p in projects}
+        # Registered projects whose root was not a directory when this registry was
+        # built (#3643). NOT part of the fence — nothing resolves into them — but kept
+        # by name so a call into one is answered "its folder is missing", not "unknown
+        # project", and so ``_RegistryRef`` can notice the folder coming back.
+        self._missing = {n: p for n, p in (missing or {}).items() if n not in self._by_name}
 
     def names(self) -> list[str]:
         return list(self._by_name)
@@ -292,13 +338,27 @@ class ProjectRegistry:
     def get(self, name: str) -> Project | None:
         return self._by_name.get(name)
 
+    def missing(self) -> dict[str, Path]:
+        """``{name: configured root}`` for registered projects whose folder was missing at build."""
+        return dict(self._missing)
+
+    def any_missing_returned(self) -> bool:
+        """True when a root that was missing at build is a directory again."""
+        return any(_is_dir(p) for p in self._missing.values())
+
     def resolve(self, project: str, rel_path: str = ".") -> Path:
         """Resolve a workspace-relative path. Raises ValueError on unknown
-        project or a path that escapes the fence. Does NOT require existence
-        (writes create new files)."""
+        project, a project whose root folder is missing, or a path that escapes
+        the fence. Does NOT require the target to exist (writes create new files)."""
         proj = self._by_name.get(project)
         if proj is None:
+            if project in self._missing:
+                raise ValueError(_missing_root_message(project, self._missing[project]))
             raise ValueError(f"unknown project {project!r}. Known: {', '.join(self._by_name) or '(none)'}")
+        # Checked per call, not just at build: a root deleted mid-session must not stay
+        # "resolvable" — a write would otherwise mkdir the vanished root back into being.
+        if not _is_dir(proj.root) and not (proj.recreate_root and _recreate_default_workspace(proj.root)):
+            raise ValueError(_missing_root_message(project, proj.root))
         rel = (rel_path or ".").strip()
         if rel.startswith("/") or rel.startswith("~"):
             raise ValueError("path must be relative to the project root")
@@ -321,7 +381,7 @@ def _approved(decision) -> bool:
     return str(decision).strip().lower() in {"approve", "approved", "yes", "y", "true", "ok"}
 
 
-def _configured_entries(config, *, create: bool = False) -> list[dict]:
+def _configured_entries(config, *, create: bool = False, quiet: bool = False) -> list[dict]:
     """The fence entries this config actually asks for — explicit
     ``filesystem.projects``, else the ADR 0095 ``projects:`` registry projected
     onto the fence, else the default workspace. The warning path below reports
@@ -332,7 +392,7 @@ def _configured_entries(config, *, create: bool = False) -> list[dict]:
     ever sees them — which is why it does its own WARNING logging rather than
     deferring to the warning below."""
     entries = (
-        config.effective_filesystem_projects(create=create)
+        config.effective_filesystem_projects(create=create, quiet=quiet)
         if hasattr(config, "effective_filesystem_projects")
         else (getattr(config, "filesystem_projects", []) or [])
     )
@@ -445,22 +505,41 @@ def _launch_editor(argv: list[str]) -> str | None:
     return None
 
 
-def _registry_from_config(config, *, create: bool = True) -> ProjectRegistry:
+def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -> ProjectRegistry:
     projects: list[Project] = []
+    missing: dict[str, Path] = {}
     # Explicit projects, or the default workspace dir (created) when none are
     # configured — the on-by-default fenced workspace.
-    entries = _configured_entries(config, create=create)
+    entries = _configured_entries(config, create=create, quiet=quiet)
+    # The implicit default: a real config with nothing configured gets the single
+    # `workspace` entry from effective_filesystem_projects — the only root the tools own.
+    implicit_default = (
+        hasattr(config, "effective_filesystem_projects")
+        and not getattr(config, "filesystem_projects", None)
+        and not getattr(config, "projects", None)
+    )
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
         raw_path = str(entry.get("path") or "").strip()
         if not name or not raw_path:
-            log.warning("[fs] skipping project missing name/path: %r", entry)
+            (log.debug if quiet else log.warning)("[fs] skipping project missing name/path: %r", entry)
             continue
         root = Path(raw_path).expanduser().resolve()
-        if not root.is_dir():
-            log.warning("[fs] project %r path is not a directory: %s — skipped", name, root)
+        recreate_root = bool(implicit_default and name == "workspace")
+        if not _is_dir(root):
+            # Skipped from the fence, NOT forgotten (#3643): the other projects keep
+            # working, a call into this one says its folder is missing, and
+            # ``_RegistryRef`` re-admits it the moment the folder is back.
+            if not quiet:
+                log.warning(
+                    "[fs] project %r folder is missing: %s — its files are unavailable until it's back "
+                    "(other projects unaffected)",
+                    name,
+                    root,
+                )
+            missing.setdefault(name, root)
             continue
         projects.append(
             Project(
@@ -468,9 +547,34 @@ def _registry_from_config(config, *, create: bool = True) -> ProjectRegistry:
                 root=root,
                 write=bool(entry.get("write", False)),
                 no_delete=bool(entry.get("no_delete", False)),
+                recreate_root=recreate_root,
             )
         )
-    return ProjectRegistry(projects)
+    return ProjectRegistry(projects, missing)
+
+
+def missing_projects_warning(config) -> str | None:
+    """The operator banner line for registered work folders that are missing (#3643), or
+    ``None``. Feeds ``GET /api/runtime/status`` ``warnings[]``: live and self-clearing,
+    so it disappears on the next poll once the folder is back.
+
+    Only CONFIGURED folders count (explicit ``filesystem.projects`` or the ADR 0095
+    registry): the default workspace is created by the tools' own build, so a fresh
+    install that hasn't built yet isn't "missing" anything. Read-only and quiet — it's
+    polled, so it never mkdirs and never re-logs the build's skip warnings."""
+    if config is None or not bool(getattr(config, "filesystem_enabled", False)):
+        return None
+    if not (getattr(config, "filesystem_projects", None) or getattr(config, "projects", None)):
+        return None
+    missing = _registry_from_config(config, create=False, quiet=True).missing()
+    if not missing:
+        return None
+    listed = ", ".join(f"{name} ({root})" for name, root in missing.items())
+    one = len(missing) == 1
+    return (
+        f"Work {'folder is' if one else 'folders are'} missing: {listed}. The agent's file tools can't "
+        f"reach {'it' if one else 'them'} until restored; other projects are unaffected."
+    )
 
 
 def project_roots(config) -> dict[str, str]:
@@ -595,7 +699,11 @@ class _RegistryRef:
 
     def get(self) -> ProjectRegistry:
         cfg = self._live_config()
-        if cfg is not self._cached_config:
+        # A root that was missing when the cached registry was built and is a directory
+        # again (re-cloned, volume remounted) is re-admitted HERE, on the next tool call:
+        # the config object didn't change, so the identity check alone would never see
+        # it (#3643). One stat per missing root per call; nothing when none are missing.
+        if cfg is not self._cached_config or self._cached_registry.any_missing_returned():
             self._cached_registry = _registry_from_config(cfg)
             self._cached_config = cfg
         return self._cached_registry
@@ -746,10 +854,11 @@ def build_fs_tools(config) -> list:
     # The tools are long-lived closures; they resolve the registry through the
     # ref on EVERY call so a mid-turn registration (#2836) is visible same-turn.
     registry_ref = _RegistryRef(config)
-    if not registry_ref.build_registry.names():
-        # Configured-but-all-unusable is an OPERATOR MISTAKE, not the inert default: every
-        # fs tool unbinds and the agent just... can't read files anymore. Warn, and
-        # name the folders, so the log says why instead of only that it happened.
+    build_registry = registry_ref.build_registry
+    if not build_registry.names() and not build_registry.missing():
+        # Nothing usable AND nothing that could come back (no entry with both a name and
+        # a path): the inert default, or junk config. Junk is an operator mistake, so
+        # warn and name it instead of only INFO-logging that the tools are gone.
         configured = _configured_entries(config)
         if configured:
             log.warning(
@@ -759,6 +868,16 @@ def build_fs_tools(config) -> list:
         else:
             log.info("[fs] filesystem enabled but no valid projects registered — no tools")
         return []
+    if not build_registry.names():
+        # Every registered folder is missing. This used to unbind the whole toolset for
+        # the session (#2251) and nothing re-bound it when the folder came back (#3643).
+        # Bind anyway: a call into a missing project says so by name, and the live
+        # registry re-admits a folder the moment it exists again.
+        log.warning(
+            "[fs] no registered work folder exists right now — filesystem tools stay bound and "
+            "reach each project once its folder is back: %s",
+            ", ".join(f"{n} ({p})" for n, p in build_registry.missing().items()),
+        )
     allow_run = bool(getattr(config, "filesystem_allow_run", False))
     memoize_reads = bool(getattr(config, "tools_memoize_reads_enabled", False))
     # run_command is unsandboxed (arbitrary argv as the server user), so by
@@ -788,9 +907,17 @@ def build_fs_tools(config) -> list:
         ``ro`` read-only, ``rw`` read-write, ``rw/no-delete`` read-write but deletes off)."""
         registry = registry_ref.get()
         lines = ["Managed projects:"]
+        gone = registry.missing()
         for name in registry.names():
             p = registry.get(name)
-            lines.append(f"- {name}  [{_mode(p)}]  {p.root}")
+            if _is_dir(p.root):
+                lines.append(f"- {name}  [{_mode(p)}]  {p.root}")
+            else:  # deleted since the registry was built
+                gone[name] = p.root
+        for name, root in gone.items():
+            lines.append(f"- {name}  [missing]  {root} — folder not found; unavailable until it's back")
+        if gone:
+            lines.append("Tell the operator about a missing project folder instead of working around it.")
         return "\n".join(lines)
 
     @tool

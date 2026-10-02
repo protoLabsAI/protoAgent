@@ -329,8 +329,8 @@ export type BrowseListing = {
 };
 
 // `exists` is READ-ONLY liveness from GET /api/settings/filesystem-projects: a root whose
-// folder is gone gets skipped when the fs tools are built, and if that empties the registry
-// the whole toolset unbinds. Absent on rows the editor is composing.
+// folder is gone is unreachable (its tool calls say "folder is missing") until it's back;
+// the other folders keep working (#3643). Absent on rows the editor is composing.
 export type FsProject = { name?: string; path: string; write: boolean; exists?: boolean };
 
 // The ADR 0095 managed-projects registry (GET /api/projects, read-only — registration
@@ -355,8 +355,8 @@ export type ManagedProject = {
 // ADR 0095 exists to kill.
 export type ManagedProjects = {
   enabled: boolean;
-  // "unbound" = the registry has entries but none of their folders are there, so the
-  // fence resolves EMPTY and the whole fs toolset unbinds (#2251). Distinct from
+  // "unbound" = the registry has entries but none feeds the fence (all `fs: false`, or
+  // every folder missing), so the fs tools can reach nothing (#2251, #3643). Distinct from
   // "registry" precisely because that case must not look like it's working.
   fence_source: "explicit" | "registry" | "workspace_default" | "disabled" | "unbound";
   projects: ManagedProject[];

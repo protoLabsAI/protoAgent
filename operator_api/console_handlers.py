@@ -119,6 +119,18 @@ async def _operator_runtime_status():
             warnings.append(drift)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
+    # A registered work folder that's gone (#3643) — its fs tools answer "folder is
+    # missing" and the other projects keep working, but the operator should see it
+    # without asking the agent. Live + self-clearing: stats each configured root per
+    # poll, so it's off the loop, and it clears once the folder is back.
+    try:
+        from tools.fs_tools import missing_projects_warning
+
+        missing_folders = await asyncio.to_thread(missing_projects_warning, config)
+        if missing_folders:
+            warnings.append(missing_folders)
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     # Plugin-reported setup gaps (setup_gaps seam): a plugin that is installed and
     # enabled but can't do its job — no `br` binary, no coder delegate, gh not
     # authenticated — says so HERE, where the operator looks, instead of only in
