@@ -132,7 +132,9 @@ test("text streamed before a tool call never disappears when the turn folds (THI
 // that answer is the FIRST Markdown mount. The lazy renderer suspended there and its fallback
 // painted the raw SOURCE — `Done — … - **protoAgent** … \`plugins.lock\`` on one line — for
 // ~0.3s (React's fallback reveal throttle) before the rendered list replaced it. A per-frame
-// probe asserts the bubble never shows markdown syntax, and that the answer still renders.
+// probe asserts the bubble never shows markdown syntax, and that the answer still renders. The
+// answer also STREAMS in deltas that end on a bare marker — the first is `**` alone — which must
+// not paint either (danglingMarker.ts).
 test("a markdown answer never paints as raw source on its first frames (MDFLASH)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
@@ -153,7 +155,8 @@ test("a markdown answer never paints as raw source on its first frames (MDFLASH)
     requestAnimationFrame(tick);
   });
 
-  await composer.fill("MDFLASH then append a note");
+  // SLOW: 300ms between deltas, so each dangling marker would sit on screen for many frames.
+  await composer.fill("MDFLASH SLOW then append a note");
   await composer.press("Enter");
 
   const msg = page.locator(".pl-message--assistant").last();

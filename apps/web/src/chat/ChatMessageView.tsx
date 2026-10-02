@@ -23,6 +23,7 @@ import { useUI } from "../state/uiStore";
 import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { DelegateProgressView } from "./DelegateProgressView";
+import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
 import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
@@ -193,12 +194,19 @@ export function ChatMessageView({
           // `leadParts` is text the bubble already showed before the turn folded (a reasoning
           // model's pre-tool sentence): it stays inline above the WorkBlock — never yanked into it.
           const { fold, leadParts, workParts, answerParts } = foldPlan(parts, streaming);
-          const renderText = (part: ChatPart, key: string) =>
-            part.kind !== "text" || !part.text.trim() ? null : message.role === "user" ? (
-              renderUserText(part.text, key)
+          // The turn's LAST part is the one still streaming: a marker it ends on with nothing
+          // after it yet (`**`, `` ` ``, `- `) is held back so it never paints as a literal
+          // (danglingMarker.ts). Settled text, and every earlier part, renders verbatim.
+          const live = streaming ? parts[parts.length - 1] : undefined;
+          const renderText = (part: ChatPart, key: string) => {
+            if (part.kind !== "text") return null;
+            const text = part === live && message.role !== "user" ? hideDanglingMarker(part.text) : part.text;
+            return !text.trim() ? null : message.role === "user" ? (
+              renderUserText(text, key)
             ) : (
-              <Markdown key={key}>{part.text}</Markdown>
+              <Markdown key={key}>{text}</Markdown>
             );
+          };
           // Every part is keyed by its index in `parts` (foldPlan keeps the part objects), and
           // lead + work + answer render as ONE keyed list. So when the first tool call folds the
           // turn, the pre-tool sentence that was streaming as the answer becomes a lead part with
@@ -242,7 +250,7 @@ export function ChatMessageView({
             message.role === "user" ? (
               renderUserText(message.content)
             ) : (
-              <Markdown>{message.content}</Markdown>
+              <Markdown>{streaming ? hideDanglingMarker(message.content) : message.content}</Markdown>
             )
           ) : null}
         </>
