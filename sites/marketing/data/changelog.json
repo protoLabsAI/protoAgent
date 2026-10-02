@@ -1,5 +1,34 @@
 [
   {
+    "version": "v0.189.0",
+    "date": "2026-10-02",
+    "changes": [
+      "A delegation to another agent over A2A now shows that agent's live work on its card too (#3980).",
+      "Brand & Launch replaces the Social Marketing archetype — a draft-only launch manager for any app, held from the picker until it's been tested (#3981).",
+      "Plugins can find the managed Python runtime through the SDK (#3992).",
+      "Plugins that watch a coding agent through dispatch_tapped now see its plan as it changes (#3995).",
+      "Operator API status codes and validation changed for clients (#3973).",
+      "The parked-sessions index reads the task store once (#3972).",
+      "Console pollers stop on a task state the server can't name (#3972).",
+      "Checkpoint pruning, knowledge forget-delete, and the non-streaming turn's HITL check hardened (#3973).",
+      "Operator API routes no longer leak internals or die on bad input (#3973).",
+      "A fresh install's agent card describes protoAgent instead of a template placeholder, and the default-on cowork pack's optional document libraries no longer warn on first boot (#3976).",
+      "A /<subagent> slash run that keeps working is no longer cut off by the stall guard (#3977).",
+      "\"Test connection\" and the model list now probe the lead model's own connection (#3978).",
+      "A coding-agent delegation now shows its live work on its card, and its reply no longer opens with the same sentence twice (#3979).",
+      "The Install-from-URL dialog shows the whole git URL (#3982).",
+      "Settings ▸ Plugins no longer says a plugin's console view or background surface needs a restart (#3988).",
+      "Updating, re-installing or uninstalling a plugin no longer asks for a restart it doesn't need (#3990).",
+      "Three small follow-ups from the #3984/#3986/#3987 reviews (#3991).",
+      "A background subagent sees only the tools its fence allows (#3994).",
+      "The agent's set_config tool can no longer point a plugin at a program to run (#3992).",
+      "A plugin can no longer make the core plugin update and enable routes reachable without auth (#3997).",
+      "README is now a launch landing page (#3975).",
+      "New \"Network egress\" page lists every outbound call protoAgent makes on its own (#3976).",
+      "README states the privacy claim the egress audit backs (#3989)."
+    ]
+  },
+  {
     "version": "v0.188.0",
     "date": "2026-10-01",
     "changes": [

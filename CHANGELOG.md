@@ -15,6 +15,166 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.189.0] - 2026-10-02
+
+### Added
+- **A delegation to another agent over A2A now shows that agent's live work on its card too (#3980).**
+  When the peer supports streaming (every protoAgent agent does), its tool calls, files
+  and the answer as it streams in appear on the `@name` card and the `delegate_to` row
+  while it works — the same view coding-agent delegations got — and the result lands a
+  little sooner. Peers that don't stream, and model-endpoint delegates, keep the spinner
+  and the final reply.
+
+- **Brand & Launch replaces the Social Marketing archetype — a draft-only launch manager for any app, held from the picker until it's been tested (#3981).**
+  From a brief it writes a campaign plan, produces scripted screen recordings, GIFs, stills and social cards (Campaign Studio), drafts copy into a linted queue (Social Studio), tracks every asset to operator approval, and ends with a launch-day run sheet. It never posts, never invents a number, and keeps secrets off screen. The held `social-marketing` row, its `social-marketing` persona preset and the `social-archetype` registry entry are removed; create a Brand & Launch member today with `POST /api/fleet` and the `brand-launch` persona.
+
+- **Plugins can find the managed Python runtime through the SDK (#3992).**
+  `sdk.managed_python_exe()` returns the interpreter that `execute_code` runs on the desktop
+  app, or `None` when the runtime isn't installed. Plugins that run Python of their own no
+  longer need to import core internals to find it.
+
+- **Plugins that watch a coding agent through `dispatch_tapped` now see its plan as it changes (#3995).**
+  `dispatch_tapped` takes an optional `on_plan` callback. It receives the coder's full
+  current checklist (for Claude Code, every TaskCreate/TaskUpdate) while the run is still
+  going, so a plugin no longer waits for the final result to see it. The project board's
+  build drawer uses it to show a live plan. A callback that raises never breaks the run.
+
+### Changed
+- **Operator API status codes and validation changed for clients (#3973).** These are
+  visible to anything calling `/api` directly — see "Error shapes" in the operator API
+  reference.
+  - `POST /api/chat` answers a failed turn with a real HTTP error instead of a `200`
+    carrying the error as the reply (or a bare `500`): `429` / `502` / `503` / `400` /
+    `500` on the `/v1` policy, a provider that closed the stream is now `502` on both
+    surfaces, and the body is `{"detail": {code, message, upstream_status, session_id,
+    error_id}}` (an object, not a string).
+  - A missing id is `404`: `PUT` / `DELETE /api/scheduler/jobs/{id}` (were `400` /
+    `200 {canceled: false}`) and task `PATCH`, close and `DELETE` (were `500` /
+    `200 {deleted: false}`).
+  - With no task store, the task routes answer `503 "tasks not enabled"`.
+  - `POST /api/subagents/batch` takes at most 20 tasks, each with a non-empty `prompt`; a
+    task without one now fails the whole batch with `422`.
+  - `POST /api/goals` has a typed body: a wrong type, or `max_iterations` outside 1..1000
+    (`no_progress_limit` 1..100), is a `422`; `max_iterations: 0` no longer means "the
+    default".
+  - `GET /api/background?status=` must be `running`, `completed`, `failed` or `canceled`,
+    and every `/api/background/{id}` route rejects a malformed id with `400`.
+  - A malformed `schedule` or `timezone` is refused at the scheduler route with `400`.
+  - The console treats a `502` with a coded `detail` as the agent's own model failure,
+    never as a cold start to retry, and the goal form caps `max_iterations` at 1000.
+
+### Fixed
+- **The parked-sessions index reads the task store once (#3972).** `GET
+  /api/chat/sessions?parked=true` confirmed each candidate session with two queries, and the
+  task table has no `context_id` index, so each query scanned the whole table: up to 1,600
+  scans for `limit=200`. One windowed query now finds every candidate's newest turn, turn
+  count and last update. The session summary (`GET /api/chat/sessions/{id}`) also takes one
+  query instead of two. Results are unchanged, and stores other than SQLite still order
+  turns by last update.
+- **Console pollers stop on a task state the server can't name (#3972).** The command-palette
+  chat's reopen check and the cross-agent "finished a turn" watcher kept polling a task in
+  the `unknown` / `TASK_STATE_UNSPECIFIED` state. The palette held its composer locked for
+  about two minutes. Both now treat that state as settled, like the main chat already did.
+  The cross-agent watcher also reads GetTask results through the shared unwrap, so a tagged
+  status update is no longer mistaken for a finished task.
+
+- **Checkpoint pruning, knowledge forget-delete, and the non-streaming turn's HITL check hardened (#3973).**
+  Deleting a chat no longer also deletes other chats' goal-iteration checkpoints whose id
+  differs only by case or by a `_`/`%` wildcard (the cascade is an exact prefix match now). The prune sweep and aged-thread lookup are
+  one query each instead of one per thread. The age-based delete holds the write lock from its scan through the delete, so a
+  chat reopened mid-sweep can't lose its new turn. The periodic reclaim no longer runs a full
+  `VACUUM` on a legacy (`auto_vacuum=NONE`) checkpoint DB, which locked out live writes for the
+  whole rewrite; it logs the one-time `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` migration to run
+  with the server stopped instead. A memory forget-delete on a store with no vector table now deletes the chunks
+  instead of aborting (a transient vector error still fails it, so it is retried). A non-streaming turn
+  (`/api/chat`, `/v1`) now reads its pending HITL question while still holding the per-thread
+  lock, as the streaming driver does.
+
+- **Operator API routes no longer leak internals or die on bad input (#3973).** A 500 from
+  an `/api` operator route no longer returns the exception text (it leaked file paths and
+  library internals): the error is logged with its traceback and the client gets a generic
+  message with a short error id to find it by. One malformed bus event no longer ends the
+  `/api/events` stream. `/api/runtime/status`, `/api/goals/{id}` and `/api/subagents` are
+  guarded like their siblings. A goal spec's `max_iterations` / `no_progress_limit` are
+  type- and range-checked on every set path, so `"abc"` is no longer stored and left to
+  break the drive loop. With no task store wired, the task routes stop failing with an
+  AttributeError 500 and `/api/tasks/status` stops claiming `initialized: true`.
+
+- **A fresh install's agent card describes protoAgent instead of a template placeholder, and the default-on cowork pack's optional document libraries no longer warn on first boot (#3976).**
+  `/.well-known/agent-card.json` previously said "Replace this description with your agent's actual purpose"; it now describes the runtime, and `a2a.description` still overrides it. A plugin whose missing deps are all optional-tier now logs that at INFO with the `protoagent plugin install-deps <id>` fix instead of a WARNING; a missing required dep still warns and raises the banner.
+
+- **A `/<subagent>` slash run that keeps working is no longer cut off by the stall guard (#3977).**
+  The run now reports liveness the way a `/<workflow>` step does (#3940): each model call or
+  tool round it completes becomes a rate-limited (one per 5 s) `progress` frame the A2A stall
+  guard counts. It renders no card and sends no A2A frame. Before, the turn was silent from the
+  subagent's start card to its end card, so a run longer than `turn_stall_timeout_seconds`
+  (900 s) was stopped as stalled. A run wedged inside one call still reports nothing and is
+  still stopped at the stall window. Progress is scoped to the turn that started the run, so
+  another turn's subagent can't keep it alive. A native turn's `task()` and `run_workflow`
+  delegations already surfaced their subagents' tool rounds on the lead stream; a test now
+  guards that.
+
+- **"Test connection" and the model list now probe the lead model's own connection (#3978).**
+  With a provider-qualified lead (`gateway:protolabs/smart`) whose key lives only in the
+  connection, `POST /api/config/test-model` returned a spurious `HTTP 401 … No api key passed`
+  while chat worked: the probe went to the retired `model.api_base`/`model.api_key` default
+  route and sent the qualified string as the model id. Both routes now resolve the model the
+  same way the runtime does — that connection's endpoint and stored key, with the bare model id.
+
+- **A coding-agent delegation now shows its live work on its card, and its reply no longer opens with the same sentence twice (#3979).**
+  `@claude-code <task>` (or the agent delegating to an ACP coder — Claude Code, Codex,
+  protoCLI) used to show a spinner and a clock for the whole run. The card now shows the
+  coder's own plan as a checklist, the tool it is running (with its kind and file), its
+  last few tool calls and the tail of what it is saying — live, and still there after a
+  reload. Same view on a `delegate_to` row and a background delegation's row. Separately,
+  Claude Code re-sent each streamed block of text as one more chunk, which doubled the
+  opening sentence of replies; that replay is now dropped.
+
+- **The Install-from-URL dialog shows the whole git URL (#3982).**
+  The URL field shared a row with the ref field and was clipped to its tail (`…ub.com/protoLabsAI/terminal-plugin`); it now spans the dialog, with the ref field and Install button on the row below.
+
+- **Settings ▸ Plugins no longer says a plugin's console view or background surface needs a restart (#3988).**
+  Installing, enabling or disabling a plugin hot-reloads it. Its router, which serves the console view, mounts or unmounts on the live app (ADR 0096), and its background surfaces start or stop on the reconcile (ADR 0018). The hint beside **Restart server** now says that. It names the cases that still need a restart: env / launch-flag changes, and an update or uninstall whose toast asks for one. The plugin guides and the artifact plugin README were corrected to match.
+
+- **Updating, re-installing or uninstalling a plugin no longer asks for a restart it doesn't need (#3990).**
+  These actions recommended a restart for any plugin with a console view, route or background surface. That came from the old "the first router mount wins" limit (#942), which live re-mounting (ADR 0096) had already removed. A new test boots a real server and checks every step from install through update, force re-install, disable, enable and uninstall. At each step the plugin's routes serve the new code or 404 once removed, the old background surface stops and the new one starts. The restart prompt now appears only when a background surface can't be swapped live: its task won't stop, or it declares a `reload(cfg)` hook and keeps running the old code across an update. Disabling or uninstalling a plugin now also cancels a surface task that ignores `stop()`; before, that task kept running untracked.
+
+- **Three small follow-ups from the #3984/#3986/#3987 reviews (#3991).**
+  The fleet "finished a turn" toast no longer calls a turn that ended in an `unknown` /
+  unspecified state "done" — it gets a neutral "ended in an unknown state" toast. A
+  subagent run's model failure (`/api/subagents/run` and `/batch`, HTTP 429/502) now
+  carries the same object detail as `/api/chat` (`{code, message, upstream_status,
+  session_id, error_id}`), so the console no longer mistakes it for an agent that is
+  still booting and retries it up to 25 times. The `/<subagent>` turn-liveness tests
+  run in about 19 s instead of 43 s.
+
+- **A background subagent sees only the tools its fence allows (#3994).** A detached
+  subagent run carried every one of the lead's tool schemas on every model call, and its
+  allowlist was enforced only when a tool was called. On a 120-tool agent that was about
+  42k prompt tokens per call. A run with a 6-tool allowlist also spent rounds calling
+  tools it could see but not use. Fenced turns now bind only the fenced tools. The
+  call-time block is unchanged.
+
+### Security
+- **The agent's `set_config` tool can no longer point a plugin at a program to run (#3992).**
+  It already refused keys named exactly `command`, `args` or `interpreter`. It now also refuses
+  any key with one of those words, or `cmd`, `bin`, `exe` or `binary`, as part of its name
+  (`local_gate_cmd`, `rh_bin`, `binary_path`). It refuses any plugin setting whose manifest marks
+  it `spawns: true`, such as `ffmpeg_path`, even while that plugin is disabled. Keys hidden inside
+  a nested value (`{"some_plugin": {"command": …}}`) are checked too; before, they got past both
+  this check and the secret check. Operators set these keys from Settings as before.
+
+- **A plugin can no longer make the core plugin update and enable routes reachable without auth (#3997).**
+  `POST /api/plugins/<id>/update` and `POST /api/plugins/<id>/enabled` live inside each plugin's own `/api/plugins/<id>/` namespace, and so do the bundle routes under `/api/plugins/bundles/`. A plugin manifest's `public_paths` or `federation_paths` could cover these core routes. An installed plugin could then make its own update and enable routes callable with no credential, or by a federation-token holder. The auth middleware now always keeps these routes gated, the manifest parser drops entries that name them, and `bundles`, `ack` and `install-deps` are reserved plugin ids. A test boots a real server and checks every lifecycle route; another fails if a new core route under the plugin namespace isn't covered.
+
+### Docs
+- **README is now a launch landing page (#3975).** A new hero with download / one-command / from-source paths, a "Watch it" tour, and "Why it's built this way" sit up top. The full feature map is collapsed lower down, with its stale output-protocol row corrected, and the fork/template story moves to "Build your own agent".
+
+- **New "Network egress" page lists every outbound call protoAgent makes on its own (#3976).**
+  `docs/explanation/network-egress.md` covers what calls out, when, where and how to turn it off, backing the "no analytics or tracking SDKs" claim. The marketing site's plugin-install, cost-transport and wire-extension claims were also corrected to match the code.
+
+- **README states the privacy claim the egress audit backs (#3989).** The hero links the [network-egress](docs/explanation/network-egress.md) page, and the desktop line now says no runtime is downloaded at first launch instead of "nothing is fetched" — the app does check for updates and the console loads its fonts.
+
 ## [0.188.0] - 2026-10-01
 
 ### Fixed
