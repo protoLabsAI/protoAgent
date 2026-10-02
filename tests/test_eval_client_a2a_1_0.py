@@ -159,7 +159,11 @@ async def test_params_level_context_id_does_not_pin_the_session():
     contextId field. a2a-sdk 1.1 rejected the unknown field (-32602); since 1.2 the
     JSON-RPC dispatcher ignores unrecognized request fields for forward compatibility
     (a2aproject/a2a-python#1273, #3950), so the request succeeds — in a FRESH context.
-    Either way a params-level contextId never selects the session."""
+    Either way a params-level contextId never selects the session.
+
+    This app mounts the STOCK ``create_jsonrpc_routes``; production mounts
+    ``create_a2a_jsonrpc_routes``, which refuses the request with -32602 instead
+    (``tests/test_a2a_misplaced_ids.py``)."""
     seen: list = []
     app = _build_app(_ctx_recording_stream(seen))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=5) as c:
