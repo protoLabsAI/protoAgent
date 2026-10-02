@@ -44,8 +44,14 @@ export function agoLabel(epochS: number | null | undefined, now: number = Date.n
 }
 
 /** The meta line under a finished goal: `achieved · command: pytest -q · 4m ago` — the
- *  outcome, what decided it (the verifier for a success, the reason for a failure), and when. */
-export function goalOutcomeLine(goal: GoalState, verifier: string, now: number = Date.now()): string {
+ *  outcome, what decided it (the verifier for a success, the reason for a failure), and when.
+ *  `withStatus: false` drops the leading outcome for a surface whose title already says it. */
+export function goalOutcomeLine(
+  goal: GoalState,
+  verifier: string,
+  now: number = Date.now(),
+  withStatus = true,
+): string {
   const why = goal.status === "achieved" ? verifier : (goal.last_reason ?? "").trim() || verifier;
-  return [goal.status, why, agoLabel(goal.finished_at, now)].filter(Boolean).join(" · ");
+  return [withStatus ? goal.status : "", why, agoLabel(goal.finished_at, now)].filter(Boolean).join(" · ");
 }

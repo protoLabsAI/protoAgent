@@ -57,7 +57,7 @@ export function GoalRunStrip({ sessionId }: { sessionId: string }) {
   }
 
   const achieved = phase === "achieved";
-  const line = goalOutcomeLine(goal, verifier, now);
+  const line = goalOutcomeLine(goal, verifier, now, false); // the title already says "achieved"
   return (
     <div
       className={`chat-goal-strip chat-goal-strip--${phase}`}
