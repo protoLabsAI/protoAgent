@@ -548,8 +548,13 @@ def register_plugin_routes(app) -> None:
 
         # Routers re-mount with the fresh code (ADR 0096), so a fresh install and a force
         # re-install over a live plugin are both live; only a surface the reload couldn't
-        # replace asks for a restart.
-        restart = bool(result.reloaded and await _restart_needed(result.installed_ids))
+        # replace asks for a restart. With NO reload (the post-install reload failed, or
+        # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE) the new files are on disk while a plugin that
+        # was already live keeps running its old router / tools / surfaces → restart.
+        if result.reloaded:
+            restart = await _restart_needed(result.installed_ids)
+        else:
+            restart = any(_is_live(pid) for pid in result.installed_ids)
         deps_needed = await asyncio.to_thread(_deps_needed, result.installed_ids)
         if result.enable_error:
             log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
@@ -722,8 +727,12 @@ def register_plugin_routes(app) -> None:
 
         inst = res.install
         # Same truth as the single-plugin update: routers re-mount live; only a member's
-        # surface the reload couldn't replace asks for a restart.
-        restart = bool(inst.reloaded and await _restart_needed(inst.installed_ids))
+        # surface the reload couldn't replace asks for a restart — and with no reload, any
+        # member that was already live keeps running its old code.
+        if inst.reloaded:
+            restart = await _restart_needed(inst.installed_ids)
+        else:
+            restart = any(_is_live(pid) for pid in inst.installed_ids)
         for pid, err in inst.load_errors.items():
             log.warning("[plugins] bundle %s member %s updated but FAILED to load: %s", bundle_id, pid, err)
         return {

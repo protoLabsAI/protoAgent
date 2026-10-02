@@ -512,6 +512,72 @@ def test_fresh_install_hot_mounts_no_restart(monkeypatch):
     assert body["restart_recommended"] is False
 
 
+_LIVE_BOARDY = [{"id": "boardy", "enabled": True, "loaded": True, "views": [{"id": "b"}]}]
+
+
+def test_force_reinstall_whose_reload_failed_over_a_live_plugin_recommends_restart(monkeypatch):
+    # The new files landed but the post-install reload failed (enable_error): the OLD
+    # router / tools / surfaces of the already-live plugin keep running → restart.
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=_LIVE_BOARDY, router_keys={("boardy", "/plugins/boardy")})
+    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (False, ["boom"])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
+    assert body["reloaded"] is False and body["enable_error"]
+    assert body["restart_recommended"] is True
+
+
+def test_force_reinstall_without_enable_over_a_live_plugin_recommends_restart(monkeypatch):
+    # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE: fetch only, no reload — same stale-code story.
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=_LIVE_BOARDY, router_keys={("boardy", "/plugins/boardy")})
+    monkeypatch.setenv("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "1")
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/boardy", "force": True}).json()
+    assert body["reloaded"] is False
+    assert body["restart_recommended"] is True
+
+
+def test_a_fresh_install_whose_reload_failed_needs_no_restart(monkeypatch):
+    # Nothing of it was running, so there is no old code to replace.
+    from graph.plugins import installer
+
+    _wire(monkeypatch, enabled=[], disabled=[], meta=[])
+    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (False, ["boom"])
+    monkeypatch.setattr(installer, "install", lambda url, ref=None, **k: {"id": "boardy"})
+    body = _client().post("/api/plugins/install", json={"url": "https://x/boardy"}).json()
+    assert body["reloaded"] is False and body["restart_recommended"] is False
+
+
+def test_bundle_update_whose_reload_failed_over_a_live_member_recommends_restart(monkeypatch):
+    from graph.plugins import installer
+
+    _wire(
+        monkeypatch,
+        enabled=["board"],
+        disabled=[],
+        meta=[{"id": "board", "enabled": True, "loaded": True}],
+        router_keys={("board", "/api/plugins/board")},
+    )
+    sys.modules["server.agent_init"]._apply_settings_changes = lambda config=None, soul=None: (False, ["boom"])
+    monkeypatch.setattr(
+        installer,
+        "bundle_entry",
+        lambda bid: {"id": bid, "source_url": "https://x/stack", "requested_ref": "", "plugins": ["board"]},
+    )
+    monkeypatch.setattr(
+        installer,
+        "install",
+        lambda url, ref=None, **k: {"bundle": "stacky", "installed": [{"id": "board"}], "enabled": ["board"]},
+    )
+    monkeypatch.setattr(installer, "orphaned_bundle_members", lambda bid, before: [])
+    body = _client().post("/api/plugins/bundles/stacky/update").json()
+    assert body["reloaded"] is False
+    assert body["restart_recommended"] is True
+
+
 def test_force_reinstall_over_mounted_router_is_live(monkeypatch):
     # The reload re-mounts an already-mounted router with the fresh code (ADR 0096 —
     # #942's "the first mount wins" is retired), so a force re-install over a live

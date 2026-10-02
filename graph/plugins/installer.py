@@ -1559,16 +1559,24 @@ def _force_rmtree(path: Path) -> bool:
     def _on_error(func, failed, exc) -> None:
         # The failing entry may be read-only (Windows), or its directory may lack write
         # permission (POSIX) — make both writable and try the same operation once more.
+        # Only a removal is retried here: rmtree also reports a failed ``os.open`` /
+        # ``os.scandir`` of an unreadable directory, and ``os.open(path)`` without flags
+        # raises TypeError. Those just get the chmod — the next pass re-walks the tree. And
+        # nothing may escape: this helper must never raise (a leftover .bak would 500 every
+        # update, and the failed-move rollback would skip restoring the backup).
         exc = exc[1] if isinstance(exc, tuple) else exc  # onerror passes exc_info
         try:
             os.chmod(failed, stat.S_IRWXU if os.path.isdir(failed) else stat.S_IREAD | stat.S_IWRITE)
             parent = os.path.dirname(failed)
             if parent:
                 os.chmod(parent, stat.S_IRWXU)
-            func(failed)
+            if func in (os.unlink, os.rmdir, os.remove):
+                func(failed)
+            else:
+                errors.append(exc)
         except FileNotFoundError:
             pass
-        except OSError as again:
+        except Exception as again:  # noqa: BLE001 — recorded + logged below, never raised
             errors.append(again or exc)
 
     for attempt in range(_RMTREE_ATTEMPTS):
@@ -1580,7 +1588,7 @@ def _force_rmtree(path: Path) -> bool:
                 shutil.rmtree(path, onexc=_on_error)
             else:  # pragma: no cover — 3.11
                 shutil.rmtree(path, onerror=_on_error)
-        except OSError as exc:  # e.g. a link, which rmtree refuses before any callback
+        except Exception as exc:  # noqa: BLE001 — e.g. a link, which rmtree refuses before any callback
             errors.append(exc)
         if not os.path.lexists(path):
             return True

@@ -1570,6 +1570,67 @@ def test_a_read_only_leftover_is_cleared(env):
             os.chmod(sub, stat.S_IRWXU)
 
 
+_ROOT_SKIP = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores permission bits")
+
+
+@_ROOT_SKIP
+def test_force_rmtree_never_raises_on_an_unreadable_directory(tmp_path, monkeypatch, caplog):
+    """rmtree reports a mode-000 directory through ``os.open`` / ``os.scandir``; retrying
+    ``os.open(path)`` without flags raised TypeError straight out of the "never raises"
+    helper (#3990 adversarial review). It must not raise, and must log what kept it."""
+    tree = tmp_path / "t"
+    locked = tree / "locked"
+    locked.mkdir(parents=True)
+    (locked / "f").write_text("x")
+    os.chmod(locked, 0)
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    try:
+        # Normal case: the chmod lets the next pass in, so the tree goes.
+        assert installer._force_rmtree(tree) is True
+        assert not tree.exists()
+
+        # A directory that stays unreadable (chmod can't help): no raise, logged, False.
+        locked.mkdir(parents=True)
+        os.chmod(locked, 0)
+        monkeypatch.setattr(installer.os, "chmod", lambda *a, **k: None)
+        with caplog.at_level("WARNING", logger=installer.log.name):
+            assert installer._force_rmtree(tree) is False
+        assert "could not delete" in caplog.text
+    finally:
+        monkeypatch.undo()
+        if locked.exists():
+            os.chmod(locked, stat.S_IRWXU)
+
+
+@_ROOT_SKIP
+def test_failed_move_restores_the_backup_even_over_an_unreadable_half_copy(env, monkeypatch):
+    """The rollback path cleans the half-moved tree with ``_force_rmtree`` before renaming
+    the backup back. A mode-000 dir in that half copy used to raise out of it, so the
+    previous version was never restored."""
+    import shutil
+
+    repo = _make_plugin_repo(env)
+    first = installer.install(str(repo))
+    _commit_update(repo)
+    target = installer.live_plugins_dir() / "demo_ext"
+    real_move = shutil.move
+
+    def half_then_die(src, dst, *a, **k):
+        if Path(dst) == target:
+            (target / "half" / "locked").mkdir(parents=True)
+            os.chmod(target / "half" / "locked", 0)
+            raise OSError("simulated: died mid-move")
+        return real_move(src, dst, *a, **k)
+
+    monkeypatch.setattr(shutil, "move", half_then_die)
+    monkeypatch.setattr(installer.time, "sleep", lambda s: None)
+    with pytest.raises(installer.InstallError, match="previous version was restored"):
+        installer.install(str(repo))
+    assert (target / "protoagent.plugin.yaml").exists() and not (target / "half").exists()
+    assert not (target / "extra.py").exists()
+    assert [e["resolved_sha"] for e in installer._read_lock()["plugins"]] == [first["resolved_sha"]]
+
+
 def test_force_rmtree_retries_a_transient_failure(tmp_path, monkeypatch):
     """A file another process holds for a moment (an AV scan on Windows) fails one
     pass; the next pass, after a short wait, removes the tree."""
