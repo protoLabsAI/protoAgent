@@ -461,6 +461,8 @@ def working_tree_diff(root: Path, timeout: float = DIFF_TIMEOUT_S) -> WorkingTre
 
 #: The fallback poll's own deadline — it runs every couple of seconds, so it gives up early.
 STAMP_TIMEOUT_S = 5.0
+#: A stamp slower than this (ms) is reported ``slow`` — the console's poll then backs off.
+STAMP_SLOW_MS = 500
 
 
 def working_tree_stamp(root: Path, timeout: float = STAMP_TIMEOUT_S) -> str | None:
@@ -469,43 +471,49 @@ def working_tree_stamp(root: Path, timeout: float = STAMP_TIMEOUT_S) -> str | No
 
     The console's code pane polls this while it is on screen (``GET /api/fs/stamp``) to
     notice edits nothing reported — a terminal, an editor, a coder's shell tool — and only
-    refetches the full diff when the stamp moves. It hashes ``HEAD``, the porcelain status
-    (which files differ, and how) and each listed file's ``lstat`` size + mtime (a file
-    edited AGAIN keeps its status letter). One status run instead of the diff's six git
-    runs and the patch: hardened exactly like :func:`working_tree_diff` (``git status``
-    runs clean filters to hash stat-dirty files, so they are neutralised here too). Never
-    reads file content. Raises :class:`GitTimeout` / :class:`GitError` like the diff.
+    refetches the full diff when the stamp moves. A stamp only has to MOVE when something
+    changed; it never has to say what. So it is built from metadata alone and **never reads
+    a tracked file's content**:
+
+    * ``HEAD``;
+    * ``git diff-files --name-only`` — the tracked files whose index STAT differs from the
+      working tree. Plumbing ``diff-files`` reports a stat-dirty file as such instead of
+      re-hashing it to prove it clean (porcelain ``git status`` re-hashes; with
+      ``GIT_OPTIONAL_LOCKS=0`` it can never save the refreshed stat, so a ``touch``-ed 800 MB
+      of tracked files was re-read on EVERY 2 s poll — ~2 s of a core per open pane). A
+      touched-but-unchanged file just stays listed, with a stable ``lstat``: no churn;
+    * ``git diff-index --cached --name-status`` — what is staged vs ``HEAD`` (index vs tree,
+      no working-tree read);
+    * ``git ls-files --others --exclude-standard`` — untracked files;
+    * each listed path's ``lstat`` size + mtime (a file edited AGAIN keeps its entry).
+
+    Hardened like :func:`working_tree_diff` (same argv discipline, env scrub, fsmonitor/hook
+    overrides; filter drivers still neutralised, though with no hashing nothing would run
+    them). Raises :class:`GitTimeout` / :class:`GitError` like the diff.
     """
     import hashlib
 
     git = _Git(root, timeout)
-    probe = git.run("rev-parse", "--is-inside-work-tree", "--show-prefix", ok_codes=(0, 128))
-    lines = probe.decode("utf-8", "surrogateescape").split("\n")
-    if not lines or lines[0].strip() != "true":
+    probe = git.run("rev-parse", "--is-inside-work-tree", ok_codes=(0, 128))
+    if probe.strip() != b"true":
         return None
-    prefix = lines[1].strip() if len(lines) > 1 else ""
     _neutralise_filters(git)
     head = git.run("rev-parse", "--verify", "-q", "HEAD", ok_codes=(0, 1)).strip()
-    status = git.run(
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--ignore-submodules=all",
-        "--no-renames",
-        "--",
-        ".",
+    base = head.decode() or git.run("hash-object", "-t", "tree", "--stdin", stdin=b"").decode().strip()
+    # Every listing is relative to `root` (`--relative` / ls-files' own cwd-relative paths),
+    # and scoped to it, so a project inside a bigger repo fingerprints only itself.
+    dirty = git.run("diff-files", "-z", "--name-only", "--relative", "--ignore-submodules=all", "--", ".")
+    staged = git.run(
+        "diff-index", "-z", "--cached", "--name-status", "--relative", "--ignore-submodules=all", base, "--", "."
     )
+    untracked = git.run("ls-files", "-z", "--others", "--exclude-standard", "--", ".")
     h = hashlib.sha256()
-    h.update(head + b"\0" + status + b"\0")
-    for n, entry in enumerate(_z_fields(status)):
+    h.update(head + b"\0" + dirty + b"\1" + staged + b"\1" + untracked + b"\1")
+    for n, rel in enumerate(_z_fields(dirty) + _z_fields(untracked)):
         if n >= MAX_FILES:
             break
-        top_rel = entry[3:]
-        if prefix and not top_rel.startswith(prefix):
-            continue
         try:
-            st = os.lstat(root / top_rel[len(prefix) :])
+            st = os.lstat(root / rel)
             h.update(f"{st.st_size}:{st.st_mtime_ns}\0".encode())
         except OSError:
             h.update(b"-\0")

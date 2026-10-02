@@ -76,6 +76,11 @@ TEXT_TAIL_MAX = 400
 #: Paths per tool call, and open calls, remembered for the code pane's change signal.
 WRITE_PATHS_MAX = 20
 OPEN_WRITES_MAX = 64
+#: ``fs.changed`` per tracker at most every this many seconds (≤ 2/s): a delegate's writes
+#: inside the window are coalesced into the next one (trailing), never dropped.
+WRITE_EVENT_INTERVAL_S = 0.5
+#: Distinct written paths held between two ``fs.changed`` flushes.
+PENDING_WRITES_MAX = 200
 #: Seconds between snapshots. A coder can fire dozens of updates a second while it
 #: streams text; the card needs a few frames a second at most.
 MIN_INTERVAL_S = 0.75
@@ -139,10 +144,21 @@ class DelegateProgress:
         min_interval: float = MIN_INTERVAL_S,
         clock: Callable[[], float] = time.monotonic,
         workdir: str | None = None,
+        announce_writes: bool = True,
+        write_interval: float = WRITE_EVENT_INTERVAL_S,
     ) -> None:
         self.target = target
         # The delegate's cwd — what a RELATIVE location in its tool calls is relative to.
         self.workdir = workdir
+        # Whether this delegate's reported writes may become ``fs.changed`` at all. Only a
+        # delegate that writes to THIS machine's filesystem (a local ACP subprocess, a
+        # loopback A2A peer) — a remote peer's ``args.path`` names a file on ITS disk, and
+        # trusting it would let any peer drive refetches + Follow jumps in every console.
+        self.announce_writes = announce_writes
+        self._write_interval = write_interval
+        self._pending_writes: list[str] = []
+        self._last_write_emit: float | None = None
+        self._write_flush: asyncio.Task | None = None
         self._sink = sink
         self._min_interval = min_interval
         self._clock = clock
@@ -241,18 +257,46 @@ class DelegateProgress:
         frame itself is often bare. Never raises: the card and the delegation come first."""
         paths = raw_paths or self._open_paths.get(tid) or []
         self._open_paths.pop(tid, None)
-        if status != "completed" or not paths:
+        if not self.announce_writes or status != "completed" or not paths:
             return
         row = next((r for r in [self.current_tool, *reversed(self.recent_tools)] if r and r.get("id") == tid), None)
         kind = str(event.get("kind") or (row or {}).get("kind") or "")
         name = str((row or {}).get("name") or event.get("name") or "")
         try:
-            from graph.fs_changes import is_write_tool, notify_paths_changed
+            from graph.fs_changes import is_write_tool
 
-            if is_write_tool(kind, name):
-                notify_paths_changed(paths, source="delegate", target=self.target, workdir=self.workdir)
+            if not is_write_tool(kind, name):
+                return
+        except Exception:  # noqa: BLE001 — a live view must never cost the delegation
+            return
+        for p in paths:
+            if p not in self._pending_writes and len(self._pending_writes) < PENDING_WRITES_MAX:
+                self._pending_writes.append(p)
+        # Throttled: at most one flush per write_interval, trailing — a burst of edits (or a
+        # flood of frames) becomes one event, not one per call.
+        now = self._clock()
+        if self._last_write_emit is None or now - self._last_write_emit >= self._write_interval:
+            self._flush_writes()
+        elif self._write_flush is None or self._write_flush.done():
+            wait = self._write_interval - (now - self._last_write_emit)
+            self._write_flush = asyncio.get_running_loop().create_task(self._flush_writes_after(wait))
+
+    def _flush_writes(self) -> None:
+        """Publish the pending writes (one ``fs.changed`` per project they touch)."""
+        if not self._pending_writes:
+            return
+        paths, self._pending_writes = self._pending_writes, []
+        self._last_write_emit = self._clock()
+        try:
+            from graph.fs_changes import notify_paths_changed
+
+            notify_paths_changed(paths, source="delegate", target=self.target, workdir=self.workdir)
         except Exception:  # noqa: BLE001 — a live view must never cost the delegation
             log.debug("[delegate-progress] fs change notify failed", exc_info=True)
+
+    async def _flush_writes_after(self, wait: float) -> None:
+        await asyncio.sleep(max(0.0, wait))
+        self._flush_writes()
 
     # -- emission --------------------------------------------------------------
 
@@ -297,7 +341,9 @@ class DelegateProgress:
             await self._emit()
 
     async def finish(self, *, ok: bool = True) -> None:
-        """The run is over: one final ``done`` snapshot, whatever the throttle says."""
+        """The run is over: one final ``done`` snapshot, whatever the throttle says — and
+        the last coalesced writes, whatever the write throttle says."""
+        self._flush_writes()
         self.close()
         if self.done:
             return
@@ -311,3 +357,6 @@ class DelegateProgress:
         if self._trailing is not None and not self._trailing.done():
             self._trailing.cancel()
         self._trailing = None
+        if self._write_flush is not None and not self._write_flush.done():
+            self._write_flush.cancel()
+        self._write_flush = None

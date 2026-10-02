@@ -26,6 +26,8 @@ export const REFRESH_MAX_WAIT_MS = 1_000;
 export const STAMP_POLL_MS = 2_000;
 /** After a failed poll (timeout, git error), wait this long before asking again. */
 export const STAMP_BACKOFF_MS = 10_000;
+/** Ceiling for the slow-stamp backoff (the server marks a stamp `slow` past ~500 ms). */
+export const STAMP_SLOW_MAX_MS = 30_000;
 
 export type FsChange = {
   project: string;

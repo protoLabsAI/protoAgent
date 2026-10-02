@@ -58,6 +58,10 @@ export type FsStamp = {
   project: string;
   is_git: boolean;
   stamp: string;
+  /** How long the server took, and whether that was past its slow threshold — the poll
+   *  backs off on `slow` (absent on an older server: treated as fast). */
+  elapsed_ms?: number;
+  slow?: boolean;
 };
 
 export const workspaceApi = {

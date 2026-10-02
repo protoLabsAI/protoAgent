@@ -133,6 +133,17 @@ def _hub_proxied_slug(url: str) -> str:
     return ""
 
 
+def _writes_are_local(url: str) -> bool:
+    """May this peer's reported file writes become ``fs.changed`` for the code pane (ADR 0112)?
+
+    Only when it writes to THIS machine's disk: a loopback peer that is not the hub's proxy
+    to a member (``/agents/<slug>/a2a`` can front a remote, LAN-paired instance). A remote
+    peer's tool-call ``args.path`` names a file on its own filesystem — mapping it onto our
+    registered projects would let any peer forge refetch storms and Follow jumps in every
+    open console. Its edits still surface through the pane's stamp poll if they are real."""
+    return _is_loopback_url(url) and not _hub_proxied_slug(url)
+
+
 def _a2a_error_detail(d: Delegate, err: object) -> str:
     """Turn a JSON-RPC error payload into an operator-legible cause — especially the
     version-skew case, which otherwise surfaces as an opaque ``-32009``.
@@ -850,7 +861,11 @@ class A2aAdapter(Adapter):
             from .a2a_progress import LiveView
 
             sink = current_sink()
-            live = LiveView(DelegateProgress(d.name, sink)) if sink is not None and info.get("streaming") else None
+            live = (
+                LiveView(DelegateProgress(d.name, sink, announce_writes=_writes_are_local(d.url)))
+                if sink is not None and info.get("streaming")
+                else None
+            )
             try:
                 reply = await self._dispatch_traced(
                     d,

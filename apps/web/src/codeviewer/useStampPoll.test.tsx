@@ -14,8 +14,8 @@ vi.mock("../lib/api", async (importOriginal) => {
 });
 
 import { ApiError } from "../lib/api";
-import { STAMP_POLL_MS } from "./liveRefresh";
-import { useStampPoll } from "./useStampPoll";
+import { STAMP_POLL_MS, STAMP_SLOW_MAX_MS } from "./liveRefresh";
+import { nextStampInterval, useStampPoll } from "./useStampPoll";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +62,40 @@ describe("useStampPoll", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
     await tick(STAMP_POLL_MS); // s2 again
     expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("backs off exponentially (to 30 s) while the server says the stamp is slow; resets on a change", async () => {
+    let stamp = "s1";
+    let slow = true;
+    mocks.fsStamp.mockImplementation(async () => ({ project: "app", is_git: true, stamp, slow }));
+    const onChange = vi.fn();
+    await act(async () => root.render(h(Probe, { onChange })));
+    await tick(0); // baseline (slow) → next in 4 s
+    const at = () => mocks.fsStamp.mock.calls.length;
+    await tick(STAMP_POLL_MS);
+    expect(at()).toBe(1);
+    await tick(STAMP_POLL_MS); // 4 s
+    expect(at()).toBe(2);
+    await tick(8_000 - 1);
+    expect(at()).toBe(2);
+    await tick(1); // 8 s
+    expect(at()).toBe(3);
+    // A change resets the cadence even while slow.
+    stamp = "s2";
+    await tick(16_000);
+    expect(at()).toBe(4);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    slow = false;
+    await tick(STAMP_POLL_MS);
+    expect(at()).toBe(5);
+  });
+
+  it("nextStampInterval caps at 30 s and resets on fast or moved", () => {
+    expect(nextStampInterval(STAMP_POLL_MS, true, false)).toBe(STAMP_POLL_MS * 2);
+    expect(nextStampInterval(STAMP_SLOW_MAX_MS, true, false)).toBe(STAMP_SLOW_MAX_MS);
+    expect(nextStampInterval(16_000, true, false)).toBe(STAMP_SLOW_MAX_MS);
+    expect(nextStampInterval(16_000, false, false)).toBe(STAMP_POLL_MS);
+    expect(nextStampInterval(16_000, true, true)).toBe(STAMP_POLL_MS);
   });
 
   it("a 404 stops polling for good", async () => {

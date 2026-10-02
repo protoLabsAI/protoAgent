@@ -47,6 +47,7 @@ from .a2a import (  # noqa: F401 — re-exported
     _warn_if_suspiciously_short,
     _wire_int,
     _wire_number,
+    _writes_are_local,
     mark_delegation_detached,
 )
 from .acp_adapter import _INCOMPLETE_STOP_REASONS, AcpAdapter, _mark_incomplete  # noqa: F401 — re-exported
