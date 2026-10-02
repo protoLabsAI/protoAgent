@@ -561,12 +561,12 @@ def _on_custom_delegate_progress(st: _TurnStreamState, event: dict, name: str, p
 def _on_custom_goal_probe(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
     # The goal checkpoint (graph/middleware/goal_checkpoint.py) is running the goal's
     # verifier mid-turn — it can take a while and nothing else streams meanwhile, so say so
-    # as a transient status line (a plain-string tool_start, like the drive's 🎯 notes).
-    # Only the lead's own turn: a subagent's graph has no goal pass.
+    # as a transient `goal_status` line (the executor's typed goal-status frame, like the
+    # drive's 🎯 notes — never a tool_start). Only the lead's own turn.
     data = event.get("data")
     text = str(data.get("text") or "") if isinstance(data, dict) else ""
     if text and not parent_tool_id:
-        yield ("tool_start", f"🎯 {text}")
+        yield ("goal_status", {"text": f"🎯 {text}"})
 
 
 # `astream_events` kind → handler. Kinds not listed produce nothing (skills are no

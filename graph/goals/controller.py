@@ -554,6 +554,17 @@ class GoalController:
             log.warning("[goal] mid-turn verifier probe failed for %s", session_id, exc_info=True)
             return None
 
+    async def finish_mid_turn(self, session_id: str, result) -> str:
+        """Record the active goal ACHIEVED on a passing mid-turn probe (``probe``'s result) —
+        the same terminal path as ``evaluate`` (history, hooks, ``goal.achieved``), before
+        the turn's closing call. Returns the terminal note, or ``""`` when there is no
+        active goal any more."""
+        state = self.active_goal(session_id)
+        if state is None or result is None or not result.met:
+            return ""
+        decision = await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
+        return decision.note
+
     @staticmethod
     def _record_history(state: GoalState, status: str, reason: str, evidence: str) -> None:
         """Append a per-iteration event to the goal's timeline (capped). Reason/evidence are

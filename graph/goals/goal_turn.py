@@ -46,6 +46,11 @@ class GoalTurn:
     probe_round: int = -1
     probe_after: float = 0.0
     probes: int = 0
+    # Set when a probe passed mid-turn: the goal is already recorded achieved, and this is
+    # its terminal note ("✓ goal achieved: …") for the drive to report. ``closing`` is True
+    # until the one tool-less closing model call has run.
+    achieved_note: str = ""
+    closing: bool = False
 
     @property
     def capped(self) -> bool:

@@ -4,7 +4,9 @@ REAL streaming driver (``server.chat._chat_langgraph_stream``) and a real
 
 The farm-b repro: ``/goal new`` + command verifier ``pytest -q``; the agent fixed the bug,
 saw the tests pass, and kept going in the same turn — "the goal is already complete" two or
-three more times — before a text-only reply let the post-turn verifier run.
+three more times — before a text-only reply let the post-turn verifier run. Now a passing
+mid-turn probe records the goal achieved and runs ONE closing call with no tools bound, so
+the reply ends on a short summary and no tool runs after the pass.
 """
 
 from __future__ import annotations
@@ -37,18 +39,38 @@ def _flag_command(flag) -> dict:
     }
 
 
+class _Clock:
+    """A fake monotonic clock: each model round takes ``per_call`` seconds."""
+
+    def __init__(self, per_call: float):
+        self.t = 1000.0
+        self.per_call = per_call
+
+    def __call__(self):
+        return self.t
+
+
 class _ScriptedFake(GenericFakeChatModel):
-    """Fake chat model with tool calls; ``side_effects[i]`` runs before call ``i`` answers."""
+    """Fake chat model with tool calls; ``side_effects[i]`` runs before call ``i`` answers.
+    Records how many tools were bound for each call (``bound``)."""
 
     calls: int = 0
     side_effects: dict = {}
+    clock: object = None
+    bound: list = []
+    _pending_bound: int = 0
 
     def bind_tools(self, tools, **kwargs):
+        self._pending_bound = len(tools or [])
         return self
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         from langchain_core.messages import AIMessageChunk
 
+        self.bound.append(self._pending_bound)
+        self._pending_bound = 0
+        if self.clock is not None:
+            self.clock.t += self.clock.per_call
         effect = self.side_effects.get(self.calls)
         self.calls += 1
         if effect:
@@ -61,33 +83,33 @@ class _ScriptedFake(GenericFakeChatModel):
         yield ChatGenerationChunk(message=AIMessageChunk(content=message.content or "", tool_call_chunks=chunks))
 
 
-def _plan_call(text: str, call_id: str) -> AIMessage:
-    return AIMessage(
-        content=text,
-        tool_calls=[{"name": "update_goal_plan", "args": {"plan": text or "plan"}, "id": call_id, "type": "tool_call"}],
-    )
-
-
 def _call(name: str, text: str, call_id: str, args: dict | None = None) -> AIMessage:
     return AIMessage(content=text, tool_calls=[{"name": name, "args": args or {}, "id": call_id, "type": "tool_call"}])
 
 
-def _install(monkeypatch, tmp_path, script, side_effects):
-    """A real lead graph on ``script`` + a real GoalController with a flag-file command goal."""
+SUMMARY = "Fixed apply_discount to take a percentage; both tests pass."
+
+
+def _install(monkeypatch, tmp_path, script, side_effects, *, per_call: float = 3.0):
+    """A real lead graph on ``script`` + a real GoalController with a flag-file command goal.
+    The DEFAULT probe debounce runs on a fake clock at ``per_call`` seconds per model round."""
     import runtime.state as rs
     from langgraph.checkpoint.memory import MemorySaver
 
     flag = tmp_path / "fixed.flag"
-    fake = _ScriptedFake(messages=iter(script), side_effects={k: (lambda: flag.write_text("x")) for k in side_effects})
+    clock = _Clock(per_call)
+    monkeypatch.setattr("graph.middleware.goal_checkpoint._now", clock)
+    fake = _ScriptedFake(
+        messages=iter(script),
+        side_effects={k: (lambda: flag.write_text("x")) for k in side_effects},
+        clock=clock,
+        bound=[],
+    )
     cfg = LangGraphConfig(goal_max_iterations=8)
     # The goal-loop tools (update_goal_plan) bind only while a plugin verifier is
     # registered (#2690) — cowork registers one on a stock install; the registry is empty
     # in unit tests.
     monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"test:check": object()})
-    # No debounce between probes here (test_goal_checkpoint.py covers it): every tool round
-    # may probe.
-    monkeypatch.setattr("graph.middleware.goal_checkpoint.PROBE_MIN_INTERVAL_S", 0.0)
-    monkeypatch.setattr("graph.middleware.goal_checkpoint.PROBE_BACKOFF_FACTOR", 0.0)
     with patch("graph.agent.create_llm", lambda *a, **k: fake):
         from graph.agent import create_agent_graph
 
@@ -97,7 +119,7 @@ def _install(monkeypatch, tmp_path, script, side_effects):
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", ctrl, raising=False)
     assert ctrl.set_goal_operator("gc1", "make the failing test pass", _flag_command(flag))[0]
-    return fake, ctrl
+    return fake, ctrl, g
 
 
 async def _drive():
@@ -105,49 +127,67 @@ async def _drive():
     return frames, next(p for k, p in frames if k == "done")
 
 
+async def _tools_after_the_pass(g) -> list[str]:
+    """Tool results checkpointed AFTER the closing note — must be none."""
+    from langchain_core.messages import ToolMessage
+
+    from graph.middleware.guard_notes import is_guard_note
+
+    snap = await g.aget_state({"configurable": {"thread_id": "a2a:gc1"}})
+    msgs = snap.values["messages"]
+    at = next(i for i, m in enumerate(msgs) if is_guard_note(m, "goal-checkpoint"))
+    return [m.name for m in msgs[at:] if isinstance(m, ToolMessage)]
+
+
+def _assert_closed(fake, ctrl, done, *, closing_call: int):
+    assert fake.calls == closing_call + 1, "one closing call after the pass, then the turn ends"
+    assert fake.bound[closing_call] == 0, "the closing call runs with no tools bound"
+    assert all(n > 0 for n in fake.bound[:closing_call]), "working calls had their tools"
+    assert "already complete" not in done and "explore" not in done
+    # The reply ends on the closing summary, then the goal's terminal note.
+    assert done.split("---")[0].rstrip().endswith(SUMMARY)
+    assert done.rstrip().endswith("✓ goal achieved: command exited 0")
+    state = ctrl.store.get("gc1")
+    assert state.status == "achieved" and state.iteration == 0 and len(state.history) == 1
+
+
 @pytest.mark.asyncio
-async def test_goal_turn_stops_at_the_plan_record_that_meets_the_goal(monkeypatch, tmp_path):
-    """The repro's shape: plan → (fix) → "Both tests pass" + plan. The turn ends there:
-    the scripted "already complete" rounds are never requested, and the goal is achieved
-    on iteration 0 with one history entry."""
+async def test_plan_record_shape_closes_on_a_summary(monkeypatch, tmp_path):
+    """plan → (fix) "Both tests pass" + plan → [pass] → closing summary."""
     script = [
-        _call("update_goal_plan", "Exploring the repo first.", "p1", {"plan": "explore"}),  # not met yet
-        _call("update_goal_plan", "Both tests pass.", "p2", {"plan": "done"}),  # met → ends here
+        _call("update_goal_plan", "Exploring the repo first.", "p1", {"plan": "explore"}),
+        _call("update_goal_plan", "Both tests pass.", "p2", {"plan": "done"}),
+        AIMessage(content=SUMMARY),
         AIMessage(content="The goal is already complete."),
-        AIMessage(content="The goal is already complete — no further action needed."),
     ]
-    # The "fix" lands while the model produces its second answer (as an edit_file in that
-    # round would) — so the probe after p1 fails and the probe after p2 passes.
-    fake, ctrl = _install(monkeypatch, tmp_path, script, side_effects={1})
+    fake, ctrl, g = _install(monkeypatch, tmp_path, script, side_effects={1})
 
     _frames, done = await _drive()
 
-    assert fake.calls == 2, "the turn must end at the tool round whose probe passed"
-    assert "already complete" not in done
-    assert "goal achieved" in done
-    state = ctrl.store.get("gc1")
-    assert state.status == "achieved" and state.iteration == 0 and len(state.history) == 1
+    _assert_closed(fake, ctrl, done, closing_call=2)
+    assert await _tools_after_the_pass(g) == []
 
 
 @pytest.mark.asyncio
-async def test_goal_turn_stops_after_any_tool_round_not_only_a_plan_record(monkeypatch, tmp_path):
-    """The review's alternate tool order: no ``update_goal_plan`` at all. calculator (the fix
-    lands) → current_time "Both tests pass. Let me explore…" → current_time "already
-    complete" → text. The first probe after the fix ends the turn."""
+async def test_review_repro_default_debounce_closes_right_after_the_fix(monkeypatch, tmp_path):
+    """The round-2 review repro, with the DEFAULT debounce on a fake clock at 3s per model
+    round: current_time (probe: not met) → calculator (the fix lands) → [probe: met] →
+    closing call. A 10s floor suppressed the probe after the fix and the turn ran on to 5
+    calls with "already complete" twice. The scripted closing answer even tries to call a
+    tool — it has none bound, and the call is dropped."""
     script = [
-        _call("calculator", "Applying the fix.", "t1", {"expression": "1+1"}),
-        _call("current_time", "Both tests pass. Let me explore the project again…", "t2"),
-        _call("current_time", "The goal is already complete.", "t3"),
+        _call("current_time", "Looking around.", "t1"),
+        _call("calculator", "Applying the fix.", "t2", {"expression": "1+1"}),
+        _call("current_time", SUMMARY, "t3"),  # the closing call: its tool call must not run
+        _call("current_time", "Both tests pass. Let me explore the project again…", "t4"),
         AIMessage(content="The goal is already complete — no further action needed."),
     ]
-    fake, ctrl = _install(monkeypatch, tmp_path, script, side_effects={0})
+    fake, ctrl, g = _install(monkeypatch, tmp_path, script, side_effects={1})
 
     frames, done = await _drive()
 
-    assert fake.calls == 1, "the turn must end at the first tool round after the fix"
-    assert "already complete" not in done and "explore" not in done
-    assert "goal achieved" in done
-    state = ctrl.store.get("gc1")
-    assert state.status == "achieved" and state.iteration == 0 and len(state.history) == 1
-    # The probe said so on the live stream while it ran.
-    assert any(k == "tool_start" and "checking the goal" in str(p) for k, p in frames)
+    _assert_closed(fake, ctrl, done, closing_call=2)
+    assert await _tools_after_the_pass(g) == []
+    # The probe said so on the live stream — as a goal status line, never a tool_start.
+    assert any(k == "goal_status" and "checking the goal" in str(p) for k, p in frames)
+    assert not any(k == "tool_start" and "🎯" in str(p) for k, p in frames)

@@ -306,7 +306,16 @@ class GoalDrive:
         if notice:
             self.text = f"{self.text}\n\n{notice}"
 
+    def _met_mid_turn(self) -> str:
+        """The terminal note when the pass just run already met — and recorded — the goal
+        mid-turn (``graph.middleware.goal_checkpoint``); ``""`` otherwise."""
+        return str(getattr(self.last_pass, "achieved_note", "") or "") if self.last_pass is not None else ""
+
     async def _steps(self) -> AsyncIterator[GoalNote | GoalContinuation]:
+        if met := self._met_mid_turn():
+            yield GoalNote(met)
+            self.text = f"{self.text}\n\n---\n{met}"
+            return
         if STATE.goal_controller is None or not STATE.goal_controller.active_goal(self.session_id):
             return
         # Hard cap on top of the controller's own budget: a verifier that never says
@@ -345,6 +354,11 @@ class GoalDrive:
             self.last_pass_config = step.config
             if step.text:
                 self.text = step.text
+            if met := self._met_mid_turn():
+                # The continuation met the goal mid-turn: it is already recorded achieved.
+                note = met
+                yield GoalNote(met)
+                break
         if note:
             self.text = f"{self.text}\n\n---\n{note}"
 

@@ -645,6 +645,54 @@ async def test_consumed_steer_flushes_prior_text_then_surfaces_a_typed_boundary(
 
 
 @pytest.mark.asyncio
+async def test_goal_status_is_a_typed_status_line_not_a_tool_call_or_text():
+    """#4012: a goal drive's 🎯 status line used to be a plain-string tool_start — WORKING
+    *text* a delegator's card committed as content, counted as a tool call. It now rides its
+    own goal-status DataPart, after the text that preceded it, and counts as no tool call."""
+    import json
+
+    from a2a_impl.executor import GOAL_STATUS_MIME
+
+    outcomes: list[TurnOutcome] = []
+    set_terminal_hook(outcomes.append)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "Applying the fix. " * 8)
+        yield ("goal_status", {"text": "🎯 checking the goal…"})
+        yield ("done", "Applying the fix.")
+
+    app = _build_app(stream)
+    goal_lines, plain_status_text = [], []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "goal",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                result = json.loads(line[5:].strip()).get("result", {})
+                status = result.get("statusUpdate", {}).get("status", {})
+                for part in status.get("message", {}).get("parts", []):
+                    if (part.get("metadata") or {}).get("mimeType") == GOAL_STATUS_MIME:
+                        goal_lines.append(part.get("data", {}).get("text"))
+                    elif part.get("text"):
+                        plain_status_text.append(part["text"])
+    set_terminal_hook(None)
+
+    assert goal_lines == ["🎯 checking the goal…"]
+    assert not any("🎯" in t for t in plain_status_text)
+    assert outcomes and outcomes[0].tool_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_tool_end_fragment_carries_true_output_size():
     """#2775: the fragment's `result` is the CAPPED card preview; `outputChars` rides
     the same extra-key lane as parentToolCallId with the true pre-truncation size, so

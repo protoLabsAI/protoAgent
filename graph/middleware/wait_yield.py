@@ -8,9 +8,10 @@ signal, so this middleware provides it: once ``wait`` has run, the next
 ``before_model`` jumps straight to ``end`` instead of looping back to the model.
 
 It is also where a GOAL-DRIVEN turn ends once the goal's verifier passes mid-turn
-(``graph.middleware.goal_checkpoint``): probed (debounced) after each tool round, so a turn
-that already met its goal doesn't run on re-announcing "already complete". Async hook
-only — the verifier is async.
+(``graph.middleware.goal_checkpoint``): probed (debounced) after each tool round; on a pass
+the goal is recorded achieved and ONE closing model call (tools unbound) writes a short
+summary, so a turn that already met its goal doesn't run on re-announcing "already
+complete". Async hooks only — the verifier is async.
 
 Detection is precise — it only fires when a ``wait`` ToolMessage sits in the
 trailing tool-result block (i.e. ``wait`` just ran in *this* turn). On a fresh
@@ -23,7 +24,7 @@ from __future__ import annotations
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.messages import ToolMessage
 
-from graph.middleware.goal_checkpoint import goal_met_after_tools
+from graph.middleware.goal_checkpoint import closing_call, goal_checkpoint
 
 WAIT_TOOL_NAME = "wait"
 
@@ -59,6 +60,9 @@ class WaitYieldMiddleware(AgentMiddleware):
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         if _just_waited(state.get("messages") or []):
             return {"jump_to": "end"}
-        if await goal_met_after_tools(state):
-            return {"jump_to": "end"}
-        return None
+        return await goal_checkpoint(state)
+
+    async def awrap_model_call(self, request, handler):  # type: ignore[override]
+        # The goal checkpoint's closing call runs with no tools bound (a no-op otherwise).
+        # A wrap hook adds no graph node.
+        return await closing_call(request, handler)

@@ -85,3 +85,36 @@ describe("a task answered across legs (#3930)", () => {
     expect(onText).toHaveBeenLastCalledWith("Let me ask.\n\nYou like banana.", false);
   });
 });
+
+// A goal drive's status line (#4012) rides its own typed DataPart: the console shows it as
+// the transient status line, and it is neither a tool call nor answer text.
+describe("goal status frames (#4012)", () => {
+  it("surface as the status line, not a tool call or text", () => {
+    const onStatus = vi.fn();
+    const onToolCall = vi.fn();
+    const onText = vi.fn();
+    const dispatch = makeA2ADispatcher(CTX, { onStatus, onToolCall, onText } as never);
+    dispatch({
+      result: {
+        statusUpdate: {
+          taskId: "t1",
+          contextId: CTX,
+          status: {
+            state: "TASK_STATE_WORKING",
+            message: {
+              parts: [
+                {
+                  data: { text: "🎯 checking the goal…" },
+                  metadata: { mimeType: "application/vnd.protolabs.goal-status-v1+json" },
+                } as never,
+              ],
+            },
+          },
+        },
+      },
+    } as A2AFrame);
+    expect(onStatus).toHaveBeenCalledWith("🎯 checking the goal…");
+    expect(onToolCall).not.toHaveBeenCalled();
+    expect(onText).not.toHaveBeenCalled();
+  });
+});

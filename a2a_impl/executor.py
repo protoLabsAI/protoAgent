@@ -89,6 +89,10 @@ STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
 # tool-call id, or a `delegate_to` ask's id. Latest wins, so a consumer that ignores or
 # misses one loses nothing but latency.
 DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json"
+# A goal drive's status line (#4012) — "🎯 checking the goal…", "🎯 goal not met (1/8) …".
+# A typed DataPart, NOT a plain-string tool_start: that became WORKING text a delegator's
+# card committed as content, and counted as a tool call.
+GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -985,6 +989,19 @@ class ProtoAgentExecutor(AgentExecutor):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([_data_part_proto(payload, DELEGATE_PROGRESS_MIME)]),
+                        )
+
+                elif event_type == "goal_status":
+                    # A transient goal status line (#4012): its own typed frame — not tool
+                    # telemetry (never counted as a tool call) and not text a consumer
+                    # would commit as content. Text before it lands above it.
+                    text = str(payload.get("text") or "") if isinstance(payload, dict) else str(payload or "")
+                    if text:
+                        await _flush_text()
+                        last_activity[0] = text.lstrip("🎯 ").strip() or last_activity[0]
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto({"text": text}, GOAL_STATUS_MIME)]),
                         )
 
                 elif event_type == "steer_consumed":

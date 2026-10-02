@@ -23,6 +23,7 @@ from graph.goals.store import GoalStore
 from graph.goals.types import VerifyResult
 from graph.middleware import goal_checkpoint
 from graph.middleware.goal_checkpoint import after_tool_round
+from graph.middleware.guard_notes import is_guard_note
 from graph.middleware.wait_yield import WaitYieldMiddleware
 
 # The controller-probe tests spawn a real verifier command.
@@ -68,6 +69,7 @@ class _Ctrl:
         self.met = met
         self.eligible = eligible
         self.probes: list[str] = []
+        self.finished: list[str] = []
         self._clock = clock
         self._takes = takes
 
@@ -79,6 +81,10 @@ class _Ctrl:
         if self._clock is not None:
             self._clock.t += self._takes
         return None if self.met is None else VerifyResult(self.met, "command exited 0" if self.met else "exit 1", "")
+
+    async def finish_mid_turn(self, session_id, result):
+        self.finished.append(session_id)
+        return f"✓ goal achieved: {result.reason}"
 
 
 class _Clock:
@@ -113,12 +119,55 @@ def _state(n: int = 1) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_ends_a_goal_turn_when_the_verifier_passes(ctrl):
+async def test_a_pass_records_the_goal_and_queues_one_closing_call(ctrl):
     c = ctrl(True)
+    mw = WaitYieldMiddleware()
     with goal_turn() as marker:
-        out = await WaitYieldMiddleware().abefore_model(_state(), None)
-    assert out == {"jump_to": "end"}
+        out = await mw.abefore_model(_state(), None)
+        # The goal is recorded achieved BEFORE the closing call...
+        assert c.finished == ["s1"] and marker.achieved_note == "✓ goal achieved: command exited 0"
+        # ...which runs on a summary note (no jump: the model gets one more, tool-less call).
+        assert "jump_to" not in out
+        (note,) = out["messages"]
+        assert is_guard_note(note, "goal-checkpoint") and "command exited 0" in note.content
+        assert "Don't call tools" in note.content and marker.closing
+        # A tool round after the pass (the closing call disobeyed) ends the turn outright.
+        assert await mw.abefore_model(_state(2), None) == {"jump_to": "end"}
     assert c.probes == ["s1"] and marker.probes == 1
+
+
+class _Req:
+    def __init__(self, tools):
+        self.tools = tools
+
+    def override(self, **kw):
+        return _Req(kw.get("tools", self.tools))
+
+
+@pytest.mark.asyncio
+async def test_the_closing_call_has_no_tools_and_cannot_call_one():
+    from langchain.agents.middleware.types import ModelResponse
+
+    seen = []
+
+    async def handler(req):
+        seen.append(list(req.tools))
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="Fixed it.", tool_calls=[{"name": "edit_file", "args": {}, "id": "x", "type": "tool_call"}]
+                )
+            ]
+        )
+
+    mw = WaitYieldMiddleware()
+    with goal_turn() as marker:
+        marker.closing = True
+        out = await mw.awrap_model_call(_Req(["edit_file", "run_command"]), handler)
+        assert seen == [[]] and out.result[0].tool_calls == [] and out.result[0].content == "Fixed it."
+        assert not marker.closing  # only ONE closing call
+        await mw.awrap_model_call(_Req(["edit_file"]), handler)  # an ordinary call: untouched
+    assert seen[1] == ["edit_file"]
 
 
 @pytest.mark.asyncio
@@ -156,17 +205,30 @@ async def test_at_most_one_probe_per_round(ctrl, clock):
 
 
 @pytest.mark.asyncio
-async def test_probes_are_bounded_over_many_quick_rounds(ctrl, clock):
-    """30 tool rounds 1s apart with a 1s verifier: one probe, then one per ≥10s window —
+async def test_a_fast_verifier_is_probed_nearly_every_round(ctrl, clock):
+    """Cost-proportional, not a fixed floor: a 0.3s check with 3s model rounds runs after
+    every round, so a fix is caught on the round it lands (a 10s floor let it slip by)."""
+    c = ctrl(False, takes=0.3)
+    mw = WaitYieldMiddleware()
+    with goal_turn():
+        for n in range(1, 11):
+            await mw.abefore_model(_state(n), None)
+            clock.t += 3.0
+    assert len(c.probes) == 10
+
+
+@pytest.mark.asyncio
+async def test_a_slow_verifier_is_bounded_over_many_quick_rounds(ctrl, clock):
+    """30 tool rounds 1s apart with a 5s verifier: a probe, then none for 2 x 5s — bounded,
     not one per round (the repro ran the command verifier 5x in one turn)."""
-    c = ctrl(False, takes=1.0)
+    c = ctrl(False, takes=5.0)
     mw = WaitYieldMiddleware()
     with goal_turn() as marker:
         for n in range(1, 31):
             await mw.abefore_model(_state(n), None)
             clock.t += 1.0
-    # ~41s of turn at ≥ 10s + the 1s probe → at most 4 probes, vs 30 rounds.
-    assert 1 < len(c.probes) <= 4 and marker.probes == len(c.probes)
+    # Each probe costs 5s and buys a 10s quiet window → about one per 15s of turn.
+    assert 1 < len(c.probes) <= 5 and marker.probes == len(c.probes)
 
 
 @pytest.mark.asyncio
@@ -217,6 +279,20 @@ async def test_probe_skips_the_llm_judge_and_a_missing_goal(tmp_path):
     assert await ctrl.probe("nope") is None
     assert ctrl.set_goal_operator("s1", "write a nice poem", {"type": "llm"})[0]
     assert await ctrl.probe("s1") is None  # judges final text + costs a model call
+
+
+@pytest.mark.asyncio
+async def test_finish_mid_turn_records_achieved_once(tmp_path):
+    flag = tmp_path / "fixed.flag"
+    flag.write_text("x")
+    ctrl = GoalController(LangGraphConfig(), GoalStore(tmp_path))
+    assert ctrl.set_goal_operator("s1", "tests pass", _flag_command(flag))[0]
+    result = await ctrl.probe("s1")
+    assert await ctrl.finish_mid_turn("s1", result) == "✓ goal achieved: command exited 0"
+    state = ctrl.store.get("s1")
+    assert state.status == "achieved" and state.iteration == 0 and len(state.history) == 1
+    assert ctrl.active_goal("s1") is None
+    assert await ctrl.finish_mid_turn("s1", result) == ""  # nothing active any more
 
 
 def test_agent_wires_the_goal_checkpoint_without_a_new_graph_node():

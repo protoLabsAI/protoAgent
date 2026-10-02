@@ -157,6 +157,9 @@ const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 // A coding-agent delegation's live state (#3979) — a whole, bounded snapshot keyed by
 // the card it belongs to (an `@` mention card, or a `delegate_to` ask).
 const DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json";
+// A goal drive's transient status line (#4012) — "🎯 checking the goal…". Its own typed
+// frame (not a plain-text status, which a delegator's card committed as content).
+const GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json";
 
 // The two protolabs-a2a SDK extensions we consume ride the message/artifact METADATA
 // map keyed by their extension URI (protolabs-a2a 0.3.0) — they are no longer MIME-typed
@@ -294,6 +297,12 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
 /** Decode a coding delegate's live-progress snapshot (#3979), or null. */
 export function delegateProgressFromParts(parts?: RawPart[]): DelegateProgressEvent | null {
   return delegateProgressFromWire(dataByMime(parts, DELEGATE_PROGRESS_MIME));
+}
+
+/** A goal drive's transient status line (#4012), or null. */
+export function goalStatusFromParts(parts?: RawPart[]): string | null {
+  const d = dataByMime(parts, GOAL_STATUS_MIME) as { text?: unknown } | null;
+  return d && typeof d.text === "string" && d.text ? d.text : null;
 }
 
 /** Decode the exact model-call boundary where queued operator input was consumed. */
@@ -580,7 +589,7 @@ export function makeA2ADispatcher(
       if (reasoning) handlers.onReasoning?.(reasoning);
       // A reasoning-only frame carries no status text; don't let it clobber the
       // transient status line with the bare working state.
-      if (!reasoning) handlers.onStatus?.(messageText || state);
+      if (!reasoning) handlers.onStatus?.(messageText || goalStatusFromParts(parts) || state);
       // tool-call-v1 rides the status MESSAGE's metadata (URI-keyed), not its parts.
       const toolEvent = toolEventFromMeta(statusUpdate.status?.message?.metadata);
       if (toolEvent) handlers.onToolCall?.(toolEvent);

@@ -40,13 +40,21 @@ import time
 from langchain_core.messages import AIMessage, ToolMessage
 
 from graph.goals.goal_turn import current_goal_turn
+from graph.middleware.guard_notes import guard_note
 
 log = logging.getLogger(__name__)
 
-# The shortest gap between two mid-turn probes of one pass, in seconds, and the back-off
-# for a slow verifier (the gap is at least this many times the last probe's duration).
-PROBE_MIN_INTERVAL_S = 10.0
+# The gap between two mid-turn probes of one pass is at least PROBE_BACKOFF_FACTOR x the
+# last probe's duration, and never under PROBE_MIN_INTERVAL_S seconds: cost-proportional,
+# so a ~1s test suite is re-checked nearly every round (a fixed 10s floor let a fast fix
+# slip past and the run-on through), while a slow verifier runs at most about once per
+# three of its own durations (the probe, then twice as long without one).
+PROBE_MIN_INTERVAL_S = 1.0
 PROBE_BACKOFF_FACTOR = 2.0
+
+# The closing-call note's guard tag + its leading text for the model.
+GUARD = "goal-checkpoint"
+SUMMARY_MARK = "[goal-checkpoint]"
 
 # Read through a module attribute so tests can drive the debounce with a fake clock.
 _now = time.monotonic
@@ -87,34 +95,80 @@ async def _announce(text: str) -> None:
         log.debug("goal_probe status was not dispatched", exc_info=True)
 
 
-async def goal_met_after_tools(state) -> bool:
-    """On a goal-driven turn, right after a tool round, probe the goal's verifier (debounced);
-    True when it passes. Never raises."""
+def summary_note(reason: str) -> str:
+    """The note the closing call runs on once the verifier passed mid-turn."""
+    return (
+        f"{SUMMARY_MARK} The goal's verifier just passed ({reason}). The goal is achieved — "
+        "reply with one or two sentences summarising what you changed. Don't call tools; "
+        "don't start anything new."
+    )
+
+
+async def goal_checkpoint(state) -> dict | None:
+    """The ``before_model`` update for a goal-driven turn, or ``None`` (carry on).
+
+    Right after a tool round, probe the goal's verifier (debounced). When it passes, mark
+    the goal ACHIEVED now (``GoalController.finish_mid_turn`` — the post-turn drive then
+    only reports it) and run ONE closing model call on a summary note, with tools unbound
+    (``closing_call``) — so the reply ends on what changed, not on a sentence cut off
+    before the next tool. Should that call still produce tool calls, they are dropped, and
+    a tool round after the pass ends the turn outright. Never raises."""
     marker = current_goal_turn()
     messages = (state or {}).get("messages") or []
     if marker is None or not after_tool_round(messages):
-        return False
+        return None
+    if marker.achieved_note:
+        return {"jump_to": "end"}  # a tool round AFTER the pass: never more work
     round_ix = _round_index(messages)
     if round_ix == marker.probe_round or _now() < marker.probe_after:
-        return False
+        return None
     from runtime.state import STATE
 
     ctrl = STATE.goal_controller
     sid = _session_id(state)
     if ctrl is None or not sid or not hasattr(ctrl, "probe"):
-        return False
+        return None
     # Probe-eligible at all? (an llm verifier, or no active goal → nothing to do, no status)
     can_probe = getattr(ctrl, "can_probe", None)
     if can_probe is not None and not can_probe(sid):
-        return False
+        return None
     marker.probe_round = round_ix
     started = _now()
     await _announce("checking the goal…")
-    result = await ctrl.probe(sid)
+    try:
+        result = await ctrl.probe(sid)
+    except Exception:  # noqa: BLE001 — the probe is advisory
+        log.warning("[goal] mid-turn probe raised for %s", sid, exc_info=True)
+        result = None
     took = max(0.0, _now() - started)
     marker.probes += 1
     marker.probe_after = _now() + max(PROBE_MIN_INTERVAL_S, PROBE_BACKOFF_FACTOR * took)
     if result is None or not result.met:
-        return False
-    log.info("[goal] verifier passed mid-turn for %s (%s) — ending the turn", sid, result.reason)
-    return True
+        return None
+    reason = result.reason or "verifier passed"
+    try:
+        note = await ctrl.finish_mid_turn(sid, result)
+    except Exception:  # noqa: BLE001 — leave the outcome to the post-turn evaluate
+        log.warning("[goal] could not record the mid-turn pass for %s", sid, exc_info=True)
+        return {"jump_to": "end"}
+    if not note:
+        return {"jump_to": "end"}  # the goal went away meanwhile (cleared): just stop
+    marker.achieved_note = note
+    marker.closing = True
+    log.info("[goal] verifier passed mid-turn for %s (%s) — closing the turn", sid, reason)
+    return {"messages": [guard_note(GUARD, summary_note(reason))]}
+
+
+async def closing_call(request, handler):
+    """``awrap_model_call`` body: the closing call after a mid-turn pass runs with NO tools
+    bound, and any tool call it still produces is dropped — it can only reply."""
+    marker = current_goal_turn()
+    if marker is None or not marker.closing:
+        return await handler(request)
+    marker.closing = False
+    response = await handler(request.override(tools=[]))
+    for msg in getattr(response, "result", None) or ([response] if isinstance(response, AIMessage) else []):
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            msg.tool_calls = []
+            msg.invalid_tool_calls = []
+    return response

@@ -1053,9 +1053,10 @@ async def _run_native_turn(
         final_text = turn["last_tool_out"] or "_(The agent ended the turn without a textual reply.)_"
 
     # Goal mode (shared drive, server/goal_loop.py): verify the outcome after the agent
-    # stops; while not met, run the continuation it asks for. The 🎯 status frames are this
-    # surface's; the terminal note lands on final_text so the A2A terminal artifact carries
-    # it (the status frames are transient and can coalesce).
+    # stops; while not met, run the continuation it asks for. The 🎯 `goal_status` frames
+    # (a typed status line, never a tool_start — #4012) are this surface's; the terminal
+    # note lands on final_text so the A2A terminal artifact carries it (the status frames
+    # are transient and can coalesce).
     drive = _goal_loop.GoalDrive(session_id, config, final_text)
     drive.notice = model_notice  # the goal's model fell back to the default (#3957)
     drive.last_pass = _goal_pass  # a round-capped pass pauses the drive (#3957)
@@ -1063,7 +1064,7 @@ async def _run_native_turn(
     async with contextlib.aclosing(drive.steps()) as _goal_steps:
         async for step in _goal_steps:
             if isinstance(step, _goal_loop.GoalNote):
-                yield ("tool_start", f"🎯 {step.note}")
+                yield ("goal_status", {"text": f"🎯 {step.note}"})
                 continue
             # Keep any narrowing the previous pass folded in (narrowest wins).
             # ...and a continuation always drives the (possibly just-set) goal: its fence too.
