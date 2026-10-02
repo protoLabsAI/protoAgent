@@ -98,12 +98,37 @@ def test_renderer_is_vendored_and_served_same_origin(monkeypatch, tmp_path):
         assert needle in notices, needle
 
 
-def test_renderer_sri_hash_matches_the_vendored_bytes(monkeypatch, tmp_path):
-    """The LIB map pins the exact bytes — a re-vendor without a hash bump would refuse to load."""
+def _sri_pins(js: str) -> dict[str, str]:
+    """The shell's LIB map as {file: "sha512-…"} — parsed, so line endings/indent don't matter."""
+    return dict(re.findall(r'\[\s*"([\w.-]+\.min\.js)"\s*,\s*"(sha512-[A-Za-z0-9+/=]+)"\s*\]', js))
+
+
+def test_every_pinned_lib_is_served_byte_exact_to_its_sri(monkeypatch, tmp_path):
+    """The SRI pin must equal the hash of the bytes the vendor route actually SERVES — on every
+    platform. A checkout that rewrites line endings (Windows autocrlf) would change the bytes and
+    the sandbox would refuse the script; .gitattributes marks vendor/ -text so it can't."""
+    from fastapi.testclient import TestClient
+
     art = _load(monkeypatch, tmp_path)
-    data = (ROOT / "vendor" / "pptx-renderer.min.js").read_bytes()
-    want = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
-    assert f'"pptx-renderer.min.js",\n      "{want}"' in _js(art)
+    pins = _sri_pins(_js(art))
+    assert set(pins) == {
+        "mermaid.min.js",
+        "react.production.min.js",
+        "react-dom.production.min.js",
+        "babel.min.js",
+        "pptx-renderer.min.js",
+    }
+    c = TestClient(_app(art))
+    for name, pin in pins.items():
+        served = c.get(f"/plugins/artifact/vendor/{name}").content
+        assert served == (ROOT / "vendor" / name).read_bytes(), name  # served as-is
+        assert pin == "sha512-" + base64.b64encode(hashlib.sha512(served).digest()).decode(), name
+
+
+def test_vendored_libs_are_checked_out_byte_exact():
+    """The guard behind the test above: git must never apply eol conversion to vendor/."""
+    attrs = (ROOT.parent.parent / ".gitattributes").read_text(encoding="utf-8")
+    assert re.search(r"^plugins/artifact/vendor/\*\*\s+.*-text", attrs, re.M), attrs
 
 
 def test_slides_frame_runs_under_a_nonce_csp_with_no_network(monkeypatch, tmp_path):
