@@ -35,6 +35,11 @@ KIND_UNREACHABLE = "unreachable"
 # a peer that never received the message still describes the conversation we remember;
 # one that is mid-turn has moved it somewhere this side has no record of.
 KIND_TIMEOUT = "timeout"
+# The peer took the work and is STILL doing it when this side's wait ran out (no-progress
+# bound or the call's own timeout). Not a failure of the peer: the error names the task id
+# and how to collect it (#3700/#3775), and the foreground tool reports it as "not finished
+# yet" rather than "failed".
+KIND_STILL_RUNNING = "still_running"
 
 
 # ── field schema (drives the panel form + validation) ─────────────────────────
