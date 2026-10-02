@@ -91,7 +91,12 @@ def _build_delegate_to(registry: DelegateRegistry):
                 answer first (ask your own operator with ask_human if you have it —
                 your question bubbles up the chain the same way), THEN resume.
                 Never re-delegate the original task instead of resuming — that
-                starts the work over.
+                starts the work over. The same id also COLLECTS a delegation that
+                timed out while the peer was still working: when a reply says the
+                delegate is "still running … on task <id>", call this tool with the
+                same target, any short `query` (e.g. "collect the result") and that
+                id — it waits on the SAME task (re-sending nothing) and returns the
+                peer's answer once it lands.
             timeout: max seconds to wait for the delegate's reply before failing,
                 overriding the delegate's configured timeout for THIS call only.
                 Leave 0 (the default) to use the configured timeout. Raise it for a
@@ -406,16 +411,33 @@ async def _dispatch_into_room(
     if outcome["ok"]:
         result = outcome["reply"]
     else:
-        result = f"Error: delegate {target!r} failed: {outcome['error'] or 'unknown error'}"
+        from .base import KIND_STILL_RUNNING
+
+        still_running = outcome.get("error_kind") == KIND_STILL_RUNNING
+        if still_running:
+            # Not a failure: the peer took the work and is still on it. The adapter's message
+            # already names the task id, last state/status and the exact collect call
+            # (#3700/#3775) — "failed" in front of it would read as "the work is lost".
+            result = f"Error: {outcome['error']}"
+        else:
+            result = f"Error: delegate {target!r} failed: {outcome['error'] or 'unknown error'}"
         # The same late collection the `@` room gets (#3360b): a peer that was still working
         # when this gave up keeps its task, and its answer comes back to this session on a
         # later turn instead of being lost. Said to the lead so it neither re-delegates the
         # work (a duplicate task) nor tells the operator the answer is gone.
         incognito = bool(state.get("incognito")) if isinstance(state, dict) else False
-        if registry.collect_late(thread_id, target, session_id=session_id, incognito=incognito):
+        collecting = registry.collect_late(thread_id, target, session_id=session_id, incognito=incognito)
+        if collecting and not still_running:
             result += (
                 "\n\nIt may still be working — its answer will be delivered to you automatically on "
                 "a later turn if it finishes. Do not re-delegate this."
+            )
+        elif still_running and not collecting and "delivered automatically" in result:
+            # The message promised a collection the room could not start after all — say so
+            # rather than leave the lead waiting on a delivery that never comes.
+            result += (
+                "\n\n(Automatic delivery could not be started — collect it yourself with the "
+                "resume_task_id call above.)"
             )
     # A Command update needs the matching ToolMessage: ToolNode validates that every
     # model tool call has exactly one terminator. It also leaves the usual result in the
