@@ -387,6 +387,36 @@ def test_brand_launch_replaces_social_marketing_and_is_held() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+def test_analyst_archetype_is_held() -> None:
+    """The Analyst archetype (answers questions from the operator's local data with read-only
+    SQL and one chart, via the data plugin) ships HELD until the operator has tested it
+    (2026-10-03). Pins both directions: not served in ``archetypes``, parked exactly once in
+    ``held`` with a resolving soul preset, its bundle URL and its capability contract, so
+    listing it is one move (into ``archetypes`` before ``custom``, dropping `_held`)."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+    held = [a["id"] for a in catalog.get("held") or []]
+
+    assert "analyst" not in ids, f"'analyst' is held until tested — it must not be in archetypes, got {ids}"
+    assert held.count("analyst") == 1, f"'analyst' must be parked exactly once in `held`, got {held}"
+    (row,) = (a for a in catalog["held"] if a["id"] == "analyst")
+    assert row.get("_held"), "the held row says why it's parked"
+    assert row.get("bundle") == "https://github.com/protoLabsAI/analyst-archetype"
+    assert row.get("requires_tools") == ["data_query", "data_chart"]
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), f"held archetype 'analyst' points at a missing soul preset {preset}"
+
+    # The persona's hard rules: never invents a number, cites the file, states assumptions,
+    # and on first run tells the operator where to set the (operator-only) data folders
+    # instead of trying to set them itself.
+    soul = preset.read_text().lower()
+    for needle in ("never invent a number", "cite the source file", "what i assumed",
+                   "settings ▸ plugins ▸ data analyst ▸ data folders", "operator-only"):
+        assert needle in soul, f"analyst persona lost a hard rule: {needle!r}"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
 def _sidecar_cli_hidden_imports() -> set[str]:
     """The `CLI_FORWARD_MODULES` list in build_sidecar.py, read statically (AST) —
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""

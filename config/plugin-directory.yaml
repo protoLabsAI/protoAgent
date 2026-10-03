@@ -444,6 +444,10 @@ archetype_repos:
     repo: protoLabsAI/brand-launch-archetype
     archetype: brand-launch   # held from the picker (archetype-catalog.json `held`) until Josh has tested it; replaces social-archetype (retired 2026-10-01)
     tagline: "Brand & Launch — a launch campaign for any app: plan, scripted recordings, GIFs, cards, copy drafts, operator approval. Draft-only."
+  - id: analyst-archetype
+    repo: protoLabsAI/analyst-archetype
+    archetype: analyst   # held from the picker (archetype-catalog.json `held`) until Josh has tested it (2026-10-03)
+    tagline: "Analyst — answers questions from your local data files with read-only SQL and one live chart; cites the file, states its assumptions."
   - id: project-manager-archetype
     repo: protoLabsAI/project-manager-archetype
     archetype: project-manager

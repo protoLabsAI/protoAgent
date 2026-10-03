@@ -82,6 +82,19 @@
         "social_queue_add",
         "browser_open"
       ]
+    },
+    {
+      "_held": "Josh tests before the picker (2026-10-03).",
+      "id": "analyst",
+      "label": "Analyst",
+      "icon": "ChartColumn",
+      "bundle": "https://github.com/protoLabsAI/analyst-archetype",
+      "blurb": "Answers questions from your own data files — CSV, Parquet, Excel, SQLite — with SQL and a live chart. Read-only, and only the folders you allow.",
+      "soul_preset": "analyst",
+      "requires_tools": [
+        "data_query",
+        "data_chart"
+      ]
     }
   ]
 }
