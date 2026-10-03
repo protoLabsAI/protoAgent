@@ -126,7 +126,7 @@ The picker draws from **two** sources:
   code-free personas are Basic and Custom, the rest reference published archetype repos)
   and is **data-driven**: add or remove archetypes by editing the JSON, no code change. A
   row the operator has pulled from the picker without deleting it sits in the file's
-  `held:` array (Brand & Launch, which replaced Social Marketing, is parked there until it's been tested) — held rows are never served, but a held archetype is still creatable through the API (`POST /api/fleet` with its `bundle` URL and the persona as `soul`). A fork or instance overrides it by
+  `held:` array (Brand & Launch, which replaced Social Marketing, and Analyst are parked there until they've been tested) — held rows are never served, but a held archetype is still creatable through the API (`POST /api/fleet` with its `bundle` URL and the persona as `soul`). A fork or instance overrides it by
   dropping its own `archetype-catalog.json` in the live config dir (same rule as
   `plugin-catalog.json`); if the file is missing entirely, a hardcoded Basic + Custom
   fallback keeps the picker from rendering empty. Each entry names a `soul_preset` (a
