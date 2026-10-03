@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.192.0] - 2026-10-03
+
+### Added
+- **Charts as Vega-Lite specs, and a plugin-services seam, for the local-first Data Analyst (ADR 0116) (#4025).**
+  The Artifact panel adds a `vega-lite` kind: a small JSON spec with its rows inline is drawn by vendored, SRI-pinned
+  Vega / Vega-Lite / vega-embed, in the console's own chart palette (dark or light, redrawn on a theme switch). It
+  runs under a no-network CSP: no `eval`, a loader that refuses every fetch, and inline data only. A chart is a query
+  plus a few hundred bytes of spec instead of a hand-written component. In the end-to-end run, "what were my best
+  weekdays last quarter? chart it" went from send to chart in about 18 s, against about 50 s for the component path.
+  Plugins also gain a call seam: `registry.register_service(name, fn)` offers a callable, and
+  `graph.sdk.service("<plugin>.<name>")` resolves it, or returns `None` when the provider is off. The first service
+  is `artifact.show`, which the new Data Analyst plugin (`protoLabsAI/data-plugin`) uses to put its charts in the panel.
+
+- **The Analyst archetype — answers questions from your own data files with read-only SQL and one live chart, held from the picker until it's been tested (#4026).**
+  Built on the data plugin (CSV, TSV, Parquet, JSON, Excel, SQLite via DuckDB) plus the Artifact panel's Vega-Lite charts: question → schema → query → one chart and a one-line takeaway, with its assumptions and the source file named. It never invents a number, reads only the folders the operator allows, and on first run tells the operator where to set them (Settings ▸ Plugins ▸ Data Analyst ▸ Data folders) instead of trying to. Needs core ≥ 0.192.0 for the data plugin; create one today with `POST /api/fleet` and the `analyst` persona.
+
 ## [0.191.0] - 2026-10-03
 
 ### Added

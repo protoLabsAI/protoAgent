@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.192.0",
+    "date": "2026-10-03",
+    "changes": [
+      "Charts as Vega-Lite specs, and a plugin-services seam, for the local-first Data Analyst (#4025).",
+      "The Analyst archetype — answers questions from your own data files with read-only SQL and one live chart, held from the picker until it's been tested (#4026)."
+    ]
+  },
+  {
     "version": "v0.191.0",
     "date": "2026-10-03",
     "changes": [
