@@ -122,9 +122,23 @@ def test_a_promotion_speaks_only_for_a_head_with_no_round():
 
 def test_the_STRICTEST_round_for_a_head_wins_not_the_latest():
     # pr-reviewer-plugin#239: after a FAIL, a re-review PASS on the same head used to turn this
-    # check green while the plugin's `QA panel` (strictest per head) stayed red.
-    decision = rah.decide([review(MERGED, "FAIL"), review(MERGED, "PASS")], MERGED, [])
-    assert not decision.ok and "FAIL" in decision.description
+    # check green while the plugin's `QA panel` (strictest per head) stayed red. Each round is
+    # tagged so the test proves WHICH round spoke, not only that something said FAIL
+    # (pr-reviewer-plugin#254).
+    def tagged(verdict, n):
+        marker = f"<!-- protoagent-qa-review head={MERGED} verdict={verdict} promoted=false round={n} -->"
+        return review(MERGED, body=f"{marker}\n## QA panel review\n")
+
+    reviews = [tagged("FAIL", 1), tagged("PASS", 2)]
+    assert rah.parse_marker(reviews[-1]["body"])["verdict"] == "PASS"  # what "latest" read
+    pick = rah.verdict_for_head(reviews, MERGED)
+    assert (pick["verdict"], pick["round"]) == ("FAIL", "1")  # the EARLIER round speaks
+    decision = rah.decide(reviews, MERGED, [])
+    assert not decision.ok and decision.description == f"QA panel returned FAIL for {MERGED[:12]}"
+    # Among equally strict rounds the newest speaks; a stricter earlier one beats a later one.
+    assert rah.verdict_for_head([tagged("FAIL", 1), tagged("PASS", 2), tagged("FAIL", 3)], MERGED)["round"] == "3"
+    pick = rah.verdict_for_head([tagged("WARN", 1), tagged("PASS", 2)], MERGED)
+    assert (pick["verdict"], pick["round"]) == ("WARN", "1")
 
 
 # ── what must NOT count as a verdict ───────────────────────────────────────────
@@ -573,3 +587,37 @@ def test_the_vendored_supersede_block_is_unedited():
     block = text[begin:end]
     recorded = re.search(r"block-ast-sha256:\s*(\S+)", block).group(1)
     assert hashlib.sha256(_canonical(ast.parse(block).body).encode()).hexdigest() == recorded
+
+
+# ── a hung `gh` is a failed call, not a hung gate (pr-reviewer-plugin#254) ─────
+
+
+def test_a_hung_gh_call_times_out_as_a_failed_api_call(monkeypatch):
+    seen = {}
+
+    def hung(cmd, **kwargs):
+        seen.update(kwargs)
+        raise rah.subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+    monkeypatch.setattr(rah.subprocess, "run", hung)
+    with pytest.raises(RuntimeError, match="timed out"):
+        rah._gh("api", "repos/o/r/pulls/1/reviews")
+    assert seen["timeout"] == rah.GH_TIMEOUT_S > 0
+
+
+def test_a_timed_out_reviews_read_posts_no_status_and_still_exits_zero(monkeypatch, capsys):
+    calls = []
+
+    def hung(cmd, **kwargs):
+        calls.append(cmd)
+        raise rah.subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+    monkeypatch.setattr(rah.subprocess, "run", hung)
+    monkeypatch.setenv("PR_NUMBER", "123")
+    monkeypatch.setenv("HEAD_SHA", "a" * 40)
+    monkeypatch.setenv("PR_LABELS", "")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    assert rah.main() == 0
+    # Fail closed: the read failed, so no verdict was decided and no status was written.
+    assert len(calls) == 1 and "statuses" not in " ".join(calls[0])
+    assert "timed out" in capsys.readouterr().err

@@ -453,10 +453,21 @@ def decide(
 # ── I/O ───────────────────────────────────────────────────────────────────────
 
 
+# Seconds one `gh` call may take (pr-reviewer-plugin#254). Without a bound, a hung `gh` held
+# the required job until the Actions job timeout, and the status it should have posted never
+# came. A paginated reviews read finishes in seconds, so this is generous.
+GH_TIMEOUT_S = 120
+
+
 def _gh(*args: str) -> str:
     """`gh` with the ambient token. Raises on failure — a broken API call must not be
-    mistaken for "no verdict" and silently fail a PR that was in fact reviewed."""
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    mistaken for "no verdict" and silently fail a PR that was in fact reviewed. A call that
+    outlives `GH_TIMEOUT_S` is a failed call too: it raises the same `RuntimeError`, which
+    every caller already handles fail-closed (no status posted from a partial read)."""
+    try:
+        result = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"gh {' '.join(args)} timed out after {GH_TIMEOUT_S}s") from exc
     if result.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout
