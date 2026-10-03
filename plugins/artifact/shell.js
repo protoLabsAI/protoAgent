@@ -1050,16 +1050,23 @@
       return out;
     }
     // Any `url` inside a data definition — refused up front with a reason, rather than left to
-    // fail inside the dataflow as a bare "Loading failed".
-    function remote(o, inData){
-      if(!o || typeof o!=="object") return false;
-      if(Array.isArray(o)) return o.some(function(x){ return remote(x, inData); });
-      for(var k in o){
-        if(!Object.prototype.hasOwnProperty.call(o, k)) continue;
-        if(inData && k==="url") return true;
-        if(remote(o[k], inData || k==="data")) return true;
+    // fail inside the dataflow as a bare "Loading failed". Inline rows (values / datasets) are
+    // never walked: a column named `url` is data, not a load. Iterative and bounded (the mirror of
+    // _tools._remote_data), so a hostile nesting depth can't blow the stack: "remote" | "deep" | "".
+    function remote(spec){
+      var stack=[[spec,false,0]], nodes=0, top, o, inData, d, k, v, i;
+      while(stack.length){
+        top=stack.pop(); o=top[0]; inData=top[1]; d=top[2];
+        if(d>64 || ++nodes>100000) return "deep";
+        if(Array.isArray(o)){ for(i=0;i<o.length;i++) if(o[i] && typeof o[i]==="object") stack.push([o[i],inData,d+1]); continue; }
+        for(k in o){
+          if(!Object.prototype.hasOwnProperty.call(o, k)) continue;
+          if(inData && k==="url") return "remote";
+          if(k==="values" || k==="datasets") continue;
+          v=o[k]; if(v && typeof v==="object") stack.push([v, inData || k==="data", d+1]);
+        }
       }
-      return false;
+      return "";
     }
     function deny(){ return Promise.reject(new Error("a chart's data must be inline (data.values) — loading is disabled")); }
     var LOADER={load:deny, sanitize:deny, http:deny, file:deny};
@@ -1100,7 +1107,9 @@
     });
     try{ spec=JSON.parse(cfg.spec); }catch(e){ fail("the chart spec isn't valid JSON: "+e.message); return; }
     if(!spec || typeof spec!=="object" || Array.isArray(spec)){ fail("a Vega-Lite spec is a JSON object"); spec=null; return; }
-    if(remote(spec, false)){ fail("a chart's data must be inline (data.values) — data.url is not loaded"); spec=null; return; }
+    var why=remote(spec);
+    if(why==="deep"){ fail("the chart spec is too deeply nested or too large (at most 64 levels)"); spec=null; return; }
+    if(why){ fail("a chart's data must be inline (data.values) — data.url is not loaded"); spec=null; return; }
     if(!W.vega || !W.vegaLite || !W.vegaEmbed){ fail("the chart renderer didn't load"); spec=null; return; }
     logger=makeLogger();
     draw();

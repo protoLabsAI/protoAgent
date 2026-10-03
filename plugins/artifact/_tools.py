@@ -18,6 +18,41 @@ log = logging.getLogger("protoagent.plugins.artifact")
 _KINDS = {"html", "svg", "mermaid", "react", "markdown", "vega-lite"}
 
 
+# Bounds on the write-time spec walk. A real chart spec is a few levels deep; the rows in
+# `data.values` are never walked (below), so the node budget counts structure, not data.
+_SPEC_MAX_DEPTH = 64
+_SPEC_MAX_NODES = 100_000
+# Keys holding INLINE rows. A row is data, not a load: a column named `url` (a table of page
+# hits) is a value, so the walk never descends into these.
+_INLINE_ROWS = frozenset({"values", "datasets"})
+
+
+def _remote_data(spec: dict) -> str | None:
+    """"remote" when a `url` sits inside a data definition, "deep"/"large" past the walk's bounds,
+    else None. ITERATIVE on purpose: a hostile spec nested hundreds deep must be a clean refusal,
+    never a RecursionError out of a tool (or out of ``show_service``, which promises not to raise)."""
+    stack: list[tuple[object, bool, int]] = [(spec, False, 0)]
+    nodes = 0
+    while stack:
+        o, in_data, depth = stack.pop()
+        nodes += 1
+        if depth > _SPEC_MAX_DEPTH:
+            return "deep"
+        if nodes > _SPEC_MAX_NODES:
+            return "large"
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if in_data and k == "url":
+                    return "remote"
+                if k in _INLINE_ROWS:
+                    continue
+                if isinstance(v, (dict, list)):
+                    stack.append((v, in_data or k == "data", depth + 1))
+        elif isinstance(o, list):
+            stack.extend((v, in_data, depth + 1) for v in o if isinstance(v, (dict, list)))
+    return None
+
+
 def _vega_problem(code: str) -> str | None:
     """Why ``code`` can't be a ``vega-lite`` artifact, or None (ADR 0116).
 
@@ -26,19 +61,18 @@ def _vega_problem(code: str) -> str | None:
     it (and its loader refuses every load regardless): this is feedback, the frame is the fence."""
     try:
         spec = json.loads(code)
+    except RecursionError:  # json's own parser recurses: a spec nested ~1000 deep
+        return f"A vega-lite spec may nest at most {_SPEC_MAX_DEPTH} levels — this one is far deeper."
     except ValueError as e:
         return f"A vega-lite artifact's code must be a JSON Vega-Lite spec — it isn't valid JSON ({e})."
     if not isinstance(spec, dict):
         return "A vega-lite artifact's code must be a JSON object (a Vega-Lite spec)."
-
-    def remote(o, in_data: bool) -> bool:
-        if isinstance(o, list):
-            return any(remote(x, in_data) for x in o)
-        if isinstance(o, dict):
-            return any((in_data and k == "url") or remote(v, in_data or k == "data") for k, v in o.items())
-        return False
-
-    if remote(spec, False):
+    why = _remote_data(spec)
+    if why == "deep":
+        return f"A vega-lite spec may nest at most {_SPEC_MAX_DEPTH} levels — flatten it."
+    if why == "large":
+        return f"A vega-lite spec's structure (outside its inline rows) may have at most {_SPEC_MAX_NODES} nodes."
+    if why == "remote":
         return (
             "Charts render INLINE data only — put the rows in `data.values` (the data plugin's "
             "data_chart does this for you); a `data.url` is never loaded."
@@ -307,7 +341,12 @@ def show_service(kind: str, code: str, title: str = "") -> dict:
     - ``message`` — the model-facing reply, render verdict included when a panel is open;
     - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it). Append it
       LAST, verbatim, to your tool's return string: the server lifts it into a chip that opens
-      the panel on this version."""
+      the panel on this version.
+
+    It is SYNCHRONOUS and can BLOCK: when a panel is open it waits (``time.sleep`` polling, up to
+    ~3.2 s) for the frame's render verdict, and it takes the store's cross-process file lock. Call
+    it from a sync tool body, or from async code via ``asyncio.to_thread`` — never directly on an
+    event loop."""
     try:
         result = _show(kind, code, title)
     except _store.StoreLockTimeout as e:

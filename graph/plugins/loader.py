@@ -1099,6 +1099,17 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 continue
             result.components[name] = validator
         for name, fn in getattr(registry, "services", {}).items():  # plugin services (ADR 0116)
+            # register_service namespaces every name, but `registry.services` is a plain dict a
+            # plugin could write to directly — so the loader re-checks: a plugin provides ONLY
+            # under its own id, never as (or over) another plugin's service.
+            if not name.startswith(f"{manifest.id}."):
+                log.warning(
+                    "[plugins] %s: service %s is outside this plugin's namespace (%s.*) — skipped",
+                    manifest.id,
+                    name,
+                    manifest.id,
+                )
+                continue
             if name in result.services:  # namespaced per plugin, so only a duplicate plugin id hits this
                 log.warning("[plugins] %s: service %s collides — skipped", manifest.id, name)
                 continue

@@ -361,3 +361,56 @@ def test_the_vendored_builds_are_the_pinned_upstream_versions():
     assert re.search(rb'version\s*=\s*"6\.4\.0"|"6\.4\.0"', heads["vega.min.js"])
     assert b"6.4.3" in heads["vega-lite.min.js"]
     assert b"7.3.0" in heads["vega-embed.min.js"]
+
+
+# ── review fixes: url COLUMNS are data; hostile nesting is a clean refusal ───────
+
+URL_ROWS = {
+    "mark": "bar",
+    "encoding": {"x": {"field": "url", "type": "nominal"}, "y": {"field": "hits", "type": "quantitative"}},
+    "data": {"values": [{"url": "/home", "hits": 10}, {"url": "/pricing", "hits": 4}]},
+}
+
+
+def test_a_url_column_in_inline_rows_is_data_not_a_load(monkeypatch, tmp_path):
+    """A table of page hits has a `url` column — data_chart inlines it under data.values."""
+    art = _load(monkeypatch, tmp_path)
+    assert "Created vega-lite artifact" in art.show_artifact.invoke({"kind": "vega-lite", "code": json.dumps(URL_ROWS)})
+    named = {
+        "mark": "point",
+        "data": {"name": "t"},
+        "datasets": {"t": [{"url": "https://example.com", "n": 1}]},
+    }
+    assert art.show_service(kind="vega-lite", code=json.dumps(named))["ok"] is True
+    # …while a real load is still refused, inline rows or not
+    both = dict(URL_ROWS, layer=[{"mark": "line", "data": {"url": "x.csv"}}])
+    assert "INLINE data only" in art.show_artifact.invoke({"kind": "vega-lite", "code": json.dumps(both)})
+
+
+def _nested(depth: int) -> str:
+    return '{"mark": "bar", "config": ' + '{"a": ' * depth + "1" + "}" * depth + "}"
+
+
+@pytest.mark.parametrize("depth", [100, 700, 5000])
+def test_a_deeply_nested_spec_is_a_clean_refusal(monkeypatch, tmp_path, depth):
+    """Past the walk's bound (700) and past json's own recursion limit (5000): never a raise."""
+    art = _load(monkeypatch, tmp_path)
+    r = art.show_service(kind="vega-lite", code=_nested(depth))
+    assert r["ok"] is False and "nest" in r["message"], r["message"][:200]
+    assert "nest" in art.show_artifact.invoke({"kind": "vega-lite", "code": _nested(depth)})
+    assert _arts(art) == []
+
+
+def test_a_wide_spec_past_the_node_budget_is_refused(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    spec = {"mark": "bar", "config": {"x": [[] for _ in range(art._tools._SPEC_MAX_NODES + 10)]}}  # under 512 KB
+    r = art.show_service(kind="vega-lite", code=json.dumps(spec))
+    assert r["ok"] is False and "nodes" in r["message"]
+
+
+def test_the_frame_embeds_url_columns_and_refuses_deep_specs(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    out = _run_frame(art, URL_ROWS)
+    assert out["errs"] == [] and len(out["calls"]) == 1
+    deep = _run_frame(art, _nested(700))
+    assert deep["calls"] == [] and any("too deeply nested" in e for e in deep["errs"]), deep["errs"]
