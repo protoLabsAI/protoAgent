@@ -63,6 +63,7 @@ from ._tools import (
     rewrite_artifact,
     save_file_artifact,
     show_artifact,
+    show_service,
     update_artifact,
 )
 from . import _ref as _ref_mod
@@ -74,6 +75,7 @@ __all__ = [
     "register",
     "resolve_for_bundle",
     "show_artifact",
+    "show_service",
     "save_file_artifact",
     "update_artifact",
     "rewrite_artifact",
@@ -108,6 +110,15 @@ def register(registry) -> None:
     _ref_mod.EMIT = register_component is not None
     if register_component is not None:
         register_component(ARTIFACT_REF, validate_artifact_ref)
+    # The `artifact.show` service (ADR 0116): how ANOTHER plugin creates an artifact — e.g. the
+    # data plugin's charts — through `graph.sdk.service`, without importing this package.
+    register_service = getattr(registry, "register_service", None)
+    if register_service is not None:
+        register_service(
+            "show",
+            show_service,
+            description="Create an artifact (any kind, e.g. a vega-lite chart) in the Artifact panel.",
+        )
     registry.register_skill_dir(
         "skills"
     )  # teaches: render with show_artifact, edit with update/rewrite, don't write files

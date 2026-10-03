@@ -62,6 +62,33 @@ from graph.multimodal import MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT, multimodal_
 from graph.components import encode_component  # noqa: F401
 
 
+# ── plugin services (the plugin↔plugin call seam, ADR 0116) ─────────────────────────────
+
+
+def service(name: str) -> Callable | None:
+    """The callable another plugin offers as ``name`` (``"<plugin_id>.<name>"``), or ``None``.
+
+    The way one plugin CALLS another without importing it: the provider registers it with
+    ``registry.register_service`` and you resolve it here, at call time — never at
+    ``register()`` time, since plugins load in no guaranteed order and a reload can swap the
+    provider in or out. ``None`` means no loaded plugin provides it (disabled, not installed,
+    or a core older than the provider needs): degrade with an actionable message rather than
+    fail. Guard the lookup itself with ``getattr(sdk, "service", None)`` on cores older than
+    this seam. The callable's signature and return shape are the PROVIDER's documented API —
+    read its docstring (``help(sdk.service("artifact.show"))``). The reference provider is the
+    artifact plugin's ``artifact.show``::
+
+        show = sdk.service("artifact.show")
+        if show is None:
+            return "The Artifact plugin is off — enable it to see charts."
+        r = show(kind="vega-lite", code=spec_json, title="Sales by weekday")
+        return r["message"] + r["ref"]   # the artifact-ref chip tail goes LAST
+    """
+    from graph.plugin_services import get_service
+
+    return get_service(name)
+
+
 # ── agent + model access (the plugin↔agent channel, ADR 0043) ──────────────────────────
 
 

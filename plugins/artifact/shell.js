@@ -24,7 +24,7 @@
   // The version in the frame, for render-status (#1458): its id, 1-based position, and its identity —
   // lifetime number + ts — which the route resolves even after a trim has shifted the position.
   var renderingId = null, renderingVer = 0, renderingN = 0, renderingTs = 0;
-  var EXT = { html: "html", svg: "svg", mermaid: "mmd", react: "jsx" };
+  var EXT = { html: "html", svg: "svg", mermaid: "mmd", react: "jsx", "vega-lite": "vl.json" };
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   // The NESTED artifact iframe (sandboxed, no stylesheet access) gets the live theme
   // injected as literal colors — read the kit-managed tokens at render time.
@@ -63,7 +63,8 @@
   // rep(true) once it's confirmed rendered — the shell relays it to /render-status so the
   // agent's create/edit reply (and check_artifact) can surface a render failure. Once-only
   // (__artRep) so the first verdict wins. KIND (set by base) gates the on-load OK: react
-  // confirms via the no-mount guard's firstChild check instead (mount is async, post-load).
+  // confirms via the no-mount guard's firstChild check instead (mount is async, post-load), and
+  // vega-lite via its embed promise (the chart is drawn after load, and can still fail then).
   var ERRBOOT = '<script>(function(){var W=window;'
     + 'function rep(ok,err){if(W.__artRep)return;W.__artRep=1;'
     + 'try{parent.postMessage({type:"protoArtifact:render",ok:!!ok,error:err?String(err).slice(0,2000):""},"*");}catch(_){}}'
@@ -74,7 +75,7 @@
     + 'W.__artErr=show;W.__artOk=function(){rep(true,"");};'
     + 'addEventListener("error",function(e){show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
     + 'addEventListener("unhandledrejection",function(e){show("⚠ "+((e.reason&&e.reason.message)||e.reason));});'
-    + 'addEventListener("load",function(){if(W.__artKind!=="react")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
+    + 'addEventListener("load",function(){if(W.__artKind!=="react"&&W.__artKind!=="vega-lite")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
   function base(kind){
     var cs = getComputedStyle(document.documentElement);
@@ -107,6 +108,15 @@
     // Slide previews for .pptx file artifacts; notices in vendor/pptx-renderer.LICENSES.txt.
     pptx: ["pptx-renderer.min.js",
       "sha512-MyPAN9XW0LRMqC0rmeaTshNlkb1GW+ODchhz+wvoAT927kKbrkcDGm05cvGa1mVrgAmFlKfA42YE4CFwfzes3g=="],
+    // Vega 6.4.0 / Vega-Lite 6.4.3 / vega-embed 7.3.0 (BSD-3-Clause): the packages' own UMD
+    // builds, byte-for-byte (window.vega / window.vegaLite / window.vegaEmbed). `vega-lite`
+    // chart artifacts (ADR 0116); notices in vendor/vega.LICENSES.txt.
+    vega: ["vega.min.js",
+      "sha512-liroOUtDzitgul3BVykJa+eaVI7LaAPY+R+CwBwOmZrJEkcHT7eMi6aFC2u6B7NQaosshIS/wM/yhkNAbj0lTA=="],
+    vegaLite: ["vega-lite.min.js",
+      "sha512-Tq8tvzbZ581gvQ426FLV3Aq2TnZrQt6TCuvqosm8aB5GJ8NviU6SKrwVkWcXUR7V6WlEtmf7HU8qUDxhQLMbQA=="],
+    vegaEmbed: ["vega-embed.min.js",
+      "sha512-Z+cCCqLMktM+IFtuAdRPVEwNQiFln47hxAh3zidS/1Aic/Ky0frcJsqn69mhMhIdlou2FgoUoPAm0i0Y5aS44A=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
@@ -536,6 +546,7 @@
       '<script>mermaid.initialize({startOnLoad:false,theme:' + JSON.stringify(mermaidTheme()) + '});'
       + 'mermaid.run().then(function(){__artVP.full();});<\/script></body>';
     if (kind === "markdown") return mdDoc(code);
+    if (kind === "vega-lite") return vegaDoc(code);
     // `react`: import map + UMD react/react-dom/babel, compiled as a MODULE so `import` works
     // (no-import artifacts still run — they use the UMD React/ReactDOM globals as before).
     // The artifact module + a forgiving AUTO-MOUNT epilogue (appended INSIDE the same babel
@@ -955,6 +966,154 @@
     if(!P || typeof P.parseZip!=="function"){ fail("the slide renderer didn't load"); return; }
     post({type:"protoArtifact:pptx", state:"need"});
   }
+  // ── theme tokens for a frame ────────────────────────────────────────────────────────────
+  // The live theme as literal values, read off the kit-managed --pl-* tokens on this page: a
+  // nested frame has no stylesheet access, so this is how it matches the console. The chart
+  // tokens are the design system's own data-viz palette (--pl-color-chart-axis / -grid /
+  // -series1…8), so a chart is drawn in the active theme's colours, dark or light. Pushed into
+  // every frame on a re-theme (pushTheme) and baked into a chart's srcdoc (vegaDoc).
+  var THEME_TOKENS={"--pl-color-bg":"#0a0a0c","--pl-color-fg":"#ededed","--pl-color-fg-muted":"#9aa0aa",
+    "--pl-color-accent":"#9b87f2","--pl-color-border":"rgba(255,255,255,.08)","--pl-font-sans":"",
+    "--pl-color-chart-axis":"","--pl-color-chart-grid":""};
+  for(var _s=1;_s<=8;_s++) THEME_TOKENS["--pl-color-chart-series"+_s]="";
+  function themeTokens(){
+    var cs=getComputedStyle(document.documentElement), out={};
+    Object.keys(THEME_TOKENS).forEach(function(k){ var v=(cs.getPropertyValue(k)||"").trim()||THEME_TOKENS[k]; if(v) out[k]=v; });
+    return out;
+  }
+  // ── vega-lite charts (ADR 0116) ─────────────────────────────────────────────────────────
+  // A chart is a Vega-Lite spec with its data INLINE (data.values): the model writes a small spec
+  // and a query — the data plugin's data_chart runs the query and inlines the rows — instead of
+  // hand-writing a component, which is what made "chart my week" slow. Drawn by the vendored
+  // vega / vega-lite / vega-embed in the same no-same-origin sandbox as every artifact, under a
+  // nonce CSP with NO network (connect-src 'none', img/font data: only). Two more locks, because
+  // CSP alone would surface them as opaque failures rather than refuse them up front:
+  //   • Vega's expression language runs as the CSP-safe interpreter (ast:true — no eval/Function);
+  //   • Vega's loader refuses EVERY load, so data.url, a spec-by-URL and image marks can't fetch,
+  //     and a spec's usermeta.embedOptions (which vega-embed lets override the embed options,
+  //     loader included) is stripped before embedding.
+  // Themed from the console's --pl-* tokens and re-drawn on a live theme switch.
+  function vegaDoc(code){
+    var nonce=cspNonce();
+    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src data: blob:; "
+      + "font-src data:; media-src 'none'; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
+      + "object-src 'none'; base-uri 'none'; form-action 'none'";
+    var cfg={spec:String(code||""), tokens:themeTokens()};
+    return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
+      + base("vega-lite").replace(/<script>/g, '<script nonce="'+nonce+'">')
+      + '<style>'+VEGA_CSS+'</style><body><div id="wrap"><div id="vis"></div></div>'
+      + cdn("vega", nonce) + cdn("vegaLite", nonce) + cdn("vegaEmbed", nonce)
+      + '<script nonce="'+nonce+'">(' + artVega.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script></body>';
+  }
+  var VEGA_CSS='html,body{margin:0;min-height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);'
+    + 'font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}'
+    + '#wrap{box-sizing:border-box;padding:16px 18px}#vis{width:100%}#vis.vega-embed{display:block}'
+    + '#vis svg,#vis canvas{max-width:100%;height:auto}';
+  // The in-frame controller. Authored as a real function and injected via toString(), like
+  // artGraphics / artSlides — so it must carry no literal script-close or comment-open sequence.
+  function artVega(cfg){
+    var W=window, tok=cfg.tokens||{}, spec=null, view=null, gen=0;
+    function fail(m){ if(W.__artErr) W.__artErr("⚠ "+m); }
+    function t(k, d){ var v=tok[k]; return (typeof v==="string" && v.trim()) ? v.trim() : d; }
+    // Luminance of the ground, for the tooltip theme. Themes are often oklch(), so the browser
+    // resolves the colour (a 1px canvas accepts any CSS colour); hex/rgb are parsed directly
+    // where there's no canvas.
+    function isDark(){
+      var bg=t("--pl-color-bg","#0a0a0c"), m, l;
+      try{ var cv=W.document.createElement("canvas"), x; cv.width=cv.height=1; x=cv.getContext("2d");
+        x.fillStyle="#000"; x.fillStyle=bg; x.fillRect(0,0,1,1); var px=x.getImageData(0,0,1,1).data;
+        return (0.299*px[0]+0.587*px[1]+0.114*px[2])/255<=0.5; }catch(_){}
+      if((m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg))){ var h=m[1].length===3?m[1].replace(/./g,"$&$&"):m[1];
+        l=(0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255; }
+      else if((m=/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(bg))) l=(0.299*m[1]+0.587*m[2]+0.114*m[3])/255;
+      else return true;
+      return l<=0.5;
+    }
+    // The Vega config the console theme implies. A spec's own `config` still wins (vega-embed
+    // merges it over this), so an author who means a colour keeps it.
+    function theme(){
+      var fg=t("--pl-color-fg","#ededed"), muted=t("--pl-color-fg-muted",fg),
+          font=t("--pl-font-sans","ui-sans-serif, system-ui, sans-serif"),
+          axis=t("--pl-color-chart-axis",muted), grid=t("--pl-color-chart-grid",t("--pl-color-border","rgba(127,127,127,.25)")),
+          series=[], i, c;
+      for(i=1;i<=8;i++){ c=t("--pl-color-chart-series"+i,""); if(c) series.push(c); }
+      if(!series.length) series.push(t("--pl-color-accent","#9b87f2"));
+      function guide(x){ x.labelColor=muted; x.titleColor=fg; x.labelFont=font; x.titleFont=font; return x; }
+      var out={ background:t("--pl-color-bg","#0a0a0c"), font:font, padding:4,
+        view:{stroke:null},
+        axis:guide({domainColor:axis, tickColor:axis, gridColor:grid, labelFontSize:11, titleFontSize:12, titleFontWeight:500}),
+        legend:guide({labelFontSize:11, titleFontSize:12, titleFontWeight:500}),
+        header:guide({labelFontSize:11, titleFontSize:12}),
+        title:{color:fg, subtitleColor:muted, font:font, subtitleFont:font, anchor:"start", fontSize:14, fontWeight:600, offset:12},
+        mark:{color:series[0]}, text:{color:fg}, rule:{color:axis} };
+      if(series.length>1) out.range={category:series};
+      return out;
+    }
+    // Any `url` inside a data definition — refused up front with a reason, rather than left to
+    // fail inside the dataflow as a bare "Loading failed". Inline rows (values / datasets) are
+    // never walked: a column named `url` is data, not a load. Iterative and bounded (the mirror of
+    // _tools._remote_data), so a hostile nesting depth can't blow the stack: "remote" | "deep" | "".
+    function remote(spec){
+      var stack=[[spec,false,0]], nodes=0, top, o, inData, d, k, v, i;
+      while(stack.length){
+        top=stack.pop(); o=top[0]; inData=top[1]; d=top[2];
+        if(d>64 || ++nodes>100000) return "deep";
+        if(Array.isArray(o)){ for(i=0;i<o.length;i++) if(o[i] && typeof o[i]==="object") stack.push([o[i],inData,d+1]); continue; }
+        for(k in o){
+          if(!Object.prototype.hasOwnProperty.call(o, k)) continue;
+          if(inData && k==="url") return "remote";
+          if(k==="values" || k==="datasets") continue;
+          v=o[k]; if(v && typeof v==="object") stack.push([v, inData || k==="data", d+1]);
+        }
+      }
+      return "";
+    }
+    function deny(){ return Promise.reject(new Error("a chart's data must be inline (data.values) — loading is disabled")); }
+    var LOADER={load:deny, sanitize:deny, http:deny, file:deny};
+    // Errors raised INSIDE the dataflow (after embed resolved) go to the logger, not the promise.
+    var logger=null;
+    function makeLogger(){
+      var b=W.vega.logger(W.vega.Warn), lg={
+        level:function(l){ if(arguments.length){ b.level(l); return lg; } return b.level(); },
+        error:function(){ fail([].slice.call(arguments).map(function(x){ return (x&&x.message)||String(x); }).join(" ")); return lg; },
+        warn:function(){ b.warn.apply(b, arguments); return lg; },
+        info:function(){ return lg; }, debug:function(){ return lg; } };
+      return lg;
+    }
+    function prep(){
+      var s=JSON.parse(JSON.stringify(spec));
+      if(s.usermeta && typeof s.usermeta==="object") delete s.usermeta.embedOptions;
+      var single=!!(s.mark || s.layer) && !s.facet && !s.repeat;
+      if(single && s.width===undefined) s.width="container";
+      if(single && s.autosize===undefined) s.autosize={type:"fit-x", contains:"padding"};
+      return s;
+    }
+    function draw(){
+      var my=++gen;
+      if(view){ view.finalize(); view=null; }
+      return W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
+          loader:LOADER, logger:logger, config:theme(), tooltip:{theme:isDark()?"dark":"light"}})
+        .then(function(res){ if(my!==gen){ res.finalize(); return; } view=res; if(W.__artOk) W.__artOk(); })
+        .catch(function(e){ if(my===gen) fail((e && e.message) || String(e)); });
+    }
+    W.addEventListener("message", function(e){
+      if(e.source!==W.parent) return;
+      var m=e.data||{};
+      if(m.type!=="protoArtifact:theme" || !m.tokens || typeof m.tokens!=="object") return;
+      var nt={};
+      Object.keys(m.tokens).forEach(function(k){ if(/^--pl-[a-z0-9-]+$/.test(k)) nt[k]=String(m.tokens[k]); });
+      if(JSON.stringify(nt)===JSON.stringify(tok)) return;  // the on-load push repeats what's baked in
+      tok=nt; if(spec) draw();
+    });
+    try{ spec=JSON.parse(cfg.spec); }catch(e){ fail("the chart spec isn't valid JSON: "+e.message); return; }
+    if(!spec || typeof spec!=="object" || Array.isArray(spec)){ fail("a Vega-Lite spec is a JSON object"); spec=null; return; }
+    var why=remote(spec);
+    if(why==="deep"){ fail("the chart spec is too deeply nested or too large (at most 64 levels)"); spec=null; return; }
+    if(why){ fail("a chart's data must be inline (data.values) — data.url is not loaded"); spec=null; return; }
+    if(!W.vega || !W.vegaLite || !W.vegaEmbed){ fail("the chart renderer didn't load"); spec=null; return; }
+    logger=makeLogger();
+    draw();
+  }
   var $art=document.getElementById("art"), $vprev=document.getElementById("vprev"),
       $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"),
       $dl=document.getElementById("dl"), $del=document.getElementById("del"),
@@ -1127,11 +1286,7 @@
   // SHIM applies them in place — no re-srcdoc, so interactive artifact state survives).
   function pushTheme(){
     if(!$frame || !$frame.contentWindow || $frame.style.display==="none") return;
-    var cs=getComputedStyle(document.documentElement);
-    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
-    var tokens={"--pl-color-bg":tok("--pl-color-bg","#0a0a0c"),"--pl-color-fg":tok("--pl-color-fg","#ededed"),
-                "--pl-color-accent":tok("--pl-color-accent","#9b87f2"),"--pl-color-border":tok("--pl-color-border","rgba(255,255,255,.08)")};
-    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:tokens},"*"); }catch(_){}
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:themeTokens()},"*"); }catch(_){}
   }
   new MutationObserver(pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:["style","class","data-theme"]});
   // A theme switch can race a render — re-push once the fresh srcdoc has loaded.

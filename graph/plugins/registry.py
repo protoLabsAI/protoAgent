@@ -42,6 +42,8 @@ class PluginRegistry:
     - ``components`` — component-v1 kinds + their props validators, emitted by the
       plugin's own tools and rendered by a console chat-component renderer
       (``register_component``, #3617).
+    - ``services`` — named callables OTHER plugins call through ``graph.sdk.service``
+      (``register_service``, ADR 0116).
 
     Routes and surfaces both wire at process init. Routes now ALSO hot-mount on a
     config reload — a newly-enabled plugin's routers, public paths, verifiers, and
@@ -108,6 +110,8 @@ class PluginRegistry:
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
         self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
         self.components: dict = {}  # component-v1 kind -> props validator (#3617)
+        self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
+        self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
 
     def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None, action=None) -> None:
         """Tell the operator this plugin can't do its job until something is fixed
@@ -296,6 +300,43 @@ class PluginRegistry:
             log.warning("[plugins] %s: component %s registered twice — keeping the first", self.plugin_id, name)
             return
         self.components[name] = validator
+
+    def register_service(self, name: str, fn, description: str = "") -> None:
+        """Offer ``fn`` to OTHER plugins as the service ``<plugin_id>.<name>`` (ADR 0116).
+
+        The cross-plugin CALL seam: where the event bus (:meth:`emit`) is fire-and-forget, a
+        service returns a result. A consumer resolves it at call time with
+        ``graph.sdk.service("<plugin_id>.<name>")`` and gets your callable — or ``None`` when
+        your plugin is disabled, so it must degrade (a service is an optional capability). It
+        never imports your plugin, so you can refactor freely behind the name. The artifact
+        plugin's ``artifact.show`` is the reference: the data plugin creates charts through it.
+
+        The name is namespaced to this plugin: ``"show"`` registers ``"<plugin_id>.show"``, and
+        a name already under this plugin's namespace is kept as-is (a plugin may only provide
+        under its own). The bare part is lowercase ``[a-z][a-z0-9_]*``. Treat the callable's
+        signature and return shape as a PUBLIC API — document them in its docstring, keep them
+        backward compatible, and return refusals as data rather than raising for an expected
+        "no". It runs in the CALLER's thread (often a tool body; sync or async is your call,
+        say which). ``description`` is a one-line summary for status surfaces. Live while the
+        plugin is loaded — a reload that disables it stops the name resolving. Guard with
+        ``getattr(registry, "register_service", None)`` on hosts older than this seam."""
+        from graph.plugin_services import is_service_name
+
+        pid = self.plugin_id
+        key = name if isinstance(name, str) and name.startswith(f"{pid}.") else f"{pid}.{name}"
+        if not is_service_name(key) or not callable(fn):
+            log.warning(
+                "[plugins] %s: service %r refused — the name must be lowercase [a-z][a-z0-9_]* "
+                "(namespaced to this plugin) and fn callable",
+                pid,
+                name,
+            )
+            return
+        if key in self.services:
+            log.warning("[plugins] %s: service %s registered twice — keeping the first", pid, key)
+            return
+        self.services[key] = fn
+        self.service_meta[key] = {"plugin_id": pid, "description": (description or "").strip()}
 
     def emit(self, topic: str, data: dict | None = None) -> None:
         """Broadcast an event on the bus (ADR 0039) — fire-and-forget.

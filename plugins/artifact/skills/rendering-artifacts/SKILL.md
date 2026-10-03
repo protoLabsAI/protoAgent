@@ -27,6 +27,12 @@ the user files to wire up themselves — not what they asked for when they want 
   diagram. Reach for this over `html` when you just want **formatted text**.
 - `html` — a full or partial HTML document (with inline `<style>`/`<script>` as needed).
 - `svg` — inline SVG markup (icons, simple charts).
+- `vega-lite` — a **chart from data**: a JSON Vega-Lite spec with the rows inline in
+  `data.values` (never `data.url` — it isn't loaded). The fastest way to chart: write the encoding,
+  not a component. It's themed to the console automatically, so leave colours/background out, and
+  it fills the panel width. Reach for this over `react` + chart.js whenever the chart is a
+  standard mark (bar/line/area/point/arc/rect heat-map) over a table of rows. With the data
+  plugin on, `data_chart(sql, spec, title)` runs the query and inlines the rows for you.
 - `react` — a self-contained component script that renders into `#root`; React, ReactDOM, and
   Babel are provided. Easiest: **name your top-level component `App`** and it **auto-mounts** — you
   don't have to write the mount call. (You still can: `ReactDOM.createRoot(...).render(...)`; an
