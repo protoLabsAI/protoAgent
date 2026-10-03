@@ -51,12 +51,23 @@ the status description — the same shape as ``skip-changelog`` and ``gate-exemp
 exists because a required check that can never go green (panel outage, a PR the panel does
 not pick up) would otherwise wedge the queue with no way out but an admin merge.
 
+**Which verdict speaks for a head (pr-reviewer-plugin#234).** Several panel rounds can land
+on one head: two racing panels (pr-reviewer-plugin#89), or a re-review an operator summoned
+to dispute a verdict. This gate reads them exactly as the plugin's own ``QA panel`` gate
+does — the STRICTEST round wins (FAIL > WARN > PASS; promotions are not rounds), except that
+a FAIL a later round *supersedes* drops out first: the plugin's pure rule
+(``rounds.superseded_fails``), VENDORED below so this file stays self-contained in repos with
+no plugin checkout. It used to read the LATEST marker, so after a FAIL a re-review PASS on
+the same head turned this check green while ``QA panel`` stayed red. If the rule raises,
+nothing is superseded and the strictest round wins (fail-closed).
+
 Stdlib + ``gh`` only, so CI needs no dependency install. Pure decision logic lives in
 ``decide()`` and is covered by ``tests/test_review_at_head.py``; everything above it is I/O.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -132,22 +143,224 @@ def parse_marker(body: str | None) -> dict[str, str] | None:
     return {m["key"]: m["value"] for m in _ATTR.finditer(found["attrs"])}
 
 
-def verdict_for_head(reviews: list[dict], head_sha: str) -> dict[str, str] | None:
-    """The LAST marker whose ``head`` is ``head_sha``, or None.
+# ── BEGIN VENDORED SUPERSEDE RULE ─────────────────────────────────────────────────────
+# Vendored from protoLabsAI/pr-reviewer-plugin `rounds.py` (+ the findings-record reader in
+# `verdicts.py`) @ f0f0bf5 — the option-(a) rule of pr-reviewer-plugin#234. Copied, not
+# imported: the repos this script gates have no plugin checkout, and a network fetch would
+# make a required check depend on it. Do NOT edit here; edit the plugin and re-sync.
+#   rounds-ast-sha256: 04e26b5f1fe0f7a29a0f88d11c400c97f26111435dd55ed1ea70790fba8262c4
+#   block-ast-sha256:  0e0cb7cc11df1b3a1605209a0f8daf27cbc524817223a9f758eb0a0deca730e9
+# Both hashes are over the AST minus comments and docstrings (formatter-proof; see
+# pr-reviewer-plugin `scripts/vendor_supersede_rule.py`). The plugin's drift
+# test fails when `rounds.py`'s rule no longer matches the first, or this block the second;
+# each downstream copy's own test fails when its block no longer matches the second.
 
-    Last, not first: the panel posts COMMENTED and may later post an APPROVED promotion for
-    the same head, and the newest is the one that stands. Matching is on the full SHA — a
-    prefix match would let a review of a *different* commit satisfy the gate on a collision,
-    which is the whole failure this guards.
+_V_BLOCKING = ("blocker", "major")
+_V_RECORD_SUMMARY = "findings JSON (machine-readable)"
+_V_RECORD_RE = re.compile(
+    r"<details>[ \t]*\r?\n<summary>" + re.escape(_V_RECORD_SUMMARY) + r"</summary>[ \t]*(?:\r?\n[ \t]*)+"
+    r"```json[ \t]*\r?\n(.*?)\r?\n```[ \t]*\r?\n</details>",
+    re.DOTALL,
+)
+_V_MAX_RECORD_CHARS = 16_000
+_V_B64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _v_norm(path: str) -> str:
+    path = path.strip()
+    while path.startswith("./"):
+        path = path[2:]
+    return path.removeprefix("/")
+
+
+def _v_anchor(file: object, line: object) -> str:
+    path = _v_norm(str(file or ""))
+    return f"{path}:{line}" if isinstance(line, int) else path
+
+
+def _v_review_id(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _v_findings_record(body: str) -> tuple[list[dict], bool]:
+    """(findings, recorded): `recorded` only for exactly ONE well-formed findings record.
+    The rule never reads the findings of an unrecorded round, so none are recalled."""
+    blocks = _V_RECORD_RE.findall(body or "")
+    if len(blocks) != 1:
+        return [], False
+    try:
+        parsed = json.loads(blocks[0]) if blocks[0].strip() else None
+    except json.JSONDecodeError:
+        return [], False
+    if not isinstance(parsed, list):
+        return [], False
+    findings = [f for f in parsed if isinstance(f, dict)]
+    return findings, len(findings) == len(parsed)
+
+
+def _v_decode_disposition_record(token: object) -> dict | None:
+    if not isinstance(token, str) or not token or len(token) > _V_MAX_RECORD_CHARS:
+        return None
+    if not _V_B64URL_RE.match(token):
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("rows"), list):
+        return None
+    of = parsed.get("of")
+    if not isinstance(of, int) or isinstance(of, bool) or of <= 0:
+        return None
+    rows = []
+    for row in parsed["rows"]:
+        if not (
+            isinstance(row, dict)
+            and isinstance(row.get("a"), str)
+            and isinstance(row.get("d"), str)
+            and isinstance(row.get("e"), bool)
+            and isinstance(row.get("h"), bool)
+        ):
+            return None
+        rows.append({"a": row["a"], "d": row["d"], "e": row["e"], "h": row["h"]})
+    return {"of": of, "rows": rows}
+
+
+def _v_panel_round(attrs: dict[str, str], body: str, review_id) -> dict:
+    """One posted, non-promotion review → the round facts the rule reads."""
+    findings, recorded = _v_findings_record(body)
+    return {
+        "head": attrs.get("head", ""),
+        "verdict": attrs.get("verdict", ""),
+        "findings": findings,
+        "findings_recorded": recorded,
+        "complete": attrs.get("complete", "true").lower() != "false",
+        "verified": attrs.get("verified", "true").lower() != "false",
+        "reaffirmed": attrs.get("reaffirmed", ""),
+        "id": _v_review_id(review_id),
+        "disposed": _v_decode_disposition_record(attrs.get("disp")),
+    }
+
+
+def _v_blocking_priors(round_: dict | None) -> list[dict]:
+    return [
+        f
+        for f in (round_ or {}).get("findings") or []
+        if isinstance(f, dict)
+        and str(f.get("severity") or "").lower() in _V_BLOCKING
+        and str(f.get("verdict") or "").lower() != "refuted"
+        and not f.get("nearby")
+        and not f.get("ungrounded")
+    ]
+
+
+def _v_supersedes(fail: dict, newer: dict) -> bool:
+    """Does `newer` replace `fail` as the verdict for their head? Fails CLOSED.
+
+    Only a COMPLETE, VERIFIED round on the same head, posted after `fail`, that
+    dispositioned `fail` itself and refuted EVERY blocking finding of it with evidence,
+    the refutation honoured, and that does not still hold one of them."""
+    if not isinstance(fail, dict) or not isinstance(newer, dict):
+        return False
+    if str(fail.get("verdict") or "").upper() != "FAIL" or fail.get("reaffirmed") or not fail.get("findings_recorded"):
+        return False
+    fail_id = _v_review_id(fail.get("id"))
+    newer_id = _v_review_id(newer.get("id"))
+    if fail_id <= 0 or newer_id <= fail_id:
+        return False
+    if not fail.get("head") or newer.get("head") != fail.get("head"):
+        return False
+    if newer.get("reaffirmed"):
+        return False
+    if not (newer.get("complete") is True and newer.get("verified") is True and newer.get("findings_recorded") is True):
+        return False
+    record = newer.get("disposed")
+    if not isinstance(record, dict) or record.get("of") != fail_id:
+        return False
+    priors = _v_blocking_priors(fail)
+    if not priors:
+        return False
+    rows: dict[str, list[dict]] = {}
+    for row in record.get("rows") or []:
+        rows.setdefault(str(row.get("a") or ""), []).append(row)
+    still = {_v_anchor(f.get("file"), f.get("line")) for f in _v_blocking_priors(newer)}
+    for prior in priors:
+        anchor = _v_anchor(prior.get("file"), prior.get("line"))
+        mine = rows.get(anchor) or []
+        if not mine or anchor in still:
+            return False
+        if not all(r.get("d") == "refuted" and r.get("e") is True and r.get("h") is True for r in mine):
+            return False
+    return True
+
+
+def _v_superseded_fails(rounds: list[dict]) -> list[tuple[dict, dict]]:
+    pool = [r for r in rounds or [] if isinstance(r, dict)]
+    out = []
+    for fail in pool:
+        by = next((r for r in pool if r is not fail and _v_supersedes(fail, r)), None)
+        if by is not None:
+            out.append((fail, by))
+    return out
+
+
+# ── END VENDORED SUPERSEDE RULE ───────────────────────────────────────────────────────
+
+
+# Strictest first. A marker with no verdict outranks everything, so it is picked and fails
+# ("carries no verdict"); an unknown verdict ranks with WARN.
+def _rank(attrs: dict[str, str]) -> int:
+    if "verdict" not in attrs:
+        return 3
+    verdict = attrs["verdict"].upper()
+    if verdict in BLOCKING_VERDICTS:
+        return 2
+    return {"PASS": 0, "WARN": 1}.get(verdict, 1)
+
+
+def _superseded(panel: list[tuple[dict, dict[str, str]]]) -> set[int]:
+    """Indices into `panel` of FAIL rounds a later round supersedes (the vendored rule).
+    A rule that raises supersedes nothing: the strictest round wins (fail-closed)."""
+    try:
+        rounds = [_v_panel_round(attrs, review.get("body") or "", review.get("id")) for review, attrs in panel]
+        gone = {id(fail) for fail, _by in _v_superseded_fails(rounds)}
+        return {index for index, round_ in enumerate(rounds) if id(round_) in gone}
+    except Exception as exc:  # noqa: BLE001 — any failure ⇒ strictest-wins
+        print(f"review_at_head: supersede rule failed ({exc!r}); strictest verdict wins", file=sys.stderr)
+        return set()
+
+
+def verdict_for_head(reviews: list[dict], head_sha: str) -> dict[str, str] | None:
+    """The marker that speaks for ``head_sha``, or None when there is none.
+
+    The STRICTEST panel round for the head, after dropping any FAIL a later round supersedes
+    (pr-reviewer-plugin#234) — the same answer the plugin's ``QA panel`` gate reaches.
+    Promotions (``promoted=true``) are not rounds; they speak only when the head has no
+    round at all, as the newest of them. Ties go to the newest. Matching is on the full SHA —
+    a prefix match would let a review of a *different* commit satisfy the gate on a
+    collision, which is the whole failure this guards.
     """
-    match = None
+    markers: list[tuple[dict, dict[str, str]]] = []
     for review in reviews:
         if (review.get("user") or {}).get("login") != REVIEWER_LOGIN:
             continue
         attrs = parse_marker(review.get("body"))
         if attrs and attrs.get("head") == head_sha:
-            match = attrs
-    return match
+            markers.append((review, attrs))
+    if not markers:
+        return None
+    panel = [(r, a) for r, a in markers if a.get("promoted", "false").lower() != "true"]
+    if not panel:
+        return markers[-1][1]
+    gone = _superseded(panel)
+    pool = [a for i, (_r, a) in enumerate(panel) if i not in gone]
+    worst = max(_rank(a) for a in pool)
+    pick = next(a for a in reversed(pool) if _rank(a) == worst)
+    return {**pick, "_superseded": str(len(gone))} if gone else pick
 
 
 def _contract_failure(attrs: dict[str, str], head_sha: str) -> str | None:
@@ -232,6 +445,8 @@ def decide(
         if reason is not None:
             return Decision("failure", reason)
 
+    if attrs.get("_superseded"):
+        return Decision("success", f"{verdict} at {head_sha[:12]} (an earlier FAIL was refuted with evidence)")
     return Decision("success", f"{verdict} at {head_sha[:12]}")
 
 
