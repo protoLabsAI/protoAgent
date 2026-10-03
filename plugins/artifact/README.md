@@ -27,9 +27,10 @@ and mounts its console view live, with no restart.
 - **Tools** — an artifact is a **version chain** (the Claude "update vs rewrite" model), so editing
   iterates the same artifact instead of flooding the panel with near-duplicates:
   - `show_artifact(kind, code, title, links?)` — **create** (`kind` ∈ `html` · `markdown` · `svg` ·
-    `mermaid` · `react`). `markdown` renders with design-system prose styling (` ```mermaid ` fences
-    become live diagrams); `react` can `import` the curated libraries below. `links` (mermaid) —
-    see **Code-linked diagrams** below.
+    `mermaid` · `vega-lite` · `react`). `markdown` renders with design-system prose styling
+    (` ```mermaid ` fences become live diagrams); `vega-lite` is a **chart** — see **Charts** below;
+    `react` can `import` the curated libraries below. `links` (mermaid) — see **Code-linked
+    diagrams** below.
   - `update_artifact(old_string, new_string, artifact_id?, links?)` — **targeted edit**
     (string-replace, must match once) → new version. The fast path for small changes. A
     diagram's links carry over unless `links` is passed (`{}` clears them).
@@ -154,6 +155,36 @@ are injected into every `html` / `react` / `markdown` artifact (via the host-ser
 `/_ds/plugin-kit.css`), so even plain elements (`className="pl-btn pl-btn--primary"`) follow the
 live theme — reach for a raw element with `className="pl-…"` for any component `@pl/ui` doesn't wrap.
 
+## Charts (`vega-lite`, ADR 0116)
+
+A chart is a [Vega-Lite](https://vega.github.io/vega-lite/) spec with its rows **inline** in
+`data.values` — a few hundred bytes of JSON instead of a hand-written component, which is what
+makes a chart fast to produce. The panel draws it with the vendored `vega` 6.4.0 / `vega-lite`
+6.4.3 / `vega-embed` 7.3.0 (BSD-3-Clause; their own UMD builds, byte-for-byte, notices in
+`vendor/vega.LICENSES.txt`), SRI-pinned like the other UMD libs.
+
+- **Themed for you.** The chart takes the console's own data-viz tokens — `--pl-color-chart-series1…8`
+  as the categorical palette, `--pl-color-chart-axis`/`-grid` for guides, the theme's fg/bg/font —
+  and redraws on a live theme switch. Leave colours and background out of the spec; a spec's own
+  `config` still wins when you mean one. A single view fills the panel width.
+- **Inline data only.** A `url` inside any data definition is refused when the version is written
+  (create, update and rewrite), with a reason. In the frame, Vega's loader refuses every load
+  (`data.url`, a spec by URL, image marks), the CSP has no network (`connect-src 'none'`, images and
+  fonts `data:` only), expressions run as the CSP-safe interpreter (no `eval`, so no
+  `'unsafe-eval'`), and a spec's `usermeta.embedOptions` — which vega-embed would otherwise let
+  override the embed options, loader included — is stripped. No export/editor action menu.
+- **From another plugin.** The `artifact.show` plugin service creates one without importing this
+  plugin — `graph.sdk.service("artifact.show")(kind="vega-lite", code=spec_json, title=…)` → `{ok,
+  id, version, message, ref}`; append `ref` (the chat chip) last. The data plugin's `data_chart`
+  runs a query and hands its rows here this way.
+
+```json
+{"title": "Revenue by weekday", "mark": {"type": "bar", "tooltip": true},
+ "encoding": {"x": {"field": "weekday", "type": "nominal", "sort": "-y"},
+              "y": {"field": "revenue", "type": "quantitative", "axis": {"format": "$,.0f"}}},
+ "data": {"values": [{"weekday": "Sat", "revenue": 2310.5}, {"weekday": "Fri", "revenue": 1876}]}}
+```
+
 ## Slide decks (.pptx)
 
 A `.pptx` saved with `save_file_artifact` previews as its **real slides**, not a text dump: a large
@@ -264,7 +295,7 @@ the page announces it is listening (`protoagent:ready`), targeted at the page's 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no
 > outbound network at all (`capabilities.network: []` is literally true):
-> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, and the `.pptx` slide renderer (`*.min.js`). Pinned with **Subresource
+> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, the `.pptx` slide renderer, and Vega / Vega-Lite / vega-embed (`*.min.js`). Pinned with **Subresource
 >   Integrity** (`integrity` + `crossorigin="anonymous"` — required because the sandbox is an opaque
 >   origin, so the load is cross-origin); a tampered served file won't execute. To bump one, replace
 >   the file, recompute its `sha512`, and update the `LIB` map in the shell page.

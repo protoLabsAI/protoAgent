@@ -23,6 +23,8 @@ the module's own.
 
 ## Contents
 
+**Plugin services (the plugin↔plugin call seam, ADR 0116)** — [`service()`](#sdk-service)
+
 **Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
 
 **Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
@@ -46,6 +48,32 @@ the module's own.
 **Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
 
 **Managed Python runtime (ADR 0094 — the provisioned child interpreter)** — [`managed_python_exe()`](#sdk-managed-python-exe)
+
+## Plugin services (the plugin↔plugin call seam, ADR 0116)
+
+### `sdk.service` {#sdk-service}
+
+```python
+sdk.service(name: str) -> Callable | None
+```
+
+The callable another plugin offers as `name` (`"<plugin_id>.<name>"`), or `None`.
+
+The way one plugin CALLS another without importing it: the provider registers it with
+`registry.register_service` and you resolve it here, at call time — never at
+`register()` time, since plugins load in no guaranteed order and a reload can swap the
+provider in or out. `None` means no loaded plugin provides it (disabled, not installed,
+or a core older than the provider needs): degrade with an actionable message rather than
+fail. Guard the lookup itself with `getattr(sdk, "service", None)` on cores older than
+this seam. The callable's signature and return shape are the PROVIDER's documented API —
+read its docstring (`help(sdk.service("artifact.show"))`). The reference provider is the
+artifact plugin's `artifact.show`::
+
+    show = sdk.service("artifact.show")
+    if show is None:
+        return "The Artifact plugin is off — enable it to see charts."
+    r = show(kind="vega-lite", code=spec_json, title="Sales by weekday")
+    return r["message"] + r["ref"]   # the artifact-ref chip tail goes LAST
 
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
 

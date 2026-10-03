@@ -64,6 +64,8 @@ class PluginLoadResult:
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
     chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only chat control commands
     components: dict = field(default_factory=dict)  # component-v1 kind -> props validator (#3617)
+    services: dict = field(default_factory=dict)  # "<plugin_id>.<name>" -> callable (ADR 0116)
+    service_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
     meta: list[dict] = field(default_factory=list)
 
 
@@ -1096,6 +1098,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 log.warning("[plugins] %s: component %s collides — skipped", manifest.id, name)
                 continue
             result.components[name] = validator
+        for name, fn in getattr(registry, "services", {}).items():  # plugin services (ADR 0116)
+            if name in result.services:  # namespaced per plugin, so only a duplicate plugin id hits this
+                log.warning("[plugins] %s: service %s collides — skipped", manifest.id, name)
+                continue
+            result.services[name] = fn
+            smeta = getattr(registry, "service_meta", {}).get(name)
+            if smeta:
+                result.service_meta[name] = smeta
         entry["loaded"] = True
         entry["tools"] = [t.name for t in kept]
         # Count the conventional skills/ dir too (auto-discovered above) — counting only
@@ -1108,6 +1118,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         entry["mcp_servers"] = len(registry.mcp_servers)
         entry["chat_commands"] = [f"/{t}" for t in registry.chat_commands]
         entry["components"] = sorted(getattr(registry, "components", {}))
+        entry["services"] = sorted(getattr(registry, "services", {}))
         result.meta.append(entry)
         log.info(
             "[plugins] loaded %s: %d tool(s), %d skill dir(s), %d route(s), "

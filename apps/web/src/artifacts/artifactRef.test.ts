@@ -50,6 +50,8 @@ describe("artifactRefFromProps", () => {
     expect(artifactRefFromProps(undefined)).toBeNull();
     // An unknown kind is dropped rather than echoed into the chip.
     expect(artifactRefFromProps({ artifact_id: "a", version: 1, kind: "<b>x</b>" })?.kind).toBe("");
+    // A chart (ADR 0116) is a known kind, so an untitled one still says what it is.
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, kind: "vega-lite" })?.kind).toBe("vega-lite");
   });
 
   it("names an untitled artifact by its kind", () => {

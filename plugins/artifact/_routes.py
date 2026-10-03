@@ -115,6 +115,9 @@ _VENDOR_FILES = {
     "react-dom.production.min.js",
     "babel.min.js",
     "pptx-renderer.min.js",  # @aiden0z/pptx-renderer as an IIFE (window.PptxRenderer) — slide previews
+    "vega.min.js",  # vega / vega-lite / vega-embed UMD builds — `vega-lite` chart artifacts (ADR 0116)
+    "vega-lite.min.js",
+    "vega-embed.min.js",
     # ESM modules (the `react` import map): curated libs …
     "d3.mjs",
     "chartjs.mjs",

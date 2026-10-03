@@ -25,7 +25,7 @@ ARTIFACT_REF = "artifact-ref"
 # plugin component seam, which couldn't lift the tail out of the tool card.
 EMIT = True
 
-_KINDS = frozenset({"html", "svg", "mermaid", "react", "markdown", "file"})
+_KINDS = frozenset({"html", "svg", "mermaid", "react", "markdown", "vega-lite", "file"})
 _ID_MAX = 64
 TITLE_MAX = 200
 _PROPS = {"artifact_id", "version", "versions_total", "title", "kind"}

@@ -117,6 +117,9 @@ def test_every_pinned_lib_is_served_byte_exact_to_its_sri(monkeypatch, tmp_path)
         "react-dom.production.min.js",
         "babel.min.js",
         "pptx-renderer.min.js",
+        "vega.min.js",
+        "vega-lite.min.js",
+        "vega-embed.min.js",
     }
     c = TestClient(_app(art))
     for name, pin in pins.items():

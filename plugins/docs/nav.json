@@ -939,6 +939,10 @@
           "title": "0115 — Model calls share a bounded, priority-ordered in-flight lane per endpoint and model (off by default)"
         },
         {
+          "path": "adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts.md",
+          "title": "0116 — A local-first data analyst: DuckDB over files in place, charts as Vega-Lite specs, and a plugin-service call seam"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

@@ -281,6 +281,8 @@ class FakeRegistry:
         self.embedders: dict = {}
         self.chat_commands: dict = {}  # slugified token -> handler
         self.components: dict = {}  # component-v1 kind -> props validator (#3617)
+        self.services: dict = {}  # "<plugin_id>.<name>" -> callable (ADR 0116)
+        self.service_meta: dict = {}  # name -> {plugin_id, description}
         self.late_tool_factories: list = []
         self.saved_media: list = []  # (data, mime, meta) — save_media captures (#1929)
         self.handlers: dict = {}  # topic -> [handlers]
@@ -332,6 +334,23 @@ class FakeRegistry:
         test can run its validator the way the host does. Same signature as the host method;
         the host also refuses a core/invalid name."""
         self.components[name] = validator
+
+    def register_service(self, name: str, fn, description: str = "") -> None:
+        """Capture a plugin service under its namespaced name (``self.services["<id>.<name>"]``),
+        with the host's validation — a malformed name or non-callable raises here instead of
+        being dropped with a warning, so a registration the host would refuse fails the test.
+        To exercise a CONSUMER, put fakes in the live table instead:
+        ``graph.plugin_services.set_plugin_services({"artifact.show": fake})``."""
+        from graph.plugin_services import is_service_name
+
+        pid = self.plugin_id
+        key = name if isinstance(name, str) and name.startswith(f"{pid}.") else f"{pid}.{name}"
+        if not is_service_name(key) or not callable(fn):
+            raise ValueError(f"service {name!r} would be refused by the host (bad name or non-callable)")
+        if key in self.services:
+            raise ValueError(f"service {key} registered twice — the host keeps only the first")
+        self.services[key] = fn
+        self.service_meta[key] = {"plugin_id": pid, "description": description}
 
     def register_chat_command(self, name: str, handler) -> None:
         """Capture a user-only ``/<name>`` control command — with the real registry's

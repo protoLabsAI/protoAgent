@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import secrets
@@ -14,7 +15,40 @@ from . import _config, _links, _preview, _ref, _render_status, _slides, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
-_KINDS = {"html", "svg", "mermaid", "react", "markdown"}
+_KINDS = {"html", "svg", "mermaid", "react", "markdown", "vega-lite"}
+
+
+def _vega_problem(code: str) -> str | None:
+    """Why ``code`` can't be a ``vega-lite`` artifact, or None (ADR 0116).
+
+    Checked when a version is WRITTEN, so a malformed spec is refused with a reason the model can
+    act on instead of committing a version that only fails in the panel. The frame re-checks all of
+    it (and its loader refuses every load regardless): this is feedback, the frame is the fence."""
+    try:
+        spec = json.loads(code)
+    except ValueError as e:
+        return f"A vega-lite artifact's code must be a JSON Vega-Lite spec — it isn't valid JSON ({e})."
+    if not isinstance(spec, dict):
+        return "A vega-lite artifact's code must be a JSON object (a Vega-Lite spec)."
+
+    def remote(o, in_data: bool) -> bool:
+        if isinstance(o, list):
+            return any(remote(x, in_data) for x in o)
+        if isinstance(o, dict):
+            return any((in_data and k == "url") or remote(v, in_data or k == "data") for k, v in o.items())
+        return False
+
+    if remote(spec, False):
+        return (
+            "Charts render INLINE data only — put the rows in `data.values` (the data plugin's "
+            "data_chart does this for you); a `data.url` is never loaded."
+        )
+    return None
+
+
+def _kind_problem(kind: str, code: str) -> str | None:
+    """A per-kind content check for a version about to be written; None when it's fine."""
+    return _vega_problem(code) if kind == "vega-lite" else None
 
 # ── full-body-write nudge (#2257) ────────────────────────────────────────────
 # Iterating an artifact by re-SAVING it (save_file_artifact / rewrite_artifact)
@@ -214,7 +248,9 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
 
     ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
     "mermaid" (a Mermaid diagram definition), "markdown" (a Markdown document — rendered with
-    design-system prose styling; ```mermaid fences become live diagrams), or "react" (a
+    design-system prose styling; ```mermaid fences become live diagrams), "vega-lite" (a CHART: a
+    JSON Vega-Lite spec with its rows inline in ``data.values`` — themed to the console
+    automatically, so leave colours/background out; ``data.url`` is never loaded), or "react" (a
     self-contained React component script; name your top-level component ``App`` and it
     AUTO-MOUNTS into ``#root`` (no manual ``createRoot(...).render`` needed — though an explicit
     render still works). React, ReactDOM and Babel are provided, and it can ``import`` from a
@@ -254,6 +290,40 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     return _then_render(_show(kind, code, title, checked))
 
 
+def show_service(kind: str, code: str, title: str = "") -> dict:
+    """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
+
+    How a plugin puts something in the Artifact panel without importing this one — e.g. the data
+    plugin's ``data_chart`` runs a query and hands the rows, inlined into a Vega-Lite spec, here::
+
+        show = sdk.service("artifact.show")   # None when the artifact plugin is off
+        r = show(kind="vega-lite", code=spec_json, title="Best weekdays")
+
+    It is exactly ``show_artifact`` minus the code ``links``: the same kinds, size cap, per-kind
+    checks, version chain and render-verdict wait. Returns a dict — never raises for a refusal:
+
+    - ``ok`` — False when nothing was created (``message`` says why);
+    - ``id`` / ``version`` — the new artifact and its version (``""`` / ``0`` on a refusal);
+    - ``message`` — the model-facing reply, render verdict included when a panel is open;
+    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it). Append it
+      LAST, verbatim, to your tool's return string: the server lifts it into a chip that opens
+      the panel on this version."""
+    try:
+        result = _show(kind, code, title)
+    except _store.StoreLockTimeout as e:
+        return {"ok": False, "id": "", "version": 0, "message": str(e), "ref": ""}
+    msg, target, *rest = result
+    if target is None:
+        return {"ok": False, "id": "", "version": 0, "message": msg, "ref": ""}
+    return {
+        "ok": True,
+        "id": target[0],
+        "version": target[1],
+        "message": msg + _render_status._render_suffix(*target),
+        "ref": rest[0] if rest else "",
+    }
+
+
 @_store.serialized
 def _show(kind: str, code: str, title: str, checked: _links.Checked | None = None) -> _LockedResult:
     k = (kind or "").strip().lower()
@@ -261,6 +331,8 @@ def _show(kind: str, code: str, title: str, checked: _links.Checked | None = Non
         return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}.", None
     code = code or ""
     if err := _store._too_big(code):
+        return err, None
+    if err := _kind_problem(k, code):
         return err, None
     kept, report = _links.finish(checked, k, code) if checked else ({}, "")
     store = _store._read_store()
@@ -360,6 +432,8 @@ def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.
     new_code = src.replace(old_string, new_string, 1)
     if err := _store._too_big(new_code):
         return err, None
+    if err := _kind_problem(art["kind"], new_code):
+        return err, None
     kept, report = _carry_links(art, checked, new_code)
     v = _store._commit_version(store, art, new_code, extra={"links": kept} if kept else None)
     return (
@@ -397,6 +471,8 @@ def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | 
         return "No artifact to rewrite. Create one with show_artifact first.", None
     if _store._is_file(art):
         return _store._file_not_editable(art), None
+    if err := _kind_problem(art["kind"], code):
+        return err, None
     if title:
         art["title"] = title
     kept, report = _links.finish(checked, art["kind"], code) if checked else ({}, "")

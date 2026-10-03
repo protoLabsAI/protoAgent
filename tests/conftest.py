@@ -156,6 +156,17 @@ def _isolate_goal_verifier_registry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_plugin_service_registry(monkeypatch):
+    """The same snapshot/restore for the plugin-service table (ADR 0116): plugin wiring
+    rebinds it with ``set_plugin_services``, so a test that wires plugins (or sets fakes)
+    would otherwise hand its services to whichever test runs next on that xdist worker."""
+    from graph import plugin_services
+
+    monkeypatch.setattr(plugin_services, "_SERVICES", plugin_services._SERVICES)
+    monkeypatch.setattr(plugin_services, "_SERVICE_META", plugin_services._SERVICE_META)
+
+
+@pytest.fixture(autouse=True)
 def _trust_testclient_host(monkeypatch):
     """Trust Starlette ``TestClient``'s ``Host: testserver`` in the open-mode Host allowlist.
 

@@ -68,6 +68,7 @@ Host services (agent invoke + event bus) a surface/route can use — the server 
 | [`register_mcp_server()`](#registry-register-mcp-server) | Contribute a **managed MCP server** the agent connects to ([ADR 0019](/adr/0019-plugin-config-settings-secrets)) |
 | [`register_middleware()`](#registry-register-middleware) | Add a plugin-contributed LangGraph `AgentMiddleware` ([ADR 0032](/adr/0032-pluggable-middleware)) |
 | [`register_router()`](#registry-register-router) | Mount a FastAPI `APIRouter` on the server ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
+| [`register_service()`](#registry-register-service) | Offer `fn` to OTHER plugins as the service `<plugin_id>.<name>` ([ADR 0116](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)) |
 | [`register_setup_step()`](#registry-register-setup-step) | Register a SETUP STEP: the server-side half of a `plugin_setup` setup-gap action |
 | [`register_skill_dir()`](#registry-register-skill-dir) | Add a directory of `SKILL.md` skills bundled with the plugin |
 | [`register_subagent()`](#registry-register-subagent) | Add a `SubagentConfig` to `SUBAGENT_REGISTRY` ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
@@ -350,6 +351,31 @@ public view `/plugins/<id>` and the bearer-gated data router
 plugin-views.md, [ADR 0026](/adr/0026-plugin-contributed-console-surfaces)); a prefix outside both logs a WARNING ([#870](https://github.com/protoLabsAI/protoAgent/issues/870),
 [#1732](https://github.com/protoLabsAI/protoAgent/issues/1732)). The default-deny auth middleware guards all non-public paths
 regardless of prefix.
+
+### `registry.register_service` {#registry-register-service}
+
+```python
+registry.register_service(name: str, fn, description: str = '') -> None
+```
+
+Offer `fn` to OTHER plugins as the service `<plugin_id>.<name>` ([ADR 0116](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)).
+
+The cross-plugin CALL seam: where the event bus (`emit`) is fire-and-forget, a
+service returns a result. A consumer resolves it at call time with
+`graph.sdk.service("<plugin_id>.<name>")` and gets your callable — or `None` when
+your plugin is disabled, so it must degrade (a service is an optional capability). It
+never imports your plugin, so you can refactor freely behind the name. The artifact
+plugin's `artifact.show` is the reference: the data plugin creates charts through it.
+
+The name is namespaced to this plugin: `"show"` registers `"<plugin_id>.show"`, and
+a name already under this plugin's namespace is kept as-is (a plugin may only provide
+under its own). The bare part is lowercase `[a-z][a-z0-9_]*`. Treat the callable's
+signature and return shape as a PUBLIC API — document them in its docstring, keep them
+backward compatible, and return refusals as data rather than raising for an expected
+"no". It runs in the CALLER's thread (often a tool body; sync or async is your call,
+say which). `description` is a one-line summary for status surfaces. Live while the
+plugin is loaded — a reload that disables it stops the name resolving. Guard with
+`getattr(registry, "register_service", None)` on hosts older than this seam.
 
 ### `registry.register_setup_step` {#registry-register-setup-step}
 

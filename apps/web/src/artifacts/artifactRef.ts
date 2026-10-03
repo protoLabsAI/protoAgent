@@ -15,7 +15,7 @@ export const ARTIFACT_REF_COMPONENT = "artifact-ref";
 /** The artifact plugin's panel — `plugin:<id>:<view>` from its manifest. */
 export const ARTIFACT_VIEW_KEY = "plugin:artifact:artifact";
 
-const KINDS = new Set(["html", "svg", "mermaid", "react", "markdown", "file"]);
+const KINDS = new Set(["html", "svg", "mermaid", "react", "markdown", "vega-lite", "file"]);
 
 export type ArtifactRef = { id: string; version: number; title: string; kind: string };
 
