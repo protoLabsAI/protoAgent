@@ -15,6 +15,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.191.0] - 2026-10-03
+
+### Added
+- **The Artifact panel shows a `.pptx` as real slides, not a text outline (#4019).** A deck
+  saved with `save_file_artifact` now renders as a large current slide fitted to the panel with
+  a filmstrip underneath. Arrow keys, PageUp/PageDown, Home/End and clicks page through it. The
+  renderer is the vendored, SRI-pinned `@aiden0z/pptx-renderer` (Apache-2.0), so it works
+  offline on desktop and server installs. Theme colours, fonts, bullets, tables, images and
+  shapes come through, and text stays sharp at any width. Hostile files are bounded twice: once
+  at save time and again in the sandboxed frame. The limits cover zip bombs, oversized
+  entries, slide count, and images over 50 MP (shown as a placeholder). A nonce CSP blocks
+  script and network access from the deck. The text outline stays underneath for screen
+  readers, and it is the whole view when a deck can't be rendered.
+
+### Fixed
+- **A missing work folder no longer takes every filesystem tool with it, and a re-cloned one comes back in the same session (#3643).**
+  When a registered project's folder was gone at graph build, it was dropped from the fence;
+  if that left no folder, `build_fs_tools` bound nothing and the agent lost `read_file` /
+  `search_files` / `show_code` for the rest of the session, even after the folder was
+  re-cloned. Now the missing project is skipped while the others keep working, a call into
+  it says "project X's folder is missing" (and tells the model not to work around it with
+  `execute_code`), the tools stay bound even when every folder is missing, and the folder
+  is reachable again on the next tool call once it exists. The fence is unchanged: a
+  missing root resolves to nothing and a write never recreates it. The operator sees a
+  WARNING log line naming the project and path, plus a self-clearing console banner via
+  `GET /api/runtime/status`.
+
+- **Text the agent streams before a tool call no longer disappears from the chat (#4015).**
+  A reasoning model's turn could stream a sentence, then call a tool. At that moment the
+  console folded the whole turn into the collapsed "Working…" block, so the answer started
+  and then vanished, and it stayed hidden behind "Worked" after the turn finished. Text that
+  was already on screen before the turn folded now stays in place above the work block, and
+  later tool calls and narration fold below it. When the final full-turn text arrives, it
+  only extends what is already shown and never moves it.
+
+- **A reload or reattach in the middle of a turn keeps the agent's pre-tool text on screen (#4016).**
+  After #4015, text the agent streamed before a tool call stayed visible live. A reload or
+  reattach still hid it inside the collapsed "Working…" block, and on a reload of a finished
+  turn it moved below the block. This happened because the stored turn keeps the answer as
+  one flattened text, separate from the tool and reasoning steps. Each of those steps now
+  records how much text came before it, and a replay puts the text back in the order it
+  streamed in. Separately, a sentence that was cut off just before a tool call is now
+  completed where it is, instead of being split across the tool card.
+
+- **A chat answer no longer flashes as raw markdown before it renders (#4018).**
+  On a freshly loaded console, the first assistant answer could appear for about a third of
+  a second as unformatted source on one line, such as `- **bold** … \`code\``, before it
+  turned into the formatted list. This showed most on turns that called a tool, because their
+  whole answer arrives at once. The markdown renderer now loads ahead of the first message,
+  and while it loads the answer is blank. Raw source is never shown.
+
+- **A streaming chat answer no longer flashes stray markdown symbols (#4020).**
+  While an answer was still arriving, a formatting mark could show on its own for a moment
+  before its text arrived. For example, the `**` that opens a bold word appeared as two
+  literal asterisks. The same happened with a lone backtick, `~~`, `_`, and an empty `- `
+  bullet. The console now holds that trailing mark back until its text arrives. Finished
+  answers are shown exactly as written.
+
+- **The Browser panel's address bar now follows the tab (#4021).** When the agent opened a page, clicked a link, submitted a form, followed a redirect or went back or forward, the bar stayed on its placeholder, and back/forward were always enabled. The screencast bridge saw the navigation events but used them only to re-arm the stream. It now sends the tab's URL, title and back/forward state to the panel. The bar updates live but leaves the operator's text alone while they are typing in it.
+
+- **`Review at head` reads the strictest panel round for a head, as `QA panel` does (#4022).** It read the latest panel marker, so after a FAIL a re-review PASS on the same head turned this required check green while the plugin's `QA panel` stayed red. It now takes the strictest round (promotions are not rounds). A FAIL is dropped only when a later complete, verified round on the same head refuted every one of its blocking findings with evidence, the option-(a) rule of pr-reviewer-plugin#234. The rule is vendored into `scripts/review_at_head.py` with a hash, and a test fails if it is edited in place.
+
+- **A hung `gh` call can no longer stall the required `Review at head` check (#4023).** `scripts/review_at_head.py` ran `gh` with no timeout, so a hung call held the job until the Actions job timeout and no status was posted. Each call is now bounded at 120 seconds, and a timeout is treated like any failed API call: the job posts no status from a partial read and exits cleanly, as it already did for API errors (pr-reviewer-plugin#254).
+
 ## [0.190.0] - 2026-10-02
 
 ### Added

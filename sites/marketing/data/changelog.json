@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.191.0",
+    "date": "2026-10-03",
+    "changes": [
+      "The Artifact panel shows a .pptx as real slides, not a text outline (#4019).",
+      "A missing work folder no longer takes every filesystem tool with it, and a re-cloned one comes back in the same session (#3643).",
+      "Text the agent streams before a tool call no longer disappears from the chat (#4015).",
+      "A reload or reattach in the middle of a turn keeps the agent's pre-tool text on screen (#4016).",
+      "A chat answer no longer flashes as raw markdown before it renders (#4018).",
+      "A streaming chat answer no longer flashes stray markdown symbols (#4020).",
+      "The Browser panel's address bar now follows the tab (#4021).",
+      "Review at head reads the strictest panel round for a head, as QA panel does (#4022).",
+      "A hung gh call can no longer stall the required Review at head check (#4023)."
+    ]
+  },
+  {
     "version": "v0.190.0",
     "date": "2026-10-02",
     "changes": [
