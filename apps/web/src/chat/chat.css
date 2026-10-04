@@ -694,6 +694,10 @@
 /* Slash-command autocomplete (floats above the composer). */
 .composer-wrap {
   position: relative;
+  /* A grid item of .chat-session-slot: without min-width:0 its min-content (the one-line
+     background-work / goal strips above the prompt) pins the whole chat column wider than the
+     panel, the same leak .pl-convo-wrap guards against above. The strips ellipsize instead. */
+  min-width: 0;
 }
 
 /* The DS PromptInput shows focus on the CONTAINER (.pl-prompt:focus-within). Our
@@ -998,7 +1002,11 @@
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
+.chat-bgwork > :not(.chat-bgwork-list) {
+  flex: none; /* the spinner and View keep their size; only the label list shrinks */
+}
 .chat-bgwork-list {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
