@@ -240,11 +240,13 @@ export function BackgroundJobs() {
     <>
       <Tooltip label={info}>
         <Button
-          icon
+          // A square icon button only when it holds just the icon: with the running count
+          // beside the spinner, a fixed square squeezed the spinner into an oval.
+          icon={running === 0}
           size="xs"
           variant="ghost"
           type="button"
-          className="bg-jobs-pill"
+          className={`bg-jobs-pill${running > 0 ? " bg-jobs-pill--running" : ""}`}
           onClick={() => {
             setOpen(true);
             // Persist past this session (#2692) — a reload must not re-show a badge
