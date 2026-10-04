@@ -21,7 +21,7 @@ description: >-
   **Download agent-browser** button), and the banner's **Install Chrome** button fetches
   the browser it drives. An `npm i -g agent-browser` install on PATH still wins. Ships
   DISABLED; enable with `plugins: { enabled: [agent_browser] }`.
-# Bundled but OPT-IN: the pack contributes 17 tools and drives a real browser at
+# Bundled but OPT-IN: the pack contributes 18 tools and drives a real browser at
 # `network: ["*"]`, so it turns on deliberately — never by shipping.
 enabled: false
 # The standalone repo this bundled copy retires (#3445). An installed copy that

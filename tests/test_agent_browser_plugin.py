@@ -63,6 +63,7 @@ LAST_STANDALONE_VERSION = (0, 6, 5)
 EXPECTED_TOOLS = {
     "browser_open", "browser_back", "browser_forward", "browser_reload",
     "browser_snapshot", "browser_get_text", "browser_get_html", "browser_get_value",
+    "browser_form_read",
     "browser_click", "browser_fill", "browser_type", "browser_press", "browser_hover",
     "browser_eval", "browser_screenshot", "browser_pdf", "browser_close",
 }
@@ -84,6 +85,7 @@ preflight = _mod("preflight")
 rt = _mod("runtime")
 storage = _mod("storage")
 tools = _mod("tools")
+forms = _mod("forms")
 cli_fetch = _mod("cli_fetch")
 chrome_install = _mod("chrome_install")
 
@@ -221,10 +223,10 @@ async def test_action_tools_pass_refs(monkeypatch):
     assert rec[-1] == ["ab", "snapshot"]
 
 
-def test_all_17_tools_present():
+def test_all_18_tools_present():
     names = set(_toolmap())
     assert names == EXPECTED_TOOLS
-    assert len(names) == 17  # 16 from the standalone repo + browser_pdf (#3451)
+    assert len(names) == 18  # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032)
     assert "browser_dashboard" not in names  # the dashboard tool is gone (full switchover)
 
 
@@ -1034,6 +1036,235 @@ def test_pdf_tells_the_model_about_the_artifact_handoff():
     plugin. If the docstring stops saying so, the capability is undiscoverable."""
     desc = _toolmap()["browser_pdf"].description
     assert "save_file_artifact" in desc and "PDF" in desc
+
+
+# ── #4032: label-located fields + browser_form_read (forms.py) ─────────────────────
+# Host-free: the in-page JS never runs here — the tool tests mock Popen and assert on the
+# stdin script + the parse of canned eval output; the label-matching RANKING is pure Python
+# (forms.match_fields) and is exercised directly.
+
+
+# A canned `abEnumerate` payload — the shape the in-page JS prints — covering every kind.
+_FORM_FIELDS = [
+    {"idx": 0, "label": "First name", "labels": ["First name", "first_name"], "kind": "text",
+     "name": "first_name", "id": "fn", "required": True, "value": "Ada", "selector": '[data-ab-field="0"]'},
+    {"idx": 1, "label": "Email", "labels": ["Email", "email"], "kind": "email",
+     "name": "email", "id": "em", "required": True, "value": "ada@x.io", "selector": '[data-ab-field="1"]'},
+    {"idx": 2, "label": "Country", "labels": ["Country"], "kind": "combobox",
+     "name": "country", "id": "cty", "required": False, "value": "United States", "selector": '[data-ab-field="2"]'},
+    {"idx": 3, "label": "Role", "labels": ["Role"], "kind": "native-select",
+     "name": "role", "id": "role", "required": False, "value": "Engineer",
+     "options": ["", "Engineer", "Manager"], "selector": '[data-ab-field="3"]'},
+    {"idx": 4, "label": "Seniority", "labels": ["Seniority"], "kind": "radio-group",
+     "name": "sen", "id": "", "required": True, "value": "Senior",
+     "options": ["Junior", "Senior"], "selector": '[data-ab-field="4"]'},
+    {"idx": 5, "label": "Résumé", "labels": ["Résumé", "resume"], "kind": "file",
+     "name": "resume", "id": "rz", "required": False, "value": "cv.pdf", "selector": '[data-ab-field="5"]'},
+    {"idx": 6, "label": "Subscribe", "labels": ["Subscribe", "subscribe"], "kind": "checkbox",
+     "name": "sub", "id": "sb", "required": False, "value": True, "selector": '[data-ab-field="6"]'},
+]
+
+
+def _field(label, labels=None, kind="text", name="", selector=None, **kw):
+    d = {"label": label, "labels": labels if labels is not None else [label], "kind": kind,
+         "name": name, "selector": selector or f"[sel-{label}]"}
+    d.update(kw)
+    return d
+
+
+# ── forms.classify / normalize — pure string routing ──────────────────────────────
+
+
+@pytest.mark.parametrize(("field", "kind"), [
+    ("@e5", "ref"), ("@e123", "ref"), ("  @e9 ", "ref"),
+    ("#email", "css"), (".form-control", "css"), ("[name='email']", "css"),
+    ("div > input", "css"), ("a + b", "css"), ("x ~ y", "css"),
+    ("Email", "label"), ("First name", "label"), ("Résumé", "label"), ("  Email  ", "label"),
+])
+def test_classify_routes_refs_css_and_labels(field, kind):
+    assert forms.classify(field) == kind
+    assert forms.is_ref(field) == (kind == "ref")
+    assert forms.is_css(field) == (kind == "css")
+
+
+def test_normalize_collapses_whitespace_strips_asterisks_and_lowercases():
+    assert forms.normalize("  Email   Address * ") == "email address"
+    assert forms.normalize("First\nName*") == "first name"
+    assert forms.normalize("") == ""
+
+
+# ── forms.match_fields — the label ranking (exact > prefix > substring; never guess) ──
+
+
+def test_match_exact_beats_prefix_and_resolves_uniquely():
+    fields = [_field("Email address"), _field("Email", selector="[email]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[email]" and m.label == "Email"
+
+
+def test_match_prefix_beats_substring():
+    fields = [_field("Please enter your email"), _field("Email address", selector="[addr]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[addr]"   # prefix (tier 1) wins over substring (tier 2)
+
+
+def test_match_falls_back_to_non_primary_label_sources():
+    # a react-styled field with no visible <label>, matched via its `name`/placeholder
+    fields = [_field("", labels=["email"], name="email", selector="[byname]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[byname]"
+
+
+def test_required_marker_asterisk_is_ignored_when_matching():
+    m = forms.match_fields("Email", [_field("Email *", labels=["Email *"], selector="[e]")])
+    assert m.ok and m.selector == "[e]"
+
+
+def test_match_ambiguous_at_the_best_tier_is_an_error_that_names_them():
+    fields = [_field("Email", kind="email", name="a"), _field("Email", kind="text", name="b")]
+    m = forms.match_fields("Email", fields)
+    assert not m.ok and m.error.startswith("Error:")
+    assert "2 fields" in m.error and "name=a" in m.error and "name=b" in m.error
+    assert m.selector == ""   # SHALL NOT act on any
+
+
+def test_match_zero_is_an_error_listing_the_closest_candidates():
+    fields = [_field("First name"), _field("Last name"), _field("Phone number")]
+    m = forms.match_fields("email", fields)
+    assert not m.ok and m.error.startswith("Error:")
+    assert m.candidates and len(m.candidates) <= 5
+
+
+def test_closest_labels_ranks_by_similarity_and_caps_at_five():
+    fields = [_field(x) for x in ["Email", "E-mail address", "Emergency contact",
+                                  "First name", "Last name", "Phone"]]
+    close = forms.closest_labels(fields, "email", n=5)
+    assert len(close) == 5 and close[0] == "Email"   # the nearest label first
+
+
+# ── forms.resolve_js / parse_resolve / resolve_target — the reusable locator ───────
+
+
+def test_resolve_js_passes_refs_and_css_through_without_walking_the_dom():
+    for field in ("@e7", "#email", ".foo", "div > input"):
+        js = forms.resolve_js(field)
+        assert "mode:'pass'" in js and json.dumps(field.strip()) in js
+        assert "abEnumerate" not in js   # a pass-through never enumerates
+
+
+def test_resolve_js_for_a_label_enumerates_the_page():
+    js = forms.resolve_js("Email")
+    assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+
+
+def test_resolve_target_round_trips_a_ref_pass_through_unchanged():
+    m = forms.resolve_target("@e3", forms.parse_resolve(json.dumps({"mode": "pass", "target": "@e3"})))
+    assert m.ok and m.selector == "@e3"   # r1: the ref reaches the CLI unchanged
+
+
+def test_resolve_target_resolves_a_label_against_enumerated_fields():
+    out = json.dumps({"mode": "enumerate", "fields": [
+        {"label": "Email", "labels": ["Email"], "selector": "[s]", "kind": "email"}]})
+    m = forms.resolve_target("Email", forms.parse_resolve(out))
+    assert m.ok and m.selector == "[s]" and m.kind == "email"
+
+
+def test_parse_resolve_never_raises_on_unreadable_output():
+    m = forms.resolve_target("Email", forms.parse_resolve("<<not json>>"))
+    assert not m.ok and m.error.startswith("Error:")
+
+
+# ── browser_form_read — the tool (canned eval output + stdin script) ───────────────
+
+
+async def test_form_read_returns_public_json_in_document_order(monkeypatch):
+    payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    # r7: the script rides eval --stdin, never argv
+    assert rec[-1] == ["ab", "eval", "--stdin"]
+    assert "abEnumerate" in procs[-1].stdin.getvalue().decode()
+    data = json.loads(out)
+    assert [f["label"] for f in data] == ["First name", "Email", "Country", "Role",
+                                          "Seniority", "Résumé", "Subscribe"]   # r5: document order
+    # the internal addressing keys never surface
+    assert all("labels" not in f and "selector" not in f and "idx" not in f for f in data)
+    first = data[0]
+    assert set(first) == {"label", "kind", "name", "id", "required", "value"}
+    assert first["required"] is True and first["kind"] == "text" and first["name"] == "first_name"
+
+
+async def test_form_read_reports_committed_values_and_options(monkeypatch):
+    payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload))
+    data = json.loads(await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({}))
+    by_kind = {f["kind"]: f for f in data}
+    # r6: a combobox reports its committed selection, and omits options (not in the DOM)
+    assert by_kind["combobox"]["value"] == "United States" and "options" not in by_kind["combobox"]
+    assert by_kind["native-select"]["options"] == ["", "Engineer", "Manager"]
+    assert by_kind["native-select"]["value"] == "Engineer"
+    assert by_kind["radio-group"]["options"] == ["Junior", "Senior"] and by_kind["radio-group"]["value"] == "Senior"
+    assert by_kind["file"]["value"] == "cv.pdf"
+    assert by_kind["checkbox"]["value"] is True
+
+
+def test_form_read_js_extracts_the_committed_combobox_value_not_typed_text():
+    """r6 is produced in-page; the script must read the rendered single-value, and must
+    skip a combobox's inner search input so half-typed text is never surfaced as a field."""
+    js = forms.read_form_js("")
+    assert "single-value" in js and "singleValue" in js   # the committed selection
+    assert "abInCombo" in js and "select__control" in js   # the inner input is skipped
+
+
+async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#application"})
+    script = procs[-1].stdin.getvalue().decode()
+    assert 'abScopeRoot("#application", true)' in script
+
+
+async def test_form_read_scope_label_is_passed_as_a_container_name(monkeypatch):
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "Work history"})
+    assert 'abScopeRoot("Work history", false)' in procs[-1].stdin.getvalue().decode()
+
+
+async def test_form_read_refuses_a_ref_scope_without_running_the_cli(monkeypatch):
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "@e5"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't be resolved in an eval — refuse before the subprocess
+
+
+async def test_form_read_reports_an_unmatched_scope(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": False, "error": "scope-not-found"})))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#nope"})
+    assert out.startswith("Error:") and "#nope" in out
+
+
+async def test_form_read_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="not json at all"))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    assert out.startswith("Error:")   # r8: no new tool raises
+
+
+async def test_form_read_surfaces_an_eval_error(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no page open"))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    assert out.startswith("Error:") and "no page open" in out
+
+
+def test_form_read_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_form_read"]
+    assert "browser_form_read" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
 
 
 # ── register() wiring ────────────────────────────────────────────────────────────

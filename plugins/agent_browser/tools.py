@@ -47,7 +47,7 @@ import time
 
 from langchain_core.tools import tool
 
-from . import cli_fetch, preflight, storage
+from . import cli_fetch, forms, preflight, storage
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
@@ -462,6 +462,37 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         """Get the current value of a form field (a `@eN` ref or CSS selector)."""
         return _bad_operand(selector=selector) or await _ab("get", "value", selector)
 
+    @tool
+    async def browser_form_read(scope: str = "") -> str:
+        """Read every form field on the page in ONE call — the reliable way to see a form
+        before filling it, and to verify it afterwards.
+
+        Returns a JSON array, one object per field in document order, each with `label`,
+        `kind` (text/textarea/email/tel/number/native-select/combobox/checkbox/radio-group/
+        file/other), `name`, `id`, `required`, the current committed `value` (for a
+        react-select-style combobox the RENDERED selection, not any half-typed search text;
+        for a radio group the checked option's label; for a file input the attached
+        filename) and, where they live in the DOM, `options` (native-select / radio-group).
+
+        `scope` optionally restricts the read to one container — a CSS selector
+        (`#application`) or a visible container label (a `<fieldset>` legend / `aria-label`);
+        leave it blank for the whole page.
+
+        The labels this returns are exactly what the other form tools address by, and that
+        addressing is re-resolved in the page on every call, so it survives the re-renders
+        that make a `browser_snapshot` `@eN` ref go stale."""
+        # scope is embedded in the eval script (stdin), never an argv element, so it needs no
+        # argv-option guard — but a snapshot @ref can't be resolved inside an eval, so say so
+        # rather than silently reading the whole page.
+        if scope and forms.is_ref(scope):
+            return ("Error: browser_form_read can't scope by a @ref — those are resolved by the "
+                    "CLI, not in the page. Pass a CSS selector or a visible container label, or "
+                    "leave scope blank to read the whole page.")
+        out = await _ab("eval", "--stdin", stdin=forms.read_form_js(scope))
+        if out.startswith("Error:"):
+            return out
+        return forms.render_form_read(out, scope)
+
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
     async def browser_click(selector: str) -> str:
@@ -538,6 +569,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     return [
         browser_open, browser_back, browser_forward, browser_reload,
         browser_snapshot, browser_get_text, browser_get_html, browser_get_value,
+        browser_form_read,
         browser_click, browser_fill, browser_type, browser_press, browser_hover,
         browser_eval, browser_screenshot, browser_pdf, browser_close,
     ]
