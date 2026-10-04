@@ -204,6 +204,93 @@ test("New agent: every card has its own 'What's included' preview (#2041)", asyn
   await expect(dialog.getByText("Secrets: Brave API key")).toBeVisible();
 });
 
+// ── New agent: "From a bundle URL" + opt-in preview archetypes ───────────────────────
+// The third source: paste a bundle's git URL (+ ref) → the read-only peek shows what it
+// installs and asks for an explicit trust ack on a non-official source → the SAME set-up
+// dialog → Create posts `bundle` + `ref`. Held catalog archetypes appear only behind
+// Advanced ▸ "Show preview archetypes", badged "Preview", and the choice sticks per console.
+
+test("New agent → From a bundle URL → preview + trust → set up → create posts bundle + ref", async ({ page }) => {
+  await openAgents(page);
+  let posted = null;
+  await page.route("**/api/fleet", async (route) => {
+    if (route.request().method() === "POST") posted = route.request().postDataJSON();
+    return route.continue();
+  });
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("tab", { name: "From a bundle URL" }).click();
+
+  // A non-git URL is refused before anything is fetched.
+  const urlField = page.getByLabel("Repository URL");
+  await urlField.fill("not a repo");
+  await page.getByRole("button", { name: "Look up" }).click();
+  await expect(page.getByRole("alert")).toContainText("isn't a git repository URL");
+
+  // A GitHub /tree/<ref> page URL folds to repo + ref.
+  await urlField.fill("https://github.com/acme/analyst-archetype/tree/v0.1.0");
+  await page.getByRole("button", { name: "Look up" }).click();
+  const preview = page.locator(".bundle-url-preview");
+  await expect(preview).toContainText("github.com/acme/analyst-archetype@v0.1.0");
+  await expect(page.getByLabel("Ref (optional)")).toHaveValue("v0.1.0");
+  await expect(preview).toContainText("What it installs");
+  await expect(preview.locator(".archetype-preview-member")).toHaveCount(3);
+  await expect(preview).toContainText("built-in");
+  await expect(preview).toContainText("It will ask for: Data folders");
+  await expect(preview).toContainText("isn't an official source");
+
+  // Next waits for the trust ack.
+  const next = page.getByRole("button", { name: /^Next/ });
+  await expect(next).toBeDisabled();
+  await preview.getByText("I trust this repository").click();
+  await expect(next).toBeEnabled();
+  await next.click();
+
+  const dialog = setupDialog(page);
+  await expect(dialog).toContainText("Set up Analyst");
+  await expect(dialog).toContainText("installs 3 plugins");
+  await expect(dialog.getByLabel("Agent name")).toHaveValue("analyst");
+  await dialog.getByLabel("Agent name").fill("databot");
+  // The bundle's required config_inputs answer hard-gates Create, exactly like a catalog card.
+  await expect(createButton(page)).toBeDisabled();
+  await dialog.getByLabel("Data folders").fill("/Users/me/data");
+  await createButton(page).click();
+  await expect(page).toHaveURL(/\/app\/agent\/databot-ab12\//);
+  expect(posted?.bundle).toBe("https://github.com/acme/analyst-archetype");
+  expect(posted?.ref).toBe("v0.1.0");
+  expect(posted?.requires_tools).toEqual(["data_query", "data_chart"]);
+  expect(posted?.config_inputs).toEqual({ "data.data_dirs": "/Users/me/data" });
+});
+
+test("New agent → From a bundle URL: an unreadable repo shows the server's reason", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("tab", { name: "From a bundle URL" }).click();
+  await page.getByLabel("Repository URL").fill("https://github.com/acme/missing-archetype");
+  await page.getByRole("button", { name: "Look up" }).click();
+  await expect(page.getByRole("alert")).toContainText("repository not found");
+  await expect(page.getByRole("button", { name: /^Next/ })).toBeDisabled();
+});
+
+test("New agent: held archetypes stay hidden until 'Show preview archetypes', then carry a Preview badge", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.locator(".pl-radiocard", { hasText: "Analyst" })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Advanced \(1\)/ }).click();
+  await expect(page.locator(".pl-radiocard", { hasText: "Analyst" })).toHaveCount(0);
+
+  await page.getByText("Show preview archetypes").click();
+  const held = page.locator(".pl-radiocard", { hasText: "Analyst" });
+  await expect(held).toBeVisible();
+  await expect(held.locator(".pl-badge")).toHaveText("Preview");
+
+  // Persisted per console: a reload keeps the opt-in.
+  await page.reload({ waitUntil: "load" });
+  await openFleet(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("button", { name: /^Advanced \(2\)/ }).click();
+  await expect(page.locator(".pl-radiocard", { hasText: "Analyst" })).toBeVisible();
+});
+
 // ── The set-up step's hard gate (#2977/#2979/#2984) ────────────────────────────────
 // A required bundle `config_inputs` answer has no env fallback — the server refuses the
 // create — so Create must not be offered until it's answered. The Project Manager

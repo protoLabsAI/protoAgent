@@ -184,6 +184,54 @@ export const ARCHETYPES = [
   { id: "custom", label: "Custom", icon: "PenLine", blurb: "Write your own — fill in a template.", bundle: null, soul: "# Identity\n\n_Describe your agent in one paragraph._" },
 ];
 
+// The catalog's `held` entries — only on GET /api/archetypes?include_held=1 (the New-agent
+// picker's "Show preview archetypes" opt-in), each flagged `held: true` → a "Preview" badge.
+export const HELD_ARCHETYPES = [
+  {
+    id: "analyst", label: "Analyst", icon: "ChartColumn",
+    blurb: "Answers questions from your own data files — CSV, Parquet, Excel, SQLite — with SQL and a live chart.",
+    bundle: "https://github.com/protoLabsAI/analyst-archetype",
+    soul: "# Identity\n\nI am a data analyst.",
+    tier: "standard",
+    requires_tools: ["data_query", "data_chart"],
+    held: true,
+  },
+];
+
+// GET /api/archetypes/from-url — the "From a bundle URL" peek. Shaped after the real
+// analyst-archetype v0.1.0: one fetched plugin pinned at a ref, two built-ins it turns on,
+// and a required config_inputs prompt. A non-protoLabsAI URL answers `trusted: false` → the ack.
+export function archetypeFromUrl(url, ref) {
+  const source = url.replace(/^https:\/\//, "").replace(/\.git$/, "").replace(/\/$/, "");
+  return {
+    id: "analyst-archetype",
+    archetype: {
+      id: "analyst-archetype", label: "Analyst", icon: "ChartColumn",
+      blurb: "Answers questions from your own data files with SQL and a live chart.",
+      bundle: url, soul: "# Identity\n\nI am a data analyst.", tier: "standard",
+      requires: [], requires_tools: ["data_query", "data_chart"],
+      ...(ref ? { ref } : {}),
+    },
+    bundle: {
+      kind: "bundle", id: "analyst-archetype", name: "Analyst",
+      description: "A read-only data analyst over the folders you allow.",
+      enabled: ["data", "artifact", "notes"],
+      members: [
+        { id: "data", builtin: false, ref: "v0.1.0", url: "https://github.com/protoLabsAI/data-plugin", name: "Data", version: "0.1.0", description: "SQL over CSV / Parquet / Excel / SQLite, plus charts.", skills: [{ name: "analyze", description: "Answer a question from data" }] },
+        { id: "artifact", builtin: true, name: "Artifact", version: "0.4.0", description: "Publish charts and reports as artifacts." },
+        { id: "notes", builtin: true, name: "Notes", version: "0.6.0", description: "Markdown notes beside chat." },
+      ],
+      mcp: [],
+      secrets: [],
+      config_inputs: [
+        { key: "data.data_dirs", label: "Data folders", type: "path", required: true, help: "Only these folders are readable." },
+      ],
+    },
+    trusted: source.toLowerCase().startsWith("github.com/protolabsai/"), // official org → no ack
+    source,
+  };
+}
+
 // GET /api/archetypes/{id}/preview — the read-only bundle peek (#2041). product-archetype
 // asks for a GitHub MCP server (needs a token) + a standalone Brave secret, so it exercises
 // the enriched preview dialog AND the new-agent Configure step's SOFT gate (skip → env).

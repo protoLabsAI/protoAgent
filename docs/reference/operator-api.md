@@ -171,8 +171,9 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | GET | `/api/fleet/discover` | Discover agents (LAN mDNS + tailnet) |
 | POST · DELETE | `/api/fleet/remotes[/{ident}]` | Register / remove a remote member |
 | POST | `/api/fleet/remotes/pair` | Pair with a remote by claiming a code minted on it (`{url, code, name?}`); stores the per-device token, adds or re-tokens the member (ADR 0113) |
-| GET | `/api/archetypes` | Starter agent types (catalog + installed bundles) |
+| GET | `/api/archetypes` | Starter agent types (catalog + installed bundles); `?include_held=1` adds the catalog's `held` preview entries (`held: true`) |
 | GET | `/api/archetypes/{id}/preview` | Peek a bundle archetype's members/MCP/secrets before install |
+| GET | `/api/archetypes/from-url?url=&ref=` | Peek an uncatalogued bundle by git URL (+ optional ref): its archetype row, the bundle peek, and whether the source is `trusted` |
 
 ## Plugins & MCP
 

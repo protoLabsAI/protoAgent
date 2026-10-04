@@ -460,6 +460,7 @@ def create(
     from_config: str | None = None,
     inherit_model: str | None = None,
     bundle: str | None = None,
+    bundle_ref: str | None = None,
     port: int | None = None,
     shared_skills: bool = False,
     snapshot_config: Path | None = None,
@@ -578,6 +579,10 @@ def create(
                 "created": datetime.now(timezone.utc).isoformat(),
                 "bundle": bundle or "",
             }
+            # The pinned ref a bundle was created at ("From a bundle URL", #new-agent) —
+            # recorded beside the URL so the provenance says WHICH bundle, not just whose.
+            if bundle and bundle_ref:
+                rec["bundle_ref"] = bundle_ref
             # The archetype's capability contract (#2277): the tools its persona commits to
             # performing. Recorded here because the member's instance root IS this workspace, so
             # it can read its own contract at boot and check it against what actually got bound —
@@ -596,7 +601,7 @@ def create(
     oauth_warnings: list[str] = []
     try:
         if bundle:
-            installed = _install_bundle_into(ws, bundle)
+            installed = _install_bundle_into(ws, bundle, ref=bundle_ref)
             # Auto-enable the bundle's plugins so a new agent boots WITH its tools live —
             # matching the console install path (which auto-enables on install, ADR 0027).
             # The CLI installer deliberately doesn't enable, so without this the agent
@@ -1421,10 +1426,11 @@ def _tail(*streams: str | bytes | None, lines: int = 60) -> str:
     return "\n".join(out[-lines:])
 
 
-def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
+def _install_bundle_into(ws: Path, bundle: str, *, ref: str | None = None) -> list[str]:
     """Install a bundle (or plugin) into the workspace via a scoped subprocess —
     ``PROTOAGENT_HOME=<ws>`` makes the workspace the installer's instance root, so
-    plugins land at ``<ws>/plugins`` and the lock at ``<ws>/plugins.lock``."""
+    plugins land at ``<ws>/plugins`` and the lock at ``<ws>/plugins.lock``. ``ref`` pins
+    the bundle to a tag / branch / SHA (the CLI's ``--ref``; default = its default branch)."""
     env = {
         **os.environ,
         "PROTOAGENT_HOME": str(ws),
@@ -1437,7 +1443,7 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
     # follow-up). No effect on a source/server run, where install never pips (ADR 0027 D4).
     try:
         proc = subprocess.run(
-            [*_server_argv(), "plugin", "install", bundle, "--install-runtime-deps"],
+            [*_server_argv(), "plugin", "install", bundle, *(["--ref", ref] if ref else []), "--install-runtime-deps"],
             env=env,
             capture_output=True,
             text=True,

@@ -183,10 +183,12 @@ export const publishedLinksQuery = () =>
   });
 
 // Archetypes for the new-agent picker (Basic + installed bundles) — config, not live.
-export const archetypesQuery = () =>
+// `includeHeld` (the picker's "Show preview archetypes" opt-in) adds the catalog's held
+// entries under its own key, so the default list is never polluted by the preview one.
+export const archetypesQuery = (includeHeld = false) =>
   queryOptions({
-    queryKey: queryKeys.archetypes,
-    queryFn: () => api.archetypes(),
+    queryKey: includeHeld ? [...queryKeys.archetypes, "held"] : queryKeys.archetypes,
+    queryFn: () => api.archetypes(includeHeld),
   });
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar; the panel

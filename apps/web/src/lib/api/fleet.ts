@@ -9,6 +9,7 @@
  */
 import type {
   Archetype,
+  ArchetypeFromUrl,
   ArchetypePreview,
   DiagnosticsLogs,
   DiagnosticsTask,
@@ -43,15 +44,26 @@ export const fleetApi = {
   discoverAgents() {
     return request<{ discovered: DiscoveredAgent[] }>("/api/fleet/discover");
   },
-  archetypes() {
-    return request<{ archetypes: Archetype[] }>("/api/archetypes");
+  // `includeHeld` asks for the catalog's held (preview) archetypes too — only the New-agent
+  // picker's opt-in sends it; they're never part of the default list.
+  archetypes(includeHeld = false) {
+    return request<{ archetypes: Archetype[] }>(includeHeld ? "/api/archetypes?include_held=1" : "/api/archetypes");
   },
   archetypePreview(id: string) {
     return request<ArchetypePreview>(`/api/archetypes/${encodeURIComponent(id)}/preview`);
   },
+  /** Peek an uncatalogued bundle by git URL (+ optional ref) — read-only, nothing installs.
+   *  400 = not a git URL / bad ref; 502 = the repo couldn't be read. */
+  archetypeFromUrl(url: string, ref?: string) {
+    const q = new URLSearchParams({ url });
+    if (ref) q.set("ref", ref);
+    return request<ArchetypeFromUrl>(`/api/archetypes/from-url?${q.toString()}`);
+  },
   createAgent(body: {
     name: string;
     bundle?: string | null;
+    // Tag / branch / SHA to install `bundle` at ("From a bundle URL"); omitted = default branch.
+    ref?: string;
     soul?: string;
     port?: number;
     start?: boolean;

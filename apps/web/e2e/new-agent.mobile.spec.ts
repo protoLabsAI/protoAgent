@@ -60,3 +60,21 @@ test("mobile: Setup Wizard — pick step, then the set-up step with the folder p
   await expect(wizard.getByRole("button", { name: /Browse/ })).toBeVisible();
   await noSidewaysScroll(page);
 });
+
+test("mobile: From a bundle URL — the form and the bundle preview fit the phone", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("header-menu").click();
+  await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Settings sections" }).selectOption("Fleet");
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("tab", { name: "From a bundle URL" }).tap();
+  await page.getByLabel("Repository URL").fill("https://github.com/acme/analyst-archetype");
+  await page.getByLabel("Ref (optional)").fill("v0.1.0");
+  await page.getByRole("button", { name: "Look up" }).tap();
+  await expect(page.locator(".bundle-url-preview")).toContainText("What it installs");
+  await noSidewaysScroll(page);
+  await page.getByText("I trust this repository").tap();
+  await page.getByRole("button", { name: /^Next/ }).tap();
+  await expect(page.locator(".archetype-setup-dialog").getByLabel("Agent name")).toHaveValue("analyst");
+  await noSidewaysScroll(page);
+});
