@@ -15,6 +15,7 @@ format. ``run`` returns the env + argv for the CLI to ``exec`` the normal server
 from __future__ import annotations
 
 import contextlib
+import logging
 import copy as _copy
 import os
 import re
@@ -26,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from infra.paths import atomic_write, read_text_utf8
+
+_log = logging.getLogger("protoagent.workspaces")
 
 PORT_BASE = 7870  # workspaces get PORT_BASE+1, +2, … unless an explicit port is given
 
@@ -1364,6 +1367,60 @@ def _server_argv() -> list[str]:
     return [sys.executable, "-m", "server"]
 
 
+_BUNDLE_INSTALL_TIMEOUT_S = 300
+
+#: A line the stdlib logging formatter wrote (``2026-10-03 17:26:43,676 INFO httpx …``) — the
+#: child's narration, never the error. Matches both the human and the bracketed level forms.
+_LOG_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T][\d:.,]+\s+(?:\[?(?:DEBUG|INFO|WARNING|WARN)\]?)\s")
+_REASON_MAX = 1500
+
+
+def install_failure_reason(stdout: str | bytes | None, stderr: str | bytes | None, returncode: int | None = None) -> str:
+    """The one line that says WHY a ``plugin install`` subprocess failed.
+
+    The child's stderr interleaves its own log stream (httpx narrates every GET at INFO) with the
+    CLI's ``✗ <reason>`` line, which comes LAST. Slicing the head of that stream (what this used to
+    do, ``stderr[:400]``) returned four httpx lines and cut off before the reason. So: drop the
+    log-formatter narration (DEBUG/INFO/WARNING), prefer the CLI's last ``✗`` line plus its
+    continuation lines (git's ``fatal: …``), else
+    the last remaining line (a traceback's ``SomeError: message``, an ERROR log line), else the
+    exit code."""
+
+    def _lines(raw: str | bytes | None) -> list[str]:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        return [ln.rstrip() for ln in (raw or "").splitlines() if ln.strip()]
+
+    reason = ""
+    for stream in (_lines(stderr), _lines(stdout)):
+        marks = [i for i, ln in enumerate(stream) if ln.lstrip().startswith("✗")]
+        if marks:
+            # The ✗ line and its continuation (git's `remote: Repository not found.` / `fatal: …`
+            # follow it on their own lines), minus any narration interleaved after it.
+            tail = [ln.strip() for ln in stream[marks[-1] :] if not _LOG_LINE.match(ln)]
+            reason = " ".join(tail).lstrip("✗ ").strip()
+            break
+    for stream in (_lines(stderr), _lines(stdout)):
+        if reason:
+            break
+        # stderr first: stdout carries the child's boot banners (`[metrics] …`, `[tracing] …`).
+        # ERROR/CRITICAL log lines aren't _LOG_LINE matches, so they count as plain here.
+        plain = [ln.strip() for ln in stream if not _LOG_LINE.match(ln)]
+        reason = plain[-1] if plain else ""
+    if not reason:
+        reason = f"`plugin install` exited {returncode}" if returncode is not None else "`plugin install` failed"
+    return reason if len(reason) <= _REASON_MAX else reason[: _REASON_MAX - 1] + "…"
+
+
+def _tail(*streams: str | bytes | None, lines: int = 60) -> str:
+    out: list[str] = []
+    for raw in streams:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        out.extend((raw or "").splitlines())
+    return "\n".join(out[-lines:])
+
+
 def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
     """Install a bundle (or plugin) into the workspace via a scoped subprocess —
     ``PROTOAGENT_HOME=<ws>`` makes the workspace the installer's instance root, so
@@ -1378,15 +1435,28 @@ def _install_bundle_into(ws: Path, bundle: str) -> list[str]:
     # pip'd into it as part of the install. The operator's pick of the archetype is the act;
     # a plain `plugin install` on the desktop now leaves deps for the consent dialog (#3618
     # follow-up). No effect on a source/server run, where install never pips (ADR 0027 D4).
-    proc = subprocess.run(
-        [*_server_argv(), "plugin", "install", bundle, "--install-runtime-deps"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
+    try:
+        proc = subprocess.run(
+            [*_server_argv(), "plugin", "install", bundle, "--install-runtime-deps"],
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_BUNDLE_INSTALL_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        _log.warning("bundle install of %s timed out after %ss\n%s", bundle, _BUNDLE_INSTALL_TIMEOUT_S, _tail(exc.stderr))
+        raise WorkspaceError(
+            f"bundle install failed: timed out after {_BUNDLE_INSTALL_TIMEOUT_S}s installing {bundle}"
+        ) from None
     if proc.returncode != 0:
-        raise WorkspaceError(f"bundle install failed: {(proc.stderr or proc.stdout).strip()[:400]}")
+        reason = install_failure_reason(proc.stdout, proc.stderr, proc.returncode)
+        # The FULL output goes to the hub log — the 400 detail carries only the reason.
+        _log.warning(
+            "bundle install of %s failed (exit %s): %s\n%s", bundle, proc.returncode, reason, _tail(proc.stderr, proc.stdout)
+        )
+        raise WorkspaceError(f"bundle install failed: {reason}")
     import json
 
     lock = ws / "plugins.lock"
