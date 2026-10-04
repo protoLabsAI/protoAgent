@@ -89,13 +89,32 @@ function abByIds(ids){
     var n = id && document.getElementById(id); return n ? abClean(n.textContent) : '';
   }).filter(Boolean).join(' ');
 }
+// The react-select container (`.select__control`) is the canonical combobox root — it holds
+// the committed `.select__single-value`. Its inner search INPUT ALSO carries
+// role="combobox", but it is NOT a field of its own: enumerating it surfaced the dropdown
+// twice — an unlabelled entry with the real value AND a labelled entry whose value was
+// always '' (abComboValue found no single-value node on a bare <input>) (#4032 review).
+function abComboContainer(el){
+  return !!(el.matches && el.matches('.select__control, [class*="select__control"]'));
+}
 function abComboRoot(el){
-  return !!(el.matches && el.matches('[role="combobox"], .select__control, [class*="select__control"]'));
+  if(abComboContainer(el)) return true;
+  // A bare ARIA combobox is a root only when it is NOT the inner input of a react-select
+  // container — that inner input is represented by the container above it.
+  if(el.matches && el.matches('[role="combobox"]')){
+    return !(el.closest && el.closest('.select__control, [class*="select__control"]'));
+  }
+  return false;
 }
 function abInCombo(el){
   if(abComboRoot(el)) return false;
-  var host = el.closest && el.closest('[role="combobox"], .select__control, [class*="select__control"]');
-  return !!(host && host !== el);
+  // The react-select inner search input matches `[role="combobox"]` itself, so closest() on
+  // that selector would return the input and miss the skip; test the CONTAINER ancestor
+  // explicitly (never a self-match) before falling back to a bare ARIA combobox ancestor.
+  var cont = el.closest && el.closest('.select__control, [class*="select__control"]');
+  if(cont && cont !== el) return true;
+  var combo = el.closest && el.closest('[role="combobox"]');
+  return !!(combo && combo !== el);
 }
 function abCandidateLabels(el){
   var out = [];
@@ -169,10 +188,21 @@ function abEnumerate(root){
       seenRadio[key] = true;
     }
     var labels = abCandidateLabels(el);
+    var comboInner = null;
     if(kind==='radio-group'){
       var fs = el.closest && el.closest('fieldset');
       var leg = fs && fs.querySelector('legend');
       if(leg){ var lt = abClean(abTextNoControls(leg)); if(lt) labels.unshift(lt); }
+    }
+    if(kind==='combobox'){
+      // The react-select container has no label of its own; the labelled node is its inner
+      // search input (its id drives `<label for>`, and it carries aria-label/labelledby).
+      // Merge those so the ONE combobox entry is both labelled AND carries the value.
+      comboInner = el.querySelector && el.querySelector('input, select, textarea, [role="combobox"]');
+      if(comboInner && comboInner !== el){
+        var il = abCandidateLabels(comboInner);
+        for(var li=0; li<il.length; li++){ if(labels.indexOf(il[li])<0) labels.push(il[li]); }
+      }
     }
     try { el.setAttribute('data-ab-field', String(idx)); } catch(e){}
     var desc = {
@@ -194,6 +224,11 @@ function abEnumerate(root){
       else { desc.value = ''; }
     } else if(kind==='combobox'){
       desc.value = abComboValue(el);          // committed selection, NOT the typed search text
+      if(comboInner && comboInner !== el){    // adopt the inner input's identity when the
+        if(!desc.name){ desc.name = (comboInner.getAttribute && comboInner.getAttribute('name')) || ''; }
+        if(!desc.id){ desc.id = (comboInner.getAttribute && comboInner.getAttribute('id')) || ''; }
+        if(!desc.required){ desc.required = abRequired(comboInner); }   // container lacks them
+      }
     } else if(kind==='checkbox'){
       desc.value = !!el.checked;
     } else if(kind==='file'){

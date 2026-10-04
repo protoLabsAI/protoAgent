@@ -321,6 +321,30 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     _bad_operand = bad_operand  # runtime.bad_operand — shared with the panel's /nav route
 
+    async def _resolve_field(selector: str) -> tuple[str, str]:
+        """Resolve a model-supplied locator to a selector the CLI can act on THIS call.
+
+        A ``@eN`` ref or a CSS selector passes straight through to the CLI unchanged (so a
+        snapshot ref keeps working exactly as before); a visible LABEL is re-resolved in the
+        page on every call via the shared ``forms`` resolver — the one copy of the locator
+        logic — so label addressing survives the re-renders that make an ``@eN`` ref go stale.
+
+        Returns ``(selector, "")`` on success, or ``("", "Error: …")`` with a ready-to-return
+        message: a flag-shaped operand, an eval/CLI failure, or a label that matches no field
+        (closest candidates) or more than one (the ambiguous matches — never a guess).
+        """
+        # A flag-shaped operand is refused before ANY subprocess — the eval resolver included
+        # — exactly as the direct-to-CLI path did.
+        if (bad := _bad_operand(selector=selector)):
+            return "", bad
+        if forms.classify(selector) in ("ref", "css"):
+            return selector.strip(), ""
+        out = await _ab("eval", "--stdin", stdin=forms.resolve_js(selector))
+        if out.startswith("Error:"):
+            return "", out
+        match = forms.resolve_target(selector, forms.parse_resolve(out))
+        return ("", match.error) if not match.ok else (match.selector, "")
+
     async def _capture(verb: str, path: str, default_name: str) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
 
@@ -459,8 +483,11 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     async def browser_get_value(selector: str) -> str:
-        """Get the current value of a form field (a `@eN` ref or CSS selector)."""
-        return _bad_operand(selector=selector) or await _ab("get", "value", selector)
+        """Get the current value of a form field by its visible LABEL (re-resolved in the page
+        each call, so it survives re-renders), a `@eN` ref, or a CSS selector. For a whole-form
+        view (every field, committed values included) prefer `browser_form_read`."""
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("get", "value", sel)
 
     @tool
     async def browser_form_read(scope: str = "") -> str:
@@ -496,19 +523,33 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
     async def browser_click(selector: str) -> str:
-        """Click an element by `@eN` ref (from `browser_snapshot`) or a CSS selector
-        (e.g. `#submit`). Snapshot first to get the ref."""
-        return _bad_operand(selector=selector) or await _ab("click", selector)
+        """Click a form field by its visible LABEL (re-resolved in the page each call, so it
+        survives re-renders — a checkbox, radio or combobox by label), a `@eN` ref (from
+        `browser_snapshot`), or a CSS selector (e.g. `#submit`). Address buttons and links,
+        which are not form fields, by ref or CSS; `browser_form_read` lists the labels."""
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("click", sel)
 
     @tool
     async def browser_fill(selector: str, text: str) -> str:
-        """Clear a field and fill it with `text` (a `@eN` ref or CSS selector)."""
-        return _bad_operand(selector=selector, text=text) or await _ab("fill", selector, text)
+        """Clear a field and fill it with `text`. Address the field by its visible LABEL
+        (re-resolved in the page each call, so it survives re-renders), a `@eN` ref, or a CSS
+        selector. A label that matches no field, or more than one, is a clear error — call
+        `browser_form_read` to see the fields."""
+        if (bad := _bad_operand(text=text)):
+            return bad
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("fill", sel, text)
 
     @tool
     async def browser_type(selector: str, text: str) -> str:
-        """Type `text` into an element without clearing it first (a ref or selector)."""
-        return _bad_operand(selector=selector, text=text) or await _ab("type", selector, text)
+        """Type `text` into a field without clearing it first. Address the field by its visible
+        LABEL (re-resolved each call, so it survives re-renders), a `@eN` ref, or a CSS
+        selector."""
+        if (bad := _bad_operand(text=text)):
+            return bad
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("type", sel, text)
 
     @tool
     async def browser_press(key: str) -> str:
@@ -518,8 +559,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     async def browser_hover(selector: str) -> str:
-        """Hover the pointer over an element (a `@eN` ref or CSS selector)."""
-        return _bad_operand(selector=selector) or await _ab("hover", selector)
+        """Hover the pointer over a form field by its visible LABEL (re-resolved each call, so
+        it survives re-renders), a `@eN` ref, or a CSS selector."""
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("hover", sel)
 
     @tool
     async def browser_eval(expression: str) -> str:

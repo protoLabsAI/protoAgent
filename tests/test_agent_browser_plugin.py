@@ -1174,6 +1174,108 @@ def test_parse_resolve_never_raises_on_unreadable_output():
     assert not m.ok and m.error.startswith("Error:")
 
 
+# ── the action tools address a field by label (resolver wired into the CLI wrappers) ──
+# The #4032-review gap: browser_form_read's docstring says the other form tools address by
+# the labels it returns, but fill/click/type/hover/get_value passed the arg raw to the CLI,
+# so a label was a selector failure — the wasted-round loop this PR targets. They now route
+# through the shared forms resolver.
+
+
+def _resolving_popen(fields, record=None, procs=None, action_out=b"(ok)"):
+    """A scripted CLI: an `eval --stdin` answers the label resolver with an enumerate payload
+    of `fields`; every other verb returns `action_out`. So a label action makes TWO calls —
+    the in-page resolve, then the act — and the test can read both."""
+    payload = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        p = _FakeProc(argv, out=payload if argv[1:2] == ["eval"] else action_out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_fill_resolves_a_label_in_the_page_then_acts(monkeypatch):
+    """r2: the label is resolved FRESH on this call (an eval), with no reliance on a prior
+    snapshot, and the CLI fills the element the resolver returned."""
+    rec, procs = [], []
+    fields = [
+        {"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+        {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "email"},
+    ]
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "ada@x.io"})
+    assert not out.startswith("Error:"), out
+    assert rec[0] == ["ab", "eval", "--stdin"]                       # r7: resolve rides stdin
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()       # the shared forms resolver
+    assert rec[1] == ["ab", "fill", '[data-ab-field="1"]', "ada@x.io"]   # then act on the match
+
+
+async def test_click_and_get_value_resolve_labels_too(monkeypatch):
+    fields = [{"label": "Subscribe", "labels": ["Subscribe"], "selector": '[data-ab-field="0"]', "kind": "checkbox"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    t = _toolmap({"binary": "ab"})
+    await t["browser_click"].ainvoke({"selector": "Subscribe"})
+    assert rec[-1] == ["ab", "click", '[data-ab-field="0"]']
+    await t["browser_get_value"].ainvoke({"selector": "Subscribe"})
+    assert rec[-1] == ["ab", "get", "value", '[data-ab-field="0"]']
+
+
+@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch, name):
+    """r1 / back-compat: a `@eN` ref or a CSS selector reaches the CLI unchanged, with NO
+    in-page resolve eval — the pre-label behaviour, preserved exactly."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    args = {"selector": "@e2"}
+    if name in ("browser_fill", "browser_type"):
+        args["text"] = "hi"
+    await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert rec[-1][1] != "eval"                       # a ref never triggers an in-page resolve
+    assert "@e2" in rec[-1]
+    # a CSS selector takes the same straight-through path
+    rec.clear()
+    args["selector"] = "#q"
+    await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert rec[-1][1] != "eval" and "#q" in rec[-1]
+
+
+async def test_a_label_matching_no_field_is_an_error_and_never_acts(monkeypatch):
+    """r3: zero matches → an Error naming the closest candidates, and the CLI never acts."""
+    fields = [{"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+              {"label": "Last name", "labels": ["Last name"], "selector": '[data-ab-field="1"]', "kind": "text"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "x"})
+    assert out.startswith("Error:") and "no form field matches" in out
+    assert rec == [["ab", "eval", "--stdin"]]        # resolved, then stopped — never filled
+
+
+async def test_a_label_matching_two_fields_at_the_best_tier_refuses_to_act(monkeypatch):
+    """r4: more than one match at the best tier → an Error listing them, and SHALL NOT act."""
+    fields = [{"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="0"]', "kind": "email", "name": "a"},
+              {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "text", "name": "b"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "Email"})
+    assert out.startswith("Error:") and "2 fields" in out and "name=a" in out and "name=b" in out
+    assert rec == [["ab", "eval", "--stdin"]]        # never clicked either one
+
+
+async def test_a_flag_shaped_label_is_refused_before_any_resolve_eval(monkeypatch):
+    """r8 / the argv guard still fires FIRST: a flag-shaped selector never reaches even the
+    in-page resolver subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "--headed", "text": "x"})
+    assert out.startswith("Error:") and "looks like a command-line option" in out
+    assert rec == []
+
+
 # ── browser_form_read — the tool (canned eval output + stdin script) ───────────────
 
 
@@ -1215,6 +1317,78 @@ def test_form_read_js_extracts_the_committed_combobox_value_not_typed_text():
     js = forms.read_form_js("")
     assert "single-value" in js and "singleValue" in js   # the committed selection
     assert "abInCombo" in js and "select__control" in js   # the inner input is skipped
+
+
+# The enumeration JS is DOM logic, so the combobox de-duplication is exercised against a real
+# DOM (jsdom, from the console workspace's node_modules) — the only host-free way to prove it.
+NODE = shutil.which("node")
+
+_REACT_SELECT_HTML = """
+<form>
+  <div class="field">
+    <label for="rs-country-input">Country</label>
+    <div class="select__control">
+      <div class="select__value-container">
+        <div class="select__single-value">United States</div>
+        <div class="select__input-container">
+          <input id="rs-country-input" role="combobox" name="country" value="typed-but-not-chosen"/>
+        </div>
+      </div>
+      <div class="select__indicators"><span class="select__indicator">v</span></div>
+    </div>
+  </div>
+  <label for="plain">Email</label>
+  <input id="plain" type="email" name="email" value="ada@x.io"/>
+</form>
+"""
+
+
+def _run_enumerate_js(html: str):
+    """Run forms._JS_LIB's ``abEnumerate`` against a real DOM and return the field list."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + forms._JS_LIB + "\n"
+        "console.log(JSON.stringify(abEnumerate(document)));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_enumerate_collapses_a_react_select_combobox_to_one_labelled_field():
+    """#4032-review correctness bug: the react-select inner search input also carries
+    role="combobox", so the dropdown enumerated TWICE — an unlabelled entry with the real
+    value and a labelled entry whose value was always ''. It must be ONE field, labelled
+    (from the inner input) AND carrying the committed selection."""
+    fields = _run_enumerate_js(_REACT_SELECT_HTML)
+    assert [f["kind"] for f in fields] == ["combobox", "email"]   # document order, no twin
+    combos = [f for f in fields if f["kind"] == "combobox"]
+    assert len(combos) == 1                                       # not two
+    c = combos[0]
+    assert c["label"] == "Country"                               # labelled (merged from inner)
+    assert c["value"] == "United States"                        # committed selection, not typed
+    assert c["name"] == "country" and c["id"] == "rs-country-input"   # inner identity adopted
+    assert "" not in [f["label"] for f in fields]               # no phantom unlabelled entry
+
+
+def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
+    """A plain ARIA combobox (no react-select container) is still one root — the fix only
+    folds the inner input of a `.select__control`, nothing else."""
+    html = """<form>
+      <label for="cb">State</label>
+      <div id="cb" role="combobox" aria-expanded="false">California</div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    assert len(fields) == 1 and fields[0]["kind"] == "combobox"
+    assert fields[0]["label"] == "State" and fields[0]["value"] == "California"
 
 
 async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):
