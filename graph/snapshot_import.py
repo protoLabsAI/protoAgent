@@ -656,7 +656,7 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
     import os
     import subprocess
 
-    from graph.workspaces.manager import _server_argv
+    from graph.workspaces.manager import _server_argv, install_failure_reason
 
     env = {**os.environ, "PROTOAGENT_HOME": str(ws)}
     installed: list[str] = []
@@ -675,7 +675,9 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
             failed.append({"id": pin.id, "url": pin.url, "error": "install timed out after 300s"})
             continue
         if proc.returncode != 0:
-            failed.append({"id": pin.id, "url": pin.url, "error": (proc.stderr or proc.stdout).strip()[-300:]})
+            failed.append(
+                {"id": pin.id, "url": pin.url, "error": install_failure_reason(proc.stdout, proc.stderr, proc.returncode)}
+            )
             continue
         installed.append(pin.id)
 

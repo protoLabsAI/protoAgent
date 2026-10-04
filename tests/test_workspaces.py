@@ -1775,3 +1775,97 @@ def test_a_whitespace_only_secret_never_overrides_a_real_inline_tracing_key(root
     secrets = yaml.safe_load((root / rec["id"] / "config" / "secrets.yaml").read_text())
 
     assert secrets["tracing"] == {"public_key": "pk-lf-inline", "secret_key": "sk-lf-inline"}
+
+
+# ── bundle install failures say WHY (the analyst-archetype 400, 2026-10-03) ───────────────────
+
+# What the frozen desktop's `plugin install` child actually wrote: httpx narration first, the
+# CLI's `✗ <reason>` last. The old `stderr[:400]` kept the narration and cut off the reason.
+_ANALYST_STDERR = (
+    '2026-10-03 17:26:43,676 INFO httpx HTTP Request: GET https://api.github.com/repos/protoLabsAI/analyst-archetype/commits/HEAD "HTTP/1.1 200 OK"\n'
+    '2026-10-03 17:26:43,852 INFO httpx HTTP Request: GET https://codeload.github.com/protoLabsAI/analyst-archetype/tar.gz/c5ea817536d5bfaa71d7d295a9e3aebe11202a68 "HTTP/1.1 200 OK"\n'
+    '2026-10-03 17:26:44,424 INFO httpx HTTP Request: GET https://api.github.com/repos/protoLabsAI/data-plugin/commits/v0.1.0 "HTTP/1.1 200 OK"\n'
+    '2026-10-03 17:26:44,613 INFO httpx HTTP Request: GET https://codeload.github.com/protoLabsAI/data-plugin/tar.gz/f56c068ec19760f4eac36e1ab94026b55c8323b2 "HTTP/1.1 200 OK"\n'
+    "✗ 'data' needs duckdb as a HOST-scoped dep, which a frozen app cannot satisfy: the plugin imports it in "
+    "this process, and the managed Python runtime (which is where deps get installed) only serves execute_code "
+    "children — separate site-packages. Vendor the code, drop the dependency, or ship it in the app bundle. "
+    "(Declare scope: runtime if it is only imported by execute_code.)\n"
+)
+
+
+def test_bundle_install_failure_surfaces_the_cli_reason_not_httpx_noise(monkeypatch, tmp_path, caplog):
+    import logging
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, stdout="", stderr=_ANALYST_STDERR)
+    )
+    with caplog.at_level(logging.WARNING, logger="protoagent.workspaces"):
+        with pytest.raises(manager.WorkspaceError) as exc:
+            manager._install_bundle_into(tmp_path, "https://github.com/protoLabsAI/analyst-archetype")
+    msg = str(exc.value)
+    assert msg.startswith("bundle install failed: 'data' needs duckdb as a HOST-scoped dep")
+    assert msg.endswith("(Declare scope: runtime if it is only imported by execute_code.)")  # not truncated
+    assert "httpx" not in msg and "HTTP Request" not in msg
+    # The hub log gets the reason AND the full child output.
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "needs duckdb as a HOST-scoped dep" in logged and "codeload.github.com" in logged
+
+
+@pytest.mark.parametrize(
+    "stdout, stderr, want",
+    [
+        ("", _ANALYST_STDERR, "'data' needs duckdb"),
+        # A crash: no ✗ line — the traceback's last line, never an INFO line after it.
+        ("", "2026-10-03 1:2:3,4 INFO httpx GET x\nTraceback (most recent call last):\n  File \"x\"\nValueError: bad manifest\n", "ValueError: bad manifest"),
+        # Only narration + an ERROR log line → the ERROR line.
+        ("", "2026-10-03 17:00:00,000 INFO httpx GET a\n2026-10-03 17:00:00,001 ERROR protoagent boom happened\n", "ERROR protoagent boom happened"),
+        # The ✗ line on stdout (some CLI paths print there) still wins over stderr noise.
+        ("✗ plugin 'x' already installed — from 'y'; use --force to replace.\n", "2026-10-03 17:00:00,000 INFO httpx GET a\n", "plugin 'x' already installed"),
+        # A multi-line ✗ (git's own error follows on the next lines) keeps its continuation.
+        ("", "2026-10-03 17:00:00,000 INFO httpx GET a\n✗ git clone https://github.com/o/nope failed: Cloning into '/tmp/r'...\nremote: Repository not found.\nfatal: repository 'https://github.com/o/nope/' not found\n", "Cloning into '/tmp/r'... remote: Repository not found. fatal: repository"),
+        # A crash with boot banners on stdout: stderr's last line, not the banner.
+        ("[metrics] Prometheus metrics initialized\n[trace_export] fleet trace export disabled.\n", "Traceback (most recent call last):\nOSError: disk full\n", "OSError: disk full"),
+        # Nothing at all → the exit code, never an empty detail.
+        ("", "", "exited 2"),
+    ],
+)
+def test_install_failure_reason(stdout, stderr, want):
+    got = manager.install_failure_reason(stdout, stderr, 2)
+    assert want in got
+    assert "INFO httpx" not in got
+
+
+def test_install_failure_reason_caps_a_runaway_line():
+    got = manager.install_failure_reason("", "✗ " + "x" * 5000, 1)
+    assert len(got) <= 1500 and got.endswith("…")
+
+
+def test_bundle_install_timeout_is_a_workspace_error(monkeypatch, tmp_path):
+    import subprocess
+
+    def _run(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"), stderr="2026-10-03 17:00:00,000 INFO httpx GET a\n")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    with pytest.raises(manager.WorkspaceError, match="timed out after 300s"):
+        manager._install_bundle_into(tmp_path, "https://github.com/acme/stack")
+
+
+def test_plugin_cli_keeps_httpx_quiet(monkeypatch):
+    """The child `plugin install` must not narrate HTTP requests onto the stderr its caller parses."""
+    import logging
+
+    from graph.plugins import cli
+
+    for name in ("httpx", "httpcore"):
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.INFO)
+
+    def _stop():
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "_build_parser", _stop)
+    with pytest.raises(SystemExit):
+        cli.run_plugin_cli(["list"])
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING

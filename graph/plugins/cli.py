@@ -10,6 +10,7 @@ agent, the devkit's ``enable_plugin`` tool — live, no restart).
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 
 from graph.plugins import installer, scaffold
@@ -134,6 +135,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def run_plugin_cli(argv: list[str]) -> int:
+    # `python -m server` configures INFO logging at import, and httpx then narrates every GitHub
+    # API/codeload request onto stderr — ahead of the `✗ <reason>` line a failure ends with. A
+    # caller that captures stderr (fleet create's bundle install) showed the narration instead of
+    # the reason. Same quieting as `fleet` (graph/fleet/cli.py); httpx errors still raise.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     args = _build_parser().parse_args(argv)
     try:
         if args.cmd == "new":
