@@ -15,6 +15,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.193.0] - 2026-10-04
+
+### Added
+- **New agent can start from any bundle URL, and preview archetypes are opt-in (#4030).**
+  Settings ▸ New agent has a third source, "From a bundle URL": paste a bundle's git URL
+  (plus an optional tag, branch or SHA; a GitHub `/tree/<ref>` link works too). You then see
+  what it installs before anything runs: each plugin and its ref, the built-ins it turns on,
+  and the settings it will ask for. A bundle from a non-official source asks you to confirm
+  "I trust this repository". The flow then continues into the same set-up dialog as the
+  catalog cards. `POST /api/fleet` accepts `ref`, and `GET /api/archetypes/from-url` returns
+  the read-only peek. Archetypes the catalog still holds back for testing now show under
+  Advanced ▸ "Show preview archetypes", marked with a **Preview** badge. They're off by
+  default and the setting is remembered per console (`GET /api/archetypes?include_held=1`).
+
+- **A path setting can hold a list of folders (`multiple: true`) (#4031).**
+  A `type: path` setting — core or plugin manifest `settings:` — that declares `multiple: true`
+  now renders one row per folder, each with its own **Browse…**, a Remove (×) button, and an
+  **Add folder** button that appends a row and opens Browse… for it straight away. Before,
+  Browse… replaced the whole value, so a field like the data plugin's **Data folders** could
+  only be edited as comma-separated text. The saved value is still one string (the rows joined
+  with newlines, duplicates dropped), so existing configs and older cores keep working; an
+  existing comma-separated value loads as rows. A bundle's `config_inputs` `type: path` honours
+  `multiple: true` in the New agent set-up step too.
+
+### Fixed
+- **A failed bundle install now says why, instead of four lines of httpx log (fleet create / archetype picker, #4029).**
+  `POST /api/fleet` with a `bundle` that failed to install returned
+  `400 bundle install failed: <INFO httpx HTTP Request: GET …>` cut off at 400 characters. That
+  was the first 400 characters of the `plugin install` child's stderr, which is where httpx
+  narrates every GitHub request, so the CLI's `✗ <reason>` line (written last) never made it in.
+  The analyst archetype hit this on the desktop app, where the hidden reason was
+  `'data' needs duckdb as a HOST-scoped dep…`. Now:
+  - the 400 detail carries that reason line, untruncated up to 1,500 characters (falling back
+    to a traceback's last line, then the exit code);
+  - the hub log gets the reason plus the child's full output at WARNING;
+  - `plugin` CLI commands no longer narrate httpx/httpcore requests at INFO;
+  - a timed-out install is a clean 400 rather than a 500.
+
+  Snapshot import's per-plugin `error` uses the same extraction.
+
+- **A long "background job running" strip no longer widens the chat (#4033).** The strip above the composer is one line; the composer wrapper sized itself to that line, so a long job label pushed the whole chat column wider than its panel and overflowed it. The label now ellipsizes (the full list is in its tooltip and behind View), and the spinner and View button keep their size.
+
+- **The background-agents pill keeps its spinner round while jobs run (#4034).** With the running count beside it, the bottom bar's spinner was squeezed into an oval and the count half-hidden; the pill now widens to fit both.
+
+- **A background delegation's progress card no longer blinks out and back while its job runs (#4035).**
+  Every `/api/events` stream ended after its first idle keepalive (15s): the keepalive came
+  from timing out a read of the bus subscription, and timing it out closed the subscription.
+  The console reconnected, re-hydrated its background-job store from `GET /api/background`,
+  and that hydrate rebuilt the job's entry without the delegate's live progress, so the card
+  vanished until the delegate's next snapshot. Now:
+  - the bus stream stays open through idle stretches;
+  - a re-hydrate merges into what the bus already delivered (it keeps progress, never drops
+    a job the page doesn't list, and doesn't re-render when nothing changed);
+  - the utility-bar widget keeps running jobs the list page omits.
+
 ## [0.192.0] - 2026-10-03
 
 ### Added

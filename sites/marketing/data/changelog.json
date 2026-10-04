@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.193.0",
+    "date": "2026-10-04",
+    "changes": [
+      "New agent can start from any bundle URL, and preview archetypes are opt-in (#4030).",
+      "A path setting can hold a list of folders (multiple: true) (#4031).",
+      "A failed bundle install now says why, instead of four lines of httpx log (fleet create / archetype picker, #4029).",
+      "A long \"background job running\" strip no longer widens the chat (#4033).",
+      "The background-agents pill keeps its spinner round while jobs run (#4034).",
+      "A background delegation's progress card no longer blinks out and back while its job runs (#4035)."
+    ]
+  },
+  {
     "version": "v0.192.0",
     "date": "2026-10-03",
     "changes": [
