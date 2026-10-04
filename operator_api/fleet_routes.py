@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from fastapi import Request, WebSocket  # module-level so the stringized `request: Request` /
 # `ws: WebSocket` annotations on the proxy routes resolve
@@ -201,7 +202,7 @@ def register_fleet_routes(app) -> None:
     async def _create_agent(body: dict = Body(...)):
         """Create an agent (optionally from a bundle archetype) and start it.
 
-        Body: ``{name, bundle?: <git-url>, soul?: str, port?: int, start?: bool=true,
+        Body: ``{name, bundle?: <git-url>, ref?: <tag|branch|sha>, soul?: str, port?: int, start?: bool=true,
         shared_skills?: bool, inherit_config?: bool=true, inputs?: {key: value},
         secrets?: [{key, value}], config_inputs?: {dotted_key: value}}``.
         ``soul`` is the archetype's base SOUL.md (persona), written
@@ -224,6 +225,19 @@ def register_fleet_routes(app) -> None:
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
+        # The tag / branch / SHA to install the bundle at — the new-agent "From a bundle URL"
+        # source pins one (blank = the default branch). Checked here, before any workspace
+        # exists, with the installer's own validator; only meaningful with a bundle.
+        ref = (str(body.get("ref") or "").strip()) or None
+        if ref and not bundle:
+            raise HTTPException(400, "`ref` needs a `bundle` to pin")
+        if ref:
+            from graph.plugins import installer
+
+            try:
+                installer._validate_ref(ref)
+            except installer.InstallError as exc:
+                raise HTTPException(400, str(exc))
         # Operator-supplied bundle-seed values (#2041): `inputs` fill MCP `${input}` placeholders,
         # `secrets` carry values for the bundle's declared secrets. Coerced to plain str maps/list
         # here so a malformed field degrades to "not supplied" (env-only fallback) rather than 500.
@@ -256,6 +270,7 @@ def register_fleet_routes(app) -> None:
             out = await fleet_ops.create(
                 name,
                 bundle=bundle,
+                ref=ref,
                 soul=soul,
                 port=port,
                 start=start,
@@ -322,10 +337,40 @@ def register_fleet_routes(app) -> None:
             raise HTTPException(400, str(exc))
 
     @app.get("/api/archetypes")
-    async def _list_archetypes():
+    async def _list_archetypes(include_held: bool = False):
         """Starter agent types for the new-agent picker: the built-in **Basic** +
-        every installed bundle's ``archetype:`` metadata."""
-        return {"archetypes": _archetypes()}
+        every installed bundle's ``archetype:`` metadata. ``?include_held=1`` also returns
+        the catalog's ``held`` entries (archetypes still being tested), each marked
+        ``held: true`` — only the console's opt-in "Show preview archetypes" asks for them."""
+        return {"archetypes": _archetypes(include_held=include_held)}
+
+    @app.get("/api/archetypes/from-url")
+    async def _archetype_from_url(url: str = "", ref: str = ""):
+        """An archetype from a bundle's git URL (+ optional ref) that ISN'T in the catalog —
+        the new-agent picker's "From a bundle URL" source. A read-only peek (nothing
+        installs): the bundle's ``archetype:`` block shaped like a ``/api/archetypes`` row,
+        plus the same ``bundle`` peek ``/preview`` serves (members + refs, builtins,
+        config_inputs) so the console can show what it installs before Create. ``trusted``
+        says whether the source is official/acked (ADR 0071 D3) — the console asks for an
+        explicit "I trust this repository" when it isn't."""
+        from graph.plugins import installer
+        from ops import plugins as plugin_ops
+
+        try:
+            clean_url = _validate_bundle_url(url)
+            clean_ref = ref.strip() or None
+            if clean_ref:
+                installer._validate_ref(clean_ref)
+        except (ValueError, installer.InstallError) as exc:
+            raise HTTPException(400, str(exc))
+        try:
+            peek = await plugin_ops.peek_bundle(clean_url, clean_ref)
+        except Exception as exc:  # noqa: BLE001 — network/git failure → clean 502
+            raise HTTPException(502, f"could not read bundle {clean_url}: {exc}")
+        rec = _peek_archetype_record(clean_url, peek)
+        if clean_ref:
+            rec["ref"] = clean_ref
+        return {"id": rec["id"], "archetype": rec, "bundle": peek, **_source_trust(clean_url)}
 
     @app.get("/api/archetypes/{archetype_id}/preview")
     async def _archetype_preview(archetype_id: str):
@@ -334,7 +379,9 @@ def register_fleet_routes(app) -> None:
         pip deps, and capabilities — enumerated WITHOUT installing (read-only
         peek, TTL-cached). Code-free archetypes return ``bundle: null``; the
         SOUL text is already in the list payload."""
-        record = next((a for a in _archetypes() if a.get("id") == archetype_id), None)
+        # Held entries resolve too: the picker only shows them when the operator opted in,
+        # and this is a read-only peek.
+        record = next((a for a in _archetypes(include_held=True) if a.get("id") == archetype_id), None)
         if record is None:
             raise HTTPException(404, f"unknown archetype: {archetype_id}")
         if not record.get("bundle"):
@@ -351,8 +398,6 @@ def register_fleet_routes(app) -> None:
 def _norm_url(u: str | None) -> str:
     """Canonicalize a git URL for dedupe (drop trailing ``.git`` / ``/``, lowercase) —
     the same normalization the plugin catalog uses to match install state by URL."""
-    import re
-
     return re.sub(r"\.git$", "", (u or "").strip().rstrip("/")).lower()
 
 
@@ -386,11 +431,11 @@ _FALLBACK_ARCHETYPES = [
 ]
 
 
-def _load_archetype_catalog() -> list[dict]:
-    """Built-in archetype entries from ``archetype-catalog.json`` — the live config dir
-    overrides the bundled seed (a fork adds/removes archetypes with NO code change), same
-    lookup order as the plugin/MCP catalogs. Falls back to Basic + Custom if the file is
-    absent or malformed, so the new-agent picker + wizard never come up empty-handed."""
+def _read_archetype_catalog_doc() -> dict | None:
+    """The winning ``archetype-catalog.json`` parsed — the live config dir overrides the
+    bundled seed (a fork adds/removes archetypes with NO code change), same lookup order as
+    the plugin/MCP catalogs. None when the file is absent or malformed; the live dir wins
+    even when broken (never silently falls through to the seed)."""
     import json
 
     from infra.paths import instance_paths
@@ -400,16 +445,153 @@ def _load_archetype_catalog() -> list[dict]:
         f = base / "archetype-catalog.json"
         if f.exists():
             try:
-                entries = (json.loads(f.read_text(encoding="utf-8")) or {}).get("archetypes")
-                if isinstance(entries, list) and entries:
-                    return entries
+                doc = json.loads(f.read_text(encoding="utf-8")) or {}
+                return doc if isinstance(doc, dict) else None
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 log.warning("[fleet] archetype-catalog.json unreadable at %s", f)
-            break  # live dir wins even if broken — don't silently fall through to the seed
+            return None
+    return None
+
+
+def _load_archetype_catalog() -> list[dict]:
+    """Built-in archetype entries from ``archetype-catalog.json`` (see
+    ``_read_archetype_catalog_doc``). Falls back to Basic + Custom if the file is absent or
+    malformed, so the new-agent picker + wizard never come up empty-handed."""
+    entries = (_read_archetype_catalog_doc() or {}).get("archetypes")
+    if isinstance(entries, list) and entries:
+        return entries
     return _FALLBACK_ARCHETYPES
 
 
-def _archetypes() -> list[dict]:
+def _load_held_archetypes() -> list[dict]:
+    """The catalog's ``held`` entries — archetypes parked out of the picker until they're
+    tested. Same shape as ``archetypes``; served only on an explicit ``include_held`` ask
+    (the console's "Show preview archetypes" opt-in), never by default."""
+    held = (_read_archetype_catalog_doc() or {}).get("held")
+    return [e for e in held if isinstance(e, dict)] if isinstance(held, list) else []
+
+
+def _catalog_record(entry: dict, aid: str) -> dict:
+    """One catalog (or held) entry shaped as the ``/api/archetypes`` row the console reads."""
+    from graph.config_io import read_soul_preset
+
+    soul = entry.get("soul") or (read_soul_preset(str(entry["soul_preset"])) if entry.get("soul_preset") else "")
+    return {
+        "id": aid,
+        "label": entry.get("label", aid),
+        "icon": entry.get("icon", "Package"),
+        "bundle": entry.get("bundle") or None,
+        "blurb": entry.get("blurb", ""),
+        "soul": soul,
+        # Picker placement (ADR 0042): "advanced" archetypes collapse under the picker's
+        # "Advanced (N)" toggle; a missing tag normalizes to "standard" (renders inline).
+        "tier": _norm_tier(entry.get("tier")),
+        # Host capabilities this archetype needs to be USEFUL (#2186 follow-on) —
+        # e.g. "python_runtime": cowork's document skills route through execute_code,
+        # which on the desktop app needs the managed CPython. The new-agent picker
+        # warns at choose-time when a requirement isn't provisioned.
+        "requires": list(entry.get("requires") or []),
+        # Capability contract (#2277): the tools this archetype's PERSONA commits to
+        # performing. Recorded on the created workspace so the member can check its own
+        # doctrine against the tools that actually bound — a preset that says it files
+        # issues while `github.write` defaults false otherwise narrates the filing.
+        "requires_tools": list(entry.get("requires_tools") or []),
+    }
+
+
+def _bundle_archetype_record(bid: str, url: str, arch: dict) -> dict:
+    """A bundle's ``archetype:`` manifest block shaped as an ``/api/archetypes`` row — shared
+    by installed-bundle self-registration and the "From a bundle URL" peek."""
+    from graph.config_io import read_soul_preset
+
+    # A bundle declares its persona inline (`soul`) or names a host preset
+    # (`soul_preset`) — the same pair the catalog supports (#2715; before,
+    # only inline worked here and a preset-naming bundle silently fell back
+    # to the base persona via the console's personaSoul()). An unknown
+    # preset name resolves to "" — warn, because the operator sees the
+    # fallback persona with no other signal.
+    soul = str(arch.get("soul") or "")
+    if not soul and arch.get("soul_preset"):
+        soul = read_soul_preset(str(arch["soul_preset"]))
+        if not soul:
+            log.warning(
+                "[fleet] bundle %s names soul_preset %r — not found on this host; "
+                "the picker will fall back to the base persona",
+                bid,
+                arch["soul_preset"],
+            )
+    return {
+        "id": bid,
+        "label": arch.get("label"),
+        "icon": arch.get("icon", "Package"),
+        "blurb": arch.get("blurb", ""),
+        "bundle": url or None,
+        "soul": soul,
+        # A bundle can file itself under the picker's "Advanced" toggle too —
+        # same optional tag as the catalog field, normalized to standard/advanced.
+        "tier": _norm_tier(arch.get("tier")),
+        # A bundle's archetype: block can declare host requirements too —
+        # same shape as the catalog field (#2186 follow-on).
+        "requires": list(arch.get("requires") or []),
+        # A bundle's archetype: block declares its capability contract the
+        # same way (#2277).
+        "requires_tools": list(arch.get("requires_tools") or []),
+    }
+
+
+# A bundle URL the "From a bundle URL" source accepts: an https git-host repo
+# (`https://github.com/owner/repo`, optional `.git` / trailing slash; nested groups OK for
+# GitLab-style hosts) or the scp-style SSH form (`git@github.com:owner/repo.git`). Stricter
+# than the installer's scheme check on purpose — this is a pasted URL, not a local path.
+_BUNDLE_URL_RE = re.compile(
+    r"^(?:https://[A-Za-z0-9.-]+(?::\d+)?/|git@[A-Za-z0-9.-]+:)"
+    r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?$"
+)
+
+
+def _validate_bundle_url(url: str) -> str:
+    """The trimmed bundle URL, or ``ValueError`` with a readable reason."""
+    u = (url or "").strip()
+    if not u:
+        raise ValueError("a bundle URL is required")
+    if not _BUNDLE_URL_RE.match(u) or any(seg in (".", "..") for seg in re.split(r"[/:]", u)):
+        raise ValueError(
+            f"not a git repository URL: {u!r} — use https://github.com/<owner>/<repo> (or git@host:owner/repo.git)"
+        )
+    return u
+
+
+def _peek_archetype_record(url: str, peek: dict) -> dict:
+    """The ``/api/archetypes`` row for a peeked bundle URL: its ``archetype:`` block, with
+    the label / blurb falling back to the bundle's own name / description (or the repo name)
+    so a bundle without an archetype block still reads as a card."""
+    arch = dict(peek.get("archetype") or {})
+    slug = re.sub(r"\.git$", "", url.rstrip("/")).rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    members = peek.get("members") or []
+    first = members[0] if members and isinstance(members[0], dict) else {}
+    bid = str(peek.get("id") or first.get("id") or slug)
+    arch["label"] = arch.get("label") or peek.get("name") or first.get("name") or slug
+    arch["blurb"] = arch.get("blurb") or peek.get("description") or first.get("description") or ""
+    return _bundle_archetype_record(bid, url, arch)
+
+
+def _source_trust(url: str) -> dict:
+    """Whether ``url`` is an official / already-acked plugin source (ADR 0071 D3) — the same
+    predicate the install route's consent gate uses — plus its normalized display form."""
+    from graph.plugins.trust import normalize_source, source_trusted
+    from runtime.state import STATE
+
+    cfg = STATE.graph_config
+    trusted = source_trusted(
+        url,
+        official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
+        acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
+        trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
+    )
+    return {"trusted": bool(trusted), "source": normalize_source(url)}
+
+
+def _archetypes(*, include_held: bool = False) -> list[dict]:
     """Starter agent types for the new-agent picker + setup wizard (ADR 0042).
 
     Data-driven: the built-in set comes from ``archetype-catalog.json`` (see
@@ -419,10 +601,9 @@ def _archetypes() -> list[dict]:
     names a ``soul_preset`` file under ``config/soul-presets/`` (resolved here) or an inline
     ``soul``; a bundle declares it inline in its manifest. The whole list is deduped by id +
     bundle URL (a catalog entry for a stack never doubles up with the same installed bundle),
-    and ``custom`` is kept LAST.
+    and ``custom`` is kept LAST. ``include_held`` appends the catalog's ``held`` entries
+    (``held: true``) before Custom — the picker's opt-in preview archetypes.
     """
-    from graph.config_io import read_soul_preset
-
     out: list[dict] = []
     custom: dict | None = None
     seen_ids: set[str] = set()
@@ -432,29 +613,8 @@ def _archetypes() -> list[dict]:
         aid = str(entry.get("id") or "").strip()
         if not aid or aid in seen_ids:
             continue
-        soul = entry.get("soul") or (read_soul_preset(str(entry["soul_preset"])) if entry.get("soul_preset") else "")
-        bundle = entry.get("bundle") or None
-        rec = {
-            "id": aid,
-            "label": entry.get("label", aid),
-            "icon": entry.get("icon", "Package"),
-            "bundle": bundle,
-            "blurb": entry.get("blurb", ""),
-            "soul": soul,
-            # Picker placement (ADR 0042): "advanced" archetypes collapse under the picker's
-            # "Advanced (N)" toggle; a missing tag normalizes to "standard" (renders inline).
-            "tier": _norm_tier(entry.get("tier")),
-            # Host capabilities this archetype needs to be USEFUL (#2186 follow-on) —
-            # e.g. "python_runtime": cowork's document skills route through execute_code,
-            # which on the desktop app needs the managed CPython. The new-agent picker
-            # warns at choose-time when a requirement isn't provisioned.
-            "requires": list(entry.get("requires") or []),
-            # Capability contract (#2277): the tools this archetype's PERSONA commits to
-            # performing. Recorded on the created workspace so the member can check its own
-            # doctrine against the tools that actually bound — a preset that says it files
-            # issues while `github.write` defaults false otherwise narrates the filing.
-            "requires_tools": list(entry.get("requires_tools") or []),
-        }
+        rec = _catalog_record(entry, aid)
+        bundle = rec["bundle"]
         seen_ids.add(aid)
         if bundle:
             seen_urls.add(_norm_url(bundle))
@@ -486,43 +646,25 @@ def _archetypes() -> list[dict]:
             seen_ids.add(bid)
             if url:
                 seen_urls.add(_norm_url(url))
-            # A bundle declares its persona inline (`soul`) or names a host preset
-            # (`soul_preset`) — the same pair the catalog supports (#2715; before,
-            # only inline worked here and a preset-naming bundle silently fell back
-            # to the base persona via the console's personaSoul()). An unknown
-            # preset name resolves to "" — warn, because the operator sees the
-            # fallback persona with no other signal.
-            soul = str(arch.get("soul") or "")
-            if not soul and arch.get("soul_preset"):
-                soul = read_soul_preset(str(arch["soul_preset"]))
-                if not soul:
-                    log.warning(
-                        "[fleet] bundle %s names soul_preset %r — not found on this host; "
-                        "the picker will fall back to the base persona",
-                        bid,
-                        arch["soul_preset"],
-                    )
-            out.append(
-                {
-                    "id": bid,
-                    "label": arch.get("label"),
-                    "icon": arch.get("icon", "Package"),
-                    "blurb": arch.get("blurb", ""),
-                    "bundle": url or None,
-                    "soul": soul,
-                    # A bundle can file itself under the picker's "Advanced" toggle too —
-                    # same optional tag as the catalog field, normalized to standard/advanced.
-                    "tier": _norm_tier(arch.get("tier")),
-                    # A bundle's archetype: block can declare host requirements too —
-                    # same shape as the catalog field (#2186 follow-on).
-                    "requires": list(arch.get("requires") or []),
-                    # A bundle's archetype: block declares its capability contract the
-                    # same way (#2277).
-                    "requires_tools": list(arch.get("requires_tools") or []),
-                }
-            )
+            out.append(_bundle_archetype_record(bid, url, arch))
     except Exception:  # noqa: BLE001 — archetype discovery is best-effort
         log.warning("[fleet] archetype discovery failed", exc_info=True)
+
+    # Held catalog entries (archetypes still being tested) — only on an explicit ask, each
+    # flagged so the picker can badge it "Preview". Deduped like the rest: once the bundle is
+    # installed (or promoted into `archetypes`), the regular row wins and the badge goes.
+    if include_held:
+        for entry in _load_held_archetypes():
+            aid = str(entry.get("id") or "").strip()
+            if not aid or aid in seen_ids or aid == "custom":
+                continue
+            rec = _catalog_record(entry, aid)
+            if rec["bundle"] and _norm_url(rec["bundle"]) in seen_urls:
+                continue
+            seen_ids.add(aid)
+            if rec["bundle"]:
+                seen_urls.add(_norm_url(rec["bundle"]))
+            out.append({**rec, "held": True})
 
     if custom is not None:
         out.append(custom)  # the catch-all write-your-own persona, always LAST

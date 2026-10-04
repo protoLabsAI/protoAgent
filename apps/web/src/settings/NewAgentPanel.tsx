@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
@@ -6,6 +6,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 
+import { BundleUrlSource } from "./BundleUrlSource";
 import { ImportSnapshotPanel } from "./ImportSnapshotPanel";
 import { api } from "../lib/api";
 import { ArchetypePicker } from "../setup/ArchetypePicker";
@@ -23,7 +24,8 @@ import {
 import { errMsg } from "../lib/format";
 import { escapeCloseAllowed, isTopmostOverlay } from "../lib/overlayStack";
 import { HARD_GATE_HINT } from "../lib/pickerCopy";
-import type { Archetype } from "../lib/types";
+import { setShowPreviewArchetypes, useShowPreviewArchetypes } from "../lib/previewArchetypesPref";
+import type { Archetype, ArchetypeFromUrl } from "../lib/types";
 
 // Onboarding / archetype picker (ADR 0042), in two steps (lib/archetypeFlow):
 //   1. PICK — the archetype cards only (ArchetypePicker): label, icon, blurb, "What's
@@ -36,11 +38,17 @@ import type { Archetype } from "../lib/types";
 // Creating from a bundle clones+installs it (a few seconds) — the POST returns once the
 // agent is up, so Create shows a spinner until then.
 //
-// A new agent has TWO sources (ADR 0091 #2106): an archetype (below) or a SNAPSHOT of an
-// existing agent. They share this one entry point rather than living in separate places,
-// because "where do new agents come from" should be one question with two answers. The
-// snapshot path is its own component: it has to show a plan and take consent before it can
-// create anything, which is a different shape from picking a card.
+// A new agent has THREE sources: an archetype card (below), a bundle URL that isn't in the
+// catalog (BundleUrlSource), or a SNAPSHOT of an existing agent (ADR 0091 #2106). They share
+// this one entry point rather than living in separate places, because "where do new agents
+// come from" should be one question. The URL source ends in the SAME set-up dialog as a card
+// (its own flow state, so switching tabs never mixes answers); it has to show the bundle and
+// take a trust decision first. The snapshot path has to show a plan and take consent before it
+// can create anything, which is a different shape again.
+//
+// Held catalog archetypes (still being tested) are opt-in: Advanced ▸ "Show preview
+// archetypes" (persisted per console, lib/previewArchetypesPref) refetches the list with
+// `?include_held=1` and the picker badges them "Preview". Never shown by default.
 export function NewAgentPanel({
   onDone,
   onCancel,
@@ -53,11 +61,20 @@ export function NewAgentPanel({
 }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const archetypes = useQuery(archetypesQuery());
-  const [flow, dispatch] = useReducer(archetypeFlowReducer, undefined, () => initialArchetypeFlow("basic"));
+  const showPreview = useShowPreviewArchetypes();
+  // keepPreviousData: flipping the preview switch swaps query keys — keep the cards on screen
+  // while the other list loads instead of flashing an empty picker.
+  const archetypes = useQuery({ ...archetypesQuery(showPreview), placeholderData: keepPreviousData });
+  const [catalogFlow, catalogDispatch] = useReducer(archetypeFlowReducer, undefined, () => initialArchetypeFlow("basic"));
+  // The "From a bundle URL" source runs the same two-step flow on its own state.
+  const [urlFlow, urlDispatch] = useReducer(archetypeFlowReducer, undefined, () => initialArchetypeFlow(""));
+  const [fromUrl, setFromUrl] = useState<ArchetypeFromUrl | null>(null);
   // Which source this new agent comes from. Archetype is the default because it's the
   // common case; importing is deliberate and usually starts from a file you already have.
-  const [source, setSource] = useState<"archetype" | "snapshot">("archetype");
+  const [source, setSource] = useState<"archetype" | "url" | "snapshot">("archetype");
+  const urlSource = source === "url";
+  const flow = urlSource ? urlFlow : catalogFlow;
+  const dispatch = urlSource ? urlDispatch : catalogDispatch;
   // Names already on the fleet — the suggested name steps around them (engineer-2, …).
   const fleet = useQuery({ ...fleetQuery(), refetchInterval: false });
   const taken = useMemo(() => (fleet.data?.agents ?? []).map((a) => a.name), [fleet.data]);
@@ -65,21 +82,25 @@ export function NewAgentPanel({
   // "custom" is a wizard-only persona (write-your-own SOUL) — this picker creates an
   // agent from a bundle, and its persona editor lives under Advanced, so Custom would
   // just duplicate Basic.
-  const list = (archetypes.data?.archetypes ?? []).filter((a) => a.id !== "custom");
-  const pickedArchetype = list.find((a) => a.id === flow.picked);
-  const archetype = pickedArchetype ?? list[0];
+  const list = (archetypes.data?.archetypes ?? []).filter((a) => a.id !== "custom" && (showPreview || !a.held));
+  const pickedCatalog = list.find((a) => a.id === catalogFlow.picked);
+  const urlArchetype = fromUrl?.archetype;
+  const pickedArchetype = urlSource ? urlArchetype : pickedCatalog;
+  const archetype = urlSource ? urlArchetype : (pickedCatalog ?? list[0]);
 
   // The picked archetype's read-only peek — the source of the set-up form's fields (its
   // bundle's config_inputs, MCP inputs and declared secrets). Shares the preview dialog's
   // cache key; only fetched for bundle-backed archetypes (Basic has no bundle → no fields).
+  // The URL source already HAS its peek (the lookup returned it) — no second fetch.
   const preview = useQuery({
-    queryKey: ["archetype-preview", flow.picked],
-    queryFn: () => api.archetypePreview(flow.picked),
-    enabled: Boolean(pickedArchetype?.bundle),
+    queryKey: ["archetype-preview", catalogFlow.picked],
+    queryFn: () => api.archetypePreview(catalogFlow.picked),
+    enabled: !urlSource && Boolean(pickedCatalog?.bundle),
     staleTime: 10 * 60 * 1000,
     retry: 1,
   });
-  const fields = useMemo(() => archetypeConfigFields(preview.data), [preview.data]);
+  const peekData = urlSource ? (fromUrl ?? undefined) : preview.data;
+  const fields = useMemo(() => archetypeConfigFields(peekData), [peekData]);
 
   // Runtime requirement at CHOOSE-time (#2186 follow-on): an archetype declaring
   // `requires: [python_runtime]` (cowork — its document skills route through
@@ -90,6 +111,7 @@ export function NewAgentPanel({
   // `stale` (provisioned, old doc baseline) still works — no warning for it here.
   const pyRuntime = pythonRuntimeView(useQuery(pythonRuntimeQuery()).data);
   const runtimeWarning =
+    !urlSource &&
     pickedArchetype?.requires?.includes("python_runtime") && pyRuntime.kind === "action" && !pyRuntime.stale
       ? pyRuntime.installing
         ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
@@ -106,12 +128,20 @@ export function NewAgentPanel({
     flow.name.trim() && !nameOk ? "Use only letters, numbers, dashes and underscores." : null;
 
   function pick(a: Archetype) {
-    dispatch({ type: "pick", id: a.id, suggestedName: suggestedAgentName(a, taken), soul: a.soul ?? "" });
+    catalogDispatch({ type: "pick", id: a.id, suggestedName: suggestedAgentName(a, taken), soul: a.soul ?? "" });
   }
   function next() {
     if (!archetype) return;
     pick(archetype); // same card → only fills a still-empty name/persona
-    dispatch({ type: "next" });
+    catalogDispatch({ type: "next" });
+  }
+  // The URL source's Next: the looked-up bundle becomes the picked archetype of its own flow
+  // (a different bundle clears the answers, the same one keeps them — the reducer's rule).
+  function nextFromUrl(found: ArchetypeFromUrl) {
+    const a = found.archetype;
+    setFromUrl(found);
+    urlDispatch({ type: "pick", id: `${a.bundle ?? a.id}@${a.ref ?? ""}`, suggestedName: suggestedAgentName(a, taken), soul: a.soul ?? "" });
+    urlDispatch({ type: "next" });
   }
 
   const create = useMutation({
@@ -136,13 +166,13 @@ export function NewAgentPanel({
   // "Landed" means DATA, not "not loading": a failed peek is not loading either, and it
   // knows the questions no better — it holds too, with an inline Retry.
   const bundlePicked = Boolean(pickedArchetype?.bundle);
-  const peekLoading = bundlePicked && preview.isLoading;
-  const peekMissing = bundlePicked && !preview.data;
+  const peekLoading = !urlSource && bundlePicked && preview.isLoading;
+  const peekMissing = bundlePicked && !peekData;
   const canCreate = nameOk && !missingHard && !peekMissing && !create.isPending;
   const submit = () => {
     if (canCreate) create.mutate();
   };
-  const setupOpen = source === "archetype" && flow.step === "setup" && Boolean(archetype);
+  const setupOpen = source !== "snapshot" && flow.step === "setup" && Boolean(archetype);
 
   // Esc / backdrop on the set-up dialog = Back. The DS Dialog closes on EVERY open
   // dialog's Escape, so an Escape aimed at a layer above this one (the folder picker's
@@ -163,13 +193,13 @@ export function NewAgentPanel({
     const notOurs = escapeNotOurs.current;
     escapeNotOurs.current = false;
     if (!notOurs) dispatch({ type: "back" });
-  }, []);
+  }, [dispatch]);
 
   return (
     <section className="panel stage-panel">
       <PanelHeader
         title="New agent"
-        kicker="pick an archetype, then name and set it up — a new workspace agent on this host"
+        kicker="pick an archetype or paste a bundle URL, then name and set it up — a new workspace agent on this host"
         actions={
           onCancel ? (
             <Button variant="ghost" onClick={onCancel}>
@@ -192,6 +222,15 @@ export function NewAgentPanel({
           <button
             type="button"
             role="tab"
+            aria-selected={source === "url"}
+            className={source === "url" ? "is-active" : ""}
+            onClick={() => setSource("url")}
+          >
+            From a bundle URL
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={source === "snapshot"}
             className={source === "snapshot" ? "is-active" : ""}
             onClick={() => setSource("snapshot")}
@@ -201,6 +240,8 @@ export function NewAgentPanel({
         </div>
         {source === "snapshot" ? (
           <ImportSnapshotPanel onDone={onDone} />
+        ) : source === "url" ? (
+          <BundleUrlSource onNext={nextFromUrl} />
         ) : (
           <>
             <p className="fleet-section-label">Archetype</p>
@@ -208,7 +249,13 @@ export function NewAgentPanel({
                 inside their own container so Next below never leaves the viewport. Height
                 only: width stays with the AppShell's controlled container. */}
             <div className="archetype-card-scroll" style={{ maxHeight: "min(52vh, 560px)", overflowY: "auto" }}>
-              <ArchetypePicker archetypes={list} value={flow.picked} onPick={pick} notices={notices} />
+              <ArchetypePicker
+                archetypes={list}
+                value={catalogFlow.picked}
+                onPick={pick}
+                notices={notices}
+                previewArchetypes={{ on: showPreview, onToggle: setShowPreviewArchetypes }}
+              />
             </div>
             <div className="panel-actions archetype-step-actions">
               <Button variant="primary" disabled={!archetype} onClick={next}>
@@ -239,6 +286,12 @@ export function NewAgentPanel({
             </>
           }
         >
+          {urlSource && fromUrl ? (
+            <p className="archetype-preview-muted bundle-url-setup-source">
+              From <code>{fromUrl.source}{archetype.ref ? `@${archetype.ref}` : ""}</code> — installs{" "}
+              {fromUrl.bundle?.members.length ?? 0} plugin{fromUrl.bundle?.members.length === 1 ? "" : "s"} into the new agent.
+            </p>
+          ) : null}
           <ArchetypeSetupForm
             name={flow.name}
             onNameChange={(name) => dispatch({ type: "setName", name })}
@@ -252,7 +305,7 @@ export function NewAgentPanel({
             onSoulChange={(soul) => dispatch({ type: "setSoul", soul })}
             hardGateHint={HARD_GATE_HINT}
             loading={peekLoading}
-            loadError={bundlePicked && preview.isError ? errMsg(preview.error) : null}
+            loadError={!urlSource && bundlePicked && preview.isError ? errMsg(preview.error) : null}
             onRetry={() => void preview.refetch()}
           />
         </Dialog>

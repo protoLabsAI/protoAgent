@@ -1448,7 +1448,7 @@ def test_bundle_failure_does_not_transfer_oauth_ownership(root, tmp_path, monkey
     (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
     local_store = host / "codex-oauth.json"
     local_store.write_text('{"tokens":{"refresh_token":"instance"}}')
-    monkeypatch.setattr(manager, "_install_bundle_into", lambda ws, bundle: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(manager, "_install_bundle_into", lambda ws, bundle, ref=None: (_ for _ in ()).throw(RuntimeError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         manager.create("sister", inherit_model=str(host), bundle="https://example.invalid/bundle")
@@ -1467,7 +1467,7 @@ def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, t
     repo.mkdir(parents=True)
     monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "acme/proj")
 
-    def fake_install(ws, bundle):
+    def fake_install(ws, bundle, ref=None):
         _pm_lock(ws)
         return ["board"]
 
@@ -1591,7 +1591,7 @@ def test_cli_new_answers_config_inputs_and_copies_the_delegate(root, tmp_path, m
     monkeypatch.setattr(config_io, "config_yaml_path", lambda: host / "langgraph-config.yaml")
     monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "")
 
-    def fake_install(ws, bundle):
+    def fake_install(ws, bundle, ref=None):
         _pm_lock(ws)
         return ["board"]
 
@@ -1869,3 +1869,35 @@ def test_plugin_cli_keeps_httpx_quiet(monkeypatch):
         cli.run_plugin_cli(["list"])
     assert logging.getLogger("httpx").level == logging.WARNING
     assert logging.getLogger("httpcore").level == logging.WARNING
+
+
+def test_create_pins_bundle_ref_into_install_and_record(root, tmp_path, monkeypatch):
+    """A bundle created at a ref ("From a bundle URL") installs AT that ref and records it."""
+    host = _host_dir(tmp_path)
+    seen: dict = {}
+
+    def fake_install(ws, bundle, ref=None):
+        seen.update(bundle=bundle, ref=ref)
+        return []
+
+    monkeypatch.setattr(manager, "_install_bundle_into", fake_install)
+    rec = manager.create("pinned", bundle="https://example/b", bundle_ref="v0.1.0", inherit_model=str(host))
+    assert seen == {"bundle": "https://example/b", "ref": "v0.1.0"}
+    ws_doc = yaml.safe_load((root / rec["id"] / "workspace.yaml").read_text())
+    assert ws_doc["bundle_ref"] == "v0.1.0"
+
+
+def test_install_bundle_into_passes_ref_to_the_cli(monkeypatch, tmp_path):
+    import subprocess
+
+    seen: list[list[str]] = []
+
+    def _run(argv, **kw):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager.subprocess, "run", _run)
+    manager._install_bundle_into(tmp_path, "https://github.com/acme/stack", ref="v2")
+    manager._install_bundle_into(tmp_path, "https://github.com/acme/stack")
+    assert seen[0][seen[0].index("--ref") + 1] == "v2"
+    assert "--ref" not in seen[1]

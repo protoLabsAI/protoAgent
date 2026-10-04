@@ -1981,6 +1981,22 @@ export type Archetype = {
   // create so the member persists them to workspace.yaml and warns at boot when its
   // bound toolset doesn't cover the contract. Optional: absent on older hosts.
   requires_tools?: string[];
+  // A catalog `held` entry — an archetype still being tested. Only served on the opt-in
+  // `GET /api/archetypes?include_held=1` (Settings ▸ New agent ▸ Advanced ▸ "Show preview
+  // archetypes"); the picker badges it "Preview".
+  held?: boolean;
+  // The tag / branch / SHA a "From a bundle URL" archetype is pinned to — rides the create
+  // as `ref`. Absent on catalog rows (they install the bundle's default branch).
+  ref?: string;
+};
+
+// GET /api/archetypes/from-url — an uncatalogued bundle peeked by URL: its archetype row
+// (shaped like an /api/archetypes entry), the same bundle peek /preview serves, and whether
+// the source is official/acked (`trusted`, ADR 0071 D3) with its normalized display form.
+export type ArchetypeFromUrl = ArchetypePreview & {
+  archetype: Archetype;
+  trusted: boolean;
+  source: string;
 };
 
 // What an archetype's bundle would set up — the read-only pre-install peek

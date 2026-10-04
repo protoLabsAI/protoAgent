@@ -1532,6 +1532,19 @@ textarea {
   gap: var(--pl-space-2_5);
   margin-top: var(--pl-space-1);
 }
+/* The opt-in "Show preview archetypes" switch at the top of the expanded Advanced section,
+   with its one-line caveat below; held cards then carry a DS "Preview" Badge in the title. */
+.archetype-preview-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+}
+.archetype-card-title {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pl-space-1_5);
+}
 
 /* Topbar fleet switcher (ADR 0042) — the agent name as a DS Menu trigger (#1078).
    The dropdown itself is the DS Menu (.pl-menu, portaled to <body>), so the old

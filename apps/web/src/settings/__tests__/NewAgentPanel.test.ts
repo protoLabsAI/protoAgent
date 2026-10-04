@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NewAgentPanel } from "../NewAgentPanel";
 import { api } from "../../lib/api";
 import { HARD_GATE_HINT, SETUP_OPTIONAL_HELP } from "../../lib/pickerCopy";
-import type { Archetype, ArchetypePreview, PythonRuntimePayload } from "../../lib/types";
+import { PREVIEW_ARCHETYPES_KEY, setShowPreviewArchetypes } from "../../lib/previewArchetypesPref";
+import type { Archetype, ArchetypeFromUrl, ArchetypePreview, PythonRuntimePayload } from "../../lib/types";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -72,6 +73,11 @@ let container: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
+  try {
+    localStorage.removeItem(PREVIEW_ARCHETYPES_KEY); // the opt-in is per console — start every test OFF
+  } catch {
+    /* no storage */
+  }
   vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: ARCHETYPES });
   vi.spyOn(api, "pythonRuntime").mockResolvedValue(runtimePayload({})); // provisioned by default
   vi.spyOn(api, "archetypePreview").mockImplementation(async (id: string) =>
@@ -143,10 +149,10 @@ function mockCreate() {
 }
 
 describe("NewAgentPanel — step 1: the picker is cards only", () => {
-  it("offers both new-agent sources, archetype first (#2106)", async () => {
+  it("offers all three new-agent sources, archetype first (#2106)", async () => {
     await mountPanel();
     const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
-    expect(tabs.map((t) => t.textContent)).toEqual(["From an archetype", "From a snapshot"]);
+    expect(tabs.map((t) => t.textContent)).toEqual(["From an archetype", "From a bundle URL", "From a snapshot"]);
     expect(tabs[0].getAttribute("aria-selected")).toBe("true");
   });
 
@@ -424,9 +430,14 @@ describe("NewAgentPanel — advanced-tier archetypes collapse behind a toggle", 
     expect(nameInput()?.value).toBe("project-manager");
   });
 
-  it("shows no advanced toggle when every archetype is standard", async () => {
+  it("with every archetype standard, Advanced carries no count — it only holds the preview switch", async () => {
     await mountPanel();
     expect(advancedToggle()).toBeUndefined();
+    const toggle = buttonNamed(/^Advanced$/, container);
+    expect(toggle).toBeTruthy();
+    await click(toggle);
+    expect(container.textContent).toContain("Show preview archetypes");
+    expect(container.querySelectorAll('input[type="radio"]').length).toBe(2); // no extra cards
   });
 });
 
@@ -463,5 +474,182 @@ describe("NewAgentPanel — onDone hands over the created agent's name AND id", 
     await tick(() => document.querySelector(".pl-toast") !== null);
     expect(document.querySelector(".pl-toast")?.textContent).toContain("Couldn't create agent");
     expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
+// ── Held (preview) archetypes: opt-in, per console, badged ─────────────────────────────
+
+describe("NewAgentPanel — preview archetypes are opt-in under Advanced", () => {
+  const HELD: Archetype = {
+    id: "analyst",
+    label: "Analyst",
+    icon: "chart",
+    blurb: "Answers from your data",
+    bundle: "https://github.com/protoLabsAI/analyst-archetype",
+    soul: "# Analyst",
+    held: true,
+  };
+  const previewSwitch = () =>
+    [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((i) =>
+      i.closest("label")?.textContent?.includes("Show preview archetypes"),
+    );
+
+  afterEach(() => act(() => setShowPreviewArchetypes(false)));
+
+  it("never asks for held archetypes by default, and never renders one", async () => {
+    const spy = vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: [...ARCHETYPES, HELD] });
+    await mountPanel();
+    expect(spy.mock.calls.every((c) => !c[0])).toBe(true); // no include_held on the default fetch
+    await click(buttonNamed(/^Advanced/, container));
+    expect(radioFor("analyst")).toBeUndefined(); // even if a server sent one, it stays hidden
+    expect(previewSwitch()?.checked).toBe(false);
+  });
+
+  it("the switch refetches with include_held, badges the held card 'Preview', and persists", async () => {
+    const spy = vi
+      .spyOn(api, "archetypes")
+      .mockImplementation(async (includeHeld?: boolean) => ({ archetypes: includeHeld ? [...ARCHETYPES, HELD] : ARCHETYPES }));
+    await mountPanel();
+    await click(buttonNamed(/^Advanced/, container));
+    await click(previewSwitch());
+    await tick(() => Boolean(radioFor("analyst")));
+    expect(spy).toHaveBeenCalledWith(true);
+    const card = radioFor("analyst")!.closest(".pl-radiocard")!;
+    expect(card.querySelector(".pl-badge")?.textContent).toBe("Preview");
+    expect(localStorage.getItem(PREVIEW_ARCHETYPES_KEY)).toBe("1");
+    // A held card drives the same set-up step as any other.
+    await pick("analyst");
+    await next();
+    expect(dialog()?.textContent).toContain("Set up Analyst");
+  });
+
+  it("a console that opted in before opens with the preview cards already there", async () => {
+    setShowPreviewArchetypes(true);
+    vi.spyOn(api, "archetypes").mockImplementation(async (includeHeld?: boolean) => ({
+      archetypes: includeHeld ? [...ARCHETYPES, HELD] : ARCHETYPES,
+    }));
+    await mountPanel();
+    await click(buttonNamed(/^Advanced \(1\)/, container));
+    expect(radioFor("analyst")).toBeTruthy();
+  });
+});
+
+// ── From a bundle URL: entry → preview + trust → the same set-up dialog → create ─────────
+
+describe("NewAgentPanel — From a bundle URL", () => {
+  const FOUND: ArchetypeFromUrl = {
+    id: "analyst-archetype",
+    archetype: {
+      id: "analyst-archetype",
+      label: "Analyst",
+      icon: "chart",
+      blurb: "Answers questions from your data files.",
+      bundle: "https://github.com/acme/analyst-archetype",
+      soul: "# Analyst",
+      ref: "v0.1.0",
+      requires_tools: ["data_query"],
+    },
+    bundle: {
+      kind: "bundle",
+      id: "analyst-archetype",
+      name: "Analyst",
+      description: "The analyst bundle.",
+      members: [
+        { id: "data", builtin: false, ref: "v0.1.0", name: "Data", version: "0.1.0" },
+        { id: "notes", builtin: true, name: "Notes" },
+      ],
+      mcp: [],
+      secrets: [],
+      config_inputs: [{ key: "data.data_dirs", label: "Data folders", type: "string", required: true }],
+    },
+    trusted: false,
+    source: "github.com/acme/analyst-archetype",
+  };
+  const urlInput = () => container.querySelector<HTMLInputElement>('input[type="url"]');
+  const refInput = () => container.querySelector<HTMLInputElement>('input[placeholder="v0.1.0"]');
+  const trustBox = () =>
+    [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((i) =>
+      i.closest("label")?.textContent?.includes("I trust this repository"),
+    );
+  async function openUrlTab() {
+    await mountPanel();
+    await click([...container.querySelectorAll<HTMLElement>('[role="tab"]')].find((t) => t.textContent === "From a bundle URL"));
+  }
+  async function lookUp() {
+    await click(buttonNamed(/Look up/, container));
+    await tick(() => Boolean(container.querySelector(".bundle-url-preview")));
+  }
+
+  it("rejects a non-git URL on the client — nothing is fetched", async () => {
+    const spy = vi.spyOn(api, "archetypeFromUrl");
+    await openUrlTab();
+    await typeInto(urlInput(), "not a repo");
+    await click(buttonNamed(/Look up/, container));
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("isn't a git repository URL");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("folds a GitHub /tree/<ref> URL, previews what it installs, and gates Next on trust", async () => {
+    const spy = vi.spyOn(api, "archetypeFromUrl").mockResolvedValue(FOUND);
+    await openUrlTab();
+    await typeInto(urlInput(), "https://github.com/acme/analyst-archetype/tree/v0.1.0");
+    await lookUp();
+    expect(spy).toHaveBeenCalledWith("https://github.com/acme/analyst-archetype", "v0.1.0");
+    const preview = container.querySelector<HTMLElement>(".bundle-url-preview")!;
+    expect(preview.textContent).toContain("github.com/acme/analyst-archetype@v0.1.0");
+    expect(preview.textContent).toContain("The analyst bundle.");
+    expect(preview.textContent).toContain("v0.1.0"); // the member's pinned ref
+    expect(preview.textContent).toContain("built-in"); // the builtin it turns on
+    expect(preview.textContent).toContain("It will ask for: Data folders");
+    expect(preview.textContent).toContain("isn't an official source");
+    const nextBtn = buttonNamed(/^Next/, container)!;
+    expect(nextBtn.disabled).toBe(true);
+    await click(trustBox());
+    expect(nextBtn.disabled).toBe(false);
+  });
+
+  it("a trusted source needs no extra ack; editing the URL drops the preview", async () => {
+    vi.spyOn(api, "archetypeFromUrl").mockResolvedValue({ ...FOUND, trusted: true });
+    await openUrlTab();
+    await typeInto(urlInput(), "https://github.com/acme/analyst-archetype");
+    await lookUp();
+    expect(trustBox()).toBeUndefined();
+    expect(buttonNamed(/^Next/, container)!.disabled).toBe(false);
+    await typeInto(urlInput(), "https://github.com/acme/other");
+    expect(container.querySelector(".bundle-url-preview")).toBeNull();
+    expect(buttonNamed(/^Next/, container)!.disabled).toBe(true);
+  });
+
+  it("Next runs the same set-up dialog and Create posts bundle + ref + answers", async () => {
+    vi.spyOn(api, "archetypeFromUrl").mockResolvedValue(FOUND);
+    const create = mockCreate();
+    await openUrlTab();
+    await typeInto(urlInput(), "https://github.com/acme/analyst-archetype");
+    await typeInto(refInput(), "v0.1.0");
+    await lookUp();
+    await click(trustBox());
+    await next();
+    expect(dialog()?.textContent).toContain("Set up Analyst");
+    expect(dialog()?.textContent).toContain("installs 2 plugins");
+    expect(nameInput()?.value).toBe("analyst");
+    // The required config_inputs answer hard-gates Create, same as a catalog card.
+    expect(createButton()?.disabled).toBe(true);
+    const field = [...dialog()!.querySelectorAll<HTMLInputElement>("input")].find((i) =>
+      i.closest("label")?.textContent?.includes("Data folders"),
+    );
+    await typeInto(field ?? null, "/data");
+    expect(createButton()?.disabled).toBe(false);
+    await click(createButton());
+    await tick(() => create.mock.calls.length > 0);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "analyst",
+        bundle: "https://github.com/acme/analyst-archetype",
+        ref: "v0.1.0",
+        soul: "# Analyst",
+        config_inputs: { "data.data_dirs": "/data" },
+        requires_tools: ["data_query"],
+      }),
+    );
   });
 });

@@ -19,6 +19,8 @@ import {
   ACTIVITY_HISTORY,
   ARCHETYPES,
   ARCHETYPE_PREVIEWS,
+  archetypeFromUrl,
+  HELD_ARCHETYPES,
   ARTIFACT_STORE,
   buildFrames,
   buildWatches,
@@ -690,7 +692,10 @@ function handleApiGet(
         { name: "remy", url: "http://192.168.5.50:7871", host: "192.168.5.50", port: 7871 },
       ] };
     case "/api/archetypes":
-      return { archetypes: ARCHETYPES };
+      // Held (preview) archetypes ride only the explicit opt-in, before Custom (kept last).
+      return params.get("include_held") === "1"
+        ? { archetypes: [...ARCHETYPES.slice(0, -1), ...HELD_ARCHETYPES, ARCHETYPES[ARCHETYPES.length - 1]] }
+        : { archetypes: ARCHETYPES };
     case "/api/activity":
       return ACTIVITY_HISTORY;
     case "/api/inbox":
@@ -1593,6 +1598,17 @@ const server = createServer(async (req, res) => {
         // Archetype bundle peek (#2041) — the enriched preview (mcp + secrets) the
         // preview dialog and the new-agent Configure step both read. Unknown/code-free
         // ids fall back to bundle:null.
+        // "From a bundle URL" peek — same validation shape as the server: 400 for a non-git
+        // URL, 502 for a repo that can't be read (`…/missing` in the path).
+        if (pathname === "/api/archetypes/from-url") {
+          const u = (url.searchParams.get("url") || "").trim();
+          const ref = (url.searchParams.get("ref") || "").trim();
+          if (!/^(?:https:\/\/[A-Za-z0-9.-]+(?::\d+)?\/|git@[A-Za-z0-9.-]+:)[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\/?$/.test(u)) {
+            return sendJson(res, { detail: `not a git repository URL: '${u}'` }, 400);
+          }
+          if (u.includes("/missing")) return sendJson(res, { detail: `could not read bundle ${u}: repository not found` }, 502);
+          return sendJson(res, archetypeFromUrl(u, ref));
+        }
         const m = pathname.match(/^\/api\/archetypes\/([^/]+)\/preview$/);
         if (m) {
           const id = decodeURIComponent(m[1]);

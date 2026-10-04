@@ -868,3 +868,200 @@ def test_pair_route_refuses_plain_http_on_a_lan_before_dialling(client, pair_wir
     r = client.post("/api/fleet/remotes/pair", json={"url": lan, "code": "ABCDE-12345", "allow_insecure": True})
     assert r.status_code == 200, r.text
     assert len(pair_wire["posts"]) == 1
+
+
+# ── Held (preview) archetypes + "From a bundle URL" (new-agent sources) ─────────────
+
+
+def _with_held(monkeypatch, held):
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(fleet_routes, "_load_held_archetypes", lambda: held)
+    monkeypatch.setattr("graph.plugins.installer._read_lock", lambda: {})
+
+
+_HELD = [
+    {
+        "_held": "Josh tests first.",
+        "id": "analyst",
+        "label": "Analyst",
+        "icon": "ChartColumn",
+        "bundle": "https://github.com/protoLabsAI/analyst-archetype",
+        "blurb": "Answers questions from your data files.",
+        "soul": "# Analyst",
+        "requires_tools": ["data_query"],
+    }
+]
+
+
+def test_held_archetypes_hidden_by_default(client, monkeypatch):
+    _with_held(monkeypatch, _HELD)
+    arr = client.get("/api/archetypes").json()["archetypes"]
+    assert "analyst" not in [a["id"] for a in arr]
+    assert not any(a.get("held") for a in arr)
+
+
+def test_held_archetypes_only_on_explicit_include_held(client, monkeypatch):
+    _with_held(monkeypatch, _HELD)
+    arr = client.get("/api/archetypes?include_held=1").json()["archetypes"]
+    by_id = {a["id"]: a for a in arr}
+    assert by_id["analyst"]["held"] is True
+    assert by_id["analyst"]["requires_tools"] == ["data_query"]
+    assert "_held" not in by_id["analyst"]  # the curator's note is never served
+    assert not any(a.get("held") for a in arr if a["id"] != "analyst")  # only held rows are flagged
+    assert arr[-1]["id"] == "custom"  # Custom stays LAST
+
+
+def test_held_archetype_dedupes_against_installed_bundle(client, monkeypatch):
+    from operator_api import fleet_routes
+
+    monkeypatch.setattr(fleet_routes, "_load_held_archetypes", lambda: _HELD)
+    monkeypatch.setattr(
+        "graph.plugins.installer._read_lock",
+        lambda: {
+            "bundles": [
+                {
+                    "id": "analyst-archetype",
+                    "source_url": "https://github.com/protoLabsAI/analyst-archetype.git",
+                    "archetype": {"label": "Analyst"},
+                }
+            ]
+        },
+    )
+    arr = client.get("/api/archetypes?include_held=1").json()["archetypes"]
+    assert [a["id"] for a in arr if a["label"] == "Analyst"] == ["analyst-archetype"]  # installed row wins
+    assert not any(a.get("held") for a in arr)
+
+
+def test_held_archetype_preview_resolves(client, monkeypatch):
+    _with_held(monkeypatch, _HELD)
+    import ops.plugins as plugin_ops
+
+    async def _fake_peek(url, ref=None):
+        return {"kind": "bundle", "id": "analyst-archetype", "members": []}
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _fake_peek)
+    assert client.get("/api/archetypes/analyst/preview").json()["bundle"]["id"] == "analyst-archetype"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "not a url",
+        "https://github.com/onlyowner",
+        "http://github.com/a/b",
+        "file:///etc/passwd",
+        "/tmp/local/repo",
+        "https://github.com/a/../b",
+        "https://github.com/a/b?x=1",
+        "--upload-pack=evil",
+    ],
+)
+def test_from_url_rejects_non_git_urls(client, monkeypatch, url):
+    import ops.plugins as plugin_ops
+
+    async def _never(*a, **k):
+        raise AssertionError("must not fetch an invalid URL")
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _never)
+    r = client.get("/api/archetypes/from-url", params={"url": url})
+    assert r.status_code == 400
+
+
+def test_from_url_rejects_bad_ref(client):
+    r = client.get("/api/archetypes/from-url", params={"url": "https://github.com/a/b", "ref": "-x;rm"})
+    assert r.status_code == 400
+
+
+def test_from_url_peeks_and_shapes_an_archetype(client, monkeypatch):
+    import ops.plugins as plugin_ops
+    from runtime.state import STATE
+
+    seen = {}
+
+    async def _fake_peek(url, ref=None):
+        seen.update(url=url, ref=ref)
+        return {
+            "kind": "bundle",
+            "id": "analyst-archetype",
+            "name": "Analyst bundle",
+            "description": "Data analysis.",
+            "members": [{"id": "data", "builtin": False, "ref": "v0.1.0"}, {"id": "notes", "builtin": True}],
+            "config_inputs": [{"key": "data.data_dirs", "label": "Data folders", "type": "string"}],
+            "archetype": {"label": "Analyst", "icon": "ChartColumn", "blurb": "Answers from data.", "soul": "# A"},
+        }
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _fake_peek)
+    cfg = type("C", (), {"plugins_sources_official": ["github.com/protoLabsAI/*"], "plugins_sources_acked": []})()
+    monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
+    r = client.get(
+        "/api/archetypes/from-url", params={"url": " https://github.com/protoLabsAI/analyst-archetype ", "ref": "v0.1.0"}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert seen == {"url": "https://github.com/protoLabsAI/analyst-archetype", "ref": "v0.1.0"}
+    arch = body["archetype"]
+    assert body["id"] == arch["id"] == "analyst-archetype"
+    assert arch["label"] == "Analyst" and arch["blurb"] == "Answers from data." and arch["soul"] == "# A"
+    assert arch["bundle"] == "https://github.com/protoLabsAI/analyst-archetype"
+    assert arch["ref"] == "v0.1.0"
+    assert body["bundle"]["members"][0]["ref"] == "v0.1.0"  # the full peek rides along
+    assert body["trusted"] is True and body["source"] == "github.com/protoLabsAI/analyst-archetype"
+
+
+def test_from_url_untrusted_source_and_no_archetype_block(client, monkeypatch):
+    import ops.plugins as plugin_ops
+    from runtime.state import STATE
+
+    async def _fake_peek(url, ref=None):
+        return {"kind": "plugin", "members": [{"id": "thing", "name": "Thing", "description": "A plugin."}]}
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _fake_peek)
+    cfg = type("C", (), {"plugins_sources_official": ["github.com/protoLabsAI/*"], "plugins_sources_acked": []})()
+    monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
+    body = client.get("/api/archetypes/from-url", params={"url": "git@github.com:acme/thing.git"}).json()
+    assert body["trusted"] is False
+    assert body["archetype"]["label"] == "Thing" and body["archetype"]["blurb"] == "A plugin."
+    assert "ref" not in body["archetype"]
+
+
+def test_from_url_fetch_failure_is_502(client, monkeypatch):
+    import ops.plugins as plugin_ops
+
+    async def _boom(url, ref=None):
+        raise RuntimeError("repo not found")
+
+    monkeypatch.setattr(plugin_ops, "peek_bundle", _boom)
+    r = client.get("/api/archetypes/from-url", params={"url": "https://github.com/a/b"})
+    assert r.status_code == 502 and "repo not found" in r.json()["detail"]
+
+
+def test_create_forwards_bundle_ref(client, monkeypatch):
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(kwargs)
+        return {"id": f"{name}-0000", "name": name, "port": 7999, "path": "/tmp/x", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    r = client.post(
+        "/api/fleet",
+        json={"name": "pinned", "start": False, "bundle": "https://github.com/x/stack", "ref": "v0.1.0"},
+    )
+    assert r.status_code == 200
+    assert captured["bundle_ref"] == "v0.1.0"
+
+    captured.clear()
+    client.post("/api/fleet", json={"name": "unpinned", "start": False, "bundle": "https://github.com/x/stack"})
+    assert captured["bundle_ref"] is None
+
+
+@pytest.mark.parametrize("body", [{"ref": "v1"}, {"bundle": "https://github.com/x/stack", "ref": "--evil"}])
+def test_create_rejects_bad_ref(client, monkeypatch, body):
+    from graph.workspaces import manager
+
+    monkeypatch.setattr(manager, "create", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not create")))
+    assert client.post("/api/fleet", json={"name": "x", "start": False, **body}).status_code == 400

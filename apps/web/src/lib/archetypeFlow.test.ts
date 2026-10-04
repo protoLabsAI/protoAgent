@@ -177,6 +177,14 @@ describe("createAgentBody — the Create payload", () => {
     expect(body.soul).toBe("# Engineer");
   });
 
+  it("a 'From a bundle URL' archetype pins its ref; catalog rows send none", () => {
+    const s = run([pickEngineer]);
+    expect(createAgentBody(s, { ...ENGINEER, ref: "v0.1.0" }, fields).ref).toBe("v0.1.0");
+    expect(createAgentBody(s, ENGINEER, fields).ref).toBeUndefined();
+    // A ref without a bundle is meaningless — never sent.
+    expect(createAgentBody(s, { ...BASIC, ref: "v1" }, []).ref).toBeUndefined();
+  });
+
   it("Basic: no bundle, no soul, no contract", () => {
     const s = run([{ type: "pick", id: "basic", suggestedName: "agent", soul: "" }]);
     expect(createAgentBody(s, BASIC, [])).toEqual({
