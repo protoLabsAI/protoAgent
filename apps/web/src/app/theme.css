@@ -88,6 +88,15 @@
 .bg-jobs-pill {
   position: relative;
 }
+/* Running: the spinner + count sit side by side — the spinner never shrinks out of round. */
+.bg-jobs-pill--running {
+  gap: var(--pl-space-1);
+}
+.bg-jobs-pill > svg,
+.bg-jobs-pill > [role="status"],
+.bg-jobs-pill > :first-child {
+  flex: none;
+}
 .bg-jobs-unread {
   position: absolute;
   top: 1px;
