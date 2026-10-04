@@ -30,6 +30,9 @@ export type ConfigField = {
   defaultValue?: string;
   // config_inputs only: the bundle's optional `help` line, rendered under the field.
   help?: string;
+  // config_inputs `type: path` only: a list of folders (one row + Browse… each), answered
+  // as ONE "\n"-joined string — the same shape a plugin `multiple` path setting stores.
+  multiple?: boolean;
 };
 
 // Form state is keyed by origin(+server)+key: an MCP input and a declared secret that
@@ -96,6 +99,7 @@ export function archetypeConfigFields(preview: ArchetypePreview | undefined): Co
       kind,
       defaultValue: fallback,
       help: ci.help?.trim() || undefined,
+      ...(kind === "path" && ci.multiple === true ? { multiple: true } : {}),
     });
   }
   return fields;

@@ -125,6 +125,13 @@ def normalize_config_inputs(bundle_id: str, raw: object, *, strict: bool = True)
         # hosts that predate it, so a bundle can declare it without a core-version gate.
         if typ == "path" and bool(entry.get("project")):
             norm["project"] = True
+        # `multiple: true` on a `path` input: the Configure step renders a list of folders
+        # (one row + Browse… each) and answers with ONE "\n"-joined string, the same
+        # value shape a plugin's `multiple` path setting stores. Dropped beside `project`
+        # (a managed project is exactly one checkout) and on any other type. Additive —
+        # an older host ignores it and shows the single picker.
+        elif typ == "path" and entry.get("multiple") is True:
+            norm["multiple"] = True
         # `help:` — an optional one-line explanation rendered under the field, so the
         # `label` can stay a short name ("Allow GitHub writes") instead of carrying the
         # whole explanation. Optional + additive: an older host ignores it, and a bundle

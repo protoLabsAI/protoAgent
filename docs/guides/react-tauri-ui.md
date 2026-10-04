@@ -126,7 +126,8 @@ listing of the **server's** directories. It has to be server-side: the console f
 configures a machine it isn't running on, and the browser's own pickers
 (`webkitdirectory`, `showDirectoryPicker()`) describe the client's filesystem and can't
 produce an absolute path on the server at all. Plugin-declared fields can set
-`type: path` (and `path_kind: file`) to get the same control.
+`type: path` (and `path_kind: file`) to get the same control, and `multiple: true` for a
+list of paths (one row + Browse… each, stored as one `\n`-joined string).
 
 A path that is **not on the server's filesystem** must stay `type: "string"` —
 `secrets_manager.path` is a folder inside a remote vault (1Password/Bitwarden), so a

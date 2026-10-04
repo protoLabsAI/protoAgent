@@ -1150,6 +1150,26 @@ def test_normalize_config_inputs_keeps_project_flag_on_path_only():
     assert "project" not in out[1] and "project" not in out[2]
 
 
+def test_normalize_config_inputs_keeps_multiple_on_plain_path_only():
+    """`multiple: true` on a `path` input survives (the Configure step renders a folder
+    list and answers with one "\\n"-joined string). It is dropped on other types, on a
+    non-literal-true value, and beside `project: true` (a managed project is ONE repo)."""
+    out = installer.normalize_config_inputs(
+        "b",
+        [
+            {"key": "data.data_dirs", "label": "Folders", "type": "path", "multiple": True},
+            {"key": "data.name", "label": "Name", "type": "string", "multiple": True},
+            {"key": "board.repo", "label": "Repo", "type": "path", "project": True, "multiple": True},
+            {"key": "data.other", "label": "Other", "type": "path", "multiple": "yes"},
+        ],
+    )
+    assert out[0].get("multiple") is True
+    assert all("multiple" not in o for o in out[1:])
+    assert out[2].get("project") is True
+    # The answer shape is a plain string — coercion keeps the interior newlines.
+    assert installer.coerce_config_input_value("path", " /a\n/b \n") == "/a\n/b"
+
+
 def test_normalize_config_inputs_keeps_optional_help():
     """`help:` is an optional explanation line under the field (the label stays short).
     A non-blank value is kept trimmed; blank/absent adds no key, so the normalized shape

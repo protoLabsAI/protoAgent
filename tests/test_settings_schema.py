@@ -396,3 +396,47 @@ def test_persona_and_media_are_not_swept_into_plugins():
     assert _category_for("Media") == "Plugins"  # interim (no Capabilities panel yet) — but EXPLICIT
     # A genuinely unknown (plugin) section still gets the Integrations default.
     assert _category_for("Discord") == "Plugins"
+
+
+# ── `multiple: true` on a `path` field — the list-of-folders control ──────────
+
+
+def test_core_path_field_emits_multiple(monkeypatch):
+    """A core `path` Field with `multiple=True` emits `multiple: true` so the console
+    renders one row per folder; every other field emits `false` (the key is always
+    present, like `path_kind`, so the client never needs a type check)."""
+    from graph.settings_schema import Field
+
+    many = Field("demo.dirs", "project_dir", "Dirs", "path", "Demo", multiple=True)
+    one = Field("demo.dir", "project_dir", "Dir", "path", "Demo")
+    # `multiple` is a path-only hint — a stray flag on another type is not emitted as true.
+    stray = Field("demo.name", "project_dir", "Name", "string", "Demo", multiple=True)
+    monkeypatch.setattr("graph.settings_schema.FIELDS", [many, one, stray])
+    entries = {e["key"]: e for g in build_schema(LangGraphConfig()) for e in g["fields"]}
+    assert entries["demo.dirs"]["multiple"] is True
+    assert entries["demo.dir"]["multiple"] is False
+    assert entries["demo.name"]["multiple"] is False
+
+
+def test_plugin_path_setting_emits_multiple_and_saves_a_newline_joined_string(monkeypatch):
+    """A plugin manifest `path` setting with `multiple: true` emits it (only a literal
+    true counts, and only on `path`); the stored value stays ONE string — the rows joined
+    with "\\n" — and validation still accepts exactly that, refusing a raw list."""
+    _fake_plugin_specs(
+        monkeypatch,
+        [
+            {"key": "data_dirs", "label": "Data folders", "type": "path", "path_kind": "dir", "multiple": True},
+            {"key": "one_dir", "label": "One", "type": "path"},
+            {"key": "truthy", "label": "Truthy", "type": "path", "multiple": "yes"},
+            {"key": "label", "label": "Label", "type": "string", "multiple": True},
+        ],
+    )
+    fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
+    assert fields["artifact.data_dirs"]["multiple"] is True
+    assert fields["artifact.data_dirs"]["path_kind"] == "dir"
+    assert fields["artifact.one_dir"]["multiple"] is False
+    assert fields["artifact.truthy"]["multiple"] is False
+    assert fields["artifact.label"]["multiple"] is False
+    assert validate_flat({"artifact.data_dirs": "/srv/a\n/srv/b"}) == (True, None)
+    ok, msg = validate_flat({"artifact.data_dirs": ["/srv/a", "/srv/b"]})
+    assert ok is False and "string path" in (msg or "")
