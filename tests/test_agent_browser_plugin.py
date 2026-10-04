@@ -1044,7 +1044,9 @@ def test_pdf_tells_the_model_about_the_artifact_handoff():
 # (forms.match_fields) and is exercised directly.
 
 
-# A canned `abEnumerate` payload — the shape the in-page JS prints — covering every kind.
+# A canned `abEnumerate` payload — the shape the in-page JS prints — covering every kind. The
+# radio group is TWO per-option entries (what the JS now emits so each option is independently
+# addressable); the read renderer folds them back into one radio-group row.
 _FORM_FIELDS = [
     {"idx": 0, "label": "First name", "labels": ["First name", "first_name"], "kind": "text",
      "name": "first_name", "id": "fn", "required": True, "value": "Ada", "selector": '[data-ab-field="0"]'},
@@ -1055,13 +1057,16 @@ _FORM_FIELDS = [
     {"idx": 3, "label": "Role", "labels": ["Role"], "kind": "native-select",
      "name": "role", "id": "role", "required": False, "value": "Engineer",
      "options": ["", "Engineer", "Manager"], "selector": '[data-ab-field="3"]'},
-    {"idx": 4, "label": "Seniority", "labels": ["Seniority"], "kind": "radio-group",
-     "name": "sen", "id": "", "required": True, "value": "Senior",
-     "options": ["Junior", "Senior"], "selector": '[data-ab-field="4"]'},
-    {"idx": 5, "label": "Résumé", "labels": ["Résumé", "resume"], "kind": "file",
-     "name": "resume", "id": "rz", "required": False, "value": "cv.pdf", "selector": '[data-ab-field="5"]'},
-    {"idx": 6, "label": "Subscribe", "labels": ["Subscribe", "subscribe"], "kind": "checkbox",
-     "name": "sub", "id": "sb", "required": False, "value": True, "selector": '[data-ab-field="6"]'},
+    {"idx": 4, "label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "id": "sen_j", "required": True, "value": "Junior", "selector": '[data-ab-field="4"]',
+     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Junior", "checked": False},
+    {"idx": 5, "label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "id": "sen_s", "required": True, "value": "Senior", "selector": '[data-ab-field="5"]',
+     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Senior", "checked": True},
+    {"idx": 6, "label": "Résumé", "labels": ["Résumé", "resume"], "kind": "file",
+     "name": "resume", "id": "rz", "required": False, "value": "cv.pdf", "selector": '[data-ab-field="6"]'},
+    {"idx": 7, "label": "Subscribe", "labels": ["Subscribe", "subscribe"], "kind": "checkbox",
+     "name": "sub", "id": "sb", "required": False, "value": True, "selector": '[data-ab-field="7"]'},
 ]
 
 
@@ -1079,7 +1084,16 @@ def _field(label, labels=None, kind="text", name="", selector=None, **kw):
     ("@e5", "ref"), ("@e123", "ref"), ("  @e9 ", "ref"),
     ("#email", "css"), (".form-control", "css"), ("[name='email']", "css"),
     ("div > input", "css"), ("a + b", "css"), ("x ~ y", "css"),
+    # tag-led selectors that worked before this plugin learned labels must still reach the CLI
+    # as CSS — not be mistaken for a label the form has no field for (#4032 review).
+    ("button[type=submit]", "css"), ("input[name='email']", "css"), ("textarea", "css"),
+    ("select#country", "css"), ("form input", "css"), ("input:checked", "css"), ("*", "css"),
+    # a space inside an attribute value must not fracture the selector into "label words"
+    ('input[aria-label="First name"]', "css"),
     ("Email", "label"), ("First name", "label"), ("Résumé", "label"), ("  Email  ", "label"),
+    # labels that happen to collide with a tag name stay LABELS (tag match is case-sensitive,
+    # so a capitalised word is never a bare type selector) — the regression the review caught.
+    ("Address", "label"), ("Time", "label"), ("Select one", "label"), ("Full name", "label"),
 ])
 def test_classify_routes_refs_css_and_labels(field, kind):
     assert forms.classify(field) == kind
@@ -1140,6 +1154,38 @@ def test_closest_labels_ranks_by_similarity_and_caps_at_five():
                                   "First name", "Last name", "Phone"]]
     close = forms.closest_labels(fields, "email", n=5)
     assert len(close) == 5 and close[0] == "Email"   # the nearest label first
+
+
+# ── forms.match_fields — a radio group is enumerated per option, so each is addressable ──
+# #4032 review: collapsing a group to its first radio meant a later option could not be
+# clicked by its own text, and the group's legend silently acted on the first member. Each
+# option is now its own descriptor, and the legend rides every member's labels.
+_RADIO_OPTIONS = [
+    {"label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "selector": '[data-ab-field="0"]', "group": "sen", "groupLabel": "Seniority",
+     "optionLabel": "Junior", "checked": False},
+    {"label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "selector": '[data-ab-field="1"]', "group": "sen", "groupLabel": "Seniority",
+     "optionLabel": "Senior", "checked": True},
+]
+
+
+@pytest.mark.parametrize(("option", "selector"), [
+    ("Senior", '[data-ab-field="1"]'),   # a LATER option resolves to its own radio, not the first
+    ("Junior", '[data-ab-field="0"]'),
+])
+def test_match_resolves_a_specific_radio_option_by_its_own_label(option, selector):
+    m = forms.match_fields(option, _RADIO_OPTIONS)
+    assert m.ok and m.selector == selector and m.label == option
+
+
+def test_match_by_the_radio_group_legend_is_ambiguous_not_a_silent_first_pick():
+    """Addressing the group by its legend matches every option (the legend rides each
+    member's labels), so it is an ambiguous error listing them — never a silent act on the
+    first radio."""
+    m = forms.match_fields("Seniority", _RADIO_OPTIONS)
+    assert not m.ok and m.selector == ""
+    assert "2 fields" in m.error and "Junior" in m.error and "Senior" in m.error
 
 
 # ── forms.resolve_js / parse_resolve / resolve_target — the reusable locator ───────
@@ -1225,6 +1271,21 @@ async def test_click_and_get_value_resolve_labels_too(monkeypatch):
     assert rec[-1] == ["ab", "get", "value", '[data-ab-field="0"]']
 
 
+async def test_click_addresses_a_specific_radio_option_not_the_group_first_member(monkeypatch):
+    """#4032 review: clicking a later radio option by its own text hits THAT option; clicking
+    the whole group by its legend is refused as ambiguous, never a silent act on the first."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(_RADIO_OPTIONS, record=rec))
+    t = _toolmap({"binary": "ab"})
+    out = await t["browser_click"].ainvoke({"selector": "Senior"})
+    assert not out.startswith("Error:"), out
+    assert rec[-1] == ["ab", "click", '[data-ab-field="1"]']        # the Senior radio, not Junior
+    rec.clear()
+    out = await t["browser_click"].ainvoke({"selector": "Seniority"})
+    assert out.startswith("Error:") and "Junior" in out and "Senior" in out
+    assert rec == [["ab", "eval", "--stdin"]]                        # resolved, then refused — no click
+
+
 @pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
 async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch, name):
     """r1 / back-compat: a `@eN` ref or a CSS selector reaches the CLI unchanged, with NO
@@ -1242,6 +1303,24 @@ async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch
     args["selector"] = "#q"
     await _toolmap({"binary": "ab"})[name].ainvoke(args)
     assert rec[-1][1] != "eval" and "#q" in rec[-1]
+
+
+@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+@pytest.mark.parametrize("sel", ["button[type=submit]", "input[name='email']", "textarea",
+                                 "select#country", "form input"])
+async def test_tag_led_css_selectors_reach_the_cli_unchanged(monkeypatch, name, sel):
+    """#4032 review regression: a selector that leads with a tag name (`button[type=submit]`,
+    `textarea`, `form input`, …) is a CSS selector that worked before this plugin learned
+    labels. It must still go straight to the CLI — not be treated as a label the form has no
+    field for and fail 'no form field matches'."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    args = {"selector": sel}
+    if name in ("browser_fill", "browser_type"):
+        args["text"] = "hi"
+    out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert not out.startswith("Error:"), out
+    assert rec[-1][1] != "eval" and sel in rec[-1]   # no in-page resolve; the selector reaches the CLI
 
 
 async def test_a_label_matching_no_field_is_an_error_and_never_acts(monkeypatch):
@@ -1309,6 +1388,28 @@ async def test_form_read_reports_committed_values_and_options(monkeypatch):
     assert by_kind["radio-group"]["options"] == ["Junior", "Senior"] and by_kind["radio-group"]["value"] == "Senior"
     assert by_kind["file"]["value"] == "cv.pdf"
     assert by_kind["checkbox"]["value"] is True
+
+
+def test_render_folds_radio_options_into_one_group_at_the_first_members_position():
+    """The per-option radio descriptors `abEnumerate` emits collapse to ONE radio-group row
+    for the read view: `options` is the member labels, `value` the checked one, `required` true
+    if any member is, placed where the first member appeared."""
+    fields = [
+        {"label": "Size", "labels": ["Size"], "kind": "text", "name": "size", "id": "",
+         "required": False, "value": ""},
+        {"label": "Red", "kind": "radio-group", "name": "color", "group": "color",
+         "groupLabel": "Colour", "optionLabel": "Red", "checked": False, "required": True,
+         "selector": "[a]"},
+        {"label": "Green", "kind": "radio-group", "name": "color", "group": "color",
+         "groupLabel": "Colour", "optionLabel": "Green", "checked": True, "required": False,
+         "selector": "[b]"},
+    ]
+    out = json.loads(forms.render_form_read(json.dumps({"ok": True, "fields": fields})))
+    assert [f["label"] for f in out] == ["Size", "Colour"]       # folded, at the group's slot
+    grp = out[1]
+    assert grp["kind"] == "radio-group" and grp["options"] == ["Red", "Green"]
+    assert grp["value"] == "Green" and grp["required"] is True   # checked option; any-required
+    assert set(grp) == {"label", "kind", "name", "id", "required", "value", "options"}
 
 
 def test_form_read_js_extracts_the_committed_combobox_value_not_typed_text():
@@ -1389,6 +1490,38 @@ def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
     fields = _run_enumerate_js(html)
     assert len(fields) == 1 and fields[0]["kind"] == "combobox"
     assert fields[0]["label"] == "State" and fields[0]["value"] == "California"
+
+
+_RADIO_HTML = """
+<form>
+  <fieldset>
+    <legend>Seniority *</legend>
+    <label><input type="radio" name="sen" value="jr"/> Junior</label>
+    <label><input type="radio" name="sen" value="sr" checked/> Senior</label>
+  </fieldset>
+  <label for="e">Email</label>
+  <input id="e" type="email" name="email"/>
+</form>
+"""
+
+
+def test_enumerate_lists_every_radio_option_as_its_own_addressable_field():
+    """#4032 review: each radio is enumerated and tagged separately (so a later option is
+    clickable by its own text), the group legend rides every member's labels (so addressing
+    the group hits every option), and the read renderer folds the members into one row."""
+    fields = _run_enumerate_js(_RADIO_HTML)
+    radios = [f for f in fields if f["kind"] == "radio-group"]
+    assert len(radios) == 2                                        # one entry PER option, not collapsed
+    assert [r["label"] for r in radios] == ["Junior", "Senior"]
+    assert radios[0]["selector"] != radios[1]["selector"]         # each independently addressable
+    assert all(r["selector"].startswith('[data-ab-field="') for r in radios)
+    assert all("Seniority" in r["labels"] for r in radios)        # legend (asterisk stripped) on each
+    assert radios[1]["checked"] is True and radios[1]["optionLabel"] == "Senior"
+    # the read renderer folds the two options back into one radio-group row
+    folded = [f for f in forms.collapse_radio_groups(fields) if f["kind"] == "radio-group"]
+    assert len(folded) == 1
+    assert folded[0]["label"] == "Seniority" and folded[0]["options"] == ["Junior", "Senior"]
+    assert folded[0]["value"] == "Senior"
 
 
 async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):

@@ -35,10 +35,101 @@ from dataclasses import dataclass, field as _dc_field
 # ── field classification (Python side — pure string inspection) ──────────────────
 # A dash-and-letter is the CLI's option grammar, but classify() runs on a locator, not an
 # argv element; the argv guard (runtime.bad_operand) still covers anything that reaches the
-# command line. Descendant whitespace is deliberately NOT treated as a combinator: real
-# field labels contain spaces ("First name"), so only the explicit combinators count.
+# command line.
 _CSS_START = ("#", ".", "[")
 _CSS_COMBINATORS = (">", "+", "~")
+
+# The HTML tag names a CSS selector may lead with. A label that happens to be one of these
+# words is still routed to the CLI as a selector ONLY when it is a bare lowercase tag (a
+# capitalised "Address"/"Time"/"Select" stays a LABEL — tag names are matched case-sensitively
+# against this lowercase set), which is why real field labels ("Address", "First name") keep
+# resolving by label while `textarea`, `select#country`, `button[type=submit]` and `form input`
+# route to CSS the way they did before this plugin learned to address by label (#4032 review).
+_HTML_TAGS = frozenset({
+    "a", "abbr", "address", "area", "article", "aside", "audio", "b", "base", "bdi", "bdo",
+    "blockquote", "body", "br", "button", "canvas", "caption", "cite", "code", "col",
+    "colgroup", "data", "datalist", "dd", "del", "details", "dfn", "dialog", "div", "dl",
+    "dt", "em", "embed", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2",
+    "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "i", "iframe", "img",
+    "input", "ins", "kbd", "label", "legend", "li", "link", "main", "map", "mark", "menu",
+    "meta", "meter", "nav", "noscript", "object", "ol", "optgroup", "option", "output", "p",
+    "param", "picture", "pre", "progress", "q", "rp", "rt", "ruby", "s", "samp", "script",
+    "search", "section", "select", "slot", "small", "source", "span", "strong", "style",
+    "sub", "summary", "sup", "table", "tbody", "td", "template", "textarea", "tfoot", "th",
+    "thead", "time", "title", "tr", "track", "u", "ul", "var", "video", "wbr",
+})
+
+# One simple-selector qualifier: `#id`, `.class`, `[attr]`/`[attr=val]`, `:pseudo`/`::pseudo`.
+_CSS_QUALIFIER = re.compile(r"\#[\w-]+|\.[\w-]+|\[[^\]]*\]|::?[\w-]+(?:\([^)]*\))?")
+
+
+def _compound_ok(tok: str) -> bool:
+    """True if ``tok`` is one CSS compound selector: an optional type selector (``*`` or a
+    known HTML tag) followed by any number of ``#``/``.``/``[``/``:`` qualifiers — e.g.
+    ``textarea``, ``select#country``, ``button[type=submit]``, ``input:checked``. A leading
+    word that is NOT a known tag (``First``, ``Email``) disqualifies it, so a label is never
+    mistaken for a bare type selector."""
+    if not tok:
+        return False
+    m = re.match(r"\*|[A-Za-z][A-Za-z0-9]*", tok)
+    i = 0
+    has_type = False
+    if m:
+        lead = m.group(0)
+        if lead != "*" and lead not in _HTML_TAGS:
+            return False
+        has_type = True
+        i = m.end()
+    has_qualifier = False
+    while i < len(tok):
+        qm = _CSS_QUALIFIER.match(tok, i)
+        if not qm:
+            return False
+        i = qm.end()
+        has_qualifier = True
+    return has_type or has_qualifier
+
+
+def _split_selector(s: str) -> list:
+    """Split on descendant whitespace, but NOT whitespace inside ``[...]`` / ``(...)`` — so an
+    attribute value with a space (``input[aria-label="First name"]``) stays one token."""
+    tokens, depth, cur = [], 0, []
+    for ch in s:
+        if ch in "[(":
+            depth += 1
+            cur.append(ch)
+        elif ch in "])":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+        elif ch.isspace() and depth == 0:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        tokens.append("".join(cur))
+    return tokens
+
+
+def _is_css_selector(s: str) -> bool:
+    """Decide whether ``s`` is a CSS selector rather than a visible label.
+
+    Unambiguous starts (``#``/``.``/``[``) and the explicit combinators (``> + ~``) route to
+    CSS as before. Beyond that, a tag-led selector — one whose every (bracket-aware) token is a
+    CSS compound whose type selector is a known HTML tag — is CSS too, so a descendant selector
+    (``form input``) and a bare/qualified tag (``textarea``, ``select#country``,
+    ``input[aria-label="First name"]``) reach the CLI instead of failing a label match.
+    Descendant whitespace is a combinator ONLY when every token parses as a tag-led compound, so
+    a multi-word label ("First name") stays a LABEL (``First`` is not a tag)."""
+    if not s:
+        return False
+    if s[:1] in _CSS_START:
+        return True
+    if any(c in s for c in _CSS_COMBINATORS):
+        return True
+    tokens = _split_selector(s)
+    return bool(tokens) and all(_compound_ok(t) for t in tokens)
 
 
 def classify(field: str) -> str:
@@ -46,7 +137,7 @@ def classify(field: str) -> str:
     s = (field or "").strip()
     if s.startswith("@e"):
         return "ref"
-    if s[:1] in _CSS_START or any(c in s for c in _CSS_COMBINATORS):
+    if _is_css_selector(s):
         return "css"
     return "label"
 
@@ -174,7 +265,7 @@ function abEnumerate(root){
   root = root || document;
   var nodes = Array.prototype.slice.call(root.querySelectorAll(
     'input, textarea, select, [role="combobox"], .select__control, [class*="select__control"]'));
-  var out = [], seenRadio = {}, idx = 0;
+  var out = [], idx = 0;
   var skip = {hidden:1, submit:1, button:1, reset:1, image:1};
   for(var i=0;i<nodes.length;i++){
     var el = nodes[i];
@@ -182,17 +273,20 @@ function abEnumerate(root){
     if(el.tagName.toLowerCase()==='input' && skip[(el.getAttribute('type')||'').toLowerCase()]) continue;
     var kind = abKindOf(el);
     var name = (el.getAttribute && el.getAttribute('name')) || '';
-    if(kind==='radio-group'){
-      var key = name || ('@@' + idx);
-      if(seenRadio[key]) continue;            // collapse a radio group to its first member
-      seenRadio[key] = true;
-    }
     var labels = abCandidateLabels(el);
     var comboInner = null;
+    // EVERY radio is enumerated and tagged as its own addressable field — not collapsed to the
+    // group's first member — so clicking a later option by its own text works (#4032 review).
+    // The read tool folds the members back into one radio-group entry (render collapses by the
+    // shared group key); the group legend is appended to each member's labels so addressing the
+    // group by its legend hits every option (an AMBIGUOUS error that lists them) rather than
+    // silently acting on the first.
+    var radioLegend = '';
     if(kind==='radio-group'){
       var fs = el.closest && el.closest('fieldset');
       var leg = fs && fs.querySelector('legend');
-      if(leg){ var lt = abClean(abTextNoControls(leg)); if(lt) labels.unshift(lt); }
+      if(leg) radioLegend = abClean(abTextNoControls(leg));
+      if(radioLegend && labels.indexOf(radioLegend) < 0) labels.push(radioLegend);
     }
     if(kind==='combobox'){
       // The react-select container has no label of its own; the labelled node is its inner
@@ -215,13 +309,14 @@ function abEnumerate(root){
       var so = el.options[el.selectedIndex];
       desc.value = so ? abClean(so.textContent) : '';
     } else if(kind==='radio-group'){
-      var radios = Array.prototype.slice.call(root.querySelectorAll('input[type="radio"]')).filter(
-        function(r){ return ((r.getAttribute('name')||'')===name); });
-      if(!name){ radios = [el]; }
-      desc.options = radios.map(function(r){ var l = abCandidateLabels(r); return l[0] || abClean(r.value) || ''; });
-      var chk = radios.filter(function(r){ return r.checked; })[0];
-      if(chk){ var cl = abCandidateLabels(chk); desc.value = cl[0] || abClean(chk.value) || ''; }
-      else { desc.value = ''; }
+      // Per-OPTION descriptor: its own label addresses this one radio; the group metadata lets
+      // the read renderer fold the members back into one radio-group entry (options + checked).
+      var optionLabel = labels[0] || abClean(el.value) || '';
+      desc.group = name || ('@@' + idx);     // no name → each radio is its own group
+      desc.groupLabel = radioLegend;
+      desc.optionLabel = optionLabel;
+      desc.checked = !!el.checked;
+      desc.value = optionLabel;
     } else if(kind==='combobox'){
       desc.value = abComboValue(el);          // committed selection, NOT the typed search text
       if(comboInner && comboInner !== el){    // adopt the inner input's identity when the
@@ -433,9 +528,50 @@ def _public_field(f: dict) -> dict:
     return out
 
 
+def _group_key(f: dict) -> str:
+    """The key that folds a radio group's per-option descriptors into one read entry."""
+    return f.get("group") or f.get("name") or f.get("selector") or f.get("label") or ""
+
+
+def collapse_radio_groups(fields: list) -> list:
+    """Fold the per-option radio descriptors ``abEnumerate`` emits back into one ``radio-group``
+    object per group — ``options`` is the member labels in document order, ``value`` the checked
+    one — at the position of the group's first member. Every other field passes through
+    unchanged. (Enumeration is per-option so each radio is independently addressable; the read
+    view is per-group.)"""
+    out: list = []
+    at: dict = {}
+    for f in fields:
+        if f.get("kind") != "radio-group":
+            out.append(_public_field(f))
+            continue
+        key = _group_key(f)
+        option = f.get("optionLabel") or f.get("label") or ""
+        if key in at:
+            g = out[at[key]]
+            g["options"].append(option)
+            if f.get("checked"):
+                g["value"] = option
+            if f.get("required"):
+                g["required"] = True
+            continue
+        at[key] = len(out)
+        out.append({
+            "label": f.get("groupLabel") or f.get("name") or option,
+            "kind": "radio-group",
+            "name": f.get("name", ""),
+            "id": "",
+            "required": bool(f.get("required", False)),
+            "value": option if f.get("checked") else "",
+            "options": [option],
+        })
+    return out
+
+
 def render_form_read(output: str, scope: str = "") -> str:
     """Turn ``read_form_js``'s JSON into the model-facing result: a JSON array, one object
-    per field in document order, or a readable ``Error: …`` / empty note."""
+    per field in document order (radio options folded into their group), or a readable
+    ``Error: …`` / empty note."""
     try:
         data = json.loads(output)
     except (ValueError, TypeError):
@@ -449,4 +585,4 @@ def render_form_read(output: str, scope: str = "") -> str:
     if not fields:
         where = f" within {scope!r}" if scope else ""
         return f"No form fields found{where}."
-    return json.dumps([_public_field(f) for f in fields], ensure_ascii=False, indent=2)
+    return json.dumps(collapse_radio_groups(fields), ensure_ascii=False, indent=2)
