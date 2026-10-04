@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -208,13 +209,23 @@ async def _sse_event_stream(
     """
     yield ": connected\n\n"
     agen = subscribe(since) if since is not None else subscribe()
+    # The pending read OUTLIVES an idle window. ``wait_for(agen.__anext__())`` would cancel
+    # it on timeout, and cancelling an async generator's step closes the generator: the bus
+    # subscription ended at the first keepalive, so every console connection dropped after
+    # 15s idle and reconnected — re-hydrating every store that refetches on reconnect, and
+    # blinking a background delegation's progress card out each time.
+    pending: asyncio.Future | None = None
     try:
         while True:
-            try:
-                evt = await asyncio.wait_for(agen.__anext__(), timeout=keepalive_s)
-            except asyncio.TimeoutError:
+            if pending is None:
+                pending = asyncio.ensure_future(agen.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=keepalive_s)
+            if not done:
                 yield ": keepalive\n\n"
                 continue
+            step, pending = pending, None
+            try:
+                evt = step.result()
             except StopAsyncIteration:
                 break
             # One malformed bus event (no `event` key, a non-dict, a payload json can't
@@ -227,6 +238,12 @@ async def _sse_event_stream(
                 continue
             yield text
     finally:
+        if pending is not None:
+            # The client left mid-wait: stop the read before closing the subscription
+            # (closing a generator whose step is still running raises).
+            pending.cancel()
+            with contextlib.suppress(BaseException):
+                await pending
         await agen.aclose()
 
 

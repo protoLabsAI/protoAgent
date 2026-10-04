@@ -59,23 +59,62 @@ function statusOf(raw: unknown): JobStatus {
   return s === "failed" || s === "canceled" || s === "running" ? s : "completed";
 }
 
+/** A job's identity on the wire: the REST rows carry `id`, the bus events `job_id`. A row
+ *  is read through both so the two sources can never key one job twice. */
+export function jobIdOf(raw: { id?: unknown; job_id?: unknown } | null | undefined): string {
+  return String(raw?.id || raw?.job_id || "");
+}
+
+/** Merge a `GET /api/background` page into the store's map — pure, for the tests.
+ *
+ *  A MERGE, never a replace: the list says nothing about a job's live delegate progress
+ *  (that only rides the bus), and it is one page, not every job. So a row only refreshes
+ *  the fields the list owns, keeps everything else the store learned live, and a job the
+ *  page doesn't mention stays as it is. Hydration runs on every bus reconnect; when it
+ *  rebuilt each row from the list, it stripped `progress` and a background delegation's
+ *  progress card vanished until the delegate's next snapshot — over and over.
+ *
+ *  Returns the SAME map when nothing changed, so subscribers don't re-render. */
+export function mergeHydration(
+  current: Record<string, JobLite>,
+  rows: readonly Partial<BackgroundJobDTO & { job_id: string }>[],
+  isNewerLive: (id: string) => boolean = () => false,
+): Record<string, JobLite> {
+  let next = current;
+  for (const j of rows) {
+    const id = jobIdOf(j);
+    // A live event beat this response home: it saw the job LATER than the API did.
+    if (!id || isNewerLive(id)) continue;
+    const prev = current[id];
+    const merged: JobLite = {
+      ...prev,
+      id,
+      status: j.status ?? prev?.status ?? "running",
+      subagent_type: j.subagent_type ?? prev?.subagent_type ?? "",
+      description: j.description ?? prev?.description ?? "",
+      origin_session: j.origin_session || prev?.origin_session,
+    };
+    if (
+      prev &&
+      prev.status === merged.status &&
+      prev.subagent_type === merged.subagent_type &&
+      prev.description === merged.description &&
+      prev.origin_session === merged.origin_session
+    )
+      continue;
+    if (next === current) next = { ...current };
+    next[id] = merged;
+  }
+  return next;
+}
+
 function hydrate() {
   const startedAt = Date.now();
   api
     .background()
     .then((d) => {
-      const next = { ...jobs };
-      for (const j of d.jobs || []) {
-        // A live event beat this response home: it saw the job LATER than the API did.
-        if ((liveAt.get(j.id) ?? 0) >= startedAt) continue;
-        next[j.id] = {
-          id: j.id,
-          status: j.status,
-          subagent_type: j.subagent_type,
-          description: j.description,
-          origin_session: j.origin_session,
-        };
-      }
+      const next = mergeHydration(jobs, d.jobs || [], (id) => (liveAt.get(id) ?? 0) >= startedAt);
+      if (next === jobs) return;
       jobs = next;
       emit();
     })
@@ -163,7 +202,7 @@ function ensureJob(id: string) {
   api
     .backgroundJob(id)
     .then((j) =>
-      upsert(j.id, {
+      upsert(jobIdOf(j) || id, {
         status: j.status,
         subagent_type: j.subagent_type,
         description: j.description,

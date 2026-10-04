@@ -6,6 +6,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { ArrowUpRight, Bot, Check, CheckCircle2, Copy, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { jobIdOf } from "../chat/backgroundJobStore";
 import { chatStore } from "../chat/chat-store";
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
@@ -62,9 +63,19 @@ export function BackgroundJobs() {
       .background()
       .then((d) => {
         setEnabled(!!d.enabled);
-        const m: Record<string, BackgroundJobDTO> = {};
-        for (const j of d.jobs || []) m[j.id] = j;
-        setJobs(m);
+        // The list is one page. A RUNNING job it doesn't mention (an older one paged out,
+        // or a start the bus delivered first) stays: dropping it would blink the pill's
+        // count and the dialog row until the next event re-added it. Finished jobs are
+        // the list's to own — a delete or clear elsewhere must drop them here too.
+        setJobs((prev) => {
+          const m: Record<string, BackgroundJobDTO> = {};
+          for (const [id, j] of Object.entries(prev)) if (j.status === "running") m[id] = j;
+          for (const j of d.jobs || []) {
+            const id = jobIdOf(j);
+            if (id) m[id] = { ...j, id };
+          }
+          return m;
+        });
       })
       .catch(() => {
         /* feature off / unreachable — the pill stays hidden */
