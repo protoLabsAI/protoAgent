@@ -730,6 +730,47 @@ function abNative(el, want){
     return {ok:false, reason:'mismatch', kind:'native-select', label:label, wanted:chosen, actual:actual};
   return {ok:true, kind:'native-select', label:label, chosen:chosen, committed:actual};
 }
+function abComboMenus(input, control){
+  // Find THIS control's dropdown — never the whole document, so a menu already open
+  // elsewhere (a hidden listbox, a sibling widget's list) can't win the poll and get clicked
+  // (#4032 review: an unscoped `[role="option"]` matched another control's "Afghanistan").
+  // 1) aria wiring — the input names its listbox by id (react-select AND bare ARIA comboboxes
+  //    both do), which locates the menu even when react-select PORTALS it out of the container.
+  var menus = [];
+  var ids = (input && input.getAttribute &&
+    (input.getAttribute('aria-controls') || input.getAttribute('aria-owns'))) || '';
+  String(ids).split(/\s+/).forEach(function(id){
+    if(!id) return;
+    var m = null; try { m = document.getElementById(id); } catch(e){ m = null; }
+    if(m && menus.indexOf(m) < 0) menus.push(m);
+  });
+  if(menus.length) return menus;
+  // 2) fallback — react-select renders the menu as a sibling of the control inside their
+  //    shared wrapper; climb to the nearest ancestor that actually CONTAINS a react-select
+  //    menu and scope to it (bounded, so the search never widens to the whole page).
+  var node = control || input;
+  for(var up = 0; node && up < 6; up++){
+    var m2 = node.querySelector && node.querySelector(
+      '.select__menu, [class*="select__menu"], [class*="-menu"]');
+    if(m2) return [m2];
+    if(node.tagName === 'FORM' || node === document.body) break;
+    node = node.parentElement;
+  }
+  // 3) last resort — a bare ARIA combobox whose listbox lives inside its own container.
+  var cont = (input && input.closest && input.closest('[class*="select__"], [class*="-container"]'))
+          || control;
+  var lb = cont && cont.querySelector && cont.querySelector('[role="listbox"]');
+  if(lb) return [lb];
+  return cont ? [cont] : [];
+}
+function abComboOptions(input, control){
+  var menus = abComboMenus(input, control), out = [];
+  for(var i=0;i<menus.length;i++){
+    var found = (menus[i].querySelectorAll && menus[i].querySelectorAll('[role="option"]')) || [];
+    for(var j=0;j<found.length;j++){ if(out.indexOf(found[j]) < 0) out.push(found[j]); }
+  }
+  return out;
+}
 async function abCombo(el, want){
   var input = (el.matches && el.matches('[role="combobox"]')) ? el
             : (el.querySelector && el.querySelector('[role="combobox"], input'));
@@ -741,9 +782,10 @@ async function abCombo(el, want){
   if(typable){ abSetNativeValue(input, ''); abFire(input, 'input'); }   // CLEAR first — never append
   abMouse(control, 'mousedown');                                       // open the menu
   if(typable){ abSetNativeValue(input, want); abFire(input, 'input'); } // type a filter prefix
-  var opts = await abWaitFor(function(){
-    return Array.prototype.slice.call(document.querySelectorAll('[role="option"]'));
-  }, 3000);
+  // Scope the option scan to THIS control's menu (abComboMenus) — the poll returns on its
+  // first non-empty read, so an unscoped scan would seize whatever `[role="option"]` is
+  // already on the page before this menu renders.
+  var opts = await abWaitFor(function(){ return abComboOptions(input, control); }, 3000);
   if(!opts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[]};
   var texts = opts.map(function(o){ return abClean(o.textContent); });
   var m = abMatchOption(texts, want);
@@ -857,7 +899,8 @@ def render_select(output: str, field: str, option_text: str) -> str:
                 "Call browser_form_read to inspect the field.")
     if reason == "not-found":
         return (f"Error: could not find a field matching {field!r} to select in. Call "
-                "browser_form_read to list the fields, or pass a CSS selector or @ref.")
+                "browser_form_read to list the fields, or pass a CSS selector. (browser_select "
+                "addresses by LABEL or CSS, not a @ref — a ref can't be resolved in the page.)")
     if reason == "unsupported":
         return (f"Error: {field!r} is a {data.get('kind', 'plain')!r} field, not a choice "
                 "field browser_select can set. Use browser_fill for text, or browser_click for "

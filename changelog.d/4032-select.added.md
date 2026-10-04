@@ -1,7 +1,8 @@
 - **`browser_select` sets native, react-select and phone-country dropdowns and verifies the result (#4032).**
   The `agent_browser` plugin gains one tool for CHOICE fields — a native `<select>`, a
-  react-select-style combobox, and an intl-tel-input country picker — addressed by the same
-  label/`@ref`/CSS locator as the other form tools. It matches `option_text`
+  react-select-style combobox, and an intl-tel-input country picker — addressed by its visible
+  LABEL or a CSS selector (a snapshot `@ref` is refused here: the widget is set in the page,
+  where the CLI's ref can't be resolved). It matches `option_text`
   case-insensitively (an exact match, or a unique prefix; zero or several candidates is an
   error that lists the options), commits by CLICKING the matching option — never by pressing
   Enter — and CLEARS a combobox before typing rather than appending to it. The two failure

@@ -1668,6 +1668,87 @@ def test_select_combobox_clears_before_typing_and_never_presses_enter():
     assert "'Enter'" not in js and '"Enter"' not in js and ".key" not in js
 
 
+def _run_select_lib_js(html: str, expr: str):
+    """Evaluate `expr` against a real DOM (jsdom) with forms._JS_LIB + _SELECT_LIB loaded, and
+    return the JSON it produces — the host-free way to prove the in-page option scoping."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + forms._JS_LIB + forms._SELECT_LIB + "\n"
+        "console.log(JSON.stringify((function(){ return " + expr + "; })()));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+# A react-select control whose menu is wired by `aria-controls`, plus ANOTHER widget's
+# listbox already open on the page (the #4032 wrong country). The scoped scan must ignore it.
+_SCOPED_COMBO_ARIA_HTML = """
+<form>
+  <ul role="listbox" id="other-menu"><li role="option">Afghanistan</li></ul>
+  <div class="field">
+    <label for="rs-country">Country</label>
+    <div class="select__control">
+      <div class="select__value-container">
+        <div class="select__input-container">
+          <input id="rs-country" role="combobox" name="country" aria-controls="rs-menu"/>
+        </div>
+      </div>
+    </div>
+    <div class="select__menu" id="rs-menu" role="listbox">
+      <div role="option">United States</div>
+      <div role="option">United Kingdom</div>
+    </div>
+  </div>
+</form>
+"""
+
+# A react-select control with NO aria wiring: the menu is a sibling of the control inside a
+# `-container` wrapper. The fallback must scope to that wrapper — never the whole document.
+_SCOPED_COMBO_CONTAINER_HTML = """
+<form>
+  <ul role="listbox" id="other-menu"><li role="option">Afghanistan</li></ul>
+  <div class="my-select-container">
+    <label for="cc">Country</label>
+    <div class="select__control"><input id="cc" role="combobox" name="country"/></div>
+    <div class="select__menu" role="listbox">
+      <div role="option">Canada</div>
+      <div role="option">Cambodia</div>
+    </div>
+  </div>
+</form>
+"""
+
+_COMBO_OPTIONS_EXPR = (
+    "abComboOptions("
+    "document.querySelector('.select__control').querySelector('[role=combobox]'),"
+    "document.querySelector('.select__control'))"
+    ".map(function(o){ return o.textContent.trim(); })"
+)
+
+
+@pytest.mark.parametrize(("html", "expected"), [
+    (_SCOPED_COMBO_ARIA_HTML, ["United States", "United Kingdom"]),
+    (_SCOPED_COMBO_CONTAINER_HTML, ["Canada", "Cambodia"]),
+])
+def test_combobox_options_are_scoped_to_this_controls_menu(html, expected):
+    """#4032 review: the combobox branch read `[role="option"]` from the WHOLE document, and
+    the poll returns on its first non-empty read — so a menu already open elsewhere (here an
+    'Afghanistan' option) could be matched and clicked, changing another field. Options must
+    come only from THIS control's menu (via aria-controls, else its own container wrapper)."""
+    opts = _run_select_lib_js(html, _COMBO_OPTIONS_EXPR)
+    assert opts == expected
+    assert "Afghanistan" not in opts     # the other widget's open menu is never seen
+
+
 async def test_select_native_success_reads_back_and_reports(monkeypatch):
     """r1: a successful native selection reports the committed read-back value and label."""
     rec, procs = [], []
@@ -1751,6 +1832,19 @@ async def test_select_not_found_points_at_form_read(monkeypatch):
     out = await _select(monkeypatch, {"ok": False, "reason": "not-found"},
                         field="#missing", option_text="x")
     assert out.startswith("Error:") and "browser_form_read" in out and "Selected" not in out
+
+
+async def test_select_refuses_a_ref_field_without_running_the_cli(monkeypatch):
+    """#4032 review: browser_select claimed `@ref` support, but it sets the widget via an
+    in-page `document.querySelector`, where "@e5" is invalid CSS and throws — the error was
+    swallowed as 'not-found', so EVERY ref-addressed select failed. A ref is now refused up
+    front (as browser_form_read does), before any subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "@e5", "option_text": "United States"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't be resolved in an eval — refuse before the CLI runs
 
 
 async def test_select_on_a_non_choice_field_is_refused(monkeypatch):
