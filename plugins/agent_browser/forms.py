@@ -112,13 +112,49 @@ def _split_selector(s: str) -> list:
     return tokens
 
 
+def _split_combinators(s: str):
+    """Split ``s`` on the CSS combinators (``> + ~``) that sit OUTSIDE ``[...]`` / ``(...)``.
+
+    Returns ``(parts, had_combinator)`` where ``parts`` are the combinator-separated pieces
+    (each already whitespace-stripped, kept even when empty) and ``had_combinator`` says a
+    combinator character was actually used as a separator. An empty piece means a combinator
+    had no compound on one side (``C++``, a leading/trailing/doubled combinator) — the caller
+    treats that as NOT a clean selector, so a label like ``"C++ experience"`` is never routed
+    to CSS off a bare ``+`` substring (#4032 review)."""
+    parts, depth, cur, had = [], 0, [], False
+    for ch in s:
+        if ch in "[(":
+            depth += 1
+            cur.append(ch)
+        elif ch in "])":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+        elif depth == 0 and ch in _CSS_COMBINATORS:
+            had = True
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur).strip())
+    return parts, had
+
+
+def _is_tag_led_chain(s: str) -> bool:
+    """True if ``s`` is a (possibly descendant) chain whose every bracket-aware token is a CSS
+    compound led by a known HTML tag/``*`` or a ``#``/``.``/``[``/``:`` qualifier."""
+    tokens = _split_selector(s)
+    return bool(tokens) and all(_compound_ok(t) for t in tokens)
+
+
 def _is_css_selector(s: str) -> bool:
     """Decide whether ``s`` is a CSS selector rather than a visible label.
 
-    Unambiguous starts (``#``/``.``/``[``) and the explicit combinators (``> + ~``) route to
-    CSS as before. Beyond that, a tag-led selector — one whose every (bracket-aware) token is a
-    CSS compound whose type selector is a known HTML tag — is CSS too, so a descendant selector
-    (``form input``) and a bare/qualified tag (``textarea``, ``select#country``,
+    Unambiguous starts (``#``/``.``/``[``) route to CSS. A combinator (``> + ~``) routes to CSS
+    only when it ANCHORS two real compound chains — ``div > input``, ``input+label``,
+    ``li ~ a`` — never off a bare combinator character, so ``"C++ experience"`` stays a LABEL.
+    Beyond that, a tag-led chain — one whose every (bracket-aware) token is a CSS compound whose
+    type selector is a known HTML tag — is CSS too, so a descendant selector (``form input``)
+    and a bare/qualified tag (``textarea``, ``select#country``,
     ``input[aria-label="First name"]``) reach the CLI instead of failing a label match.
     Descendant whitespace is a combinator ONLY when every token parses as a tag-led compound, so
     a multi-word label ("First name") stays a LABEL (``First`` is not a tag)."""
@@ -126,10 +162,12 @@ def _is_css_selector(s: str) -> bool:
         return False
     if s[:1] in _CSS_START:
         return True
-    if any(c in s for c in _CSS_COMBINATORS):
-        return True
-    tokens = _split_selector(s)
-    return bool(tokens) and all(_compound_ok(t) for t in tokens)
+    parts, had_combinator = _split_combinators(s)
+    if had_combinator:
+        # a real combinator joins non-empty compound chains on BOTH sides (no empty piece,
+        # which would mean "C++"/"~x"/"x>"), and each piece is itself a tag-led compound chain.
+        return all(parts) and all(_is_tag_led_chain(p) for p in parts)
+    return _is_tag_led_chain(s)
 
 
 def classify(field: str) -> str:

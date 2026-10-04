@@ -1083,7 +1083,10 @@ def _field(label, labels=None, kind="text", name="", selector=None, **kw):
 @pytest.mark.parametrize(("field", "kind"), [
     ("@e5", "ref"), ("@e123", "ref"), ("  @e9 ", "ref"),
     ("#email", "css"), (".form-control", "css"), ("[name='email']", "css"),
-    ("div > input", "css"), ("a + b", "css"), ("x ~ y", "css"),
+    # a combinator routes to CSS only when it ANCHORS real compound chains on both sides —
+    # `div`/`input`/`a`/`b`/`li` are HTML tags, so these are genuine selectors.
+    ("div > input", "css"), ("a + b", "css"), ("li ~ a", "css"), ("input+label", "css"),
+    (".parent > .child", "css"), ("input > .foo", "css"),
     # tag-led selectors that worked before this plugin learned labels must still reach the CLI
     # as CSS — not be mistaken for a label the form has no field for (#4032 review).
     ("button[type=submit]", "css"), ("input[name='email']", "css"), ("textarea", "css"),
@@ -1091,6 +1094,13 @@ def _field(label, labels=None, kind="text", name="", selector=None, **kw):
     # a space inside an attribute value must not fracture the selector into "label words"
     ('input[aria-label="First name"]', "css"),
     ("Email", "label"), ("First name", "label"), ("Résumé", "label"), ("  Email  ", "label"),
+    # a combinator CHARACTER inside a visible label must NOT route to CSS off a bare substring —
+    # the Greenhouse tech-job fields the PR exists to fill ("C++ experience") were being passed
+    # to the CLI as broken selectors (#4032 review, blocking). An unanchored combinator (no real
+    # compound on one side, or a non-tag word beside it) stays a LABEL.
+    ("C++ experience", "label"), ("C++", "label"), ("Years of C++", "label"),
+    ("Rust > Go preference", "label"), ("~5 years", "label"), ("Pros + Cons", "label"),
+    ("x ~ y", "label"),   # `x`/`y` are not HTML tags → not a real sibling selector
     # labels that happen to collide with a tag name stay LABELS (tag match is case-sensitive,
     # so a capitalised word is never a bare type selector) — the regression the review caught.
     ("Address", "label"), ("Time", "label"), ("Select one", "label"), ("Full name", "label"),
@@ -1201,6 +1211,16 @@ def test_resolve_js_passes_refs_and_css_through_without_walking_the_dom():
 def test_resolve_js_for_a_label_enumerates_the_page():
     js = forms.resolve_js("Email")
     assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+
+
+@pytest.mark.parametrize("field", ["C++ experience", "Years of C++", "Rust > Go preference"])
+def test_resolve_js_treats_combinator_bearing_labels_as_labels_not_css(field):
+    """#4032 review (blocking): a label that merely CONTAINS a combinator char (`C++`, `>`)
+    must enumerate the page and rank by label — never be shipped to the CLI as a selector that
+    matches nothing. The previous substring check routed `"C++ experience"` to CSS."""
+    js = forms.resolve_js(field)
+    assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+    assert "mode:'pass'" not in js   # NOT a CSS/ref pass-through
 
 
 def test_resolve_target_round_trips_a_ref_pass_through_unchanged():
