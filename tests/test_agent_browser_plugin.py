@@ -63,6 +63,7 @@ LAST_STANDALONE_VERSION = (0, 6, 5)
 EXPECTED_TOOLS = {
     "browser_open", "browser_back", "browser_forward", "browser_reload",
     "browser_snapshot", "browser_get_text", "browser_get_html", "browser_get_value",
+    "browser_form_read",
     "browser_click", "browser_fill", "browser_type", "browser_press", "browser_hover",
     "browser_eval", "browser_screenshot", "browser_pdf", "browser_close",
 }
@@ -84,6 +85,7 @@ preflight = _mod("preflight")
 rt = _mod("runtime")
 storage = _mod("storage")
 tools = _mod("tools")
+forms = _mod("forms")
 cli_fetch = _mod("cli_fetch")
 chrome_install = _mod("chrome_install")
 
@@ -221,10 +223,10 @@ async def test_action_tools_pass_refs(monkeypatch):
     assert rec[-1] == ["ab", "snapshot"]
 
 
-def test_all_17_tools_present():
+def test_all_18_tools_present():
     names = set(_toolmap())
     assert names == EXPECTED_TOOLS
-    assert len(names) == 17  # 16 from the standalone repo + browser_pdf (#3451)
+    assert len(names) == 18  # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032)
     assert "browser_dashboard" not in names  # the dashboard tool is gone (full switchover)
 
 
@@ -1034,6 +1036,562 @@ def test_pdf_tells_the_model_about_the_artifact_handoff():
     plugin. If the docstring stops saying so, the capability is undiscoverable."""
     desc = _toolmap()["browser_pdf"].description
     assert "save_file_artifact" in desc and "PDF" in desc
+
+
+# ── #4032: label-located fields + browser_form_read (forms.py) ─────────────────────
+# Host-free: the in-page JS never runs here — the tool tests mock Popen and assert on the
+# stdin script + the parse of canned eval output; the label-matching RANKING is pure Python
+# (forms.match_fields) and is exercised directly.
+
+
+# A canned `abEnumerate` payload — the shape the in-page JS prints — covering every kind. The
+# radio group is TWO per-option entries (what the JS now emits so each option is independently
+# addressable); the read renderer folds them back into one radio-group row.
+_FORM_FIELDS = [
+    {"idx": 0, "label": "First name", "labels": ["First name", "first_name"], "kind": "text",
+     "name": "first_name", "id": "fn", "required": True, "value": "Ada", "selector": '[data-ab-field="0"]'},
+    {"idx": 1, "label": "Email", "labels": ["Email", "email"], "kind": "email",
+     "name": "email", "id": "em", "required": True, "value": "ada@x.io", "selector": '[data-ab-field="1"]'},
+    {"idx": 2, "label": "Country", "labels": ["Country"], "kind": "combobox",
+     "name": "country", "id": "cty", "required": False, "value": "United States", "selector": '[data-ab-field="2"]'},
+    {"idx": 3, "label": "Role", "labels": ["Role"], "kind": "native-select",
+     "name": "role", "id": "role", "required": False, "value": "Engineer",
+     "options": ["", "Engineer", "Manager"], "selector": '[data-ab-field="3"]'},
+    {"idx": 4, "label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "id": "sen_j", "required": True, "value": "Junior", "selector": '[data-ab-field="4"]',
+     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Junior", "checked": False},
+    {"idx": 5, "label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "id": "sen_s", "required": True, "value": "Senior", "selector": '[data-ab-field="5"]',
+     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Senior", "checked": True},
+    {"idx": 6, "label": "Résumé", "labels": ["Résumé", "resume"], "kind": "file",
+     "name": "resume", "id": "rz", "required": False, "value": "cv.pdf", "selector": '[data-ab-field="6"]'},
+    {"idx": 7, "label": "Subscribe", "labels": ["Subscribe", "subscribe"], "kind": "checkbox",
+     "name": "sub", "id": "sb", "required": False, "value": True, "selector": '[data-ab-field="7"]'},
+]
+
+
+def _field(label, labels=None, kind="text", name="", selector=None, **kw):
+    d = {"label": label, "labels": labels if labels is not None else [label], "kind": kind,
+         "name": name, "selector": selector or f"[sel-{label}]"}
+    d.update(kw)
+    return d
+
+
+# ── forms.classify / normalize — pure string routing ──────────────────────────────
+
+
+@pytest.mark.parametrize(("field", "kind"), [
+    ("@e5", "ref"), ("@e123", "ref"), ("  @e9 ", "ref"),
+    ("#email", "css"), (".form-control", "css"), ("[name='email']", "css"),
+    # a combinator routes to CSS only when it ANCHORS real compound chains on both sides —
+    # `div`/`input`/`a`/`b`/`li` are HTML tags, so these are genuine selectors.
+    ("div > input", "css"), ("a + b", "css"), ("li ~ a", "css"), ("input+label", "css"),
+    (".parent > .child", "css"), ("input > .foo", "css"),
+    # tag-led selectors that worked before this plugin learned labels must still reach the CLI
+    # as CSS — not be mistaken for a label the form has no field for (#4032 review).
+    ("button[type=submit]", "css"), ("input[name='email']", "css"), ("textarea", "css"),
+    ("select#country", "css"), ("form input", "css"), ("input:checked", "css"), ("*", "css"),
+    # a space inside an attribute value must not fracture the selector into "label words"
+    ('input[aria-label="First name"]', "css"),
+    ("Email", "label"), ("First name", "label"), ("Résumé", "label"), ("  Email  ", "label"),
+    # a combinator CHARACTER inside a visible label must NOT route to CSS off a bare substring —
+    # the Greenhouse tech-job fields the PR exists to fill ("C++ experience") were being passed
+    # to the CLI as broken selectors (#4032 review, blocking). An unanchored combinator (no real
+    # compound on one side, or a non-tag word beside it) stays a LABEL.
+    ("C++ experience", "label"), ("C++", "label"), ("Years of C++", "label"),
+    ("Rust > Go preference", "label"), ("~5 years", "label"), ("Pros + Cons", "label"),
+    ("x ~ y", "label"),   # `x`/`y` are not HTML tags → not a real sibling selector
+    # labels that happen to collide with a tag name stay LABELS (tag match is case-sensitive,
+    # so a capitalised word is never a bare type selector) — the regression the review caught.
+    ("Address", "label"), ("Time", "label"), ("Select one", "label"), ("Full name", "label"),
+])
+def test_classify_routes_refs_css_and_labels(field, kind):
+    assert forms.classify(field) == kind
+    assert forms.is_ref(field) == (kind == "ref")
+    assert forms.is_css(field) == (kind == "css")
+
+
+def test_normalize_collapses_whitespace_strips_asterisks_and_lowercases():
+    assert forms.normalize("  Email   Address * ") == "email address"
+    assert forms.normalize("First\nName*") == "first name"
+    assert forms.normalize("") == ""
+
+
+# ── forms.match_fields — the label ranking (exact > prefix > substring; never guess) ──
+
+
+def test_match_exact_beats_prefix_and_resolves_uniquely():
+    fields = [_field("Email address"), _field("Email", selector="[email]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[email]" and m.label == "Email"
+
+
+def test_match_prefix_beats_substring():
+    fields = [_field("Please enter your email"), _field("Email address", selector="[addr]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[addr]"   # prefix (tier 1) wins over substring (tier 2)
+
+
+def test_match_falls_back_to_non_primary_label_sources():
+    # a react-styled field with no visible <label>, matched via its `name`/placeholder
+    fields = [_field("", labels=["email"], name="email", selector="[byname]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[byname]"
+
+
+def test_required_marker_asterisk_is_ignored_when_matching():
+    m = forms.match_fields("Email", [_field("Email *", labels=["Email *"], selector="[e]")])
+    assert m.ok and m.selector == "[e]"
+
+
+def test_match_ambiguous_at_the_best_tier_is_an_error_that_names_them():
+    fields = [_field("Email", kind="email", name="a"), _field("Email", kind="text", name="b")]
+    m = forms.match_fields("Email", fields)
+    assert not m.ok and m.error.startswith("Error:")
+    assert "2 fields" in m.error and "name=a" in m.error and "name=b" in m.error
+    assert m.selector == ""   # SHALL NOT act on any
+
+
+def test_match_zero_is_an_error_listing_the_closest_candidates():
+    fields = [_field("First name"), _field("Last name"), _field("Phone number")]
+    m = forms.match_fields("email", fields)
+    assert not m.ok and m.error.startswith("Error:")
+    assert m.candidates and len(m.candidates) <= 5
+
+
+def test_closest_labels_ranks_by_similarity_and_caps_at_five():
+    fields = [_field(x) for x in ["Email", "E-mail address", "Emergency contact",
+                                  "First name", "Last name", "Phone"]]
+    close = forms.closest_labels(fields, "email", n=5)
+    assert len(close) == 5 and close[0] == "Email"   # the nearest label first
+
+
+# ── forms.match_fields — a radio group is enumerated per option, so each is addressable ──
+# #4032 review: collapsing a group to its first radio meant a later option could not be
+# clicked by its own text, and the group's legend silently acted on the first member. Each
+# option is now its own descriptor, and the legend rides every member's labels.
+_RADIO_OPTIONS = [
+    {"label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "selector": '[data-ab-field="0"]', "group": "sen", "groupLabel": "Seniority",
+     "optionLabel": "Junior", "checked": False},
+    {"label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "selector": '[data-ab-field="1"]', "group": "sen", "groupLabel": "Seniority",
+     "optionLabel": "Senior", "checked": True},
+]
+
+
+@pytest.mark.parametrize(("option", "selector"), [
+    ("Senior", '[data-ab-field="1"]'),   # a LATER option resolves to its own radio, not the first
+    ("Junior", '[data-ab-field="0"]'),
+])
+def test_match_resolves_a_specific_radio_option_by_its_own_label(option, selector):
+    m = forms.match_fields(option, _RADIO_OPTIONS)
+    assert m.ok and m.selector == selector and m.label == option
+
+
+def test_match_by_the_radio_group_legend_is_ambiguous_not_a_silent_first_pick():
+    """Addressing the group by its legend matches every option (the legend rides each
+    member's labels), so it is an ambiguous error listing them — never a silent act on the
+    first radio."""
+    m = forms.match_fields("Seniority", _RADIO_OPTIONS)
+    assert not m.ok and m.selector == ""
+    assert "2 fields" in m.error and "Junior" in m.error and "Senior" in m.error
+
+
+# ── forms.resolve_js / parse_resolve / resolve_target — the reusable locator ───────
+
+
+def test_resolve_js_passes_refs_and_css_through_without_walking_the_dom():
+    for field in ("@e7", "#email", ".foo", "div > input"):
+        js = forms.resolve_js(field)
+        assert "mode:'pass'" in js and json.dumps(field.strip()) in js
+        assert "abEnumerate" not in js   # a pass-through never enumerates
+
+
+def test_resolve_js_for_a_label_enumerates_the_page():
+    js = forms.resolve_js("Email")
+    assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+
+
+@pytest.mark.parametrize("field", ["C++ experience", "Years of C++", "Rust > Go preference"])
+def test_resolve_js_treats_combinator_bearing_labels_as_labels_not_css(field):
+    """#4032 review (blocking): a label that merely CONTAINS a combinator char (`C++`, `>`)
+    must enumerate the page and rank by label — never be shipped to the CLI as a selector that
+    matches nothing. The previous substring check routed `"C++ experience"` to CSS."""
+    js = forms.resolve_js(field)
+    assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+    assert "mode:'pass'" not in js   # NOT a CSS/ref pass-through
+
+
+def test_resolve_target_round_trips_a_ref_pass_through_unchanged():
+    m = forms.resolve_target("@e3", forms.parse_resolve(json.dumps({"mode": "pass", "target": "@e3"})))
+    assert m.ok and m.selector == "@e3"   # r1: the ref reaches the CLI unchanged
+
+
+def test_resolve_target_resolves_a_label_against_enumerated_fields():
+    out = json.dumps({"mode": "enumerate", "fields": [
+        {"label": "Email", "labels": ["Email"], "selector": "[s]", "kind": "email"}]})
+    m = forms.resolve_target("Email", forms.parse_resolve(out))
+    assert m.ok and m.selector == "[s]" and m.kind == "email"
+
+
+def test_parse_resolve_never_raises_on_unreadable_output():
+    m = forms.resolve_target("Email", forms.parse_resolve("<<not json>>"))
+    assert not m.ok and m.error.startswith("Error:")
+
+
+# ── the action tools address a field by label (resolver wired into the CLI wrappers) ──
+# The #4032-review gap: browser_form_read's docstring says the other form tools address by
+# the labels it returns, but fill/click/type/hover/get_value passed the arg raw to the CLI,
+# so a label was a selector failure — the wasted-round loop this PR targets. They now route
+# through the shared forms resolver.
+
+
+def _resolving_popen(fields, record=None, procs=None, action_out=b"(ok)"):
+    """A scripted CLI: an `eval --stdin` answers the label resolver with an enumerate payload
+    of `fields`; every other verb returns `action_out`. So a label action makes TWO calls —
+    the in-page resolve, then the act — and the test can read both."""
+    payload = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        p = _FakeProc(argv, out=payload if argv[1:2] == ["eval"] else action_out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_fill_resolves_a_label_in_the_page_then_acts(monkeypatch):
+    """r2: the label is resolved FRESH on this call (an eval), with no reliance on a prior
+    snapshot, and the CLI fills the element the resolver returned."""
+    rec, procs = [], []
+    fields = [
+        {"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+        {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "email"},
+    ]
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "ada@x.io"})
+    assert not out.startswith("Error:"), out
+    assert rec[0] == ["ab", "eval", "--stdin"]                       # r7: resolve rides stdin
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()       # the shared forms resolver
+    assert rec[1] == ["ab", "fill", '[data-ab-field="1"]', "ada@x.io"]   # then act on the match
+
+
+async def test_click_and_get_value_resolve_labels_too(monkeypatch):
+    fields = [{"label": "Subscribe", "labels": ["Subscribe"], "selector": '[data-ab-field="0"]', "kind": "checkbox"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    t = _toolmap({"binary": "ab"})
+    await t["browser_click"].ainvoke({"selector": "Subscribe"})
+    assert rec[-1] == ["ab", "click", '[data-ab-field="0"]']
+    await t["browser_get_value"].ainvoke({"selector": "Subscribe"})
+    assert rec[-1] == ["ab", "get", "value", '[data-ab-field="0"]']
+
+
+async def test_click_addresses_a_specific_radio_option_not_the_group_first_member(monkeypatch):
+    """#4032 review: clicking a later radio option by its own text hits THAT option; clicking
+    the whole group by its legend is refused as ambiguous, never a silent act on the first."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(_RADIO_OPTIONS, record=rec))
+    t = _toolmap({"binary": "ab"})
+    out = await t["browser_click"].ainvoke({"selector": "Senior"})
+    assert not out.startswith("Error:"), out
+    assert rec[-1] == ["ab", "click", '[data-ab-field="1"]']        # the Senior radio, not Junior
+    rec.clear()
+    out = await t["browser_click"].ainvoke({"selector": "Seniority"})
+    assert out.startswith("Error:") and "Junior" in out and "Senior" in out
+    assert rec == [["ab", "eval", "--stdin"]]                        # resolved, then refused — no click
+
+
+@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch, name):
+    """r1 / back-compat: a `@eN` ref or a CSS selector reaches the CLI unchanged, with NO
+    in-page resolve eval — the pre-label behaviour, preserved exactly."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    args = {"selector": "@e2"}
+    if name in ("browser_fill", "browser_type"):
+        args["text"] = "hi"
+    await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert rec[-1][1] != "eval"                       # a ref never triggers an in-page resolve
+    assert "@e2" in rec[-1]
+    # a CSS selector takes the same straight-through path
+    rec.clear()
+    args["selector"] = "#q"
+    await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert rec[-1][1] != "eval" and "#q" in rec[-1]
+
+
+@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+@pytest.mark.parametrize("sel", ["button[type=submit]", "input[name='email']", "textarea",
+                                 "select#country", "form input"])
+async def test_tag_led_css_selectors_reach_the_cli_unchanged(monkeypatch, name, sel):
+    """#4032 review regression: a selector that leads with a tag name (`button[type=submit]`,
+    `textarea`, `form input`, …) is a CSS selector that worked before this plugin learned
+    labels. It must still go straight to the CLI — not be treated as a label the form has no
+    field for and fail 'no form field matches'."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    args = {"selector": sel}
+    if name in ("browser_fill", "browser_type"):
+        args["text"] = "hi"
+    out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert not out.startswith("Error:"), out
+    assert rec[-1][1] != "eval" and sel in rec[-1]   # no in-page resolve; the selector reaches the CLI
+
+
+async def test_a_label_matching_no_field_is_an_error_and_never_acts(monkeypatch):
+    """r3: zero matches → an Error naming the closest candidates, and the CLI never acts."""
+    fields = [{"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+              {"label": "Last name", "labels": ["Last name"], "selector": '[data-ab-field="1"]', "kind": "text"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "x"})
+    assert out.startswith("Error:") and "no form field matches" in out
+    assert rec == [["ab", "eval", "--stdin"]]        # resolved, then stopped — never filled
+
+
+async def test_a_label_matching_two_fields_at_the_best_tier_refuses_to_act(monkeypatch):
+    """r4: more than one match at the best tier → an Error listing them, and SHALL NOT act."""
+    fields = [{"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="0"]', "kind": "email", "name": "a"},
+              {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "text", "name": "b"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "Email"})
+    assert out.startswith("Error:") and "2 fields" in out and "name=a" in out and "name=b" in out
+    assert rec == [["ab", "eval", "--stdin"]]        # never clicked either one
+
+
+async def test_a_flag_shaped_label_is_refused_before_any_resolve_eval(monkeypatch):
+    """r8 / the argv guard still fires FIRST: a flag-shaped selector never reaches even the
+    in-page resolver subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "--headed", "text": "x"})
+    assert out.startswith("Error:") and "looks like a command-line option" in out
+    assert rec == []
+
+
+# ── browser_form_read — the tool (canned eval output + stdin script) ───────────────
+
+
+async def test_form_read_returns_public_json_in_document_order(monkeypatch):
+    payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    # r7: the script rides eval --stdin, never argv
+    assert rec[-1] == ["ab", "eval", "--stdin"]
+    assert "abEnumerate" in procs[-1].stdin.getvalue().decode()
+    data = json.loads(out)
+    assert [f["label"] for f in data] == ["First name", "Email", "Country", "Role",
+                                          "Seniority", "Résumé", "Subscribe"]   # r5: document order
+    # the internal addressing keys never surface
+    assert all("labels" not in f and "selector" not in f and "idx" not in f for f in data)
+    first = data[0]
+    assert set(first) == {"label", "kind", "name", "id", "required", "value"}
+    assert first["required"] is True and first["kind"] == "text" and first["name"] == "first_name"
+
+
+async def test_form_read_reports_committed_values_and_options(monkeypatch):
+    payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload))
+    data = json.loads(await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({}))
+    by_kind = {f["kind"]: f for f in data}
+    # r6: a combobox reports its committed selection, and omits options (not in the DOM)
+    assert by_kind["combobox"]["value"] == "United States" and "options" not in by_kind["combobox"]
+    assert by_kind["native-select"]["options"] == ["", "Engineer", "Manager"]
+    assert by_kind["native-select"]["value"] == "Engineer"
+    assert by_kind["radio-group"]["options"] == ["Junior", "Senior"] and by_kind["radio-group"]["value"] == "Senior"
+    assert by_kind["file"]["value"] == "cv.pdf"
+    assert by_kind["checkbox"]["value"] is True
+
+
+def test_render_folds_radio_options_into_one_group_at_the_first_members_position():
+    """The per-option radio descriptors `abEnumerate` emits collapse to ONE radio-group row
+    for the read view: `options` is the member labels, `value` the checked one, `required` true
+    if any member is, placed where the first member appeared."""
+    fields = [
+        {"label": "Size", "labels": ["Size"], "kind": "text", "name": "size", "id": "",
+         "required": False, "value": ""},
+        {"label": "Red", "kind": "radio-group", "name": "color", "group": "color",
+         "groupLabel": "Colour", "optionLabel": "Red", "checked": False, "required": True,
+         "selector": "[a]"},
+        {"label": "Green", "kind": "radio-group", "name": "color", "group": "color",
+         "groupLabel": "Colour", "optionLabel": "Green", "checked": True, "required": False,
+         "selector": "[b]"},
+    ]
+    out = json.loads(forms.render_form_read(json.dumps({"ok": True, "fields": fields})))
+    assert [f["label"] for f in out] == ["Size", "Colour"]       # folded, at the group's slot
+    grp = out[1]
+    assert grp["kind"] == "radio-group" and grp["options"] == ["Red", "Green"]
+    assert grp["value"] == "Green" and grp["required"] is True   # checked option; any-required
+    assert set(grp) == {"label", "kind", "name", "id", "required", "value", "options"}
+
+
+def test_form_read_js_extracts_the_committed_combobox_value_not_typed_text():
+    """r6 is produced in-page; the script must read the rendered single-value, and must
+    skip a combobox's inner search input so half-typed text is never surfaced as a field."""
+    js = forms.read_form_js("")
+    assert "single-value" in js and "singleValue" in js   # the committed selection
+    assert "abInCombo" in js and "select__control" in js   # the inner input is skipped
+
+
+# The enumeration JS is DOM logic, so the combobox de-duplication is exercised against a real
+# DOM (jsdom, from the console workspace's node_modules) — the only host-free way to prove it.
+NODE = shutil.which("node")
+
+_REACT_SELECT_HTML = """
+<form>
+  <div class="field">
+    <label for="rs-country-input">Country</label>
+    <div class="select__control">
+      <div class="select__value-container">
+        <div class="select__single-value">United States</div>
+        <div class="select__input-container">
+          <input id="rs-country-input" role="combobox" name="country" value="typed-but-not-chosen"/>
+        </div>
+      </div>
+      <div class="select__indicators"><span class="select__indicator">v</span></div>
+    </div>
+  </div>
+  <label for="plain">Email</label>
+  <input id="plain" type="email" name="email" value="ada@x.io"/>
+</form>
+"""
+
+
+def _run_enumerate_js(html: str):
+    """Run forms._JS_LIB's ``abEnumerate`` against a real DOM and return the field list."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + forms._JS_LIB + "\n"
+        "console.log(JSON.stringify(abEnumerate(document)));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_enumerate_collapses_a_react_select_combobox_to_one_labelled_field():
+    """#4032-review correctness bug: the react-select inner search input also carries
+    role="combobox", so the dropdown enumerated TWICE — an unlabelled entry with the real
+    value and a labelled entry whose value was always ''. It must be ONE field, labelled
+    (from the inner input) AND carrying the committed selection."""
+    fields = _run_enumerate_js(_REACT_SELECT_HTML)
+    assert [f["kind"] for f in fields] == ["combobox", "email"]   # document order, no twin
+    combos = [f for f in fields if f["kind"] == "combobox"]
+    assert len(combos) == 1                                       # not two
+    c = combos[0]
+    assert c["label"] == "Country"                               # labelled (merged from inner)
+    assert c["value"] == "United States"                        # committed selection, not typed
+    assert c["name"] == "country" and c["id"] == "rs-country-input"   # inner identity adopted
+    assert "" not in [f["label"] for f in fields]               # no phantom unlabelled entry
+
+
+def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
+    """A plain ARIA combobox (no react-select container) is still one root — the fix only
+    folds the inner input of a `.select__control`, nothing else."""
+    html = """<form>
+      <label for="cb">State</label>
+      <div id="cb" role="combobox" aria-expanded="false">California</div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    assert len(fields) == 1 and fields[0]["kind"] == "combobox"
+    assert fields[0]["label"] == "State" and fields[0]["value"] == "California"
+
+
+_RADIO_HTML = """
+<form>
+  <fieldset>
+    <legend>Seniority *</legend>
+    <label><input type="radio" name="sen" value="jr"/> Junior</label>
+    <label><input type="radio" name="sen" value="sr" checked/> Senior</label>
+  </fieldset>
+  <label for="e">Email</label>
+  <input id="e" type="email" name="email"/>
+</form>
+"""
+
+
+def test_enumerate_lists_every_radio_option_as_its_own_addressable_field():
+    """#4032 review: each radio is enumerated and tagged separately (so a later option is
+    clickable by its own text), the group legend rides every member's labels (so addressing
+    the group hits every option), and the read renderer folds the members into one row."""
+    fields = _run_enumerate_js(_RADIO_HTML)
+    radios = [f for f in fields if f["kind"] == "radio-group"]
+    assert len(radios) == 2                                        # one entry PER option, not collapsed
+    assert [r["label"] for r in radios] == ["Junior", "Senior"]
+    assert radios[0]["selector"] != radios[1]["selector"]         # each independently addressable
+    assert all(r["selector"].startswith('[data-ab-field="') for r in radios)
+    assert all("Seniority" in r["labels"] for r in radios)        # legend (asterisk stripped) on each
+    assert radios[1]["checked"] is True and radios[1]["optionLabel"] == "Senior"
+    # the read renderer folds the two options back into one radio-group row
+    folded = [f for f in forms.collapse_radio_groups(fields) if f["kind"] == "radio-group"]
+    assert len(folded) == 1
+    assert folded[0]["label"] == "Seniority" and folded[0]["options"] == ["Junior", "Senior"]
+    assert folded[0]["value"] == "Senior"
+
+
+async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#application"})
+    script = procs[-1].stdin.getvalue().decode()
+    assert 'abScopeRoot("#application", true)' in script
+
+
+async def test_form_read_scope_label_is_passed_as_a_container_name(monkeypatch):
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "Work history"})
+    assert 'abScopeRoot("Work history", false)' in procs[-1].stdin.getvalue().decode()
+
+
+async def test_form_read_refuses_a_ref_scope_without_running_the_cli(monkeypatch):
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "@e5"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't be resolved in an eval — refuse before the subprocess
+
+
+async def test_form_read_reports_an_unmatched_scope(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": False, "error": "scope-not-found"})))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#nope"})
+    assert out.startswith("Error:") and "#nope" in out
+
+
+async def test_form_read_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="not json at all"))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    assert out.startswith("Error:")   # r8: no new tool raises
+
+
+async def test_form_read_surfaces_an_eval_error(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no page open"))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    assert out.startswith("Error:") and "no page open" in out
+
+
+def test_form_read_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_form_read"]
+    assert "browser_form_read" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
 
 
 # ── register() wiring ────────────────────────────────────────────────────────────
