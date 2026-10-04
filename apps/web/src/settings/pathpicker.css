@@ -120,3 +120,27 @@
   flex: none;
   gap: var(--pl-space-2);
 }
+
+/* The list form (`multiple: true`) — one PathPicker row per path, a Remove beside each,
+   "Add folder" underneath. Rows stack with the same gap as the single control's parts. */
+.path-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1_5);
+  min-width: 0;
+}
+.path-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  min-width: 0;
+}
+.path-list-picker {
+  flex: 1;
+  min-width: 0;
+}
+.path-list-empty {
+  margin: 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-subtle);
+}

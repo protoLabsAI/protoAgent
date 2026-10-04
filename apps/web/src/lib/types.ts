@@ -410,6 +410,8 @@ export type BundleConfigInput = {
   // name. Absent on older hosts/bundles — a long legacy `label` still renders as-is.
   help?: string;
   type?: BundleConfigInputType;
+  // `type: path` only: a list of folders, answered as one "\n"-joined string.
+  multiple?: boolean;
   required?: boolean;
   default?: string | boolean;
 };
@@ -497,6 +499,10 @@ export type SettingsField = {
   // Whether a "path" field ends on a folder or a file. Emitted for every field; only read
   // when type is "path".
   path_kind?: "dir" | "file";
+  // A "path" field that holds SEVERAL paths: render one row per path (Browse… each, plus
+  // Add/Remove). The value is still ONE string, the rows joined with "\n". Absent from
+  // older cores → the single picker, which edits the same string.
+  multiple?: boolean;
   section: string;
   description?: string;
   restart: boolean;

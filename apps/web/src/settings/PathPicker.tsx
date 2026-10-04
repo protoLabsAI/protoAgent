@@ -6,7 +6,7 @@ import { Dialog } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, isHostConsole } from "../lib/api";
 import { canPickNatively, hasDesktopShell, pickPathNative } from "../lib/desktop";
@@ -43,6 +43,8 @@ export function PathPicker({
   ariaLabel,
   describedBy,
   invalid,
+  autoBrowse = false,
+  browseLabel,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -53,8 +55,15 @@ export function PathPicker({
   // id of a help line describing the field (aria-describedby on the text input).
   describedBy?: string;
   invalid?: boolean;
+  // Open Browse… as soon as the picker mounts — the list control's "Add folder" appends
+  // a row and goes straight to choosing it. Once per mount (the ref survives StrictMode's
+  // double effect), so a re-render never re-opens a dialog the operator closed.
+  autoBrowse?: boolean;
+  // Accessible name for Browse… when several pickers share a screen ("Browse for folder 2").
+  browseLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const autoBrowsed = useRef(false);
 
   // Desktop host window only (#2265) — see canPickNatively for why a fleet-member window
   // keeps the server-side browser. Read once per render: both inputs are fixed for the
@@ -74,6 +83,15 @@ export function PathPicker({
     setOpen(true);
   };
 
+  useEffect(() => {
+    if (!autoBrowse || autoBrowsed.current) return;
+    autoBrowsed.current = true;
+    void browse();
+    // Mount-only by design: `browse` closes over the first render's value, which is the
+    // row's starting point either way.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <>
       <div className="path-picker">
@@ -87,7 +105,7 @@ export function PathPicker({
           aria-invalid={invalid}
           onChange={(e) => onChange(e.target.value)}
         />
-        <Button variant="ghost" size="sm" type="button" onClick={() => void browse()}>
+        <Button variant="ghost" size="sm" type="button" aria-label={browseLabel} onClick={() => void browse()}>
           <FolderOpen size={15} /> Browse…
         </Button>
       </div>

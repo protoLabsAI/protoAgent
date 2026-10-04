@@ -559,7 +559,28 @@ settings:                      # System → Settings group (named after the sect
 ```
 
 **Field types:** `string` · `text` (multiline string — a system prompt / template) ·
-`number` · `bool` · `select` (with `options: [...]`) · `string_list` · `secret`.
+`number` · `bool` · `select` (with `options: [...]`) · `string_list` · `secret` ·
+`path` (a local path on the agent's machine, with a **Browse…** picker over the server's
+filesystem; `path_kind: dir` (default) ends on a folder, `path_kind: file` on a file).
+
+**Several paths in one setting — `multiple: true`:** a `path` setting that holds more
+than one path (data folders, vaults, repos) adds `multiple: true` and renders as a list:
+one row per path, each with its own Browse…, a Remove (×) button, and an **Add folder**
+button that appends a row and opens Browse… for it. The stored value is still **one
+string** — the rows joined with `\n`, duplicates dropped — so parse it by splitting on
+newlines (and commas, which is how an existing comma-separated value loads into rows):
+
+```yaml
+settings:
+  - { key: data_dirs, label: "Data folders", type: path, path_kind: dir, multiple: true }
+```
+
+```python
+dirs = [p.strip() for p in re.split(r"[,\n]", cfg.get("data_dirs") or "") if p.strip()]
+```
+
+`multiple` is additive: a core that predates it ignores the key and shows the single
+path box, which edits the same string — so it needs no `min_protoagent_version` bump.
 
 **Tabbed Configure dialogs:** a larger plugin can declare an ordered tab registry,
 then assign ordinary schema-backed fields by stable tab id. Labels are presentation;

@@ -644,6 +644,9 @@ export const SETTINGS_SCHEMA = [
     plugin_id: "demo",
     fields: [
       { key: "demo.greeting", label: "Greeting", type: "string", section: "Demo Plugin", restart: false, description: "Shown by the demo tool.", options: [], value: "hello", default: "hello", scope: "agent", source: "agent" },
+      // A `multiple: true` path setting (the data plugin's "Data folders" shape) — the legacy
+      // comma-separated value must load as one row per folder.
+      { key: "demo.data_dirs", label: "Data folders", type: "path", path_kind: "dir", multiple: true, section: "Demo Plugin", restart: false, description: "Folders the demo reads.", options: [], value: "/home/op/Documents, /srv/data", default: "", scope: "agent", source: "agent" },
     ],
   },
   {

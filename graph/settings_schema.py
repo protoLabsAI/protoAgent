@@ -59,6 +59,12 @@ class Field:
     # the picker is the point. Value stays a plain string — `path` is a rendering hint,
     # nothing downstream treats it differently.
     path_kind: str = "dir"
+    # A `type: "path"` field that holds SEVERAL paths. The console renders one row per
+    # path (each with its own Browse…, plus Add / Remove) instead of one text box. The
+    # stored value is STILL a plain string — the entries joined with "\n" — so existing
+    # configs, older cores (which ignore the flag and show the single box) and readers
+    # that split on commas/newlines all keep working. A rendering hint, like path_kind.
+    multiple: bool = False
 
 
 # ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
@@ -2103,6 +2109,9 @@ def build_schema(
             # Only meaningful for `type: "path"` — whether Browse… ends on a folder or a
             # file. Always emitted so the client can read it without a type check.
             "path_kind": f.path_kind,
+            # Only meaningful for `type: "path"` — render a list of paths (one row each),
+            # still saved as one "\n"-joined string. Always emitted, like path_kind.
+            "multiple": f.type == "path" and f.multiple,
             "section": f.section,
             "description": f.description,
             "restart": f.restart,
@@ -2168,6 +2177,10 @@ def build_schema(
             # plugins hold as many local paths as the core does (vaults, repos, export
             # dirs), and none of them should be a free-text box either.
             "path_kind": "file" if spec.get("path_kind") == "file" else "dir",
+            # `multiple: true` on a plugin `path` setting → the list-of-paths control. An
+            # older core never emits this key, so the console falls back to the single box
+            # — the stored "\n"-joined string reads fine either way.
+            "multiple": ftype == "path" and spec.get("multiple") is True,
             "section": group,
             "description": spec.get("description", ""),
             "restart": bool(spec.get("restart", False)),

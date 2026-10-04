@@ -62,7 +62,8 @@ bundle's `enabled:` list. Keep listing it by URL: that is what older hosts need.
 **`config_inputs:`** are the questions the Setup Wizard / New Agent panel asks *before*
 the agent exists — on the **set-up step** that follows picking the archetype — written
 into its config at the declared dotted keys (`type`: `string` · `path` (a folder picker
-browsing the agent's machine) · `delegate` · `boolean` (a switch)). Keep `label` a short
+browsing the agent's machine; add `multiple: true` for a list of folders, answered as one
+`\n`-joined string like a plugin's `multiple` path setting) · `delegate` · `boolean` (a switch)). Keep `label` a short
 name ("Allow GitHub writes") and put the explanation in the optional **`help:`** line,
 which renders under the field in regular text (core ≥ the release carrying it; older
 cores ignore `help` and show the label alone, so a long self-explaining `label` still
