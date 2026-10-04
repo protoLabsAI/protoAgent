@@ -624,3 +624,287 @@ def render_form_read(output: str, scope: str = "") -> str:
         where = f" within {scope!r}" if scope else ""
         return f"No form fields found{where}."
     return json.dumps(collapse_radio_groups(fields), ensure_ascii=False, indent=2)
+
+
+# ── browser_select: set a choice field correctly, then PROVE it (#4032) ───────────
+# The two failure modes on the Greenhouse form (#4032) are removed by construction:
+#   * the react-select dropdown committed the HIGHLIGHTED option on type+Enter (visa became
+#     "Yes, Ireland Highly Skilled Worker Visa") — so this NEVER presses Enter; it CLICKS the
+#     matched `role=option` element;
+#   * typed text was appended to stale input ("YeYess") — so it CLEARS the combobox input
+#     before typing, never appends.
+# The committed value is read back and compared to what was chosen; a mismatch is a hard
+# error (never a silent wrong submission). The match itself is case-insensitive and
+# whitespace-collapsed (``abNorm``), an exact match wins, and a unique prefix is the only
+# non-exact that resolves — zero or several candidates is an error that lists the options.
+#
+# One async script, three in-page branches dispatched by ``abSelectKind``: a native
+# ``<select>``, a react-select-style combobox (``role=combobox`` input in a ``select__`` /
+# ``-container`` wrapper, or ``aria-autocomplete=list``), and an intl-tel-input (``.iti``)
+# country picker. The combobox/iti branches poll (≤3s) for the menu to render — the CLI's
+# ``eval`` awaits the returned Promise. Helpers are shared with ``_JS_LIB`` (``abClean`` /
+# ``abNorm`` / ``abComboValue`` / ``abCandidateLabels``) so there is one tidy/label copy.
+_SELECT_LIB = r"""
+function abFieldLabel(el){
+  if(!el) return '';
+  var labs = abCandidateLabels(el);
+  return labs.length ? labs[0] : '';
+}
+function abSetNativeValue(input, value){
+  // A react-select search input is a CONTROLLED <input>; assigning `.value` directly does not
+  // notify React. Call the native value setter off the prototype, then dispatch `input`, so the
+  // clear (and the typed filter) actually take — and we never APPEND to stale text ("YeYess").
+  try {
+    var proto = Object.getPrototypeOf(input);
+    var desc = proto && Object.getOwnPropertyDescriptor(proto, 'value');
+    if(desc && desc.set){ desc.set.call(input, value); return; }
+  } catch(e){}
+  try { input.value = value; } catch(e){}
+}
+function abFire(el, type){ try { el.dispatchEvent(new Event(type, {bubbles:true})); } catch(e){} }
+function abMouse(el, type){ try { el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true})); } catch(e){} }
+function abClickOption(el){
+  // A full pointer sequence, NEVER Enter: react-select commits an option on mousedown, an
+  // intl-tel country on click — dispatch both so either reacts, and no keyboard commit can
+  // land on the wrong highlighted row (the #4032 visa bug).
+  abMouse(el, 'mousedown'); abMouse(el, 'mouseup');
+  if(typeof el.click === 'function'){ try { el.click(); } catch(e){ abMouse(el, 'click'); } }
+  else abMouse(el, 'click');
+}
+function abSleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+async function abWaitFor(fn, timeoutMs){
+  var end = Date.now() + timeoutMs;
+  for(;;){
+    var v = fn();
+    if(v && v.length) return v;
+    if(Date.now() >= end) return v || [];
+    await abSleep(80);
+  }
+}
+function abMatchOption(options, want){
+  // Case-insensitive, whitespace-collapsed. Exactly one EXACT match wins; else exactly one
+  // PREFIX match wins; zero or several at the winning tier is an error (never a guess).
+  var nw = abNorm(want), exact = [], prefix = [];
+  for(var i=0;i<options.length;i++){
+    var no = abNorm(options[i]);
+    if(!no) continue;
+    if(no === nw) exact.push(i);
+    else if(no.indexOf(nw) === 0) prefix.push(i);
+  }
+  if(exact.length === 1) return {index: exact[0]};
+  if(exact.length > 1) return {error: 'ambiguous'};
+  if(prefix.length === 1) return {index: prefix[0]};
+  return {error: prefix.length > 1 ? 'ambiguous' : 'no-option'};
+}
+function abSelectKind(el){
+  var tag = el.tagName ? el.tagName.toLowerCase() : '';
+  if(tag === 'select') return 'native';
+  if(el.closest && el.closest('.iti, [class*="iti--"]')) return 'iti';
+  if(el.matches && el.matches('.select__control, [class*="select__control"]')) return 'combobox';
+  var combo = (el.matches && el.matches('[role="combobox"]')) ? el
+            : (el.querySelector && el.querySelector('[role="combobox"]'));
+  if(combo){
+    // The react-select signature: a role=combobox input inside a `select__` / `-container`
+    // wrapper, or one declaring aria-autocomplete=list. A bare ARIA combobox still routes
+    // here — the two conditions are the canonical cases, not an exclusive gate.
+    var container = (combo.closest && combo.closest('[class*="select__"], [class*="-container"]'))
+                 || (el.closest && el.closest('[class*="select__"], [class*="-container"]'));
+    var aa = combo.getAttribute && combo.getAttribute('aria-autocomplete');
+    if(container || aa === 'list') return 'combobox';
+    return 'combobox';
+  }
+  return 'other';
+}
+function abNative(el, want){
+  var opts = Array.prototype.map.call(el.options, function(o){ return abClean(o.textContent); });
+  var m = abMatchOption(opts, want);
+  var label = abFieldLabel(el);
+  if(m.error) return {ok:false, reason:m.error, kind:'native-select', label:label, options:opts.slice(0,10)};
+  var chosen = opts[m.index];
+  el.selectedIndex = m.index;
+  try { el.value = el.options[m.index].value; } catch(e){}
+  abFire(el, 'input'); abFire(el, 'change');            // bubbling, so React/jQuery listeners fire
+  var so = el.options[el.selectedIndex];
+  var actual = so ? abClean(so.textContent) : '';
+  if(abNorm(actual) !== abNorm(chosen))
+    return {ok:false, reason:'mismatch', kind:'native-select', label:label, wanted:chosen, actual:actual};
+  return {ok:true, kind:'native-select', label:label, chosen:chosen, committed:actual};
+}
+function abComboMenus(input, control){
+  // Find THIS control's dropdown — never the whole document, so a menu already open
+  // elsewhere (a hidden listbox, a sibling widget's list) can't win the poll and get clicked
+  // (#4032 review: an unscoped `[role="option"]` matched another control's "Afghanistan").
+  // 1) aria wiring — the input names its listbox by id (react-select AND bare ARIA comboboxes
+  //    both do), which locates the menu even when react-select PORTALS it out of the container.
+  var menus = [];
+  var ids = (input && input.getAttribute &&
+    (input.getAttribute('aria-controls') || input.getAttribute('aria-owns'))) || '';
+  String(ids).split(/\s+/).forEach(function(id){
+    if(!id) return;
+    var m = null; try { m = document.getElementById(id); } catch(e){ m = null; }
+    if(m && menus.indexOf(m) < 0) menus.push(m);
+  });
+  if(menus.length) return menus;
+  // 2) fallback — react-select renders the menu as a sibling of the control inside their
+  //    shared wrapper; climb to the nearest ancestor that actually CONTAINS a react-select
+  //    menu and scope to it (bounded, so the search never widens to the whole page).
+  var node = control || input;
+  for(var up = 0; node && up < 6; up++){
+    var m2 = node.querySelector && node.querySelector(
+      '.select__menu, [class*="select__menu"], [class*="-menu"]');
+    if(m2) return [m2];
+    if(node.tagName === 'FORM' || node === document.body) break;
+    node = node.parentElement;
+  }
+  // 3) last resort — a bare ARIA combobox whose listbox lives inside its own container.
+  var cont = (input && input.closest && input.closest('[class*="select__"], [class*="-container"]'))
+          || control;
+  var lb = cont && cont.querySelector && cont.querySelector('[role="listbox"]');
+  if(lb) return [lb];
+  return cont ? [cont] : [];
+}
+function abComboOptions(input, control){
+  var menus = abComboMenus(input, control), out = [];
+  for(var i=0;i<menus.length;i++){
+    var found = (menus[i].querySelectorAll && menus[i].querySelectorAll('[role="option"]')) || [];
+    for(var j=0;j<found.length;j++){ if(out.indexOf(found[j]) < 0) out.push(found[j]); }
+  }
+  return out;
+}
+async function abCombo(el, want){
+  var input = (el.matches && el.matches('[role="combobox"]')) ? el
+            : (el.querySelector && el.querySelector('[role="combobox"], input'));
+  var control = (el.matches && el.matches('.select__control, [class*="select__control"]')) ? el
+              : ((input && input.closest && input.closest('.select__control, [class*="select__control"]')) || el);
+  var label = abFieldLabel(input || el);
+  var typable = input && /^(input|textarea)$/i.test(input.tagName || '');
+  if(input && input.focus){ try { input.focus(); } catch(e){} }
+  if(typable){ abSetNativeValue(input, ''); abFire(input, 'input'); }   // CLEAR first — never append
+  abMouse(control, 'mousedown');                                       // open the menu
+  if(typable){ abSetNativeValue(input, want); abFire(input, 'input'); } // type a filter prefix
+  // Scope the option scan to THIS control's menu (abComboMenus) — the poll returns on its
+  // first non-empty read, so an unscoped scan would seize whatever `[role="option"]` is
+  // already on the page before this menu renders.
+  var opts = await abWaitFor(function(){ return abComboOptions(input, control); }, 3000);
+  if(!opts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[]};
+  var texts = opts.map(function(o){ return abClean(o.textContent); });
+  var m = abMatchOption(texts, want);
+  if(m.error) return {ok:false, reason:m.error, kind:'combobox', label:label, options:texts.slice(0,10)};
+  var chosen = texts[m.index];
+  abClickOption(opts[m.index]);                                        // COMMIT by click, not Enter
+  await abWaitFor(function(){
+    var sv = control.querySelector && control.querySelector(
+      '.select__single-value, [class*="singleValue"], [class*="single-value"]');
+    var t = sv ? abClean(sv.textContent) : '';
+    return (t && abNorm(t) === abNorm(chosen)) ? [t] : [];
+  }, 2000);
+  var actual = (control && control.querySelector) ? abComboValue(control) : '';
+  if(abNorm(actual) !== abNorm(chosen))
+    return {ok:false, reason:'mismatch', kind:'combobox', label:label, wanted:chosen, actual:actual};
+  return {ok:true, kind:'combobox', label:label, chosen:chosen, committed:actual};
+}
+function abItiSelectedName(iti){
+  var f = iti.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
+  if(!f) return '';
+  var t = f.getAttribute('title') || f.getAttribute('aria-label') || abClean(f.textContent) || '';
+  return abClean(String(t).split(':')[0]);               // "United States: +1 201" -> "United States"
+}
+async function abIti(el, want){
+  var iti = (el.closest && el.closest('.iti, [class*="iti--"]')) || el;
+  var label = abFieldLabel(el);
+  var btn = iti.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
+  if(btn) abClickOption(btn);                             // open the country list
+  var items = await abWaitFor(function(){
+    return Array.prototype.slice.call(document.querySelectorAll('.iti__country, li[class*="iti__country"]'));
+  }, 3000);
+  if(!items.length) return {ok:false, reason:'no-option', kind:'iti', label:label, options:[]};
+  var names = items.map(function(li){
+    var nm = li.querySelector('.iti__country-name, [class*="country-name"]');
+    return abClean(nm ? nm.textContent : li.textContent);
+  });
+  var m = abMatchOption(names, want);
+  if(m.error) return {ok:false, reason:m.error, kind:'iti', label:label, options:names.slice(0,10)};
+  var chosen = names[m.index];
+  abClickOption(items[m.index]);
+  await abWaitFor(function(){
+    var got = abItiSelectedName(iti);
+    return (got && abNorm(got) === abNorm(chosen)) ? [got] : [];
+  }, 2000);
+  var actual = abItiSelectedName(iti);                   // read back the selected flag's title
+  if(abNorm(actual) !== abNorm(chosen))
+    return {ok:false, reason:'mismatch', kind:'iti', label:label, wanted:chosen, actual:actual};
+  return {ok:true, kind:'iti', label:label, chosen:chosen, committed:actual};
+}
+"""
+
+_SELECT_DRIVER = r"""
+(async function(){
+  var el = null;
+  try { el = document.querySelector(SEL); } catch(e){ el = null; }
+  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
+  var kind = abSelectKind(el);
+  try {
+    if(kind === 'native') return JSON.stringify(abNative(el, WANT));
+    if(kind === 'combobox') return JSON.stringify(await abCombo(el, WANT));
+    if(kind === 'iti') return JSON.stringify(await abIti(el, WANT));
+    return JSON.stringify({ok:false, reason:'unsupported', kind:kind, label:abFieldLabel(el)});
+  } catch(e){
+    return JSON.stringify({ok:false, reason:'exception', message:String(e && e.message || e)});
+  }
+})()
+"""
+
+
+def select_js(selector: str, option_text: str) -> str:
+    """The script ``browser_select`` evals: detect the widget at ``selector`` and set it to
+    ``option_text`` in the page, reading back the committed value. ``selector`` is the
+    locator the bd-12mo.1 resolver already turned into something ``querySelector`` can act on
+    (a ``[data-ab-field="N"]`` tag for a label, or a raw CSS selector). Rides ``eval --stdin``
+    like every other form script (#3689)."""
+    return (_JS_LIB + _SELECT_LIB + "\n(function(){\n"
+            "var SEL = " + _js(selector) + ";\n"
+            "var WANT = " + _js(option_text) + ";\n"
+            "return " + _SELECT_DRIVER.strip() + ";\n})()")
+
+
+def render_select(output: str, field: str, option_text: str) -> str:
+    """Turn ``select_js``'s JSON into the model-facing result. Success is ``Selected "…" in
+    <label>``; every failure is an ``Error: …`` — an ambiguous/absent option lists the choices,
+    and a read-back that disagrees with what was chosen is a hard mismatch error (never a
+    silent success). Never raises."""
+    try:
+        data = json.loads(output)
+    except (ValueError, TypeError):
+        return "Error: could not select — the page returned unreadable data."
+    if not isinstance(data, dict):
+        return "Error: could not select — unexpected data from the page."
+    label = data.get("label") or field
+    if data.get("ok"):
+        chosen = data.get("chosen") or option_text
+        return f'Selected "{chosen}" in {label}'
+    reason = data.get("reason")
+    if reason == "mismatch":
+        wanted = data.get("wanted") or option_text
+        return (f'Error: {label} reads "{data.get("actual", "")}" after selecting "{wanted}" — '
+                "the committed value does not match what was chosen, so nothing was submitted.")
+    if reason in ("no-option", "ambiguous"):
+        opts = data.get("options") or []
+        listing = ", ".join(repr(o) for o in opts[:10])
+        head = (f"Error: {option_text!r} matches more than one option in {label}"
+                if reason == "ambiguous"
+                else f"Error: no option matching {option_text!r} in {label}")
+        if listing:
+            return f"{head}. Available options: {listing}."
+        return (f"{head} — no options were found. Is the control open and populated? "
+                "Call browser_form_read to inspect the field.")
+    if reason == "not-found":
+        return (f"Error: could not find a field matching {field!r} to select in. Call "
+                "browser_form_read to list the fields, or pass a CSS selector. (browser_select "
+                "addresses by LABEL or CSS, not a @ref — a ref can't be resolved in the page.)")
+    if reason == "unsupported":
+        return (f"Error: {field!r} is a {data.get('kind', 'plain')!r} field, not a choice "
+                "field browser_select can set. Use browser_fill for text, or browser_click for "
+                "a checkbox/radio.")
+    if reason == "exception":
+        return f"Error: selecting in {label} failed in the page: {str(data.get('message', ''))[:200]}"
+    return f"Error: could not select {option_text!r} in {label}."

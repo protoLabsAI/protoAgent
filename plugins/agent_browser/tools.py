@@ -552,6 +552,45 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return err or await _ab("type", sel, text)
 
     @tool
+    async def browser_select(field: str, option_text: str) -> str:
+        """Set a CHOICE field to the option whose visible text is `option_text`, then PROVE it
+        by reading the committed value back. Handles a native `<select>`, a react-select-style
+        combobox, and an intl-tel-input country picker — the widgets a plain `browser_fill`
+        cannot drive — and verifies the result so a wrong answer is never submitted silently.
+
+        Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
+        re-renders) or a CSS selector — NOT a `@eN` snapshot ref: this tool sets the widget in
+        the page, where the CLI's ref can't be resolved (`browser_form_read` has the same limit).
+        `browser_form_read` lists the labels. `option_text` is matched case-insensitively and
+        whitespace-collapsed: an exact match wins, and the only non-exact that resolves is a
+        UNIQUE prefix. If no option — or more than one — matches, the tool lists the available
+        options and changes nothing. The combobox is cleared before typing (never appended to)
+        and committed by CLICKING the option, never by pressing Enter. On success you get
+        `Selected "<text>" in <label>`; if the field reads back a different value it is a hard
+        `Error:`, not a success.
+
+        PHONE fields (intl-tel-input): select the COUNTRY with THIS tool BEFORE you
+        `browser_fill` the national number. Changing the country after the number is filled
+        reformats or clears it, so the order matters — country first, then the number."""
+        if (bad := _bad_operand(field=field, option_text=option_text)):
+            return bad
+        # A @ref is resolved by the CLI, not in the page — but browser_select sets the widget
+        # via an in-page document.querySelector, where "@e5" is invalid CSS and throws, which
+        # was swallowed as 'not-found' so EVERY ref-addressed select failed. Refuse it up front
+        # (browser_form_read does the same) rather than claim support it cannot honour.
+        if forms.is_ref(field):
+            return ("Error: browser_select can't address a field by a @ref — a ref is resolved "
+                    "by the CLI, not in the page, and this tool sets the widget in-page. Pass "
+                    "the field's visible LABEL or a CSS selector; browser_form_read lists them.")
+        sel, err = await _resolve_field(field)
+        if err:
+            return err
+        out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
+        if out.startswith("Error:"):
+            return out
+        return forms.render_select(out, field, option_text)
+
+    @tool
     async def browser_press(key: str) -> str:
         """Press a key or chord on the focused element (e.g. `Enter`, `Tab`,
         `Control+a`)."""
@@ -613,6 +652,6 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         browser_open, browser_back, browser_forward, browser_reload,
         browser_snapshot, browser_get_text, browser_get_html, browser_get_value,
         browser_form_read,
-        browser_click, browser_fill, browser_type, browser_press, browser_hover,
+        browser_click, browser_fill, browser_type, browser_select, browser_press, browser_hover,
         browser_eval, browser_screenshot, browser_pdf, browser_close,
     ]

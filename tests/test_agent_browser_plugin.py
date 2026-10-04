@@ -64,7 +64,7 @@ EXPECTED_TOOLS = {
     "browser_open", "browser_back", "browser_forward", "browser_reload",
     "browser_snapshot", "browser_get_text", "browser_get_html", "browser_get_value",
     "browser_form_read",
-    "browser_click", "browser_fill", "browser_type", "browser_press", "browser_hover",
+    "browser_click", "browser_fill", "browser_type", "browser_select", "browser_press", "browser_hover",
     "browser_eval", "browser_screenshot", "browser_pdf", "browser_close",
 }
 
@@ -223,10 +223,11 @@ async def test_action_tools_pass_refs(monkeypatch):
     assert rec[-1] == ["ab", "snapshot"]
 
 
-def test_all_18_tools_present():
+def test_all_19_tools_present():
     names = set(_toolmap())
     assert names == EXPECTED_TOOLS
-    assert len(names) == 18  # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032)
+    # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032 A1) + browser_select (#4032 A2)
+    assert len(names) == 19
     assert "browser_dashboard" not in names  # the dashboard tool is gone (full switchover)
 
 
@@ -913,6 +914,8 @@ async def test_pdf_is_fenced_exactly_like_screenshot(monkeypatch):
     ("browser_eval", {"expression": "--help"}),
     ("browser_fill", {"selector": "#q", "text": "--headed"}),
     ("browser_type", {"selector": "#q", "text": "-h"}),
+    ("browser_select", {"field": "--help", "option_text": "x"}),
+    ("browser_select", {"field": "#c", "option_text": "--allow-file-access"}),
 ])
 async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(monkeypatch, name, args):
     rec = []
@@ -1591,6 +1594,309 @@ async def test_form_read_surfaces_an_eval_error(monkeypatch):
 def test_form_read_is_a_registered_tool_with_a_usable_docstring():
     t = _toolmap()["browser_form_read"]
     assert "browser_form_read" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
+
+
+# ── #4032 A2: browser_select — native / react-select / intl-tel-input, with read-back ──
+# Host-free like the form-read tests: the in-page engine never runs here. The branch-dispatch
+# tests assert the single `eval --stdin` script carries each widget's marker (detection is
+# in-page); the tool tests mock Popen and parse canned select-engine output (success /
+# mismatch / ambiguous / no-option / not-found); the match + render logic is pure Python.
+
+
+def _select_popen(result, fields=None, record=None, procs=None):
+    """A scripted CLI for browser_select. The FIRST `eval --stdin` (the bd-12mo.1 label
+    resolver) answers with an enumerate payload of `fields`; the SECOND (the select engine)
+    answers with `result` — so a LABEL select makes two evals and the test can read both.
+    A CSS/ref field skips the resolver, so there is only the one select eval."""
+    enum = json.dumps({"mode": "enumerate", "fields": fields or []}).encode()
+    res = result if isinstance(result, str) else json.dumps(result)
+    res = res.encode() if isinstance(res, str) else res
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = enum if state["evals"] == 0 else res
+            state["evals"] += 1
+        p = _FakeProc(argv, out=out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def _select(monkeypatch, result, field="#country", option_text="United States",
+                  record=None, procs=None):
+    """Drive browser_select against a CSS field (no resolver eval) with a canned engine result."""
+    payload = result if isinstance(result, str) else json.dumps(result)
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=record, procs=procs))
+    return await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": field, "option_text": option_text})
+
+
+def test_select_js_dispatches_to_each_widget_branch_in_one_script():
+    """r1/r2/r3: ONE `eval` script detects the widget in-page and dispatches. Assert every
+    branch's marker is present, the locator + option ride as JSON literals, and the combobox
+    is cleared before typing — never appended to (the 'YeYess' bug)."""
+    js = forms.select_js('[data-ab-field="2"]', "United States")
+    assert json.dumps('[data-ab-field="2"]') in js and json.dumps("United States") in js
+    assert "abSelectKind" in js
+    # native <select>: set the option and fire BUBBLING input + change
+    assert "native-select" in js and "el.options" in js
+    assert "abFire(el, 'input')" in js and "abFire(el, 'change')" in js and "bubbles:true" in js
+    # react-select combobox: role=option menu, the select__/-container/aria-autocomplete signature
+    assert 'role="option"' in js and "select__control" in js
+    assert "aria-autocomplete" in js and '-container' in js
+    # intl-tel-input: the country list + the selected-flag read-back
+    assert "iti__country" in js and "iti__country-name" in js
+    assert "selected-flag" in js and ("title" in js and "aria-label" in js)
+
+
+def test_select_combobox_clears_before_typing_and_never_presses_enter():
+    """r2, by construction: the input is cleared (`abSetNativeValue(input, '')`) before the
+    filter is typed, and the option is COMMITTED BY CLICK — the script contains no Enter/key
+    press at all, so the highlighted-wrong-option commit (#4032) cannot happen."""
+    js = forms.select_js("#country", "United States")
+    assert "abSetNativeValue(input, '')" in js            # clear first, never append
+    assert "abClickOption" in js                           # commit by clicking the option element
+    # no keyboard commit anywhere: no key events, and the Enter key is never named as a value
+    assert "KeyboardEvent" not in js and "keydown" not in js and "keypress" not in js
+    assert "'Enter'" not in js and '"Enter"' not in js and ".key" not in js
+
+
+def _run_select_lib_js(html: str, expr: str):
+    """Evaluate `expr` against a real DOM (jsdom) with forms._JS_LIB + _SELECT_LIB loaded, and
+    return the JSON it produces — the host-free way to prove the in-page option scoping."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + forms._JS_LIB + forms._SELECT_LIB + "\n"
+        "console.log(JSON.stringify((function(){ return " + expr + "; })()));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+# A react-select control whose menu is wired by `aria-controls`, plus ANOTHER widget's
+# listbox already open on the page (the #4032 wrong country). The scoped scan must ignore it.
+_SCOPED_COMBO_ARIA_HTML = """
+<form>
+  <ul role="listbox" id="other-menu"><li role="option">Afghanistan</li></ul>
+  <div class="field">
+    <label for="rs-country">Country</label>
+    <div class="select__control">
+      <div class="select__value-container">
+        <div class="select__input-container">
+          <input id="rs-country" role="combobox" name="country" aria-controls="rs-menu"/>
+        </div>
+      </div>
+    </div>
+    <div class="select__menu" id="rs-menu" role="listbox">
+      <div role="option">United States</div>
+      <div role="option">United Kingdom</div>
+    </div>
+  </div>
+</form>
+"""
+
+# A react-select control with NO aria wiring: the menu is a sibling of the control inside a
+# `-container` wrapper. The fallback must scope to that wrapper — never the whole document.
+_SCOPED_COMBO_CONTAINER_HTML = """
+<form>
+  <ul role="listbox" id="other-menu"><li role="option">Afghanistan</li></ul>
+  <div class="my-select-container">
+    <label for="cc">Country</label>
+    <div class="select__control"><input id="cc" role="combobox" name="country"/></div>
+    <div class="select__menu" role="listbox">
+      <div role="option">Canada</div>
+      <div role="option">Cambodia</div>
+    </div>
+  </div>
+</form>
+"""
+
+_COMBO_OPTIONS_EXPR = (
+    "abComboOptions("
+    "document.querySelector('.select__control').querySelector('[role=combobox]'),"
+    "document.querySelector('.select__control'))"
+    ".map(function(o){ return o.textContent.trim(); })"
+)
+
+
+@pytest.mark.parametrize(("html", "expected"), [
+    (_SCOPED_COMBO_ARIA_HTML, ["United States", "United Kingdom"]),
+    (_SCOPED_COMBO_CONTAINER_HTML, ["Canada", "Cambodia"]),
+])
+def test_combobox_options_are_scoped_to_this_controls_menu(html, expected):
+    """#4032 review: the combobox branch read `[role="option"]` from the WHOLE document, and
+    the poll returns on its first non-empty read — so a menu already open elsewhere (here an
+    'Afghanistan' option) could be matched and clicked, changing another field. Options must
+    come only from THIS control's menu (via aria-controls, else its own container wrapper)."""
+    opts = _run_select_lib_js(html, _COMBO_OPTIONS_EXPR)
+    assert opts == expected
+    assert "Afghanistan" not in opts     # the other widget's open menu is never seen
+
+
+async def test_select_native_success_reads_back_and_reports(monkeypatch):
+    """r1: a successful native selection reports the committed read-back value and label."""
+    rec, procs = [], []
+    out = await _select(monkeypatch,
+                        {"ok": True, "kind": "native-select", "label": "Role",
+                         "chosen": "Engineer", "committed": "Engineer"},
+                        field="#role", option_text="Engineer", record=rec, procs=procs)
+    assert out == 'Selected "Engineer" in Role'
+    assert rec[-1] == ["ab", "eval", "--stdin"]            # r6: the engine rides eval --stdin
+    assert "abSelectKind" in procs[-1].stdin.getvalue().decode()
+
+
+async def test_select_reuses_the_bd12mo1_label_locator_before_the_engine(monkeypatch):
+    """r6: a LABEL is resolved FRESH by the shared bd-12mo.1 resolver (an enumerate eval), and
+    the resolved `[data-ab-field]` selector is what the select engine then acts on — two evals,
+    both on stdin, no second locator."""
+    rec, procs = [], []
+    fields = [{"label": "Country", "labels": ["Country"], "selector": '[data-ab-field="0"]',
+               "kind": "combobox"}]
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        _select_popen({"ok": True, "kind": "combobox", "label": "Country",
+                                       "chosen": "United States", "committed": "United States"},
+                                      fields=fields, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "Country", "option_text": "United States"})
+    assert out == 'Selected "United States" in Country'
+    assert rec == [["ab", "eval", "--stdin"], ["ab", "eval", "--stdin"]]
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()        # the resolver
+    select_script = procs[1].stdin.getvalue().decode()
+    assert "abSelectKind" in select_script                            # the engine
+    assert json.dumps('[data-ab-field="0"]') in select_script         # on the RESOLVED selector
+
+
+async def test_select_mismatch_on_read_back_is_a_hard_error(monkeypatch):
+    """r5: the field reading back a different value than was chosen is an Error naming both —
+    never a success. This is the guard against committing the wrong option silently (#4032)."""
+    out = await _select(monkeypatch,
+                        {"ok": False, "reason": "mismatch", "kind": "combobox", "label": "Visa",
+                         "wanted": "No", "actual": "Yes, Ireland Highly Skilled Worker Visa"},
+                        field="#visa", option_text="No")
+    assert out.startswith("Error:") and "Selected" not in out
+    assert "Visa" in out and "No" in out
+    assert "Yes, Ireland Highly Skilled Worker Visa" in out
+    assert "reads" in out and "after selecting" in out
+
+
+async def test_select_no_matching_option_lists_the_available_ones(monkeypatch):
+    """r4: zero matches → an Error listing the available options, and nothing is committed."""
+    out = await _select(monkeypatch,
+                        {"ok": False, "reason": "no-option", "kind": "native-select",
+                         "label": "Role", "options": ["Engineer", "Manager", "Designer"]},
+                        field="#role", option_text="Astronaut")
+    assert out.startswith("Error:") and "Astronaut" in out
+    assert "Engineer" in out and "Manager" in out and "Designer" in out
+    assert "Selected" not in out
+
+
+async def test_select_ambiguous_option_is_an_error_not_a_guess(monkeypatch):
+    """r4: more than one candidate at the winning tier → an Error (never a silent pick)."""
+    out = await _select(monkeypatch,
+                        {"ok": False, "reason": "ambiguous", "kind": "combobox", "label": "Country",
+                         "options": ["United States", "United States Minor Outlying Islands"]},
+                        field="#country", option_text="United")
+    assert out.startswith("Error:") and "more than one" in out
+    assert "United States" in out and "Selected" not in out
+
+
+def test_select_render_caps_the_listed_options_at_ten():
+    """r4: the available-options listing is bounded at 10, however long the real list."""
+    opts = [f"Country {i}" for i in range(25)]
+    out = forms.render_select(
+        json.dumps({"ok": False, "reason": "no-option", "label": "Country", "options": opts}),
+        "#country", "Nowhere")
+    assert out.startswith("Error:")
+    assert "Country 0" in out and "Country 9" in out
+    assert "Country 10" not in out and "Country 24" not in out
+
+
+async def test_select_not_found_points_at_form_read(monkeypatch):
+    """A locator that matches no element in the page is a clear Error, never a success."""
+    out = await _select(monkeypatch, {"ok": False, "reason": "not-found"},
+                        field="#missing", option_text="x")
+    assert out.startswith("Error:") and "browser_form_read" in out and "Selected" not in out
+
+
+async def test_select_refuses_a_ref_field_without_running_the_cli(monkeypatch):
+    """#4032 review: browser_select claimed `@ref` support, but it sets the widget via an
+    in-page `document.querySelector`, where "@e5" is invalid CSS and throws — the error was
+    swallowed as 'not-found', so EVERY ref-addressed select failed. A ref is now refused up
+    front (as browser_form_read does), before any subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "@e5", "option_text": "United States"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't be resolved in an eval — refuse before the CLI runs
+
+
+async def test_select_on_a_non_choice_field_is_refused(monkeypatch):
+    """A plain text field isn't a choice widget — say so rather than pretend to select."""
+    out = await _select(monkeypatch, {"ok": False, "reason": "unsupported", "kind": "other",
+                                      "label": "First name"},
+                        field="#first", option_text="x")
+    assert out.startswith("Error:") and "browser_fill" in out
+
+
+async def test_select_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
+    out = await _select(monkeypatch, "not json at all", field="#country", option_text="x")
+    assert out.startswith("Error:")   # never raises
+
+
+async def test_select_surfaces_an_eval_error(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no page open"))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "#country", "option_text": "x"})
+    assert out.startswith("Error:") and "no page open" in out
+
+
+async def test_select_phone_country_is_the_iti_branch_and_fill_follows_it(monkeypatch):
+    """r3 + the phone helper: selecting the COUNTRY drives the intl-tel-input branch (click a
+    country entry, read back the selected flag), and because that branch never writes the tel
+    input's value, a following browser_fill of the national number reaches the tel input
+    unchanged. The docstring documents the country-before-number order."""
+    # the iti branch of the engine must not type into the tel input — else the number a later
+    # browser_fill enters would be clobbered (and the order in the docstring would be a lie).
+    iti_src = forms._SELECT_LIB.split("async function abIti")[1].split("\nfunction ")[0]
+    assert "abSetNativeValue" not in iti_src and ".value" not in iti_src
+
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "kind": "iti", "label": "Phone",
+                                                   "chosen": "United States",
+                                                   "committed": "United States"}), record=rec))
+    t = _toolmap({"binary": "ab"})
+    picked = await t["browser_select"].ainvoke({"field": "#phone", "option_text": "United States"})
+    assert picked == 'Selected "United States" in Phone'
+    # then the number is filled into the SAME tel input, verbatim
+    filled = await t["browser_fill"].ainvoke({"selector": "#phone", "text": "2015550123"})
+    assert not filled.startswith("Error:")
+    assert rec[-1] == ["ab", "fill", "#phone", "2015550123"]
+
+    desc = t["browser_select"].description.lower()
+    assert "phone" in desc and "country" in desc and "before" in desc and "fill" in desc
+
+
+def test_select_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_select"]
+    assert "browser_select" in EXPECTED_TOOLS
     assert t.description and len(t.description) >= 20
 
 
