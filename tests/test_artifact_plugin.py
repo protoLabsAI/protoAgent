@@ -2306,3 +2306,68 @@ def test_reads_after_a_failed_migration_take_no_store_lock(monkeypatch, tmp_path
     calls = _record_os_lock(monkeypatch, art)
     assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]  # still served, from legacy
     assert calls == []  # the cached fallback means a later read never re-takes the store lock
+
+
+# ── save_file_artifact: project-relative paths (the fs tools' path language) ─────────────
+# An agent finds a file with find_files/read_file as `project` + a relative path; passing
+# that same relative path here used to resolve against the server's cwd and fail.
+
+
+def _fence(monkeypatch, art, **roots):
+    from tools.fs_tools import Project, ProjectRegistry
+
+    reg = ProjectRegistry([Project(name=n, root=r.resolve()) for n, r in roots.items()])
+    monkeypatch.setattr(art._links, "_registry", lambda: reg)
+
+
+def test_save_file_artifact_resolves_a_relative_path_inside_a_project(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    (ws / "sheets").mkdir(parents=True)
+    (ws / "sheets" / "sheet.txt").write_text("body", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": "sheets/sheet.txt"})
+    assert "Saved file artifact" in out
+    assert _arts(art)[0]["versions"][0]["file"]["filename"] == "sheet.txt"
+
+
+def test_save_file_artifact_explicit_project(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (b / "x.txt").write_text("in b", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=a, other=b)
+    out = art.save_file_artifact.invoke({"path": "x.txt", "project": "other"})
+    assert "Saved file artifact" in out and "in b" in _arts(art)[0]["versions"][0]["code"]
+
+
+def test_save_file_artifact_relative_path_in_two_projects_is_ambiguous(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d in (a, b):
+        d.mkdir()
+        (d / "same.txt").write_text(d.name, encoding="utf-8")
+    _fence(monkeypatch, art, workspace=a, other=b)
+    out = art.save_file_artifact.invoke({"path": "same.txt"})
+    assert "more than one project" in out and "workspace" in out and "other" in out
+    assert _arts(art) == []
+
+
+def test_save_file_artifact_project_path_cannot_escape_the_fence(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": "../secret.txt", "project": "workspace"})
+    assert "escapes" in out and _arts(art) == []
+
+
+def test_save_file_artifact_not_found_names_where_it_looked(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": "sheets/missing.pdf"})
+    assert "No file at" in out and "workspace" in out
