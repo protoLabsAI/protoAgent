@@ -1,0 +1,77 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — Ashby application form (#4032 A5).
+
+  Models the DOM contract of an Ashby-hosted job application form:
+      https://jobs.ashbyhq.com/<company>/<job-id>/application
+  (the public "Application" form Ashby serves).
+
+  Captured / last modeled: 2026-10-04.
+
+  Self-contained (no network, no external JS/CSS). Its purpose is to exercise the
+  agent_browser in-page form JavaScript (plugins/agent_browser/forms.py) in a real
+  browser. What matters is the DOM contract, not a pixel copy:
+
+    * Ashby-style labelled text fields (a `<label for>` with a required-asterisk span);
+    * a REQUIRED résumé `input[type=file]` (Ashby's "Resume" field) — browser_upload
+      must attach a file and read its name back;
+    * a radio group in a `<fieldset>`/`<legend>` (Ashby's yes/no eligibility question) —
+      each option addressable by its own label, the group readable as one folded
+      radio-group via browser_form_read.
+
+  TO REFRESH when Ashby changes its markup: open a live application form, read the
+  relevant field's DOM in devtools, update the matching block below (keep `<label for>`
+  associations and the fieldset/legend around the radio group), then bump the "last
+  modeled" date. Run: pytest tests/test_agent_browser_forms_live.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ashby — Application</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 640px; margin: 2rem auto; }
+  .ashby-field { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=text], input[type=email] { width: 100%; padding: .4rem; box-sizing: border-box; }
+  .ashby-required { color: #c00; }
+  fieldset { border: 1px solid #ccc; border-radius: 4px; }
+  fieldset label { display: inline; font-weight: 400; margin-left: .35rem; }
+</style>
+</head>
+<body>
+<h1>Submit your application</h1>
+<form id="ashby-application" aria-label="Application">
+
+  <div class="ashby-field">
+    <label for="full_name">Full name <span class="ashby-required">*</span></label>
+    <input type="text" id="full_name" name="_systemfield_name" required>
+  </div>
+
+  <div class="ashby-field">
+    <label for="ashby_email">Email <span class="ashby-required">*</span></label>
+    <input type="email" id="ashby_email" name="_systemfield_email" required>
+  </div>
+
+  <div class="ashby-field">
+    <label for="ashby_resume">Resume <span class="ashby-required">*</span></label>
+    <input type="file" id="ashby_resume" name="_systemfield_resume"
+           accept=".pdf,.doc,.docx,.txt" required>
+  </div>
+
+  <div class="ashby-field">
+    <fieldset id="work_auth_group">
+      <legend>Are you legally authorized to work in the United States? *</legend>
+      <div>
+        <input type="radio" id="auth_yes" name="work_auth" value="Yes" required>
+        <label for="auth_yes">Yes</label>
+      </div>
+      <div>
+        <input type="radio" id="auth_no" name="work_auth" value="No">
+        <label for="auth_no">No</label>
+      </div>
+    </fieldset>
+  </div>
+
+</form>
+</body>
+</html>

@@ -199,6 +199,26 @@ def _js(value) -> str:
     return json.dumps(value)
 
 
+def _loads(output: str):
+    """``json.loads`` tolerant of the CLI's extra string layer.
+
+    Every in-page script here ends ``return JSON.stringify({...})`` — so the value handed
+    back to the CLI is a STRING. ``agent-browser eval`` (pinned 0.27.1) serialises the
+    completion value for output: a returned *object* prints as JSON, but a returned *string*
+    prints JSON-ENCODED — one layer deeper than the mocked unit tests feed (they pass the
+    single-encoded JSON verbatim). Live, ``json.loads`` therefore yields the inner JSON text
+    as a ``str`` rather than the dict the parsers expect, and every real form op failed as
+    "unreadable data" (#4032 A5 — the drift the live fixtures exist to catch).
+
+    Accept both shapes: parse once, and if that yields a lone JSON string, parse it again.
+    Raises ``ValueError``/``TypeError`` on genuine garbage, exactly like ``json.loads`` — so
+    every caller's existing ``except (ValueError, TypeError)`` still catches it."""
+    data = json.loads(output)
+    if isinstance(data, str):
+        data = json.loads(data)
+    return data
+
+
 # ── the in-page JavaScript (ONE copy, shared by every form tool) ─────────────────
 # Defines, in the page: clean/norm (text tidy), candidateLabels (the six label sources in
 # precedence order), kindOf / requiredOf / comboValue (field shape), enumerateFields(root)
@@ -527,7 +547,7 @@ def parse_resolve(output: str) -> dict:
     """Parse the JSON ``resolve_js`` prints. Never raises — a garbled page returns an
     ``{"mode": "error"}`` marker ``resolve_target`` turns into a readable error."""
     try:
-        data = json.loads(output)
+        data = _loads(output)
     except (ValueError, TypeError):
         return {"mode": "error", "error": "unreadable resolver output"}
     if not isinstance(data, dict):
@@ -611,7 +631,7 @@ def render_form_read(output: str, scope: str = "") -> str:
     per field in document order (radio options folded into their group), or a readable
     ``Error: …`` / empty note."""
     try:
-        data = json.loads(output)
+        data = _loads(output)
     except (ValueError, TypeError):
         return "Error: could not read the form (the page returned unreadable data)."
     if isinstance(data, dict) and data.get("ok") is False:
@@ -873,7 +893,7 @@ def render_select(output: str, field: str, option_text: str) -> str:
     and a read-back that disagrees with what was chosen is a hard mismatch error (never a
     silent success). Never raises."""
     try:
-        data = json.loads(output)
+        data = _loads(output)
     except (ValueError, TypeError):
         return "Error: could not select — the page returned unreadable data."
     if not isinstance(data, dict):
@@ -1000,7 +1020,7 @@ def parse_upload(output: str, field: str) -> tuple[str, str, str]:
     ``[data-pa-upload=…]`` tag the CLI uploads to; ``error`` is a ready-to-return ``Error: …``
     when no single file input could be located. Never raises."""
     try:
-        data = json.loads(output)
+        data = _loads(output)
     except (ValueError, TypeError):
         return "", "", "Error: could not locate the upload field — the page returned unreadable data."
     if not isinstance(data, dict):
@@ -1030,7 +1050,7 @@ def render_upload(output: str, field: str, basename: str, label: str = "") -> st
     field-level validation text is surfaced either way. Never raises."""
     where = label or field
     try:
-        data = json.loads(output)
+        data = _loads(output)
     except (ValueError, TypeError):
         return "Error: could not verify the upload — the page returned unreadable data."
     if not isinstance(data, dict):
@@ -1130,7 +1150,7 @@ def render_js_click(output: str, selector: str, cli_result: str) -> str:
     ``Clicked <selector> (JS fallback)``; if the element could not be resolved in the page
     the CLI's own result stands (nothing better to say). Never raises."""
     try:
-        data = json.loads(output)
+        data = _loads(output)
     except (ValueError, TypeError):
         return cli_result
     if isinstance(data, dict) and data.get("ok"):
