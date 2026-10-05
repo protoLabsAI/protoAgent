@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.194.0",
+    "date": "2026-10-05",
+    "changes": [
+      "browser_click can fall back to a JS click, and the web-browse skill now teaches form filling (#4032).",
+      "Browser tools address form fields by label and read whole forms back (#4032).",
+      "browser_select sets native, react-select and phone-country dropdowns and verifies the result (#4032).",
+      "browser_upload attaches a file to a form's file input, fenced to the browser's own capture directory (#4032).",
+      "The Analyst persona points a new operator at its own data folder first (#4038).",
+      "Browser form tools work against the real agent-browser CLI, now guarded by real-Chrome tests (#4032).",
+      "A wait picks back up as part of the chat (#4043)."
+    ]
+  },
+  {
     "version": "v0.193.0",
     "date": "2026-10-04",
     "changes": [

@@ -15,6 +15,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.194.0] - 2026-10-05
+
+### Added
+- **`browser_click` can fall back to a JS click, and the web-browse skill now teaches form filling (#4032).**
+  On Greenhouse the résumé "Enter manually" button opened its textarea only after a
+  JS-dispatched click; a plain CLI click exited 0 and nothing happened, and the agent had no
+  written doctrine for forms so it fell back to snapshot/`@eN`/type+Enter — the cause of most
+  of the failures in the issue. `browser_click` now takes an optional `js_fallback`: when set,
+  it fingerprints the page (element count + `document.activeElement` + the target's
+  `aria-expanded`), does the normal CLI click, re-fingerprints, and ONLY if nothing moved
+  resolves the element in the page and dispatches a bubbling `mousedown`/`mouseup` plus
+  `el.click()`, reporting `Clicked <x> (JS fallback)` — never a second click when the first
+  already worked. The default (`js_fallback=false`) is byte-for-byte unchanged, and the
+  selector also accepts the bd-12mo.1 label locator (`@eN` and CSS still pass through). The
+  web-browse skill gains a **Filling forms** section: start with `browser_form_read`, address
+  fields by LABEL not `@eN`, use `browser_select` for every dropdown/combobox/phone-country
+  picker (never type+Enter), pick the phone country before the number, `browser_upload` a file
+  made with `browser_pdf`, reach for `js_fallback` when a click visibly does nothing, read the
+  form back and diff every value — and never click submit, or touch a captcha/login, without
+  the operator saying so.
+
+- **Browser tools address form fields by label and read whole forms back (#4032).**
+  `browser_snapshot`'s `@eN` refs are resolved once and go stale the instant a page
+  re-renders — a reload, a React state change, a validation error redrawing a field — which
+  is why filling one long Greenhouse form could burn ~50 tool rounds on "Unknown ref". The
+  `agent_browser` plugin now lets a tool address a field by its visible **label** (falling
+  back to `aria-label`/`aria-labelledby`/`placeholder`/`name`), re-resolved in the page on
+  every call, so addressing survives the re-renders that invalidate a snapshot ref; a `@eN`
+  ref or a CSS selector still works unchanged. An ambiguous or missing label is a clear
+  error (the closest labels, or the fields it matched) rather than a silent action on the
+  wrong element. The new **`browser_form_read`** tool returns every field on the page (or
+  within a `scope` container) as JSON — `label`, `kind`, `name`, `id`, `required`, the
+  committed `value` (a react-select combobox reports its rendered selection, not half-typed
+  search text) and `options` — the reliable way to see a form before filling it and to
+  verify it after.
+
+- **`browser_select` sets native, react-select and phone-country dropdowns and verifies the result (#4032).**
+  The `agent_browser` plugin gains one tool for CHOICE fields — a native `<select>`, a
+  react-select-style combobox, and an intl-tel-input country picker — addressed by its visible
+  LABEL or a CSS selector (a snapshot `@ref` is refused here: the widget is set in the page,
+  where the CLI's ref can't be resolved). It matches `option_text`
+  case-insensitively (an exact match, or a unique prefix; zero or several candidates is an
+  error that lists the options), commits by CLICKING the matching option — never by pressing
+  Enter — and CLEARS a combobox before typing rather than appending to it. The two failure
+  modes on the Greenhouse form this targets are removed by construction: a type+Enter no
+  longer commits the highlighted-but-wrong option (visa "Yes, Ireland Highly Skilled Worker
+  Visa"), and typed text is no longer doubled ("YeYess"). After committing it reads the
+  rendered value back and compares it to what was chosen; a disagreement is a hard `Error:`,
+  so a wrong answer is never submitted silently. For a phone field, select the country first,
+  then `browser_fill` the national number.
+
+- **`browser_upload` attaches a file to a form's file input, fenced to the browser's own capture directory (#4032).**
+  Ashby and Greenhouse application forms want a résumé as a FILE, and the `agent_browser`
+  plugin had no way to set a file input. The new tool addresses the field by its visible
+  LABEL or a CSS selector (re-resolved in the page each call) — and when the located element
+  is the "Attach" button or wrapper that hides the real input, it uses the single
+  `input[type=file]` in that field's container (none, or more than one, is a clear error).
+  `file_path` is fenced exactly like a capture, in reverse: it may only read a file that
+  already lives inside the plugin's own capture directory, so a prompt-injected page cannot
+  make the agent upload an arbitrary local file (`~/.ssh/...`, a `..` escape or a symlink out
+  is refused before the CLI runs, and the file must exist and be non-empty). The résumé flow
+  is therefore `browser_pdf` → `browser_upload`, both inside the fence. After the attach it
+  reads `input.files[0].name` back and requires it to match the uploaded file — a mismatch or
+  empty read-back is a hard `Error:`, and any field-level validation message is surfaced — so
+  a silent non-attach is never reported as success.
+
+### Changed
+- **The Analyst persona points a new operator at its own data folder first (#4038).** data-plugin
+  v0.1.4 gives every agent a default data folder, `<workspace>/data`. It's created on load and
+  always allowlisted, and `data_sources` names it when nothing is connected. The `analyst` soul
+  preset's first-run section now says: drop files into your data folder (the path
+  `data_sources` shows) or add folders in Settings ▸ Plugins ▸ Data Analyst ▸ Data folders.
+  When the operator has turned the default folder off, it points at Settings only.
+
+### Fixed
+- **Browser form tools work against the real agent-browser CLI, now guarded by real-Chrome tests (#4032).**
+  The `agent_browser` form drivers — `browser_select`, `browser_upload`, `browser_form_read`
+  and `browser_click`'s JS fallback — run their logic as in-page JavaScript and read the
+  result back through `agent-browser eval`. The pinned CLI (0.27.1) serialises a returned
+  STRING one layer deeper than the CLI-mocking unit tests assumed, so against a real browser
+  every one of those tools failed with "the page returned unreadable data" (and a JS fallback
+  was mis-reported as a plain click) — a drift the mocked suite could never catch. The forms
+  parser now tolerates that extra encoding layer, so the tools actually drive native
+  `<select>`, react-select comboboxes, intl-tel-input phone pickers and file inputs in a real
+  browser. Saved, self-contained Greenhouse and Ashby application-form fixtures and a live
+  test module (skipped unless the CLI and Chrome are present, so the default gate stays
+  host-free) lock the behavior in: a vendor markup change now fails a test instead of letting
+  the agent submit a wrong answer.
+
+- **A wait picks back up as part of the chat (#4043).**
+  - When an agent's `wait` runs out, the turn it resumes with now streams and settles in the chat like any other reply. It used to fold into a collapsed "Scheduled task" card, a treatment meant for schedules set somewhere else. Goal runs already worked this way.
+  - A turn that ends on `wait` without saying anything now replies "I'll pick this back up in 45 minutes." It used to show the wait's raw confirmation, including the instruction the agent left for itself, so the reply read as the agent prompting itself.
+
 ## [0.193.0] - 2026-10-04
 
 ### Added
