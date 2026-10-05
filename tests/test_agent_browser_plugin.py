@@ -1380,6 +1380,185 @@ async def test_a_flag_shaped_label_is_refused_before_any_resolve_eval(monkeypatc
     assert rec == []
 
 
+# ── #4032 A4: browser_click can fall back to a JS-dispatched click ─────────────────
+# On Greenhouse the résumé "Enter manually" button opened its textarea only after a
+# JS-dispatched click; a normal CLI click exited 0 and NOTHING happened. `js_fallback=True`
+# fingerprints the page, does the CLI click, re-fingerprints, and dispatches an in-page
+# click ONLY when nothing moved. Host-free: Popen is mocked, so the fingerprint/click evals
+# return canned bytes and the test reads the issued argv + stdin.
+
+
+def _click_fallback_popen(fingerprints, record=None, procs=None, click_out=b"(ok)",
+                          jsclick=b'{"ok":true}'):
+    """A scripted CLI for ``browser_click(js_fallback=True)`` against a CSS selector (no label
+    resolve eval): the Nth `eval --stdin` returns ``fingerprints[N]`` while any remain, then
+    the js-click eval returns ``jsclick``; the `click` verb returns ``click_out``. So the call
+    order is fingerprint-before (eval), click, fingerprint-after (eval), then — only when the
+    two fingerprints agree — the js-click (eval)."""
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            i = state["evals"]
+            state["evals"] += 1
+            out = fingerprints[i] if i < len(fingerprints) else jsclick
+        else:
+            out = click_out
+        p = _FakeProc(argv, out=out if isinstance(out, bytes) else out.encode())
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_click_without_js_fallback_issues_no_fingerprint_eval(monkeypatch):
+    """r1: the default path is byte-for-byte the old one — a single CLI click, no fingerprint
+    evals, for a CSS selector just as for a `@eN` ref."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "#go"})
+    assert out == "(ok)" and rec == [["ab", "click", "#go"]]
+    # explicit js_fallback=False is identical
+    rec.clear()
+    await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "#go", "js_fallback": False})
+    assert rec == [["ab", "click", "#go"]]
+
+
+async def test_js_fallback_dispatches_an_in_page_click_when_nothing_changed(monkeypatch):
+    """r2: the fingerprint is unchanged after the CLI click, so the tool dispatches a bubbling
+    in-page click on the resolved element and says `(JS fallback)`."""
+    rec, procs = [], []
+    fp = b'{"n":100,"ae":"BODY#.:","exp":"false"}'
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        _click_fallback_popen([fp, fp], record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#enter-manually", "js_fallback": True})
+    # fingerprint-before, click, fingerprint-after, THEN the fallback js-click
+    assert [a[1] for a in rec] == ["eval", "click", "eval", "eval"]
+    assert out == "Clicked #enter-manually (JS fallback)"
+    # the fallback eval dispatches a bubbling click on the SAME selector, never a keypress
+    js = procs[-1].stdin.getvalue().decode()
+    assert "querySelector" in js and "mousedown" in js and "mouseup" in js and "el.click()" in js
+    assert json.dumps("#enter-manually") in js and "press" not in js.lower()
+
+
+async def test_js_fallback_does_not_dispatch_when_the_click_changed_the_page(monkeypatch):
+    """r3: the fingerprint moved (the textarea opened, element count grew), so the click
+    worked — the tool must NOT dispatch a second click."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _click_fallback_popen(
+        [b'{"n":100,"ae":"A","exp":"false"}', b'{"n":140,"ae":"TEXTAREA","exp":"true"}'], record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#enter-manually", "js_fallback": True})
+    # fingerprint-before, click, fingerprint-after — and then STOP (no third eval)
+    assert [a[1] for a in rec] == ["eval", "click", "eval"]
+    assert out == "(ok)" and "JS fallback" not in out
+
+
+async def test_js_fallback_suppressed_when_a_fingerprint_cannot_be_read(monkeypatch):
+    """A doubt is never a second click: if either fingerprint comes back as an Error, the CLI
+    result stands and no in-page click is dispatched."""
+    rec = []
+    seen = {"evals": 0}
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            seen["evals"] += 1
+            if seen["evals"] == 2:
+                return _FakeProc(argv, out=b"", err=b"page gone", rc=1)   # fingerprint-after fails
+            return _FakeProc(argv, out=b'{"n":100,"ae":"","exp":""}')
+        return _FakeProc(argv, out=b"(ok)")
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#x", "js_fallback": True})
+    assert [a[1] for a in rec] == ["eval", "click", "eval"]   # no fallback js-click
+    assert out == "(ok)"
+
+
+async def test_js_fallback_does_not_fire_when_the_cli_click_itself_errors(monkeypatch):
+    """A CLI click that exits non-zero is a real failure to surface — not a case for the JS
+    fallback, which exists for a click that 'succeeds' yet does nothing."""
+    rec = []
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            return _FakeProc(argv, out=b'{"n":1,"ae":"","exp":""}')
+        return _FakeProc(argv, out=b"", err=b"no such element", rc=2)   # the click fails
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#missing", "js_fallback": True})
+    assert out.startswith("Error:") and "no such element" in out
+    assert [a[1] for a in rec] == ["eval", "click"]   # fingerprint-before, click, then stop
+
+
+async def test_js_fallback_resolves_a_label_through_the_shared_locator(monkeypatch):
+    """r4: with js_fallback a LABEL is still resolved through the bd-12mo.1 locator — the
+    resolve eval enumerates, and the fingerprint/click/fallback all act on the resolved
+    `[data-ab-field]` selector, never a stale ref."""
+    rec, procs = [], []
+    fields = [{"label": "Enter manually", "labels": ["Enter manually"],
+               "selector": '[data-ab-field="3"]', "kind": "other"}]
+    enum = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+    fp = b'{"n":80,"ae":"","exp":"false"}'
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            i = state["evals"]
+            state["evals"] += 1
+            out = enum if i == 0 else (fp if i in (1, 2) else b'{"ok":true}')
+            p = _FakeProc(argv, out=out)
+        else:
+            p = _FakeProc(argv, out=b"(ok)")
+        procs.append(p)
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "Enter manually", "js_fallback": True})
+    # resolve(eval) → fingerprint(eval) → click → fingerprint(eval) → js-click(eval)
+    assert [a[1] for a in rec] == ["eval", "eval", "click", "eval", "eval"]
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()        # the shared resolver
+    assert rec[2] == ["ab", "click", '[data-ab-field="3"]']           # clicked the resolved selector
+    assert json.dumps('[data-ab-field="3"]') in procs[-1].stdin.getvalue().decode()
+    assert out == "Clicked Enter manually (JS fallback)"              # reported by the model's label
+
+
+def test_fingerprint_js_and_js_click_js_ride_stdin_and_carry_the_selector():
+    """The two fallback scripts are built host-free: each embeds the selector as a JSON literal
+    and is shaped for `eval --stdin` (#3689)."""
+    fp = forms.fingerprint_js('[data-ab-field="2"]')
+    assert json.dumps('[data-ab-field="2"]') in fp and "getElementsByTagName" in fp
+    assert "activeElement" in fp and "aria-expanded" in fp
+    click = forms.js_click_js("#go")
+    assert json.dumps("#go") in click and "mousedown" in click and "el.click()" in click
+
+
+@pytest.mark.parametrize(("before", "after", "changed"), [
+    ('{"n":1}', '{"n":1}', False),            # identical → nothing moved
+    ('{"n":1}', '{"n":2}', True),             # element count grew → the click did something
+    ("Error: boom", '{"n":1}', True),         # unreadable → treated as changed (suppress fallback)
+    ('{"n":1}', "", True),                    # empty → suppress
+])
+def test_fingerprint_changed_is_strict_and_fails_safe(before, after, changed):
+    assert forms.fingerprint_changed(before, after) is changed
+
+
+def test_render_js_click_reports_the_fallback_or_defers_to_the_cli():
+    assert forms.render_js_click('{"ok":true}', "#go", "(ok)") == "Clicked #go (JS fallback)"
+    # element not resolvable in-page (a @ref) → the CLI's own result stands
+    assert forms.render_js_click('{"ok":false,"reason":"not-found"}', "@e5", "(ok)") == "(ok)"
+    assert forms.render_js_click("<<garbage>>", "#go", "(ok)") == "(ok)"
+
+
 # ── browser_form_read — the tool (canned eval output + stdin script) ───────────────
 
 
@@ -2936,6 +3115,32 @@ def test_every_tool_the_skill_declares_exists():
     assert declared, "the web-browse skill should declare its tools"
     assert declared <= EXPECTED_TOOLS, sorted(declared - EXPECTED_TOOLS)
     assert "browser_pdf" in declared   # the new capability is discoverable
+
+
+def test_the_skill_frontmatter_lists_the_form_filling_tools():
+    """#4032 A4: the web-browse skill now teaches form filling, so its advisory `tools:` list
+    must carry the form tools the Filling forms section relies on — or the model can't see
+    them as part of the skill."""
+    from graph.skills.loader import parse_skill_md
+
+    declared = set(parse_skill_md(ROOT / "skills" / "web-browse" / "SKILL.md").tools_used or [])
+    assert {"browser_form_read", "browser_select", "browser_upload"} <= declared
+
+
+def test_the_skill_has_a_filling_forms_section_with_the_form_doctrine():
+    """r5: the Filling forms doctrine is present — read first, address by label, select for
+    dropdowns, country-before-number, upload from a browser_pdf, read-back diff, and never
+    submitting (or solving a captcha/login) without the operator."""
+    text = _skill_text()
+    assert "## Filling forms" in text
+    assert "browser_form_read" in text and "browser_select" in text and "browser_upload" in text
+    low = text.lower()
+    assert "label" in low and "@en" in low                       # address by label, not @eN
+    assert "never" in low and "type" in low and "enter" in low   # never type-and-Enter for selects
+    assert "country" in low and "number" in low                  # country before the number
+    assert "browser_pdf" in text                                 # upload a file made with browser_pdf
+    assert "js_fallback" in low                                  # the click fallback is taught
+    assert "submit" in low and ("captcha" in low or "login" in low)   # consent + human steps
 
 
 def test_every_backticked_identifier_in_the_skill_is_a_real_tool():

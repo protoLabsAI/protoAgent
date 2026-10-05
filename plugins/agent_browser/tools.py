@@ -523,13 +523,35 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
-    async def browser_click(selector: str) -> str:
+    async def browser_click(selector: str, js_fallback: bool = False) -> str:
         """Click a form field by its visible LABEL (re-resolved in the page each call, so it
         survives re-renders — a checkbox, radio or combobox by label), a `@eN` ref (from
         `browser_snapshot`), or a CSS selector (e.g. `#submit`). Address buttons and links,
-        which are not form fields, by ref or CSS; `browser_form_read` lists the labels."""
+        which are not form fields, by ref or CSS; `browser_form_read` lists the labels.
+
+        Set `js_fallback=true` when a click reports success but the page visibly does
+        NOTHING (a Greenhouse "Enter manually" button that won't open its textarea, a custom
+        control that ignores a synthetic click): the tool fingerprints the page, does the
+        normal CLI click, re-fingerprints, and ONLY if nothing changed dispatches an in-page
+        click (a bubbling mousedown/mouseup plus `el.click()`) and reports `(JS fallback)`. It
+        never clicks twice when the first click already worked. The default (`js_fallback`
+        off) is the plain CLI click, unchanged."""
         sel, err = await _resolve_field(selector)
-        return err or await _ab("click", sel)
+        if err:
+            return err
+        if not js_fallback:
+            return await _ab("click", sel)
+        # Fingerprint → CLI click → re-fingerprint. Only a click that moved NOTHING (and whose
+        # fingerprints we could actually read) earns the in-page dispatch; see fingerprint_changed.
+        before = await _ab("eval", "--stdin", stdin=forms.fingerprint_js(sel))
+        clicked = await _ab("click", sel)
+        if clicked.startswith("Error:"):
+            return clicked            # the CLI click itself failed — nothing to fall back from
+        after = await _ab("eval", "--stdin", stdin=forms.fingerprint_js(sel))
+        if forms.fingerprint_changed(before, after):
+            return clicked            # the click DID something (or we can't tell) — no second click
+        dispatched = await _ab("eval", "--stdin", stdin=forms.js_click_js(sel))
+        return forms.render_js_click(dispatched, selector, clicked)
 
     @tool
     async def browser_fill(selector: str, text: str) -> str:
