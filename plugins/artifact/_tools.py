@@ -132,9 +132,58 @@ def _save_nudge(art_id: str) -> str:
     )
 
 
+def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
+    """``path`` (+ optional fs ``project``) → the file to save, or ``(None, why)``.
+
+    Speaks the fs tools' path language, so a file the agent just found with
+    ``find_files``/``read_file`` (a project + a relative path) saves as-is:
+
+    * ``project`` given → resolved inside that project's fence (``..`` can't escape it);
+    * an absolute or ``~`` path → used as-is (unchanged behaviour);
+    * a relative path with no project → looked up in every registered project. Exactly one
+      hit wins; more than one is ambiguous (the agent must name the project); none falls back
+      to the old cwd-relative lookup before giving up.
+    """
+    raw = (path or "").strip()
+    registry = _links._registry()
+    if project:
+        if registry is None:
+            return None, f"project {project!r} given, but this agent has no filesystem projects — pass an absolute path."
+        try:
+            p = registry.resolve(project, raw)
+        except ValueError as e:
+            return None, f"{e}."
+        if not p.is_file():
+            return None, f"No file at {raw!r} in project {project!r}. Write the file first, then pass its path."
+        return p, ""
+    p = Path(os.path.expanduser(raw))
+    if p.is_absolute():
+        p = p.resolve()
+        return (p, "") if p.is_file() else (None, f"No file at {raw!r}. Write the file first, then pass its path.")
+    hits: list[tuple[str, Path]] = []
+    names = registry.names() if registry is not None else []
+    for name in names:
+        try:
+            cand = registry.resolve(name, raw)
+        except ValueError:
+            continue
+        if cand.is_file():
+            hits.append((name, cand))
+    if len(hits) == 1:
+        return hits[0][1], ""
+    if len(hits) > 1:
+        where = ", ".join(n for n, _ in hits)
+        return None, f"{raw!r} exists in more than one project ({where}) — pass `project` to pick one."
+    cwd = p.resolve()
+    if cwd.is_file():
+        return cwd, ""
+    looked = f" (looked in project(s): {', '.join(names)})" if names else ""
+    return None, f"No file at {raw!r}{looked}. Write the file first, then pass its path."
+
+
 @tool
 @_busy_reply
-def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
+def save_file_artifact(path: str, title: str = "", artifact_id: str = "", project: str = "") -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
     wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
     the same edit-history + inspectable panel treatment as a rendered artifact, and the user
@@ -155,11 +204,15 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
     becomes v2, v3… of the same artifact rather than a new panel entry), pass that artifact's
     ``artifact_id`` (see ``list_artifacts``). Returns the artifact id.
 
+    ``path`` takes the same form as the fs tools: a path relative to a filesystem project
+    (pass ``project``, or omit it when only one project has that file — the default
+    ``workspace`` included), or an absolute path.
+
     This is for FILES on disk. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
     """
-    p = Path(os.path.expanduser(path or "")).resolve()
-    if not p.exists() or not p.is_file():
-        return f"No file at {path!r}. Write the file first, then pass its path."
+    p, why = _resolve_file(path, project)
+    if p is None:
+        return why
     data = p.read_bytes()
     limit = _config._max_blob_bytes()
     if len(data) > limit:
