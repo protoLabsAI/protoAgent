@@ -64,7 +64,8 @@ EXPECTED_TOOLS = {
     "browser_open", "browser_back", "browser_forward", "browser_reload",
     "browser_snapshot", "browser_get_text", "browser_get_html", "browser_get_value",
     "browser_form_read",
-    "browser_click", "browser_fill", "browser_type", "browser_select", "browser_press", "browser_hover",
+    "browser_click", "browser_fill", "browser_type", "browser_select", "browser_upload",
+    "browser_press", "browser_hover",
     "browser_eval", "browser_screenshot", "browser_pdf", "browser_close",
 }
 
@@ -223,11 +224,12 @@ async def test_action_tools_pass_refs(monkeypatch):
     assert rec[-1] == ["ab", "snapshot"]
 
 
-def test_all_19_tools_present():
+def test_all_20_tools_present():
     names = set(_toolmap())
     assert names == EXPECTED_TOOLS
     # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032 A1) + browser_select (#4032 A2)
-    assert len(names) == 19
+    #   + browser_upload (#4032 A3)
+    assert len(names) == 20
     assert "browser_dashboard" not in names  # the dashboard tool is gone (full switchover)
 
 
@@ -1900,6 +1902,417 @@ def test_select_is_a_registered_tool_with_a_usable_docstring():
     assert t.description and len(t.description) >= 20
 
 
+# ── #4032 A3: browser_upload — attach a fenced file to a file input, with read-back ──
+# Host-free like the other form tools: the in-page engine never runs here. The fence is pure
+# Python (storage.resolve_upload_path) and exercised directly; the tool tests mock Popen and
+# assert argv + the canned read-back; the in-page file-input RESOLUTION (the Attach-button
+# container climb) is proven against a real DOM (jsdom) where it is the only host-free way.
+
+
+# ── storage.resolve_upload_path — the capture fence, in reverse ────────────────────
+
+
+def test_resolve_upload_path_accepts_a_file_inside_the_fence():
+    root = storage.capture_root().resolve()
+    f = root / "cv.pdf"
+    f.write_bytes(b"%PDF-1.4 resume")
+    assert storage.resolve_upload_path("cv.pdf") == f
+    assert storage.resolve_upload_path(str(f)) == f   # an absolute path already inside the fence
+
+
+def test_resolve_upload_path_accepts_a_relative_subdirectory_file():
+    root = storage.capture_root().resolve()
+    sub = root / "out"
+    sub.mkdir()
+    (sub / "resume.pdf").write_bytes(b"%PDF")
+    assert storage.resolve_upload_path("out/resume.pdf") == (sub / "resume.pdf").resolve()
+
+
+@pytest.mark.parametrize("bad", [
+    "/etc/passwd",
+    "../../escape.pdf",
+    "a/../../escape.pdf",
+    "~/.ssh/id_rsa",
+    "",
+    ".",
+])
+def test_resolve_upload_path_refuses_paths_outside_the_fence(bad):
+    with pytest.raises(ValueError):
+        storage.resolve_upload_path(bad)
+
+
+def test_resolve_upload_path_requires_an_existing_non_empty_file():
+    root = storage.capture_root().resolve()
+    (root / "empty.pdf").write_bytes(b"")
+    with pytest.raises(ValueError) as e_empty:
+        storage.resolve_upload_path("empty.pdf")      # inside the fence, but zero bytes
+    assert "empty" in str(e_empty.value)
+    with pytest.raises(ValueError):
+        storage.resolve_upload_path("missing.pdf")    # inside the fence, but absent
+
+
+def test_resolve_upload_path_refuses_a_symlink_escaping_the_fence(tmp_path):
+    root = storage.capture_root().resolve()
+    outside = tmp_path / "secret.pdf"
+    outside.write_bytes(b"%PDF secret")
+    link = root / "linked.pdf"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this host")
+    with pytest.raises(ValueError):
+        storage.resolve_upload_path("linked.pdf")     # resolves (and exists) OUTSIDE the root
+
+
+# ── the tool: fence refusals run BEFORE any subprocess ─────────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../../escape.pdf", "~/.ssh/id_rsa", ""])
+async def test_upload_refuses_a_path_outside_the_fence_without_running_the_cli(monkeypatch, bad):
+    """r3/r4: a path that escapes the fence (or is blank) is an Error, and the CLI never runs —
+    the fence is resolved before any subprocess, exactly like a capture."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": bad})
+    assert out.startswith("Error:")
+    assert rec == []   # nothing reached agent-browser
+
+
+async def test_upload_refuses_a_symlink_escape_without_running_the_cli(monkeypatch, tmp_path):
+    """r3: a symlink INSIDE the fence that points out resolves to a file elsewhere — refused
+    before the CLI, so a planted link can't exfiltrate its target."""
+    root = storage.capture_root().resolve()
+    outside = tmp_path / "secret.pdf"
+    outside.write_bytes(b"%PDF secret")
+    try:
+        (root / "linked.pdf").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this host")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "linked.pdf"})
+    assert out.startswith("Error:") and "outside" in out
+    assert rec == []
+
+
+async def test_upload_refuses_a_missing_or_empty_file_without_running_the_cli(monkeypatch):
+    """r4: a file that is missing, or present but empty, is an Error before the upload."""
+    root = storage.capture_root().resolve()
+    (root / "empty.pdf").write_bytes(b"")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    t = _toolmap({"binary": "ab"})
+    out_missing = await t["browser_upload"].ainvoke({"field": "#resume", "file_path": "nope.pdf"})
+    out_empty = await t["browser_upload"].ainvoke({"field": "#resume", "file_path": "empty.pdf"})
+    assert out_missing.startswith("Error:") and out_empty.startswith("Error:")
+    assert rec == []   # neither reached the CLI
+
+
+async def test_upload_refuses_a_ref_field_without_running_the_cli(monkeypatch):
+    """A @ref can't be resolved in the page (where the input is tagged), so it's refused up
+    front — as browser_select / browser_form_read do — before any subprocess."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "@e5", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []
+
+
+# ── the tool: the happy path + the read-back verify ────────────────────────────────
+
+
+def _upload_popen(locate, verify, record=None, procs=None, upload_out=b"(ok)"):
+    """A scripted CLI for browser_upload against a CSS field (no resolver eval): the FIRST
+    `eval --stdin` answers the locate/tag step with `locate`, the SECOND answers the read-back
+    verify with `verify`, and `upload` returns `upload_out`."""
+    loc = locate if isinstance(locate, (bytes, bytearray)) else json.dumps(locate).encode()
+    ver = verify if isinstance(verify, (bytes, bytearray)) else json.dumps(verify).encode()
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = loc if state["evals"] == 0 else ver
+            state["evals"] += 1
+        elif argv[1:2] == ["upload"]:
+            out = upload_out
+        p = _FakeProc(argv, out=out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_upload_attaches_a_fenced_file_and_verifies_the_readback(monkeypatch):
+    """r1: a CSS-addressed file input is tagged in-page, the CLI uploads the fenced ABSOLUTE
+    path to that stable selector, and success is reported only after reading the attached
+    filename back and confirming it matches."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4 resume")
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="abc123"]', "label": "Résumé", "name": "resume"},
+        {"ok": True, "name": "cv.pdf", "error": ""},
+        record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    # locate(eval) → upload → verify(eval): a CSS field skips the label resolver
+    assert [a[1] for a in rec] == ["eval", "upload", "eval"]
+    # the CLI uploads the STABLE tagged selector + the fenced ABSOLUTE path — never a ref
+    assert rec[1] == ["ab", "upload", '[data-pa-upload="abc123"]', str(resume)]
+    # both scripts ride stdin (#3689): the locate tags with data-pa-upload, the verify reads files[0]
+    locate_script = procs[0].stdin.getvalue().decode()
+    verify_script = procs[2].stdin.getvalue().decode()
+    assert "data-pa-upload" in locate_script
+    assert "abc123" in verify_script and "files" in verify_script
+
+
+async def test_upload_resolves_a_label_through_the_bd12mo1_locator_first(monkeypatch):
+    """r1/r2: a LABEL is resolved FRESH by the shared bd-12mo.1 resolver (an enumerate eval),
+    and the resolved `[data-ab-field]` selector is what the locate/tag step then acts on —
+    resolve, locate, upload, verify, all on stdin."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF resume")
+    fields = [{"label": "Résumé", "labels": ["Résumé"], "selector": '[data-ab-field="6"]', "kind": "file"}]
+    enum = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+    locate = json.dumps({"ok": True, "selector": '[data-pa-upload="n"]', "label": "Résumé"}).encode()
+    verify = json.dumps({"ok": True, "name": "cv.pdf", "error": ""}).encode()
+    rec, procs = [], []
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = (enum, locate, verify)[state["evals"]]
+            state["evals"] += 1
+        p = _FakeProc(argv, out=out)
+        procs.append(p)
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "Résumé", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    assert [a[1] for a in rec] == ["eval", "eval", "upload", "eval"]
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()           # the resolver runs first
+    assert json.dumps('[data-ab-field="6"]') in procs[1].stdin.getvalue().decode()  # tagged the match
+    assert rec[2] == ["ab", "upload", '[data-pa-upload="n"]', str(resume)]
+
+
+async def test_upload_marks_the_file_in_flight_so_a_prune_cannot_take_it(monkeypatch):
+    """r6: while the upload runs, the source file is protected from capture pruning — even a
+    prune with a zero budget fired mid-upload leaves it in place."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4 resume content")
+    locate = json.dumps({"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"}).encode()
+    verify = json.dumps({"ok": True, "name": "cv.pdf", "error": ""}).encode()
+    seen, state = {}, {"evals": 0}
+
+    def _popen(argv, **kw):
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = locate if state["evals"] == 0 else verify
+            state["evals"] += 1
+        elif argv[1:2] == ["upload"]:
+            # a prune that would otherwise delete every capture fires mid-upload
+            storage.prune_captures(max_files=0, max_bytes=0)
+            seen["survived"] = resume.is_file()
+        return _FakeProc(argv, out=out)
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    assert seen["survived"] is True   # the in-flight source was shielded from the prune
+
+
+# ── the tool: verify failures and locate errors are hard errors ────────────────────
+
+
+async def test_upload_readback_mismatch_is_a_hard_error(monkeypatch):
+    """r5: the input reading back a DIFFERENT filename than was uploaded is an Error naming
+    both — never a success. This is the guard against a silent non-attach."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+        {"ok": True, "name": "stale-old-file.pdf", "error": ""}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "Uploaded" not in out
+    assert "stale-old-file.pdf" in out and "cv.pdf" in out
+
+
+async def test_upload_empty_readback_is_a_hard_error_and_surfaces_validation(monkeypatch):
+    """r5: an empty read-back (nothing attached) is an Error, and any field validation text is
+    surfaced so the agent learns why."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+        {"ok": True, "name": "", "error": "Résumé is required"}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "nothing is attached" in out
+    assert "Résumé is required" in out
+
+
+async def test_upload_no_file_input_in_container_is_an_error(monkeypatch):
+    """r2 (negative): the located element isn't a file input and its container has none — a
+    clear Error, and the CLI never uploads."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": False, "reason": "no-file-input", "label": "Cover letter"},
+        {"ok": True}, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#cover", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "file input" in out
+    assert not any(a[1:2] == ["upload"] for a in rec)   # located, then stopped — never uploaded
+
+
+async def test_upload_multiple_file_inputs_in_container_is_an_error(monkeypatch):
+    """r2 (negative): more than one file input in the container is ambiguous, never a guess."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": False, "reason": "multiple", "label": "Documents", "count": 2},
+        {"ok": True}, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#docs", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "ambiguous" in out and "2" in out
+    assert not any(a[1:2] == ["upload"] for a in rec)
+
+
+async def test_upload_surfaces_a_cli_upload_error(monkeypatch):
+    """A non-zero `upload` exit (e.g. the element vanished) is surfaced, not swallowed."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+
+    def _popen(argv, **kw):
+        if argv[1:2] == ["eval"]:
+            return _FakeProc(argv, out=json.dumps(
+                {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"}).encode())
+        if argv[1:2] == ["upload"]:
+            return _FakeProc(argv, out=b"", err=b"no element", rc=1)
+        return _FakeProc(argv, out=b"(ok)")
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "no element" in out
+
+
+async def test_upload_degrades_on_unreadable_locate_output_instead_of_raising(monkeypatch):
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen("not json at all", {"ok": True}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:")   # never raises
+
+
+async def test_upload_flag_shaped_field_is_refused_before_anything(monkeypatch):
+    """The argv guard fires first: a flag-shaped field never reaches the fence or the CLI."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "--headed", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "looks like a command-line option" in out
+    assert rec == []
+
+
+# ── the in-page resolution (a real DOM via jsdom) — the Attach-button container climb ──
+
+
+def _run_upload_js(html: str, selector: str, nonce: str = "n1"):
+    """Eval `forms.upload_js(selector, nonce)` against a real DOM (jsdom) and return the JSON
+    it produces — the only host-free way to prove the file-input container resolution."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        "const script = " + json.dumps(forms.upload_js(selector, nonce)) + ";\n"
+        "console.log((0, eval)(script));\n"   # upload_js returns a JSON string
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+_ATTACH_BUTTON_HTML = """
+<form>
+  <div class="field" id="resume-field">
+    <label>Resume/CV</label>
+    <button type="button">Attach</button>
+    <input type="file" name="resume" style="display:none"/>
+  </div>
+</form>
+"""
+
+
+def test_upload_js_uses_the_single_file_input_hidden_behind_an_attach_button():
+    """r2: the located element is the field wrapper (the real input hides behind an "Attach"
+    button, as Greenhouse/Ashby do). The driver climbs to the container and tags its single
+    file input, so the CLI gets a stable `[data-pa-upload]` selector for it."""
+    res = _run_upload_js(_ATTACH_BUTTON_HTML, "#resume-field", nonce="n1")
+    assert res["ok"] is True
+    assert res["selector"] == '[data-pa-upload="n1"]'
+    assert res["name"] == "resume"
+
+
+def test_upload_js_tags_a_file_input_addressed_directly():
+    html = '<form><label for="r">Résumé</label><input id="r" type="file" name="resume"/></form>'
+    res = _run_upload_js(html, "#r", nonce="z9")
+    assert res["ok"] is True and res["selector"] == '[data-pa-upload="z9"]' and res["name"] == "resume"
+
+
+def test_upload_js_refuses_more_than_one_file_input_in_the_container():
+    html = ('<form><div id="box">'
+            '<input type="file" name="a"/><input type="file" name="b"/>'
+            '</div></form>')
+    res = _run_upload_js(html, "#box", nonce="z")
+    assert res["ok"] is False and res["reason"] == "multiple" and res["count"] == 2
+
+
+def test_upload_js_refuses_when_the_container_has_no_file_input():
+    html = '<form><div id="box"><input type="text" name="a"/></div></form>'
+    res = _run_upload_js(html, "#box", nonce="z")
+    assert res["ok"] is False and res["reason"] == "no-file-input"
+
+
+def test_upload_js_reports_not_found_for_an_absent_selector():
+    res = _run_upload_js("<form></form>", "#nope", nonce="z")
+    assert res["ok"] is False and res["reason"] == "not-found"
+
+
+def test_upload_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_upload"]
+    assert "browser_upload" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
+
+
 # ── register() wiring ────────────────────────────────────────────────────────────
 
 
@@ -2606,7 +3019,7 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
     entirely, so a renamed subcommand would have shipped green. Read its own help."""
     help_text = subprocess.run([CLI, "--help"], capture_output=True, text=True, timeout=60).stdout
     for verb in ("open", "back", "forward", "reload", "snapshot", "click", "fill", "type",
-                 "press", "hover", "eval", "screenshot", "pdf", "close"):
+                 "press", "hover", "eval", "screenshot", "pdf", "upload", "close"):
         assert re.search(rf"^\s+{re.escape(verb)}\b", help_text, re.M), f"CLI lost `{verb}`"
     # `get <what>` is documented as its own group, and the plugin sends text/html/value
     assert "agent-browser get <what>" in help_text

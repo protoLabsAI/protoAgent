@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import signal
 import subprocess
 import threading
@@ -591,6 +592,72 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return forms.render_select(out, field, option_text)
 
     @tool
+    async def browser_upload(field: str, file_path: str) -> str:
+        """Attach a local file to a form's file input and VERIFY it took. Use this for an
+        application form that wants a résumé/CV FILE (Ashby, Greenhouse) — a plain
+        `browser_fill` cannot set a file input.
+
+        `file_path` is FENCED to this plugin's own capture directory: a bare filename or
+        relative path resolves inside it, and an absolute path is accepted only if it already
+        lies inside it. A path that escapes — `..`, a symlink out, `~/.ssh/...`, any absolute
+        path elsewhere — is refused, so a prompt-injected page cannot make the agent upload an
+        arbitrary local file. The way to get a file here is `browser_pdf`, which writes into
+        this same directory and returns the path to pass straight to `browser_upload`; the
+        file must exist and be non-empty.
+
+        Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
+        re-renders) or a CSS selector — NOT a `@eN` ref (the input is located and tagged in the
+        page, where a ref can't be resolved; `browser_form_read` has the same limit). If the
+        located element isn't the file input itself — Greenhouse/Ashby hide it behind an
+        "Attach" button — the single file input in its container is used; none, or more than
+        one, is a clear error.
+
+        On success you get `Uploaded <name> to <label>`, returned only after reading the
+        attached filename back and confirming it matches the uploaded file; a read-back that is
+        empty or a different name is a hard `Error:`, and any validation message the field
+        shows is surfaced."""
+        if (bad := _bad_operand(field=field)):
+            return bad
+        # A @ref is resolved by the CLI, not in the page — but the file input is located AND
+        # tagged via an in-page querySelector, where "@e5" is invalid CSS and throws. Refuse it
+        # up front (browser_select / browser_form_read do the same) rather than fail obscurely.
+        if forms.is_ref(field):
+            return ("Error: browser_upload can't address a field by a @ref — a ref is resolved "
+                    "by the CLI, not in the page, and the file input is located and tagged "
+                    "in-page. Pass the field's visible LABEL or a CSS selector; browser_form_read "
+                    "lists them.")
+        # Fence the SOURCE path FIRST — a rejected path never reaches the CLI, and the file must
+        # exist and be non-empty. The résumé flow hands this the path browser_pdf returned.
+        try:
+            source = await asyncio.to_thread(storage.resolve_upload_path, file_path)
+        except ValueError as e:
+            return f"Error: {e}"
+        except Exception as e:  # noqa: BLE001 — an unreadable store informs the loop, never crashes it
+            return f"Error: could not prepare the upload: {e}"
+        # Resolve the field FRESH this call (the bd-12mo.1 locator), then refine to the file
+        # input and tag it with a nonce so the CLI acts on a stable selector, never a stale ref.
+        sel, err = await _resolve_field(field)
+        if err:
+            return err
+        nonce = secrets.token_hex(8)
+        located = await _ab("eval", "--stdin", stdin=forms.upload_js(sel, nonce))
+        if located.startswith("Error:"):
+            return located
+        target, label, locate_err = forms.parse_upload(located, field)
+        if locate_err:
+            return locate_err
+        # A file being uploaded must not be pruned mid-call (a concurrent capture's prune, or
+        # one over budget) — mark it in flight for the duration of the CLI call.
+        with storage.in_flight(source):
+            up = await _ab("upload", target, str(source))
+        if up.startswith("Error:"):
+            return up
+        read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(target))
+        if read.startswith("Error:"):
+            return read
+        return forms.render_upload(read, field, source.name, label=label)
+
+    @tool
     async def browser_press(key: str) -> str:
         """Press a key or chord on the focused element (e.g. `Enter`, `Tab`,
         `Control+a`)."""
@@ -652,6 +719,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         browser_open, browser_back, browser_forward, browser_reload,
         browser_snapshot, browser_get_text, browser_get_html, browser_get_value,
         browser_form_read,
-        browser_click, browser_fill, browser_type, browser_select, browser_press, browser_hover,
+        browser_click, browser_fill, browser_type, browser_select, browser_upload,
+        browser_press, browser_hover,
         browser_eval, browser_screenshot, browser_pdf, browser_close,
     ]
