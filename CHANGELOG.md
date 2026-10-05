@@ -15,6 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.195.0] - 2026-10-05
+
+### Added
+- **PDF file artifacts render as real pages in the Artifact panel (#4046).**
+  A `.pdf` saved with `save_file_artifact` now previews as its pages: one continuous scroll
+  fitted to the panel, a page indicator, and zoom (−/Fit/+), with the extracted text kept
+  underneath. Rendering uses vendored pdf.js on the sandboxed frame's main thread, with no
+  workers and no network. A save-time preflight decodes every stream under byte and time
+  budgets and refuses password-protected, oversized or bomb-like files, which keep the text card
+  with the reason.
+
+### Fixed
+- **`save_file_artifact` accepts the same project-relative paths as the fs tools (#4044).**
+  A file found with `find_files`/`read_file` (a project plus a relative path) now saves
+  as-is. Pass `project` to pick one, or omit it when only one project has the file. Before
+  this, a relative path resolved against the server's working directory and failed with
+  "No file at".
+
 ## [0.194.0] - 2026-10-05
 
 ### Added
