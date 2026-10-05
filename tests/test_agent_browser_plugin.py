@@ -1532,6 +1532,25 @@ async def test_js_fallback_resolves_a_label_through_the_shared_locator(monkeypat
     assert out == "Clicked Enter manually (JS fallback)"              # reported by the model's label
 
 
+async def test_js_fallback_refuses_a_ref_without_running_the_cli(monkeypatch):
+    """#4032 review: with `js_fallback` a `@ref` was silently a no-op — the fallback dispatches
+    the click via an in-page document.querySelector where "@e5" is invalid CSS and throws, the
+    throw was swallowed as 'not-found', and the CLI's ordinary success text still stood, so the
+    model believed a fallback ran that didn't. A ref is now refused up front (as browser_select
+    / browser_upload / browser_form_read refuse refs), before ANY subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "@e5", "js_fallback": True})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't drive an in-page click — refuse before the CLI runs
+    # but the SAME ref still clicks fine on the plain CLI path (js_fallback off), unchanged
+    rec.clear()
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "@e5", "js_fallback": False})
+    assert out == "(ok)" and rec == [["ab", "click", "@e5"]]
+
+
 def test_fingerprint_js_and_js_click_js_ride_stdin_and_carry_the_selector():
     """The two fallback scripts are built host-free: each embeds the selector as a JSON literal
     and is shaped for `eval --stdin` (#3689)."""
@@ -1554,8 +1573,8 @@ def test_fingerprint_changed_is_strict_and_fails_safe(before, after, changed):
 
 def test_render_js_click_reports_the_fallback_or_defers_to_the_cli():
     assert forms.render_js_click('{"ok":true}', "#go", "(ok)") == "Clicked #go (JS fallback)"
-    # element not resolvable in-page (a @ref) → the CLI's own result stands
-    assert forms.render_js_click('{"ok":false,"reason":"not-found"}', "@e5", "(ok)") == "(ok)"
+    # element gone from the page by dispatch time (not-found) → the CLI's own result stands
+    assert forms.render_js_click('{"ok":false,"reason":"not-found"}', "#go", "(ok)") == "(ok)"
     assert forms.render_js_click("<<garbage>>", "#go", "(ok)") == "(ok)"
 
 

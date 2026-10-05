@@ -534,8 +534,23 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         control that ignores a synthetic click): the tool fingerprints the page, does the
         normal CLI click, re-fingerprints, and ONLY if nothing changed dispatches an in-page
         click (a bubbling mousedown/mouseup plus `el.click()`) and reports `(JS fallback)`. It
-        never clicks twice when the first click already worked. The default (`js_fallback`
-        off) is the plain CLI click, unchanged."""
+        never clicks twice when the first click already worked. Because the fallback dispatches
+        the click in the page, address the target by its LABEL or a CSS selector when you set
+        `js_fallback` — a `@eN` ref is resolved by the CLI, not in the page, so it can't drive
+        the fallback and is refused (as `browser_select`/`browser_upload`/`browser_form_read`
+        refuse refs for the same in-page limit). The default (`js_fallback` off) is the plain
+        CLI click, unchanged — a ref still works there."""
+        # A @ref drives the JS fallback through an in-page document.querySelector, where "@e5"
+        # is invalid CSS and throws: the dispatch would do NOTHING while the CLI's success text
+        # stood, so the model would believe a fallback ran that didn't. Refuse a ref up front
+        # when a fallback is asked for (browser_select / browser_upload / browser_form_read
+        # refuse refs for the same reason); a ref still works for the plain CLI click below.
+        if js_fallback and forms.is_ref(selector):
+            return ("Error: browser_click can't run its JS fallback on a @ref — a ref is "
+                    "resolved by the CLI, not in the page, and the fallback dispatches the "
+                    "click in-page. Pass the button's visible LABEL or a CSS selector "
+                    "(browser_form_read lists the labels), or drop js_fallback to click the "
+                    "ref with the plain CLI.")
         sel, err = await _resolve_field(selector)
         if err:
             return err

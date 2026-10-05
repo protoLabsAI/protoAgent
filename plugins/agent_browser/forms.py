@@ -1096,9 +1096,10 @@ def fingerprint_js(selector: str) -> str:
     """The script ``browser_click`` evals to fingerprint the page for its JS fallback: the
     element count, a descriptor of ``document.activeElement``, and ``selector``'s
     ``aria-expanded`` — cheap, but enough to tell whether a CLI click actually DID anything.
-    ``selector`` is what the bd-12mo.1 resolver produced (a ``[data-ab-field="N"]`` tag, raw
-    CSS, or a ``@ref`` the in-page ``querySelector`` can't resolve — in which case only the
-    count/activeElement move the needle). Rides ``eval --stdin`` (#3689)."""
+    ``selector`` is what the bd-12mo.1 resolver produced — a ``[data-ab-field="N"]`` tag or raw
+    CSS (``browser_click`` refuses a ``@ref`` on the fallback path, so the in-page
+    ``querySelector`` always has something resolvable to read ``aria-expanded`` from). Rides
+    ``eval --stdin`` (#3689)."""
     return ("(function(){\nvar SEL = " + _js(selector) + ";\n"
             "return " + _FINGERPRINT_DRIVER.strip() + ";\n})()")
 
@@ -1107,7 +1108,9 @@ def js_click_js(selector: str) -> str:
     """The script ``browser_click`` evals for its JS fallback: resolve ``selector`` in the page
     and dispatch a bubbling ``mousedown``/``mouseup`` plus ``el.click()``. Returns
     ``{ok:true}``, or ``{ok:false, reason:'not-found'}`` when the element can't be resolved
-    in-page (a ``@ref``, or it vanished). Rides ``eval --stdin`` (#3689)."""
+    in-page (it vanished between the fingerprint and the dispatch). ``browser_click`` refuses a
+    ``@ref`` before reaching here — a ref is invalid CSS in-page and would never resolve. Rides
+    ``eval --stdin`` (#3689)."""
     return ("(function(){\nvar SEL = " + _js(selector) + ";\n"
             "return " + _JS_CLICK_DRIVER.strip() + ";\n})()")
 
