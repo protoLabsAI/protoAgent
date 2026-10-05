@@ -117,6 +117,14 @@
       "sha512-Tq8tvzbZ581gvQ426FLV3Aq2TnZrQt6TCuvqosm8aB5GJ8NviU6SKrwVkWcXUR7V6WlEtmf7HU8qUDxhQLMbQA=="],
     vegaEmbed: ["vega-embed.min.js",
       "sha512-Z+cCCqLMktM+IFtuAdRPVEwNQiFln47hxAh3zidS/1Aic/Ky0frcJsqn69mhMhIdlou2FgoUoPAm0i0Y5aS44A=="],
+    // pdf.js — pdfjs-dist 6.4.299 legacy build (Apache-2.0), byte-for-byte ES modules (loaded with
+    // cdnModule). The lib sets globalThis.pdfjsLib; the worker module only sets
+    // globalThis.pdfjsWorker, which makes pdf.js run on the frame's main thread — the sandbox CSP
+    // forbids workers. PDF page previews; notices in vendor/pdfjs.LICENSES.txt.
+    pdfjs: ["pdfjs.min.mjs",
+      "sha512-Z/QvVhTGIViDuuSHyCgvsZVOuYQa8CpYD3lis7cG8c17vDGEO8fkstjdeW/58o1qjWEa8IPH3efCurYfgw3PSQ=="],
+    pdfjsWorker: ["pdfjs-worker.min.mjs",
+      "sha512-cgsoOrm2N2zEbj1vccst4py/Wf4vyUBwoMXCSaT7WI/vGKCYc33zBWj2TPeYFpdtESAOHCvzzxKe+lxMDatk9Q=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
@@ -125,6 +133,11 @@
   // Access-Control-Allow-Origin:* to satisfy the CORS fetch.
   function cdn(name, nonce){ var c = LIB[name];
     return '<script crossorigin="anonymous" integrity="' + c[1] + '"' + (nonce ? ' nonce="' + nonce + '"' : '')
+      + ' src="' + ORIGIN + '/plugins/artifact/vendor/' + c[0] + '"><\/script>'; }
+  // The same, as an ES module script (pdf.js ships only as modules). Module scripts run in
+  // document order after parsing, so a later inline module sees what these ones set up.
+  function cdnModule(name, nonce){ var c = LIB[name];
+    return '<script type="module" crossorigin="anonymous" integrity="' + c[1] + '" nonce="' + nonce + '"'
       + ' src="' + ORIGIN + '/plugins/artifact/vendor/' + c[0] + '"><\/script>'; }
   // Curated ESM import map for `react` artifacts (offline-vendored, served same-origin with
   // CORS). Bare specifiers resolve to the vendored modules: react/react-dom via tiny shims that
@@ -611,11 +624,13 @@
     return {code:code.slice(0, j>=0?j:i), truncated:true};
   }
   // .pptx decks render as real slides (the vendored renderer, see slidesDoc); _slides.is_slides
-  // is the Python twin of this test (by extension, or the OOXML presentation mime).
+  // is the Python twin of this test (by extension, or the OOXML presentation mime). PDFs render
+  // as real pages (vendored pdf.js, see pdfDoc); _pdfview.is_pdf is the twin of that test.
   var PPTX_MIME="application/vnd.openxmlformats-officedocument.presentationml.presentation";
   function previewKind(name, mime){
     var n=String(name||"").toLowerCase(), i=n.lastIndexOf("."), ext=i<0?"":n.slice(i+1);
     if(ext==="pptx" || String(mime||"").toLowerCase()===PPTX_MIME) return "slides";
+    if(ext==="pdf" || String(mime||"").toLowerCase()==="application/pdf") return "pdf";
     if(ext==="csv"||ext==="tsv") return "table";
     if(ext==="md"||ext==="markdown") return "md";
     if(ext==="json") return "json";
@@ -645,10 +660,24 @@
     if(previewKind(f.filename, f.mime)!=="slides") return false;
     return !!(f.slides && typeof f.slides==="object" && f.slides.render===true);
   }
-  // `note` (optional) forces the text card and says why the slides aren't shown.
+  // Does this version get the page renderer? ONLY a PDF the save-time preflight (_pdfview.py)
+  // cleared — it decoded every stream the renderer will decode under a budget. A refusal, or a
+  // version saved before the preflight existed (no verdict), gets the extracted-text card.
+  function pdfOk(v){
+    var f=v.file||{};
+    if(previewKind(f.filename, f.mime)!=="pdf") return false;
+    return !!(f.pdf && typeof f.pdf==="object" && f.pdf.render===true);
+  }
+  // `note` (optional) forces the text card and says why the slides/pages aren't shown.
   function fileCard(v, note){
     var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
     var pk=previewKind(name, mime);
+    if(pk==="pdf" && !note){
+      if(pdfOk(v)) return pdfDoc(v);
+      note="Page preview unavailable — "+(f.pdf&&typeof f.pdf==="object"
+        ? String(f.pdf.reason||"the file failed the safety checks")
+        : "this version was saved before page previews; re-save the file to render its pages");
+    }
     if(pk==="slides" && !note){
       if(slidesOk(v)) return slidesDoc(v);
       note="Slide preview unavailable — "+(f.slides&&typeof f.slides==="object"
@@ -665,7 +694,7 @@
     var thumb = f.thumb
       ? '<img src="'+f.thumb+'" alt="" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid '+border+'">'
       : '<div style="font-size:44px;line-height:1">📄</div>';
-    var body, pvl=note ? "Text outline" : "Preview";
+    var body, pvl=note ? (pk==="pdf" ? "Extracted text" : "Text outline") : "Preview";
     if(pk==="table"){
       var rows=parseDsv(code, name.slice(-4)===".tsv" ? "\t" : ",");
       if(truncated && rows.length>1) rows=rows.slice(0,-1); // last row may be mid-cut
@@ -1171,8 +1200,8 @@
       // frame can open. Captured with the srcdoc so they always belong to what's on screen.
       renderingLinks = (a.kind==="mermaid" && v.links && typeof v.links==="object" && !Array.isArray(v.links)) ? v.links : null;
       linkLabels = null;
-      // A deck's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
-      pptxReset(a.kind==="file" && slidesOk(v) ? {id:a.id, vi:vi, v:v, key:key} : null);
+      // A deck's / PDF's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
+      pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)) ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : "pptx"} : null);
       $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
       renderLinks(); }
   }
@@ -1373,6 +1402,229 @@
     $run.disabled=false;
   });
 
+  // ── .pdf page previews ────────────────────────────────────────────────────────────────
+  // A PDF renders as REAL pages — the vendored pdf.js (window.pdfjsLib), drawn to canvases on the
+  // frame's main thread (the worker module only registers its message handler; the CSP forbids
+  // workers), in the same no-same-origin sandbox under a nonce CSP with no network. The pages
+  // stack in one scroll, fitted to the panel width; a page is drawn only while it's near the
+  // visible area and its canvas is freed when it scrolls away, so a 2000-page PDF costs what the
+  // few visible pages cost. Canvas size is capped (maxCanvasPixels) whatever the zoom.
+  //
+  // Caps — the mirror of _pdfview.py (drift-guarded by a test). The save-time preflight decoded
+  // every stream under a budget; the frame bounds its own parse (parseMs), and the shell's
+  // watchdog swaps in the extracted-text card if the frame never answers.
+  var PDF_CAPS={
+    maxBytes: 41943040,         // 40 MB — _pdfview.MAX_BYTES
+    maxPages: 2000,             // _pdfview.MAX_PAGES
+    maxCanvasPixels: 16777216,  // one drawn page's canvas (4096 × 4096)
+    parseMs: 20000,
+    watchdogMs: 45000
+  };
+  function pdfDoc(v){
+    var cs=getComputedStyle(document.documentElement);
+    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
+    var f=v.file||{}, name=f.filename||"document.pdf", mime=f.mime||"application/pdf", nonce=cspNonce();
+    var st=stripTrunc(v.code||"");
+    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src blob: data:; "
+      + "media-src 'none'; font-src blob: data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
+      + "object-src 'none'; base-uri 'none'; form-action 'none'";
+    var tokens=":root{--pl-color-bg:"+tok("--pl-color-bg","#0a0a0c")+";--pl-color-fg:"+tok("--pl-color-fg","#ededed")
+      + ";--pl-color-fg-muted:"+tok("--pl-color-fg-muted","#9aa0aa")+";--pl-color-border:"+tok("--pl-color-border","rgba(255,255,255,.12)")
+      + ";--pl-color-accent:"+tok("--pl-color-accent","#9b87f2")+"}";
+    var cfg={caps:PDF_CAPS, pages:+((f.pdf&&f.pdf.pages)||0)};
+    return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
+      + '<style>'+tokens+PDF_CSS+'</style>'
+      + '<div class="wrap"><div class="hd"><div class="ic" aria-hidden="true">PDF</div>'
+      + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
+      + '<div class="nav" id="nav" hidden>'
+      + '<button id="prev" type="button" aria-label="Previous page" title="Previous page">‹</button>'
+      + '<span id="pos" aria-live="polite"></span>'
+      + '<button id="next" type="button" aria-label="Next page" title="Next page">›</button>'
+      + '<span class="sep"></span>'
+      + '<button id="zout" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>'
+      + '<button id="zfit" type="button" class="wide" aria-label="Fit to width" title="Fit to width (0)">Fit</button>'
+      + '<button id="zin" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button></div></div>'
+      + '<div class="stage" id="stage" tabindex="0" role="document" aria-label="PDF pages">'
+      + '<div id="pages"></div><div id="status" class="st" role="status">Rendering pages…</div></div>'
+      + '<details id="ol"><summary>Extracted text</summary><pre class="pv">'+esc(st.code)
+      + (st.truncated?'\n… (preview truncated — download the file for the full content)':'')+'</pre></details></div>'
+      + cdnModule("pdfjsWorker", nonce) + cdnModule("pdfjs", nonce)
+      + '<script type="module" nonce="'+nonce+'">(' + artPdf.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script>';
+  }
+  var PDF_CSS='html,body{margin:0;height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);'
+    + 'font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif);overflow:hidden}'
+    + '.wrap{display:flex;flex-direction:column;height:100%;box-sizing:border-box;padding:14px 16px;gap:10px}'
+    + '.hd{display:flex;gap:12px;align-items:center;flex:none}.meta{min-width:0;flex:1}'
+    + '.ic{flex:none;width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;'
+    + 'font:700 9px/1 var(--pl-font-sans,system-ui);letter-spacing:.04em;color:#fff;background:#b3261e}'
+    + '.nm{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    + '.mt{color:var(--pl-color-fg-muted);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+    + '.nav{display:flex;align-items:center;gap:4px;flex:none}.nav[hidden]{display:none}'
+    + '.nav .sep{width:1px;height:18px;background:var(--pl-color-border);margin:0 4px}'
+    + '.nav button{all:unset;box-sizing:border-box;min-width:28px;height:28px;padding:0 6px;border-radius:6px;text-align:center;font-size:16px;line-height:26px;'
+    + 'cursor:pointer;border:1px solid var(--pl-color-border)}.nav button.wide{font-size:12px}'
+    + '.nav button:hover{background:rgba(127,127,127,.16)}.nav button[disabled]{opacity:.35;cursor:default}'
+    + '.nav button:focus-visible,.stage:focus-visible,summary:focus-visible{outline:2px solid var(--pl-color-accent);outline-offset:2px}'
+    + '#pos{min-width:64px;text-align:center;font-size:12px;color:var(--pl-color-fg-muted);font-variant-numeric:tabular-nums}'
+    + '.stage{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;outline:none}'
+    + '.stage.failed{flex:none}'
+    + '#pages{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;align-items:center;gap:12px;padding:4px 0 12px}'
+    + '#pages[hidden]{display:none}'
+    + '.pg{flex:none;position:relative;background:#fff;border-radius:2px;box-shadow:0 1px 2px rgba(0,0,0,.25),0 8px 28px rgba(0,0,0,.28);line-height:0}'
+    + '.pg canvas{display:block;width:100%;height:100%}'
+    + '.pg[data-err]::after{content:attr(data-err);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;'
+    + 'font:12px/1.4 var(--pl-font-sans,system-ui);color:#555}'
+    + '.st{font-size:12px;color:var(--pl-color-fg-muted);padding:6px 0}.st:empty{display:none}'
+    + '.st.err{color:var(--pl-color-fg);padding:8px 10px;border-radius:6px;border:1px solid var(--pl-color-border);background:rgba(127,127,127,.1);align-self:stretch}'
+    + 'details{flex:none;font-size:12px;min-height:0}details[open]{flex:1;display:flex;flex-direction:column}'
+    + 'summary{cursor:pointer;color:var(--pl-color-fg-muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:2px 0}'
+    + 'pre.pv{flex:1;min-height:0;max-height:100%;overflow:auto;margin:6px 0 0;padding:12px;border:1px solid var(--pl-color-border);border-radius:8px;'
+    + 'background:rgba(127,127,127,.08);white-space:pre-wrap;word-break:break-word;'
+    + 'font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);font-size:12px;line-height:1.5}';
+
+  // The in-frame page controller. Like artSlides it's authored here and injected as SOURCE, so it
+  // may reference nothing outside itself. Keep `</` and `<!` out of it: it rides a srcdoc <script>.
+  function artPdf(cfg){
+    var D=document, W=window, L=W.pdfjsLib, caps=(cfg&&cfg.caps)||{};
+    function $(id){ return D.getElementById(id); }
+    var stage=$("stage"), box=$("pages"), status=$("status"), ol=$("ol"), nav=$("nav"), pos=$("pos"),
+        prev=$("prev"), next=$("next"), zin=$("zin"), zout=$("zout"), zfit=$("zfit");
+    var doc=null, task=null, count=0, failed=false, timer=0, slots=[], io=null, zoom=1, cur=1, baseW=612, lastFit=0;
+    var ZMIN=0.5, ZMAX=4;
+    function post(m){ try{ W.parent.postMessage(m, "*"); }catch(_){} }
+    function mb(n){ return Math.round(n/1048576)+" MB"; }
+    function fail(reason){
+      if(failed) return; failed=true; clearTimeout(timer);
+      if(task){ try{ task.destroy(); }catch(_){} }
+      status.textContent="Couldn't render this PDF: "+reason+". The extracted text is below.";
+      status.className="st err"; box.textContent=""; box.hidden=true; nav.hidden=true;
+      stage.classList.add("failed"); ol.open=true;
+      post({type:"protoArtifact:pdf", state:"failed", reason:String(reason).slice(0,300)});
+    }
+    // Page width in CSS px: the panel width at zoom 1 ("fit"), scaled by the zoom factor. The page
+    // box stays laid out while it's still empty (it's only hidden on failure): a display:none box
+    // measures 0 wide, which sized the FIRST page at the 160px floor.
+    function fitW(){ return Math.max(160, box.clientWidth-24); }
+    function pageW(){ return Math.round(fitW()*zoom); }
+    function size(s){ var w=pageW(); s.el.style.width=w+"px"; s.el.style.height=Math.round(w*s.ratio)+"px"; }
+    function release(s){
+      if(s.canvas){ s.canvas.width=0; s.canvas.height=0; s.canvas.remove(); s.canvas=null; }
+      s.drawnW=0;
+    }
+    async function draw(s){
+      if(s.busy || failed) return;
+      var w=pageW(); if(s.canvas && s.drawnW===w) return;
+      s.busy=true;
+      try{
+        var page=await doc.getPage(s.n);
+        var vp1=page.getViewport({scale:1});
+        if(vp1.width>0 && vp1.height>0 && Math.abs(vp1.height/vp1.width-s.ratio)>0.001){ s.ratio=vp1.height/vp1.width; size(s); }
+        var dpr=Math.min(W.devicePixelRatio||1, 2), scale=w/vp1.width*dpr;
+        var px=vp1.width*vp1.height*scale*scale;
+        if(px>caps.maxCanvasPixels) scale*=Math.sqrt(caps.maxCanvasPixels/px);
+        var vp=page.getViewport({scale:scale});
+        var c=D.createElement("canvas"); c.width=Math.max(1, Math.floor(vp.width)); c.height=Math.max(1, Math.floor(vp.height));
+        c.setAttribute("aria-hidden", "true");
+        await page.render({canvas:c, viewport:vp}).promise;
+        if(!s.visible){ c.width=0; c.height=0; }
+        else { if(s.canvas) release(s); s.el.appendChild(c); s.canvas=c; s.drawnW=w; s.el.removeAttribute("data-err"); }
+        try{ page.cleanup(); }catch(_){}
+      }catch(e){ s.el.setAttribute("data-err", "Page "+s.n+" couldn't be drawn"); }
+      s.busy=false;
+      if(s.visible && s.drawnW!==pageW()) draw(s);  // the zoom changed while it was drawing
+    }
+    function current(){
+      var top=box.getBoundingClientRect().top, best=1, bd=1e9;
+      for(var i=0;i<slots.length;i++){ var r=slots[i].el.getBoundingClientRect(), d=Math.abs(r.top-top);
+        if(r.bottom>top+8 && d<bd){ bd=d; best=slots[i].n; } if(r.top>top+box.clientHeight) break; }
+      return best;
+    }
+    function update(){
+      cur=current(); pos.textContent=cur+" / "+count;
+      prev.disabled=cur<=1; next.disabled=cur>=count;
+      zout.disabled=zoom<=ZMIN; zin.disabled=zoom>=ZMAX;
+      stage.setAttribute("aria-label", "PDF page "+cur+" of "+count);
+    }
+    function go(n){
+      n=Math.max(1, Math.min(count, n)); var s=slots[n-1]; if(!s) return;
+      box.scrollTop=s.el.offsetTop-box.offsetTop-4; update();
+    }
+    function setZoom(z){
+      var anchor=cur, frac=0, s=slots[anchor-1];
+      if(s){ frac=(box.scrollTop-(s.el.offsetTop-box.offsetTop))/Math.max(1, s.el.offsetHeight); }
+      zoom=Math.max(ZMIN, Math.min(ZMAX, z));
+      slots.forEach(size);
+      if(s){ box.scrollTop=s.el.offsetTop-box.offsetTop+frac*s.el.offsetHeight; }
+      slots.forEach(function(t){ if(t.visible) draw(t); });
+      update();
+    }
+    async function load(buf){
+      if(failed || doc) return;
+      if(!(buf instanceof ArrayBuffer)) return fail("no file data reached the preview");
+      if(buf.byteLength>caps.maxBytes) return fail("the file is over the "+mb(caps.maxBytes)+" preview cap");
+      timer=setTimeout(function(){ fail("it took longer than "+Math.round(caps.parseMs/1000)+"s to read"); }, caps.parseMs);
+      try{
+        task=L.getDocument({data:new Uint8Array(buf), useWasm:false, useSystemFonts:true, enableXfa:false,
+          disableAutoFetch:true, disableStream:true, disableRange:true, isOffscreenCanvasSupported:false, verbosity:0});
+        task.onPassword=function(){ fail("the PDF is password-protected"); };
+        doc=await task.promise;
+        if(failed) return;
+        count=doc.numPages||0;
+        if(!count) return fail("the PDF has no pages");
+        if(count>caps.maxPages) return fail(count+" pages is over the "+caps.maxPages+"-page preview cap");
+        var first=(await doc.getPage(1)).getViewport({scale:1}), ratio=first.height/first.width;
+        baseW=first.width;
+        clearTimeout(timer);
+        io=new IntersectionObserver(function(es){ es.forEach(function(e){
+          var s=e.target.__slot; s.visible=e.isIntersecting;
+          if(e.isIntersecting) draw(s); else release(s);
+        }); update(); }, {root:box, rootMargin:"600px 0px"});
+        for(var i=1;i<=count;i++){
+          var el=D.createElement("div"); el.className="pg"; el.setAttribute("role", "img"); el.setAttribute("aria-label", "Page "+i);
+          var s={n:i, el:el, ratio:ratio, canvas:null, drawnW:0, busy:false, visible:false}; el.__slot=s;
+          slots.push(s); size(s); box.appendChild(el); io.observe(el);
+        }
+        status.textContent=""; nav.hidden=false; lastFit=fitW(); update();
+        post({type:"protoArtifact:pdf", state:"rendered", count:count});
+      }catch(e){
+        var msg=String((e&&e.message)||e);
+        fail(e && e.name==="PasswordException" ? "the PDF is password-protected" : msg.slice(0,200));
+      }
+    }
+
+    prev.addEventListener("click", function(){ go(cur-1); });
+    next.addEventListener("click", function(){ go(cur+1); });
+    zin.addEventListener("click", function(){ setZoom(zoom*1.25); });
+    zout.addEventListener("click", function(){ setZoom(zoom/1.25); });
+    zfit.addEventListener("click", function(){ setZoom(1); });
+    box.addEventListener("scroll", function(){ if(count) update(); }, {passive:true});
+    D.addEventListener("keydown", function(e){
+      if(!doc || e.altKey || e.ctrlKey || e.metaKey) return;
+      var t=e.target; if(t && (t.tagName==="SUMMARY" || t.tagName==="BUTTON")) return;
+      var k=e.key;
+      if(k==="+"||k==="=") { e.preventDefault(); setZoom(zoom*1.25); }
+      else if(k==="-"||k==="_") { e.preventDefault(); setZoom(zoom/1.25); }
+      else if(k==="0") { e.preventDefault(); setZoom(1); }
+      else if(k==="Home") { e.preventDefault(); go(1); }
+      else if(k==="End") { e.preventDefault(); go(count); }
+    });
+    if(W.ResizeObserver){ var rt=0; new ResizeObserver(function(){ clearTimeout(rt); rt=setTimeout(function(){
+      if(!doc || Math.abs(fitW()-lastFit)<=2) return;
+      lastFit=fitW(); setZoom(zoom); }, 120); }).observe(box); }
+
+    W.addEventListener("message", function(e){
+      if(e.source!==W.parent) return;
+      var m=e.data||{};
+      if(m.type==="protoArtifact:theme" && m.tokens && typeof m.tokens==="object"){
+        Object.keys(m.tokens).forEach(function(k){ if(/^--pl-color-[a-z-]+$/.test(k)) D.documentElement.style.setProperty(k, String(m.tokens[k])); });
+        return;
+      }
+      if(m.type==="protoArtifact:pdf:data"){ load(m.buf); return; }
+      if(m.type==="protoArtifact:pdf:error"){ fail(String(m.reason||"the file couldn't be fetched")); }
+    });
+    if(!L || typeof L.getDocument!=="function" || !W.pdfjsWorker){ fail("the PDF renderer didn't load"); return; }
+    post({type:"protoArtifact:pdf", state:"need"});
+  }
   // Slide previews, shell side. The deck's frame is sandboxed (opaque origin, no bearer), so it
   // asks for its bytes ({state:"need"}) and the shell fetches the gated blob and TRANSFERS a copy
   // in. The fetch is size-capped before and after, and cached per version so a re-render (theme,
@@ -1380,6 +1632,7 @@
   // (a renderer wedged on a hostile file): it swaps the frame for the plain text outline card.
   var pptxCtx=null, pptxCache={key:"", buf:null}, pptxWatch=0;
   function pptxReset(ctx){ clearTimeout(pptxWatch); pptxCtx=ctx; }
+  // `ctx.kind` is "pptx" (slides) or "pdf" (pages): one byte-feed for both renderers.
   function pptxFallback(ctx, note){
     if(pptxCtx!==ctx) return;  // the panel moved on to another version
     pptxCtx=null; clearTimeout(pptxWatch);
@@ -1387,29 +1640,31 @@
   }
   async function pptxBytes(ctx){
     if(pptxCache.key===ctx.key && pptxCache.buf) return pptxCache.buf;
-    var size=+((ctx.v.file||{}).size||0);
-    if(size>PPTX_CAPS.maxBytes) throw new Error("the file is over the "+Math.round(PPTX_CAPS.maxBytes/1048576)+" MB preview cap");
+    var size=+((ctx.v.file||{}).size||0), maxBytes=ctx.kind==="pdf" ? PDF_CAPS.maxBytes : PPTX_CAPS.maxBytes;
+    if(size>maxBytes) throw new Error("the file is over the "+Math.round(maxBytes/1048576)+" MB preview cap");
     var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(ctx.id)+"/blob?version="+(ctx.vi+1));
     if(!r.ok) throw new Error("the file couldn't be fetched ("+r.status+")");
     var buf=await r.arrayBuffer();
-    if(buf.byteLength>PPTX_CAPS.maxBytes) throw new Error("the file is over the preview size cap");
+    if(buf.byteLength>maxBytes) throw new Error("the file is over the preview size cap");
     pptxCache={key:ctx.key, buf:buf};
     return buf;
   }
   async function pptxMessage(m){
-    var ctx=pptxCtx; if(!ctx) return;
+    var ctx=pptxCtx; if(!ctx || m.type!=="protoArtifact:"+ctx.kind) return;
     if(m.state==="rendered"||m.state==="failed"){ clearTimeout(pptxWatch); return; }
     if(m.state!=="need") return;
     clearTimeout(pptxWatch);
-    pptxWatch=setTimeout(function(){ pptxFallback(ctx, "Slide preview unavailable — rendering took too long"); }, PPTX_CAPS.watchdogMs);
+    pptxWatch=ctx.kind==="pdf"
+      ? setTimeout(function(){ pptxFallback(ctx, "Page preview unavailable — rendering took too long"); }, PDF_CAPS.watchdogMs)
+      : setTimeout(function(){ pptxFallback(ctx, "Slide preview unavailable — rendering took too long"); }, PPTX_CAPS.watchdogMs);
     try{
       var buf=await pptxBytes(ctx);
       if(pptxCtx!==ctx) return;
       var copy=buf.slice(0);  // transfer a copy; the cache keeps the original
-      $frame.contentWindow.postMessage({type:"protoArtifact:pptx:data", buf:copy}, "*", [copy]);
+      $frame.contentWindow.postMessage({type:"protoArtifact:"+ctx.kind+":data", buf:copy}, "*", [copy]);
     }catch(err){
       if(pptxCtx!==ctx) return;
-      try{ $frame.contentWindow.postMessage({type:"protoArtifact:pptx:error", reason:String((err&&err.message)||err)}, "*"); }catch(_){}
+      try{ $frame.contentWindow.postMessage({type:"protoArtifact:"+ctx.kind+":error", reason:String((err&&err.message)||err)}, "*"); }catch(_){}
     }
   }
 
@@ -1420,7 +1675,7 @@
   window.addEventListener("message", async function(e){
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
-    if(m.type==="protoArtifact:pptx"){ pptxMessage(m); return; }
+    if(m.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"){ pptxMessage(m); return; }
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
     // create/edit reply + check_artifact can surface a render failure. Best-effort POST —
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,

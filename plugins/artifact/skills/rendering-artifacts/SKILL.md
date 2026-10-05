@@ -154,7 +154,8 @@ image — call **`save_file_artifact(path, title?, artifact_id?)`** right after,
 a **versioned download artifact**: the bytes are stored, a readable text preview is extracted
 (docx→text, xlsx→sheet table, pptx→slide outline, pdf→text; images get a thumbnail), and the panel
 shows a download card. A `.pptx` deck is shown as its **real slides** (a large current slide plus a
-filmstrip, arrow keys to page), with the outline kept underneath. Re-saving the same document as a new revision? Pass the prior
+filmstrip, arrow keys to page), with the outline kept underneath. A `.pdf` is shown as its **real
+pages** (scroll through them, zoom with −/Fit/+), with the extracted text kept underneath. Re-saving the same document as a new revision? Pass the prior
 `artifact_id` so it becomes v2, v3… of the same artifact instead of a new panel entry.
 
 ```text
@@ -164,6 +165,11 @@ save_file_artifact("/work/report.docx", "Q3 Report")
 
 This is for files that already exist on disk. To *render* HTML/React/SVG/Markdown/charts, use
 `show_artifact` (above) — don't write those to a file first.
+
+**Showing a document that's already on disk** (a PDF a tool rendered, a deck, a report): ONE
+`save_file_artifact` call on that file. Never `read_file` it and paste its contents into
+`show_artifact` — that re-types the whole document through the model (a minute or more for a
+few pages of HTML) and the copy drifts from the file.
 
 ## Interactive artifacts (calling back to you)
 

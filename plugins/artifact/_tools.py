@@ -11,7 +11,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import _config, _links, _preview, _ref, _render_status, _slides, _store
+from . import _config, _links, _pdfview, _preview, _ref, _render_status, _slides, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -193,7 +193,8 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "", projec
     skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
     shows a download card with a preview typed by content (csv/tsv → a real table, .md →
     rendered prose, .json → pretty-printed; .pptx → the real rendered SLIDES (with the slide
-    outline beneath); docx→text, xlsx→sheet table, pdf→text; images get a thumbnail; other text
+    outline beneath); .pdf → the real rendered PAGES (with the extracted text beneath);
+    docx→text, xlsx→sheet table; images get a thumbnail; other text
     files → plain text), and offers a Download button.
 
     COMPOSE the file completely, then save ONCE — do not save revision after revision while
@@ -230,8 +231,11 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "", projec
     # A deck gets the slide renderer's safety preflight (caps on size / entries / inflation /
     # image pixels) — the panel only parses it in the browser when this says it may.
     slides = _slides.preflight(data) if _slides.is_slides(p.name, mime) else None
+    # A PDF gets the page renderer's safety preflight (size / page count / decoded stream bytes /
+    # image pixels) — the panel only draws its pages when this says it may.
+    pdf = _pdfview.preflight(data) if _pdfview.is_pdf(p.name, mime) else None
     ext = p.suffix.lower().lstrip(".") or "bin"
-    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id, slides)
+    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf)
 
 
 @_store.serialized
@@ -245,6 +249,7 @@ def _save_file(
     title: str,
     artifact_id: str,
     slides: dict | None = None,
+    pdf: dict | None = None,
 ) -> str:
     """save_file_artifact's store read-modify-write. The blob is written INSIDE the lock on
     purpose: the blob sweep runs under it too, so it can never see (and delete) a blob that
@@ -273,6 +278,8 @@ def _save_file(
     }
     if slides is not None:
         file_meta["slides"] = slides
+    if pdf is not None:
+        file_meta["pdf"] = pdf
     if art is None:
         nv = _store._new_version(preview, extra={"file": file_meta, "blob": blob_name})
         art = {

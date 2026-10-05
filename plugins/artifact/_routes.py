@@ -118,6 +118,11 @@ _VENDOR_FILES = {
     "vega.min.js",  # vega / vega-lite / vega-embed UMD builds — `vega-lite` chart artifacts (ADR 0116)
     "vega-lite.min.js",
     "vega-embed.min.js",
+    # ESM modules loaded by <script type="module"> (SRI-pinned too): pdf.js, legacy build —
+    # PDF page previews. The worker module only sets globalThis.pdfjsWorker, so pdf.js runs on
+    # the frame's main thread (the sandbox CSP forbids workers).
+    "pdfjs.min.mjs",
+    "pdfjs-worker.min.mjs",
     # ESM modules (the `react` import map): curated libs …
     "d3.mjs",
     "chartjs.mjs",

@@ -100,7 +100,7 @@ def test_renderer_is_vendored_and_served_same_origin(monkeypatch, tmp_path):
 
 def _sri_pins(js: str) -> dict[str, str]:
     """The shell's LIB map as {file: "sha512-…"} — parsed, so line endings/indent don't matter."""
-    return dict(re.findall(r'\[\s*"([\w.-]+\.min\.js)"\s*,\s*"(sha512-[A-Za-z0-9+/=]+)"\s*\]', js))
+    return dict(re.findall(r'\[\s*"([\w.-]+\.min\.m?js)"\s*,\s*"(sha512-[A-Za-z0-9+/=]+)"\s*\]', js))
 
 
 def test_every_pinned_lib_is_served_byte_exact_to_its_sri(monkeypatch, tmp_path):
@@ -120,6 +120,8 @@ def test_every_pinned_lib_is_served_byte_exact_to_its_sri(monkeypatch, tmp_path)
         "vega.min.js",
         "vega-lite.min.js",
         "vega-embed.min.js",
+        "pdfjs.min.mjs",
+        "pdfjs-worker.min.mjs",
     }
     c = TestClient(_app(art))
     for name, pin in pins.items():
