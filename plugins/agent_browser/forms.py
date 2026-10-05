@@ -908,3 +908,145 @@ def render_select(output: str, field: str, option_text: str) -> str:
     if reason == "exception":
         return f"Error: selecting in {label} failed in the page: {str(data.get('message', ''))[:200]}"
     return f"Error: could not select {option_text!r} in {label}."
+
+
+# ── browser_upload: attach a fenced local file to a file input, then PROVE it (#4032) ─
+# Ashby/Greenhouse application forms want a résumé FILE, and hide the real `input[type=file]`
+# behind an "Attach" button — so a label/CSS locator often lands on the wrapper or the button,
+# not the input itself. The driver resolves to the file input, or the SINGLE file input inside
+# the located element's field container (none / more than one is an error, never a guess), and
+# tags it `data-pa-upload="<nonce>"` so the CLI acts on a STABLE selector — never a snapshot
+# ref a re-render would invalidate. After the CLI attaches the file, the verify script reads
+# `input.files[0].name` back (plus any field-level validation text), so a silent non-attach is
+# caught. Shares abClean / abCandidateLabels / abTextNoControls with _JS_LIB (one tidy/label copy).
+_UPLOAD_DRIVER = r"""
+(function(){
+  var el = null;
+  try { el = document.querySelector(SEL); } catch(e){ el = null; }
+  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
+  function abIsFile(n){
+    return !!(n && n.tagName === 'INPUT' && (n.getAttribute('type')||'').toLowerCase() === 'file');
+  }
+  var labs = abCandidateLabels(el), label = labs.length ? labs[0] : '';
+  var input = null;
+  if(abIsFile(el)){
+    input = el;
+  } else {
+    // The located element is a wrapper / label / "Attach" button — climb a bounded number of
+    // ancestors and take the file input from the FIRST container that holds any. Exactly one
+    // resolves; more than one is ambiguous (never a guess); none is an error.
+    var node = el, picked = null, many = 0;
+    for(var up = 0; node && up < 6; up++){
+      var found = (node.querySelectorAll && node.querySelectorAll('input[type="file"]')) || [];
+      if(found.length === 1){ picked = found[0]; break; }
+      if(found.length > 1){ many = found.length; break; }
+      if(node.tagName === 'FORM' || node === document.body) break;
+      node = node.parentElement;
+    }
+    if(many) return JSON.stringify({ok:false, reason:'multiple', label:label, count:many});
+    if(!picked) return JSON.stringify({ok:false, reason:'no-file-input', label:label});
+    input = picked;
+  }
+  if(!label){ var il = abCandidateLabels(input); label = il.length ? il[0] : ''; }
+  try { input.setAttribute('data-pa-upload', NONCE); } catch(e){}
+  return JSON.stringify({ok:true, selector:'[data-pa-upload="' + NONCE + '"]', label:label,
+                         name:(input.getAttribute && input.getAttribute('name')) || ''});
+})()
+"""
+
+_UPLOAD_VERIFY = r"""
+(function(){
+  var el = null;
+  try { el = document.querySelector(SEL); } catch(e){ el = null; }
+  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
+  var name = (el.files && el.files.length) ? String(el.files[0].name || '') : '';
+  // Surface any visible validation/error text in the field's container (bounded climb), so a
+  // form that rejected the file ("must be a PDF") tells the agent rather than reading as a win.
+  var err = '', node = el;
+  for(var up = 0; node && up < 6; up++){
+    var box = node.querySelector && node.querySelector(
+      '[role="alert"], [aria-invalid="true"], [class*="error"], [class*="invalid"]');
+    if(box){ var t = abClean(abTextNoControls(box)); if(t){ err = t; break; } }
+    if(node.tagName === 'FORM' || node === document.body) break;
+    node = node.parentElement;
+  }
+  return JSON.stringify({ok:true, name:name, error:err});
+})()
+"""
+
+
+def upload_js(selector: str, nonce: str) -> str:
+    """Script ``browser_upload`` evals to RESOLVE the upload target: find the file input at
+    ``selector`` (or the single one inside its field container) and tag it
+    ``data-pa-upload="<nonce>"`` so the CLI acts on a stable selector, not a stale ref.
+    ``selector`` is what the bd-12mo.1 resolver already produced (a ``[data-ab-field="N"]`` tag
+    for a label, or raw CSS). Rides ``eval --stdin`` like every form script (#3689)."""
+    return (_JS_LIB + "\n(function(){\n"
+            "var SEL = " + _js(selector) + ";\n"
+            "var NONCE = " + _js(nonce) + ";\n"
+            "return " + _UPLOAD_DRIVER.strip() + ";\n})()")
+
+
+def upload_verify_js(selector: str) -> str:
+    """Script ``browser_upload`` evals AFTER the attach: read back ``input.files[0].name`` and
+    any field-level validation text at ``selector`` (the ``data-pa-upload`` tag)."""
+    return (_JS_LIB + "\n(function(){\n"
+            "var SEL = " + _js(selector) + ";\n"
+            "return " + _UPLOAD_VERIFY.strip() + ";\n})()")
+
+
+def parse_upload(output: str, field: str) -> tuple[str, str, str]:
+    """Parse ``upload_js``'s JSON → ``(selector, label, error)``. ``selector`` is the
+    ``[data-pa-upload=…]`` tag the CLI uploads to; ``error`` is a ready-to-return ``Error: …``
+    when no single file input could be located. Never raises."""
+    try:
+        data = json.loads(output)
+    except (ValueError, TypeError):
+        return "", "", "Error: could not locate the upload field — the page returned unreadable data."
+    if not isinstance(data, dict):
+        return "", "", "Error: could not locate the upload field — unexpected data from the page."
+    if data.get("ok"):
+        return (data.get("selector") or ""), (data.get("label") or ""), ""
+    reason, label = data.get("reason"), (data.get("label") or field)
+    if reason == "not-found":
+        return "", "", (f"Error: could not find a field matching {field!r} to upload to. Call "
+                        "browser_form_read to list the fields (a file field shows kind 'file'), "
+                        "or pass a CSS selector.")
+    if reason == "no-file-input":
+        return "", "", (f"Error: {label} is not a file input, and no file input sits in its "
+                        "container to upload to. Point `field` at the form's file field "
+                        "(browser_form_read lists them; a file field shows kind 'file').")
+    if reason == "multiple":
+        return "", "", (f"Error: {label}'s container holds {data.get('count', 'several')} file "
+                        "inputs, so which one to upload to is ambiguous. Point `field` directly "
+                        "at the one you mean (its own label or a CSS selector).")
+    return "", "", f"Error: could not locate a file input for {field!r}."
+
+
+def render_upload(output: str, field: str, basename: str, label: str = "") -> str:
+    """Turn ``upload_verify_js``'s JSON into the result. Success is ``Uploaded <name> to
+    <label>``, returned ONLY when the read-back ``input.files[0].name`` equals ``basename``; an
+    empty or mismatched read-back is a hard ``Error:`` (never a silent non-attach), and any
+    field-level validation text is surfaced either way. Never raises."""
+    where = label or field
+    try:
+        data = json.loads(output)
+    except (ValueError, TypeError):
+        return "Error: could not verify the upload — the page returned unreadable data."
+    if not isinstance(data, dict):
+        return "Error: could not verify the upload — unexpected data from the page."
+    if not data.get("ok"):
+        if data.get("reason") == "not-found":
+            return (f"Error: the file input for {where} could not be found to verify the upload, "
+                    "so nothing was confirmed attached.")
+        return f"Error: could not verify the upload to {where}."
+    name = str(data.get("name") or "").strip()
+    err = str(data.get("error") or "").strip()
+    tail = f" The field reports: {err}" if err else ""
+    if not name:
+        return (f"Error: nothing is attached to {where} after the upload — the file input reads "
+                f"empty.{tail}")
+    if name != basename:
+        return (f"Error: {where} reads back {name!r}, but {basename!r} was uploaded — the "
+                f"attachment does not match, so it was not confirmed.{tail}")
+    return f"Uploaded {name} to {where}{tail}"
