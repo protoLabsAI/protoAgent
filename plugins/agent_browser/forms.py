@@ -1050,3 +1050,89 @@ def render_upload(output: str, field: str, basename: str, label: str = "") -> st
         return (f"Error: {where} reads back {name!r}, but {basename!r} was uploaded — the "
                 f"attachment does not match, so it was not confirmed.{tail}")
     return f"Uploaded {name} to {where}{tail}"
+
+
+# ── browser_click JS fallback: a CLI click that reports success but does nothing (#4032) ─
+# On Greenhouse the résumé "Enter manually" button opened its textarea only after a
+# JS-dispatched click: a normal CLI click exited 0 and NOTHING happened. So
+# ``browser_click(js_fallback=True)`` takes a cheap DOM fingerprint, does the CLI click,
+# re-fingerprints, and ONLY when nothing moved dispatches an in-page click. The fallback
+# never fires when the first click already worked (the fingerprint changed) or when the
+# fingerprint can't be read (a doubt is treated as "something happened" — never a second
+# click). Both scripts ride ``eval --stdin`` like every form script (#3689).
+_FINGERPRINT_DRIVER = r"""
+(function(){
+  var n = document.getElementsByTagName('*').length;
+  var ae = document.activeElement;
+  var aeDesc = ae ? ((ae.tagName||'') + '#' + (ae.getAttribute ? (ae.getAttribute('id')||'') : '')
+                     + '.' + String(ae.className||'')
+                     + ':' + (ae.getAttribute ? (ae.getAttribute('name')||'') : '')) : '';
+  var t = null;
+  try { t = SEL ? document.querySelector(SEL) : null; } catch(e){ t = null; }
+  var exp = (t && t.getAttribute) ? (t.getAttribute('aria-expanded')||'') : '';
+  return JSON.stringify({n:n, ae:aeDesc, exp:exp});
+})()
+"""
+
+_JS_CLICK_DRIVER = r"""
+(function(){
+  var el = null;
+  try { el = document.querySelector(SEL); } catch(e){ el = null; }
+  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
+  function abFire(type){
+    try { el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true})); } catch(e){}
+  }
+  // A bubbling mousedown/mouseup PLUS el.click() — the sequence Greenhouse's "Enter manually"
+  // button needed. Never a keyboard commit (that lands on the wrong highlighted row, #4032 A2).
+  abFire('mousedown'); abFire('mouseup');
+  if(typeof el.click === 'function'){ try { el.click(); } catch(e){ abFire('click'); } }
+  else abFire('click');
+  return JSON.stringify({ok:true});
+})()
+"""
+
+
+def fingerprint_js(selector: str) -> str:
+    """The script ``browser_click`` evals to fingerprint the page for its JS fallback: the
+    element count, a descriptor of ``document.activeElement``, and ``selector``'s
+    ``aria-expanded`` — cheap, but enough to tell whether a CLI click actually DID anything.
+    ``selector`` is what the bd-12mo.1 resolver produced — a ``[data-ab-field="N"]`` tag or raw
+    CSS (``browser_click`` refuses a ``@ref`` on the fallback path, so the in-page
+    ``querySelector`` always has something resolvable to read ``aria-expanded`` from). Rides
+    ``eval --stdin`` (#3689)."""
+    return ("(function(){\nvar SEL = " + _js(selector) + ";\n"
+            "return " + _FINGERPRINT_DRIVER.strip() + ";\n})()")
+
+
+def js_click_js(selector: str) -> str:
+    """The script ``browser_click`` evals for its JS fallback: resolve ``selector`` in the page
+    and dispatch a bubbling ``mousedown``/``mouseup`` plus ``el.click()``. Returns
+    ``{ok:true}``, or ``{ok:false, reason:'not-found'}`` when the element can't be resolved
+    in-page (it vanished between the fingerprint and the dispatch). ``browser_click`` refuses a
+    ``@ref`` before reaching here — a ref is invalid CSS in-page and would never resolve. Rides
+    ``eval --stdin`` (#3689)."""
+    return ("(function(){\nvar SEL = " + _js(selector) + ";\n"
+            "return " + _JS_CLICK_DRIVER.strip() + ";\n})()")
+
+
+def fingerprint_changed(before: str, after: str) -> bool:
+    """True if two ``fingerprint_js`` outputs differ — i.e. the CLI click DID something. An
+    empty or ``Error:`` fingerprint on EITHER side also returns True: "something happened, or
+    we can't tell", which SUPPRESSES the fallback so a doubt never triggers a second click."""
+    b, a = (before or "").strip(), (after or "").strip()
+    if not b or not a or b.startswith("Error:") or a.startswith("Error:"):
+        return True
+    return b != a
+
+
+def render_js_click(output: str, selector: str, cli_result: str) -> str:
+    """Turn ``js_click_js``'s JSON into the result. A dispatched click reports
+    ``Clicked <selector> (JS fallback)``; if the element could not be resolved in the page
+    the CLI's own result stands (nothing better to say). Never raises."""
+    try:
+        data = json.loads(output)
+    except (ValueError, TypeError):
+        return cli_result
+    if isinstance(data, dict) and data.get("ok"):
+        return f"Clicked {selector} (JS fallback)"
+    return cli_result
