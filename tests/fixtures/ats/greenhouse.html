@@ -33,6 +33,9 @@
         - `data-open="arrowdown-or-trusted"` (sponsorship): IGNORES an untrusted
           mousedown (`if(!e.isTrusted) return`); opens only on ArrowDown or a trusted
           click — so the escalation must reach strategy (b)/the CLI click.
+        - `data-open="type-to-search"` (primary skill): a TYPE-TO-SEARCH combobox whose
+          listbox renders ONLY after input — a mousedown and ArrowDown never open it, so
+          browser_select must TYPE the filter to open it (the pre-#4032 open path).
         - `data-open="trusted-only"` (security clearance): ignores untrusted mousedown
           AND has no ArrowDown handler; opens ONLY on a real (trusted) CLI click — the
           browser_select trusted-click fallback.
@@ -186,6 +189,23 @@
     </div>
   </div>
 
+  <!-- Primary-skill combobox: a TYPE-TO-SEARCH combobox whose listbox renders ONLY after input.
+       A mousedown and ArrowDown never open it, so browser_select must type the filter to open
+       it — the pre-#4032 open path a pointer-only escalation would have regressed. -->
+  <div class="field">
+    <label for="skills_input">Primary skill</label>
+    <div class="select__container" data-options="skills" data-open="type-to-search" data-filter="text">
+      <div class="select__control" id="skills_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Start typing…</span>
+        <input id="skills_input" name="skills" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="skills_menu"
+               autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Referral combobox: FILTERS options by a hidden value, not the visible label, so typing
        the wanted option's text hides every option — the unfiltered rescan must find it. -->
   <div class="field">
@@ -274,6 +294,7 @@ var OPTIONS = {
   country: ["Afghanistan", "Åland Islands", "Albania", "Canada", "Ireland",
             "United Kingdom", "United States", "Zimbabwe"],
   sponsorship: ["Yes", "No", "Not sure"],
+  skills: ["Python", "JavaScript", "Go", "Rust"],   // type-to-search: listbox renders only on input
   referral: [{ text: "LinkedIn", value: "li" }, { text: "Referral", value: "ref" },
              { text: "Company website", value: "web" }, { text: "Job board", value: "jb" }],
   clearance: ["Yes", "No"],
@@ -356,6 +377,12 @@ document.querySelectorAll(".select__container").forEach(function (container) {
     closeMenu();                          // react-select closes the menu when focus leaves
   });
   input.addEventListener("input", function () {
+    if (mode === "type-to-search") {
+      // the listbox renders ONLY after input: open on a non-empty query, collapse when cleared
+      if ((input.value || "").trim()) { openMenu(); renderOptions(menuEl()); }
+      else closeMenu();
+      return;
+    }
     var m = menuEl();
     if (m) renderOptions(m);              // re-filter the open menu as the search text changes
   });
@@ -366,6 +393,7 @@ document.querySelectorAll(".select__container").forEach(function (container) {
       if (!e.isTrusted) return;           // ignores a synthetic mousedown
     }
     e.preventDefault();                   // keep focus on the input
+    if (mode === "type-to-search") { input.focus(); return; }  // focus only — no menu until typing
     if (!isFocused) {
       openAfterFocus = true;
       input.focus();                      // the focus handler opens via openAfterFocus
@@ -380,6 +408,7 @@ document.querySelectorAll(".select__container").forEach(function (container) {
     input.addEventListener("keydown", function (e) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        if (mode === "type-to-search") return;  // no ArrowDown open — the listbox needs input
         if (!isOpen()) openMenu();        // ArrowDown opens (an OPEN signal, not a commit)
       } else if (e.key === "Enter") {
         e.preventDefault();               // Enter commits the highlighted row — the #4032 trap

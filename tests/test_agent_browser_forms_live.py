@@ -204,6 +204,28 @@ async def test_select_falls_back_to_a_trusted_cli_click_to_open(browser):
     assert (await _form(browser))[field]["value"] == "Yes"
 
 
+async def test_select_opens_a_type_to_search_combobox_by_typing(browser):
+    """A TYPE-TO-SEARCH combobox renders its listbox ONLY after input — a pointer sequence and
+    ArrowDown never open it (the live sponsorship-style widgets are not the only shape; this one
+    regressed when the open escalation dropped the typed-open path). browser_select types the
+    filter to open it, then clicks the match."""
+    await _open(browser, GREENHOUSE)
+    field = "Primary skill"
+    # prove it stays closed on a pointer sequence AND ArrowDown — only typing will open it
+    not_opened = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var i=document.getElementById('skills_input');"
+        "var c=document.getElementById('skills_control');"
+        "c.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,buttons:1}));"
+        "i.focus();"
+        "i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));"
+        "return i.getAttribute('aria-expanded')==='false';})()"})
+    assert not_opened == "true", not_opened
+
+    out = await browser["browser_select"].ainvoke({"field": field, "option_text": "Python"})
+    assert out.startswith('Selected "Python" in'), out
+    assert (await _form(browser))[field]["value"] == "Python"
+
+
 async def test_select_rescans_unfiltered_when_the_typed_filter_hides_the_option(browser):
     """r6: the referral control filters options by a hidden value, not the visible text, so typing
     the wanted option's text hides EVERY option; the unfiltered rescan still finds and commits it."""
