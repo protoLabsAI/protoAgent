@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.195.0",
+    "date": "2026-10-05",
+    "changes": [
+      "PDF file artifacts render as real pages in the Artifact panel (#4046).",
+      "save_file_artifact accepts the same project-relative paths as the fs tools (#4044)."
+    ]
+  },
+  {
     "version": "v0.194.0",
     "date": "2026-10-05",
     "changes": [
