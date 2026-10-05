@@ -38,6 +38,7 @@ from graph import upstream_errors as _upstream_errors
 from graph.fence_scope import fence_scope
 from graph.image_limits import fit_data_uri
 from graph.middleware.redaction import redact as _redact
+from graph.middleware.wait_yield import wait_turn_reply
 from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
@@ -1050,7 +1051,10 @@ async def _run_native_turn(
     # note is appended after evaluation, so an empty turn under a goal no longer ends as a
     # bare note with the fallback skipped (the note made the text non-empty).
     if not final_text:
-        final_text = turn["last_tool_out"] or "_(The agent ended the turn without a textual reply.)_"
+        last_tool_out = turn["last_tool_out"]
+        final_text = (
+            wait_turn_reply(last_tool_out) or last_tool_out or "_(The agent ended the turn without a textual reply.)_"
+        )
 
     # Goal mode (shared drive, server/goal_loop.py): verify the outcome after the agent
     # stops; while not met, run the continuation it asks for. The 🎯 `goal_status` frames

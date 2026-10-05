@@ -688,6 +688,29 @@ async def test_empty_reply_falls_back_to_the_last_tool_output(env):
 
 
 @pytest.mark.asyncio
+async def test_a_silent_wait_yield_replies_with_when_it_resumes(env):
+    # The real `wait` confirmation carries the resume instruction — the agent's note to its
+    # future self. As the turn's answer it read as the agent prompting itself; the reply says
+    # when it's back instead (the tool card still shows the plan).
+    env.install(
+        streams=[
+            [
+                tool_start("t1", "wait"),
+                tool_end(
+                    "t1",
+                    "wait",
+                    tool_msg("Wait scheduled: 45 minutes. Will resume to: Check on bd-49yo. Don't create cards.", "tc1"),
+                ),
+            ]
+        ]
+    )
+
+    frames = await _run()
+
+    assert frames[-1] == ("done", "I'll pick this back up in 45 minutes.")
+
+
+@pytest.mark.asyncio
 async def test_empty_reply_with_no_tools_is_a_placeholder(env):
     env.install(streams=[[reasoning("r1", "hmm")]])
 

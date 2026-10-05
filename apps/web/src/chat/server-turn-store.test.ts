@@ -14,6 +14,7 @@ import {
   serverResultPreview,
   serverTurnLabel,
   serverTurnSessionsKey,
+  WAIT_RESUME_ORIGIN,
 } from "./server-turn-store";
 
 // The server-turn store powers the #1767 typing indicator: `turn.started` arms a labelled
@@ -235,5 +236,20 @@ describe("goal runs", () => {
     expect(rendersAsResultCard(GOAL_RUN_ORIGIN)).toBe(false);
     // A plain scheduled fire still collapses.
     expect(rendersAsResultCard("scheduler")).toBe(true);
+  });
+});
+
+// The agent's own `wait` elapsing is also a `scheduler` fire on the wire, with a `wait:<session>`
+// trigger. It resumes the agent's work in the chat that waited, so it renders like the rest of
+// the conversation — it used to fold into a collapsed "Scheduled task" card.
+describe("wait resumes", () => {
+  it("maps a wait trigger to the wait-resume origin", () => {
+    expect(effectiveOrigin("scheduler", "wait:chat-1790542011776-3ottyh")).toBe(WAIT_RESUME_ORIGIN);
+    expect(effectiveOrigin("scheduler", "waitlist-sweep")).toBe("scheduler");
+  });
+
+  it("labels and renders a wait resume as the conversation, not a result card", () => {
+    expect(labelForOrigin(WAIT_RESUME_ORIGIN)).toBe("picking back up after a wait…");
+    expect(rendersAsResultCard(WAIT_RESUME_ORIGIN)).toBe(false);
   });
 });

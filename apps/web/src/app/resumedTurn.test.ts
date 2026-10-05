@@ -216,6 +216,18 @@ describe("resumedTurnRender — goal runs", () => {
     expect(r!.toast.title).toBe("Goal run finished");
   });
 
+  it("tags a wait wake-up with the wait-resume origin so it settles as a chat message", () => {
+    const r = resumedTurnRender({
+      session_id: "chat-1",
+      text: "bd-49yo merged.",
+      task_id: "t3",
+      origin: "scheduler",
+      trigger: "wait:chat-1",
+    });
+    expect(r!.origin).toBe("wait-resume");
+    expect(r!.toast.title).toBe("Task resumed");
+  });
+
   it("leaves a plain scheduled fire as a scheduler result", () => {
     const r = resumedTurnRender({ session_id: "chat-1", text: "done", task_id: "t2", origin: "scheduler", trigger: "job-1" });
     expect(r!.origin).toBe("scheduler");

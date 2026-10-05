@@ -335,3 +335,36 @@ async def test_wait_real_backend_keeps_different_threads_independent(tmp_path):
     await _wait_tool(s).ainvoke({"seconds": 30, "then": "a", "state": {"session_id": "chat-1"}})
     await _wait_tool(s).ainvoke({"seconds": 30, "then": "b", "state": {"session_id": "chat-2"}})
     assert {j.id for j in s.list_jobs()} == {"wait:chat-1", "wait:chat-2"}  # both pending
+
+
+def test_wait_turn_reply_says_when_the_agent_is_back():
+    from graph.middleware.wait_yield import wait_turn_reply
+
+    assert (
+        wait_turn_reply("Wait scheduled: 1 hour 30 minutes. Will resume to: Check CI. Then merge.")
+        == "I'll pick this back up in 1 hour 30 minutes."
+    )
+    # Not a wait confirmation → None, so the caller keeps its own fallback.
+    assert wait_turn_reply("Error: couldn't schedule the wake-up: down") is None
+    assert wait_turn_reply("Scheduled job j1 next at 2026-10-05T09:00:00Z.") is None
+    assert wait_turn_reply("") is None
+
+
+def test_wait_turn_reply_matches_the_real_tool_confirmation():
+    # Guard the coupling: the parser keys off the `wait` tool's own wording.
+    import asyncio
+
+    from tools.scheduler_tools import _build_scheduler_tools
+
+    from graph.middleware.wait_yield import wait_turn_reply
+
+    class _Sched:
+        def cancel_job(self, job_id):
+            return False
+
+        def add_job(self, *a, **k):
+            return None
+
+    wait = next(t for t in _build_scheduler_tools(_Sched()) if t.name == "wait")
+    out = asyncio.run(wait.ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
+    assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
