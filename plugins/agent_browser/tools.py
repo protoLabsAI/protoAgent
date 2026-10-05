@@ -626,6 +626,17 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
         if out.startswith("Error:"):
             return out
+        # A react-select that refused EVERY in-page open strategy (the pointer sequence AND
+        # ArrowDown) reports reason:'not-open'. A REAL, trusted CLI click opens a widget that
+        # gates on isTrusted where a synthetic event cannot — do ONE on the control, then re-run
+        # the in-page select once. If it STILL won't open, render_select returns the explicit
+        # "could not open the dropdown" error (never the misleading "no options were found").
+        if (control_sel := forms.select_reopen_target(out)):
+            clicked = await _ab("click", control_sel)
+            if not clicked.startswith("Error:"):
+                out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
+                if out.startswith("Error:"):
+                    return out
         return forms.render_select(out, field, option_text)
 
     @tool

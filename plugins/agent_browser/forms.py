@@ -664,6 +664,21 @@ def render_form_read(output: str, scope: str = "") -> str:
 # country picker. The combobox/iti branches poll (≤3s) for the menu to render — the CLI's
 # ``eval`` awaits the returned Promise. Helpers are shared with ``_JS_LIB`` (``abClean`` /
 # ``abNorm`` / ``abComboValue`` / ``abCandidateLabels``) so there is one tidy/label copy.
+#
+# The combobox OPENS ITSELF, escalating (#4032 fix round): real react-select's control ignores a
+# non-primary / bare untrusted ``mousedown``, opens via ``openAfterFocus`` on the focus a
+# mousedown triggers, TOGGLES closed on a second mousedown while open, and opens on an ArrowDown
+# keydown — so a single synthetic ``mousedown`` opened the menu only intermittently live (4/10),
+# and never on the sponsorship widget. ``abCombo`` now escalates, re-checking THIS control after
+# each strategy: (a) ``abOpenCombo`` — a full primary-button pointer sequence on the control and
+# its dropdown indicator, then focus + ArrowDown; (b) if those fail and the input is typable, TYPE
+# the filter — a TYPE-TO-SEARCH ARIA combobox (``abSelectKind`` routes every ``role=combobox``
+# here) renders its listbox ONLY after input, so neither the pointer sequence nor ArrowDown ever
+# opens it, and the pre-#4032 driver relied on this typed open; (c) if NOTHING opens it, return
+# ``reason:'not-open'`` (with the control selector) so ``browser_select`` can escalate to a REAL,
+# trusted CLI click before giving up with an explicit "could not open" error. An already-open menu
+# is used as-is — never toggled closed — and the filter is typed once (an empty filtered scan
+# clears and rescans unfiltered before declaring no-option).
 _SELECT_LIB = r"""
 function abFieldLabel(el){
   if(!el) return '';
@@ -791,6 +806,98 @@ function abComboOptions(input, control){
   }
   return out;
 }
+function abComboOpen(input, control){
+  // THIS control's menu is open when it has rendered options OR its input reports aria-expanded —
+  // the two signals react-select exposes, either of which means "don't dispatch another open".
+  var opts = abComboOptions(input, control);
+  if(opts && opts.length) return true;
+  var exp = (input && input.getAttribute) ? input.getAttribute('aria-expanded') : null;
+  return exp === 'true';
+}
+async function abWaitOpen(input, control, timeoutMs){
+  var end = Date.now() + timeoutMs;
+  for(;;){
+    if(abComboOpen(input, control)) return true;
+    if(Date.now() >= end) return false;
+    await abSleep(80);
+  }
+}
+function abPointerEvt(el, type){
+  // A PRIMARY-button pointer/mouse event ({button:0, buttons:1, view:window}) — the open signal
+  // real react-select accepts (its onControlMouseDown ignores a non-zero button). PointerEvent for
+  // pointer* when the engine has it, MouseEvent otherwise; it is untrusted, so a widget that gates
+  // on isTrusted still won't open on it — those escalate to a real CLI click on the Python side.
+  if(!el) return;
+  var init = {bubbles:true, cancelable:true, button:0, buttons:1, view:window};
+  var ev = null;
+  try {
+    ev = (/^pointer/.test(type) && typeof PointerEvent === 'function')
+       ? new PointerEvent(type, init) : new MouseEvent(type, init);
+  } catch(e){
+    try { ev = new MouseEvent(type, {bubbles:true, cancelable:true, button:0, buttons:1}); }
+    catch(e2){ ev = null; }
+  }
+  if(ev){ try { el.dispatchEvent(ev); } catch(e){} }
+}
+function abTrustedishSeq(el){
+  // The full primary-button sequence a real pointer makes: pointerdown -> mousedown -> pointerup
+  // -> mouseup -> click. NEVER a key commit (Enter lands on the highlighted row — the #4032 trap).
+  abPointerEvt(el, 'pointerdown'); abPointerEvt(el, 'mousedown');
+  abPointerEvt(el, 'pointerup');   abPointerEvt(el, 'mouseup');
+  abPointerEvt(el, 'click');
+}
+function abArrowDown(input){
+  // ArrowDown opens a react-select even when its control ignores a synthetic mousedown. This is an
+  // OPEN signal, not a commit — the option is still COMMITTED BY CLICK (abClickOption), never Enter.
+  if(!input) return;
+  var ev = null;
+  try {
+    ev = new KeyboardEvent('keydown',
+      {key:'ArrowDown', code:'ArrowDown', keyCode:40, which:40, bubbles:true, cancelable:true});
+  } catch(e){ ev = null; }
+  if(ev){ try { input.dispatchEvent(ev); } catch(e){} }
+}
+function abControlSelector(control){
+  // A stable selector the CLI can do a REAL (trusted) click on when every in-page open strategy
+  // fails — the field was already tagged data-ab-field by the resolver; otherwise tag it ourselves.
+  if(!control || !control.getAttribute) return '';
+  var f = control.getAttribute('data-ab-field');
+  if(f !== null && f !== '') return '[data-ab-field="' + f + '"]';
+  var v = control.getAttribute('data-ab-open');
+  if(!v){ v = 'c' + Date.now(); try { control.setAttribute('data-ab-open', v); } catch(e){} }
+  return '[data-ab-open="' + v + '"]';
+}
+async function abOpenCombo(input, control){
+  // Escalate open strategies, re-checking THIS control after each — stop at the first that opens,
+  // and NEVER dispatch on an already-open menu (a second mousedown toggles react-select closed).
+  if(abComboOpen(input, control)) return true;
+  // (a) a primary-button pointer sequence on the control, then on its dropdown indicator. Blur the
+  //     input first so react-select's openAfterFocus path fires on the focus the mousedown triggers
+  //     (a mousedown while already focused TOGGLES — it would close a menu we then race to reopen).
+  if(document.activeElement === input && input && input.blur){ try { input.blur(); } catch(e){} }
+  abTrustedishSeq(control);
+  if(await abWaitOpen(input, control, 800)) return true;
+  var indicator = control && control.querySelector && control.querySelector(
+    '[class*="indicatorContainer"], [class*="dropdown-indicator"]');
+  if(indicator){
+    if(document.activeElement === input && input && input.blur){ try { input.blur(); } catch(e){} }
+    abTrustedishSeq(indicator);
+    if(await abWaitOpen(input, control, 500)) return true;
+  }
+  // (b) focus the input and press ArrowDown.
+  if(input && input.focus){ try { input.focus(); } catch(e){} }
+  abArrowDown(input);
+  if(await abWaitOpen(input, control, 800)) return true;
+  return false;
+}
+function abTypeFilter(input, want){
+  // CLEAR stale text first (never append "YeYess") then type `want`, via the native value setter
+  // so a CONTROLLED react-select input actually re-filters. This is ALSO the open signal a
+  // TYPE-TO-SEARCH combobox needs — its listbox renders ONLY after input, so neither a pointer
+  // sequence nor ArrowDown opens it; the caller polls abComboOptions / abComboOpen afterwards.
+  abSetNativeValue(input, ''); abFire(input, 'input');
+  abSetNativeValue(input, want); abFire(input, 'input');
+}
 async function abCombo(el, want){
   var input = (el.matches && el.matches('[role="combobox"]')) ? el
             : (el.querySelector && el.querySelector('[role="combobox"], input'));
@@ -798,17 +905,40 @@ async function abCombo(el, want){
               : ((input && input.closest && input.closest('.select__control, [class*="select__control"]')) || el);
   var label = abFieldLabel(input || el);
   var typable = input && /^(input|textarea)$/i.test(input.tagName || '');
-  if(input && input.focus){ try { input.focus(); } catch(e){} }
-  if(typable){ abSetNativeValue(input, ''); abFire(input, 'input'); }   // CLEAR first — never append
-  abMouse(control, 'mousedown');                                       // open the menu
-  if(typable){ abSetNativeValue(input, want); abFire(input, 'input'); } // type a filter prefix
-  // Scope the option scan to THIS control's menu (abComboMenus) — the poll returns on its
-  // first non-empty read, so an unscoped scan would seize whatever `[role="option"]` is
-  // already on the page before this menu renders.
+  var filtered = false;                 // have we already typed `want` into the input?
+  // Open the menu OURSELVES — but if it is ALREADY open on entry, skip straight to the scan so we
+  // never toggle it closed (r2). Escalate: abOpenCombo (pointer sequence / ArrowDown), then — for a
+  // TYPE-TO-SEARCH combobox whose listbox renders ONLY after input — type the filter to make it
+  // render (the pre-#4032 open path, restored). If NOTHING opens it, return reason:'not-open' so
+  // browser_select can escalate to a REAL, trusted CLI click before giving up.
+  if(!abComboOpen(input, control)){
+    var opened = await abOpenCombo(input, control);
+    if(!opened && typable){
+      if(input.focus){ try { input.focus(); } catch(e){} }
+      abTypeFilter(input, want); filtered = true;
+      opened = await abWaitOpen(input, control, 3000);
+    }
+    if(!opened){
+      var exp = (input && input.getAttribute) ? (input.getAttribute('aria-expanded') || '') : '';
+      return {ok:false, reason:'not-open', kind:'combobox', label:label,
+              expanded:exp, control:abControlSelector(control)};
+    }
+  }
+  // Menu is open — type the filter to narrow the options (once; the type-to-search open above may
+  // already have), then scan THIS control's menu (abComboMenus scopes it). If the filter hid the
+  // wanted option (none left, or none matched), clear it and rescan the UNFILTERED list before
+  // declaring no-option — react-select can filter on a value that differs from the visible text.
+  if(typable && !filtered){ abTypeFilter(input, want); filtered = true; }
   var opts = await abWaitFor(function(){ return abComboOptions(input, control); }, 3000);
-  if(!opts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[]};
-  var texts = opts.map(function(o){ return abClean(o.textContent); });
-  var m = abMatchOption(texts, want);
+  var texts = (opts || []).map(function(o){ return abClean(o.textContent); });
+  var m = texts.length ? abMatchOption(texts, want) : {error:'no-option'};
+  if(m.error === 'no-option' && typable){
+    abSetNativeValue(input, ''); abFire(input, 'input');               // drop the filter …
+    opts = await abWaitFor(function(){ return abComboOptions(input, control); }, 2000);
+    texts = (opts || []).map(function(o){ return abClean(o.textContent); });
+    m = texts.length ? abMatchOption(texts, want) : {error:'no-option'};   // … and rescan unfiltered
+  }
+  if(!texts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[]};
   if(m.error) return {ok:false, reason:m.error, kind:'combobox', label:label, options:texts.slice(0,10)};
   var chosen = texts[m.index];
   abClickOption(opts[m.index]);                                        // COMMIT by click, not Enter
@@ -887,11 +1017,26 @@ def select_js(selector: str, option_text: str) -> str:
             "return " + _SELECT_DRIVER.strip() + ";\n})()")
 
 
+def select_reopen_target(output: str) -> str:
+    """If ``select_js`` reported the dropdown would not open in-page (``reason:'not-open'`` — every
+    synthetic open strategy failed), return the CONTROL selector ``browser_select`` should do a
+    REAL, trusted CLI click on before retrying; otherwise "". A trusted click opens a react-select
+    that gates on ``isTrusted`` where a synthetic mousedown cannot. Never raises."""
+    try:
+        data = _loads(output)
+    except (ValueError, TypeError):
+        return ""
+    if isinstance(data, dict) and data.get("reason") == "not-open":
+        return data.get("control") or ""
+    return ""
+
+
 def render_select(output: str, field: str, option_text: str) -> str:
     """Turn ``select_js``'s JSON into the model-facing result. Success is ``Selected "…" in
     <label>``; every failure is an ``Error: …`` — an ambiguous/absent option lists the choices,
-    and a read-back that disagrees with what was chosen is a hard mismatch error (never a
-    silent success). Never raises."""
+    a dropdown that never opened says so (never the misleading "no options were found"), and a
+    read-back that disagrees with what was chosen is a hard mismatch error (never a silent
+    success). Never raises."""
     try:
         data = _loads(output)
     except (ValueError, TypeError):
@@ -903,6 +1048,10 @@ def render_select(output: str, field: str, option_text: str) -> str:
         chosen = data.get("chosen") or option_text
         return f'Selected "{chosen}" in {label}'
     reason = data.get("reason")
+    if reason == "not-open":
+        exp = data.get("expanded") or "false"
+        return (f"Error: could not open the dropdown for {label} (aria-expanded stayed {exp}) after "
+                "JS, keyboard and a real click — call browser_snapshot to inspect it.")
     if reason == "mismatch":
         wanted = data.get("wanted") or option_text
         return (f'Error: {label} reads "{data.get("actual", "")}" after selecting "{wanted}" — '

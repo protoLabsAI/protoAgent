@@ -1856,16 +1856,17 @@ def test_select_js_dispatches_to_each_widget_branch_in_one_script():
     assert "selected-flag" in js and ("title" in js and "aria-label" in js)
 
 
-def test_select_combobox_clears_before_typing_and_never_presses_enter():
+def test_select_combobox_clears_before_typing_and_commits_by_click_never_enter():
     """r2, by construction: the input is cleared (`abSetNativeValue(input, '')`) before the
-    filter is typed, and the option is COMMITTED BY CLICK — the script contains no Enter/key
-    press at all, so the highlighted-wrong-option commit (#4032) cannot happen."""
+    filter is typed, and the option is COMMITTED BY CLICK (`abClickOption`). The only keyboard
+    event is an ArrowDown to OPEN the menu (#4032 fix round) — Enter is never pressed, so the
+    highlighted-wrong-option commit (#4032) cannot happen."""
     js = forms.select_js("#country", "United States")
     assert "abSetNativeValue(input, '')" in js            # clear first, never append
     assert "abClickOption" in js                           # commit by clicking the option element
-    # no keyboard commit anywhere: no key events, and the Enter key is never named as a value
-    assert "KeyboardEvent" not in js and "keydown" not in js and "keypress" not in js
-    assert "'Enter'" not in js and '"Enter"' not in js and ".key" not in js
+    # ArrowDown is an OPEN signal, not a commit; Enter/keypress is never dispatched to commit.
+    assert "ArrowDown" in js and "keypress" not in js
+    assert "'Enter'" not in js and '"Enter"' not in js
 
 
 def _run_select_lib_js(html: str, expr: str):
