@@ -28,6 +28,30 @@ from graph.middleware.goal_checkpoint import closing_call, goal_checkpoint
 
 WAIT_TOOL_NAME = "wait"
 
+# The ``wait`` tool's success confirmation (tools/scheduler_tools.py) — "Wait scheduled:
+# <duration>. Will resume to: <then>". It is a status line for the MODEL; the resume
+# instruction in it is the agent talking to its future self.
+_WAIT_CONFIRMATION_PREFIX = "Wait scheduled: "
+_WAIT_RESUME_MARK = ". Will resume to: "
+
+
+def wait_turn_reply(tool_output: str) -> str | None:
+    """The chat reply for a turn that yielded on ``wait`` without saying anything, or None
+    when ``tool_output`` isn't a wait confirmation.
+
+    A turn that ends on ``wait`` often has no assistant text — the model calls the tool and
+    the turn ends here — so the answer used to fall back to the raw confirmation. In chat
+    that read as the agent prompting itself: the operator saw "Wait scheduled: 45 minutes.
+    Will resume to: Check on …" as the reply. The tool card already shows the resume plan;
+    the reply only needs to say when the agent is back."""
+    text = (tool_output or "").strip()
+    if not text.startswith(_WAIT_CONFIRMATION_PREFIX):
+        return None
+    duration = text[len(_WAIT_CONFIRMATION_PREFIX) :].split(_WAIT_RESUME_MARK, 1)[0].strip().rstrip(".")
+    if not duration:
+        return None
+    return f"I'll pick this back up in {duration}."
+
 
 def _just_waited(messages: list) -> bool:
     """True if the trailing contiguous ToolMessage block contains a *successful*

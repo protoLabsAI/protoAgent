@@ -1,0 +1,3 @@
+- **A wait picks back up as part of the chat (#PRNUM).**
+  - When an agent's `wait` runs out, the turn it resumes with now streams and settles in the chat like any other reply. It used to fold into a collapsed "Scheduled task" card, a treatment meant for schedules set somewhere else. Goal runs already worked this way.
+  - A turn that ends on `wait` without saying anything now replies "I'll pick this back up in 45 minutes." It used to show the wait's raw confirmation, including the instruction the agent left for itself, so the reply read as the agent prompting itself.
