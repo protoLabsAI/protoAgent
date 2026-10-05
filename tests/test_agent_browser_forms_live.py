@@ -148,6 +148,108 @@ async def test_phone_country_then_number_both_read_back(browser):
     assert (await _form(browser))[field]["value"] == "2015550123"
 
 
+# ── the open escalation: browser_select opens a closed react-select ITSELF (#4032 fix) ──
+
+
+async def test_select_opens_a_closed_combobox_itself_without_a_prior_click(browser):
+    """r1: a CLOSED react-select is opened BY browser_select — no browser_click first — then the
+    matched option is clicked and the committed value reads back."""
+    await _open(browser, GREENHOUSE)
+    # prove it is closed before we touch it (a boolean expression returns an unquoted "true")
+    closed = await browser["browser_eval"].ainvoke(
+        {"expression": "document.getElementById('country_input').getAttribute('aria-expanded') === 'false'"})
+    assert closed == "true", closed
+
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "Canada"})
+    assert out.startswith('Selected "Canada" in'), out
+    assert (await _form(browser))["Country"]["value"] == "Canada"
+
+
+async def test_select_uses_an_already_open_menu_without_toggling_it_closed(browser):
+    """r2: when the menu is ALREADY open, browser_select picks straight from it — it must not
+    dispatch a mousedown that would TOGGLE react-select closed (then fail to find options)."""
+    await _open(browser, GREENHOUSE)
+    # open the Country menu the way a user would (focus + ArrowDown), WITHOUT browser_select
+    opened = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var i=document.getElementById('country_input');"
+        "i.focus();"
+        "i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));"
+        "return i.getAttribute('aria-expanded')==='true';})()"})
+    assert opened == "true", opened
+
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States" in'), out
+    assert (await _form(browser))["Country"]["value"] == "United States"
+
+
+async def test_select_commits_a_control_that_ignores_untrusted_mousedown(browser):
+    """r3: the sponsorship control IGNORES a synthetic mousedown (opens only on ArrowDown or a
+    trusted click) — the live widget that never opened on a JS mousedown. browser_select still
+    opens it via the escalation and commits."""
+    await _open(browser, GREENHOUSE)
+    field = "Will you now or in the future require immigration sponsorship?"
+    out = await browser["browser_select"].ainvoke({"field": field, "option_text": "No"})
+    assert out.startswith('Selected "No" in'), out
+    assert (await _form(browser))[field]["value"] == "No"
+
+
+async def test_select_falls_back_to_a_trusted_cli_click_to_open(browser):
+    """r3: the security-clearance control opens ONLY on a real (trusted) click — a synthetic
+    mousedown and ArrowDown are both ignored. browser_select escalates to the trusted CLI-click
+    fallback and commits."""
+    await _open(browser, GREENHOUSE)
+    field = "Do you require security clearance?"
+    out = await browser["browser_select"].ainvoke({"field": field, "option_text": "Yes"})
+    assert out.startswith('Selected "Yes" in'), out
+    assert (await _form(browser))[field]["value"] == "Yes"
+
+
+async def test_select_rescans_unfiltered_when_the_typed_filter_hides_the_option(browser):
+    """r6: the referral control filters options by a hidden value, not the visible text, so typing
+    the wanted option's text hides EVERY option; the unfiltered rescan still finds and commits it."""
+    await _open(browser, GREENHOUSE)
+    field = "How did you hear about us?"
+    out = await browser["browser_select"].ainvoke({"field": field, "option_text": "Referral"})
+    assert out.startswith('Selected "Referral" in'), out
+    assert (await _form(browser))[field]["value"] == "Referral"
+
+
+async def test_select_on_a_control_that_never_opens_is_an_explicit_open_error(browser):
+    """r5: a control that never opens — even to a trusted click — returns an explicit 'could not
+    open the dropdown' error naming aria-expanded, NOT the misleading 'no options were found'."""
+    await _open(browser, GREENHOUSE)
+    field = "Preferred office"
+    out = await browser["browser_select"].ainvoke({"field": field, "option_text": "Remote"})
+    assert out.startswith("Error: could not open the dropdown for"), out
+    assert "aria-expanded stayed false" in out
+    assert "no options were found" not in out
+    assert (await _form(browser))[field]["value"] == ""   # nothing committed
+
+
+async def test_ten_consecutive_selects_across_comboboxes_all_commit(browser):
+    """r4: live, only 4 of 10 react-select questions committed (the single-mousedown open was
+    flaky). With the open escalation, 10 consecutive selects across the comboboxes all commit and
+    read back — the 4/10 becomes 10/10."""
+    await _open(browser, GREENHOUSE)
+    visa = "Are you authorized to work?"
+    sponsorship = "Will you now or in the future require immigration sponsorship?"
+    picks = [
+        (visa, "Yes"), ("Country", "United States"), (sponsorship, "No"),
+        (visa, "No"), ("Country", "Canada"), (sponsorship, "Yes"),
+        (visa, "Yes"), ("Country", "Ireland"), (sponsorship, "Not sure"),
+        ("Country", "United Kingdom"),
+    ]
+    assert len(picks) == 10
+    for field, option in picks:
+        out = await browser["browser_select"].ainvoke({"field": field, "option_text": option})
+        assert out.startswith(f'Selected "{option}" in'), out
+
+    fields = await _form(browser)   # the LAST committed value per control reads back
+    assert fields[visa]["value"] == "Yes"
+    assert fields["Country"]["value"] == "United Kingdom"
+    assert fields[sponsorship]["value"] == "Not sure"
+
+
 # ── file input behind an "Attach" button, verified by read-back ──────────────────
 
 

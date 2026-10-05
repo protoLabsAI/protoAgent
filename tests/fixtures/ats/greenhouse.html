@@ -14,16 +14,33 @@
   interaction behaviors Greenhouse's widgets have, NOT a pixel copy:
 
     * text inputs with `<label for>` and required-asterisk markers;
-    * a react-select-style combobox: `.select__container` > `.select__control`
+    * react-select-style comboboxes: `.select__container` > `.select__control`
       holding an `input[role=combobox]`, an always-present `.select__single-value`
       showing the committed choice, and a `.select__menu` (id === the input's
-      aria-controls) of `role=option` elements rendered ONLY while the menu is open.
-      The menu opens on a mousedown on the control; the first option is highlighted
-      and Enter would commit it (the #4032 trap). The visa combobox offers both
-      "Yes" and "Yes, Ireland Highly Skilled Worker Visa" with the Ireland option
-      FIRST (highlighted), so a type+Enter would pick the wrong one — browser_select
-      must click the exact "Yes" instead. The country combobox lists "Afghanistan"
-      first and includes "United States".
+      aria-controls) of `role=option` elements that is PORTALLED to <body> and exists
+      ONLY while open. These model REAL react-select OPEN semantics so the open
+      escalation (#4032 fix round) is actually exercised, not a toy that opens on any
+      event: the control ignores a non-primary (button !== 0) mousedown; a mousedown
+      while the input is NOT focused focuses it and opens via an `openAfterFocus`
+      flag; a mousedown while focused and already open TOGGLES it closed; ArrowDown on
+      the input opens. The first option is highlighted and Enter would commit it (the
+      #4032 trap) — browser_select clicks the exact option instead. Behaviors are set
+      per control by data-attributes:
+        - `data-open="standard"` (default): opens on a synthetic button-0 mousedown
+          (visa, country). Visa lists "Yes, Ireland Highly Skilled Worker Visa" FIRST
+          (highlighted) then "Yes", so a type+Enter picks wrong; country lists
+          "Afghanistan" first and includes "United States".
+        - `data-open="arrowdown-or-trusted"` (sponsorship): IGNORES an untrusted
+          mousedown (`if(!e.isTrusted) return`); opens only on ArrowDown or a trusted
+          click — so the escalation must reach strategy (b)/the CLI click.
+        - `data-open="trusted-only"` (security clearance): ignores untrusted mousedown
+          AND has no ArrowDown handler; opens ONLY on a real (trusted) CLI click — the
+          browser_select trusted-click fallback.
+        - `data-open="never"` (preferred office): never opens on anything — the
+          explicit "could not open the dropdown" error, not "no options were found".
+        - `data-filter="value"` (how-did-you-hear): filters options by a hidden value,
+          not the visible text, so typing the wanted option's text hides EVERYTHING —
+          the unfiltered rescan must still find it.
     * an intl-tel-input phone field: `.iti` wrapper, a `.iti__selected-flag` whose
       `title` holds the committed country, and a `ul.iti__country-list` of
       `li.iti__country` (each `.iti__country-name`) with Afghanistan and Åland
@@ -64,6 +81,8 @@
   .select__single-value { color: #111; }
   .select__placeholder { color: #999; }
   .select__input { border: none; outline: none; flex: 1; min-width: 4rem; padding: 0; }
+  .select__indicators { display: flex; align-items: center; }
+  .select__dropdown-indicator { width: 1rem; height: 1rem; cursor: pointer; }
   .select__menu {
     position: absolute; left: 0; right: 0; top: 100%; z-index: 10; background: #fff;
     border: 1px solid #ccc; border-top: none; max-height: 14rem; overflow: auto;
@@ -120,8 +139,8 @@
     </div>
   </div>
 
-  <!-- Work-authorization combobox (react-select). "Yes, Ireland…" is the highlighted
-       first option, so a type+Enter would pick it — the #4032 bug. -->
+  <!-- Work-authorization combobox (react-select, standard open). "Yes, Ireland…" is the
+       highlighted first option, so a type+Enter would pick it — the #4032 bug. -->
   <div class="field">
     <label for="visa_input">Are you authorized to work? *</label>
     <div class="select__container" data-options="visa">
@@ -131,11 +150,12 @@
         <input id="visa_input" name="visa" class="select__input" role="combobox"
                aria-autocomplete="list" aria-expanded="false" aria-controls="visa_menu"
                autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
     </div>
   </div>
 
-  <!-- Country combobox (react-select); "Afghanistan" first, "United States" present. -->
+  <!-- Country combobox (react-select, standard open); "Afghanistan" first, "United States" present. -->
   <div class="field">
     <label for="country_input">Country *</label>
     <div class="select__container" data-options="country">
@@ -145,6 +165,71 @@
         <input id="country_input" name="country" class="select__input" role="combobox"
                aria-autocomplete="list" aria-expanded="false" aria-controls="country_menu"
                autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sponsorship combobox: IGNORES an untrusted mousedown; opens only on ArrowDown or a
+       trusted click. Exercises the escalation past strategy (a). -->
+  <div class="field">
+    <label for="sponsorship_input">Will you now or in the future require immigration sponsorship? *</label>
+    <div class="select__container" data-options="sponsorship" data-open="arrowdown-or-trusted">
+      <div class="select__control" id="sponsorship_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="sponsorship_input" name="sponsorship" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="sponsorship_menu"
+               autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Referral combobox: FILTERS options by a hidden value, not the visible label, so typing
+       the wanted option's text hides every option — the unfiltered rescan must find it. -->
+  <div class="field">
+    <label for="referral_input">How did you hear about us?</label>
+    <div class="select__container" data-options="referral" data-filter="value">
+      <div class="select__control" id="referral_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="referral_input" name="referral" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="referral_menu"
+               autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Security-clearance combobox: ignores untrusted mousedown AND has no ArrowDown handler;
+       opens ONLY on a real (trusted) CLI click — the browser_select trusted-click fallback. -->
+  <div class="field">
+    <label for="clearance_input">Do you require security clearance?</label>
+    <div class="select__container" data-options="clearance" data-open="trusted-only">
+      <div class="select__control" id="clearance_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="clearance_input" name="clearance" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="clearance_menu"
+               autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Preferred-office combobox: a broken/disabled widget that NEVER opens on anything —
+       the explicit "could not open the dropdown" error, not "no options were found". -->
+  <div class="field">
+    <label for="office_input">Preferred office</label>
+    <div class="select__container" data-options="office" data-open="never">
+      <div class="select__control" id="office_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="office_input" name="office" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="office_menu"
+               autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
     </div>
   </div>
@@ -178,72 +263,132 @@
 "use strict";
 
 // ── react-select-style comboboxes ────────────────────────────────────────────
-// Options per container. The visa list puts the long "Ireland" option FIRST so it is
-// the highlighted row a type+Enter would wrongly commit (the #4032 trap); browser_select
-// clicks the exact "Yes" instead. The option menu is created on open and removed on
-// commit/close, so it exists in the DOM ONLY while open (the react-select contract).
+// Options per container. An entry is either a plain string (visible text === value) or a
+// {text, value} pair (value drives data-filter="value" filtering, text is what commits).
+// The visa list puts the long "Ireland" option FIRST so it is the highlighted row a
+// type+Enter would wrongly commit (the #4032 trap); browser_select clicks the exact match.
+// The menu is PORTALLED to <body> (named by aria-controls) and exists ONLY while open — the
+// real react-select contract — so a stale selector or an unscoped option scan can't see it.
 var OPTIONS = {
   visa: ["Yes, Ireland Highly Skilled Worker Visa", "Yes", "No"],
   country: ["Afghanistan", "Åland Islands", "Albania", "Canada", "Ireland",
-            "United Kingdom", "United States", "Zimbabwe"]
+            "United Kingdom", "United States", "Zimbabwe"],
+  sponsorship: ["Yes", "No", "Not sure"],
+  referral: [{ text: "LinkedIn", value: "li" }, { text: "Referral", value: "ref" },
+             { text: "Company website", value: "web" }, { text: "Job board", value: "jb" }],
+  clearance: ["Yes", "No"],
+  office: ["Remote", "London", "San Francisco"]   // never rendered — this control never opens
 };
 
 document.querySelectorAll(".select__container").forEach(function (container) {
   var which = container.getAttribute("data-options");
+  var mode = container.getAttribute("data-open") || "standard";
+  var filterMode = container.getAttribute("data-filter") || "none";
   var control = container.querySelector(".select__control");
   var input = container.querySelector("input[role=combobox]");
   var single = container.querySelector(".select__single-value");
   var placeholder = container.querySelector(".select__placeholder");
   var menuId = input.getAttribute("aria-controls");
+  var isFocused = false;
+  var openAfterFocus = false;           // react-select: a mousedown-driven focus opens the menu
+
+  function menuEl() { return document.getElementById(menuId); }
+  function isOpen() { return !!menuEl(); }
+
+  function renderOptions(menu) {
+    var list = menu.querySelector(".select__menu-list");
+    while (list.firstChild) list.removeChild(list.firstChild);
+    var q = (input.value || "").trim().toLowerCase();
+    OPTIONS[which].forEach(function (entry) {
+      var text = (typeof entry === "string") ? entry : entry.text;
+      var value = (typeof entry === "string") ? text : (entry.value || entry.text);
+      if (q) {
+        if (filterMode === "value" && value.toLowerCase().indexOf(q) < 0) return;  // hidden by filter
+        if (filterMode === "text" && text.toLowerCase().indexOf(q) < 0) return;
+      }
+      var opt = document.createElement("div");
+      opt.className = "select__option" + (list.children.length === 0 ? " select__option--is-focused" : "");
+      opt.setAttribute("role", "option");
+      opt.textContent = text;
+      // Commit on mousedown — what react-select does, and the event forms.py fires first.
+      opt.addEventListener("mousedown", function (e) { e.preventDefault(); commit(text); });
+      list.appendChild(opt);
+    });
+  }
+
+  function openMenu() {
+    if (isOpen()) return;
+    var menu = document.createElement("div");
+    menu.className = "select__menu";
+    menu.id = menuId;                     // named by aria-controls, ONLY while open
+    var list = document.createElement("div");
+    list.className = "select__menu-list";
+    list.setAttribute("role", "listbox");
+    menu.appendChild(list);
+    document.body.appendChild(menu);      // PORTALLED to <body>, like real react-select
+    renderOptions(menu);
+    input.setAttribute("aria-expanded", "true");
+  }
 
   function closeMenu() {
-    var m = container.querySelector(".select__menu");
+    var m = menuEl();
     if (m) m.remove();
     input.setAttribute("aria-expanded", "false");
   }
 
   function commit(text) {
-    single.textContent = text;              // the committed value forms.py reads back
+    single.textContent = text;            // the committed value forms.py reads back
     if (placeholder) placeholder.style.display = "none";
-    input.value = "";                       // react-select clears the search on commit
+    input.value = "";                     // react-select clears the search on commit
     input.dispatchEvent(new Event("input", { bubbles: true }));
     closeMenu();
   }
 
-  function openMenu() {
-    if (container.querySelector(".select__menu")) return;
-    var menu = document.createElement("div");
-    menu.className = "select__menu";
-    menu.id = menuId;
-    var list = document.createElement("div");
-    list.className = "select__menu-list";
-    list.setAttribute("role", "listbox");
-    OPTIONS[which].forEach(function (text, i) {
-      var opt = document.createElement("div");
-      opt.className = "select__option" + (i === 0 ? " select__option--is-focused" : "");
-      opt.setAttribute("role", "option");
-      opt.textContent = text;
-      // Commit on mousedown — what react-select does, and the event forms.py fires
-      // first. Clicking an option never routes through the control's open handler
-      // because the menu is a sibling of the control, not a descendant.
-      opt.addEventListener("mousedown", function (e) { e.preventDefault(); commit(text); });
-      list.appendChild(opt);
-    });
-    menu.appendChild(list);
-    container.appendChild(menu);
-    input.setAttribute("aria-expanded", "true");
-  }
+  if (mode === "never") return;           // a broken/disabled widget — no open handlers at all
 
-  control.addEventListener("mousedown", function () { openMenu(); });
-  // Enter commits the highlighted (first) option — the keyboard path that made the visa
-  // field wrong. browser_select deliberately clicks the matched option instead.
-  input.addEventListener("keydown", function (e) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      var focused = container.querySelector(".select__option--is-focused");
-      if (focused) commit(focused.textContent);
+  input.addEventListener("focus", function () {
+    isFocused = true;
+    if (openAfterFocus) { openAfterFocus = false; openMenu(); }
+  });
+  input.addEventListener("blur", function () {
+    isFocused = false;
+    openAfterFocus = false;
+    closeMenu();                          // react-select closes the menu when focus leaves
+  });
+  input.addEventListener("input", function () {
+    var m = menuEl();
+    if (m) renderOptions(m);              // re-filter the open menu as the search text changes
+  });
+
+  control.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;           // primary button only (real react-select)
+    if (mode === "arrowdown-or-trusted" || mode === "trusted-only") {
+      if (!e.isTrusted) return;           // ignores a synthetic mousedown
+    }
+    e.preventDefault();                   // keep focus on the input
+    if (!isFocused) {
+      openAfterFocus = true;
+      input.focus();                      // the focus handler opens via openAfterFocus
+    } else if (isOpen()) {
+      closeMenu();                        // a second mousedown while open TOGGLES closed
+    } else {
+      openMenu();
     }
   });
+
+  if (mode !== "trusted-only") {
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (!isOpen()) openMenu();        // ArrowDown opens (an OPEN signal, not a commit)
+      } else if (e.key === "Enter") {
+        e.preventDefault();               // Enter commits the highlighted row — the #4032 trap
+        var m = menuEl();
+        var focused = m && m.querySelector(".select__option--is-focused");
+        if (focused) commit(focused.textContent);
+      }
+    });
+  }
 });
 
 // ── intl-tel-input ────────────────────────────────────────────────────────────
