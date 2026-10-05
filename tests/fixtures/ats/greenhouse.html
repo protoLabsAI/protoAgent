@@ -1,0 +1,305 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — Greenhouse application form (#4032 A5).
+
+  Models the DOM contract of a Greenhouse-hosted job application form:
+      https://job-boards.greenhouse.io/<company>/jobs/<id>
+  (the public "Apply for this job" form served by job-boards.greenhouse.io).
+
+  Captured / last modeled: 2026-10-04.
+
+  This is a MINIMAL, self-contained reproduction — no network, no external JS/CSS —
+  whose purpose is to exercise the agent_browser in-page form JavaScript (plugins/
+  agent_browser/forms.py) in a real browser. What matters is the DOM contract and the
+  interaction behaviors Greenhouse's widgets have, NOT a pixel copy:
+
+    * text inputs with `<label for>` and required-asterisk markers;
+    * a react-select-style combobox: `.select__container` > `.select__control`
+      holding an `input[role=combobox]`, an always-present `.select__single-value`
+      showing the committed choice, and a `.select__menu` (id === the input's
+      aria-controls) of `role=option` elements rendered ONLY while the menu is open.
+      The menu opens on a mousedown on the control; the first option is highlighted
+      and Enter would commit it (the #4032 trap). The visa combobox offers both
+      "Yes" and "Yes, Ireland Highly Skilled Worker Visa" with the Ireland option
+      FIRST (highlighted), so a type+Enter would pick the wrong one — browser_select
+      must click the exact "Yes" instead. The country combobox lists "Afghanistan"
+      first and includes "United States".
+    * an intl-tel-input phone field: `.iti` wrapper, a `.iti__selected-flag` whose
+      `title` holds the committed country, and a `ul.iti__country-list` of
+      `li.iti__country` (each `.iti__country-name`) with Afghanistan and Åland
+      Islands first and United States present. Picking a country updates the flag's
+      title; the national number is a plain `input[type=tel]`.
+    * a résumé block: a hidden `input[type=file]` behind an "Attach" button, and an
+      "Enter manually" trigger whose textarea is revealed ONLY by a JS-dispatched
+      (untrusted) click — a native CLI click reports success but does nothing, which
+      is exactly the Greenhouse behavior browser_click(js_fallback=True) exists for.
+    * a native `<select>` for voluntary self-identification.
+
+  TO REFRESH when Greenhouse changes its markup: open a live application form, read
+  the relevant widget's DOM in devtools, and update the matching block below (keep the
+  class names forms.py keys on — `select__control`, `select__single-value`,
+  `select__menu`, `iti__selected-flag`, `iti__country`, `iti__country-name`), then
+  bump the "last modeled" date. Run: pytest tests/test_agent_browser_forms_live.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greenhouse — Apply</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 640px; margin: 2rem auto; }
+  .field { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=text], input[type=email], input[type=tel], select, textarea {
+    width: 100%; padding: .4rem; box-sizing: border-box; font-size: 1rem;
+  }
+  .hidden-file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+  [hidden] { display: none !important; }
+
+  /* react-select-style combobox */
+  .select__container { position: relative; }
+  .select__control {
+    border: 1px solid #ccc; border-radius: 4px; padding: .35rem .5rem; min-height: 2.2rem;
+    display: flex; align-items: center; cursor: pointer; background: #fff;
+  }
+  .select__single-value { color: #111; }
+  .select__placeholder { color: #999; }
+  .select__input { border: none; outline: none; flex: 1; min-width: 4rem; padding: 0; }
+  .select__menu {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 10; background: #fff;
+    border: 1px solid #ccc; border-top: none; max-height: 14rem; overflow: auto;
+  }
+  .select__option { padding: .4rem .5rem; cursor: pointer; }
+  .select__option--is-focused { background: #deebff; }
+
+  /* intl-tel-input */
+  .iti { position: relative; display: block; }
+  .iti__flag-container { position: relative; }
+  .iti__selected-flag {
+    display: inline-flex; gap: .35rem; align-items: center; cursor: pointer;
+    padding: .3rem .5rem; border: 1px solid #ccc; border-radius: 4px; margin-bottom: .25rem;
+  }
+  .iti__country-list {
+    list-style: none; margin: 0; padding: 0; border: 1px solid #ccc; max-height: 14rem;
+    overflow: auto;
+  }
+  .iti__country { padding: .35rem .5rem; cursor: pointer; display: flex; gap: .5rem; }
+  .iti__hide { display: none; }
+</style>
+</head>
+<body>
+<h1>Apply for this job</h1>
+<form id="application" aria-label="Application">
+
+  <div class="field">
+    <label for="first_name">First Name *</label>
+    <input type="text" id="first_name" name="first_name" required>
+  </div>
+
+  <div class="field">
+    <label for="last_name">Last Name *</label>
+    <input type="text" id="last_name" name="last_name" required>
+  </div>
+
+  <div class="field">
+    <label for="email">Email *</label>
+    <input type="email" id="email" name="email" required>
+  </div>
+
+  <!-- Phone — intl-tel-input: select the country, then type the national number. -->
+  <div class="field">
+    <label for="phone">Phone number *</label>
+    <div class="iti" id="phone_iti">
+      <div class="iti__flag-container">
+        <div class="iti__selected-flag" role="button" tabindex="-1" title="">
+          <span class="iti__selected-dial-code"></span>
+          <span class="iti__arrow"></span>
+        </div>
+        <ul class="iti__country-list iti__hide" aria-label="Country"></ul>
+      </div>
+      <input type="tel" id="phone" name="phone" autocomplete="off">
+    </div>
+  </div>
+
+  <!-- Work-authorization combobox (react-select). "Yes, Ireland…" is the highlighted
+       first option, so a type+Enter would pick it — the #4032 bug. -->
+  <div class="field">
+    <label for="visa_input">Are you authorized to work? *</label>
+    <div class="select__container" data-options="visa">
+      <div class="select__control" id="visa_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="visa_input" name="visa" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="visa_menu"
+               autocomplete="off">
+      </div>
+    </div>
+  </div>
+
+  <!-- Country combobox (react-select); "Afghanistan" first, "United States" present. -->
+  <div class="field">
+    <label for="country_input">Country *</label>
+    <div class="select__container" data-options="country">
+      <div class="select__control" id="country_control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="country_input" name="country" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="country_menu"
+               autocomplete="off">
+      </div>
+    </div>
+  </div>
+
+  <!-- Résumé: a hidden file input behind "Attach", and an "Enter manually" trigger
+       whose textarea reveals only on a JS-dispatched click. -->
+  <div class="field" id="resume_block">
+    <label for="resume">Resume/CV *</label>
+    <input type="file" id="resume" name="resume" class="hidden-file"
+           accept=".pdf,.doc,.docx,.txt">
+    <button type="button" class="attach-btn" id="attach_resume">Attach</button>
+    <div class="manual-trigger" id="enter_manually" role="button">Enter manually</div>
+    <textarea id="manual_resume" name="manual_resume" rows="6" hidden></textarea>
+  </div>
+
+  <!-- Voluntary self-identification — native select. -->
+  <div class="field">
+    <label for="gender">Gender</label>
+    <select id="gender" name="gender">
+      <option value="">Please select</option>
+      <option>Male</option>
+      <option>Female</option>
+      <option>Non-binary</option>
+      <option>Decline to self identify</option>
+    </select>
+  </div>
+
+</form>
+
+<script>
+"use strict";
+
+// ── react-select-style comboboxes ────────────────────────────────────────────
+// Options per container. The visa list puts the long "Ireland" option FIRST so it is
+// the highlighted row a type+Enter would wrongly commit (the #4032 trap); browser_select
+// clicks the exact "Yes" instead. The option menu is created on open and removed on
+// commit/close, so it exists in the DOM ONLY while open (the react-select contract).
+var OPTIONS = {
+  visa: ["Yes, Ireland Highly Skilled Worker Visa", "Yes", "No"],
+  country: ["Afghanistan", "Åland Islands", "Albania", "Canada", "Ireland",
+            "United Kingdom", "United States", "Zimbabwe"]
+};
+
+document.querySelectorAll(".select__container").forEach(function (container) {
+  var which = container.getAttribute("data-options");
+  var control = container.querySelector(".select__control");
+  var input = container.querySelector("input[role=combobox]");
+  var single = container.querySelector(".select__single-value");
+  var placeholder = container.querySelector(".select__placeholder");
+  var menuId = input.getAttribute("aria-controls");
+
+  function closeMenu() {
+    var m = container.querySelector(".select__menu");
+    if (m) m.remove();
+    input.setAttribute("aria-expanded", "false");
+  }
+
+  function commit(text) {
+    single.textContent = text;              // the committed value forms.py reads back
+    if (placeholder) placeholder.style.display = "none";
+    input.value = "";                       // react-select clears the search on commit
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    closeMenu();
+  }
+
+  function openMenu() {
+    if (container.querySelector(".select__menu")) return;
+    var menu = document.createElement("div");
+    menu.className = "select__menu";
+    menu.id = menuId;
+    var list = document.createElement("div");
+    list.className = "select__menu-list";
+    list.setAttribute("role", "listbox");
+    OPTIONS[which].forEach(function (text, i) {
+      var opt = document.createElement("div");
+      opt.className = "select__option" + (i === 0 ? " select__option--is-focused" : "");
+      opt.setAttribute("role", "option");
+      opt.textContent = text;
+      // Commit on mousedown — what react-select does, and the event forms.py fires
+      // first. Clicking an option never routes through the control's open handler
+      // because the menu is a sibling of the control, not a descendant.
+      opt.addEventListener("mousedown", function (e) { e.preventDefault(); commit(text); });
+      list.appendChild(opt);
+    });
+    menu.appendChild(list);
+    container.appendChild(menu);
+    input.setAttribute("aria-expanded", "true");
+  }
+
+  control.addEventListener("mousedown", function () { openMenu(); });
+  // Enter commits the highlighted (first) option — the keyboard path that made the visa
+  // field wrong. browser_select deliberately clicks the matched option instead.
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      var focused = container.querySelector(".select__option--is-focused");
+      if (focused) commit(focused.textContent);
+    }
+  });
+});
+
+// ── intl-tel-input ────────────────────────────────────────────────────────────
+// Afghanistan and Åland Islands first (the real plugin's default ordering), United
+// States present. Picking a country writes "<name>: +<dial>" into the selected flag's
+// title — which is what forms.py reads back.
+var ITI_COUNTRIES = [
+  ["Afghanistan", "93"], ["Åland Islands", "358"], ["Albania", "355"],
+  ["Canada", "1"], ["Ireland", "353"], ["United Kingdom", "44"],
+  ["United States", "1"], ["Zimbabwe", "263"]
+];
+
+document.querySelectorAll(".iti").forEach(function (iti) {
+  var flag = iti.querySelector(".iti__selected-flag");
+  var dial = iti.querySelector(".iti__selected-dial-code");
+  var list = iti.querySelector(".iti__country-list");
+
+  ITI_COUNTRIES.forEach(function (c) {
+    var li = document.createElement("li");
+    li.className = "iti__country";
+    li.setAttribute("data-dial-code", c[1]);
+    var name = document.createElement("span");
+    name.className = "iti__country-name";
+    name.textContent = c[0];
+    var code = document.createElement("span");
+    code.className = "iti__dial-code";
+    code.textContent = "+" + c[1];
+    li.appendChild(name);
+    li.appendChild(code);
+    li.addEventListener("click", function () {
+      flag.setAttribute("title", c[0] + ": +" + c[1]);   // committed country (read back)
+      if (dial) dial.textContent = "+" + c[1];
+      list.classList.add("iti__hide");
+    });
+    list.appendChild(li);
+  });
+
+  flag.addEventListener("click", function () { list.classList.toggle("iti__hide"); });
+});
+
+// ── résumé block ────────────────────────────────────────────────────────────
+// The "Attach" button proxies clicks to the hidden file input (Greenhouse pattern).
+// The browser_upload tool sets the file input directly, so this is only cosmetic.
+document.getElementById("attach_resume").addEventListener("click", function () {
+  document.getElementById("resume").click();
+});
+
+// "Enter manually": a native (trusted) click reports success but does NOTHING — only a
+// JS-dispatched (untrusted) click reveals the textarea, which is the exact Greenhouse
+// behavior browser_click(js_fallback=True) was built for. The trigger is a non-focusable
+// element, so a CLI click leaves document.activeElement unchanged and the js-fallback
+// fingerprint can tell nothing happened.
+document.getElementById("enter_manually").addEventListener("click", function (e) {
+  if (e.isTrusted) return;                 // a native/CLI click does nothing
+  document.getElementById("manual_resume").hidden = false;
+});
+</script>
+</body>
+</html>
