@@ -676,7 +676,7 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     html = art._SHELL_HTML + art._SHELL_JS
     assert "cdnjs.cloudflare.com" not in html  # no external CDN dependency
     assert "/plugins/artifact/vendor/" in html  # served same-origin
-    # all eight libs present, each with an integrity hash.
+    # all ten libs present, each with an integrity hash.
     for lib in (
         "mermaid.min.js",
         "react.production.min.js",
@@ -686,9 +686,11 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
         "vega.min.js",
         "vega-lite.min.js",
         "vega-embed.min.js",
+        "pdfjs.min.mjs",
+        "pdfjs-worker.min.mjs",
     ):
         assert lib in html
-    assert html.count("sha512-") == 8 and 'integrity="' in html
+    assert html.count("sha512-") == 10 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html

@@ -220,6 +220,35 @@ decoded). The frame re-applies them on its own inflate, one entry at a time so t
 stops it, with a 20 s parse budget; a 45 s shell watchdog swaps in the outline card if the frame
 never answers.
 
+## PDFs (.pdf)
+
+A `.pdf` saved with `save_file_artifact` previews as its **real pages**: one continuous scroll,
+fitted to the panel width, with a page indicator (‹ 3 / 12 ›) and zoom (− / Fit / +, or the `-`,
+`0` and `+` keys). Pages are drawn to canvases only while they're near the visible area and freed
+when they scroll away, so a 500-page report opens as fast as a 3-page sheet; a drawn page's canvas
+is capped at 16 MP whatever the zoom. The extracted text stays underneath (collapsed) for screen
+readers, copying, and as the whole view when a file can't be rendered.
+
+The renderer is [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist` 6.4.299, legacy build,
+Apache-2.0 — notices in `vendor/pdfjs.LICENSES.txt`), vendored byte-for-byte as
+`vendor/pdfjs.min.mjs` + `vendor/pdfjs-worker.min.mjs` and SRI-pinned. It runs on the frame's
+**main thread**: the worker module only registers pdf.js's message handler on `globalThis`, so the
+frame never starts a Worker (its CSP forbids them). No wasm decoders, cMaps or standard-font data
+are vendored: JPEG 2000 / JBIG2 images draw blank and non-embedded fonts fall back to system fonts.
+There's no text or link layer (pages are pictures; use the extracted text to copy).
+
+**Hostile files.** Same sandbox and nonce CSP as slides, plus `worker-src 'none'` and no network of
+any kind (`useWasm:false`, no streaming or range loads). pdf.js has no decompression limits of its
+own, so the save-time preflight (`_pdfview.py`) decodes every stream the renderer will decode —
+each page's content streams, its image and form XObjects (forms recursively) and embedded font
+programs — through pypdf's bounded filters, against a 64 MB per-stream and 512 MB whole-document
+budget and a 15 s clock. Image sizes come from the image dictionaries (no decode): 50 MP per
+image, 150 MP drawn on one page. Password-protected files, unreadable files and anything over
+40 MB or 2000 pages are refused. The verdict is stamped on the version as `file.pdf`; a refused
+PDF, or one saved before page previews existed, shows the extracted-text card with the reason.
+`PDF_CAPS` in `shell.js` mirrors the caps (drift-guarded); the frame adds a 20 s parse budget and
+the shell's 45 s watchdog swaps in the text card if the frame never answers.
+
 ## Configuration
 
 The operator-facing knobs are **Settings ▸ Plugins ▸ Artifact** fields (no restart) — and an
@@ -295,7 +324,7 @@ the page announces it is listening (`protoagent:ready`), targeted at the page's 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no
 > outbound network at all (`capabilities.network: []` is literally true):
-> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, the `.pptx` slide renderer, and Vega / Vega-Lite / vega-embed (`*.min.js`). Pinned with **Subresource
+> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, the `.pptx` slide renderer, and Vega / Vega-Lite / vega-embed (`*.min.js`). The `.pdf` renderer (pdf.js) is the same idea as ES modules (`pdfjs*.min.mjs`, `<script type="module">`, also SRI-pinned). Pinned with **Subresource
 >   Integrity** (`integrity` + `crossorigin="anonymous"` — required because the sandbox is an opaque
 >   origin, so the load is cross-origin); a tampered served file won't execute. To bump one, replace
 >   the file, recompute its `sha512`, and update the `LIB` map in the shell page.

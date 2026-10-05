@@ -28,6 +28,7 @@ import logging
 #   _store          file-backed version chains + sidecar blobs + event emit
 #   _preview        file previews: mime/clip/extractors/thumbnails
 #   _slides         .pptx slide-preview safety preflight (caps the in-panel renderer)
+#   _pdfview        .pdf page-preview safety preflight (caps the in-panel pdf.js)
 #   _render_status  browser render feedback (#1458)
 #   _bundle         chat-bundle consumption seam (#2681)
 #   _tools          the nine agent-facing tools + the full-body-write nudge
