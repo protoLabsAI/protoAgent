@@ -1,0 +1,244 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — Greenhouse PHONE-COUNTRY picker (#4032 bug 2a).
+
+  Models the DOM contract of the phone-country selector on the live GitLab Greenhouse
+  application form:
+      https://job-boards.greenhouse.io/gitlab/jobs/8698330002
+  (the react-select-style country/dial-code combobox that sits next to the phone number).
+
+  Captured / last modeled: 2026-10-05.
+
+  This is a MINIMAL, self-contained reproduction — no network, no external JS/CSS — whose
+  purpose is to exercise the agent_browser in-page form JavaScript (plugins/agent_browser/
+  forms.py) in a real browser. What matters is the DOM contract and the interaction
+  behavior, NOT a pixel copy.
+
+  It is a SEPARATE file from greenhouse.html ON PURPOSE: greenhouse.html already has a
+  react-select labelled "Country *", and the label-resolution slice needs this phone picker
+  to be the ONLY field labelled Country. greenhouse.html is NOT modified.
+
+  The picker is a react-select combobox:
+    * `.select__container` (aria-label="Country") > `.select__control` holding an always-
+      present `.select__single-value`, an `input#country[role=combobox]`, and a dropdown
+      indicator. There is NO `<label for="country">` — the widget's only accessible name is
+      `aria-label="Country"` on the container and on the portalled listbox (as live).
+    * The `.select__menu` (id === the input's aria-controls) is PORTALLED to <body> and
+      exists ONLY while open, a list of `role=option` reading "Afghanistan +93", "Canada +1",
+      "United States +1", "United Kingdom +44", "Virgin Islands (British) +1284" and
+      "Virgin Islands (U.S.) +1340". The two Virgin Islands entries share a prefix, differ only by
+      a parenthetical, and both sit under +1 — the read-back must still tell them apart, so a
+      genuinely wrong commit between them is a hard mismatch (it exercises the #4032 bug 2a review
+      finding that stripping a dial code must NOT also split on "(" / strip a trailing number).
+      Open semantics match real react-select (button-0 mousedown focuses + opens via
+      openAfterFocus; a second mousedown while open toggles closed; ArrowDown opens), copied from
+      greenhouse.html.
+    * THE BUG THIS FIXTURE REPRODUCES: on commit the single-value renders ONLY a flag span +
+      the "+1" dial code as VISIBLE text, with the committed country NAME in a `title` on the
+      CHILD flag span — e.g.
+        <span class="select__single-value"><span class="flag" title="United States"></span>+1</span>
+      So the visible text is just "+1" (shared by the US and Canada), and browser_select must
+      read the NAME from the child title to confirm/report the selection.
+    * `data-force-commit="<option text>"` is a TEST HOOK: when set, the NEXT option click
+      commits THAT option regardless of which row was clicked — so a test can commit Canada
+      and then make a United-States click still read back Canada, proving a shared "+1" never
+      counts as a match (a hard mismatch).
+
+  Also a plain `input[type=tel]#phone` with `<label for="phone">Phone *</label>` — the
+  national number next to the country picker.
+
+  TO REFRESH when Greenhouse changes its markup: open a live application form, read the
+  phone-country widget's DOM in devtools, update the matching block below (keep the class
+  names forms.py keys on — `select__control`, `select__single-value`, `select__menu`), and
+  bump the "last modeled" date. Run: pytest tests/test_agent_browser_forms_live.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greenhouse — Phone country</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 640px; margin: 2rem auto; }
+  .field { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=tel] { width: 100%; padding: .4rem; box-sizing: border-box; font-size: 1rem; }
+
+  /* react-select-style combobox */
+  .select__container { position: relative; }
+  .select__control {
+    border: 1px solid #ccc; border-radius: 4px; padding: .35rem .5rem; min-height: 2.2rem;
+    display: flex; align-items: center; cursor: pointer; background: #fff;
+  }
+  .select__single-value { color: #111; display: inline-flex; align-items: center; gap: .35rem; }
+  .select__single-value .flag { width: 1.2rem; height: .9rem; background: #ddd; display: inline-block; }
+  .select__placeholder { color: #999; }
+  .select__input { border: none; outline: none; flex: 1; min-width: 4rem; padding: 0; }
+  .select__indicators { display: flex; align-items: center; }
+  .select__dropdown-indicator { width: 1rem; height: 1rem; cursor: pointer; }
+  .select__menu {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 10; background: #fff;
+    border: 1px solid #ccc; border-top: none; max-height: 14rem; overflow: auto;
+  }
+  .select__option { padding: .4rem .5rem; cursor: pointer; }
+  .select__option--is-focused { background: #deebff; }
+</style>
+</head>
+<body>
+<h1>Apply for this job</h1>
+<form id="application" aria-label="Application">
+
+  <!-- Phone-country combobox (react-select). Commits a flag + "+1" as visible text, with the
+       country NAME in a title on the CHILD flag span. Its only label is aria-label="Country". -->
+  <div class="field">
+    <div class="select__container" aria-label="Country" data-options="country">
+      <div class="select__control">
+        <span class="select__single-value"></span>
+        <span class="select__placeholder">Select…</span>
+        <input id="country" name="country" class="select__input" role="combobox"
+               aria-autocomplete="list" aria-expanded="false" aria-controls="country_menu"
+               autocomplete="off">
+        <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- The national number — a plain tel input. -->
+  <div class="field">
+    <label for="phone">Phone *</label>
+    <input type="tel" id="phone" name="phone" autocomplete="off">
+  </div>
+
+</form>
+
+<script>
+"use strict";
+
+// Each option carries the visible option TEXT ("United States +1"), the committed country
+// NAME ("United States") and the dial code ("1"). On commit the single-value shows only a
+// flag + "+<dial>", with NAME in a title on the child flag span — the live GitLab contract.
+var OPTIONS = {
+  country: [
+    { text: "Afghanistan +93",              name: "Afghanistan",              dial: "93"   },
+    { text: "Canada +1",                    name: "Canada",                   dial: "1"    },
+    { text: "United States +1",             name: "United States",            dial: "1"    },
+    { text: "United Kingdom +44",           name: "United Kingdom",           dial: "44"   },
+    // Two REAL phone-country entries that share the "Virgin Islands" prefix, differ only by a
+    // parenthetical, and both sit under +1 — the read-back must still tell them apart. (A dial-code
+    // strip that also split on "(" would collapse both to "Virgin Islands" — #4032 bug 2a review.)
+    { text: "Virgin Islands (British) +1284", name: "Virgin Islands (British)", dial: "1284" },
+    { text: "Virgin Islands (U.S.) +1340",    name: "Virgin Islands (U.S.)",    dial: "1340" }
+  ]
+};
+
+document.querySelectorAll(".select__container").forEach(function (container) {
+  var which = container.getAttribute("data-options");
+  var control = container.querySelector(".select__control");
+  var input = container.querySelector("input[role=combobox]");
+  var single = container.querySelector(".select__single-value");
+  var placeholder = container.querySelector(".select__placeholder");
+  var menuId = input.getAttribute("aria-controls");
+  var isFocused = false;
+  var openAfterFocus = false;           // react-select: a mousedown-driven focus opens the menu
+
+  function menuEl() { return document.getElementById(menuId); }
+  function isOpen() { return !!menuEl(); }
+
+  function entryFor(text) {
+    var list = OPTIONS[which];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].text.toLowerCase() === String(text).toLowerCase()) return list[i];
+    }
+    return null;
+  }
+
+  function renderOptions(menu) {
+    var list = menu.querySelector(".select__menu-list");
+    while (list.firstChild) list.removeChild(list.firstChild);
+    OPTIONS[which].forEach(function (entry) {
+      var opt = document.createElement("div");
+      opt.className = "select__option" + (list.children.length === 0 ? " select__option--is-focused" : "");
+      opt.setAttribute("role", "option");
+      opt.textContent = entry.text;                 // the VISIBLE option text includes "+1"
+      // Commit on mousedown — what react-select does, and the event forms.py fires first.
+      opt.addEventListener("mousedown", function (e) { e.preventDefault(); commit(entry.text); });
+      list.appendChild(opt);
+    });
+  }
+
+  function openMenu() {
+    if (isOpen()) return;
+    var menu = document.createElement("div");
+    menu.className = "select__menu";
+    menu.id = menuId;                               // named by aria-controls, ONLY while open
+    var list = document.createElement("div");
+    list.className = "select__menu-list";
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", "Country");     // the live listbox's only accessible name
+    menu.appendChild(list);
+    document.body.appendChild(menu);                // PORTALLED to <body>, like real react-select
+    renderOptions(menu);
+    input.setAttribute("aria-expanded", "true");
+  }
+
+  function closeMenu() {
+    var m = menuEl();
+    if (m) m.remove();
+    input.setAttribute("aria-expanded", "false");
+  }
+
+  function commit(text) {
+    // A TEST HOOK: when data-force-commit is set the NEXT click commits THAT option regardless
+    // of which row was clicked — so a United-States click can still read back Canada (both +1).
+    var forced = container.getAttribute("data-force-commit");
+    var entry = entryFor(forced || text) || entryFor(text);
+    if (!entry) return;
+    // Render ONLY a flag + the dial code as VISIBLE text, with the NAME in a title on the CHILD.
+    single.innerHTML = "";
+    var flag = document.createElement("span");
+    flag.className = "flag";
+    flag.setAttribute("title", entry.name);         // the committed country NAME lives here
+    single.appendChild(flag);
+    single.appendChild(document.createTextNode("+" + entry.dial));
+    if (placeholder) placeholder.style.display = "none";
+    input.value = "";                               // react-select clears the search on commit
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    closeMenu();
+  }
+
+  input.addEventListener("focus", function () {
+    isFocused = true;
+    if (openAfterFocus) { openAfterFocus = false; openMenu(); }
+  });
+  input.addEventListener("blur", function () {
+    isFocused = false;
+    openAfterFocus = false;
+    closeMenu();                                    // react-select closes the menu when focus leaves
+  });
+
+  control.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;                     // primary button only (real react-select)
+    e.preventDefault();                             // keep focus on the input
+    if (!isFocused) {
+      openAfterFocus = true;
+      input.focus();                                // the focus handler opens via openAfterFocus
+    } else if (isOpen()) {
+      closeMenu();                                  // a second mousedown while open TOGGLES closed
+    } else {
+      openMenu();
+    }
+  });
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!isOpen()) openMenu();                    // ArrowDown opens (an OPEN signal, not a commit)
+    } else if (e.key === "Enter") {
+      e.preventDefault();                           // Enter commits the highlighted row — the #4032 trap
+      var m = menuEl();
+      var focused = m && m.querySelector(".select__option--is-focused");
+      if (focused) commit(focused.textContent);
+    }
+  });
+});
+</script>
+</body>
+</html>

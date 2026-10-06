@@ -308,9 +308,103 @@ function abRequired(el){
   if(r==='true') return true;
   return !!(el.hasAttribute && el.hasAttribute('required'));
 }
+// ── committed-selection identity (phone-country pickers, #4032 bug 2a) ──────────
+// A phone-country react-select/iti commits the COUNTRY but renders only a flag + the "+1"
+// dial code as visible text, stashing the country NAME in a title/aria-label on a CHILD of the
+// single-value / selected-flag. abComboValue (and the read-back in abCombo/abIti) must read that
+// NAME, and NEVER treat a bare dial code as the committed value — "+1" is shared by the US and
+// Canada, so a dial code alone can never confirm which country was committed.
+function abIsDial(s){ var t = abClean(s); return t === '' || /^\+?\d[\d\s-]*$/.test(t); }
+function abCountryPart(s){
+  // Drop ONLY a trailing phone DIAL CODE — " +1", ": +1", "(+1)" — leaving everything else
+  // intact. The literal "+" is REQUIRED, and nothing is split on a bare "(" or ":": otherwise a
+  // real parenthetical or a trailing option number would be stripped and two DISTINCT options
+  // that merely share a prefix would collapse to the same key — "Level 1"/"Level 2",
+  // "Windows 10"/"Windows 11", "Spring 2025"/"Spring 2026", "Yes (full-time)"/"Yes (part-time)",
+  // "Virgin Islands (British)"/"Virgin Islands (U.S.)" — which the read-back must still tell apart
+  // (the old `split(/[:(]/)[0]` + optional-"+" strip conflated them — #4032 bug 2a review). So
+  // "United States: +1" / "United States (+1)" / "United States +1" all -> "United States", while
+  // "Virgin Islands (U.S.) +1340" -> "Virgin Islands (U.S.)" (only the "+1340" tail goes).
+  var t = abClean(s);
+  t = t.replace(/\s*\(\s*\+\d[\d\s-]*\)\s*$/, '');   // a trailing "(+1)" dial code in parens
+  t = t.replace(/\s*:?\s*\+\d[\d\s-]*$/, '');        // a trailing " +1" / ": +1" dial code
+  return abClean(t);
+}
+function abAttrTexts(node){
+  // title + aria-label on `node` AND every descendant, in document order — a title on a child
+  // flag span is what the live GitLab picker carries, which the element-only read missed.
+  var out = [];
+  if(!node) return out;
+  var all = [node];
+  if(node.querySelectorAll){ var k = node.querySelectorAll('*'); for(var i=0;i<k.length;i++) all.push(k[i]); }
+  for(var j=0;j<all.length;j++){
+    var n = all[j]; if(!n.getAttribute) continue;
+    var ti = abClean(n.getAttribute('title')); if(ti) out.push(ti);
+    var al = abClean(n.getAttribute('aria-label')); if(al) out.push(al);
+  }
+  return out;
+}
+function abBestName(cands){
+  // the first candidate (or its country part) that is NOT a bare dial code / empty.
+  for(var i=0;i<cands.length;i++){
+    var cp = abCountryPart(cands[i]);
+    if(cp && !abIsDial(cp)) return cp;
+    if(cands[i] && !abIsDial(cands[i])) return abClean(cands[i]);
+  }
+  return '';
+}
+function abSelectedIdentity(root){
+  // Candidate texts of the COMMITTED selection, priority order: title/aria-label on the
+  // single-value node or ANY descendant, and on the iti selected-flag/-country or ANY
+  // descendant; then a hidden native input/select value inside the widget; then the visible text.
+  if(!root || !root.querySelector) return [];
+  var out = [];
+  var sv = root.querySelector('.select__single-value, [class*="singleValue"], [class*="single-value"]');
+  var flag = root.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
+  out = out.concat(abAttrTexts(sv)).concat(abAttrTexts(flag));
+  var hid = root.querySelector('input[type="hidden"], select');
+  if(hid){
+    if((hid.tagName || '').toLowerCase() === 'select'){
+      var so = hid.options && hid.options[hid.selectedIndex];
+      var st = so ? abClean(so.textContent) : ''; if(st) out.push(st);
+    } else { var hv = abClean(hid.value); if(hv) out.push(hv); }
+  }
+  if(sv){ var svt = abClean(sv.textContent); if(svt) out.push(svt); }
+  if(flag){ var ft = abClean(flag.textContent); if(ft) out.push(ft); }
+  var seen = {}, res = [];
+  for(var i=0;i<out.length;i++){ var key = out[i].toLowerCase(); if(out[i] && !seen[key]){ seen[key]=1; res.push(out[i]); } }
+  return res;
+}
+function abIdentityMatch(chosen, cands){
+  // chosen matches the commit when abNorm(chosen) OR abNorm(countryPart(chosen)) equals abNorm
+  // of ANY candidate or its country part. A candidate that is only a dial code / empty is
+  // IGNORED — "+1" is shared by US and Canada, so it NEVER matches on its own.
+  var targets = [];
+  if(!abIsDial(chosen)) targets.push(abNorm(chosen));
+  var ccp = abCountryPart(chosen); if(ccp && !abIsDial(ccp)) targets.push(abNorm(ccp));
+  if(!targets.length) return false;
+  for(var i=0;i<cands.length;i++){
+    var c = cands[i], probes = [];
+    if(!abIsDial(c)) probes.push(abNorm(c));
+    var cp = abCountryPart(c); if(cp && !abIsDial(cp)) probes.push(abNorm(cp));
+    for(var p=0;p<probes.length;p++){
+      for(var t=0;t<targets.length;t++){ if(probes[p] && probes[p] === targets[t]) return true; }
+    }
+  }
+  return false;
+}
 function abComboValue(root){
   var sv = root.querySelector('.select__single-value, [class*="singleValue"], [class*="single-value"]');
-  if(sv) return abClean(sv.textContent);
+  if(sv){
+    var vis = abClean(sv.textContent);
+    // The visible single-value is only a flag / dial code (a phone-country picker) — recover the
+    // committed country NAME from a title/aria-label in the single-value subtree (#4032 bug 2a).
+    if(abIsDial(vis)){
+      var name = abBestName(abAttrTexts(sv));
+      if(name) return name;
+    }
+    return vis;
+  }
   var mv = root.querySelectorAll('.select__multi-value, [class*="multiValue"], [class*="multi-value"]');
   if(mv && mv.length){
     return Array.prototype.map.call(mv, function(n){ return abClean(n.textContent); }).join(', ');
@@ -942,22 +1036,30 @@ async function abCombo(el, want){
   if(m.error) return {ok:false, reason:m.error, kind:'combobox', label:label, options:texts.slice(0,10)};
   var chosen = texts[m.index];
   abClickOption(opts[m.index]);                                        // COMMIT by click, not Enter
-  await abWaitFor(function(){
-    var sv = control.querySelector && control.querySelector(
-      '.select__single-value, [class*="singleValue"], [class*="single-value"]');
-    var t = sv ? abClean(sv.textContent) : '';
-    return (t && abNorm(t) === abNorm(chosen)) ? [t] : [];
-  }, 2000);
-  var actual = (control && control.querySelector) ? abComboValue(control) : '';
-  if(abNorm(actual) !== abNorm(chosen))
-    return {ok:false, reason:'mismatch', kind:'combobox', label:label, wanted:chosen, actual:actual};
-  return {ok:true, kind:'combobox', label:label, chosen:chosen, committed:actual};
+  // Read-back: a phone-country picker renders only the "+1" dial code, stashing the NAME in a
+  // title on a child — so match the chosen option (or its country part) against the committed
+  // selection's IDENTITY candidates (#4032 bug 2a). The plain-combobox path is preserved as a
+  // fallback: abComboValue now returns the NAME for a dial-code-only value, so comparing against
+  // it still works for ordinary (even numeric) comboboxes and NEVER re-matches a bare dial code.
+  function abComboOk(){
+    var cs = (control && control.querySelector) ? abSelectedIdentity(control) : [];
+    var cv = (control && control.querySelector) ? abComboValue(control) : '';
+    return abIdentityMatch(chosen, cs) || (!!cv && abNorm(chosen) === abNorm(cv));
+  }
+  await abWaitFor(function(){ return abComboOk() ? [1] : []; }, 2000);
+  var cands = (control && control.querySelector) ? abSelectedIdentity(control) : [];
+  var cval = (control && control.querySelector) ? abComboValue(control) : '';
+  if(!abComboOk())
+    return {ok:false, reason:'mismatch', kind:'combobox', label:label, wanted:chosen,
+            actual: abBestName(cands) || cval};
+  return {ok:true, kind:'combobox', label:label, chosen:chosen, committed: abBestName(cands) || cval || chosen};
 }
 function abItiSelectedName(iti){
-  var f = iti.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
-  if(!f) return '';
-  var t = f.getAttribute('title') || f.getAttribute('aria-label') || abClean(f.textContent) || '';
-  return abClean(String(t).split(':')[0]);               // "United States: +1 201" -> "United States"
+  // The committed country NAME — a title/aria-label on the selected-flag OR ANY descendant
+  // (e.g. a child flag span), never a bare dial code. (Was: the flag element's own attrs only,
+  // so a title on a child was missed and the "+1" dial-code text won — #4032 bug 2a.)
+  var cands = abSelectedIdentity(iti);
+  return abBestName(cands) || (cands.length ? cands[0] : '');
 }
 async function abIti(el, want){
   var iti = (el.closest && el.closest('.iti, [class*="iti--"]')) || el;
@@ -976,14 +1078,17 @@ async function abIti(el, want){
   if(m.error) return {ok:false, reason:m.error, kind:'iti', label:label, options:names.slice(0,10)};
   var chosen = names[m.index];
   abClickOption(items[m.index]);
-  await abWaitFor(function(){
-    var got = abItiSelectedName(iti);
-    return (got && abNorm(got) === abNorm(chosen)) ? [got] : [];
-  }, 2000);
-  var actual = abItiSelectedName(iti);                   // read back the selected flag's title
-  if(abNorm(actual) !== abNorm(chosen))
-    return {ok:false, reason:'mismatch', kind:'iti', label:label, wanted:chosen, actual:actual};
-  return {ok:true, kind:'iti', label:label, chosen:chosen, committed:actual};
+  function abItiOk(){
+    return abIdentityMatch(chosen, abSelectedIdentity(iti)) ||
+           abNorm(chosen) === abNorm(abItiSelectedName(iti));
+  }
+  await abWaitFor(function(){ return abItiOk() ? [1] : []; }, 2000);
+  var cands = abSelectedIdentity(iti);                   // read back the selected flag's identity
+  var iname = abItiSelectedName(iti);
+  if(!abItiOk())
+    return {ok:false, reason:'mismatch', kind:'iti', label:label, wanted:chosen,
+            actual: abBestName(cands) || iname};
+  return {ok:true, kind:'iti', label:label, chosen:chosen, committed: abBestName(cands) || iname || chosen};
 }
 """
 
