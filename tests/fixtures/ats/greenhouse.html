@@ -6,7 +6,7 @@
       https://job-boards.greenhouse.io/<company>/jobs/<id>
   (the public "Apply for this job" form served by job-boards.greenhouse.io).
 
-  Captured / last modeled: 2026-10-04.
+  Captured / last modeled: 2026-10-05.
 
   This is a MINIMAL, self-contained reproduction — no network, no external JS/CSS —
   whose purpose is to exercise the agent_browser in-page form JavaScript (plugins/
@@ -49,10 +49,24 @@
       `li.iti__country` (each `.iti__country-name`) with Afghanistan and Åland
       Islands first and United States present. Picking a country updates the flag's
       title; the national number is a plain `input[type=tel]`.
-    * a résumé block: a hidden `input[type=file]` behind an "Attach" button, and an
-      "Enter manually" trigger whose textarea is revealed ONLY by a JS-dispatched
-      (untrusted) click — a native CLI click reports success but does nothing, which
-      is exactly the Greenhouse behavior browser_click(js_fallback=True) exists for.
+    * résumé + cover-letter blocks: each a hidden `input[type=file]` behind an "Attach"
+      button (the input carries aria-labelledby=the button, so BOTH resolve the shared
+      label "Attach" — which is why browser_upload addresses them by `#resume` /
+      `#cover_letter` id, not the ambiguous label). On `change` the widget REPLACES its
+      `input[type=file]` with a fresh one (same id/name, empty `files`) and renders a
+      filename chip with a remove button — the live Greenhouse behavior that strands a
+      nonce tagged on the OLD input, so browser_upload must verify via the new input's
+      id/name or the chip (#4032 bug 3). The résumé block also has an "Enter manually"
+      trigger whose textarea is revealed ONLY by a JS-dispatched (untrusted) click — a
+      native CLI click reports success but does nothing, which is exactly the Greenhouse
+      behavior browser_click(js_fallback=True) exists for.
+    * a transcript block (`#transcript`) whose widget REJECTS the attach — on `change` it
+      clears the input and shows a `role=alert` validation message, WRAPPED in a plain div (no
+      alert/error class) and ENDING in the rejected filename ("… could not be attached:
+      <basename>"), as real validators do. A real non-attach that must stay a browser_upload
+      error with the message surfaced — and NOT read as a success just because a plain wrapper
+      AROUND the alert shares its text and that text ends in the filename (#4032 bug 3 review:
+      an ancestor-only alert exclusion let the wrapper through as a chip).
     * a native `<select>` for voluntary self-identification.
 
   TO REFRESH when Greenhouse changes its markup: open a live application form, read
@@ -106,6 +120,14 @@
   }
   .iti__country { padding: .35rem .5rem; cursor: pointer; display: flex; gap: .5rem; }
   .iti__hide { display: none; }
+
+  /* file-attach widget: the filename chip the widget renders after a re-render */
+  .file-chip {
+    display: inline-flex; gap: .4rem; align-items: center; margin-top: .4rem;
+    padding: .2rem .5rem; border: 1px solid #ccc; border-radius: 1rem; background: #f4f6f8;
+  }
+  .file-chip__remove { border: none; background: none; cursor: pointer; font-size: 1rem; line-height: 1; }
+  .field-error { color: #b00020; margin-top: .4rem; font-size: .9rem; }
 </style>
 </head>
 <body>
@@ -254,15 +276,36 @@
     </div>
   </div>
 
-  <!-- Résumé: a hidden file input behind "Attach", and an "Enter manually" trigger
-       whose textarea reveals only on a JS-dispatched click. -->
-  <div class="field" id="resume_block">
+  <!-- Résumé: a hidden file input behind "Attach" (the input is aria-labelledby the button, so
+       it shares the label "Attach" with the cover-letter field — address it by #resume). On
+       change the widget REPLACES the input and renders a filename chip, so a nonce on the old
+       input is stranded (#4032 bug 3). Also an "Enter manually" trigger whose textarea reveals
+       only on a JS-dispatched click. -->
+  <div class="field attach-field" id="resume_block">
     <label for="resume">Resume/CV *</label>
-    <input type="file" id="resume" name="resume" class="hidden-file"
-           accept=".pdf,.doc,.docx,.txt">
+    <input type="file" id="resume" name="resume" class="hidden-file attach-input"
+           aria-labelledby="attach_resume" accept=".pdf,.doc,.docx,.txt">
     <button type="button" class="attach-btn" id="attach_resume">Attach</button>
     <div class="manual-trigger" id="enter_manually" role="button">Enter manually</div>
     <textarea id="manual_resume" name="manual_resume" rows="6" hidden></textarea>
+  </div>
+
+  <!-- Cover letter: a SECOND "Attach" file field (shares the label "Attach" with the résumé).
+       Addressing #cover_letter must land here, not on the résumé. Same re-render-on-change. -->
+  <div class="field attach-field" id="cover_letter_block">
+    <label for="cover_letter">Cover letter</label>
+    <input type="file" id="cover_letter" name="cover_letter" class="hidden-file attach-input"
+           aria-labelledby="attach_cover_letter" accept=".pdf,.doc,.docx,.txt">
+    <button type="button" class="attach-btn" id="attach_cover_letter">Attach</button>
+  </div>
+
+  <!-- Transcript: a widget that REJECTS the attach — on change it clears the input and shows a
+       validation message. A real non-attach that must stay a browser_upload error. -->
+  <div class="field attach-field" id="transcript_block">
+    <label for="transcript">Transcript</label>
+    <input type="file" id="transcript" name="transcript" class="hidden-file attach-input reject-upload"
+           accept=".pdf">
+    <button type="button" class="attach-btn" id="attach_transcript">Attach</button>
   </div>
 
   <!-- Voluntary self-identification — native select. -->
@@ -458,11 +501,78 @@ document.querySelectorAll(".iti").forEach(function (iti) {
   flag.addEventListener("click", function () { list.classList.toggle("iti__hide"); });
 });
 
-// ── résumé block ────────────────────────────────────────────────────────────
-// The "Attach" button proxies clicks to the hidden file input (Greenhouse pattern).
-// The browser_upload tool sets the file input directly, so this is only cosmetic.
-document.getElementById("attach_resume").addEventListener("click", function () {
-  document.getElementById("resume").click();
+// ── file-attach widgets (résumé, cover letter, transcript) ──────────────────────
+// Live Greenhouse/Ashby REPLACE the <input type=file> on change with a fresh one (same
+// id/name, empty files) and show the attached filename as a removable chip — which strands
+// any nonce tagged on the OLD input, so browser_upload must verify via the fresh input's
+// id/name or the chip (#4032 bug 3). A `.reject-upload` input instead models a client-side
+// validator that REJECTS the file (clears it and shows a message) — a real non-attach.
+function renderChip(block, name) {
+  var old = block.querySelector(".file-chip");
+  if (old) old.remove();
+  var chip = document.createElement("span");
+  chip.className = "file-chip";
+  var nm = document.createElement("span");
+  nm.className = "file-chip__name";
+  nm.textContent = name;                 // the attached filename, visible after the re-render
+  var rm = document.createElement("button");
+  rm.type = "button";
+  rm.className = "file-chip__remove";
+  rm.textContent = "×";             // ×, a <button> — stripped by abTextNoControls
+  chip.appendChild(nm);
+  chip.appendChild(rm);
+  block.appendChild(chip);
+}
+
+function wireAttach(input) {
+  input.addEventListener("change", function () {
+    var block = input.closest(".attach-field");
+    var name = (input.files && input.files.length) ? input.files[0].name : "";
+    if (input.classList.contains("reject-upload")) {
+      input.value = "";                  // a validator that won't accept the file — clear it
+      // Wrap the role=alert in a PLAIN div (no alert/error class) and END the message with the
+      // rejected filename — the shape the #4032 bug 3 review flagged. The wrapper shares the alert's
+      // textContent, so an ancestor-only exclusion (closest) would read "… could not be attached:
+      // rejected.pdf" as a displayed filename and report the rejected upload as verified.
+      // browser_upload must treat it as an alert (surface it, stay an error), NEVER a chip.
+      var status = block.querySelector(".transcript-status");
+      if (!status) {
+        status = document.createElement("div");
+        status.className = "transcript-status";   // a plain wrapper: NO role, NO alert/error class
+        block.appendChild(status);
+      }
+      var err = status.querySelector(".field-error");
+      if (!err) {
+        err = document.createElement("div");
+        err.className = "field-error";
+        err.setAttribute("role", "alert");
+        status.appendChild(err);
+      }
+      err.textContent = "Upload rejected — it must be a PDF under 5MB and could not be attached: " +
+                        (name || "the file");
+      return;
+    }
+    if (!name) return;
+    // re-render: swap in a fresh, EMPTY input (same identity, no nonce) and show the chip
+    var fresh = input.cloneNode(false);
+    fresh.value = "";
+    fresh.removeAttribute("data-pa-upload");
+    input.parentNode.replaceChild(fresh, input);
+    wireAttach(fresh);
+    renderChip(block, name);
+  });
+}
+
+document.querySelectorAll("input[type=file].attach-input").forEach(wireAttach);
+
+// The "Attach" buttons proxy a click to their (current) hidden file input (Greenhouse pattern).
+// browser_upload sets the input's files directly, so this is only cosmetic.
+document.querySelectorAll(".attach-btn").forEach(function (btn) {
+  var block = btn.closest(".attach-field");
+  btn.addEventListener("click", function () {
+    var inp = block.querySelector("input[type=file]");
+    if (inp) inp.click();
+  });
 });
 
 // "Enter manually": a native (trusted) click reports success but does NOTHING — only a

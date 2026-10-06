@@ -654,16 +654,20 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         file must exist and be non-empty.
 
         Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
-        re-renders) or a CSS selector — NOT a `@eN` ref (the input is located and tagged in the
-        page, where a ref can't be resolved; `browser_form_read` has the same limit). If the
-        located element isn't the file input itself — Greenhouse/Ashby hide it behind an
-        "Attach" button — the single file input in its container is used; none, or more than
-        one, is a clear error.
+        re-renders), a CSS selector, or `#id` / a bare id of the file input — NOT a `@eN` ref (the
+        input is located and tagged in the page, where a ref can't be resolved; `browser_form_read`
+        has the same limit). A `#id`/bare id of an `input[type=file]` resolves directly, even when
+        it is hidden behind an "Attach" button; otherwise, if the located element isn't the file
+        input itself (Greenhouse/Ashby hide it behind "Attach"), the single file input in its
+        container is used — none, or more than one, is a clear error. When two file fields share a
+        label (two "Attach" buttons), address each by its id.
 
-        On success you get `Uploaded <name> to <label>`, returned only after reading the
-        attached filename back and confirming it matches the uploaded file; a read-back that is
-        empty or a different name is a hard `Error:`, and any validation message the field
-        shows is surfaced."""
+        On success you get `Uploaded <name> to <label>`, returned only after confirming the attach:
+        by reading the attached filename back from the input (even if the widget re-rendered it and
+        re-found it by id/name), or — when the widget replaced the input and left the filename
+        showing as a chip — via that displayed filename (the line then says so). An attach with no
+        file and no displayed filename is a hard `Error:`, as is a read-back of a different name,
+        and any validation message the field shows is surfaced."""
         if (bad := _bad_operand(field=field)):
             return bad
         # A @ref is resolved by the CLI, not in the page — but the file input is located AND
@@ -691,16 +695,21 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         located = await _ab("eval", "--stdin", stdin=forms.upload_js(sel, nonce))
         if located.startswith("Error:"):
             return located
-        target, label, locate_err = forms.parse_upload(located, field)
+        info, locate_err = forms.parse_upload(located, field)
         if locate_err:
             return locate_err
+        target, label = info["selector"], info["label"]
         # A file being uploaded must not be pruned mid-call (a concurrent capture's prune, or
         # one over budget) — mark it in flight for the duration of the CLI call.
         with storage.in_flight(source):
             up = await _ab("upload", target, str(source))
         if up.startswith("Error:"):
             return up
-        read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(target))
+        # Verify against the input's id/name/container too, not just the nonce: a Greenhouse-style
+        # widget re-renders its file input after the attach (the nonce rode off with the old node),
+        # so the attach is confirmed by re-finding the fresh input or reading the filename chip.
+        read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(
+            target, info["id"], info["name"], info["container"], source.name))
         if read.startswith("Error:"):
             return read
         return forms.render_upload(read, field, source.name, label=label)

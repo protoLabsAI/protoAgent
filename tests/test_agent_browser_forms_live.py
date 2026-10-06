@@ -453,10 +453,17 @@ async def test_iti_tel_without_its_own_label_does_not_borrow_country(browser):
     assert (await _form(browser))["Country"]["value"] == "United States"
 
 
-# ── file input behind an "Attach" button, verified by read-back ──────────────────
+# ── file input behind an "Attach" button, verified THROUGH a widget re-render (#4032 bug 3) ──
+# Greenhouse hides the real input[type=file] behind an "Attach" button and REPLACES it on change
+# (a fresh input, same id/name, empty files, plus a filename chip). browser_upload locates #resume
+# by id and confirms the attach survived the re-render — via the fresh input's id/name or the
+# displayed chip — instead of failing "could not be found to verify". Two fields share the label
+# "Attach", so each is addressed by its id (#resume / #cover_letter).
 
 
 async def test_upload_resume_reads_back_the_filename(browser):
+    """r1: addressing by the label still works end to end — the attach is confirmed even though
+    the widget re-renders its input, via the displayed filename chip."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
     resume = root / "live_resume.pdf"
@@ -467,6 +474,136 @@ async def test_upload_resume_reads_back_the_filename(browser):
         assert (await _form(browser))["Resume/CV"]["value"] == "live_resume.pdf"
     finally:
         resume.unlink(missing_ok=True)
+
+
+async def test_upload_resume_by_id_survives_the_widget_rerender(browser):
+    """r1/r2: #resume is an input[type=file] hidden behind an "Attach" button; the widget REPLACES
+    it on change. browser_upload resolves the id directly, uploads, and confirms the attach THROUGH
+    the re-render — `Uploaded ... to ...`, never "could not be found to verify"."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "id_resume.pdf"
+    f.write_bytes(b"%PDF-1.4 id resume\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "id_resume.pdf"})
+        assert out.startswith("Uploaded id_resume.pdf to"), out
+        assert "could not be found to verify" not in out
+        # the widget really DID replace its input (a fresh node carries no files) yet the filename
+        # stays visible as a chip — the exact shape that stranded the old nonce-only verify
+        rerendered = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var i=document.getElementById('resume');"
+            "return (i.files.length===0) && !!document.querySelector('#resume_block .file-chip');})()"})
+        assert rerendered == "true", rerendered
+        assert (await _form_by_id(browser))["resume"]["value"] == "id_resume.pdf"
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_upload_cover_letter_and_resume_land_on_their_own_ids(browser):
+    """r3: the résumé and cover-letter fields share the label "Attach"; addressing #cover_letter
+    attaches ONLY to the cover letter and #resume ONLY to the résumé — never crossed."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    cv = root / "the_resume.pdf"; cv.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
+    cover = root / "the_cover.pdf"; cover.write_bytes(b"%PDF-1.4 c\n%%EOF\n")
+    try:
+        up_c = await browser["browser_upload"].ainvoke({"field": "#cover_letter", "file_path": "the_cover.pdf"})
+        assert up_c.startswith("Uploaded the_cover.pdf to"), up_c
+        up_r = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "the_resume.pdf"})
+        assert up_r.startswith("Uploaded the_resume.pdf to"), up_r
+
+        by_id = await _form_by_id(browser)   # r3 + r5: each filename reads back on its own id
+        assert by_id["resume"]["value"] == "the_resume.pdf"
+        assert by_id["cover_letter"]["value"] == "the_cover.pdf"
+    finally:
+        cv.unlink(missing_ok=True); cover.unlink(missing_ok=True)
+
+
+async def test_empty_file_fields_do_not_borrow_the_resume_chip(browser):
+    """r5 (review): after ONLY #resume is attached, the other, still-empty file fields read back
+    '' — an empty input must not cross-read a sibling field's filename chip. The résumé block even
+    shares its wrapper with the manual-entry textarea, yet its own chip still reads back."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "only_resume.pdf"; f.write_bytes(b"%PDF-1.4 only\n%%EOF\n")
+    try:
+        up = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "only_resume.pdf"})
+        assert up.startswith("Uploaded only_resume.pdf to"), up
+
+        by_id = await _form_by_id(browser)
+        assert by_id["resume"]["value"] == "only_resume.pdf"   # the field's OWN chip reads back
+        assert by_id["cover_letter"]["value"] == ""            # empty — NOT "only_resume.pdf"
+        assert by_id["transcript"]["value"] == ""              # empty — NOT "only_resume.pdf"
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_upload_by_the_shared_attach_label_is_ambiguous(browser):
+    """r3: the two file fields share the label "Attach", so addressing by that label is an
+    ambiguous error that lists them — which is WHY the id form (#resume / #cover_letter) exists."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "ambiguous.pdf"; f.write_bytes(b"%PDF-1.4\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke({"field": "Attach", "file_path": "ambiguous.pdf"})
+        assert out.startswith("Error:") and "matches 2 fields" in out, out
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_upload_rejecting_widget_is_a_hard_error_with_the_message(browser):
+    """r4 (+ bug 3 review, finding 2): a widget that REJECTS the attach (clears the input, shows a
+    `role=alert` message that NAMES the file) is a real non-attach. The fixture now WRAPS the
+    role=alert in a plain `<div>` (no alert/error class) and ENDS the message with the rejected
+    filename ("… could not be attached: rejected.pdf") — the shape the review flagged: an
+    ancestor-only exclusion (closest) let that wrapper through as a chip because it shares the
+    alert's text. Neither input.files nor a displayed filename CHIP shows the basename — the alert
+    text, wrapper and all, does NOT count — so the result is an Error with the message surfaced, and
+    NEVER a "verified via the displayed filename" success."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "rejected.pdf"; f.write_bytes(b"%PDF-1.4 x\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke({"field": "#transcript", "file_path": "rejected.pdf"})
+        assert out.startswith("Error:"), out
+        assert not out.startswith("Uploaded")
+        assert "verified via the field's displayed filename" not in out   # the alert is NOT a chip
+        assert "nothing is attached" in out
+        assert "could not be attached" in out               # the field's message is surfaced
+        assert "rejected.pdf" in out                         # and it names the rejected file
+        # the alert's message ENDS in the filename, yet the plain wrapper around it is not read as a
+        # displayed-filename chip (both the alert and anything containing it are excluded)
+        rejected = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var b=document.getElementById('transcript_block');"
+            "var w=b.querySelector('.transcript-status');var a=b.querySelector('[role=alert]');"
+            "return !!(w && a && w.contains(a) && !w.matches('[role=alert],[class*=error]')"
+            " && /rejected\\.pdf$/.test(a.textContent.trim()));})()"})
+        assert rejected == "true", rejected       # the fixture really built the finding-2 shape
+        assert (await _form_by_id(browser))["transcript"]["value"] == ""   # no silent attach
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_form_read_ignores_incidental_dotted_text_without_a_detach_control(browser):
+    """r5 (bug 3 review, finding 1): an EMPTY file field reads back '' even when its container holds
+    incidental text that merely ENDS in a dotted suffix — "jobs@acme.com", "greenhouse.io",
+    "Accepted: .pdf" — none of which is an attached-file chip. The extension test ALONE matched such
+    text on a single-upload form (the climb never meets a second file input to stop at), so an
+    unattached field reported a non-empty value and a verify-fill treated it as attached. Only a chip
+    with a DETACH control (× / Remove) counts as an attached filename; plain page text never does."""
+    await _open(browser, GREENHOUSE)
+    # drop incidental dotted text (an email, a domain, a stray "Accepted: .pdf"), NO detach control,
+    # into the still-empty cover-letter block — exactly the live-page noise the review warned about
+    injected = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var b=document.getElementById('cover_letter_block');"
+        "['Questions? jobs@acme.com','See greenhouse.io','Accepted: .pdf'].forEach(function(s){"
+        "var d=document.createElement('div');d.textContent=s;b.appendChild(d);});"
+        "return String(b.querySelectorAll('div').length);})()"})
+    assert injected and injected != "0", injected
+
+    by_id = await _form_by_id(browser)
+    assert by_id["cover_letter"]["value"] == ""   # incidental dotted text is NOT an attached filename
+    assert by_id["resume"]["value"] == ""         # and a truly empty résumé stays empty too
 
 
 # ── js-fallback click: a native click reports success but does nothing ───────────
