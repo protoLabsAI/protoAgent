@@ -1715,6 +1715,22 @@ def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
     assert fields[0]["label"] == "State" and fields[0]["value"] == "California"
 
 
+def test_enumerate_file_value_falls_back_to_the_filename_chip():
+    """#4032 bug 3: a file input the widget RE-RENDERED empty still shows the filename as a chip
+    in its field container — form_read reports that filename (controls stripped), so a verify-fill
+    sees the attached résumé after the re-render instead of a blank file field."""
+    html = """<form>
+      <div id="resume_block">
+        <label for="resume">Resume/CV</label>
+        <input id="resume" type="file" name="resume"/>
+        <span class="file-chip"><span class="file-chip__name">grace.pdf</span><button type="button">x</button></span>
+      </div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    f = [x for x in fields if x.get("id") == "resume"][0]
+    assert f["kind"] == "file" and f["value"] == "grace.pdf"
+
+
 _RADIO_HTML = """
 <form>
   <fieldset>
@@ -2369,6 +2385,70 @@ async def test_upload_empty_readback_is_a_hard_error_and_surfaces_validation(mon
     assert "Résumé is required" in out
 
 
+# ── #4032 bug 3: the attach survives the widget RE-RENDERING its file input ─────────
+
+
+async def test_upload_confirms_via_the_displayed_filename_after_a_rerender(monkeypatch):
+    """bug 3 (mocked CLI): the widget re-rendered its input (the nonce node is gone, the fresh
+    input reads empty), but the field still SHOWS the filename — the tool confirms the attach via
+    that displayed filename, instead of the old 'could not be found to verify' error."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé",
+         "id": "resume", "name": "resume", "container": "#resume_block"},
+        {"ok": True, "name": "", "displayed": True, "error": ""}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
+
+
+async def test_upload_verify_script_carries_the_id_name_and_container(monkeypatch):
+    """The verify eval is handed the input's id/name and the container selector locate found, so a
+    re-render that drops the nonce can still re-find the input (and read its displayed chip)."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF resume")
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="n"]', "label": "Résumé",
+         "id": "resume", "name": "resume", "container": "#resume_block"},
+        {"ok": True, "name": "cv.pdf", "error": ""}, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    verify_script = procs[-1].stdin.getvalue().decode()
+    assert '"resume"' in verify_script            # the input's id + name, to re-find it fresh
+    assert "resume_block" in verify_script        # the field container, for the displayed-text check
+    assert "cv.pdf" in verify_script              # the basename to look for in the container
+
+
+def test_render_upload_confirms_via_the_displayed_filename():
+    """bug 3: input re-rendered empty (name='') but the field shows the filename (displayed=true)
+    → success naming the evidence used."""
+    out = forms.render_upload(json.dumps({"ok": True, "name": "", "displayed": True, "error": ""}),
+                              "#resume", "cv.pdf", label="Résumé")
+    assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
+
+
+def test_render_upload_prefers_a_read_back_name_over_the_display():
+    """(a)/(b): a re-found input that actually carries the file wins — the success line does NOT
+    claim the displayed-filename evidence."""
+    out = forms.render_upload(json.dumps({"ok": True, "name": "cv.pdf", "displayed": True, "error": ""}),
+                              "#resume", "cv.pdf", label="Résumé")
+    assert out == "Uploaded cv.pdf to Résumé"
+
+
+def test_render_upload_empty_and_not_displayed_is_a_hard_error():
+    """r4: no attached file AND no displayed filename is a hard error — never a silent success —
+    and any field validation text is surfaced."""
+    out = forms.render_upload(
+        json.dumps({"ok": True, "name": "", "displayed": False, "error": "The file could not be attached"}),
+        "#transcript", "cv.pdf", label="Transcript")
+    assert out.startswith("Error:") and "nothing is attached" in out
+    assert "could not be attached" in out
+
+
 async def test_upload_no_file_input_in_container_is_an_error(monkeypatch):
     """r2 (negative): the located element isn't a file input and its container has none — a
     clear Error, and the CLI never uploads."""
@@ -2504,6 +2584,86 @@ def test_upload_js_refuses_when_the_container_has_no_file_input():
 def test_upload_js_reports_not_found_for_an_absent_selector():
     res = _run_upload_js("<form></form>", "#nope", nonce="z")
     assert res["ok"] is False and res["reason"] == "not-found"
+
+
+def test_upload_js_also_returns_the_input_id_and_a_container_selector():
+    """bug 3: locate also returns the input's id/name and a stable container selector, so the
+    verify step can re-find the input (and read its filename chip) after the widget re-renders and
+    the nonce tag rides off with the discarded node."""
+    res = _run_upload_js(_ATTACH_BUTTON_HTML, "#resume-field", nonce="n1")
+    assert res["ok"] is True and res["name"] == "resume"
+    assert res["container"] == "#resume-field"        # the nearest ancestor carrying an id
+
+
+def test_upload_js_resolves_a_bare_or_hashed_id_file_input_directly():
+    """r2: a `#id` OR a bare id that names an input[type=file] resolves to THAT input directly —
+    no container climb — even when it is hidden behind an "Attach" button."""
+    html = ('<form><div id="wrap"><button type="button">Attach</button>'
+            '<input id="resume" type="file" name="resume" style="display:none"/></div></form>')
+    for sel in ("#resume", "resume"):
+        res = _run_upload_js(html, sel, nonce="z")
+        assert res["ok"] is True, (sel, res)
+        assert res["id"] == "resume" and res["name"] == "resume", (sel, res)
+        assert res["container"] == "#wrap", (sel, res)
+
+
+_RERENDER_HTML = """
+<form>
+  <div id="resume_block">
+    <label for="resume">Resume/CV</label>
+    <input id="resume" type="file" name="resume"/>
+    <span class="file-chip"><span class="file-chip__name">live_resume.pdf</span><button type="button">x</button></span>
+  </div>
+</form>
+"""
+
+
+def _run_upload_verify_js(html, selector, input_id="", input_name="", container="", basename=""):
+    """Eval `forms.upload_verify_js(...)` against a real DOM (jsdom) and return the JSON it
+    produces — the host-free way to prove the re-render-tolerant read-back (nonce gone, re-find by
+    id/name, read the container's filename chip)."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        "const script = " + json.dumps(
+            forms.upload_verify_js(selector, input_id, input_name, container, basename)) + ";\n"
+        "console.log((0, eval)(script));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_upload_verify_js_confirms_via_the_chip_after_a_rerender():
+    """bug 3: the nonce node is gone (re-rendered away) and the fresh input is empty, but the field
+    container still SHOWS the filename as a chip — verify reports displayed=true (the chip's remove
+    button stripped), so the attach is confirmed rather than reported missing."""
+    res = _run_upload_verify_js(_RERENDER_HTML, '[data-pa-upload="gone"]',
+                                input_id="resume", input_name="resume",
+                                container="#resume_block", basename="live_resume.pdf")
+    assert res["ok"] is True
+    assert res["name"] == ""              # the re-rendered input carries no files
+    assert res["displayed"] is True       # but the field shows the filename
+    assert res["error"] == ""
+
+
+def test_upload_verify_js_surfaces_a_rejection_message_with_no_filename():
+    """r4: a rejecting widget clears the input and shows a validation message — verify returns an
+    empty name, displayed=false, and surfaces the message."""
+    html = ('<form><div id="box"><label for="t">Transcript</label>'
+            '<input id="t" type="file" name="t"/>'
+            '<div class="field-error" role="alert">The file could not be attached</div></div></form>')
+    res = _run_upload_verify_js(html, '[data-pa-upload="gone"]', input_id="t", input_name="t",
+                                container="#box", basename="rejected.pdf")
+    assert res["ok"] is True and res["name"] == "" and res["displayed"] is False
+    assert "could not be attached" in res["error"]
 
 
 def test_upload_is_a_registered_tool_with_a_usable_docstring():

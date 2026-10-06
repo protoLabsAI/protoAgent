@@ -233,6 +233,31 @@ function abTextNoControls(el){
   for(var i=0;i<kids.length;i++){ kids[i].remove(); }
   return abClean(c.textContent);
 }
+function abFileExt(s){ return /\.\w{2,5}$/.test(String(s==null?'':s)); }
+function abFileChipName(input){
+  // A file widget that RE-RENDERS its <input type=file> empty after an attach (Greenhouse)
+  // still shows the attached filename as a chip / link in the field container. Recover it:
+  // climb a bounded number of ancestors and, in the nearest subtree that has one, return the
+  // SHORTEST descendant text that ends in a file extension (the tight filename chip, not a
+  // wrapper that merely contains it). Controls are stripped, so a chip's remove button and the
+  // "Attach" button never leak into the value.
+  var node = input.parentElement || input;
+  for(var up = 0; node && up < 6; up++){
+    var cands = (node.querySelectorAll && node.querySelectorAll('*')) || [];
+    var best = '';
+    for(var i=0;i<cands.length;i++){
+      var c = cands[i];
+      if(c === input) continue;
+      if(c.querySelector && c.querySelector('input, select, textarea')) continue;
+      var t = abClean(abTextNoControls(c));
+      if(t && abFileExt(t) && (!best || t.length < best.length)) best = t;
+    }
+    if(best) return best;
+    if(node.tagName === 'FORM' || node === document.body) break;
+    node = node.parentElement;
+  }
+  return '';
+}
 function abByIds(ids){
   return String(ids||'').split(/\s+/).map(function(id){
     var n = id && document.getElementById(id); return n ? abClean(n.textContent) : '';
@@ -547,6 +572,7 @@ function abEnumerate(root){
       desc.value = !!el.checked;
     } else if(kind==='file'){
       desc.value = el.files ? Array.prototype.map.call(el.files, function(f){ return f.name; }).join(', ') : '';
+      if(!desc.value) desc.value = abFileChipName(el);   // widget re-rendered empty → read the chip
     } else {
       desc.value = (el.value!=null) ? String(el.value) : '';
     }
@@ -1254,20 +1280,33 @@ def render_select(output: str, field: str, option_text: str) -> str:
 # ── browser_upload: attach a fenced local file to a file input, then PROVE it (#4032) ─
 # Ashby/Greenhouse application forms want a résumé FILE, and hide the real `input[type=file]`
 # behind an "Attach" button — so a label/CSS locator often lands on the wrapper or the button,
-# not the input itself. The driver resolves to the file input, or the SINGLE file input inside
-# the located element's field container (none / more than one is an error, never a guess), and
-# tags it `data-pa-upload="<nonce>"` so the CLI acts on a STABLE selector — never a snapshot
-# ref a re-render would invalidate. After the CLI attaches the file, the verify script reads
-# `input.files[0].name` back (plus any field-level validation text), so a silent non-attach is
-# caught. Shares abClean / abCandidateLabels / abTextNoControls with _JS_LIB (one tidy/label copy).
+# not the input itself. The driver resolves to the file input (a `#id` / bare-id locator resolves
+# DIRECTLY via getElementById, with no climbing, even when the input is hidden behind an "Attach"
+# button), or to the SINGLE file input inside the located element's field container (none / more
+# than one is an error, never a guess), and tags it `data-pa-upload="<nonce>"` so the CLI acts on
+# a STABLE selector — never a snapshot ref a re-render would invalidate.
+#
+# It ALSO returns the input's `id`, `name` and a stable field-container selector, because a
+# Greenhouse-style widget RE-RENDERS its file input after the attach (bug 3): the fresh input has
+# the same id/name but the nonce tag rode off with the discarded node, so the verify step can no
+# longer find it by the nonce. The verify re-finds the input by `#<id>` / `input[type=file]
+# [name=…]` and ALSO reads the container's visible text, where the widget leaves a filename chip —
+# so an attach that survives a re-render is confirmed, not reported as "could not be found".
+# Shares abClean / abCandidateLabels / abTextNoControls with _JS_LIB (one tidy/label copy).
 _UPLOAD_DRIVER = r"""
 (function(){
-  var el = null;
-  try { el = document.querySelector(SEL); } catch(e){ el = null; }
-  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
   function abIsFile(n){
     return !!(n && n.tagName === 'INPUT' && (n.getAttribute('type')||'').toLowerCase() === 'file');
   }
+  // A `#id` / bare-id locator that names an input[type=file] resolves to it DIRECTLY — no
+  // climbing — even when the input is hidden behind an "Attach" button (#4032 bug 3). Any other
+  // selector (a CSS wrapper, a [data-ab-field] tag from the label resolver) goes through
+  // querySelector and the container climb below.
+  var el = null;
+  var idm = /^#?([A-Za-z][\w-]*)$/.exec(SEL || '');
+  if(idm){ try { el = document.getElementById(idm[1]); } catch(e){ el = null; } }
+  if(!el){ try { el = document.querySelector(SEL); } catch(e){ el = null; } }
+  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
   var labs = abCandidateLabels(el), label = labs.length ? labs[0] : '';
   var input = null;
   if(abIsFile(el)){
@@ -1290,28 +1329,77 @@ _UPLOAD_DRIVER = r"""
   }
   if(!label){ var il = abCandidateLabels(input); label = il.length ? il[0] : ''; }
   try { input.setAttribute('data-pa-upload', NONCE); } catch(e){}
+  // A stable way to RE-FIND the input after the widget re-renders and drops the nonce: the
+  // nearest ancestor-with-id (never the FORM/body, too broad) — else the field wrapper, tagged —
+  // whose visible text will show the attached filename chip the verify step reads.
+  var container = '', cnode = input.parentElement;
+  for(var cu = 0; cnode && cu < 6; cu++){
+    if(cnode.tagName === 'FORM' || cnode === document.body) break;
+    var cid = cnode.getAttribute && cnode.getAttribute('id');
+    if(cid){ container = '#' + (window.CSS && CSS.escape ? CSS.escape(cid) : cid); break; }
+    cnode = cnode.parentElement;
+  }
+  if(!container){
+    var box = input.parentElement;
+    if(box && box.tagName !== 'FORM' && box !== document.body){
+      try { box.setAttribute('data-pa-upbox', NONCE); container = '[data-pa-upbox="' + NONCE + '"]'; } catch(e){}
+    }
+  }
   return JSON.stringify({ok:true, selector:'[data-pa-upload="' + NONCE + '"]', label:label,
-                         name:(input.getAttribute && input.getAttribute('name')) || ''});
+                         name:(input.getAttribute && input.getAttribute('name')) || '',
+                         id:(input.getAttribute && input.getAttribute('id')) || '',
+                         container:container});
 })()
 """
 
+# The verify, in order: (a) the nonce-tagged node, if it survived the attach; (b) else the fresh
+# input the widget re-rendered — re-found by `#<id>`, then `input[type=file][name=…]`; (c) the
+# field container's visible text, where a Greenhouse widget leaves a filename chip. `name` is the
+# `input.files[0].name` read from whichever of (a)/(b) still carries the file; `displayed` says the
+# container's text (controls stripped) contains the uploaded basename; `source` records which of
+# (a)/(b) read the name. Any field-level validation text ("must be a PDF") is surfaced either way.
 _UPLOAD_VERIFY = r"""
 (function(){
-  var el = null;
-  try { el = document.querySelector(SEL); } catch(e){ el = null; }
-  if(!el) return JSON.stringify({ok:false, reason:'not-found'});
-  var name = (el.files && el.files.length) ? String(el.files[0].name || '') : '';
+  function abIsFile(n){
+    return !!(n && n.tagName === 'INPUT' && (n.getAttribute('type')||'').toLowerCase() === 'file');
+  }
+  function abFiles(n){ return (n && n.files && n.files.length) ? String(n.files[0].name || '') : ''; }
+  // (a) the nonce-tagged node, if the re-render did not discard it.
+  var node = null;
+  try { node = document.querySelector(SEL); } catch(e){ node = null; }
+  var name = '', source = '';
+  if(abIsFile(node)){ name = abFiles(node); if(name) source = 'nonce'; }
+  // (b) the widget re-rendered its input (the nonce rode off with the old node) — re-find a fresh
+  //     input by its committed id, then by name, and read ITS files.
+  if(!name && ID){
+    var byId = null; try { byId = document.getElementById(ID); } catch(e){ byId = null; }
+    if(abIsFile(byId)){ name = abFiles(byId); if(name) source = 'id'; if(!node) node = byId; }
+  }
+  if(!name && NAME){
+    var byName = null;
+    try {
+      byName = document.querySelector('input[type="file"][name="' +
+        (window.CSS && CSS.escape ? CSS.escape(NAME) : NAME) + '"]');
+    } catch(e){ byName = null; }
+    if(abIsFile(byName)){ name = abFiles(byName); if(name) source = 'name'; if(!node) node = byName; }
+  }
+  // (c) the field container often keeps the attached filename visible as a chip even after the
+  //     input is re-rendered empty — success if the container's text contains the basename.
+  var box = null;
+  if(CONTAINER){ try { box = document.querySelector(CONTAINER); } catch(e){ box = null; } }
+  if(!box) box = (node && node.parentElement) || node;
+  var displayed = !!(box && BASENAME && abTextNoControls(box).indexOf(BASENAME) >= 0);
   // Surface any visible validation/error text in the field's container (bounded climb), so a
   // form that rejected the file ("must be a PDF") tells the agent rather than reading as a win.
-  var err = '', node = el;
-  for(var up = 0; node && up < 6; up++){
-    var box = node.querySelector && node.querySelector(
+  var err = '', scan = box || node;
+  for(var up = 0; scan && up < 6; up++){
+    var alert = scan.querySelector && scan.querySelector(
       '[role="alert"], [aria-invalid="true"], [class*="error"], [class*="invalid"]');
-    if(box){ var t = abClean(abTextNoControls(box)); if(t){ err = t; break; } }
-    if(node.tagName === 'FORM' || node === document.body) break;
-    node = node.parentElement;
+    if(alert){ var t = abClean(abTextNoControls(alert)); if(t){ err = t; break; } }
+    if(scan.tagName === 'FORM' || scan === document.body) break;
+    scan = scan.parentElement;
   }
-  return JSON.stringify({ok:true, name:name, error:err});
+  return JSON.stringify({ok:true, name:name, source:source, displayed:displayed, error:err});
 })()
 """
 
@@ -1328,47 +1416,66 @@ def upload_js(selector: str, nonce: str) -> str:
             "return " + _UPLOAD_DRIVER.strip() + ";\n})()")
 
 
-def upload_verify_js(selector: str) -> str:
-    """Script ``browser_upload`` evals AFTER the attach: read back ``input.files[0].name`` and
-    any field-level validation text at ``selector`` (the ``data-pa-upload`` tag)."""
+def upload_verify_js(selector: str, input_id: str = "", input_name: str = "",
+                     container: str = "", basename: str = "") -> str:
+    """Script ``browser_upload`` evals AFTER the attach. Reads ``input.files[0].name`` back from
+    the nonce-tagged node (``selector``) if it survived, else from the input the widget
+    re-rendered (re-found by ``input_id``, then ``input_name``), and reports whether the field
+    ``container``'s visible text shows ``basename`` (the filename chip) — plus any field-level
+    validation text."""
     return (_JS_LIB + "\n(function(){\n"
             "var SEL = " + _js(selector) + ";\n"
+            "var ID = " + _js(input_id) + ";\n"
+            "var NAME = " + _js(input_name) + ";\n"
+            "var CONTAINER = " + _js(container) + ";\n"
+            "var BASENAME = " + _js(basename) + ";\n"
             "return " + _UPLOAD_VERIFY.strip() + ";\n})()")
 
 
-def parse_upload(output: str, field: str) -> tuple[str, str, str]:
-    """Parse ``upload_js``'s JSON → ``(selector, label, error)``. ``selector`` is the
-    ``[data-pa-upload=…]`` tag the CLI uploads to; ``error`` is a ready-to-return ``Error: …``
-    when no single file input could be located. Never raises."""
+def parse_upload(output: str, field: str) -> tuple[dict | None, str]:
+    """Parse ``upload_js``'s JSON → ``(info, error)``. On success ``info`` is a dict
+    ``{selector, label, id, name, container}`` — ``selector`` is the ``[data-pa-upload=…]`` tag
+    the CLI uploads to, and ``id``/``name``/``container`` let the verify step re-find the input
+    after a re-render drops the tag. On failure ``info`` is ``None`` and ``error`` is a
+    ready-to-return ``Error: …``. Never raises."""
     try:
         data = _loads(output)
     except (ValueError, TypeError):
-        return "", "", "Error: could not locate the upload field — the page returned unreadable data."
+        return None, "Error: could not locate the upload field — the page returned unreadable data."
     if not isinstance(data, dict):
-        return "", "", "Error: could not locate the upload field — unexpected data from the page."
+        return None, "Error: could not locate the upload field — unexpected data from the page."
     if data.get("ok"):
-        return (data.get("selector") or ""), (data.get("label") or ""), ""
+        info = {
+            "selector": data.get("selector") or "",
+            "label": data.get("label") or "",
+            "id": data.get("id") or "",
+            "name": data.get("name") or "",
+            "container": data.get("container") or "",
+        }
+        return info, ""
     reason, label = data.get("reason"), (data.get("label") or field)
     if reason == "not-found":
-        return "", "", (f"Error: could not find a field matching {field!r} to upload to. Call "
-                        "browser_form_read to list the fields (a file field shows kind 'file'), "
-                        "or pass a CSS selector.")
+        return None, (f"Error: could not find a field matching {field!r} to upload to. Call "
+                      "browser_form_read to list the fields (a file field shows kind 'file'), "
+                      "or pass a CSS selector.")
     if reason == "no-file-input":
-        return "", "", (f"Error: {label} is not a file input, and no file input sits in its "
-                        "container to upload to. Point `field` at the form's file field "
-                        "(browser_form_read lists them; a file field shows kind 'file').")
+        return None, (f"Error: {label} is not a file input, and no file input sits in its "
+                      "container to upload to. Point `field` at the form's file field "
+                      "(browser_form_read lists them; a file field shows kind 'file').")
     if reason == "multiple":
-        return "", "", (f"Error: {label}'s container holds {data.get('count', 'several')} file "
-                        "inputs, so which one to upload to is ambiguous. Point `field` directly "
-                        "at the one you mean (its own label or a CSS selector).")
-    return "", "", f"Error: could not locate a file input for {field!r}."
+        return None, (f"Error: {label}'s container holds {data.get('count', 'several')} file "
+                      "inputs, so which one to upload to is ambiguous. Point `field` directly "
+                      "at the one you mean (its own label or a CSS selector).")
+    return None, f"Error: could not locate a file input for {field!r}."
 
 
 def render_upload(output: str, field: str, basename: str, label: str = "") -> str:
-    """Turn ``upload_verify_js``'s JSON into the result. Success is ``Uploaded <name> to
-    <label>``, returned ONLY when the read-back ``input.files[0].name`` equals ``basename``; an
-    empty or mismatched read-back is a hard ``Error:`` (never a silent non-attach), and any
-    field-level validation text is surfaced either way. Never raises."""
+    """Turn ``upload_verify_js``'s JSON into the result. Success — ``Uploaded <name> to <label>``
+    — when a re-found input reads ``basename`` back via ``input.files[0].name``, OR when the
+    field's container shows the filename (a re-rendered widget keeps a chip); the latter line says
+    ``(verified via the field's displayed filename)``. A non-empty read-back of a DIFFERENT name,
+    or no evidence at all, is a hard ``Error:`` (never a silent non-attach), and any field-level
+    validation text is surfaced either way. Never raises."""
     where = label or field
     try:
         data = _loads(output)
@@ -1382,15 +1489,22 @@ def render_upload(output: str, field: str, basename: str, label: str = "") -> st
                     "so nothing was confirmed attached.")
         return f"Error: could not verify the upload to {where}."
     name = str(data.get("name") or "").strip()
+    displayed = bool(data.get("displayed"))
     err = str(data.get("error") or "").strip()
     tail = f" The field reports: {err}" if err else ""
-    if not name:
-        return (f"Error: nothing is attached to {where} after the upload — the file input reads "
-                f"empty.{tail}")
-    if name != basename:
+    # (a)/(b) a re-found input carries the file — its name must match what we uploaded.
+    if name and name == basename:
+        return f"Uploaded {name} to {where}{tail}"
+    if name and name != basename:
         return (f"Error: {where} reads back {name!r}, but {basename!r} was uploaded — the "
                 f"attachment does not match, so it was not confirmed.{tail}")
-    return f"Uploaded {name} to {where}{tail}"
+    # (c) the input re-rendered empty but the field still SHOWS the filename (a chip) — that is
+    #     proof the attach took, even though input.files no longer carries it.
+    if displayed:
+        return (f"Uploaded {basename} to {where} (verified via the field's displayed filename)"
+                f"{tail}")
+    return (f"Error: nothing is attached to {where} after the upload — the file input reads "
+            f"empty.{tail}")
 
 
 # ── browser_click JS fallback: a CLI click that reports success but does nothing (#4032) ─
