@@ -73,6 +73,7 @@ def test_preflight_counts_images_within_budget(monkeypatch, tmp_path):
         (b"not a zip at all", "bad zip"),
         (_zip({"ppt/presentation.xml": b"<p/>"}), "not a Word document"),
     ],
+    ids=["not-a-zip", "a-deck-not-a-document"],  # a zip's bytes carry its mtime; xdist workers must agree on ids
 )
 def test_preflight_refuses_non_documents(monkeypatch, tmp_path, data, reason):
     art = _load(monkeypatch, tmp_path)
