@@ -175,9 +175,12 @@ def _inflate(
 
 def preflight(data: bytes) -> dict:
     """``{render, reason, count, big_images}`` for a .pptx's bytes — ``render`` False names the
-    cap it broke. Every entry is actually inflated (bounded — see the module doc); an image over
-    MAX_IMAGE_PIXELS doesn't sink the deck: it's counted in ``big_images`` and the panel draws
-    a placeholder in its place (it never decodes it).
+    cap it broke. Every entry is actually inflated (bounded — see the module doc). An over-cap
+    image in ``ppt/media/`` doesn't sink the deck: it's counted in ``big_images`` and the panel
+    draws a placeholder in its place (it never decodes it). An image found anywhere else (sniffed
+    by its header) can't be placeholdered, so one over MAX_IMAGE_PIXELS refuses the preview, and
+    so does the deck's decoded total (accepted ppt/media images + every other image) going over
+    MAX_DECK_PIXELS.
 
     Never raises: anything unreadable is a ``render: False`` verdict (the outline still shows)."""
     if len(data) > MAX_BYTES:
@@ -234,11 +237,14 @@ def preflight(data: bytes) -> dict:
                         mp = MAX_IMAGE_PIXELS // 1_000_000
                         return _verdict(False, f"{i.filename} is a {px // 1_000_000} MP image (cap {mp} MP)", count)
                     other_pixels += px
-                    if other_pixels > MAX_DECK_PIXELS:
-                        mp = MAX_DECK_PIXELS // 1_000_000
-                        return _verdict(False, f"images outside ppt/media total more than {mp} MP", count)
         except _Refused as e:
             return _verdict(False, str(e), count)
         except Exception:  # noqa: BLE001 — zlib.error / a malformed header: not a deck we'll parse
             return _verdict(False, "the zip is corrupt (an entry couldn't be inflated)", count)
+    # ONE decoded budget for the whole deck. ppt/media keeps its own running count so its
+    # placeholder decisions stay in step with the frame's; what the browser would actually decode
+    # is those accepted media images plus every image outside ppt/media.
+    if other_pixels and pixels + other_pixels > MAX_DECK_PIXELS:
+        mp = MAX_DECK_PIXELS // 1_000_000
+        return _verdict(False, f"the deck's images total more than {mp} MP (incl. images outside ppt/media)", count)
     return _verdict(True, "", count, big)
