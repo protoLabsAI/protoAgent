@@ -15,8 +15,10 @@ clock budget, independent of the declared sizes — a bomb that patches its head
 The real size and CRC must then match the declared ones, because the browser's unzip trusts
 them: any mismatch, unsupported method, encryption, truncation or over-budget entry is
 ``render: False``. Image pixel dimensions come from the inflated header bytes (PNG / GIF /
-JPEG / BMP / WebP — no Pillow needed); an over-cap image is counted, not fatal, and the panel
-swaps in a placeholder for it.
+JPEG / BMP / WebP — no Pillow needed); an over-cap image in ``ppt/media/`` is counted, not fatal,
+and the panel swaps in a placeholder for it. Every OTHER entry is sniffed by its header bytes too
+(not its name — a relationship can point anywhere): an over-cap raster outside ``ppt/media/``
+can't be placeholder-swapped, so it refuses the preview.
 
 The shell mirrors these caps (``PPTX_CAPS`` in ``shell.js``, drift-guarded by a test) and the
 frame enforces them again on the bytes it inflates — defence in depth behind this gate.
@@ -208,7 +210,7 @@ def preflight(data: bytes) -> dict:
         if count > MAX_SLIDES:
             return _verdict(False, f"{count} slides — over the {MAX_SLIDES}-slide preview cap", count)
         deadline = time.monotonic() + MAX_SCAN_SECONDS
-        total, big, pixels = 0, 0, 0
+        total, big, pixels, other_pixels = 0, 0, 0, 0
         try:
             for i in infos:
                 size, head = _inflate(data, i, MAX_TOTAL_BYTES - total, deadline)
@@ -220,6 +222,21 @@ def preflight(data: bytes) -> dict:
                         big += 1  # the frame applies the same rule, in the same entry order
                     else:
                         pixels += px
+                    continue
+                # A raster OUTSIDE ppt/media/ (or without an image extension) is found by its header
+                # bytes: a relationship can point the renderer at any part. The frame only swaps
+                # placeholders into ppt/media/, so such an image can't be defused — over the
+                # per-image cap, or together over the deck budget, refuses the preview instead.
+                dims = image_dims(head)
+                if dims:
+                    px = dims[0] * dims[1]
+                    if px > MAX_IMAGE_PIXELS:
+                        mp = MAX_IMAGE_PIXELS // 1_000_000
+                        return _verdict(False, f"{i.filename} is a {px // 1_000_000} MP image (cap {mp} MP)", count)
+                    other_pixels += px
+                    if other_pixels > MAX_DECK_PIXELS:
+                        mp = MAX_DECK_PIXELS // 1_000_000
+                        return _verdict(False, f"images outside ppt/media total more than {mp} MP", count)
         except _Refused as e:
             return _verdict(False, str(e), count)
         except Exception:  # noqa: BLE001 — zlib.error / a malformed header: not a deck we'll parse
