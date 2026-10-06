@@ -185,9 +185,9 @@ def refresh_working_state(text: str, sections: list[dict] | None, state: Any) ->
     if secs and secs[-1].get("label") == _WORKING_STATE_LABEL:
         old_len = int(secs[-1].get("chars") or 0)
         secs.pop()
-    elif sections is None:
-        # No section annotations to locate the part by — leave the snapshot alone rather
-        # than guess at the text's structure.
+    elif not secs and text:
+        # Text with no section annotations (None or []) gives nothing to locate the part
+        # by — leave the snapshot alone rather than guess at the text's structure.
         return text, sections
     if old_len and text[len(text) - old_len :] == fresh:
         return text, sections

@@ -199,3 +199,20 @@ def test_refresh_failure_keeps_the_composed_text(monkeypatch):
     monkeypatch.setattr(projection, "working_state_block", boom)
     sections = [{"label": "Working state", "chars": 3}]
     assert refresh_working_state("abc", sections, {}) == ("abc", sections)
+
+
+def test_unannotated_text_is_left_alone_for_none_and_empty_sections(monkeypatch):
+    # No section annotations means nothing to locate the old block by; appending would
+    # duplicate a working state already inside the text.
+    text = f"memory\n\n{_ws('old')}"
+    _patch_block(monkeypatch, _ws("new"))
+    for sections in (None, []):
+        out, secs = refresh_working_state(text, sections, {})
+        assert out is text and secs is sections
+
+
+def test_block_appears_when_nothing_was_injected(monkeypatch):
+    new = _ws("first task")
+    _patch_block(monkeypatch, new)
+    out, secs = refresh_working_state("", [], {})
+    assert out == new and secs == [{"label": "Working state", "chars": len(new)}]
