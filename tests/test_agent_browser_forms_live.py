@@ -606,6 +606,115 @@ async def test_form_read_ignores_incidental_dotted_text_without_a_detach_control
     assert by_id["resume"]["value"] == ""         # and a truly empty résumé stays empty too
 
 
+# ── file input the widget REMOVES from the DOM after the attach (#4032 input-removed) ──
+# Greenhouse's OTHER shape: #writing_sample is REMOVED from the DOM on change (not re-rendered),
+# leaving only a filename chip, with its <label for> still pointing at the now-missing id. The
+# nonce rode off with the removed node and #writing_sample no longer resolves, so browser_upload
+# verifies via the chip in the surviving field wrapper (re-found by its stored selector / label),
+# and browser_form_read recovers the field from the orphaned label + chip.
+
+
+async def test_upload_into_a_widget_that_removes_its_input(browser):
+    """r1: a widget that REMOVES its input[type=file] from the DOM after the attach (leaving only a
+    filename chip, the <label for> still pointing at the now-missing id) is still confirmed — via the
+    displayed filename — never reported as "nothing is attached"."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "removed_resume.pdf"; f.write_bytes(b"%PDF-1.4 removed\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "removed_resume.pdf"})
+        assert out.startswith("Uploaded removed_resume.pdf to"), out
+        assert "verified via the field's displayed filename" in out, out
+        assert "nothing is attached" not in out
+        # the widget really REMOVED the input (gone from the DOM) yet the chip stays visible —
+        # the exact shape that stranded a nonce-only verify and read empty by id/name
+        gone = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('writing_sample')===null)"
+            " && !!document.querySelector('#writing_sample_block .file-chip');})()"})
+        assert gone == "true", gone
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_form_read_lists_the_orphaned_file_field_with_bare_filename(browser):
+    """r3: after the input is removed, browser_form_read still reports ONE kind 'file' row with the
+    removed input's id ("writing_sample"), value == the BARE filename (no "Writing sample *" prefix),
+    required read off the label's '*', and NO duplicate (there is no live input with that id)."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "orphan_sample.pdf"; f.write_bytes(b"%PDF-1.4 orphan\n%%EOF\n")
+    try:
+        up = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "orphan_sample.pdf"})
+        assert up.startswith("Uploaded orphan_sample.pdf to"), up
+
+        rows = json.loads(await browser["browser_form_read"].ainvoke({"scope": ""}))
+        file_rows = [r for r in rows if r["id"] == "writing_sample"]
+        assert len(file_rows) == 1, file_rows            # recovered, and not duplicated
+        row = file_rows[0]
+        assert row["kind"] == "file"
+        assert row["value"] == "orphan_sample.pdf"       # bare filename — the label prefix stripped
+        assert row["label"] == "Writing sample"
+        assert row["required"] is True                   # from the label's '*'
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_removed_input_upload_leaves_the_cover_letter_empty(browser):
+    """r3: attaching to the removing widget does not disturb a sibling file field — the cover
+    letter's own id still reads empty, and the orphan row carries the uploaded filename."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "res_only.pdf"; f.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
+    try:
+        up = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "res_only.pdf"})
+        assert up.startswith("Uploaded res_only.pdf to"), up
+        by_id = await _form_by_id(browser)
+        assert by_id["writing_sample"]["value"] == "res_only.pdf"
+        assert by_id["cover_letter"]["value"] == ""
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_sibling_file_field_chip_never_confirms_the_removed_upload(browser):
+    """r2: when the removed field's OWN wrapper shows no chip but a SIBLING file field (#cover_letter,
+    which still holds its own input) shows one named like the uploaded file, the verify must NOT
+    borrow the sibling's chip — it is a hard Error, never a silent success."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "sibling.pdf"; f.write_bytes(b"%PDF-1.4 s\n%%EOF\n")
+    try:
+        # Re-wire #writing_sample to remove itself on change but render NO chip of its own, and drop
+        # a matching "sibling.pdf" chip into the cover-letter block (which keeps its own live input).
+        rigged = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var i=document.getElementById('writing_sample');"
+            "var c=i.cloneNode(false);i.parentNode.replaceChild(c,i);"            # drop the wired handler
+            "c.addEventListener('change',function(){if(c.parentNode)c.parentNode.removeChild(c);});"
+            "var cb=document.getElementById('cover_letter_block');"
+            "var chip=document.createElement('span');chip.className='file-chip';"
+            "var nm=document.createElement('span');nm.className='file-chip__name';nm.textContent='sibling.pdf';"
+            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+            "chip.appendChild(nm);chip.appendChild(rm);cb.appendChild(chip);"
+            "return !!document.querySelector('#cover_letter_block .file-chip');})()"})
+        assert rigged == "true", rigged
+
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "sibling.pdf"})
+        assert out.startswith("Error:"), out
+        assert "nothing is attached" in out
+        assert "verified via the field's displayed filename" not in out
+        # the input really is gone, and the only "sibling.pdf" chip sits in the cover-letter block
+        state = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('writing_sample')===null)"
+            " && document.querySelectorAll('#writing_sample_block .file-chip').length===0"
+            " && !!document.querySelector('#cover_letter_block .file-chip');})()"})
+        assert state == "true", state
+    finally:
+        f.unlink(missing_ok=True)
+
+
 # ── js-fallback click: a native click reports success but does nothing ───────────
 
 
