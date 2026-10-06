@@ -1645,3 +1645,123 @@ def test_edit_file_serialises_per_path_not_globally(workspace):
     two.write_text("x")
     assert _edit_lock(one) is not _edit_lock(two)
     assert _edit_lock(one) is _edit_lock(one)
+
+
+# ── atomic writes: a reader never sees a truncated file ──────────────────────────────
+def test_write_is_atomic_replace_and_keeps_existing_mode(tmp_path, monkeypatch):
+    """The target is swapped in with ``os.replace`` from a fully-written temp — never
+    truncated in place — and an existing file's permission bits survive the swap."""
+    from tools import fs_tools
+
+    p = tmp_path / "conf.json"
+    p.write_bytes(b'{"old": true}\n')  # bytes: write_text would emit CRLF on Windows
+    if os.name != "nt":
+        os.chmod(p, 0o640)
+
+    seen: list[bytes] = []
+    real_replace = os.replace
+
+    def spying_replace(src, dst):
+        # At the instant of the swap the target still holds the OLD, complete bytes and
+        # the temp holds the NEW, complete bytes — there is no empty window.
+        seen.append(Path(dst).read_bytes())
+        seen.append(Path(src).read_bytes())
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(fs_tools.os, "replace", spying_replace)
+    fs_tools._write_text_verbatim(p, '{"new": true}\n')
+
+    assert seen == [b'{"old": true}\n', b'{"new": true}\n']
+    assert p.read_bytes() == b'{"new": true}\n'
+    if os.name != "nt":
+        assert (p.stat().st_mode & 0o777) == 0o640
+    assert [x.name for x in tmp_path.iterdir()] == ["conf.json"]  # no temp left behind
+
+
+def test_new_file_gets_umask_mode_not_owner_only(tmp_path):
+    """A brand-new file gets what ``open("w")`` would give it (0o666 & ~umask), not the
+    0o600 a mkstemp-based temp would silently carry over."""
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits")
+    from tools.fs_tools import _write_text_verbatim
+
+    ref = tmp_path / "ref.txt"
+    ref.write_text("x")
+    p = tmp_path / "new.txt"
+    _write_text_verbatim(p, "x")
+    assert (p.stat().st_mode & 0o777) == (ref.stat().st_mode & 0o777)
+
+
+def test_failed_write_leaves_original_intact_and_no_temp(tmp_path, monkeypatch):
+    from tools import fs_tools
+
+    p = tmp_path / "data.json"
+    p.write_text('{"keep": 1}\n')
+
+    def boom(fd):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fs_tools.os, "fsync", boom)
+    with pytest.raises(OSError, match="disk full"):
+        fs_tools._write_text_verbatim(p, '{"lost": 2}\n')
+
+    assert p.read_text() == '{"keep": 1}\n'
+    assert [x.name for x in tmp_path.iterdir()] == ["data.json"]
+
+
+def test_atomic_write_keeps_verbatim_newlines(tmp_path):
+    from tools.fs_tools import _write_text_verbatim
+
+    p = tmp_path / "mixed.txt"
+    _write_text_verbatim(p, "a\nb\r\nc")
+    assert p.read_bytes() == b"a\nb\r\nc"
+
+
+def test_write_file_serialises_with_edit_file(workspace, monkeypatch):
+    """``write_file`` takes the same per-path lock as ``edit_file``. Unlocked, an edit that
+    read the file before a concurrent write and wrote after it silently reverted the write
+    while both calls reported success. The gate makes both callers read the same snapshot
+    when nothing serialises them."""
+    import threading
+
+    from tools import fs_tools
+
+    _, a, _ = workspace
+    (a / "notes.md").write_text("status: open\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    # edit_file reads, then parks until write_file has had its chance to run.
+    edit_has_read = threading.Event()
+    real_read = fs_tools._read_text_verbatim
+
+    def gated_read(*args, **kwargs):
+        out = real_read(*args, **kwargs)
+        edit_has_read.set()
+        threading.Event().wait(0.3)  # write_file, if unlocked, lands in this window
+        return out
+
+    monkeypatch.setattr(fs_tools, "_read_text_verbatim", gated_read)
+    results: dict[str, str] = {}
+
+    def do_edit():
+        results["edit"] = t["edit_file"].invoke(
+            {"project": "a", "path": "notes.md", "old": "status: open", "new": "status: done"}
+        )
+
+    def do_write():
+        edit_has_read.wait(timeout=5)
+        results["write"] = t["write_file"].invoke(
+            {"project": "a", "path": "notes.md", "content": "status: open\nowner: kj\n"}
+        )
+
+    threads = [threading.Thread(target=do_edit), threading.Thread(target=do_write)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=10)
+
+    assert "Edited" in results["edit"], results
+    assert "Overwrote" in results["write"], results
+    # Serialised: the edit finished first, then the whole-file write landed on top. Unlocked,
+    # the edit's stale snapshot would have been written last and dropped "owner: kj".
+    assert (a / "notes.md").read_text() == "status: open\nowner: kj\n"
