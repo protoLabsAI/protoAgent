@@ -61,8 +61,10 @@
       native CLI click reports success but does nothing, which is exactly the Greenhouse
       behavior browser_click(js_fallback=True) exists for.
     * a transcript block (`#transcript`) whose widget REJECTS the attach — on `change` it
-      clears the input and shows a validation message — a real non-attach that must stay
-      a browser_upload error, with the message surfaced.
+      clears the input and shows a `role=alert` validation message that NAMES the file
+      ("<basename> could not be attached …"), as real validators do. A real non-attach that
+      must stay a browser_upload error with the message surfaced — and NOT read as a success
+      just because the basename appears in the alert text (#4032 bug 3 review).
     * a native `<select>` for voluntary self-identification.
 
   TO REFRESH when Greenhouse changes its markup: open a live application form, read
@@ -533,7 +535,10 @@ function wireAttach(input) {
         err.setAttribute("role", "alert");
         block.appendChild(err);
       }
-      err.textContent = "The file could not be attached — please try again";
+      // NAME the rejected file in the message (live validators do: "resume.pdf exceeds 5MB"). The
+      // basename is now in the container's text, so a substring check would FALSELY read this
+      // non-attach as a success — browser_upload must treat an alert as an alert, never a chip.
+      err.textContent = (name || "The file") + " could not be attached — it must be a PDF under 5MB";
       return;
     }
     if (!name) return;

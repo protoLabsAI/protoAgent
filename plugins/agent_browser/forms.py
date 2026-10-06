@@ -234,26 +234,41 @@ function abTextNoControls(el){
   return abClean(c.textContent);
 }
 function abFileExt(s){ return /\.\w{2,5}$/.test(String(s==null?'':s)); }
+function abChipText(root, input){
+  // The filename CHIP inside `root`: the SHORTEST descendant text that ENDS in a file extension
+  // (the tight chip, not a wrapper that merely contains it). Skip `input` itself, any node that
+  // holds a form control, and any validation/alert element — so a rejection message that happens
+  // to NAME the file ("resume.pdf exceeds 5MB") is never mistaken for a displayed filename
+  // (#4032 bug 3 review: the old read matched the basename anywhere in the text, errors included).
+  var cands = (root && root.querySelectorAll && root.querySelectorAll('*')) || [];
+  var best = '';
+  for(var i=0;i<cands.length;i++){
+    var c = cands[i];
+    if(c === input) continue;
+    if(c.querySelector && c.querySelector('input, select, textarea')) continue;
+    if(c.closest && c.closest('[role="alert"], [aria-invalid="true"], [class*="error"], [class*="invalid"]')) continue;
+    var t = abClean(abTextNoControls(c));
+    if(t && abFileExt(t) && (!best || t.length < best.length)) best = t;
+  }
+  return best;
+}
 function abFileChipName(input){
-  // A file widget that RE-RENDERS its <input type=file> empty after an attach (Greenhouse)
-  // still shows the attached filename as a chip / link in the field container. Recover it:
-  // climb a bounded number of ancestors and, in the nearest subtree that has one, return the
-  // SHORTEST descendant text that ends in a file extension (the tight filename chip, not a
-  // wrapper that merely contains it). Controls are stripped, so a chip's remove button and the
-  // "Attach" button never leak into the value.
-  var node = input.parentElement || input;
+  // A file widget that RE-RENDERS its <input type=file> empty after an attach (Greenhouse) still
+  // shows the attached filename as a chip in the field container. Recover it, but ONLY from THIS
+  // field's OWN container: climb a bounded number of ancestors reading a chip from each, and STOP
+  // BEFORE the <form>/<body> or any container that also holds ANOTHER file input — those chips
+  // belong to sibling file fields, so an empty input reads back '' rather than borrowing a
+  // neighbour's filename (#4032 bug 3 review: the old climb searched the whole form, so an empty
+  // #cover_letter / #transcript cross-read #resume's chip; the old code read such a field as '').
+  var node = input.parentElement;
   for(var up = 0; node && up < 6; up++){
-    var cands = (node.querySelectorAll && node.querySelectorAll('*')) || [];
-    var best = '';
-    for(var i=0;i<cands.length;i++){
-      var c = cands[i];
-      if(c === input) continue;
-      if(c.querySelector && c.querySelector('input, select, textarea')) continue;
-      var t = abClean(abTextNoControls(c));
-      if(t && abFileExt(t) && (!best || t.length < best.length)) best = t;
-    }
-    if(best) return best;
     if(node.tagName === 'FORM' || node === document.body) break;
+    var files = (node.querySelectorAll && node.querySelectorAll('input[type="file"]')) || [];
+    var shared = false;
+    for(var j=0;j<files.length;j++){ if(files[j] !== input){ shared = true; break; } }
+    if(shared) break;
+    var best = abChipText(node, input);
+    if(best) return best;
     node = node.parentElement;
   }
   return '';
@@ -1388,7 +1403,15 @@ _UPLOAD_VERIFY = r"""
   var box = null;
   if(CONTAINER){ try { box = document.querySelector(CONTAINER); } catch(e){ box = null; } }
   if(!box) box = (node && node.parentElement) || node;
-  var displayed = !!(box && BASENAME && abTextNoControls(box).indexOf(BASENAME) >= 0);
+  // (c) the attached basename shown as a filename CHIP (a tight element whose text ends in an
+  //     extension, controls and alert/validation text excluded) — NOT merely present somewhere in
+  //     the container's text, which would read a rejection message that names the file ("resume.pdf
+  //     exceeds 5MB") as a success (#4032 bug 3 review). Prefer the re-found input's OWN field
+  //     scope (abFileChipName never crosses into a sibling file field); else scan the container,
+  //     where requiring the basename still rejects a neighbour's differently-named chip.
+  var chip = abIsFile(node) ? abFileChipName(node) : '';
+  if(!chip) chip = abChipText(box, node);
+  var displayed = !!(chip && BASENAME && chip.indexOf(BASENAME) >= 0);
   // Surface any visible validation/error text in the field's container (bounded climb), so a
   // form that rejected the file ("must be a PDF") tells the agent rather than reading as a win.
   var err = '', scan = box || node;

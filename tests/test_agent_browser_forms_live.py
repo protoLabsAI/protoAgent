@@ -519,6 +519,25 @@ async def test_upload_cover_letter_and_resume_land_on_their_own_ids(browser):
         cv.unlink(missing_ok=True); cover.unlink(missing_ok=True)
 
 
+async def test_empty_file_fields_do_not_borrow_the_resume_chip(browser):
+    """r5 (review): after ONLY #resume is attached, the other, still-empty file fields read back
+    '' — an empty input must not cross-read a sibling field's filename chip. The résumé block even
+    shares its wrapper with the manual-entry textarea, yet its own chip still reads back."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "only_resume.pdf"; f.write_bytes(b"%PDF-1.4 only\n%%EOF\n")
+    try:
+        up = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "only_resume.pdf"})
+        assert up.startswith("Uploaded only_resume.pdf to"), up
+
+        by_id = await _form_by_id(browser)
+        assert by_id["resume"]["value"] == "only_resume.pdf"   # the field's OWN chip reads back
+        assert by_id["cover_letter"]["value"] == ""            # empty — NOT "only_resume.pdf"
+        assert by_id["transcript"]["value"] == ""              # empty — NOT "only_resume.pdf"
+    finally:
+        f.unlink(missing_ok=True)
+
+
 async def test_upload_by_the_shared_attach_label_is_ambiguous(browser):
     """r3: the two file fields share the label "Attach", so addressing by that label is an
     ambiguous error that lists them — which is WHY the id form (#resume / #cover_letter) exists."""
@@ -533,17 +552,22 @@ async def test_upload_by_the_shared_attach_label_is_ambiguous(browser):
 
 
 async def test_upload_rejecting_widget_is_a_hard_error_with_the_message(browser):
-    """r4: a widget that REJECTS the attach (clears the input, shows a message) is a real
-    non-attach — neither input.files nor a displayed filename shows the basename — so the result
-    is an Error, with the field's validation message surfaced (never a silent success)."""
+    """r4: a widget that REJECTS the attach (clears the input, shows a `role=alert` message that
+    NAMES the file) is a real non-attach. Neither input.files nor a displayed filename CHIP shows
+    the basename — the basename living in the alert text does NOT count — so the result is an
+    Error, with the validation message surfaced, and NEVER a "verified via the displayed filename"
+    success (#4032 bug 3 review)."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
     f = root / "rejected.pdf"; f.write_bytes(b"%PDF-1.4 x\n%%EOF\n")
     try:
         out = await browser["browser_upload"].ainvoke({"field": "#transcript", "file_path": "rejected.pdf"})
         assert out.startswith("Error:"), out
+        assert not out.startswith("Uploaded")
+        assert "verified via the field's displayed filename" not in out   # the alert is NOT a chip
         assert "nothing is attached" in out
         assert "could not be attached" in out               # the field's message is surfaced
+        assert "rejected.pdf" in out                         # and it names the rejected file
         assert (await _form_by_id(browser))["transcript"]["value"] == ""   # no silent attach
     finally:
         f.unlink(missing_ok=True)
