@@ -412,6 +412,47 @@ async def test_greenhouse_country_label_still_prefers_the_explicit_react_select(
     assert "Phone number" in fields and fields["Phone number"]["kind"] == "tel"
 
 
+async def test_iti_tel_without_its_own_label_does_not_borrow_country(browser):
+    """r3 (review): the country-list's aria-label="Country" names the COUNTRY PICKER, not the
+    phone-number `<input type=tel>` that merely shares the `.iti` wrapper. A bare tel input (no
+    `<label for>` of its own) must NOT borrow "Country" — otherwise browser_form_read reports it
+    as "Country" and browser_select(field="Country") goes AMBIGUOUS next to a real "Country"
+    select (or resolves to the number field). Inject such a bare iti onto greenhouse.html (whose
+    real react-select "Country *" coexists) and confirm the tel row keeps its own placeholder
+    label and "Country" still resolves — unambiguously — to the react-select and commits."""
+    await _open(browser, GREENHOUSE)
+    # A country-list labelled "Country" + a label-less tel input in one `.iti` — the shape the
+    # review flagged (the existing fixture's tel input has a <label for>, so it never hit it).
+    injected = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var form=document.getElementById('application');"
+        "var iti=document.createElement('div');iti.className='iti';"
+        "var fc=document.createElement('div');fc.className='iti__flag-container';"
+        "var flag=document.createElement('div');flag.className='iti__selected-flag';"
+        "flag.setAttribute('role','button');"                       # role=button → not enumerated
+        "var ul=document.createElement('ul');ul.className='iti__country-list';"
+        "ul.setAttribute('aria-label','Country');"                  # the listbox's accessible name
+        "fc.appendChild(flag);fc.appendChild(ul);"
+        "var tel=document.createElement('input');tel.type='tel';tel.id='intl_phone';"
+        "tel.name='intl_phone';tel.setAttribute('placeholder','Mobile');"   # NO <label for>; own name is the placeholder
+        "iti.appendChild(fc);iti.appendChild(tel);form.appendChild(iti);"
+        "return !!document.getElementById('intl_phone');})()"})
+    assert injected == "true", injected
+
+    by_id = await _form_by_id(browser)
+    assert "intl_phone" in by_id, sorted(by_id)
+    tel = by_id["intl_phone"]
+    assert tel["kind"] == "tel"
+    assert tel["label"] != "Country"      # the country-list's name did NOT leak onto the number field
+    assert tel["label"] == "Mobile"       # it keeps its own placeholder label
+
+    # "Country" stays unambiguous beside the real react-select: it resolves THERE and commits,
+    # never an "matches 2 fields" ambiguity (the old borrow) nor the tel input.
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States" in'), out
+    assert "matches 2 fields" not in out
+    assert (await _form(browser))["Country"]["value"] == "United States"
+
+
 # ── file input behind an "Attach" button, verified by read-back ──────────────────
 
 
