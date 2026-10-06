@@ -25,9 +25,14 @@
       `aria-label="Country"` on the container and on the portalled listbox (as live).
     * The `.select__menu` (id === the input's aria-controls) is PORTALLED to <body> and
       exists ONLY while open, a list of `role=option` reading "Afghanistan +93", "Canada +1",
-      "United States +1", "United Kingdom +44". Open semantics match real react-select
-      (button-0 mousedown focuses + opens via openAfterFocus; a second mousedown while open
-      toggles closed; ArrowDown opens), copied from greenhouse.html.
+      "United States +1", "United Kingdom +44", "Virgin Islands (British) +1284" and
+      "Virgin Islands (U.S.) +1340". The two Virgin Islands entries share a prefix, differ only by
+      a parenthetical, and both sit under +1 — the read-back must still tell them apart, so a
+      genuinely wrong commit between them is a hard mismatch (it exercises the #4032 bug 2a review
+      finding that stripping a dial code must NOT also split on "(" / strip a trailing number).
+      Open semantics match real react-select (button-0 mousedown focuses + opens via
+      openAfterFocus; a second mousedown while open toggles closed; ArrowDown opens), copied from
+      greenhouse.html.
     * THE BUG THIS FIXTURE REPRODUCES: on commit the single-value renders ONLY a flag span +
       the "+1" dial code as VISIBLE text, with the committed country NAME in a `title` on the
       CHILD flag span — e.g.
@@ -112,10 +117,15 @@
 // flag + "+<dial>", with NAME in a title on the child flag span — the live GitLab contract.
 var OPTIONS = {
   country: [
-    { text: "Afghanistan +93",    name: "Afghanistan",    dial: "93" },
-    { text: "Canada +1",          name: "Canada",         dial: "1"  },
-    { text: "United States +1",   name: "United States",  dial: "1"  },
-    { text: "United Kingdom +44", name: "United Kingdom", dial: "44" }
+    { text: "Afghanistan +93",              name: "Afghanistan",              dial: "93"   },
+    { text: "Canada +1",                    name: "Canada",                   dial: "1"    },
+    { text: "United States +1",             name: "United States",            dial: "1"    },
+    { text: "United Kingdom +44",           name: "United Kingdom",           dial: "44"   },
+    // Two REAL phone-country entries that share the "Virgin Islands" prefix, differ only by a
+    // parenthetical, and both sit under +1 — the read-back must still tell them apart. (A dial-code
+    // strip that also split on "(" would collapse both to "Virgin Islands" — #4032 bug 2a review.)
+    { text: "Virgin Islands (British) +1284", name: "Virgin Islands (British)", dial: "1284" },
+    { text: "Virgin Islands (U.S.) +1340",    name: "Virgin Islands (U.S.)",    dial: "1340" }
   ]
 };
 

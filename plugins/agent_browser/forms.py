@@ -316,9 +316,18 @@ function abRequired(el){
 // Canada, so a dial code alone can never confirm which country was committed.
 function abIsDial(s){ var t = abClean(s); return t === '' || /^\+?\d[\d\s-]*$/.test(t); }
 function abCountryPart(s){
-  // "United States: +1" / "United States (+1)" / "United States +1" -> "United States".
-  var t = abClean(s).split(/[:(]/)[0];        // drop a ": +1" / "(+1)" tail
-  t = t.replace(/\s*\+?\d[\d\s-]*$/, '');      // drop a trailing " +1" dial code
+  // Drop ONLY a trailing phone DIAL CODE — " +1", ": +1", "(+1)" — leaving everything else
+  // intact. The literal "+" is REQUIRED, and nothing is split on a bare "(" or ":": otherwise a
+  // real parenthetical or a trailing option number would be stripped and two DISTINCT options
+  // that merely share a prefix would collapse to the same key — "Level 1"/"Level 2",
+  // "Windows 10"/"Windows 11", "Spring 2025"/"Spring 2026", "Yes (full-time)"/"Yes (part-time)",
+  // "Virgin Islands (British)"/"Virgin Islands (U.S.)" — which the read-back must still tell apart
+  // (the old `split(/[:(]/)[0]` + optional-"+" strip conflated them — #4032 bug 2a review). So
+  // "United States: +1" / "United States (+1)" / "United States +1" all -> "United States", while
+  // "Virgin Islands (U.S.) +1340" -> "Virgin Islands (U.S.)" (only the "+1340" tail goes).
+  var t = abClean(s);
+  t = t.replace(/\s*\(\s*\+\d[\d\s-]*\)\s*$/, '');   // a trailing "(+1)" dial code in parens
+  t = t.replace(/\s*:?\s*\+\d[\d\s-]*$/, '');        // a trailing " +1" / ": +1" dial code
   return abClean(t);
 }
 function abAttrTexts(node){

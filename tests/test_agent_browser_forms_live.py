@@ -325,6 +325,30 @@ async def test_phone_country_shared_dial_code_is_a_hard_mismatch(browser):
     assert '"Canada"' in out              # the mismatch names the committed country, not "+1"
 
 
+async def test_phone_country_shared_prefix_options_are_not_conflated(browser):
+    """r2 regression: two options that share a prefix and differ only by a parenthetical — both
+    under +1 — must still be told apart. Commit "Virgin Islands (British)", force the NEXT click
+    to keep committing British, then choose "Virgin Islands (U.S.)". The read-back is a hard
+    mismatch: stripping the dial code must NOT also split on "(" (that collapsed both names to
+    "Virgin Islands" and wrongly reported ok). The error names the committed country, parenthetical
+    and all, not the shared "+1" nor a bare "Virgin Islands"."""
+    await _open(browser, PHONE_COUNTRY)
+    first = await browser["browser_select"].ainvoke(
+        {"field": "#country", "option_text": "Virgin Islands (British)"})
+    assert first.startswith('Selected "Virgin Islands (British)'), first
+
+    forced = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){document.querySelector('.select__container')"
+        ".setAttribute('data-force-commit','Virgin Islands (British) +1284');return true;})()"})
+    assert forced == "true", forced
+
+    out = await browser["browser_select"].ainvoke(
+        {"field": "#country", "option_text": "Virgin Islands (U.S.)"})
+    assert out.startswith("Error:"), out
+    assert "does not match" in out
+    assert '"Virgin Islands (British)"' in out     # the full name, not "+1" and not "Virgin Islands"
+
+
 async def test_phone_country_form_read_reports_the_name(browser):
     """r3: after committing United States, browser_form_read's row for id "country" has value
     "United States" — the country name recovered from the child title, not the visible "+1"."""
