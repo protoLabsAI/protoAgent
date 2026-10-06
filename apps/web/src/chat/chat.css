@@ -774,8 +774,9 @@
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
-/* The dialog's opt-in switches: harvest a summary first, or forget what the chat already
-   saved. Neither happens automatically. */
+/* The dialog's memory switches: harvest a summary first (on by default for an ordinary chat
+   since #4053; absent for incognito), or forget what the chat already saved. They're mutually
+   exclusive — ticking one unticks the other. */
 .chat-delete-harvest,
 .chat-delete-forget {
   display: flex;

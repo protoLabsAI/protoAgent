@@ -108,9 +108,9 @@ export const chatApi = {
 
   // Retire a chat session server-side: purge its checkpoints, optionally
   // harvesting the conversation into knowledge first and/or forgetting what it
-  // already wrote to memory (the delete dialog's two opt-in switches, #3493).
-  // Callers await this durable commit before dropping the local tab so a failed
-  // tombstone write remains visible and retryable.
+  // already wrote to memory (the delete dialog's two switches — #3493; harvest is
+  // ON by default for a non-incognito chat since #4053). Callers await this durable
+  // commit before dropping the local tab so a failed tombstone write stays retryable.
   deleteChatSession(sessionId: string, harvest = false, forget = false) {
     return request<{ deleted: boolean; harvested: boolean; forgotten?: number }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}${forget ? "&forget=true" : ""}`,
