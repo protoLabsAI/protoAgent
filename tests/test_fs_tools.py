@@ -1654,7 +1654,7 @@ def test_write_is_atomic_replace_and_keeps_existing_mode(tmp_path, monkeypatch):
     from tools import fs_tools
 
     p = tmp_path / "conf.json"
-    p.write_text('{"old": true}\n')
+    p.write_bytes(b'{"old": true}\n')  # bytes: write_text would emit CRLF on Windows
     if os.name != "nt":
         os.chmod(p, 0o640)
 
