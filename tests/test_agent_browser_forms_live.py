@@ -35,6 +35,7 @@ ROOT = REPO / "plugins" / "agent_browser"
 FIXTURES = REPO / "tests" / "fixtures" / "ats"
 GREENHOUSE = (FIXTURES / "greenhouse.html").as_uri()
 ASHBY = (FIXTURES / "ashby.html").as_uri()
+PHONE_COUNTRY = (FIXTURES / "greenhouse_phone_country.html").as_uri()
 
 # Load the plugin the way the host does, so its relative imports resolve (same shape as
 # tests/test_agent_browser_plugin.py).
@@ -272,6 +273,70 @@ async def test_ten_consecutive_selects_across_comboboxes_all_commit(browser):
     assert fields[sponsorship]["value"] == "Not sure"
 
 
+# ── phone-country picker: read back the committed country NAME, not the "+1" dial code ──
+# (#4032 bug 2a) The live GitLab phone-country react-select commits the country but renders
+# only a flag + "+1" as visible text, stashing the NAME in a title on a child span. The
+# read-back must read that NAME; a bare "+1" (shared by US and Canada) never counts as a match.
+
+
+async def _form_by_id(toolset) -> dict:
+    """``browser_form_read`` → ``{id: field}`` (the phone picker has no usable label yet)."""
+    raw = await toolset["browser_form_read"].ainvoke({"scope": ""})
+    assert not raw.startswith("Error:"), raw
+    return {f["id"]: f for f in json.loads(raw) if f.get("id")}
+
+
+async def test_phone_country_reads_back_the_name_not_the_dial_code(browser):
+    """r1: `#country` commits United States, whose single-value visible text is only "+1" with
+    the country name in a title on a CHILD span. browser_select reads the NAME back — so the
+    result is `Selected "United States…` and NOT an `Error: … reads "+1"` mismatch."""
+    await _open(browser, PHONE_COUNTRY)
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
+
+
+async def test_phone_country_accepts_the_dial_code_suffixed_option_text(browser):
+    """r1: addressing the same option by its full visible text ("United States +1") also commits
+    and reads back as United States (not "+1")."""
+    await _open(browser, PHONE_COUNTRY)
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States +1"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
+
+
+async def test_phone_country_shared_dial_code_is_a_hard_mismatch(browser):
+    """r2: a shared "+1" never counts as a match. Commit Canada, then force the NEXT click to
+    keep committing Canada while we choose United States — the read-back is a hard mismatch
+    (both are "+1"), reporting the committed country NAME, not the dial code."""
+    await _open(browser, PHONE_COUNTRY)
+    first = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "Canada"})
+    assert first.startswith('Selected "Canada'), first
+
+    # the fixture hook: the next commit stays Canada regardless of which option is clicked
+    forced = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){document.querySelector('.select__container')"
+        ".setAttribute('data-force-commit','Canada +1');return true;})()"})
+    assert forced == "true", forced
+
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
+    assert out.startswith("Error:"), out
+    assert "does not match" in out
+    assert '"Canada"' in out              # the mismatch names the committed country, not "+1"
+
+
+async def test_phone_country_form_read_reports_the_name(browser):
+    """r3: after committing United States, browser_form_read's row for id "country" has value
+    "United States" — the country name recovered from the child title, not the visible "+1"."""
+    await _open(browser, PHONE_COUNTRY)
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+
+    fields = await _form_by_id(browser)
+    assert "country" in fields, sorted(fields)
+    assert fields["country"]["value"] == "United States"
+
+
 # ── file input behind an "Attach" button, verified by read-back ──────────────────
 
 
@@ -392,7 +457,7 @@ async def test_ashby_required_resume_upload_and_radio_group(browser):
 
 def test_fixtures_are_self_contained_with_no_network_resources():
     comment = re.compile(r"<!--.*?-->", re.S)
-    for name in ("greenhouse.html", "ashby.html"):
+    for name in ("greenhouse.html", "ashby.html", "greenhouse_phone_country.html"):
         body = comment.sub("", (FIXTURES / name).read_text(encoding="utf-8")).lower()
         for marker in ("http://", "https://", "<script src", "<link ", "<img ", "url("):
             assert marker not in body, f"{name} references an external/network resource: {marker!r}"
