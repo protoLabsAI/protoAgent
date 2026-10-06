@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.196.0",
+    "date": "2026-10-06",
+    "changes": [
+      "Word documents render as real pages in the Artifact panel; CSV and xlsx tables done properly (#4054).",
+      "Deleting or clearing a chat now harvests it into the knowledge base by default (#4053).",
+      "agent_browser: browser_form_read folds react-select's hidden required input into its combobox (#4032).",
+      "browser_select resolves \"Country\" to a phone-country picker labelled only by aria-label (#4032).",
+      "agent_browser: browser_select reads a phone-country picker back by the country NAME, not the \"+1\" dial code (#4032).",
+      "agent_browser: browser_select now opens a closed react-select itself (#4032).",
+      "agent_browser: browser_upload confirms an attach that survives the widget re-rendering its file input (#4032)."
+    ]
+  },
+  {
     "version": "v0.195.0",
     "date": "2026-10-05",
     "changes": [
