@@ -1374,11 +1374,50 @@ function abItiSelectedName(iti){
   var cands = abSelectedIdentity(iti);
   return abBestName(cands) || (cands.length ? cands[0] : '');
 }
+function abShown(node){
+  // Is `node` actually RENDERED (not display:none, attached to the layout)? getClientRects() is
+  // empty for a display:none / detached element and non-empty otherwise — robust even when an
+  // ancestor is position:fixed, where offsetParent would wrongly read null (offsetParent is the
+  // ancient fallback). "Rendered" is deliberately NOT "in the viewport": an open list scrolled
+  // off-screen still has layout, so it still counts as open.
+  if(!node) return false;
+  if(node.getClientRects){ var r = node.getClientRects(); return !!(r && r.length); }
+  return node.offsetParent !== null;
+}
 function abItiItems(){
-  // The country options — intl-tel-input v23+ PORTALS the list to a body-level `.iti--container`,
-  // so this is a document-wide scan (a page shows one open country list at a time).
-  return Array.prototype.slice.call(
-    document.querySelectorAll('.iti__country, li[class*="iti__country"]'));
+  // The country options of the OPEN list. intl-tel-input v23+ PORTALS the list to a body-level
+  // `.iti--container`, so this MUST be a document-wide scan — but it MUST also stay visibility-
+  // scoped: the older `.iti__selected-flag` markup (and a v23 widget without a dropdownContainer)
+  // keeps its country rows PARKED in the page, hidden by `iti__hide`, while CLOSED, and a page can
+  // hold a SECOND phone picker whose own rows sit in the DOM too. An unfiltered scan would (a) read
+  // those hidden rows as "a list is already open", skip the button click, then click a hidden row
+  // on a CLOSED list (which the real library ignores), and (b) conflate two pickers' rows. So
+  // return only rows that are actually RENDERED — the open list's (#4032 v23 read-back, bug 2).
+  var all = document.querySelectorAll('.iti__country, li[class*="iti__country"]');
+  var out = [];
+  for(var i=0;i<all.length;i++){ if(abShown(all[i])) out.push(all[i]); }
+  return out;
+}
+function abItiOpen(iti, btn){
+  // Is THIS picker's dropdown already OPEN? Clicking the selected-country button again TOGGLES it
+  // closed in intl-tel-input, so a list already open (e.g. resolved via its portalled list) must be
+  // used as-is, not toggled shut and raced back open — yet a CLOSED picker MUST still be clicked
+  // open even though its hidden rows linger in the DOM, and a sibling picker's rows must not count.
+  // "Open" is the button's authoritative aria-expanded="true" (v23+), or a RENDERED country list
+  // THIS picker owns: the aria-controls target (the portalled v23 dropdown, or an in-page one) else
+  // the list inside the wrapper (older markup). A per-picker signal — never a document-wide count.
+  if(btn && btn.getAttribute && btn.getAttribute('aria-expanded') === 'true') return true;
+  var boxSel = '[role="listbox"], .iti__country-list, [class*="iti__country-list"]';
+  var box = null;
+  var cid = btn && btn.getAttribute && btn.getAttribute('aria-controls');
+  if(cid){
+    var tgt = null;
+    try { tgt = document.getElementById(cid); } catch(e){ tgt = null; }
+    if(tgt) box = (tgt.matches && tgt.matches(boxSel)) ? tgt
+                : (tgt.querySelector ? tgt.querySelector(boxSel) : null);
+  }
+  if(!box && iti && iti.querySelector) box = iti.querySelector(boxSel);
+  return abShown(box);
 }
 function abItiWrapper(el){
   // The `.iti` wrapper that OWNS the selected-country button — the correct root for opening and
@@ -1422,10 +1461,12 @@ async function abIti(el, want){
   var iti = abItiWrapper(el);
   var label = abFieldLabel(el);
   var btn = iti && iti.querySelector && iti.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
-  // Open the country list — but NOT when it is already open: clicking the button again TOGGLES it
-  // closed in intl-tel-input, so an already-open dropdown (e.g. resolved via its portalled list) is
-  // used as-is rather than toggled shut and raced back open.
-  if(btn && !abItiItems().length) abClickOption(btn);
+  // Open the country list — but NOT when THIS picker is already open: clicking the button again
+  // TOGGLES it closed in intl-tel-input, so a dropdown already open (e.g. resolved via its portalled
+  // list) is used as-is rather than toggled shut and raced back open. `abItiOpen` is a PER-PICKER
+  // check (aria-expanded / a rendered owned list), not a document-wide row count — the older markup
+  // and a second picker both park hidden rows in the DOM, and those must NOT suppress the open.
+  if(btn && !abItiOpen(iti, btn)) abClickOption(btn);
   var items = await abWaitFor(abItiItems, 3000);
   if(!items.length) return {ok:false, reason:'no-option', kind:'iti', label:label, options:[]};
   var names = items.map(function(li){

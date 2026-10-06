@@ -542,11 +542,59 @@ async def test_iti_v23_select_from_the_open_portalled_dropdown_resolves_the_wrap
         " && document.getElementById('country_button').getAttribute('aria-expanded')==='true';})()"})
     assert opened == "true", opened
 
+    # Address the PORTALLED list specifically (a second, non-portalled picker on the page also has
+    # a `ul.iti__country-list`, so scope to the body-level `.iti--container` the open dropdown rode
+    # into). browser_select must still resolve the OWNING `.iti` wrapper via the button's aria-controls.
     out = await browser["browser_select"].ainvoke(
-        {"field": "ul.iti__country-list", "option_text": "United States"})
+        {"field": ".iti--container ul.iti__country-list", "option_text": "United States"})
     assert out.startswith('Selected "United States'), out
     assert 'reads "+1"' not in out
     assert (await _form(browser))["Country"]["value"] == "United States"
+
+
+async def test_iti_v23_nonportalled_picker_opens_the_parked_list_before_committing(browser):
+    """r1/r4 (bug-2 review regression): a SECOND, non-portalled v23 picker keeps its country rows
+    PARKED in the page (hidden by iti__hide) while CLOSED and — like the real library — ignores a
+    row click while the list is closed. browser_select (addressed by the button's CSS id) must
+    CLICK THE BUTTON to open the list first, then commit — not treat the parked hidden rows as an
+    already-open list and click one on a closed list. It commits United States and reads the NAME
+    back; the portalled picker beside it is untouched."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    # the rows are in the DOM but hidden (the list is closed) before we select
+    hidden = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var c=document.getElementById('mobile_dropdown_content');"
+        "return c.classList.contains('iti__hide')"
+        " && document.querySelectorAll('#mobile_country_listbox .iti__country').length===4;})()"})
+    assert hidden == "true", hidden
+
+    out = await browser["browser_select"].ainvoke(
+        {"field": "#mobile_country_button", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
+    assert "no options were found" not in out
+    # read-back on the SECOND picker reports the NAME, and the first picker was never committed
+    fields = await _form(browser)
+    assert fields["Mobile region"]["value"] == "United States"
+    assert fields["Mobile region"]["value"] != "+1"
+
+
+async def test_iti_v23_two_pickers_on_one_page_do_not_conflate_rows(browser):
+    """r4: with the portalled "Country" picker and the non-portalled "Mobile region" picker both on
+    the page (both carrying `.iti__country` rows in the DOM — one parked-hidden), selecting each in
+    turn commits to its OWN widget. Proves the document-wide row scan is visibility-scoped and the
+    per-picker open check never lets one picker's rows suppress opening the other."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    mobile = await browser["browser_select"].ainvoke(
+        {"field": "#mobile_country_button", "option_text": "Canada"})
+    assert mobile.startswith('Selected "Canada'), mobile
+
+    country = await browser["browser_select"].ainvoke(
+        {"field": "Country", "option_text": "United States"})
+    assert country.startswith('Selected "United States'), country
+
+    fields = await _form(browser)
+    assert fields["Country"]["value"] == "United States"      # the portalled picker
+    assert fields["Mobile region"]["value"] == "Canada"       # the non-portalled picker — unchanged
 
 
 # ── file input behind an "Attach" button, verified THROUGH a widget re-render (#4032 bug 3) ──
