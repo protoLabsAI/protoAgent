@@ -35,6 +35,7 @@ delivery is unbounded — byte-identical to the pre-D6 composer.
 from __future__ import annotations
 
 import contextvars
+import html
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -167,6 +168,11 @@ class ProjectionOptions:
     # for options built directly.
     prior_sessions_max: int = 10
     prior_sessions_max_tokens: int = 2000
+    # ADR 0060 amendment: the tool names bound to the graph this projection feeds. When
+    # known, a skill-index row whose declared ``tools:`` aren't all bound carries
+    # ``missing_tools="a,b"`` so the model sees the gap BEFORE loading the skill. None =
+    # unknown (an external runtime, a test) — no absence claim is made.
+    bound_tool_names: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         # A NEGATIVE top_k is not a smaller cap — it is no cap at all, twice over
@@ -1025,6 +1031,8 @@ def _skill_index(
     if not summaries:
         return "", 0, 0
 
+    bound = opts.bound_tool_names
+    missing_by_name = {s["name"]: _missing_tools(s, bound) for s in summaries} if bound is not None else {}
     lines = [
         "<available_skills>",
         "  <!-- Learned procedures you can use. Each is a name + one-line summary; "
@@ -1032,6 +1040,11 @@ def _skill_index(
         "A self-closing, name-only row is one whose summary didn't fit the index budget — "
         "load_skill works on it all the same. -->",
     ]
+    if any(missing_by_name.values()):
+        lines.append(
+            "  <!-- missing_tools lists tools a skill declares that you do NOT have here — "
+            "plan around them (or tell the operator) before starting its procedure. -->"
+        )
     budget = int(opts.skills_index_chars)
     spent = 0
     full_rows = 0
@@ -1040,6 +1053,9 @@ def _skill_index(
     for s in summaries:
         slash = (s.get("slash") or "").strip()
         slash_attr = f' slash="/{slash}"' if slash else ""
+        missing = missing_by_name.get(s["name"])
+        if missing:
+            slash_attr += f' missing_tools="{html.escape(",".join(missing), quote=True)}"'
         full = f'  <skill name="{s["name"]}"{slash_attr}>{s.get("description", "")}</skill>'
         bare = f'  <skill name="{s["name"]}"{slash_attr}/>'
         if not bare_only and full_rows < opts.skills_top_k and (budget <= 0 or spent + len(full) <= budget):
@@ -1062,6 +1078,28 @@ def _skill_index(
         lines.append(f"  <!-- +{skipped} more — call list_skills to see them all. -->")
     lines.append("</available_skills>")
     return "\n".join(lines), listed, full_rows
+
+
+#: Cap on names in one row's ``missing_tools`` — a skill declaring a long tool list must
+#: not blow the index budget on a single row.
+_MAX_MISSING_TOOLS_LISTED = 5
+
+
+def _missing_tools(summary: dict, bound: frozenset[str]) -> list[str]:
+    """The skill's declared ``tools:`` that aren't in ``bound``, in declared order,
+    de-duplicated, capped (``…+N`` marks the rest). Advisory — the skill stays listed."""
+    raw = summary.get("tools_used") or []
+    if isinstance(raw, str):
+        raw = raw.split()
+    missing: list[str] = []
+    for name in raw:
+        name = str(name).strip()
+        if name and name not in bound and name not in missing:
+            missing.append(name)
+    if len(missing) > _MAX_MISSING_TOOLS_LISTED:
+        extra = len(missing) - _MAX_MISSING_TOOLS_LISTED
+        missing = missing[:_MAX_MISSING_TOOLS_LISTED] + [f"+{extra} more"]
+    return missing
 
 
 def _is_firing_now(job) -> bool:

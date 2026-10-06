@@ -65,7 +65,7 @@ class SkillsIndex:
 
         index = SkillsIndex("/sandbox/skills.db")
         index.add_skill(artifact)           # SkillV1Artifact from extensions.skills
-        index.skill_summaries()                 # always-on index rows: {name, description, slash, last_used, confidence}
+        index.skill_summaries()                 # always-on index rows: {name, description, slash, tools_used, last_used, confidence}
         full = index.get_skill("web-research")  # on-demand full procedure
     """
 
@@ -275,7 +275,7 @@ class SkillsIndex:
     def skill_summaries(self, limit: int | None = None) -> list[dict]:
         """The always-on skill INDEX (progressive disclosure, ADR 0060).
 
-        Returns the lightweight ``{name, description, slash}`` of every
+        Returns the lightweight ``{name, description, slash, tools_used}`` of every
         *discoverable* skill — user_only skills are slash-only and withheld —
         most-recently-used first, capped at ``limit`` (``None`` = all). The model
         reads a skill's full procedure on demand via the ``load_skill`` tool /
@@ -288,7 +288,7 @@ class SkillsIndex:
         try:
             cur = conn.execute(
                 """
-                SELECT name, description, slash, last_used, confidence
+                SELECT name, description, slash, tools_used, last_used, confidence
                 FROM skills_fts
                 WHERE user_only = '0'
                 ORDER BY last_used DESC, confidence DESC, name ASC
@@ -302,6 +302,9 @@ class SkillsIndex:
                     "name": r["name"],
                     "description": r["description"],
                     "slash": r["slash"],
+                    # The skill's advisory ``tools:`` (space-joined in the FTS row) — the
+                    # index flags the ones this agent doesn't have (ADR 0060 amendment).
+                    "tools_used": (r["tools_used"] or "").split(),
                     "last_used": r["last_used"],
                     "confidence": r["confidence"],
                 }

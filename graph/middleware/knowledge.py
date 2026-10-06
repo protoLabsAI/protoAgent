@@ -160,8 +160,13 @@ class KnowledgeMiddleware(AgentMiddleware):
         inject_min_trust: int = 1,
         options: ProjectionOptions | None = None,
         config=None,
+        bound_tool_names: frozenset[str] | None = None,
     ):
         super().__init__()
+        # The tool names bound to the graph this middleware serves (graph/agent.py
+        # passes its assembled surface). Lets the skill index flag a skill whose
+        # declared tools this agent lacks (ADR 0060 amendment); None = unknown.
+        self._bound_tool_names = frozenset(bound_tool_names) if bound_tool_names is not None else None
         # ``options`` (ADR 0108 D6) is THE wiring graph/agent.py uses —
         # ``ProjectionOptions.from_config(config)`` — and carries the one knob the
         # individual kwargs can't (the projected-context budget). When given it
@@ -226,6 +231,13 @@ class KnowledgeMiddleware(AgentMiddleware):
         # never enters the checkpointer. It is carried in the RUN's state
         # (TURN_PROJECTION_KEY), never on this instance: the instance is shared
         # by every concurrent turn.
+
+    def _with_bound_tools(self, opts: ProjectionOptions) -> ProjectionOptions:
+        if self._bound_tool_names is None or opts.bound_tool_names is not None:
+            return opts
+        from dataclasses import replace
+
+        return replace(opts, bound_tool_names=self._bound_tool_names)
 
     def _options(self, state=None) -> ProjectionOptions:
         """This middleware's delivery knobs in the shared composer's shape — the
@@ -516,7 +528,7 @@ class KnowledgeMiddleware(AgentMiddleware):
             state,
             incognito=bool(state.get("incognito")),
             record=record,
-            options=self._options(state),
+            options=self._with_bound_tools(self._options(state)),
             prior_sessions=self._cached_digest,
             record_fn=self._record_injection,
         )

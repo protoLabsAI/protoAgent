@@ -129,7 +129,12 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
 
 
 def _build_middleware(
-    config: LangGraphConfig, knowledge_store=None, skills_index=None, extra_middleware=None, stable_sections=None
+    config: LangGraphConfig,
+    knowledge_store=None,
+    skills_index=None,
+    extra_middleware=None,
+    stable_sections=None,
+    bound_tool_names: frozenset[str] | None = None,
 ):
     middleware = []
 
@@ -303,6 +308,9 @@ def _build_middleware(
                 # re-read against a per-chat model override (the graph is
                 # compiled once, but each tab picks its own model).
                 config=config,
+                # The assembled tool surface, so the skill index can flag skills whose
+                # declared tools this agent doesn't have (ADR 0060 amendment).
+                bound_tool_names=bound_tool_names,
             )
         )
 
@@ -1777,6 +1785,7 @@ def create_agent_graph(
         skills_index=skills_index,
         extra_middleware=extra_middleware,
         stable_sections=[{"label": label, "chars": len(text)} for label, text in prompt_parts],
+        bound_tool_names=frozenset(t.name for t in all_tools),
     )
 
     agent = create_agent(
