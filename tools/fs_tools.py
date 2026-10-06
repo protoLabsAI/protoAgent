@@ -26,10 +26,13 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
@@ -116,9 +119,54 @@ def _write_text_verbatim(path: Path, text: str) -> None:
     ``newline=""`` is what keeps a requested ``\\n`` a ``0A`` byte on Windows instead of
     ``0D0A``. Content that genuinely wants CRLF still gets it: the string's own line endings
     are written through untouched.
+
+    The write is also **atomic**: the bytes go to a temp file beside ``path``, are flushed and
+    fsynced, and the temp is ``os.replace``-d over the target. A plain ``open("w")`` truncates
+    first, so any reader in the window between truncate and write — a plugin tool running as a
+    parallel tool call, or a read issued right after ``edit_file`` returned — saw a 0-byte file
+    (reported as "not valid JSON: line 1 column 1"). Now a reader sees the old bytes or the new
+    bytes, never an empty or half-written file. An existing file's permission bits are carried
+    over; a new file gets the same umask-derived mode ``open("w")`` would have given it. If
+    anything fails, the temp is removed and the original is untouched.
     """
-    with path.open("w", encoding="utf-8", newline="") as f:
-        f.write(text)
+    existing_mode: int | None = None
+    try:
+        existing_mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        pass
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    # 0o666 through os.open applies the process umask, exactly like open("w") on a new file —
+    # mkstemp's 0o600 would quietly make every newly written file owner-only.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if existing_mode is not None:
+            os.chmod(tmp, existing_mode)
+        _replace_with_retry(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """``os.replace`` — retried briefly on Windows, where a reader holding ``dst`` open
+    without ``FILE_SHARE_DELETE`` (Python's default) makes the rename fail with
+    ``PermissionError`` for the moment that read lasts. POSIX renames over open files."""
+    attempts = 10 if os.name == "nt" else 1
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.02 * (i + 1))
 
 
 def _to_crlf(text: str) -> str:
@@ -1240,8 +1288,12 @@ def build_fs_tools(config) -> list:
             return f"Error: project {project!r} is read-only (write:false)."
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            existed = target.exists()
-            _write_text_verbatim(target, content)
+            # Same per-path lock as edit_file: unlocked, an edit_file that read the old
+            # text before this write and wrote after it would silently undo this write
+            # while both calls reported success.
+            with _edit_lock(target):
+                existed = target.exists()
+                _write_text_verbatim(target, content)
         except OSError as exc:
             return f"Error: cannot write {path}: {exc}"
         _announce_change(project, proj.root, target)
