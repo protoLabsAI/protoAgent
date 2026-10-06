@@ -514,3 +514,47 @@ def test_deck_pixel_budget_placeholders_the_overflow(monkeypatch, tmp_path):
     media = {f"ppt/media/image{k}.png": _png(7000, 7000) for k in range(5)}  # 49 MP each
     v = art._slides.preflight(_deck(media))
     assert v["render"] is True and v["big_images"] == 2  # 3 × 49 MP fit in 150 MP
+
+
+# ── images found by content, not by name ──────────────────────────────────────
+
+
+def test_preflight_refuses_a_giant_image_hidden_outside_ppt_media(monkeypatch, tmp_path):
+    """A relationship can point the renderer at any part, so a raster under another folder or
+    without an image extension is sniffed by its header — and since the frame can only swap
+    placeholders into ppt/media/, an over-cap one refuses the preview."""
+    art = _load(monkeypatch, tmp_path)
+    v = art._slides.preflight(_deck({"ppt/embeddings/blob.bin": _png(10_000, 10_000)}))
+    assert v["render"] is False and "ppt/embeddings/blob.bin" in v["reason"] and "MP" in v["reason"]
+
+
+def test_preflight_budgets_images_outside_ppt_media_together(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    monkeypatch.setattr(art._slides, "MAX_DECK_PIXELS", 500_000)
+    extra = {f"ppt/embeddings/i{n}.dat": _png(640, 480) for n in range(3)}  # ~0.92 MP together
+    v = art._slides.preflight(_deck(extra))
+    assert v["render"] is False and "outside ppt/media" in v["reason"] and "total more than" in v["reason"]
+
+
+def test_one_decoded_budget_spans_media_and_other_images(monkeypatch, tmp_path):
+    """Accepted ppt/media images and images elsewhere share the deck budget: neither alone is over
+    it, together they are — what the browser would decode is the sum."""
+    art = _load(monkeypatch, tmp_path)
+    monkeypatch.setattr(art._slides, "MAX_DECK_PIXELS", 500_000)
+    extra = {"ppt/media/a.png": _png(640, 480), "ppt/embeddings/b.dat": _png(640, 480)}  # ~0.31 MP each
+    v = art._slides.preflight(_deck(extra))
+    assert v["render"] is False and "total more than" in v["reason"]
+
+
+def test_small_images_outside_ppt_media_still_render(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    v = art._slides.preflight(_deck({"docProps/thumbnail.jpeg.png": _png(256, 192)}))
+    assert v["render"] is True and v["big_images"] == 0
+
+
+def test_over_cap_images_in_ppt_media_are_still_placeholdered_not_refused(monkeypatch, tmp_path):
+    """Parity with the frame is unchanged: inside ppt/media/ an over-cap image is counted as a
+    placeholder, never a refusal."""
+    art = _load(monkeypatch, tmp_path)
+    v = art._slides.preflight(_deck({"ppt/media/huge.png": _png(10_000, 10_000)}))
+    assert v["render"] is True and v["big_images"] == 1
