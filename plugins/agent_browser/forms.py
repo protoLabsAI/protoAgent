@@ -522,16 +522,35 @@ function abBestName(cands){
   }
   return '';
 }
+function abStripSelectedCountry(s){
+  // The iti v23 a11y live-text reads e.g. "Selected country United States +1" / "Selected
+  // country: United States". Drop that leading screen-reader prefix so only the country name
+  // (and a trailing dial code, stripped downstream by abCountryPart) survives (#4032 v23 read-back).
+  return abClean(String(s==null?'':s).replace(/^\s*selected\s+country\s*:?\s*/i, ''));
+}
 function abSelectedIdentity(root){
   // Candidate texts of the COMMITTED selection, priority order: title/aria-label on the
   // single-value node or ANY descendant, and on the iti selected-flag/-country or ANY
   // descendant; then a hidden native input/select value inside the widget; then the visible text.
-  if(!root || !root.querySelector) return [];
+  if(!root) return [];
   var out = [];
-  var sv = root.querySelector('.select__single-value, [class*="singleValue"], [class*="single-value"]');
-  var flag = root.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
+  var sv = root.querySelector && root.querySelector('.select__single-value, [class*="singleValue"], [class*="single-value"]');
+  // The intl-tel-input selected-country element: `root` ITSELF when the field resolved to the
+  // button (form_read on the role=combobox button, or a CSS button locator), else a descendant.
+  // Prefer the `.iti__selected-country` BUTTON explicitly — climb to it when a descendant such as
+  // `.iti__selected-country-primary` matched the loose `[class*="selected-country"]` first — so the
+  // committed NAME in its title/aria-label is read, not a dial-code-only child (#4032 v23 read-back).
+  var flagSel = '.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]';
+  var flag = (root.matches && root.matches(flagSel)) ? root
+           : (root.querySelector ? root.querySelector(flagSel) : null);
+  if(flag && flag.closest){ var btn = flag.closest('.iti__selected-country'); if(btn) flag = btn; }
   out = out.concat(abAttrTexts(sv)).concat(abAttrTexts(flag));
-  var hid = root.querySelector('input[type="hidden"], select');
+  // The iti v23 a11y live-text ("Selected country United States +1") — a NAME source carried next
+  // to a flag + dial code; strip the screen-reader prefix, leave the dial code to abCountryPart.
+  var a11y = (flag && flag.querySelector && flag.querySelector('.iti__a11y-text, [class*="iti__a11y-text"]'))
+          || (root.querySelector && root.querySelector('.iti__a11y-text, [class*="iti__a11y-text"]'));
+  if(a11y){ var at = abStripSelectedCountry(a11y.textContent); if(at) out.push(at); }
+  var hid = root.querySelector && root.querySelector('input[type="hidden"], select');
   if(hid){
     if((hid.tagName || '').toLowerCase() === 'select'){
       var so = hid.options && hid.options[hid.selectedIndex];
@@ -577,6 +596,15 @@ function abComboValue(root){
   var mv = root.querySelectorAll('.select__multi-value, [class*="multiValue"], [class*="multi-value"]');
   if(mv && mv.length){
     return Array.prototype.map.call(mv, function(n){ return abClean(n.textContent); }).join(', ');
+  }
+  // intl-tel-input v23+: the enumerated field is the `.iti__selected-country` button (role=combobox)
+  // whose visible text is ONLY the "+1" dial code. Recover the committed country NAME from its
+  // title / aria-label / a11y text (abSelectedIdentity) rather than reporting the bare dial code —
+  // which is shared by the US and Canada and must never stand in for the country (#4032 v23 read-back).
+  var itiSel = '.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]';
+  if((root.matches && root.matches(itiSel)) || (root.querySelector && root.querySelector(itiSel))){
+    var iname = abBestName(abSelectedIdentity(root));
+    if(iname) return iname;
   }
   // last resort: the rendered text with the search input removed, so typed-but-uncommitted
   // text is never reported as the value.
@@ -1346,14 +1374,100 @@ function abItiSelectedName(iti){
   var cands = abSelectedIdentity(iti);
   return abBestName(cands) || (cands.length ? cands[0] : '');
 }
+function abShown(node){
+  // Is `node` actually RENDERED (not display:none, attached to the layout)? getClientRects() is
+  // empty for a display:none / detached element and non-empty otherwise — robust even when an
+  // ancestor is position:fixed, where offsetParent would wrongly read null (offsetParent is the
+  // ancient fallback). "Rendered" is deliberately NOT "in the viewport": an open list scrolled
+  // off-screen still has layout, so it still counts as open.
+  if(!node) return false;
+  if(node.getClientRects){ var r = node.getClientRects(); return !!(r && r.length); }
+  return node.offsetParent !== null;
+}
+function abItiItems(){
+  // The country options of the OPEN list. intl-tel-input v23+ PORTALS the list to a body-level
+  // `.iti--container`, so this MUST be a document-wide scan — but it MUST also stay visibility-
+  // scoped: the older `.iti__selected-flag` markup (and a v23 widget without a dropdownContainer)
+  // keeps its country rows PARKED in the page, hidden by `iti__hide`, while CLOSED, and a page can
+  // hold a SECOND phone picker whose own rows sit in the DOM too. An unfiltered scan would (a) read
+  // those hidden rows as "a list is already open", skip the button click, then click a hidden row
+  // on a CLOSED list (which the real library ignores), and (b) conflate two pickers' rows. So
+  // return only rows that are actually RENDERED — the open list's (#4032 v23 read-back, bug 2).
+  var all = document.querySelectorAll('.iti__country, li[class*="iti__country"]');
+  var out = [];
+  for(var i=0;i<all.length;i++){ if(abShown(all[i])) out.push(all[i]); }
+  return out;
+}
+function abItiOpen(iti, btn){
+  // Is THIS picker's dropdown already OPEN? Clicking the selected-country button again TOGGLES it
+  // closed in intl-tel-input, so a list already open (e.g. resolved via its portalled list) must be
+  // used as-is, not toggled shut and raced back open — yet a CLOSED picker MUST still be clicked
+  // open even though its hidden rows linger in the DOM, and a sibling picker's rows must not count.
+  // "Open" is the button's authoritative aria-expanded="true" (v23+), or a RENDERED country list
+  // THIS picker owns: the aria-controls target (the portalled v23 dropdown, or an in-page one) else
+  // the list inside the wrapper (older markup). A per-picker signal — never a document-wide count.
+  if(btn && btn.getAttribute && btn.getAttribute('aria-expanded') === 'true') return true;
+  var boxSel = '[role="listbox"], .iti__country-list, [class*="iti__country-list"]';
+  var box = null;
+  var cid = btn && btn.getAttribute && btn.getAttribute('aria-controls');
+  if(cid){
+    var tgt = null;
+    try { tgt = document.getElementById(cid); } catch(e){ tgt = null; }
+    if(tgt) box = (tgt.matches && tgt.matches(boxSel)) ? tgt
+                : (tgt.querySelector ? tgt.querySelector(boxSel) : null);
+  }
+  if(!box && iti && iti.querySelector) box = iti.querySelector(boxSel);
+  return abShown(box);
+}
+function abItiWrapper(el){
+  // The `.iti` wrapper that OWNS the selected-country button — the correct root for opening and
+  // read-back. In v23+ the dropdown (search input + country list) is PORTALLED to a body-level
+  // `div.iti.iti--container`; when `el` resolved to THAT container / its list / its search input
+  // (bd-qgrz made its aria-label="Country" resolve), `el.closest('.iti')` is the CONTAINER, which
+  // holds no `.iti__selected-country`, so the read-back saw only "+1" / nothing (#4032 v23 read-back,
+  // wrong root). Resolve the owning wrapper:
+  //   (1) a wrapper around `el` that actually holds a selected-country button;
+  //   (2) else the button whose aria-controls targets this dropdown's content / list / container id;
+  //   (3) else any `.iti` wrapper on the page that holds a selected-country button.
+  if(!el) return el;
+  var sel = '.iti__selected-flag, .iti__selected-country, [class*="iti__selected-flag"], [class*="iti__selected-country"]';
+  var n = el.closest && el.closest('.iti, [class*="iti--"]');
+  while(n){
+    if(n.querySelector && n.querySelector(sel)) return n;
+    var p = n.parentElement;
+    n = (p && p.closest) ? p.closest('.iti, [class*="iti--"]') : null;
+  }
+  var cont = el.closest && el.closest('.iti, [class*="iti--"]');
+  var ids = [];
+  var dc = el.closest && el.closest('.iti__dropdown-content, [class*="iti__dropdown-content"]');
+  if(dc && dc.id) ids.push(dc.id);
+  var box = (el.matches && el.matches('[role="listbox"], .iti__country-list, [class*="iti__country-list"]')) ? el
+          : (el.querySelector && el.querySelector('[role="listbox"], .iti__country-list, [class*="iti__country-list"]'));
+  if(box && box.id) ids.push(box.id);
+  if(cont && cont.id) ids.push(cont.id);
+  for(var i=0;i<ids.length;i++){
+    var esc = (window.CSS && CSS.escape) ? CSS.escape(ids[i]) : ids[i];
+    var btn = null;
+    try { btn = document.querySelector(
+      '.iti__selected-country[aria-controls="' + esc + '"], [class*="iti__selected-country"][aria-controls="' + esc + '"]'); }
+    catch(e){ btn = null; }
+    if(btn){ var w = btn.closest('.iti, [class*="iti--"]'); if(w) return w; }
+  }
+  var all = document.querySelectorAll('.iti, [class*="iti--"]');
+  for(var j=0;j<all.length;j++){ if(all[j].querySelector && all[j].querySelector(sel)) return all[j]; }
+  return cont || el;
+}
 async function abIti(el, want){
-  var iti = (el.closest && el.closest('.iti, [class*="iti--"]')) || el;
+  var iti = abItiWrapper(el);
   var label = abFieldLabel(el);
-  var btn = iti.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
-  if(btn) abClickOption(btn);                             // open the country list
-  var items = await abWaitFor(function(){
-    return Array.prototype.slice.call(document.querySelectorAll('.iti__country, li[class*="iti__country"]'));
-  }, 3000);
+  var btn = iti && iti.querySelector && iti.querySelector('.iti__selected-flag, .iti__selected-country, [class*="selected-flag"], [class*="selected-country"]');
+  // Open the country list — but NOT when THIS picker is already open: clicking the button again
+  // TOGGLES it closed in intl-tel-input, so a dropdown already open (e.g. resolved via its portalled
+  // list) is used as-is rather than toggled shut and raced back open. `abItiOpen` is a PER-PICKER
+  // check (aria-expanded / a rendered owned list), not a document-wide row count — the older markup
+  // and a second picker both park hidden rows in the DOM, and those must NOT suppress the open.
+  if(btn && !abItiOpen(iti, btn)) abClickOption(btn);
+  var items = await abWaitFor(abItiItems, 3000);
   if(!items.length) return {ok:false, reason:'no-option', kind:'iti', label:label, options:[]};
   var names = items.map(function(li){
     var nm = li.querySelector('.iti__country-name, [class*="country-name"]');

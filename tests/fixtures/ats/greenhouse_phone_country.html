@@ -18,6 +18,12 @@
   react-select labelled "Country *", and the label-resolution slice needs this phone picker
   to be the ONLY field labelled Country. greenhouse.html is NOT modified.
 
+  This file models the OLD / react-select-style phone picker. The intl-tel-input v23+
+  `button.iti__selected-country` markup — flag + dial-code-only visible text, the country NAME
+  in a title, the dropdown portalled to a body-level `.iti--container` — lives in its own
+  sibling fixture, greenhouse_phone_country_iti.html (#4032 v23 read-back), so each markup era
+  keeps "Country" as the only such field in its own document.
+
   The picker is a react-select combobox:
     * `.select__container` (aria-label="Country") > `.select__control` holding an always-
       present `.select__single-value`, an `input#country[role=combobox]`, and a dropdown
