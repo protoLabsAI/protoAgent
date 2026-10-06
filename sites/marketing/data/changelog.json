@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.197.0",
+    "date": "2026-10-06",
+    "changes": [
+      "The skill index now flags skills that need tools the agent doesn't have (#4061).",
+      "write_file / edit_file can no longer leave a reader looking at an empty file (#4059).",
+      "A task the agent just updated no longer shows its old status on the next step (#4060).",
+      "Slide previews measure every image in a deck, not just those in ppt/media/ (#4057)."
+    ]
+  },
+  {
     "version": "v0.196.0",
     "date": "2026-10-06",
     "changes": [
