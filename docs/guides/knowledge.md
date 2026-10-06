@@ -185,7 +185,7 @@ A chat reaches the knowledge store by four paths:
 |---|---|---|---|
 | Compaction archive | automatically when the context fills, or `/compact` | the full transcript before the rewrite, in namespace `chat-archive:<session>` | `source` = the chat's thread; the text opens with the date span of its messages, and each line carries its own day |
 | TTL retire sweep | a thread idle past `checkpoint.max_age_days`, when harvesting is on (the default) | a summary and extracted facts | `source` = the thread; `[as of YYYY-MM-DD]` = its last activity |
-| Delete or clear with **Harvest** on | the operator | the same summary and facts | same |
+| Delete or clear with **Harvest** on (the default for a non-incognito chat) | the operator | the same summary and facts | same |
 | `memory_ingest`, hot memory | the agent, when asked to remember | the row it writes | `source` = the session |
 
 A checkpoint message has no timestamp, so an archive dates each message by the
@@ -197,17 +197,23 @@ Incognito chats are never archived or harvested.
 
 **Deleting or clearing a chat** removes its checkpoints, trajectory, prompt
 snapshots, session summary and attachments. By default it does not remove what
-the chat already wrote to memory, and the dialog says so. It offers two
-independent switches, both off by default:
+the chat already wrote to memory, and the dialog says so. It offers two switches:
 
 - **Harvest into the knowledge base first** adds a searchable summary (and facts).
+  It is **on by default** (#4053): the operator's "keep this out of memory"
+  decision is the incognito flag (ADR 0069 D3b), so an ordinary delete harvests
+  unless you turn it off. **Incognito chats are never harvested** — the switch is
+  absent for them (the server enforces this too, as a backstop), and the dialog
+  shows a short "never harvested" note in its place.
 - **Forget what this chat already saved to memory**
   (`DELETE /api/chat/sessions/{id}?forget=true`) removes the chat's compaction
   archives (everything in `chat-archive:<session>`) and the summaries and facts
   harvested from its threads: `source` is `a2a:<session>`, `chat:<session>`, the
   thread-id resolver's id, or one of their `:goal-iter-N` sub-threads, and
-  `source_type` is `harvest` or `extracted`. It runs before the harvest, so with
-  both switches on the fresh summary is kept. The response reports the rows
+  `source_type` is `harvest` or `extracted`. In the dialog, forget and harvest are
+  **mutually exclusive** — ticking forget unticks harvest, so "just make it gone"
+  is one click. (The API still accepts both: forget runs before the harvest, so
+  were both sent the fresh summary would be kept.) The response reports the rows
   removed as `forgotten`.
 
 Forget does not reach memories the agent was asked to keep (`memory_ingest`, hot
