@@ -1715,6 +1715,55 @@ def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
     assert fields[0]["label"] == "State" and fields[0]["value"] == "California"
 
 
+_REACT_SELECT_SHADOW_HTML = """
+<form>
+  <div class="select__container">
+    <label for="visa-input">Work authorization</label>
+    <div class="select__control">
+      <div class="select__single-value">Yes</div>
+      <div class="select__input-container">
+        <input id="visa-input" role="combobox" name="visa" value=""/>
+      </div>
+      <div class="select__indicators"><span class="select__indicator">v</span></div>
+    </div>
+    <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value=""/>
+  </div>
+  <label for="plain">Email</label>
+  <input id="plain" type="email" name="email" value=""/>
+</form>
+"""
+
+
+def test_enumerate_folds_a_react_select_required_shadow_input_into_the_combobox():
+    """#4032 bug 4: react-select renders a hidden `<input required>` SIBLING of `.select__control`
+    (not inside it, so abInCombo misses it). Enumerated on its own it became an unlabelled,
+    id-less, required "text" row after the combobox. abEnumerate now folds its `required` onto the
+    labelled combobox row and emits no phantom field — a real labelled input (Email) is untouched."""
+    fields = _run_enumerate_js(_REACT_SELECT_SHADOW_HTML)
+    assert [f["kind"] for f in fields] == ["combobox", "email"]   # no phantom "text" row, no twin
+    assert "" not in [f["label"] for f in fields]                 # no unlabelled entry survives
+    combo = [f for f in fields if f["kind"] == "combobox"][0]
+    assert combo["label"] == "Work authorization"
+    assert combo["required"] is True                              # folded from the hidden shadow
+    assert combo["value"] == "Yes"                                # committed value still read
+
+
+def test_enumerate_keeps_a_visible_unlabelled_input_beside_a_combobox():
+    """The fold must not over-filter: a VISIBLE, label-less input (not aria-hidden, no tabindex=-1,
+    no 1px sliver) inside a select container is a real field and is still emitted as "text"."""
+    html = """<form>
+      <div class="select__container">
+        <div class="select__control">
+          <input id="rs" role="combobox" name="rs" value=""/>
+        </div>
+        <input id="bare" type="text" name="bare" style="width:200px;height:32px" value=""/>
+      </div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    bare = [f for f in fields if f.get("id") == "bare"]
+    assert len(bare) == 1 and bare[0]["kind"] == "text"
+
+
 def test_enumerate_file_value_falls_back_to_the_filename_chip():
     """#4032 bug 3: a file input the widget RE-RENDERED empty still shows the filename as a chip
     in its field container — form_read reports that filename (controls stripped), so a verify-fill

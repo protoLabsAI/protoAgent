@@ -655,6 +655,57 @@ async def test_form_read_reports_every_field_with_its_value(browser):
     } <= set(fields)
 
 
+# ── react-select's hidden required "shadow" input is folded, not emitted (#4032 bug 4) ──
+# A required react-select renders a sibling `<input required tabindex="-1" aria-hidden="true">`
+# NEXT TO `.select__control` (inside the container, NOT inside the control). abInCombo only skips
+# nodes inside the control, so each one used to surface as an unlabelled, id-less, required "text"
+# row after every combobox. form_read must fold that `required` into the combobox row and emit no
+# such phantom field — while real fields (a visible unlabelled input, the hidden #resume file
+# input) are still listed.
+
+
+async def test_form_read_folds_the_hidden_required_shadow_into_the_combobox(browser):
+    """r1/r2/r3: no unlabelled id-less "text" row survives, every combobox row carries the folded
+    `required: true`, and the hidden #resume file input is still listed with kind "file"."""
+    await _open(browser, GREENHOUSE)
+    raw = await browser["browser_form_read"].ainvoke({"scope": ""})
+    assert not raw.startswith("Error:"), raw
+    rows = json.loads(raw)
+
+    # r1: NO row with an empty label AND empty id AND kind "text" (the shadow input's shape)
+    phantom = [f for f in rows if f["kind"] == "text" and not f["label"] and not f["id"]]
+    assert phantom == [], phantom
+
+    # r2: every react-select combobox row reports required == True (folded from its shadow input)
+    combos = [f for f in rows if f["kind"] == "combobox"]
+    assert combos, rows
+    assert all(f["required"] is True for f in combos), [(f["label"], f["required"]) for f in combos]
+
+    # r3: the hidden #resume file input is still listed, as kind "file"
+    by_id = {f["id"]: f for f in rows if f.get("id")}
+    assert "resume" in by_id, sorted(by_id)
+    assert by_id["resume"]["kind"] == "file"
+
+
+async def test_form_read_keeps_a_visible_unlabelled_text_input(browser):
+    """r3: the fold must NOT over-filter — a REAL, visible, unlabelled text input (no label,
+    aria-label or placeholder, full-size, not aria-hidden) is still emitted as a "text" field,
+    even sitting right next to a react-select `.select__control`."""
+    await _open(browser, GREENHOUSE)
+    # inject a visibly-sized, label-less text input INTO a select container, beside its control —
+    # exactly where a shadow input lives, but visible, so it must stay a field
+    injected = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var c=document.querySelector('.select__container');"
+        "var i=document.createElement('input');i.type='text';i.id='visible_bare';"
+        "i.style.width='200px';i.style.height='32px';c.appendChild(i);"
+        "return !!document.getElementById('visible_bare');})()"})
+    assert injected == "true", injected
+
+    by_id = await _form_by_id(browser)
+    assert "visible_bare" in by_id, sorted(by_id)
+    assert by_id["visible_bare"]["kind"] == "text"
+
+
 # ── label addressing survives a re-render (the whole point of #4032) ─────────────
 
 

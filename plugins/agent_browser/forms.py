@@ -549,6 +549,74 @@ function abComboValue(root){
   // text is never reported as the value.
   return abTextNoControls(root);
 }
+// ── react-select's hidden required "shadow" input (#4032 bug 4) ──────────────────
+// When a react-select field is `required`, react-select renders a sibling
+// `<input required tabindex="-1" aria-hidden="true">` (styled opacity:0 / 1px) NEXT TO
+// `.select__control`, inside the select container — NOT inside the control — to carry the
+// field's `required` constraint for native form validation. abInCombo only skips nodes inside
+// the control / combobox root, so this sibling slipped through and was enumerated on its own as
+// an unlabelled, id-less, required "text" row after EVERY combobox, polluting browser_form_read
+// (a required field nobody can answer). abIsComboShadowInput identifies it so abEnumerate folds
+// its `required` into the labelled combobox row and never emits it as a field of its own.
+function abShadowHidden(el){
+  // visually / semantically hidden: aria-hidden / tabindex=-1, OR opacity 0, OR a ≤2px sliver.
+  if(el.getAttribute){
+    if(el.getAttribute('aria-hidden') === 'true') return true;
+    if(el.getAttribute('tabindex') === '-1') return true;
+  }
+  try {
+    var cs = window.getComputedStyle && window.getComputedStyle(el);
+    if(cs){
+      if(cs.opacity !== '' && parseFloat(cs.opacity) === 0) return true;
+      var w = parseFloat(cs.width); if(w >= 0 && w <= 2) return true;
+      var h = parseFloat(cs.height); if(h >= 0 && h <= 2) return true;
+    }
+  } catch(e){}
+  return false;
+}
+function abIsComboShadowInput(el){
+  if(!el || !el.tagName || el.tagName.toLowerCase() !== 'input') return false;
+  if(abComboRoot(el)) return false;                    // the combobox root itself is a real field
+  var t = (el.getAttribute && (el.getAttribute('type') || '').toLowerCase()) || '';
+  if(t === 'file') return false;                       // a file input is a real field (#resume)
+  // It must have NO label candidates of its own — no `<label for>`, wrapping `<label>`,
+  // aria-label / aria-labelledby or placeholder. A REAL unlabelled input keeps whatever it has
+  // and stays a field; only a truly nameless input can be a shadow.
+  var id = el.getAttribute && el.getAttribute('id');
+  if(id){
+    var sel = 'label[for="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]';
+    var lf = null;
+    try { lf = document.querySelector(sel); } catch(e){ lf = null; }
+    if(lf) return false;
+  }
+  if(el.closest && el.closest('label')) return false;
+  if(el.getAttribute &&
+     (abClean(el.getAttribute('aria-label')) || abClean(abByIds(el.getAttribute('aria-labelledby'))))) return false;
+  if(el.getAttribute && abClean(el.getAttribute('placeholder'))) return false;
+  if(!abShadowHidden(el)) return false;                // a VISIBLE unlabelled input stays a field
+  // and it must sit within the same nearest container (≤3 ancestors) as a `.select__control` /
+  // combobox root — otherwise a stray hidden input elsewhere is left alone.
+  var n = el;
+  for(var up = 0; n && up <= 3; up++){
+    if(n.querySelector && n.querySelector(
+      '.select__control, [class*="select__control"], [role="combobox"]')) return true;
+    n = n.parentElement;
+  }
+  return false;
+}
+function abComboShadowRequired(control){
+  // True when the combobox's nearest container (≤3 ancestors from the control) holds a hidden
+  // required shadow input — the `required` to fold onto the combobox's own row.
+  var n = control;
+  for(var up = 0; n && up <= 3; up++){
+    var ins = (n.querySelectorAll && n.querySelectorAll('input')) || [];
+    for(var i = 0; i < ins.length; i++){
+      if(abIsComboShadowInput(ins[i]) && abRequired(ins[i])) return true;
+    }
+    n = n.parentElement;
+  }
+  return false;
+}
 function abEnumerate(root){
   root = root || document;
   var nodes = Array.prototype.slice.call(root.querySelectorAll(
@@ -559,6 +627,7 @@ function abEnumerate(root){
     var el = nodes[i];
     if(abInCombo(el)) continue;               // the combobox root represents its inner input
     if(el.tagName.toLowerCase()==='input' && skip[(el.getAttribute('type')||'').toLowerCase()]) continue;
+    if(abIsComboShadowInput(el)) continue;    // react-select's hidden required sibling — folded below
     var kind = abKindOf(el);
     var name = (el.getAttribute && el.getAttribute('name')) || '';
     var labels = abCandidateLabels(el);
@@ -612,6 +681,10 @@ function abEnumerate(root){
         if(!desc.id){ desc.id = (comboInner.getAttribute && comboInner.getAttribute('id')) || ''; }
         if(!desc.required){ desc.required = abRequired(comboInner); }   // container lacks them
       }
+      // react-select stashes the field's `required` on a hidden sibling input of the control, not
+      // on the control or its inner input — fold it in so the labelled combobox row carries the
+      // question's required flag: required = combobox.required || shadow.required (#4032 bug 4).
+      if(!desc.required) desc.required = abComboShadowRequired(el);
     } else if(kind==='checkbox'){
       desc.value = !!el.checked;
     } else if(kind==='file'){

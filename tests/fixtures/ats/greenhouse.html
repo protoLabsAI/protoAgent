@@ -44,6 +44,13 @@
         - `data-filter="value"` (how-did-you-hear): filters options by a hidden value,
           not the visible text, so typing the wanted option's text hides EVERYTHING —
           the unfiltered rescan must still find it.
+      EACH container ALSO carries react-select's hidden required "shadow" input — an
+      `<input required tabindex="-1" aria-hidden="true">` (opacity 0 / 1px, empty value)
+      SIBLING of `.select__control`, inside the container but NOT inside the control. Live
+      react-select renders it to carry the field's `required` for native form validation.
+      Because it is outside the control, abInCombo does not skip it; enumerated on its own it
+      became an unlabelled, id-less, required "text" row after EVERY combobox. browser_form_read
+      must fold its `required` into the combobox row and emit NO such phantom field (#4032 bug 4).
     * an intl-tel-input phone field: `.iti` wrapper, a `.iti__selected-flag` whose
       `title` holds the committed country, and a `ul.iti__country-list` of
       `li.iti__country` (each `.iti__country-name`) with Afghanistan and Åland
@@ -177,6 +184,9 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <!-- react-select's hidden required "shadow" input: a SIBLING of the control, carrying the
+           field's `required` for native validation. form_read folds it into the combobox row. -->
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
@@ -192,6 +202,7 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
@@ -208,6 +219,7 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
@@ -225,6 +237,7 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
@@ -241,6 +254,7 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
@@ -257,6 +271,7 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
@@ -273,6 +288,7 @@
                autocomplete="off">
         <span class="select__indicators"><span class="select__dropdown-indicator"></span></span>
       </div>
+      <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value="">
     </div>
   </div>
 
