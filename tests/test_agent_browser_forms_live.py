@@ -655,31 +655,46 @@ async def test_form_read_reports_every_field_with_its_value(browser):
     } <= set(fields)
 
 
-# ── react-select's hidden required "shadow" input is folded, not emitted (#4032 bug 4) ──
-# A required react-select renders a sibling `<input required tabindex="-1" aria-hidden="true">`
-# NEXT TO `.select__control` (inside the container, NOT inside the control). abInCombo only skips
-# nodes inside the control, so each one used to surface as an unlabelled, id-less, required "text"
-# row after every combobox. form_read must fold that `required` into the combobox row and emit no
-# such phantom field — while real fields (a visible unlabelled input, the hidden #resume file
+# ── react-select's hidden "shadow" input is folded, not emitted (#4032 bug 4) ──
+# A react-select renders a sibling `<input tabindex="-1" aria-hidden="true">` NEXT TO
+# `.select__control` (inside the container, NOT inside the control), carrying the field's
+# `required` for native validation — so the attribute is present ONLY on the required comboboxes.
+# abInCombo only skips nodes inside the control, so each shadow used to surface as an unlabelled,
+# id-less "text" row after every combobox. form_read must fold each shadow's `required` into ITS
+# OWN combobox row — SCOPED to that combobox's container, not a form-wide search — and emit no
+# such phantom field, while real fields (a visible unlabelled input, the hidden #resume file
 # input) are still listed.
 
 
 async def test_form_read_folds_the_hidden_required_shadow_into_the_combobox(browser):
-    """r1/r2/r3: no unlabelled id-less "text" row survives, every combobox row carries the folded
-    `required: true`, and the hidden #resume file input is still listed with kind "file"."""
+    """r1/r2/r3: no unlabelled id-less "text" row survives; a combobox whose OWN shadow input is
+    required carries the folded `required: true`; an OPTIONAL combobox (its own shadow NOT
+    required) stays `required: false` even though required shadow inputs for OTHER comboboxes
+    share the same <form> (the bug-4 review leak); and the hidden #resume file is still a "file"."""
     await _open(browser, GREENHOUSE)
     raw = await browser["browser_form_read"].ainvoke({"scope": ""})
     assert not raw.startswith("Error:"), raw
     rows = json.loads(raw)
 
-    # r1: NO row with an empty label AND empty id AND kind "text" (the shadow input's shape)
+    # r1: NO row with an empty label AND empty id AND kind "text" (the shadow input's shape) — and
+    # this holds for the OPTIONAL comboboxes' non-required shadows too, not only the required ones.
     phantom = [f for f in rows if f["kind"] == "text" and not f["label"] and not f["id"]]
     assert phantom == [], phantom
 
-    # r2: every react-select combobox row reports required == True (folded from its shadow input)
-    combos = [f for f in rows if f["kind"] == "combobox"]
-    assert combos, rows
-    assert all(f["required"] is True for f in combos), [(f["label"], f["required"]) for f in combos]
+    by_name = {f["name"]: f for f in rows if f.get("name")}
+
+    # r2: a combobox whose own container holds a REQUIRED shadow input reports required == True
+    # (folded from that shadow).
+    for nm in ("visa", "country", "sponsorship"):
+        assert by_name[nm]["kind"] == "combobox", by_name.get(nm)
+        assert by_name[nm]["required"] is True, by_name[nm]
+
+    # r2 (leak regression): an OPTIONAL combobox — its own shadow input is NOT required — must stay
+    # required == False. The fold is scoped to the combobox's container; a form-wide shadow search
+    # (the #4032 bug-4 review finding) would see the required shadows above and mark these True too.
+    for nm in ("skills", "referral", "clearance", "office"):
+        assert by_name[nm]["kind"] == "combobox", by_name.get(nm)
+        assert by_name[nm]["required"] is False, by_name[nm]
 
     # r3: the hidden #resume file input is still listed, as kind "file"
     by_id = {f["id"]: f for f in rows if f.get("id")}

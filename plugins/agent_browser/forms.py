@@ -605,15 +605,27 @@ function abIsComboShadowInput(el){
   return false;
 }
 function abComboShadowRequired(control){
-  // True when the combobox's nearest container (≤3 ancestors from the control) holds a hidden
-  // required shadow input — the `required` to fold onto the combobox's own row.
-  var n = control;
-  for(var up = 0; n && up <= 3; up++){
-    var ins = (n.querySelectorAll && n.querySelectorAll('input')) || [];
-    for(var i = 0; i < ins.length; i++){
-      if(abIsComboShadowInput(ins[i]) && abRequired(ins[i])) return true;
-    }
-    n = n.parentElement;
+  // react-select carries a required field's `required` on a hidden shadow <input> that is a
+  // SIBLING of `.select__control`, inside the SAME select container. Scope the search to THIS
+  // control's own container alone — NOT a broad ancestor walk: on a Greenhouse layout
+  // (control → .select__container → div.field → form) a ≤3-ancestor walk reaches the whole
+  // <form>, and a form-wide querySelectorAll('input') would find a required shadow input
+  // belonging to a DIFFERENT (even optional) combobox and falsely mark this one required
+  // (#4032 bug 4 review). The container is the control's nearest `.select__container`, falling
+  // back to the control's immediate parent (the shadow is a sibling, so it shares that parent).
+  var container = (control && control.closest &&
+    control.closest('.select__container, [class*="select__container"]')) ||
+    (control && control.parentElement);
+  if(!container || !container.querySelectorAll) return false;
+  var ins = container.querySelectorAll('input');
+  for(var i = 0; i < ins.length; i++){
+    var inp = ins[i];
+    if(!abIsComboShadowInput(inp) || !abRequired(inp)) continue;
+    // Fold only a shadow that belongs to THIS control — guard against a container that nests a
+    // second react-select: the shadow's nearest select container must be the control's own.
+    var owner = inp.closest && inp.closest('.select__container, [class*="select__container"]');
+    if(owner && owner !== container) continue;
+    return true;
   }
   return false;
 }
