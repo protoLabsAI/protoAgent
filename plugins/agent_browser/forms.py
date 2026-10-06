@@ -1541,14 +1541,21 @@ _UPLOAD_DRIVER = r"""
   }
   // A stable container that SURVIVES the input's removal: PREFER the tightest ancestor that holds
   // BOTH the input and its <label> (the field wrapper the widget leaves in place), never FORM/body.
-  // Use its id, else tag it. Fall back to the nearest ancestor-with-id — then a tagged parent — so
-  // a field with no clean wrapper still re-finds the way it did before (#4032 review: additive).
+  // Use its id, else tag it. This preference is tried ONLY when a label was found; a field with no
+  // label falls straight through to the nearest ancestor-with-id — then a tagged parent — exactly
+  // the way it re-found the container BEFORE this change, so nothing is narrowed (#4032: additive).
+  // (Using input.parentElement as the wrapper when labelEl is null would pin the container to the
+  // input's immediate parent, which a widget may remove with the input, and would shadow the
+  // surviving ancestor-with-id — the very fallback the removal case relies on.)
   var container = '';
-  var wrapper = null, wn = input.parentElement;
-  for(var wu = 0; wn && wu < 6; wu++){
-    if(wn.tagName === 'FORM' || wn === document.body) break;
-    if(!labelEl || (wn.contains && wn.contains(labelEl))){ wrapper = wn; break; }
-    wn = wn.parentElement;
+  var wrapper = null;
+  if(labelEl){
+    var wn = input.parentElement;
+    for(var wu = 0; wn && wu < 6; wu++){
+      if(wn.tagName === 'FORM' || wn === document.body) break;
+      if(wn.contains && wn.contains(labelEl)){ wrapper = wn; break; }
+      wn = wn.parentElement;
+    }
   }
   if(wrapper){
     var wid = wrapper.getAttribute && wrapper.getAttribute('id');

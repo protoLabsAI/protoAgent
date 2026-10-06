@@ -715,6 +715,54 @@ async def test_sibling_file_field_chip_never_confirms_the_removed_upload(browser
         f.unlink(missing_ok=True)
 
 
+async def test_removing_widget_with_no_label_refinds_via_ancestor_with_id(browser):
+    """r1 (review): a file field with NO ``<label for>`` and NO wrapping ``<label>`` must still be
+    confirmed when its widget REMOVES the input. With no label to re-find by, the ONLY surviving
+    anchor is the stored container, so the driver must fall through to the nearest ancestor-WITH-ID
+    (the old fallback) — never pin the container to ``input.parentElement``. Here the chip lands in a
+    grandparent-with-id, not the input's immediate parent: if the container were pinned to the parent
+    the chip would be unreachable and the attach would read 'nothing is attached'."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "portfolio_sample.pdf"; f.write_bytes(b"%PDF-1.4 portfolio\n%%EOF\n")
+    try:
+        # A label-less file field nested one level deep: #portfolio_box (has id, survives removal) >
+        # .portfolio-inner (the input's immediate parent, NO id) > input#portfolio. On change the
+        # widget removes the input and renders the chip into the GRANDPARENT (#portfolio_box).
+        rigged = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var form=document.getElementById('application');"
+            "var box=document.createElement('div');box.className='field';box.id='portfolio_box';"
+            "var inner=document.createElement('div');inner.className='portfolio-inner';"
+            "var inp=document.createElement('input');inp.type='file';inp.id='portfolio';"
+            "inp.name='portfolio';inp.className='hidden-file';"
+            "inner.appendChild(inp);box.appendChild(inner);form.appendChild(box);"
+            "inp.addEventListener('change',function(){"
+            "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
+            "inp.parentNode.removeChild(inp);"
+            "var chip=document.createElement('span');chip.className='file-chip';"
+            "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
+            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+            "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"
+            "return (document.getElementById('portfolio')!==null)"
+            " && document.querySelectorAll('label[for=\"portfolio\"]').length===0;})()"})
+        assert rigged == "true", rigged
+
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#portfolio", "file_path": "portfolio_sample.pdf"})
+        assert out.startswith("Uploaded portfolio_sample.pdf to"), out
+        assert "verified via the field's displayed filename" in out, out
+        assert "nothing is attached" not in out
+        # The input really was removed and the chip lives in the grandparent-with-id, NOT the input's
+        # immediate parent — so only the ancestor-with-id container re-finds it.
+        state = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('portfolio')===null)"
+            " && !!document.querySelector('#portfolio_box > .file-chip')"
+            " && !document.querySelector('.portfolio-inner .file-chip');})()"})
+        assert state == "true", state
+    finally:
+        f.unlink(missing_ok=True)
+
+
 # ── js-fallback click: a native click reports success but does nothing ───────────
 
 
