@@ -705,11 +705,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             up = await _ab("upload", target, str(source))
         if up.startswith("Error:"):
             return up
-        # Verify against the input's id/name/container too, not just the nonce: a Greenhouse-style
-        # widget re-renders its file input after the attach (the nonce rode off with the old node),
-        # so the attach is confirmed by re-finding the fresh input or reading the filename chip.
+        # Verify against the input's id/name/container/label too, not just the nonce: a Greenhouse
+        # widget either re-renders its file input after the attach (the nonce rode off with the old
+        # node) OR removes it from the DOM entirely, so the attach is confirmed by re-finding the
+        # fresh input, or re-finding the field container (by its stored selector or its label) and
+        # reading the filename chip there.
         read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(
-            target, info["id"], info["name"], info["container"], source.name))
+            target, info["id"], info["name"], info["container"], source.name,
+            info["label_for"], info["label_text"]))
         if read.startswith("Error:"):
             return read
         return forms.render_upload(read, field, source.name, label=label)

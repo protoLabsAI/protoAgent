@@ -606,6 +606,216 @@ async def test_form_read_ignores_incidental_dotted_text_without_a_detach_control
     assert by_id["resume"]["value"] == ""         # and a truly empty résumé stays empty too
 
 
+# ── file input the widget REMOVES from the DOM after the attach (#4032 input-removed) ──
+# Greenhouse's OTHER shape: #writing_sample is REMOVED from the DOM on change (not re-rendered),
+# leaving only a filename chip, with its <label for> still pointing at the now-missing id. The
+# nonce rode off with the removed node and #writing_sample no longer resolves, so browser_upload
+# verifies via the chip in the surviving field wrapper (re-found by its stored selector / label),
+# and browser_form_read recovers the field from the orphaned label + chip.
+
+
+async def test_upload_into_a_widget_that_removes_its_input(browser):
+    """r1: a widget that REMOVES its input[type=file] from the DOM after the attach (leaving only a
+    filename chip, the <label for> still pointing at the now-missing id) is still confirmed — via the
+    displayed filename — never reported as "nothing is attached"."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "removed_resume.pdf"; f.write_bytes(b"%PDF-1.4 removed\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "removed_resume.pdf"})
+        assert out.startswith("Uploaded removed_resume.pdf to"), out
+        assert "verified via the field's displayed filename" in out, out
+        assert "nothing is attached" not in out
+        # the widget really REMOVED the input (gone from the DOM) yet the chip stays visible —
+        # the exact shape that stranded a nonce-only verify and read empty by id/name
+        gone = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('writing_sample')===null)"
+            " && !!document.querySelector('#writing_sample_block .file-chip');})()"})
+        assert gone == "true", gone
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_form_read_lists_the_orphaned_file_field_with_bare_filename(browser):
+    """r3: after the input is removed, browser_form_read still reports ONE kind 'file' row with the
+    removed input's id ("writing_sample"), value == the BARE filename (no "Writing sample *" prefix),
+    required read off the label's '*', and NO duplicate (there is no live input with that id)."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "orphan_sample.pdf"; f.write_bytes(b"%PDF-1.4 orphan\n%%EOF\n")
+    try:
+        up = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "orphan_sample.pdf"})
+        assert up.startswith("Uploaded orphan_sample.pdf to"), up
+
+        rows = json.loads(await browser["browser_form_read"].ainvoke({"scope": ""}))
+        file_rows = [r for r in rows if r["id"] == "writing_sample"]
+        assert len(file_rows) == 1, file_rows            # recovered, and not duplicated
+        row = file_rows[0]
+        assert row["kind"] == "file"
+        assert row["value"] == "orphan_sample.pdf"       # bare filename — the label prefix stripped
+        assert row["label"] == "Writing sample"
+        assert row["required"] is True                   # from the label's '*'
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_removed_input_upload_leaves_the_cover_letter_empty(browser):
+    """r3: attaching to the removing widget does not disturb a sibling file field — the cover
+    letter's own id still reads empty, and the orphan row carries the uploaded filename."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "res_only.pdf"; f.write_bytes(b"%PDF-1.4 r\n%%EOF\n")
+    try:
+        up = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "res_only.pdf"})
+        assert up.startswith("Uploaded res_only.pdf to"), up
+        by_id = await _form_by_id(browser)
+        assert by_id["writing_sample"]["value"] == "res_only.pdf"
+        assert by_id["cover_letter"]["value"] == ""
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_sibling_file_field_chip_never_confirms_the_removed_upload(browser):
+    """r2: when the removed field's OWN wrapper shows no chip but a SIBLING file field (#cover_letter,
+    which still holds its own input) shows one named like the uploaded file, the verify must NOT
+    borrow the sibling's chip — it is a hard Error, never a silent success."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "sibling.pdf"; f.write_bytes(b"%PDF-1.4 s\n%%EOF\n")
+    try:
+        # Re-wire #writing_sample to remove itself on change but render NO chip of its own, and drop
+        # a matching "sibling.pdf" chip into the cover-letter block (which keeps its own live input).
+        rigged = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var i=document.getElementById('writing_sample');"
+            "var c=i.cloneNode(false);i.parentNode.replaceChild(c,i);"            # drop the wired handler
+            "c.addEventListener('change',function(){if(c.parentNode)c.parentNode.removeChild(c);});"
+            "var cb=document.getElementById('cover_letter_block');"
+            "var chip=document.createElement('span');chip.className='file-chip';"
+            "var nm=document.createElement('span');nm.className='file-chip__name';nm.textContent='sibling.pdf';"
+            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+            "chip.appendChild(nm);chip.appendChild(rm);cb.appendChild(chip);"
+            "return !!document.querySelector('#cover_letter_block .file-chip');})()"})
+        assert rigged == "true", rigged
+
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#writing_sample", "file_path": "sibling.pdf"})
+        assert out.startswith("Error:"), out
+        assert "nothing is attached" in out
+        assert "verified via the field's displayed filename" not in out
+        # the input really is gone, and the only "sibling.pdf" chip sits in the cover-letter block
+        state = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('writing_sample')===null)"
+            " && document.querySelectorAll('#writing_sample_block .file-chip').length===0"
+            " && !!document.querySelector('#cover_letter_block .file-chip');})()"})
+        assert state == "true", state
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_removing_widget_with_no_label_refinds_via_ancestor_with_id(browser):
+    """r1 (review): a file field with NO ``<label for>`` and NO wrapping ``<label>`` must still be
+    confirmed when its widget REMOVES the input. With no label to re-find by, the ONLY surviving
+    anchor is the stored container, so the driver must fall through to the nearest ancestor-WITH-ID
+    (the old fallback) — never pin the container to ``input.parentElement``. Here the chip lands in a
+    grandparent-with-id, not the input's immediate parent: if the container were pinned to the parent
+    the chip would be unreachable and the attach would read 'nothing is attached'."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "portfolio_sample.pdf"; f.write_bytes(b"%PDF-1.4 portfolio\n%%EOF\n")
+    try:
+        # A label-less file field nested one level deep: #portfolio_box (has id, survives removal) >
+        # .portfolio-inner (the input's immediate parent, NO id) > input#portfolio. On change the
+        # widget removes the input and renders the chip into the GRANDPARENT (#portfolio_box).
+        rigged = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var form=document.getElementById('application');"
+            "var box=document.createElement('div');box.className='field';box.id='portfolio_box';"
+            "var inner=document.createElement('div');inner.className='portfolio-inner';"
+            "var inp=document.createElement('input');inp.type='file';inp.id='portfolio';"
+            "inp.name='portfolio';inp.className='hidden-file';"
+            "inner.appendChild(inp);box.appendChild(inner);form.appendChild(box);"
+            "inp.addEventListener('change',function(){"
+            "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
+            "inp.parentNode.removeChild(inp);"
+            "var chip=document.createElement('span');chip.className='file-chip';"
+            "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
+            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+            "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"
+            "return (document.getElementById('portfolio')!==null)"
+            " && document.querySelectorAll('label[for=\"portfolio\"]').length===0;})()"})
+        assert rigged == "true", rigged
+
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#portfolio", "file_path": "portfolio_sample.pdf"})
+        assert out.startswith("Uploaded portfolio_sample.pdf to"), out
+        assert "verified via the field's displayed filename" in out, out
+        assert "nothing is attached" not in out
+        # The input really was removed and the chip lives in the grandparent-with-id, NOT the input's
+        # immediate parent — so only the ancestor-with-id container re-finds it.
+        state = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('portfolio')===null)"
+            " && !!document.querySelector('#portfolio_box > .file-chip')"
+            " && !document.querySelector('.portfolio-inner .file-chip');})()"})
+        assert state == "true", state
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_removing_widget_inside_a_wrapping_label_verifies_via_outside_chip(browser):
+    """r1 (review): a file input INSIDE a wrapping ``<label>`` (no ``label[for]``) whose widget
+    REMOVES the input and draws its chip OUTSIDE that label must still be confirmed. The driver must
+    NOT pick the wrapping label as the field container — a label trivially contains itself, so the
+    wrapper climb would stop AT it and pin the container to the label, leaving a chip drawn outside
+    the label unreachable ('nothing is attached'). It must fall through to the surviving
+    ancestor-WITH-ID, exactly the pre-change fallback. Here the chip lands as a sibling of the label
+    inside the grandparent-with-id, so a label-pinned container reads 'nothing is attached' while the
+    ancestor-with-id container confirms the attach via the displayed filename."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "wrapped_sample.pdf"; f.write_bytes(b"%PDF-1.4 wrapped\n%%EOF\n")
+    try:
+        # #wrapped_box (id, survives) > <label> (WRAPS the input, NO `for`) > input#wrapped. On change
+        # the widget removes the input and renders the chip into #wrapped_box, a SIBLING of the label
+        # (outside it) — the shape a label-pinned container could not reach.
+        rigged = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var form=document.getElementById('application');"
+            "var box=document.createElement('div');box.className='field';box.id='wrapped_box';"
+            "var lab=document.createElement('label');"
+            "lab.appendChild(document.createTextNode('Portfolio '));"   # wrapping label text, NO `for`
+            "var inp=document.createElement('input');inp.type='file';inp.id='wrapped';"
+            "inp.name='wrapped';inp.className='hidden-file';"
+            "lab.appendChild(inp);box.appendChild(lab);form.appendChild(box);"
+            "inp.addEventListener('change',function(){"
+            "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
+            "inp.parentNode.removeChild(inp);"                          # remove the input from the DOM
+            "var chip=document.createElement('span');chip.className='file-chip';"
+            "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
+            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+            "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"   # chip OUTSIDE the label
+            "var i=document.getElementById('wrapped');"
+            "return (i!==null) && (i.closest('label')!==null)"           # the input really sits in a <label>
+            " && document.querySelectorAll('label[for=\"wrapped\"]').length===0;})()"})  # and there is no label[for]
+        assert rigged == "true", rigged
+
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#wrapped", "file_path": "wrapped_sample.pdf"})
+        assert out.startswith("Uploaded wrapped_sample.pdf to"), out
+        assert "verified via the field's displayed filename" in out, out
+        assert "nothing is attached" not in out
+        # the input was removed from INSIDE the wrapping label, and the chip now sits OUTSIDE that
+        # label (a direct child of the ancestor-with-id) — only the ancestor-with-id container re-finds
+        # it; a container pinned to the (surviving, now-empty) label would miss it.
+        state = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('wrapped')===null)"
+            " && !!document.querySelector('#wrapped_box > .file-chip')"
+            " && document.querySelectorAll('#wrapped_box label .file-chip').length===0;})()"})
+        assert state == "true", state
+    finally:
+        f.unlink(missing_ok=True)
+
+
 # ── js-fallback click: a native click reports success but does nothing ───────────
 
 

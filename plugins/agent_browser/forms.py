@@ -302,6 +302,39 @@ function abFileChipName(input){
   }
   return '';
 }
+function abLabelRequired(lab){
+  // A required marker on the field's OWN <label>: a '*' in its text, or aria-required="true".
+  // Used to carry an ORPHANED file field's required flag when the input (and its `required`
+  // attribute) is gone from the DOM but the label survives (#4032 input-removed).
+  if(!lab) return false;
+  if(/\*/.test(lab.textContent || '')) return true;
+  return !!(lab.getAttribute && lab.getAttribute('aria-required') === 'true');
+}
+function abStripLabelPrefix(chipText, labelText){
+  // The displayed value is the BARE filename. When a widget renders the field LABEL into the chip
+  // ("Resume/CV* resume.pdf"), drop a leading copy of the label so the value is just "resume.pdf"
+  // (#4032 input-removed: the live chip reads "<label> <filename>").
+  var c = abClean(chipText), l = abClean(labelText);
+  if(l && c.toLowerCase().indexOf(l.toLowerCase()) === 0) c = abClean(c.slice(l.length));
+  return c;
+}
+function abOrphanBox(label){
+  // The field wrapper of an ORPHANED file field — a <label for=X> whose #X the widget REMOVED from
+  // the DOM after the attach (Greenhouse leaves only a filename chip) — found by climbing from the
+  // label until an ancestor shows an attached-file chip (a filename element with a detach control).
+  // STOP before any ancestor that holds a live input[type=file]: that chip belongs to a SIBLING
+  // file field (e.g. #cover_letter), never this removed one, so it is never borrowed (#4032).
+  var node = label && label.parentElement;
+  for(var up = 0; node && up < 6; up++){
+    if(node.tagName === 'FORM' || node === document.body) break;
+    var files = (node.querySelectorAll && node.querySelectorAll('input[type="file"]')) || [];
+    if(files.length) break;
+    var chip = abChipElement(node, null);
+    if(chip && (abRemoveControl(chip) || abRemoveControl(chip.parentElement))) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
 function abByIds(ids){
   return String(ids||'').split(/\s+/).map(function(id){
     var n = id && document.getElementById(id); return n ? abClean(n.textContent) : '';
@@ -706,6 +739,36 @@ function abEnumerate(root){
       desc.value = (el.value!=null) ? String(el.value) : '';
     }
     out.push(desc);
+    idx++;
+  }
+  // ── orphaned file fields (#4032 input-removed) ──────────────────────────────────
+  // A widget that REMOVES its <input type=file> from the DOM after an attach (Greenhouse — it does
+  // NOT re-render a fresh input) leaves only a filename chip, with its <label for=X> still pointing
+  // at the now-missing #X. No live input carries the file, so the walk above missed the field
+  // entirely. Recover it from the label + the displayed chip: for each <label for=X> whose #X no
+  // longer exists, take its field wrapper (abOrphanBox — never a sibling file field's container)
+  // and, when that wrapper shows an attached-file chip (filename + detach control), emit one
+  // kind:'file' field. Skipped when a live #X still exists, so a re-rendering widget (#resume) is
+  // NOT duplicated. The value is the BARE filename, with any label prefix stripped.
+  var orphanLabels = (root.querySelectorAll && root.querySelectorAll('label[for]')) || [];
+  for(var oi = 0; oi < orphanLabels.length; oi++){
+    var olab = orphanLabels[oi];
+    var forId = olab.getAttribute && olab.getAttribute('for');
+    if(!forId) continue;
+    var liveEl = null; try { liveEl = document.getElementById(forId); } catch(e){ liveEl = null; }
+    if(liveEl) continue;                       // a live input with that id exists — no duplicate
+    var obox = abOrphanBox(olab);
+    if(!obox) continue;
+    var ochip = abChipElement(obox, null);
+    if(!ochip || !(abRemoveControl(ochip) || abRemoveControl(ochip.parentElement))) continue;
+    var olabelText = abClean(abTextNoControls(olab));
+    try { obox.setAttribute('data-ab-field', String(idx)); } catch(e){}
+    out.push({
+      idx: idx, label: olabelText, labels: olabelText ? [olabelText] : [],
+      kind: 'file', name: forId, id: forId, required: abLabelRequired(olab),
+      selector: '[data-ab-field="' + idx + '"]',
+      value: abStripLabelPrefix(abClean(abTextNoControls(ochip)), olabelText)
+    });
     idx++;
   }
   return out;
@@ -1415,12 +1478,16 @@ def render_select(output: str, field: str, option_text: str) -> str:
 # than one is an error, never a guess), and tags it `data-pa-upload="<nonce>"` so the CLI acts on
 # a STABLE selector — never a snapshot ref a re-render would invalidate.
 #
-# It ALSO returns the input's `id`, `name` and a stable field-container selector, because a
-# Greenhouse-style widget RE-RENDERS its file input after the attach (bug 3): the fresh input has
-# the same id/name but the nonce tag rode off with the discarded node, so the verify step can no
-# longer find it by the nonce. The verify re-finds the input by `#<id>` / `input[type=file]
-# [name=…]` and ALSO reads the container's visible text, where the widget leaves a filename chip —
-# so an attach that survives a re-render is confirmed, not reported as "could not be found".
+# It ALSO returns the input's `id`, `name`, its own `<label for>` (`label_for` / `label_text`) and a
+# stable field-container selector, because a Greenhouse-style widget may either RE-RENDER its file
+# input after the attach (bug 3 — fresh input, same id/name) or REMOVE it from the DOM ENTIRELY
+# (input-removed — leaving only a filename chip, the `<label for>` still pointing at the now-missing
+# id). In both cases the nonce tag rode off with the discarded node. The verify re-finds the input
+# by `#<id>` / `input[type=file][name=…]`; failing that (a removal) it re-finds the field CONTAINER
+# — the surviving wrapper, then the wrapper of `label[for=<id>]`, then an element whose text starts
+# with the label — and reads the filename chip there, so an attach that survives EITHER behavior is
+# confirmed, not reported as "could not be found". The container is chosen to SURVIVE the removal:
+# the ancestor that holds both the `<label>` and the input, never FORM/body.
 # Shares abClean / abCandidateLabels / abTextNoControls with _JS_LIB (one tidy/label copy).
 _UPLOAD_DRIVER = r"""
 (function(){
@@ -1458,15 +1525,56 @@ _UPLOAD_DRIVER = r"""
   }
   if(!label){ var il = abCandidateLabels(input); label = il.length ? il[0] : ''; }
   try { input.setAttribute('data-pa-upload', NONCE); } catch(e){}
-  // A stable way to RE-FIND the input after the widget re-renders and drops the nonce: the
-  // nearest ancestor-with-id (never the FORM/body, too broad) — else the field wrapper, tagged —
-  // whose visible text will show the attached filename chip the verify step reads.
-  var container = '', cnode = input.parentElement;
-  for(var cu = 0; cnode && cu < 6; cu++){
-    if(cnode.tagName === 'FORM' || cnode === document.body) break;
-    var cid = cnode.getAttribute && cnode.getAttribute('id');
-    if(cid){ container = '#' + (window.CSS && CSS.escape ? CSS.escape(cid) : cid); break; }
-    cnode = cnode.parentElement;
+  // This field's own <label for> — its id and text. When the widget REMOVES the input from the DOM
+  // (not just re-renders it empty), the verify step and form_read re-find the field by this label,
+  // since neither #id nor the nonce resolves to anything any more (#4032 input-removed).
+  var labelFor = '', labelText = '', labelEl = null;
+  var inId = input.getAttribute && input.getAttribute('id');
+  if(inId){
+    var lsel = 'label[for="' + (window.CSS && CSS.escape ? CSS.escape(inId) : inId) + '"]';
+    try { labelEl = document.querySelector(lsel); } catch(e){ labelEl = null; }
+    if(labelEl){ labelFor = inId; labelText = abClean(abTextNoControls(labelEl)); }
+  }
+  if(!labelEl && input.closest){
+    labelEl = input.closest('label');
+    if(labelEl && !labelText) labelText = abClean(abTextNoControls(labelEl));
+  }
+  // A stable container that SURVIVES the input's removal: PREFER the tightest ancestor that holds
+  // BOTH the input and its <label> as SEPARATE descendants (the field wrapper the widget leaves in
+  // place — e.g. Greenhouse's <label for> beside the input), never FORM/body. Use its id, else tag
+  // it. This preference is tried ONLY for a SEPARATE label — one that does NOT itself wrap the
+  // input. A WRAPPING <label> (input.closest('label'), no `for`) or no label at all falls straight
+  // through to the nearest ancestor-with-id — then a tagged parent — exactly the way it re-found the
+  // container BEFORE this change, so nothing is narrowed (#4032: additive). (Were a wrapping label
+  // allowed in, the climb would stop AT the label — an element contains itself — and pin the
+  // container to it; a widget that removes the input and draws its chip OUTSIDE the label would then
+  // read as "nothing is attached", and the broader surviving ancestor-with-id the removal case
+  // relies on would be shadowed. Likewise pinning to input.parentElement — which the widget may
+  // remove with the input — would shadow that same ancestor-with-id fallback.)
+  var container = '';
+  var wrapper = null;
+  if(labelEl && !(labelEl.contains && labelEl.contains(input))){
+    var wn = input.parentElement;
+    for(var wu = 0; wn && wu < 6; wu++){
+      if(wn.tagName === 'FORM' || wn === document.body) break;
+      // never the label itself (it trivially contains itself) — only a PROPER wrapper of both.
+      if(wn !== labelEl && wn.contains && wn.contains(labelEl)){ wrapper = wn; break; }
+      wn = wn.parentElement;
+    }
+  }
+  if(wrapper){
+    var wid = wrapper.getAttribute && wrapper.getAttribute('id');
+    if(wid){ container = '#' + (window.CSS && CSS.escape ? CSS.escape(wid) : wid); }
+    else { try { wrapper.setAttribute('data-pa-upbox', NONCE); container = '[data-pa-upbox="' + NONCE + '"]'; } catch(e){} }
+  }
+  if(!container){
+    var cnode = input.parentElement;
+    for(var cu = 0; cnode && cu < 6; cu++){
+      if(cnode.tagName === 'FORM' || cnode === document.body) break;
+      var cid = cnode.getAttribute && cnode.getAttribute('id');
+      if(cid){ container = '#' + (window.CSS && CSS.escape ? CSS.escape(cid) : cid); break; }
+      cnode = cnode.parentElement;
+    }
   }
   if(!container){
     var box = input.parentElement;
@@ -1477,7 +1585,7 @@ _UPLOAD_DRIVER = r"""
   return JSON.stringify({ok:true, selector:'[data-pa-upload="' + NONCE + '"]', label:label,
                          name:(input.getAttribute && input.getAttribute('name')) || '',
                          id:(input.getAttribute && input.getAttribute('id')) || '',
-                         container:container});
+                         container:container, label_for:labelFor, label_text:labelText});
 })()
 """
 
@@ -1487,12 +1595,45 @@ _UPLOAD_DRIVER = r"""
 # `input.files[0].name` read from whichever of (a)/(b) still carries the file; `displayed` says the
 # container's text (controls stripped) contains the uploaded basename; `source` records which of
 # (a)/(b) read the name. Any field-level validation text ("must be a PDF") is surfaced either way.
+# When the widget REMOVED the input (no live node, no fresh input), the container is RE-FOUND in
+# order — (1) the driver's stable CONTAINER; (2) the wrapper of `label[for=LABEL_FOR]` climbing to
+# a chip (never a sibling file field's); (3) an element whose text starts with LABEL_TEXT — then
+# scanned for the chip (#4032 input-removed).
 _UPLOAD_VERIFY = r"""
 (function(){
   function abIsFile(n){
     return !!(n && n.tagName === 'INPUT' && (n.getAttribute('type')||'').toLowerCase() === 'file');
   }
   function abFiles(n){ return (n && n.files && n.files.length) ? String(n.files[0].name || '') : ''; }
+  function abRefindBox(){
+    // (1) the stable wrapper the driver stored (survives a re-render AND an input removal).
+    var b = null;
+    if(CONTAINER){ try { b = document.querySelector(CONTAINER); } catch(e){ b = null; } }
+    if(b) return b;
+    // (2) the wrapper of this field's own label[for=LABEL_FOR], climbing to its attached-file chip
+    //     without ever crossing into a sibling file field's container (abOrphanBox).
+    if(LABEL_FOR){
+      var lab = null;
+      try { lab = document.querySelector('label[for="' +
+        (window.CSS && CSS.escape ? CSS.escape(LABEL_FOR) : LABEL_FOR) + '"]'); } catch(e){ lab = null; }
+      var ob = abOrphanBox(lab);
+      if(ob) return ob;
+    }
+    // (3) last resort: the tightest element whose text STARTS WITH the field label and that holds a
+    //     chip, skipping any element that still holds a file input (a sibling field).
+    if(LABEL_TEXT){
+      var want = abNorm(LABEL_TEXT), all = document.querySelectorAll('*');
+      var best = null, bestLen = 1e9;
+      for(var i = 0; i < all.length; i++){
+        var el = all[i];
+        if(el.querySelector && el.querySelector('input[type="file"]')) continue;
+        var t = abNorm(abTextNoControls(el));
+        if(t && t.indexOf(want) === 0 && t.length < bestLen && abChipElement(el, null)){ best = el; bestLen = t.length; }
+      }
+      if(best) return best;
+    }
+    return null;
+  }
   // (a) the nonce-tagged node, if the re-render did not discard it.
   var node = null;
   try { node = document.querySelector(SEL); } catch(e){ node = null; }
@@ -1513,9 +1654,10 @@ _UPLOAD_VERIFY = r"""
     if(abIsFile(byName)){ name = abFiles(byName); if(name) source = 'name'; if(!node) node = byName; }
   }
   // (c) the field container often keeps the attached filename visible as a chip even after the
-  //     input is re-rendered empty — success if the container's text contains the basename.
-  var box = null;
-  if(CONTAINER){ try { box = document.querySelector(CONTAINER); } catch(e){ box = null; } }
+  //     input is re-rendered empty OR removed from the DOM — success if the container shows the
+  //     basename. The container is RE-FOUND (abRefindBox) so a widget that discarded the input
+  //     entirely, nonce and all, is still resolved to THIS field's wrapper, never a sibling's.
+  var box = abRefindBox();
   if(!box) box = (node && node.parentElement) || node;
   // (c) the attached basename shown as a filename CHIP (a tight element whose text ends in an
   //     extension — controls excluded, and any element that IS/sits-under/CONTAINS an alert
@@ -1555,26 +1697,31 @@ def upload_js(selector: str, nonce: str) -> str:
 
 
 def upload_verify_js(selector: str, input_id: str = "", input_name: str = "",
-                     container: str = "", basename: str = "") -> str:
+                     container: str = "", basename: str = "", label_for: str = "",
+                     label_text: str = "") -> str:
     """Script ``browser_upload`` evals AFTER the attach. Reads ``input.files[0].name`` back from
     the nonce-tagged node (``selector``) if it survived, else from the input the widget
     re-rendered (re-found by ``input_id``, then ``input_name``), and reports whether the field
     ``container``'s visible text shows ``basename`` (the filename chip) — plus any field-level
-    validation text."""
+    validation text. ``label_for`` / ``label_text`` re-find the field's container when the widget
+    REMOVED the input from the DOM entirely, so neither the nonce nor ``input_id`` resolves."""
     return (_JS_LIB + "\n(function(){\n"
             "var SEL = " + _js(selector) + ";\n"
             "var ID = " + _js(input_id) + ";\n"
             "var NAME = " + _js(input_name) + ";\n"
             "var CONTAINER = " + _js(container) + ";\n"
             "var BASENAME = " + _js(basename) + ";\n"
+            "var LABEL_FOR = " + _js(label_for) + ";\n"
+            "var LABEL_TEXT = " + _js(label_text) + ";\n"
             "return " + _UPLOAD_VERIFY.strip() + ";\n})()")
 
 
 def parse_upload(output: str, field: str) -> tuple[dict | None, str]:
     """Parse ``upload_js``'s JSON → ``(info, error)``. On success ``info`` is a dict
-    ``{selector, label, id, name, container}`` — ``selector`` is the ``[data-pa-upload=…]`` tag
-    the CLI uploads to, and ``id``/``name``/``container`` let the verify step re-find the input
-    after a re-render drops the tag. On failure ``info`` is ``None`` and ``error`` is a
+    ``{selector, label, id, name, container, label_for, label_text}`` — ``selector`` is the
+    ``[data-pa-upload=…]`` tag the CLI uploads to, and ``id``/``name``/``container`` /
+    ``label_for``/``label_text`` let the verify step re-find the field after a re-render drops the
+    tag OR the widget removes the input entirely. On failure ``info`` is ``None`` and ``error`` is a
     ready-to-return ``Error: …``. Never raises."""
     try:
         data = _loads(output)
@@ -1589,6 +1736,8 @@ def parse_upload(output: str, field: str) -> tuple[dict | None, str]:
             "id": data.get("id") or "",
             "name": data.get("name") or "",
             "container": data.get("container") or "",
+            "label_for": data.get("label_for") or "",
+            "label_text": data.get("label_text") or "",
         }
         return info, ""
     reason, label = data.get("reason"), (data.get("label") or field)

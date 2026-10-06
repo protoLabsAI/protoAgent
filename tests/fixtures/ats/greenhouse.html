@@ -71,6 +71,16 @@
       trigger whose textarea is revealed ONLY by a JS-dispatched (untrusted) click — a
       native CLI click reports success but does nothing, which is exactly the Greenhouse
       behavior browser_click(js_fallback=True) exists for.
+    * a writing-sample block (`#writing_sample`, class `.remove-upload`) — the OTHER live
+      Greenhouse shape: on `change` the widget REMOVES its `input[type=file]` from the DOM
+      ENTIRELY (it does NOT re-render a fresh one) and renders a filename chip, while the
+      `<label for="writing_sample">` keeps pointing at the now-missing id. Neither the
+      stranded nonce nor `#writing_sample` resolves afterwards, so browser_upload must
+      verify via the chip in the SURVIVING field wrapper (re-found by its stored selector
+      or its label), and browser_form_read must recover the field from the orphaned
+      `<label for>` + chip — one `kind:'file'` row, id "writing_sample", value the bare
+      filename, required read off the label's `*` (#4032 input-removed). Its label is
+      DISTINCT (not the shared "Attach"), so the two-field "Attach" ambiguity is unchanged.
     * a transcript block (`#transcript`) whose widget REJECTS the attach — on `change` it
       clears the input and shows a `role=alert` validation message, WRAPPED in a plain div (no
       alert/error class) and ENDING in the rejected filename ("… could not be attached:
@@ -325,6 +335,21 @@
     <button type="button" class="attach-btn" id="attach_cover_letter">Attach</button>
   </div>
 
+  <!-- Writing sample: the OTHER live Greenhouse shape — on change the widget REMOVES its
+       input[type=file] from the DOM ENTIRELY (it does NOT re-render a fresh one) and renders a
+       filename chip with a remove button, while the <label for="writing_sample"> stays pointing at
+       the now-missing id. So neither a nonce tagged on the old input nor `#writing_sample` resolves
+       afterwards; browser_upload must verify via the chip in the SURVIVING field wrapper, and
+       browser_form_read must recover the field from the orphaned label + chip (#4032 input-removed).
+       A DISTINCT label (not the shared "Attach") keeps the two-field "Attach" ambiguity intact. The
+       `*` marks it required, which form_read reads back off the label since the input is gone. -->
+  <div class="field attach-field" id="writing_sample_block">
+    <label for="writing_sample">Writing sample *</label>
+    <input type="file" id="writing_sample" name="writing_sample" class="hidden-file attach-input remove-upload"
+           accept=".pdf,.doc,.docx,.txt">
+    <button type="button" class="attach-btn" id="attach_writing_sample">Attach</button>
+  </div>
+
   <!-- Transcript: a widget that REJECTS the attach — on change it clears the input and shows a
        validation message. A real non-attach that must stay a browser_upload error. -->
   <div class="field attach-field" id="transcript_block">
@@ -527,12 +552,15 @@ document.querySelectorAll(".iti").forEach(function (iti) {
   flag.addEventListener("click", function () { list.classList.toggle("iti__hide"); });
 });
 
-// ── file-attach widgets (résumé, cover letter, transcript) ──────────────────────
+// ── file-attach widgets (résumé, cover letter, writing sample, transcript) ──────
 // Live Greenhouse/Ashby REPLACE the <input type=file> on change with a fresh one (same
 // id/name, empty files) and show the attached filename as a removable chip — which strands
 // any nonce tagged on the OLD input, so browser_upload must verify via the fresh input's
-// id/name or the chip (#4032 bug 3). A `.reject-upload` input instead models a client-side
-// validator that REJECTS the file (clears it and shows a message) — a real non-attach.
+// id/name or the chip (#4032 bug 3). A `.remove-upload` input instead models the OTHER live
+// shape: it REMOVES the input from the DOM entirely (no fresh input) and shows a chip, with its
+// <label for> left pointing at the now-missing id — so browser_upload/form_read must recover the
+// field from the label + chip (#4032 input-removed). A `.reject-upload` input instead models a
+// client-side validator that REJECTS the file (clears it and shows a message) — a real non-attach.
 function renderChip(block, name) {
   var old = block.querySelector(".file-chip");
   if (old) old.remove();
@@ -579,6 +607,14 @@ function wireAttach(input) {
       return;
     }
     if (!name) return;
+    if (input.classList.contains("remove-upload")) {
+      // Greenhouse's OTHER shape: REMOVE the input from the DOM entirely (no fresh input) and show
+      // a chip. The <label for> stays pointing at the now-missing id, so browser_upload/form_read
+      // must recover the field from the label + displayed chip (#4032 input-removed).
+      input.parentNode.removeChild(input);
+      renderChip(block, name);
+      return;
+    }
     // re-render: swap in a fresh, EMPTY input (same identity, no nonce) and show the chip
     var fresh = input.cloneNode(false);
     fresh.value = "";
