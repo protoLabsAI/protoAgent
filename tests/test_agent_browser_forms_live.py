@@ -552,11 +552,14 @@ async def test_upload_by_the_shared_attach_label_is_ambiguous(browser):
 
 
 async def test_upload_rejecting_widget_is_a_hard_error_with_the_message(browser):
-    """r4: a widget that REJECTS the attach (clears the input, shows a `role=alert` message that
-    NAMES the file) is a real non-attach. Neither input.files nor a displayed filename CHIP shows
-    the basename — the basename living in the alert text does NOT count — so the result is an
-    Error, with the validation message surfaced, and NEVER a "verified via the displayed filename"
-    success (#4032 bug 3 review)."""
+    """r4 (+ bug 3 review, finding 2): a widget that REJECTS the attach (clears the input, shows a
+    `role=alert` message that NAMES the file) is a real non-attach. The fixture now WRAPS the
+    role=alert in a plain `<div>` (no alert/error class) and ENDS the message with the rejected
+    filename ("… could not be attached: rejected.pdf") — the shape the review flagged: an
+    ancestor-only exclusion (closest) let that wrapper through as a chip because it shares the
+    alert's text. Neither input.files nor a displayed filename CHIP shows the basename — the alert
+    text, wrapper and all, does NOT count — so the result is an Error with the message surfaced, and
+    NEVER a "verified via the displayed filename" success."""
     await _open(browser, GREENHOUSE)
     root = storage.capture_root().resolve()
     f = root / "rejected.pdf"; f.write_bytes(b"%PDF-1.4 x\n%%EOF\n")
@@ -568,9 +571,39 @@ async def test_upload_rejecting_widget_is_a_hard_error_with_the_message(browser)
         assert "nothing is attached" in out
         assert "could not be attached" in out               # the field's message is surfaced
         assert "rejected.pdf" in out                         # and it names the rejected file
+        # the alert's message ENDS in the filename, yet the plain wrapper around it is not read as a
+        # displayed-filename chip (both the alert and anything containing it are excluded)
+        rejected = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var b=document.getElementById('transcript_block');"
+            "var w=b.querySelector('.transcript-status');var a=b.querySelector('[role=alert]');"
+            "return !!(w && a && w.contains(a) && !w.matches('[role=alert],[class*=error]')"
+            " && /rejected\\.pdf$/.test(a.textContent.trim()));})()"})
+        assert rejected == "true", rejected       # the fixture really built the finding-2 shape
         assert (await _form_by_id(browser))["transcript"]["value"] == ""   # no silent attach
     finally:
         f.unlink(missing_ok=True)
+
+
+async def test_form_read_ignores_incidental_dotted_text_without_a_detach_control(browser):
+    """r5 (bug 3 review, finding 1): an EMPTY file field reads back '' even when its container holds
+    incidental text that merely ENDS in a dotted suffix — "jobs@acme.com", "greenhouse.io",
+    "Accepted: .pdf" — none of which is an attached-file chip. The extension test ALONE matched such
+    text on a single-upload form (the climb never meets a second file input to stop at), so an
+    unattached field reported a non-empty value and a verify-fill treated it as attached. Only a chip
+    with a DETACH control (× / Remove) counts as an attached filename; plain page text never does."""
+    await _open(browser, GREENHOUSE)
+    # drop incidental dotted text (an email, a domain, a stray "Accepted: .pdf"), NO detach control,
+    # into the still-empty cover-letter block — exactly the live-page noise the review warned about
+    injected = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var b=document.getElementById('cover_letter_block');"
+        "['Questions? jobs@acme.com','See greenhouse.io','Accepted: .pdf'].forEach(function(s){"
+        "var d=document.createElement('div');d.textContent=s;b.appendChild(d);});"
+        "return String(b.querySelectorAll('div').length);})()"})
+    assert injected and injected != "0", injected
+
+    by_id = await _form_by_id(browser)
+    assert by_id["cover_letter"]["value"] == ""   # incidental dotted text is NOT an attached filename
+    assert by_id["resume"]["value"] == ""         # and a truly empty résumé stays empty too
 
 
 # ── js-fallback click: a native click reports success but does nothing ───────────

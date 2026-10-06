@@ -234,32 +234,61 @@ function abTextNoControls(el){
   return abClean(c.textContent);
 }
 function abFileExt(s){ return /\.\w{2,5}$/.test(String(s==null?'':s)); }
-function abChipText(root, input){
-  // The filename CHIP inside `root`: the SHORTEST descendant text that ENDS in a file extension
-  // (the tight chip, not a wrapper that merely contains it). Skip `input` itself, any node that
-  // holds a form control, and any validation/alert element — so a rejection message that happens
-  // to NAME the file ("resume.pdf exceeds 5MB") is never mistaken for a displayed filename
-  // (#4032 bug 3 review: the old read matched the basename anywhere in the text, errors included).
+function abRemoveControl(el){
+  // The authoritative "a file is actually attached" signal: the field shows a DETACH affordance —
+  // a remove / delete button or an × glyph — beside the filename. Arbitrary page text that merely
+  // ENDS in a dotted suffix ("jobs@acme.com", "greenhouse.io", "Accepted: .pdf") carries no such
+  // control, and neither does a validation / alert message — so requiring it keeps the
+  // browser_form_read fallback from reading incidental text as an attached filename (#4032 bug 3
+  // review: on a single-upload form the climb never meets a second file input, so the extension
+  // test ALONE reported a non-empty value for an unattached required résumé).
+  var ctrls = (el && el.querySelectorAll && el.querySelectorAll('button, a, [role="button"]')) || [];
+  for(var i=0;i<ctrls.length;i++){
+    var b = ctrls[i];
+    var t = abNorm(((b.getAttribute && b.getAttribute('aria-label')) || '') + ' ' +
+                   ((b.getAttribute && b.getAttribute('title')) || '') + ' ' + (b.textContent || ''));
+    if(/remove|delete|detach|discard|clear|cancel|reset|×|✕|✖|⨯/.test(t)) return true;
+    if(/(^|\s)x(\s|$)/.test(t)) return true;
+  }
+  return false;
+}
+function abChipElement(root, input){
+  // The filename CHIP element inside `root`: the one with the SHORTEST text that ENDS in a file
+  // extension (the tight chip, not a wrapper that merely contains it). Skip `input` itself, any node
+  // that holds a form control, and — crucially — any node that IS, SITS UNDER, or CONTAINS a
+  // validation / alert element. closest() (self + ancestors) alone let a plain wrapper AROUND a
+  // role=alert through: that wrapper has no alert class yet shares the alert's textContent, so a
+  // rejection message that NAMES the file ("Could not upload resume.pdf") read back as a displayed
+  // filename and a rejected upload reported as verified — so test descendants too (#4032 bug 3 review).
   var cands = (root && root.querySelectorAll && root.querySelectorAll('*')) || [];
-  var best = '';
+  var sel = '[role="alert"], [aria-invalid="true"], [class*="error"], [class*="invalid"]';
+  var best = null, bestLen = 1e9;
   for(var i=0;i<cands.length;i++){
     var c = cands[i];
     if(c === input) continue;
     if(c.querySelector && c.querySelector('input, select, textarea')) continue;
-    if(c.closest && c.closest('[role="alert"], [aria-invalid="true"], [class*="error"], [class*="invalid"]')) continue;
+    if(c.closest && c.closest(sel)) continue;
+    if(c.querySelector && c.querySelector(sel)) continue;
     var t = abClean(abTextNoControls(c));
-    if(t && abFileExt(t) && (!best || t.length < best.length)) best = t;
+    if(t && abFileExt(t) && t.length < bestLen){ best = c; bestLen = t.length; }
   }
   return best;
+}
+function abChipText(root, input){
+  // The filename text shown in `root`. The upload verify also requires it to contain the basename it
+  // just uploaded, so the alert exclusion above is a second guard against a rejection message there.
+  var el = abChipElement(root, input);
+  return el ? abClean(abTextNoControls(el)) : '';
 }
 function abFileChipName(input){
   // A file widget that RE-RENDERS its <input type=file> empty after an attach (Greenhouse) still
   // shows the attached filename as a chip in the field container. Recover it, but ONLY from THIS
-  // field's OWN container: climb a bounded number of ancestors reading a chip from each, and STOP
-  // BEFORE the <form>/<body> or any container that also holds ANOTHER file input — those chips
-  // belong to sibling file fields, so an empty input reads back '' rather than borrowing a
-  // neighbour's filename (#4032 bug 3 review: the old climb searched the whole form, so an empty
-  // #cover_letter / #transcript cross-read #resume's chip; the old code read such a field as '').
+  // field's OWN container (climb a bounded number of ancestors, STOP BEFORE the <form>/<body> or any
+  // ancestor that also holds ANOTHER file input — those chips belong to sibling file fields, so an
+  // empty input reads back '' rather than borrowing a neighbour's filename) AND ONLY when the chip
+  // carries a DETACH control, the authoritative proof a file is attached. Without that gate an empty
+  // input on a single-upload form (where the climb never meets a second file input to stop at) read
+  // back ANY incidental text ending in a dotted suffix as a filename (#4032 bug 3 review).
   var node = input.parentElement;
   for(var up = 0; node && up < 6; up++){
     if(node.tagName === 'FORM' || node === document.body) break;
@@ -267,8 +296,8 @@ function abFileChipName(input){
     var shared = false;
     for(var j=0;j<files.length;j++){ if(files[j] !== input){ shared = true; break; } }
     if(shared) break;
-    var best = abChipText(node, input);
-    if(best) return best;
+    var el = abChipElement(node, input);
+    if(el && (abRemoveControl(el) || abRemoveControl(el.parentElement))) return abClean(abTextNoControls(el));
     node = node.parentElement;
   }
   return '';
@@ -1404,11 +1433,12 @@ _UPLOAD_VERIFY = r"""
   if(CONTAINER){ try { box = document.querySelector(CONTAINER); } catch(e){ box = null; } }
   if(!box) box = (node && node.parentElement) || node;
   // (c) the attached basename shown as a filename CHIP (a tight element whose text ends in an
-  //     extension, controls and alert/validation text excluded) — NOT merely present somewhere in
-  //     the container's text, which would read a rejection message that names the file ("resume.pdf
-  //     exceeds 5MB") as a success (#4032 bug 3 review). Prefer the re-found input's OWN field
-  //     scope (abFileChipName never crosses into a sibling file field); else scan the container,
-  //     where requiring the basename still rejects a neighbour's differently-named chip.
+  //     extension — controls excluded, and any element that IS/sits-under/CONTAINS an alert
+  //     excluded) — NOT merely present somewhere in the container's text, which would read a
+  //     rejection message that names the file ("resume.pdf exceeds 5MB", or a plain wrapper around a
+  //     role=alert) as a success (#4032 bug 3 review). Prefer the re-found input's OWN field scope
+  //     (abFileChipName: a chip with a detach control, never crossing into a sibling file field);
+  //     else scan the container, where requiring the basename still rejects a neighbour's chip.
   var chip = abIsFile(node) ? abFileChipName(node) : '';
   if(!chip) chip = abChipText(box, node);
   var displayed = !!(chip && BASENAME && chip.indexOf(BASENAME) >= 0);

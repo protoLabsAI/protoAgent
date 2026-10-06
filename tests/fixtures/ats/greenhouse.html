@@ -61,10 +61,12 @@
       native CLI click reports success but does nothing, which is exactly the Greenhouse
       behavior browser_click(js_fallback=True) exists for.
     * a transcript block (`#transcript`) whose widget REJECTS the attach — on `change` it
-      clears the input and shows a `role=alert` validation message that NAMES the file
-      ("<basename> could not be attached …"), as real validators do. A real non-attach that
-      must stay a browser_upload error with the message surfaced — and NOT read as a success
-      just because the basename appears in the alert text (#4032 bug 3 review).
+      clears the input and shows a `role=alert` validation message, WRAPPED in a plain div (no
+      alert/error class) and ENDING in the rejected filename ("… could not be attached:
+      <basename>"), as real validators do. A real non-attach that must stay a browser_upload
+      error with the message surfaced — and NOT read as a success just because a plain wrapper
+      AROUND the alert shares its text and that text ends in the filename (#4032 bug 3 review:
+      an ancestor-only alert exclusion let the wrapper through as a chip).
     * a native `<select>` for voluntary self-identification.
 
   TO REFRESH when Greenhouse changes its markup: open a live application form, read
@@ -528,17 +530,26 @@ function wireAttach(input) {
     var name = (input.files && input.files.length) ? input.files[0].name : "";
     if (input.classList.contains("reject-upload")) {
       input.value = "";                  // a validator that won't accept the file — clear it
-      var err = block.querySelector(".field-error");
+      // Wrap the role=alert in a PLAIN div (no alert/error class) and END the message with the
+      // rejected filename — the shape the #4032 bug 3 review flagged. The wrapper shares the alert's
+      // textContent, so an ancestor-only exclusion (closest) would read "… could not be attached:
+      // rejected.pdf" as a displayed filename and report the rejected upload as verified.
+      // browser_upload must treat it as an alert (surface it, stay an error), NEVER a chip.
+      var status = block.querySelector(".transcript-status");
+      if (!status) {
+        status = document.createElement("div");
+        status.className = "transcript-status";   // a plain wrapper: NO role, NO alert/error class
+        block.appendChild(status);
+      }
+      var err = status.querySelector(".field-error");
       if (!err) {
         err = document.createElement("div");
         err.className = "field-error";
         err.setAttribute("role", "alert");
-        block.appendChild(err);
+        status.appendChild(err);
       }
-      // NAME the rejected file in the message (live validators do: "resume.pdf exceeds 5MB"). The
-      // basename is now in the container's text, so a substring check would FALSELY read this
-      // non-attach as a success — browser_upload must treat an alert as an alert, never a chip.
-      err.textContent = (name || "The file") + " could not be attached — it must be a PDF under 5MB";
+      err.textContent = "Upload rejected — it must be a PDF under 5MB and could not be attached: " +
+                        (name || "the file");
       return;
     }
     if (!name) return;
