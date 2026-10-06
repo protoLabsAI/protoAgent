@@ -123,6 +123,13 @@
     // forbids workers. PDF page previews; notices in vendor/pdfjs.LICENSES.txt.
     pdfjs: ["pdfjs.min.mjs",
       "sha512-Z/QvVhTGIViDuuSHyCgvsZVOuYQa8CpYD3lis7cG8c17vDGEO8fkstjdeW/58o1qjWEa8IPH3efCurYfgw3PSQ=="],
+    // docx-preview 0.4.1 (Apache-2.0) on JSZip 3.10.2 (MIT): the packages' own UMD builds,
+    // byte-for-byte (window.JSZip, then window.docx). .docx page previews; notices in
+    // vendor/docx-preview.LICENSES.txt.
+    jszip: ["jszip.min.js",
+      "sha512-/ICos1xr6gGjsbC2d7Z6D0hmKAnNbkCv5Pp803Q75xgHowbEcgI4CVOHMHUux/ZorCuod6dzuJOjfNoCKV0tRw=="],
+    docxPreview: ["docx-preview.min.js",
+      "sha512-CToErkDzmSle4BCcUm0qqqWrjXJuUd2g0On8SLez8p9Bf6rZHE7oxMdgARb0dOYKeZkH9wblI+J5PF6fxRttYQ=="],
     pdfjsWorker: ["pdfjs-worker.min.mjs",
       "sha512-cgsoOrm2N2zEbj1vccst4py/Wf4vyUBwoMXCSaT7WI/vGKCYc33zBWj2TPeYFpdtESAOHCvzzxKe+lxMDatk9Q=="],
   };
@@ -609,10 +616,11 @@
   }
   // `file` artifacts (ADR 0092 D2) don't iframe generated code — they show a static,
   // themed DOWNLOAD CARD whose preview is TYPED by the file's extension: csv/tsv parse
-  // into a real table, .json pretty-prints, .md renders through mdDoc (the same sandboxed
-  // machinery as the markdown kind), everything else stays a text scroll box. The
-  // table/json/text srcdocs carry no scripts, so those sandboxes stay inert; only the
-  // .md path runs script, and it's the already-trusted markdown renderer.
+  // into a real table, .xlsx into one table per sheet, .json pretty-prints, .md renders
+  // through mdDoc (the same sandboxed machinery as the markdown kind), everything else stays a
+  // text scroll box. The table/json/text srcdocs carry no scripts, so those sandboxes stay
+  // inert; only the .md path runs script, and it's the already-trusted markdown renderer.
+  // .docx / .pdf / .pptx get their own vendored renderers (docxDoc / pdfDoc / slidesDoc).
   function fmtSize(n){ n=+n||0; return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
   // Mirror of the Python _PREVIEW_TRUNC note (drift-guarded by a test): detect + strip it
   // so a clipped preview doesn't feed the marker into the table/json parsers.
@@ -627,10 +635,13 @@
   // is the Python twin of this test (by extension, or the OOXML presentation mime). PDFs render
   // as real pages (vendored pdf.js, see pdfDoc); _pdfview.is_pdf is the twin of that test.
   var PPTX_MIME="application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  var DOCX_MIME="application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   function previewKind(name, mime){
     var n=String(name||"").toLowerCase(), i=n.lastIndexOf("."), ext=i<0?"":n.slice(i+1);
     if(ext==="pptx" || String(mime||"").toLowerCase()===PPTX_MIME) return "slides";
     if(ext==="pdf" || String(mime||"").toLowerCase()==="application/pdf") return "pdf";
+    if(ext==="docx" || String(mime||"").toLowerCase()===DOCX_MIME) return "docx";
+    if(ext==="xlsx") return "sheets";
     if(ext==="csv"||ext==="tsv") return "table";
     if(ext==="md"||ext==="markdown") return "md";
     if(ext==="json") return "json";
@@ -651,6 +662,48 @@
     return rows;
   }
   var TABLE_MAX_ROWS=500;
+  // .csv delimiter: comma unless the header row clearly uses ; (European Excel), tab or |.
+  // Counted outside quotes on the first non-empty line only — cheap, and right for real files.
+  function sniffDelim(text){
+    var line=(text.split("\n").find(function(l){ return l.trim()!==""; })||""), q=false, n={",":0,";":0,"\t":0,"|":0};
+    for(var i=0;i<line.length;i++){ var c=line[i]; if(c==='"') q=!q; else if(!q && n.hasOwnProperty(c)) n[c]++; }
+    var best=",";
+    [";","\t","|"].forEach(function(d){ if(n[d]>n[best]) best=d; });
+    return best;
+  }
+  // A parsed DSV → {html, label}: header row, then up to TABLE_MAX_ROWS rows. A column whose
+  // every non-empty cell is a number is right-aligned (prices, counts read down the column).
+  function dsvTable(rows, truncated){
+    var head=rows[0]||[], data=rows.slice(1), shown=data.slice(0,TABLE_MAX_ROWS), w=head.length;
+    shown.forEach(function(r){ if(r.length>w) w=r.length; });
+    var num=[];
+    for(var c=0;c<w;c++){
+      var any=false, all=true;
+      shown.forEach(function(r){ var v=(r[c]||"").trim(); if(v===""){ return; } any=true;
+        if(v==="-"||v==="\u2013"||v==="\u2014") return;  // a dash is "none", not text
+        if(!/^[-+]?[$£€]?\(?[\d,]*\.?\d+\)?%?$/.test(v)) all=false; });
+      num.push(any&&all);
+    }
+    function cell(tag, v, c){ return "<"+tag+(num[c]?' class="n"':"")+">"+esc(v)+"</"+tag+">"; }
+    var html='<div class="tw"><table><thead><tr>'
+      + Array.from({length:w}, function(_,c){ return cell("th", head[c]||"", c); }).join("")
+      + '</tr></thead><tbody>'
+      + shown.map(function(r){ return "<tr>"+Array.from({length:w}, function(_,c){ return cell("td", r[c]||"", c); }).join("")+"</tr>"; }).join("")
+      + '</tbody></table></div>';
+    var label=w+" columns × "+data.length+(truncated?"+":"")+" rows"
+      + (data.length>shown.length||truncated ? " · first "+shown.length+" shown — download for all" : "");
+    return {html:html, label:label};
+  }
+  // The .xlsx preview is CSV per sheet, each opened by a "### sheet: <name>" line (_preview.py).
+  function splitSheets(code){
+    var out=[], cur=null;
+    code.split("\n").forEach(function(line){
+      var m=/^### sheet: (.*)$/.exec(line);
+      if(m){ cur={name:m[1], lines:[]}; out.push(cur); }
+      else if(cur) cur.lines.push(line);
+    });
+    return out.map(function(s){ return {name:s.name, csv:s.lines.join("\n").replace(/\n+$/,"")}; });
+  }
   // Does this version get the slide renderer? ONLY a .pptx the save-time preflight (_slides.py)
   // cleared — it inflated every entry under a budget, so the frame never parses bytes the server
   // hasn't measured. A refusal, or a version saved before the preflight existed (no verdict),
@@ -668,6 +721,13 @@
     if(previewKind(f.filename, f.mime)!=="pdf") return false;
     return !!(f.pdf && typeof f.pdf==="object" && f.pdf.render===true);
   }
+  // Does this version get the Word renderer? ONLY a .docx the save-time preflight (_docx.py)
+  // cleared — it inflated every entry and measured every image under a budget.
+  function docxOk(v){
+    var f=v.file||{};
+    if(previewKind(f.filename, f.mime)!=="docx") return false;
+    return !!(f.docx && typeof f.docx==="object" && f.docx.render===true);
+  }
   // `note` (optional) forces the text card and says why the slides/pages aren't shown.
   function fileCard(v, note){
     var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
@@ -677,6 +737,12 @@
       note="Page preview unavailable — "+(f.pdf&&typeof f.pdf==="object"
         ? String(f.pdf.reason||"the file failed the safety checks")
         : "this version was saved before page previews; re-save the file to render its pages");
+    }
+    if(pk==="docx" && !note){
+      if(docxOk(v)) return docxDoc(v);
+      note="Page preview unavailable — "+(f.docx&&typeof f.docx==="object"
+        ? String(f.docx.reason||"the file failed the safety checks")
+        : "this version was saved before document previews; re-save the file to render its pages");
     }
     if(pk==="slides" && !note){
       if(slidesOk(v)) return slidesDoc(v);
@@ -694,18 +760,23 @@
     var thumb = f.thumb
       ? '<img src="'+f.thumb+'" alt="" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid '+border+'">'
       : '<div style="font-size:44px;line-height:1">📄</div>';
-    var body, pvl=note ? (pk==="pdf" ? "Extracted text" : "Text outline") : "Preview";
+    var body, pvl=note ? (pk==="pdf"||pk==="docx" ? "Extracted text" : "Text outline") : "Preview";
     if(pk==="table"){
-      var rows=parseDsv(code, name.slice(-4)===".tsv" ? "\t" : ",");
+      code=code.replace(/^\uFEFF/, "");  // Excel's UTF-8 BOM would otherwise prefix the first header
+      var rows=parseDsv(code, name.slice(-4).toLowerCase()===".tsv" ? "\t" : sniffDelim(code));
       if(truncated && rows.length>1) rows=rows.slice(0,-1); // last row may be mid-cut
-      var head=rows[0]||[], data=rows.slice(1), shown=data.slice(0,TABLE_MAX_ROWS);
-      body='<div class="tw"><table><thead><tr>'
-        + head.map(function(c){return "<th>"+esc(c)+"</th>";}).join("")
-        + '</tr></thead><tbody>'
-        + shown.map(function(r){return "<tr>"+r.map(function(c){return "<td>"+esc(c)+"</td>";}).join("")+"</tr>";}).join("")
-        + '</tbody></table></div>';
-      pvl=head.length+" columns × "+data.length+(truncated?"+":"")+" rows"
-        + (data.length>shown.length||truncated ? " · first "+shown.length+" shown — download for all" : "");
+      var tb=dsvTable(rows, truncated);
+      body=tb.html; pvl=tb.label;
+    } else if(pk==="sheets"){
+      var sheets=splitSheets(code), parts=[];
+      sheets.forEach(function(sh){
+        var rows=parseDsv(sh.csv, ",");
+        if(truncated && sh===sheets[sheets.length-1] && rows.length>1) rows=rows.slice(0,-1);
+        var tb=dsvTable(rows, truncated && sh===sheets[sheets.length-1]);
+        parts.push('<div class="sh">'+esc(sh.name)+' <span>'+esc(tb.label)+'</span></div>'+tb.html);
+      });
+      body=parts.length ? '<div class="sheets">'+parts.join("")+'</div>' : '<pre class="pv">'+esc(code)+'</pre>';
+      pvl=sheets.length+" sheet"+(sheets.length===1?"":"s");
     } else {
       if(pk==="json" && !truncated){
         try{ code=JSON.stringify(JSON.parse(code), null, 2); }catch(_){ /* not valid JSON → raw */ }
@@ -726,6 +797,11 @@
       + '.tw th{position:sticky;top:0;background:'+bg+';text-align:left;font-weight:600;border-bottom:1px solid '+border+'}'
       + '.tw th,.tw td{padding:6px 10px;border-right:1px solid '+border+';white-space:nowrap;max-width:28em;overflow:hidden;text-overflow:ellipsis}'
       + '.tw th:last-child,.tw td:last-child{border-right:0}'
+      + '.tw th.n,.tw td.n{text-align:right;font-variant-numeric:tabular-nums}'
+      + '.sheets{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:6px}'
+      + '.sheets .tw{flex:none;max-height:none}'
+      + '.wrap>.tw{flex:0 1 auto}'
+      + '.sh{font-size:12px;font-weight:600;margin-top:8px}.sh span{font-weight:400;color:'+muted+'}'
       + '.tw tbody tr:nth-child(even){background:rgba(127,127,127,.06)}'
       + '.note{font-size:12px;color:'+fg+';padding:8px 10px;border-radius:6px;border:1px solid '+border+';background:rgba(127,127,127,.1)}'
       + '</style><div class="wrap"><div class="hd">'+thumb
@@ -1201,7 +1277,8 @@
       renderingLinks = (a.kind==="mermaid" && v.links && typeof v.links==="object" && !Array.isArray(v.links)) ? v.links : null;
       linkLabels = null;
       // A deck's / PDF's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
-      pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)) ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : "pptx"} : null);
+      pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
+        ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
       $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
       renderLinks(); }
   }
@@ -1625,6 +1702,153 @@
     if(!L || typeof L.getDocument!=="function" || !W.pdfjsWorker){ fail("the PDF renderer didn't load"); return; }
     post({type:"protoArtifact:pdf", state:"need"});
   }
+  // ── .docx page previews ───────────────────────────────────────────────────────────────
+  // A Word document renders as REAL pages — the vendored docx-preview (window.docx) on JSZip
+  // (window.JSZip): styles, headings, lists, tables, images, headers/footers and footnotes, laid out
+  // as HTML at the document's own page size and scaled to fit the panel (− / Fit / + zoom). Same
+  // no-same-origin sandbox and nonce CSP as slides/pages, no network. renderAltChunks stays OFF:
+  // an altChunk is raw HTML embedded in the document, and it never renders. Hyperlinks keep an
+  // href only when it's plain http(s), and even those can't open anything from the sandbox.
+  //
+  // Caps — the mirror of _docx.py (drift-guarded by a test). The save-time preflight inflated every
+  // entry and measured every image under a budget; the frame bounds its own parse (parseMs), and
+  // the shell's watchdog swaps in the extracted-text card if the frame never answers.
+  var DOCX_CAPS={
+    maxBytes: 41943040,         // 40 MB — _docx.MAX_BYTES
+    parseMs: 20000,
+    watchdogMs: 45000
+  };
+  function docxDoc(v){
+    var cs=getComputedStyle(document.documentElement);
+    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
+    var f=v.file||{}, name=f.filename||"document.docx", mime=f.mime||DOCX_MIME, nonce=cspNonce();
+    var st=stripTrunc(v.code||"");
+    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src blob: data:; "
+      + "media-src 'none'; font-src blob: data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
+      + "object-src 'none'; base-uri 'none'; form-action 'none'";
+    var tokens=":root{--pl-color-bg:"+tok("--pl-color-bg","#0a0a0c")+";--pl-color-fg:"+tok("--pl-color-fg","#ededed")
+      + ";--pl-color-fg-muted:"+tok("--pl-color-fg-muted","#9aa0aa")+";--pl-color-border:"+tok("--pl-color-border","rgba(255,255,255,.12)")
+      + ";--pl-color-accent:"+tok("--pl-color-accent","#9b87f2")+"}";
+    var cfg={caps:DOCX_CAPS};
+    return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
+      + '<style>'+tokens+PDF_CSS+DOCX_CSS+'</style>'
+      + '<div class="wrap"><div class="hd"><div class="ic dx" aria-hidden="true">DOCX</div>'
+      + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
+      + '<div class="nav" id="nav" hidden>'
+      + '<span id="pos" aria-live="polite"></span>'
+      + '<span class="sep"></span>'
+      + '<button id="zout" type="button" aria-label="Zoom out" title="Zoom out (−)">−</button>'
+      + '<button id="zfit" type="button" class="wide" aria-label="Fit to width" title="Fit to width (0)">Fit</button>'
+      + '<button id="zin" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button></div></div>'
+      + '<div class="stage" id="stage" tabindex="0" role="document" aria-label="Document pages">'
+      + '<div id="pages"><div id="doc"></div></div><div id="dstyle"></div><div id="status" class="st" role="status">Rendering document…</div></div>'
+      + '<details id="ol"><summary>Extracted text</summary><pre class="pv">'+esc(st.code)
+      + (st.truncated?'\n… (preview truncated — download the file for the full content)':'')+'</pre></details></div>'
+      + cdn("jszip", nonce) + cdn("docxPreview", nonce)
+      + '<script nonce="'+nonce+'">(' + artDocx.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script>';
+  }
+  var DOCX_CSS='.ic.dx{background:#2b579a}'
+    + '#pages{display:block;padding:4px 0 12px}'
+    + '#doc .docx-wrapper{background:transparent!important;padding:0!important;display:flex;flex-direction:column;align-items:flex-start;gap:12px}'
+    + '#doc .docx-wrapper>section.docx{margin:0!important;box-shadow:0 1px 2px rgba(0,0,0,.25),0 8px 28px rgba(0,0,0,.28)}';
+
+  // The in-frame document controller. Like artPdf it's authored here and injected as SOURCE, so
+  // it may reference nothing outside itself. Keep `</` and `<!` out of it: it rides a srcdoc <script>.
+  function artDocx(cfg){
+    var D=document, W=window, L=W.docx, caps=(cfg&&cfg.caps)||{};
+    function $(id){ return D.getElementById(id); }
+    var stage=$("stage"), box=$("pages"), doc=$("doc"), dstyle=$("dstyle"), status=$("status"), ol=$("ol"),
+        nav=$("nav"), pos=$("pos"), zin=$("zin"), zout=$("zout"), zfit=$("zfit");
+    var done=false, failed=false, timer=0, zoom=1, pageW=816, pages=[], lastFit=0;
+    var ZMIN=0.5, ZMAX=3;
+    function post(m){ try{ W.parent.postMessage(m, "*"); }catch(_){} }
+    function mb(n){ return Math.round(n/1048576)+" MB"; }
+    function fail(reason){
+      if(failed) return; failed=true; clearTimeout(timer);
+      status.textContent="Couldn't render this document: "+reason+". The extracted text is below.";
+      status.className="st err"; doc.textContent=""; box.hidden=true; nav.hidden=true;
+      stage.classList.add("failed"); ol.open=true;
+      post({type:"protoArtifact:docx", state:"failed", reason:String(reason).slice(0,300)});
+    }
+    function tidy(root){
+      var as=root.querySelectorAll ? root.querySelectorAll("a[href]") : [];
+      for(var i=0;i<as.length;i++){ var h=String(as[i].getAttribute("href")||"");
+        if(!/^https?:/i.test(h) && h.charAt(0)!=="#") as[i].removeAttribute("href"); }
+    }
+    // Word writes list bullets as private-use code points meant for the Symbol / Wingdings fonts,
+    // which a browser doesn't have (they draw as boxes). Swap the common ones for real Unicode.
+    var GLYPHS={"\uf0b7":"\u2022", "\uf0a7":"\u25aa", "\uf0d8":"\u27a2", "\uf0fc":"\u2713",
+      "\uf076":"\u2756", "\uf0a8":"\u25c6", "\uf06c":"\u25cf", "\uf06e":"\u25a0", "\uf0e0":"\u27a4"};
+    function fixGlyphs(root){
+      var styles=root.querySelectorAll("style");
+      for(var i=0;i<styles.length;i++){
+        var t=styles[i].textContent, u=t.replace(/[\uf000-\uf0ff]/g, function(c){ return GLYPHS[c]||"\u2022"; });
+        if(u!==t) styles[i].textContent=u;
+      }
+    }
+    // Fit the rendered pages to the panel with CSS zoom (zoom 1 = the widest page fits the frame).
+    // zoom re-lays the text out at the new size, so it stays sharp; a scaling transform would be
+    // rasterized at 1x and blurred by WKWebView (#1517).
+    function fitScale(){ return Math.max(0.1, (box.clientWidth-8)/pageW); }
+    function apply(){
+      doc.style.zoom=String(fitScale()*zoom);
+      zout.disabled=zoom<=ZMIN; zin.disabled=zoom>=ZMAX;
+      update();
+    }
+    function update(){
+      if(!pages.length) return;
+      var top=box.getBoundingClientRect().top+4, cur=1;
+      for(var i=0;i<pages.length;i++){ if(pages[i].getBoundingClientRect().top<=top) cur=i+1; else break; }
+      pos.textContent=cur+" / "+pages.length;
+      stage.setAttribute("aria-label", "Document page "+cur+" of "+pages.length);
+    }
+    async function load(buf){
+      if(failed || done) return;
+      if(!(buf instanceof ArrayBuffer)) return fail("no file data reached the preview");
+      if(buf.byteLength>caps.maxBytes) return fail("the file is over the "+mb(caps.maxBytes)+" preview cap");
+      timer=setTimeout(function(){ fail("it took longer than "+Math.round(caps.parseMs/1000)+"s to read"); }, caps.parseMs);
+      try{
+        await L.renderAsync(buf, doc, dstyle, {className:"docx", inWrapper:true, ignoreWidth:false, ignoreHeight:false,
+          ignoreFonts:false, breakPages:true, ignoreLastRenderedPageBreak:true, experimental:false,
+          trimXmlDeclaration:true, useBase64URL:true, renderChanges:false, renderHeaders:true, renderFooters:true,
+          renderFootnotes:true, renderEndnotes:true, renderComments:false, renderAltChunks:false, debug:false});
+        if(failed) return;
+        clearTimeout(timer); done=true;
+        tidy(doc); fixGlyphs(dstyle); fixGlyphs(doc);
+        pages=Array.prototype.slice.call(doc.querySelectorAll("section.docx"));
+        if(!pages.length) return fail("the document has no pages");
+        pageW=Math.max.apply(null, pages.map(function(p){ return p.offsetWidth||816; }));
+        status.textContent=""; nav.hidden=false; lastFit=box.clientWidth; apply();
+        post({type:"protoArtifact:docx", state:"rendered", count:pages.length});
+      }catch(e){ fail(String((e&&e.message)||e).slice(0,200)); }
+    }
+    zin.addEventListener("click", function(){ zoom=Math.min(ZMAX, zoom*1.25); apply(); });
+    zout.addEventListener("click", function(){ zoom=Math.max(ZMIN, zoom/1.25); apply(); });
+    zfit.addEventListener("click", function(){ zoom=1; apply(); });
+    box.addEventListener("scroll", update, {passive:true});
+    D.addEventListener("keydown", function(e){
+      if(!done || e.altKey || e.ctrlKey || e.metaKey) return;
+      var t=e.target; if(t && (t.tagName==="SUMMARY" || t.tagName==="BUTTON")) return;
+      var k=e.key;
+      if(k==="+"||k==="="){ e.preventDefault(); zoom=Math.min(ZMAX, zoom*1.25); apply(); }
+      else if(k==="-"||k==="_"){ e.preventDefault(); zoom=Math.max(ZMIN, zoom/1.25); apply(); }
+      else if(k==="0"){ e.preventDefault(); zoom=1; apply(); }
+    });
+    if(W.ResizeObserver){ var rt=0; new ResizeObserver(function(){ clearTimeout(rt); rt=setTimeout(function(){
+      if(!done || Math.abs(box.clientWidth-lastFit)<=2) return; lastFit=box.clientWidth; apply(); }, 120); }).observe(box); }
+    W.addEventListener("message", function(e){
+      if(e.source!==W.parent) return;
+      var m=e.data||{};
+      if(m.type==="protoArtifact:theme" && m.tokens && typeof m.tokens==="object"){
+        Object.keys(m.tokens).forEach(function(k){ if(/^--pl-color-[a-z-]+$/.test(k)) D.documentElement.style.setProperty(k, String(m.tokens[k])); });
+        return;
+      }
+      if(m.type==="protoArtifact:docx:data"){ load(m.buf); return; }
+      if(m.type==="protoArtifact:docx:error"){ fail(String(m.reason||"the file couldn't be fetched")); }
+    });
+    if(!L || typeof L.renderAsync!=="function" || !W.JSZip){ fail("the document renderer didn't load"); return; }
+    post({type:"protoArtifact:docx", state:"need"});
+  }
   // Slide previews, shell side. The deck's frame is sandboxed (opaque origin, no bearer), so it
   // asks for its bytes ({state:"need"}) and the shell fetches the gated blob and TRANSFERS a copy
   // in. The fetch is size-capped before and after, and cached per version so a re-render (theme,
@@ -1638,9 +1862,11 @@
     pptxCtx=null; clearTimeout(pptxWatch);
     $frame.srcdoc=fileCard(ctx.v, note);
   }
+  // One byte feed serves every in-frame renderer; each kind brings its own caps.
+  function feedCaps(kind){ return kind==="pdf" ? PDF_CAPS : kind==="docx" ? DOCX_CAPS : PPTX_CAPS; }
   async function pptxBytes(ctx){
     if(pptxCache.key===ctx.key && pptxCache.buf) return pptxCache.buf;
-    var size=+((ctx.v.file||{}).size||0), maxBytes=ctx.kind==="pdf" ? PDF_CAPS.maxBytes : PPTX_CAPS.maxBytes;
+    var size=+((ctx.v.file||{}).size||0), maxBytes=feedCaps(ctx.kind).maxBytes;
     if(size>maxBytes) throw new Error("the file is over the "+Math.round(maxBytes/1048576)+" MB preview cap");
     var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(ctx.id)+"/blob?version="+(ctx.vi+1));
     if(!r.ok) throw new Error("the file couldn't be fetched ("+r.status+")");
@@ -1654,9 +1880,9 @@
     if(m.state==="rendered"||m.state==="failed"){ clearTimeout(pptxWatch); return; }
     if(m.state!=="need") return;
     clearTimeout(pptxWatch);
-    pptxWatch=ctx.kind==="pdf"
-      ? setTimeout(function(){ pptxFallback(ctx, "Page preview unavailable — rendering took too long"); }, PDF_CAPS.watchdogMs)
-      : setTimeout(function(){ pptxFallback(ctx, "Slide preview unavailable — rendering took too long"); }, PPTX_CAPS.watchdogMs);
+    pptxWatch=setTimeout(function(){
+      pptxFallback(ctx, (ctx.kind==="pptx" ? "Slide" : "Page")+" preview unavailable — rendering took too long");
+    }, feedCaps(ctx.kind).watchdogMs);
     try{
       var buf=await pptxBytes(ctx);
       if(pptxCtx!==ctx) return;
@@ -1675,7 +1901,7 @@
   window.addEventListener("message", async function(e){
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
-    if(m.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"){ pptxMessage(m); return; }
+    if(m.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"||m.type==="protoArtifact:docx"){ pptxMessage(m); return; }
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
     // create/edit reply + check_artifact can surface a render failure. Best-effort POST —
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,

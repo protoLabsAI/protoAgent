@@ -8,7 +8,8 @@ artifact is a VERSION CHAIN you can step back through, not a flood of near-dupli
 didn't author) / ``pin_artifact`` (exempt a long-lived one from history eviction) /
 ``delete_artifact`` manage them. ``save_file_artifact`` (ADR 0092) versions a
 generated FILE (docx/xlsx/pptx/pdf/image) as a download artifact — bytes in a sidecar blob, a
-diffable text preview in ``code``, an image thumbnail — rendered as a download card, not iframed.
+diffable text projection in ``code``, an image thumbnail — previewed by type: .docx/.pdf as real
+pages, .pptx as real slides (each behind a save-time preflight), .csv/.tsv/.xlsx as tables.
 The panel is a plugin-served shell page
 (iframed by the console, ADR 0026) that renders the generated code in a **nested sandboxed
 iframe** (``sandbox="allow-scripts"``, no same-origin) — the Claude Artifacts / Open WebUI
@@ -29,6 +30,7 @@ import logging
 #   _preview        file previews: mime/clip/extractors/thumbnails
 #   _slides         .pptx slide-preview safety preflight (caps the in-panel renderer)
 #   _pdfview        .pdf page-preview safety preflight (caps the in-panel pdf.js)
+#   _docx           .docx page-preview safety preflight (caps the in-panel docx-preview)
 #   _render_status  browser render feedback (#1458)
 #   _bundle         chat-bundle consumption seam (#2681)
 #   _tools          the nine agent-facing tools + the full-body-write nudge

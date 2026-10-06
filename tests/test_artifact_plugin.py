@@ -676,7 +676,7 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     html = art._SHELL_HTML + art._SHELL_JS
     assert "cdnjs.cloudflare.com" not in html  # no external CDN dependency
     assert "/plugins/artifact/vendor/" in html  # served same-origin
-    # all ten libs present, each with an integrity hash.
+    # all twelve libs present, each with an integrity hash.
     for lib in (
         "mermaid.min.js",
         "react.production.min.js",
@@ -686,11 +686,13 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
         "vega.min.js",
         "vega-lite.min.js",
         "vega-embed.min.js",
+        "jszip.min.js",
+        "docx-preview.min.js",
         "pdfjs.min.mjs",
         "pdfjs-worker.min.mjs",
     ):
         assert lib in html
-    assert html.count("sha512-") == 10 and 'integrity="' in html
+    assert html.count("sha512-") == 12 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html
@@ -1128,7 +1130,7 @@ def test_xlsx_extraction_reads_sheet_cells(monkeypatch, tmp_path):
     wb.save(str(p))
     art.save_file_artifact.invoke({"path": str(p)})
     code = _arts(art)[0]["versions"][0]["code"]
-    assert "# Sales" in code and "Region" in code and "1200" in code
+    assert "### sheet: Sales" in code and "Region,Total" in code and "West,1200" in code
 
 
 def test_unparseable_office_file_degrades_not_crashes(monkeypatch, tmp_path):

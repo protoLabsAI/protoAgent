@@ -225,7 +225,7 @@ def test_shell_preview_kind_routes_pdfs_to_pages(monkeypatch, tmp_path):
         ["notes.txt", "text/plain"],
     ]
     got = _node(
-        'var PPTX_MIME="x";'
+        'var PPTX_MIME="x";var DOCX_MIME="y";'
         + _js_function(_js(art), "previewKind")
         + "console.log(JSON.stringify("
         + json.dumps(cases)
@@ -248,7 +248,7 @@ def test_shell_honours_a_refused_pdf_preflight(monkeypatch, tmp_path):
         {"file": {"filename": "a.pptx", "mime": "x", "pdf": {"render": True}}},
     ]
     got = _node(
-        'var PPTX_MIME="x";'
+        'var PPTX_MIME="x";var DOCX_MIME="y";'
         + _js_function(js, "previewKind")
         + _js_function(js, "pdfOk")
         + "console.log(JSON.stringify("
@@ -301,7 +301,8 @@ def test_in_frame_failure_shows_the_extracted_text(monkeypatch, tmp_path):
     assert "caps.parseMs" in ctl
     assert "password-protected" in ctl
     assert '<details id="ol"><summary>Extracted text</summary>' in _js_function(js, "pdfDoc")
-    assert "PDF_CAPS.watchdogMs" in js and "Page preview unavailable — rendering took too long" in js
+    assert "kind===\"pdf\" ? PDF_CAPS" in _js_function(js, "feedCaps")
+    assert "feedCaps(ctx.kind).watchdogMs" in js and '"Page")+" preview unavailable — rendering took too long"' in js
 
 
 def test_pdf_pages_are_drawn_lazily_and_capped(monkeypatch, tmp_path):
@@ -320,7 +321,8 @@ def test_pdf_js_caps_mirror_python(monkeypatch, tmp_path):
     assert caps["maxPages"] == art._pdfview.MAX_PAGES
     assert 0 < caps["parseMs"] < caps["watchdogMs"]
     # and the shell refuses to even fetch an over-cap file
-    assert "PDF_CAPS.maxBytes" in _js_function(_js(art), "pptxBytes")
+    assert "feedCaps(ctx.kind).maxBytes" in _js_function(_js(art), "pptxBytes")
+    assert "PDF_CAPS" in _js_function(_js(art), "feedCaps")
 
 
 def test_shell_feeds_bytes_to_the_frame_of_the_right_kind(monkeypatch, tmp_path):
@@ -331,5 +333,5 @@ def test_shell_feeds_bytes_to_the_frame_of_the_right_kind(monkeypatch, tmp_path)
     msg = _js_function(js, "pptxMessage")
     assert 'm.type!=="protoArtifact:"+ctx.kind' in msg
     assert '"protoArtifact:"+ctx.kind+":data"' in msg
-    assert 'kind:pdfOk(v) ? "pdf" : "pptx"' in js
-    assert 'm.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"' in js
+    assert 'kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"' in js
+    assert 'm.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"||m.type==="protoArtifact:docx"' in js

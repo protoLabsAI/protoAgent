@@ -185,6 +185,28 @@ makes a chart fast to produce. The panel draws it with the vendored `vega` 6.4.0
  "data": {"values": [{"weekday": "Sat", "revenue": 2310.5}, {"weekday": "Fri", "revenue": 1876}]}}
 ```
 
+## File artifacts — what each type previews as
+
+`save_file_artifact(path, title?, artifact_id?, project?)` stores a generated file's bytes as a
+versioned artifact (Download button, version history) and previews it by type. `path` takes the
+fs tools' form: a project-relative path (pass `project`, or omit it when one project has the file)
+or an absolute path. Every version also keeps a **text projection** in `code`, so history stays
+diffable and screen readers / a failed render still have the content.
+
+| File | Preview | Safety gate |
+|---|---|---|
+| `.docx` | **Real pages** — Word styles, headings, lists, tables, images, headers/footers, footnotes; − / Fit / + zoom ([below](#word-documents-docx)) | save-time zip preflight (`_docx.py`) |
+| `.pdf` | **Real pages** — continuous scroll, zoom ([below](#pdfs-pdf)) | save-time stream preflight (`_pdfview.py`) |
+| `.pptx` | **Real slides** — current slide + filmstrip ([below](#slide-decks-pptx)) | save-time zip preflight (`_slides.py`) |
+| `.csv` / `.tsv` | **Table** — delimiter sniffed (`,` `;` tab `|`), Excel's byte-order mark stripped, numeric columns right-aligned, first 500 rows | — (text) |
+| `.xlsx` | **One table per sheet** (first 200 rows × 50 columns each) | — (text projection) |
+| `.md` | Rendered prose | — |
+| `.json` | Pretty-printed | — |
+| images | Thumbnail | — |
+| other text | Plain text | — |
+
+The text projection is capped by `max_preview_kb`; a clipped preview says so and points at Download.
+
 ## Slide decks (.pptx)
 
 A `.pptx` saved with `save_file_artifact` previews as its **real slides**, not a text dump: a large
@@ -248,6 +270,33 @@ image, 150 MP drawn on one page. Password-protected files, unreadable files and 
 PDF, or one saved before page previews existed, shows the extracted-text card with the reason.
 `PDF_CAPS` in `shell.js` mirrors the caps (drift-guarded); the frame adds a 20 s parse budget and
 the shell's 45 s watchdog swaps in the text card if the frame never answers.
+
+## Word documents (.docx)
+
+A `.docx` saved with `save_file_artifact` previews as its **real pages**: the document's own page
+size and margins, Word paragraph/character styles, headings, numbered and bulleted lists, tables,
+embedded images, headers, footers, footnotes and endnotes, fitted to the panel width with a page
+indicator and zoom (− / Fit / +, or the `-` `0` `+` keys). Scaling uses CSS `zoom`, so text is
+re-laid-out and stays sharp (a scaling transform is blurred by WKWebView, #1517). The extracted text
+stays underneath (collapsed). Word's Symbol/Wingdings bullet code points are swapped for real
+Unicode bullets after rendering, since browsers don't ship those fonts.
+
+The renderer is [docx-preview](https://github.com/VolodymyrBaydalka/docxjs) 0.4.1 (Apache-2.0) on
+[JSZip](https://github.com/Stuk/jszip) 3.10.2 (MIT), both vendored byte-for-byte as UMD builds
+(`vendor/jszip.min.js`, `vendor/docx-preview.min.js`) and SRI-pinned; notices in
+`vendor/docx-preview.LICENSES.txt`. Not rendered: tracked changes and comments (off), and
+**altChunks** (raw HTML embedded in a document — never rendered). Legacy binary `.doc` files keep
+the text card.
+
+**Hostile files.** Same sandbox and nonce CSP as slides/pages (no network, no workers). A .docx is a
+zip, so the save-time preflight (`_docx.py`) reuses the slide preflight's bounded inflater: every
+entry is actually inflated against per-entry (32 MB) and whole-archive (256 MB) budgets and a 15 s
+clock, and its real size + CRC must match the directory. Images are measured from their headers:
+over 50 MP for one, or 400 MP for the whole document, refuses the preview with the reason. Anything
+over 40 MB, unreadable, or without `word/document.xml` keeps the text card. The verdict is stamped
+on the version as `file.docx`. `DOCX_CAPS` in `shell.js` mirrors the caps (drift-guarded); the frame
+adds a 20 s parse budget and the shell's 45 s watchdog swaps in the text card if it never answers.
+Only plain `http(s)` and in-document `#` links keep an `href`.
 
 ## Configuration
 
@@ -324,7 +373,7 @@ the page announces it is listening (`protoagent:ready`), targeted at the page's 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no
 > outbound network at all (`capabilities.network: []` is literally true):
-> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, the `.pptx` slide renderer, and Vega / Vega-Lite / vega-embed (`*.min.js`). The `.pdf` renderer (pdf.js) is the same idea as ES modules (`pdfjs*.min.mjs`, `<script type="module">`, also SRI-pinned). Pinned with **Subresource
+> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, the `.pptx` slide renderer, the `.docx` renderer (JSZip + docx-preview), and Vega / Vega-Lite / vega-embed (`*.min.js`). The `.pdf` renderer (pdf.js) is the same idea as ES modules (`pdfjs*.min.mjs`, `<script type="module">`, also SRI-pinned). Pinned with **Subresource
 >   Integrity** (`integrity` + `crossorigin="anonymous"` — required because the sandbox is an opaque
 >   origin, so the load is cross-origin); a tampered served file won't execute. To bump one, replace
 >   the file, recompute its `sha512`, and update the `LIB` map in the shell page.

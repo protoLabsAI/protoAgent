@@ -113,7 +113,9 @@ class _Refused(Exception):
     """A cap the actual inflation broke — its message is the verdict's reason."""
 
 
-def _inflate(data: bytes, info: zipfile.ZipInfo, budget: int, deadline: float) -> tuple[int, bytes]:
+def _inflate(
+    data: bytes, info: zipfile.ZipInfo, budget: int, deadline: float, what: str = "deck"
+) -> tuple[int, bytes]:
     """Inflate one entry's RAW stream from ``data`` (never via the declared size): ``(real size,
     first _HEAD_BYTES)``. Raises _Refused past ``budget`` bytes or ``deadline``, or when the
     stream disagrees with the directory (size, CRC, truncation) or can't be read."""
@@ -154,7 +156,7 @@ def _inflate(data: bytes, info: zipfile.ZipInfo, budget: int, deadline: float) -
                 take(d.decompress(buf, _CHUNK))
                 buf = d.unconsumed_tail
                 if time.monotonic() > deadline:
-                    raise _Refused(f"checking the deck took longer than {MAX_SCAN_SECONDS:.0f}s")
+                    raise _Refused(f"checking the {what} took longer than {MAX_SCAN_SECONDS:.0f}s")
             if d.eof:
                 break
         take(d.flush())
