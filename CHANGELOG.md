@@ -15,6 +15,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.197.0] - 2026-10-06
+
+### Added
+- **The skill index now flags skills that need tools the agent doesn't have (#4061).**
+  A skill whose frontmatter `tools:` names tools missing from this agent's bound toolset is
+  listed in `<available_skills>` with `missing_tools="a,b"`, so the model sees the gap before
+  loading the skill instead of partway through its procedure. The skill stays listed; when the
+  bound toolset isn't known, nothing is flagged (ADR 0060 amended).
+
+### Fixed
+- **`write_file` / `edit_file` can no longer leave a reader looking at an empty file (#4059).**
+  Writes truncated the file and then wrote it, so a parallel tool call (or a read right after
+  `edit_file`) could see 0 bytes — surfacing as "not valid JSON: line 1 column 1". Writes now go
+  to a temp file beside the target and are swapped in atomically with the original's permissions
+  kept; a failed write leaves the original untouched. `write_file` also now takes the same
+  per-file lock as `edit_file`, so a concurrent edit can't silently revert it.
+
+- **A task the agent just updated no longer shows its old status on the next step (#4060).**
+  The injected `<working_state>` was composed once per turn and re-sent unchanged on every model
+  call, so after `update_task` reported success the agent's very next call still saw the task as
+  open and re-did or doubted the update. Once a tool has run in the turn, the working-state block
+  is now re-read for each model call (in place, so prompt caching is unaffected); the rest of the
+  injected context stays the turn's snapshot.
+
+### Security
+- **Slide previews measure every image in a deck, not just those in `ppt/media/` (#4057).**
+  The `.pptx` safety check only measured images under `ppt/media/` with an image extension, so a
+  large image stored elsewhere in the file skipped the pixel caps. Every part is now sniffed by
+  its contents. One that's oversized, or a set that's too large together, refuses the slide
+  preview, and the outline card shows the reason.
+
 ## [0.196.0] - 2026-10-06
 
 ### Added
