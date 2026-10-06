@@ -151,11 +151,15 @@ guess; read the error and make the targeted edit.
 
 When a skill writes a real **file** to disk — a Word doc, a spreadsheet, a slide deck, a PDF, an
 image — call **`save_file_artifact(path, title?, artifact_id?)`** right after, to put it in the Artifact panel as
-a **versioned download artifact**: the bytes are stored, a readable text preview is extracted
-(docx→text, xlsx→sheet table, pptx→slide outline, pdf→text; images get a thumbnail), and the panel
-shows a download card. A `.pptx` deck is shown as its **real slides** (a large current slide plus a
-filmstrip, arrow keys to page), with the outline kept underneath. A `.pdf` is shown as its **real
-pages** (scroll through them, zoom with −/Fit/+), with the extracted text kept underneath. Re-saving the same document as a new revision? Pass the prior
+a **versioned download artifact** with a Download button and a preview by type:
+
+- `.docx` and `.pdf` → their **real pages** (scroll, zoom with −/Fit/+); `.pptx` → its **real
+  slides** (current slide + filmstrip, arrow keys to page). Each keeps its extracted text underneath.
+- `.csv`/`.tsv` → a table (any common delimiter; numbers right-aligned); `.xlsx` → one table per sheet.
+- `.md` → rendered prose; `.json` → pretty-printed; images → a thumbnail; other text → plain text.
+
+`path` can be relative to a filesystem project (as `find_files`/`read_file` report it — pass
+`project` if more than one has it) or absolute. Re-saving the same document as a new revision? Pass the prior
 `artifact_id` so it becomes v2, v3… of the same artifact instead of a new panel entry.
 
 ```text

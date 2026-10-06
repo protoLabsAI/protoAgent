@@ -11,7 +11,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from . import _config, _links, _pdfview, _preview, _ref, _render_status, _slides, _store
+from . import _config, _docx, _links, _pdfview, _preview, _ref, _render_status, _slides, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -191,11 +191,12 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "", projec
 
     Use this right AFTER a skill writes a document to disk (e.g. cowork's docx/xlsx/pptx/pdf
     skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
-    shows a download card with a preview typed by content (csv/tsv → a real table, .md →
-    rendered prose, .json → pretty-printed; .pptx → the real rendered SLIDES (with the slide
-    outline beneath); .pdf → the real rendered PAGES (with the extracted text beneath);
-    docx→text, xlsx→sheet table; images get a thumbnail; other text
-    files → plain text), and offers a Download button.
+    shows a preview typed by content, and offers a Download button:
+    .docx → the real rendered PAGES (Word styles, tables, images, headers/footers);
+    .pdf → the real rendered PAGES; .pptx → the real rendered SLIDES (each keeps its
+    extracted text beneath); .csv/.tsv → a table (delimiter sniffed, numbers right-aligned);
+    .xlsx → one table per sheet; .md → rendered prose; .json → pretty-printed; images → a
+    thumbnail; other text files → plain text.
 
     COMPOSE the file completely, then save ONCE — do not save revision after revision while
     you iterate in a single turn; every save round-trips the full file through the
@@ -234,8 +235,10 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "", projec
     # A PDF gets the page renderer's safety preflight (size / page count / decoded stream bytes /
     # image pixels) — the panel only draws its pages when this says it may.
     pdf = _pdfview.preflight(data) if _pdfview.is_pdf(p.name, mime) else None
+    # A Word document gets the docx renderer's preflight (zip inflation + image pixel budget).
+    docx = _docx.preflight(data) if _docx.is_docx(p.name, mime) else None
     ext = p.suffix.lower().lstrip(".") or "bin"
-    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf)
+    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf, docx)
 
 
 @_store.serialized
@@ -250,6 +253,7 @@ def _save_file(
     artifact_id: str,
     slides: dict | None = None,
     pdf: dict | None = None,
+    docx: dict | None = None,
 ) -> str:
     """save_file_artifact's store read-modify-write. The blob is written INSIDE the lock on
     purpose: the blob sweep runs under it too, so it can never see (and delete) a blob that
@@ -280,6 +284,8 @@ def _save_file(
         file_meta["slides"] = slides
     if pdf is not None:
         file_meta["pdf"] = pdf
+    if docx is not None:
+        file_meta["docx"] = docx
     if art is None:
         nv = _store._new_version(preview, extra={"file": file_meta, "blob": blob_name})
         art = {

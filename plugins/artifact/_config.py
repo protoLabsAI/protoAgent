@@ -81,7 +81,7 @@ def _max_blob_bytes() -> int:
 
 
 # The extracted-text PREVIEW cap for a `file` version — the diffable projection stored in
-# `code` (docx→text, xlsx→sheet table, pptx→outline, pdf→text). Kept well under
+# `code` (docx→text, xlsx→CSV per sheet, pptx→outline, pdf→text). Kept well under
 # max_code_kb so a huge document can't bloat history.json (read on every panel poll).
 def _max_preview_bytes() -> int:
     return _cfg_int("max_preview_kb", "ARTIFACT_MAX_PREVIEW_KB", 64) * 1024

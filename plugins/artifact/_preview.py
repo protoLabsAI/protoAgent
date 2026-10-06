@@ -49,17 +49,27 @@ def _extract_docx(path: Path) -> str:
 
 
 def _extract_xlsx(path: Path) -> str:
+    """Each sheet as real CSV (quoted where needed, so a comma inside a cell stays one cell),
+    opened by a ``### sheet: <name>`` line — the panel renders one table per sheet, and the
+    version history stays a diffable text projection. Capped per sheet: a preview, not the
+    workbook (rows past the cap end with a note row)."""
+    import csv
+    import io
+
     from openpyxl import load_workbook
 
     wb = load_workbook(str(path), read_only=True, data_only=True)
     out: list[str] = []
     for ws in wb.worksheets:
-        out.append(f"# {ws.title}")
+        out.append(f"### sheet: {ws.title}")
+        buf = io.StringIO()
+        w = csv.writer(buf, lineterminator="\n")
         for r, row in enumerate(ws.iter_rows(values_only=True)):
-            if r >= 200:  # cap rows per sheet — a preview, not the whole workbook
-                out.append("… (more rows — download for all)")
+            if r >= 200:  # cap rows per sheet
+                w.writerow(["… more rows — download the file for all"])
                 break
-            out.append(", ".join("" if c is None else str(c) for c in (row or ())[:50]))
+            w.writerow(["" if c is None else str(c) for c in (row or ())[:50]])
+        out.append(buf.getvalue().rstrip("\n"))
     wb.close()
     return "\n".join(out)
 

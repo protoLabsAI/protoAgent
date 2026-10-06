@@ -120,6 +120,8 @@ def test_every_pinned_lib_is_served_byte_exact_to_its_sri(monkeypatch, tmp_path)
         "vega.min.js",
         "vega-lite.min.js",
         "vega-embed.min.js",
+        "jszip.min.js",
+        "docx-preview.min.js",
         "pdfjs.min.mjs",
         "pdfjs-worker.min.mjs",
     }
@@ -194,13 +196,13 @@ def test_shell_preview_kind_matches_python(monkeypatch, tmp_path):
     got = _node(
         'var PPTX_MIME="'
         + PPTX_MIME
-        + '";'
+        + '";var DOCX_MIME="x";'
         + _js_function(js, "previewKind")
         + "console.log(JSON.stringify("
         + json.dumps(cases)
         + ".map(function(c){return previewKind(c[0],c[1]);})));"
     )
-    assert got == ["slides", "slides", "slides", "text", "table", "md", "json", "text"]
+    assert got == ["slides", "slides", "slides", "text", "table", "md", "json", "docx"]  # .docx → page renderer
     for (name, mime), kind in zip(cases, got):
         assert (kind == "slides") == art._slides.is_slides(name, mime), name
 
@@ -220,7 +222,7 @@ def test_shell_honours_a_refused_preflight(monkeypatch, tmp_path):
     got = _node(
         'var PPTX_MIME="'
         + PPTX_MIME
-        + '";'
+        + '";var DOCX_MIME="x";'
         + _js_function(js, "previewKind")
         + _js_function(js, "slidesOk")
         + "console.log(JSON.stringify("
@@ -279,7 +281,8 @@ def test_in_frame_failure_shows_the_outline(monkeypatch, tmp_path):
     assert "ol.open=true" in ctl and 'state:"failed"' in ctl
     assert "the slide renderer didn't load" in ctl
     assert "caps.parseMs" in ctl  # the frame's own time cap
-    assert "pptxFallback(ctx" in js and "PPTX_CAPS.watchdogMs" in js
+    assert "pptxFallback(ctx" in js and "feedCaps(ctx.kind).watchdogMs" in js
+    assert ": PPTX_CAPS" in _js_function(js, "feedCaps")
     # the outline is always in the slides page too (screen readers, and the failure view)
     assert '<details id="ol"><summary>Text outline</summary>' in _js_function(js, "slidesDoc")
 
@@ -406,7 +409,8 @@ def test_js_caps_mirror_python(monkeypatch, tmp_path):
         assert key in ctl, key
     assert "maxConcurrency:1" in ctl  # sequential inflate: the first cap hit stops the rest
     # and the shell refuses to even fetch an over-cap file
-    assert "PPTX_CAPS.maxBytes" in _js_function(_js(art), "pptxBytes")
+    assert "feedCaps(ctx.kind).maxBytes" in _js_function(_js(art), "pptxBytes")
+    assert ": PPTX_CAPS" in _js_function(_js(art), "feedCaps")
 
 
 # ── lying-header bombs (security review of #4019) ─────────────────────────────
