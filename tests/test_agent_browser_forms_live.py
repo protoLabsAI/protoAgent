@@ -361,6 +361,98 @@ async def test_phone_country_form_read_reports_the_name(browser):
     assert fields["country"]["value"] == "United States"
 
 
+# ── resolve "Country" to a picker labelled ONLY by aria-label / listbox (#4032 bug 2b) ──
+# The live GitLab phone-country picker has NO <label for>; its only accessible name is
+# aria-label="Country" on the select container (and on the listbox it controls). browser_select
+# must resolve the LABEL "Country" to it. And on greenhouse.html — where an EXPLICITLY labelled
+# react-select "Country *" coexists with an iti whose ul.iti__country-list carries
+# aria-label="Country" — the explicit label must still win: the labelled iti keeps "Phone number"
+# and never makes "Country" ambiguous.
+
+
+async def test_phone_country_resolves_by_aria_label_and_commits(browser):
+    """r1: the picker has no <label for>, only aria-label="Country" on its container — yet
+    addressing it by the LABEL "Country" resolves it and commits United States, with no
+    misleading "no options were found"."""
+    await _open(browser, PHONE_COUNTRY)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert "no options were found" not in out
+
+
+async def test_phone_country_form_read_row_is_labelled_country(browser):
+    """r2: browser_form_read lists the picker's row (id "country") labelled "Country" — the
+    accessible name recovered from the container's aria-label, not its lowercase `name` — and
+    after the commit its value is the country NAME "United States"."""
+    await _open(browser, PHONE_COUNTRY)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+
+    fields = await _form_by_id(browser)
+    assert "country" in fields, sorted(fields)
+    assert fields["country"]["label"] == "Country"
+    assert fields["country"]["value"] == "United States"
+
+
+async def test_greenhouse_country_label_still_prefers_the_explicit_react_select(browser):
+    """r3: on greenhouse.html the explicitly labelled react-select "Country *" coexists with an
+    iti whose ul.iti__country-list carries aria-label="Country". The explicit <label for> must
+    win — "Country" commits the react-select (never an ambiguous error) — and the iti keeps its
+    own label "Phone number" rather than borrowing "Country" off its country-list (which would
+    have made the label ambiguous)."""
+    await _open(browser, GREENHOUSE)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States" in'), out
+
+    fields = await _form(browser)
+    assert fields["Country"]["kind"] == "combobox"
+    assert fields["Country"]["value"] == "United States"
+    # the intl-tel-input phone field keeps its own label; the listbox's aria-label="Country" did
+    # NOT leak onto it (it has a <label for> of its own), so "Country" stayed unambiguous
+    assert "Phone number" in fields and fields["Phone number"]["kind"] == "tel"
+
+
+async def test_iti_tel_without_its_own_label_does_not_borrow_country(browser):
+    """r3 (review): the country-list's aria-label="Country" names the COUNTRY PICKER, not the
+    phone-number `<input type=tel>` that merely shares the `.iti` wrapper. A bare tel input (no
+    `<label for>` of its own) must NOT borrow "Country" — otherwise browser_form_read reports it
+    as "Country" and browser_select(field="Country") goes AMBIGUOUS next to a real "Country"
+    select (or resolves to the number field). Inject such a bare iti onto greenhouse.html (whose
+    real react-select "Country *" coexists) and confirm the tel row keeps its own placeholder
+    label and "Country" still resolves — unambiguously — to the react-select and commits."""
+    await _open(browser, GREENHOUSE)
+    # A country-list labelled "Country" + a label-less tel input in one `.iti` — the shape the
+    # review flagged (the existing fixture's tel input has a <label for>, so it never hit it).
+    injected = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var form=document.getElementById('application');"
+        "var iti=document.createElement('div');iti.className='iti';"
+        "var fc=document.createElement('div');fc.className='iti__flag-container';"
+        "var flag=document.createElement('div');flag.className='iti__selected-flag';"
+        "flag.setAttribute('role','button');"                       # role=button → not enumerated
+        "var ul=document.createElement('ul');ul.className='iti__country-list';"
+        "ul.setAttribute('aria-label','Country');"                  # the listbox's accessible name
+        "fc.appendChild(flag);fc.appendChild(ul);"
+        "var tel=document.createElement('input');tel.type='tel';tel.id='intl_phone';"
+        "tel.name='intl_phone';tel.setAttribute('placeholder','Mobile');"   # NO <label for>; own name is the placeholder
+        "iti.appendChild(fc);iti.appendChild(tel);form.appendChild(iti);"
+        "return !!document.getElementById('intl_phone');})()"})
+    assert injected == "true", injected
+
+    by_id = await _form_by_id(browser)
+    assert "intl_phone" in by_id, sorted(by_id)
+    tel = by_id["intl_phone"]
+    assert tel["kind"] == "tel"
+    assert tel["label"] != "Country"      # the country-list's name did NOT leak onto the number field
+    assert tel["label"] == "Mobile"       # it keeps its own placeholder label
+
+    # "Country" stays unambiguous beside the real react-select: it resolves THERE and commits,
+    # never an "matches 2 fields" ambiguity (the old borrow) nor the tel input.
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States" in'), out
+    assert "matches 2 fields" not in out
+    assert (await _form(browser))["Country"]["value"] == "United States"
+
+
 # ── file input behind an "Attach" button, verified by read-back ──────────────────
 
 

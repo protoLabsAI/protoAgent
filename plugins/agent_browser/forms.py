@@ -265,19 +265,86 @@ function abInCombo(el){
   var combo = el.closest && el.closest('[role="combobox"]');
   return !!(combo && combo !== el);
 }
+// ── accessible name of a label-less combobox / phone picker (#4032 bug 2b) ──────
+// A phone-country react-select / intl-tel-input often carries NO `<label for>`: its only
+// accessible name lives as aria-label / aria-labelledby on the select container or `.iti`
+// wrapper, and as aria-label on the listbox it controls (e.g. the live GitLab picker is named
+// ONLY by aria-label="Country" on its container). abCandidateLabels adds those as label
+// candidates — but ONLY for such a PICKER that has no label of its own, so an explicit
+// `<label for>` / wrapping `<label>` / own aria-label always beats an accessible-name-only match.
+// `el` is the picker ONLY when it IS the combobox root / `.select__control` / an ARIA combobox,
+// or the intl-tel-input COUNTRY BUTTON itself (`.iti__selected-flag` / `.iti__selected-country`).
+// It is NOT every node under an `.iti` wrapper: the sibling `<input type=tel>` phone-number field
+// shares that wrapper but is its OWN field — it must keep its OWN label and never borrow "Country"
+// off the country-list (#4032 bug 2b review: the old `closest('.iti')` matched the tel input too).
+function abComboOrIti(el){
+  if(abComboRoot(el)) return true;
+  if(el.matches && el.matches('.select__control, [class*="select__control"], [role="combobox"]')) return true;
+  return !!(el.matches && el.matches(
+    '.iti__selected-flag, .iti__selected-country, [class*="iti__selected-flag"], [class*="iti__selected-country"]'));
+}
+function abWrapperName(el){
+  var out = [];
+  if(!el || !el.matches) return out;
+  // 1) the nearest react-select container / intl-tel-input wrapper, within 3 ancestors — a
+  //    far-away container is not this field's name.
+  var wrap = null, n = el;
+  for(var up=0; n && up<=3; up++){
+    if(n.matches && n.matches('.select__container, [class*="select__container"], .iti, [class*="iti--"]')){ wrap = n; break; }
+    n = n.parentElement;
+  }
+  if(wrap){
+    var wal = abClean(wrap.getAttribute && wrap.getAttribute('aria-label')); if(wal) out.push(wal);
+    var wlb = wrap.getAttribute && wrap.getAttribute('aria-labelledby');
+    if(wlb){ var wt = abClean(abByIds(wlb)); if(wt) out.push(wt); }
+  }
+  // 2) the listbox this combobox controls: its aria-controls / aria-owns target (react-select
+  //    PORTALS it, so it exists only while OPEN) or an in-wrapper [role=listbox] /
+  //    ul.iti__country-list — whichever is present carries the same aria-label name.
+  var combo = (el.matches && el.matches('[role="combobox"]')) ? el
+            : (el.querySelector && el.querySelector('[role="combobox"]'));
+  var ids = (combo && combo.getAttribute &&
+    (combo.getAttribute('aria-controls') || combo.getAttribute('aria-owns'))) || '';
+  var box = null;
+  String(ids).split(/\s+/).forEach(function(id){
+    if(!id || box) return;
+    var m = null; try { m = document.getElementById(id); } catch(e){ m = null; }
+    if(m) box = m;
+  });
+  if(!box && wrap && wrap.querySelector){
+    box = wrap.querySelector('[role="listbox"], ul.iti__country-list, [class*="iti__country-list"]');
+  }
+  if(box){ var ba = abClean(box.getAttribute && box.getAttribute('aria-label')); if(ba) out.push(ba); }
+  return out;
+}
 function abCandidateLabels(el){
   var out = [];
+  var hasOwnLabel = false;
   var id = el.getAttribute && el.getAttribute('id');
   if(id){
     var sel = 'label[for="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]';
     var lf = null;
     try { lf = document.querySelector(sel); } catch(e){ lf = null; }
-    if(lf) out.push(abTextNoControls(lf));
+    if(lf){ out.push(abTextNoControls(lf)); hasOwnLabel = true; }
   }
   var wrap = el.closest && el.closest('label');
-  if(wrap) out.push(abTextNoControls(wrap));
-  var al = el.getAttribute && el.getAttribute('aria-label'); if(al) out.push(abClean(al));
-  var lb = el.getAttribute && el.getAttribute('aria-labelledby'); if(lb) out.push(abClean(abByIds(lb)));
+  if(wrap){ out.push(abTextNoControls(wrap)); hasOwnLabel = true; }
+  // The element's OWN aria-label / aria-labelledby is a label of its own — so it both ranks as a
+  // candidate AND stops the widget from borrowing a container/listbox name below (#4032 bug 2b).
+  var al = el.getAttribute && el.getAttribute('aria-label');
+  if(al){ var alc = abClean(al); if(alc){ out.push(alc); hasOwnLabel = true; } }
+  var lb = el.getAttribute && el.getAttribute('aria-labelledby');
+  if(lb){ var lbt = abClean(abByIds(lb)); if(lbt){ out.push(lbt); hasOwnLabel = true; } }
+  // A combobox / intl-tel-input PICKER with no label of its own (no `<label for>`, wrapping
+  // `<label>`, aria-label or aria-labelledby) is named by the aria-label/aria-labelledby on its
+  // container or the aria-label on the listbox it controls — a phone-country picker's only
+  // accessible name (#4032 bug 2b). Any label of its own always wins, so these borrowed names are
+  // taken ONLY when the picker carries none — and the phone-number `<input type=tel>` beside the
+  // picker is NOT a picker (abComboOrIti), so it never borrows its country-list's name.
+  if(!hasOwnLabel && abComboOrIti(el)){
+    var acc = abWrapperName(el);
+    for(var a=0;a<acc.length;a++){ if(acc[a]) out.push(acc[a]); }
+  }
   var ph = el.getAttribute && el.getAttribute('placeholder'); if(ph) out.push(abClean(ph));
   var nm = el.getAttribute && el.getAttribute('name'); if(nm) out.push(abClean(nm));
   var seen = {}, res = [];
