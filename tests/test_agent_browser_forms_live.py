@@ -763,6 +763,59 @@ async def test_removing_widget_with_no_label_refinds_via_ancestor_with_id(browse
         f.unlink(missing_ok=True)
 
 
+async def test_removing_widget_inside_a_wrapping_label_verifies_via_outside_chip(browser):
+    """r1 (review): a file input INSIDE a wrapping ``<label>`` (no ``label[for]``) whose widget
+    REMOVES the input and draws its chip OUTSIDE that label must still be confirmed. The driver must
+    NOT pick the wrapping label as the field container — a label trivially contains itself, so the
+    wrapper climb would stop AT it and pin the container to the label, leaving a chip drawn outside
+    the label unreachable ('nothing is attached'). It must fall through to the surviving
+    ancestor-WITH-ID, exactly the pre-change fallback. Here the chip lands as a sibling of the label
+    inside the grandparent-with-id, so a label-pinned container reads 'nothing is attached' while the
+    ancestor-with-id container confirms the attach via the displayed filename."""
+    await _open(browser, GREENHOUSE)
+    root = storage.capture_root().resolve()
+    f = root / "wrapped_sample.pdf"; f.write_bytes(b"%PDF-1.4 wrapped\n%%EOF\n")
+    try:
+        # #wrapped_box (id, survives) > <label> (WRAPS the input, NO `for`) > input#wrapped. On change
+        # the widget removes the input and renders the chip into #wrapped_box, a SIBLING of the label
+        # (outside it) — the shape a label-pinned container could not reach.
+        rigged = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){var form=document.getElementById('application');"
+            "var box=document.createElement('div');box.className='field';box.id='wrapped_box';"
+            "var lab=document.createElement('label');"
+            "lab.appendChild(document.createTextNode('Portfolio '));"   # wrapping label text, NO `for`
+            "var inp=document.createElement('input');inp.type='file';inp.id='wrapped';"
+            "inp.name='wrapped';inp.className='hidden-file';"
+            "lab.appendChild(inp);box.appendChild(lab);form.appendChild(box);"
+            "inp.addEventListener('change',function(){"
+            "var nm=(inp.files&&inp.files.length)?inp.files[0].name:'';if(!nm)return;"
+            "inp.parentNode.removeChild(inp);"                          # remove the input from the DOM
+            "var chip=document.createElement('span');chip.className='file-chip';"
+            "var n=document.createElement('span');n.className='file-chip__name';n.textContent=nm;"
+            "var rm=document.createElement('button');rm.type='button';rm.className='file-chip__remove';rm.textContent='\\u00d7';"
+            "chip.appendChild(n);chip.appendChild(rm);box.appendChild(chip);});"   # chip OUTSIDE the label
+            "var i=document.getElementById('wrapped');"
+            "return (i!==null) && (i.closest('label')!==null)"           # the input really sits in a <label>
+            " && document.querySelectorAll('label[for=\"wrapped\"]').length===0;})()"})  # and there is no label[for]
+        assert rigged == "true", rigged
+
+        out = await browser["browser_upload"].ainvoke(
+            {"field": "#wrapped", "file_path": "wrapped_sample.pdf"})
+        assert out.startswith("Uploaded wrapped_sample.pdf to"), out
+        assert "verified via the field's displayed filename" in out, out
+        assert "nothing is attached" not in out
+        # the input was removed from INSIDE the wrapping label, and the chip now sits OUTSIDE that
+        # label (a direct child of the ancestor-with-id) — only the ancestor-with-id container re-finds
+        # it; a container pinned to the (surviving, now-empty) label would miss it.
+        state = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return (document.getElementById('wrapped')===null)"
+            " && !!document.querySelector('#wrapped_box > .file-chip')"
+            " && document.querySelectorAll('#wrapped_box label .file-chip').length===0;})()"})
+        assert state == "true", state
+    finally:
+        f.unlink(missing_ok=True)
+
+
 # ── js-fallback click: a native click reports success but does nothing ───────────
 
 

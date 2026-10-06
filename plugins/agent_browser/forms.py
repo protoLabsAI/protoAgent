@@ -1540,20 +1540,25 @@ _UPLOAD_DRIVER = r"""
     if(labelEl && !labelText) labelText = abClean(abTextNoControls(labelEl));
   }
   // A stable container that SURVIVES the input's removal: PREFER the tightest ancestor that holds
-  // BOTH the input and its <label> (the field wrapper the widget leaves in place), never FORM/body.
-  // Use its id, else tag it. This preference is tried ONLY when a label was found; a field with no
-  // label falls straight through to the nearest ancestor-with-id — then a tagged parent — exactly
-  // the way it re-found the container BEFORE this change, so nothing is narrowed (#4032: additive).
-  // (Using input.parentElement as the wrapper when labelEl is null would pin the container to the
-  // input's immediate parent, which a widget may remove with the input, and would shadow the
-  // surviving ancestor-with-id — the very fallback the removal case relies on.)
+  // BOTH the input and its <label> as SEPARATE descendants (the field wrapper the widget leaves in
+  // place — e.g. Greenhouse's <label for> beside the input), never FORM/body. Use its id, else tag
+  // it. This preference is tried ONLY for a SEPARATE label — one that does NOT itself wrap the
+  // input. A WRAPPING <label> (input.closest('label'), no `for`) or no label at all falls straight
+  // through to the nearest ancestor-with-id — then a tagged parent — exactly the way it re-found the
+  // container BEFORE this change, so nothing is narrowed (#4032: additive). (Were a wrapping label
+  // allowed in, the climb would stop AT the label — an element contains itself — and pin the
+  // container to it; a widget that removes the input and draws its chip OUTSIDE the label would then
+  // read as "nothing is attached", and the broader surviving ancestor-with-id the removal case
+  // relies on would be shadowed. Likewise pinning to input.parentElement — which the widget may
+  // remove with the input — would shadow that same ancestor-with-id fallback.)
   var container = '';
   var wrapper = null;
-  if(labelEl){
+  if(labelEl && !(labelEl.contains && labelEl.contains(input))){
     var wn = input.parentElement;
     for(var wu = 0; wn && wu < 6; wu++){
       if(wn.tagName === 'FORM' || wn === document.body) break;
-      if(wn.contains && wn.contains(labelEl)){ wrapper = wn; break; }
+      // never the label itself (it trivially contains itself) — only a PROPER wrapper of both.
+      if(wn !== labelEl && wn.contains && wn.contains(labelEl)){ wrapper = wn; break; }
       wn = wn.parentElement;
     }
   }
