@@ -15,6 +15,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.196.0] - 2026-10-06
+
+### Added
+- **Word documents render as real pages in the Artifact panel; CSV and xlsx tables done properly (#4054).**
+  A `.docx` saved with `save_file_artifact` now previews as its pages: Word styles, headings,
+  lists, tables, images, headers, footers and footnotes, fitted to the panel with − / Fit / +
+  zoom. Rendering uses vendored docx-preview on JSZip in the artifact sandbox, with no network.
+  A save-time check inflates every part of the file and measures every image under fixed budgets,
+  and refuses anything oversized or bomb-like, which keeps the text card with the reason. CSV
+  previews now detect `;`, tab and `|` delimiters, drop Excel's byte-order mark and right-align
+  numbers. An `.xlsx` shows one table per sheet instead of comma-joined text.
+
+### Changed
+- **Deleting or clearing a chat now harvests it into the knowledge base by default (#4053).** The delete and clear dialogs open with **Harvest** already ticked for an ordinary chat, so retiring a chat keeps a searchable summary unless you turn it off — the "keep this out of memory" decision is the incognito flag (ADR 0069 D3b), not a per-delete opt-in. Incognito chats are never harvested: their harvest switch is gone, replaced by a "never harvested" note, and the request always carries `harvest=false`. Harvest and forget are now mutually exclusive — ticking **Forget what this chat already saved** unticks harvest, so "just make it gone" is one click. Bulk tab-closes and the Shift+click quick-delete follow the same default (harvest regular chats, skip incognito ones). Client-only change; the server's incognito harvest skip stays the backstop.
+
+### Fixed
+- **agent_browser: `browser_form_read` folds react-select's hidden required input into its combobox (#4032).** On a live Greenhouse form, a `required` react-select renders a sibling `<input required tabindex="-1" aria-hidden="true">` (opacity 0 / 1px) next to `.select__control`, inside the container but NOT inside the control — so the combobox-skip never caught it, and every such input surfaced as an unlabelled, id-less, required "text" row after each combobox, polluting the form read (required fields nobody could answer). The in-page enumeration now recognises that hidden shadow input — a label-less, visually/semantically hidden `<input>` (not a combobox root, not a file input) sharing a react-select combobox's nearest container — skips it, and folds its `required` onto the labelled combobox row. The fold is **scoped to the combobox's own select container**, not a form-wide search: on the Greenhouse layout a combobox's container is three ancestors below the `<form>`, so scanning ancestors for a required shadow would have reached the whole form and marked *every* combobox (optional ones included) required — now a combobox is required only when its own container holds a required shadow. Visible unlabelled inputs and hidden file inputs (Greenhouse's `#resume`) are still listed. The saved Greenhouse fixture gives each react-select container that hidden shadow sibling — with `required` on the required comboboxes and without it on the optional ones.
+
+- **`browser_select` resolves "Country" to a phone-country picker labelled only by aria-label (#4032).**
+  A react-select / intl-tel-input phone-country picker on a Greenhouse form often has no
+  `<label for>` — its only accessible name is `aria-label` / `aria-labelledby` on the select
+  container or `.iti` wrapper (and on the listbox it controls). The in-page field enumeration now
+  adds that accessible name as a label candidate for a label-less combobox/phone picker, so
+  `browser_select(field="Country")` and `browser_form_read` address and report it by "Country"
+  instead of failing with "no options were found". Only the picker borrows that name — the
+  phone-number `<input type=tel>` beside it never does, even with no label of its own — and any
+  label of the picker's own (an explicit `<label for>` / wrapping `<label>` / `aria-label`) still
+  wins, so a labelled field never borrows a neighbour's accessible name.
+
+- **agent_browser: `browser_select` reads a phone-country picker back by the country NAME, not the "+1" dial code (#4032).** On the live GitLab Greenhouse form, selecting "United States +1" committed the country but failed the read-back with `reads "+1" after selecting …`: the widget renders only a flag + the dial code as visible text, stashing the country name in a `title` on a child span, and the driver compared the visible text only. The combobox and intl-tel-input read-back now derive the committed selection's identity from the `title`/`aria-label` on the single-value / selected-flag OR any descendant (plus any hidden input value), matching on the country name or its name part — and a bare dial code (empty or `+1`, shared by the US and Canada) never counts as a match, so a genuinely wrong country is still a hard mismatch. `browser_form_read` likewise reports the country name when the visible value is only a flag/dial code. A new self-contained fixture (`greenhouse_phone_country.html`) models the live picker.
+
+- **agent_browser: `browser_select` now opens a closed react-select itself (#4032).** On the live Greenhouse form every `browser_select` failed with "no options were found" unless the menu was already open, because the combobox driver made a single synthetic `mousedown` and gave up. It now escalates open strategies — a full primary-button pointer sequence on the control and its dropdown indicator, then focus + ArrowDown, then typing the filter (a type-to-search combobox renders its listbox only after input), then a real trusted CLI click — re-checking after each and never toggling an already-open menu closed, with an empty filtered scan clearing and rescanning unfiltered. When every strategy fails the result is an explicit "could not open the dropdown … (aria-expanded stayed …)" error instead of the misleading "no options were found". The saved Greenhouse fixture now models real react-select open semantics (button-0 only, `openAfterFocus`, toggle-closed on a second mousedown, ArrowDown opens, type-to-search open, a portalled menu named by `aria-controls`).
+
+- **agent_browser: browser_upload confirms an attach that survives the widget re-rendering its file input (#4032).** Greenhouse hides the real `input[type=file]` behind an "Attach" button and REPLACES it after the attach (a fresh input, same id/name, empty `files`, plus a filename chip) — so the old verify, which re-queried only the nonce tagged on the now-discarded node, failed with "the file input … could not be found to verify … nothing was confirmed attached". `browser_upload` now resolves a `#id`/bare-id file input directly (no climbing, even behind an Attach button), and verifies in order: the nonce node if it survived, else the input re-found by `#<id>` / `[name=…]`, else the field container's displayed filename chip — so the upload is confirmed (the success line names the evidence used). The chip evidence is a tight filename element scoped to the field's OWN container (never a sibling file field's chip): any element that IS, sits under, or CONTAINS a validation/alert is excluded — so a plain wrapper around a `role=alert` whose message NAMES the file ("… could not be attached: resume.pdf") is not mistaken for a displayed filename, and a widget that REJECTS the file stays a hard `Error:` with the message surfaced, not a false success. `browser_form_read` likewise falls back to that per-field chip when a file input reads back empty — but only to a chip carrying a DETACH control (× / Remove), the authoritative proof a file is attached, so incidental page text that merely ends in a dotted suffix ("jobs@acme.com", "greenhouse.io") is never read back as a filename and an unattached field reads '' rather than borrowing a neighbour's.
+
 ## [0.195.0] - 2026-10-05
 
 ### Added
