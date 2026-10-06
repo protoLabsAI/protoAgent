@@ -138,6 +138,70 @@ def turn_projection(state_or_update: Any) -> tuple[str, list[dict] | None]:
     return str(value.get("text") or ""), value.get("sections")
 
 
+_WORKING_STATE_LABEL = "Working state"
+
+
+def _tools_ran_this_turn(messages: Any) -> bool:
+    """Has a tool result landed since the turn's newest operator input?
+
+    The turn's first model call is served by the compose that just ran, so re-reading
+    the working state there would only repeat it. Once a tool has run, a store the block
+    reads (a task, the goal plan, a schedule) may have changed under it."""
+    from langchain_core.messages import ToolMessage
+
+    for msg in reversed(messages or []):
+        if isinstance(msg, ToolMessage):
+            return True
+        if is_turn_input(msg):
+            return False
+    return False
+
+
+def refresh_working_state(text: str, sections: list[dict] | None, state: Any) -> tuple[str, list[dict] | None]:
+    """``(text, sections)`` with the ``<working_state>`` part re-read from the stores.
+
+    The turn's projection is composed once in ``before_agent`` (ADR 0108 D2), but the
+    working state is the one part the agent itself changes mid-turn: ``update_task``
+    reported success, and the next model call was still shown the task's prior status
+    from the turn-entry snapshot — so the agent re-did or second-guessed the update.
+    Every other part (memory, RAG hits, the skill index) stays the turn's snapshot.
+
+    Working state is the LAST part the composer assembles and is never shed by the
+    budget (ADR 0108 D6), so it is exactly the trailing ``chars`` of ``text`` named by
+    the final ``"Working state"`` section; it is swapped in place, so its position in
+    the frame never moves. A block that appears (or empties) mid-turn is appended (or
+    removed) with the composer's ``"\n\n"`` separator. Best-effort: any failure keeps
+    the composed text.
+    """
+    try:
+        from graph import projection
+
+        fresh = projection.working_state_block(state if isinstance(state, dict) else {})
+    except Exception as exc:  # noqa: BLE001 - a refresh must never break a model call
+        log.debug("[knowledge] working-state refresh failed: %s", exc)
+        return text, sections
+    secs = [dict(s) for s in (sections or []) if isinstance(s, dict)]
+    old_len = 0
+    if secs and secs[-1].get("label") == _WORKING_STATE_LABEL:
+        old_len = int(secs[-1].get("chars") or 0)
+        secs.pop()
+    elif sections is None:
+        # No section annotations to locate the part by — leave the snapshot alone rather
+        # than guess at the text's structure.
+        return text, sections
+    if old_len and text[len(text) - old_len :] == fresh:
+        return text, sections
+    base = text[: len(text) - old_len] if old_len else text
+    if old_len and base.endswith("\n\n"):
+        base = base[:-2]  # the separator that joined the working state on
+    if fresh:
+        text = f"{base}\n\n{fresh}" if base else fresh
+        secs.append({"label": _WORKING_STATE_LABEL, "chars": len(fresh)})
+    else:
+        text = base
+    return text, secs
+
+
 class KnowledgeMiddleware(AgentMiddleware):
     """Inject knowledge store context before each LLM call.
 
@@ -556,12 +620,23 @@ class KnowledgeMiddleware(AgentMiddleware):
         The projection is read off THIS request's run state — never off the
         shared instance — so concurrent turns each see only their own.
 
+        Its ``<working_state>`` part is the one exception to "composed once": once a
+        tool has run this turn it is re-read for every model call
+        (:func:`refresh_working_state`), so a task the agent just closed is not shown
+        to it as still open on the very next call.
+
         Stashes the projected text for PromptCaptureMiddleware (#3191).
         """
-        from graph.context_frame import context_frame_message, is_context_frame, stash_projected_context
-
         text, sections = turn_projection(getattr(request, "state", None))
         msgs = getattr(request, "messages", None) or []
+        if text and _tools_ran_this_turn(msgs):
+            text, sections = refresh_working_state(text, sections, getattr(request, "state", None))
+        return self._deliver(request, msgs, text, sections)
+
+    @staticmethod
+    def _deliver(request, msgs, text, sections):
+        from graph.context_frame import context_frame_message, is_context_frame, stash_projected_context
+
         cleaned = [m for m in msgs if not is_context_frame(m)]
         if text:
             cleaned.append(context_frame_message(text))
@@ -574,4 +649,14 @@ class KnowledgeMiddleware(AgentMiddleware):
         return handler(self._project_messages(request))
 
     async def awrap_model_call(self, request, handler):
-        return await handler(self._project_messages(request))
+        # The working-state refresh reads sqlite stores (tasks, goals, schedules) — keep
+        # it off the event loop, the same posture as the turn compose (abefore_agent).
+        text, sections = turn_projection(getattr(request, "state", None))
+        msgs = getattr(request, "messages", None) or []
+        if text and _tools_ran_this_turn(msgs):
+            import asyncio
+
+            text, sections = await asyncio.to_thread(
+                refresh_working_state, text, sections, getattr(request, "state", None)
+            )
+        return await handler(self._deliver(request, msgs, text, sections))
