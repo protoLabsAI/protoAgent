@@ -36,6 +36,7 @@ FIXTURES = REPO / "tests" / "fixtures" / "ats"
 GREENHOUSE = (FIXTURES / "greenhouse.html").as_uri()
 ASHBY = (FIXTURES / "ashby.html").as_uri()
 PHONE_COUNTRY = (FIXTURES / "greenhouse_phone_country.html").as_uri()
+PHONE_COUNTRY_ITI = (FIXTURES / "greenhouse_phone_country_iti.html").as_uri()
 
 # Load the plugin the way the host does, so its relative imports resolve (same shape as
 # tests/test_agent_browser_plugin.py).
@@ -450,6 +451,101 @@ async def test_iti_tel_without_its_own_label_does_not_borrow_country(browser):
     out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
     assert out.startswith('Selected "United States" in'), out
     assert "matches 2 fields" not in out
+    assert (await _form(browser))["Country"]["value"] == "United States"
+
+
+# ── intl-tel-input v23+: read back the country NAME from the button, not "+1" (#4032) ──
+# The live GitLab picker moved to the v23 `button.iti__selected-country` markup: on commit the
+# button shows only a flag + the "+1" dial code as VISIBLE text, with the country NAME in a title
+# (and the dropdown PORTALLED to a body-level `.iti--container`). browser_select must read the NAME
+# back — rooting on the owning `.iti` wrapper, never the portalled container — and browser_form_read
+# must report the NAME, never the bare dial code (shared by the US and Canada).
+
+
+async def test_iti_v23_select_by_label_reads_back_the_name(browser):
+    """r1: addressing the picker by the LABEL "Country" (borrowed from the `.iti` wrapper, as the
+    live widget is named) commits United States and reads the NAME back — `Selected "United States`,
+    never an `Error: … reads "+1"` mismatch — even though the button's visible text is only "+1"."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
+    assert "no options were found" not in out
+
+
+async def test_iti_v23_select_by_button_css_reads_back_the_name(browser):
+    """r1: addressing the same picker by a CSS selector for the selected-country BUTTON commits and
+    reads back the country NAME too."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    out = await browser["browser_select"].ainvoke(
+        {"field": "button.iti__selected-country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
+
+
+async def test_iti_v23_form_read_reports_the_name_not_the_dial_code(browser):
+    """r2: after committing United States, browser_form_read's row for the picker (label "Country",
+    kind combobox) has value "United States" — the NAME recovered from the button's title, NOT the
+    visible "+1". The sibling tel input keeps its own "Phone" label, so "Country" stays unambiguous."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+
+    fields = await _form(browser)
+    assert "Country" in fields, sorted(fields)
+    country = fields["Country"]
+    assert country["kind"] == "combobox"
+    assert country["value"] == "United States"
+    assert country["value"] != "+1"
+    # the national-number input keeps its own label — the country-list's name did not leak onto it
+    assert "Phone" in fields and fields["Phone"]["kind"] == "tel"
+
+
+async def test_iti_v23_repick_then_a_shared_dial_code_is_a_hard_mismatch(browser):
+    """r3: pick Canada, then pick United States — both resolve by the LABEL "Country" across re-picks
+    (the button never gains a label of its own) and read back their own NAME. Then force the NEXT
+    commit to stay Canada while choosing United States: the read-back is a hard mismatch whose "reads"
+    value is the committed country NAME ("Canada"), never the shared "+1"."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    first = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "Canada"})
+    assert first.startswith('Selected "Canada'), first
+
+    # re-picking by the same label still resolves (the button borrows "Country" every call)
+    again = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert again.startswith('Selected "United States'), again
+    assert (await _form(browser))["Country"]["value"] == "United States"
+
+    # the fixture hook: the next commit stays Canada regardless of which option is clicked
+    forced = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){document.getElementById('phone_iti')"
+        ".setAttribute('data-force-commit','Canada');return true;})()"})
+    assert forced == "true", forced
+
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith("Error:"), out
+    assert "does not match" in out
+    assert '"Canada"' in out               # the mismatch names the committed country, not "+1"
+    assert 'reads "+1"' not in out
+
+
+async def test_iti_v23_select_from_the_open_portalled_dropdown_resolves_the_wrapper(browser):
+    """r1 (wrong-root regression): open the picker so its dropdown is PORTALLED into the body-level
+    `.iti--container`, then address it by a CSS selector that lands INSIDE that container (its
+    country-list). browser_select must resolve the OWNING `.iti` wrapper (via the button's
+    aria-controls), commit, and read the NAME back from the real selected-country button — not the
+    portalled container, which holds no selected-country button and is removed on commit (which is
+    why the live read-back saw only "+1")."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    opened = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){document.getElementById('country_button').click();"
+        "return !!document.getElementById('iti_country_listbox')"
+        " && document.getElementById('country_button').getAttribute('aria-expanded')==='true';})()"})
+    assert opened == "true", opened
+
+    out = await browser["browser_select"].ainvoke(
+        {"field": "ul.iti__country-list", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
     assert (await _form(browser))["Country"]["value"] == "United States"
 
 
@@ -986,7 +1082,8 @@ async def test_ashby_required_resume_upload_and_radio_group(browser):
 
 def test_fixtures_are_self_contained_with_no_network_resources():
     comment = re.compile(r"<!--.*?-->", re.S)
-    for name in ("greenhouse.html", "ashby.html", "greenhouse_phone_country.html"):
+    for name in ("greenhouse.html", "ashby.html", "greenhouse_phone_country.html",
+                 "greenhouse_phone_country_iti.html"):
         body = comment.sub("", (FIXTURES / name).read_text(encoding="utf-8")).lower()
         for marker in ("http://", "https://", "<script src", "<link ", "<img ", "url("):
             assert marker not in body, f"{name} references an external/network resource: {marker!r}"
