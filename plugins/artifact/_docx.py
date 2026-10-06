@@ -11,7 +11,8 @@ anything else (a refusal, or a version saved before the preflight existed) keeps
 A .docx is a zip, so this reuses the slide preflight's bounded inflater (``_slides._inflate``):
 every entry's raw stream is actually inflated in chunks against a per-entry and whole-archive
 byte budget and a wall clock, independent of what the zip's directory claims, and the real size
-and CRC must match the declared ones. Embedded images are measured from their header bytes; the
+and CRC must match the declared ones. Every entry is sniffed as an image from its header bytes
+(not its name or folder — a renderer decodes whatever a relationship points at); the
 renderer decodes every image it shows, so one over the per-image or whole-document pixel budget
 refuses the preview (with a reason) rather than handing the browser a decompression bomb.
 
@@ -80,9 +81,11 @@ def preflight(data: bytes) -> dict:
             for i in infos:
                 size, head = _slides._inflate(data, i, _slides.MAX_TOTAL_BYTES - total, deadline, "document")
                 total += size
-                if _IMAGE_RE.match(i.filename):
+                # By content, not name: a renderer decodes an image wherever the document's
+                # relationships point, so a raster hidden under another name or folder counts too.
+                dims = _slides.image_dims(head)
+                if dims or _IMAGE_RE.match(i.filename):
                     images += 1
-                    dims = _slides.image_dims(head)
                     px = dims[0] * dims[1] if dims else 0
                     if px > MAX_IMAGE_PIXELS:
                         mp = MAX_IMAGE_PIXELS // 1_000_000

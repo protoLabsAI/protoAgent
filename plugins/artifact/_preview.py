@@ -48,6 +48,9 @@ def _extract_docx(path: Path) -> str:
     return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
 
+_SHEET_MARK = "### sheet: "  # splitSheets() in shell.js matches /^### sheet: (.*)$/
+
+
 def _extract_xlsx(path: Path) -> str:
     """Each sheet as real CSV (quoted where needed, so a comma inside a cell stays one cell),
     opened by a ``### sheet: <name>`` line — the panel renders one table per sheet, and the
@@ -61,14 +64,18 @@ def _extract_xlsx(path: Path) -> str:
     wb = load_workbook(str(path), read_only=True, data_only=True)
     out: list[str] = []
     for ws in wb.worksheets:
-        out.append(f"### sheet: {ws.title}")
+        out.append(f"{_SHEET_MARK}{ws.title}")
         buf = io.StringIO()
         w = csv.writer(buf, lineterminator="\n")
+        # A data row whose first cell starts like the marker is written fully quoted, so its line
+        # begins with a quote and can never be read back as a sheet boundary.
+        w_quoted = csv.writer(buf, lineterminator="\n", quoting=csv.QUOTE_ALL)
         for r, row in enumerate(ws.iter_rows(values_only=True)):
             if r >= 200:  # cap rows per sheet
                 w.writerow(["… more rows — download the file for all"])
                 break
-            w.writerow(["" if c is None else str(c) for c in (row or ())[:50]])
+            cells = ["" if c is None else str(c) for c in (row or ())[:50]]
+            (w_quoted if cells and cells[0].startswith(_SHEET_MARK) else w).writerow(cells)
         out.append(buf.getvalue().rstrip("\n"))
     wb.close()
     return "\n".join(out)

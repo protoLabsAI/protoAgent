@@ -57,7 +57,8 @@ def _zip(entries: dict[str, bytes]) -> bytes:
 def test_preflight_passes_a_real_document(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     v = art._docx.preflight(_real_docx(tmp_path))
-    assert v == {"render": True, "reason": "", "images": 0}
+    # python-docx's template carries docProps/thumbnail.jpeg — measured by content like any image
+    assert v == {"render": True, "reason": "", "images": 1}
 
 
 def test_preflight_counts_images_within_budget(monkeypatch, tmp_path):
@@ -131,7 +132,7 @@ def test_save_file_artifact_stamps_the_docx_verdict(monkeypatch, tmp_path):
     f.write_bytes(_real_docx(tmp_path))
     assert "Saved file artifact" in art.save_file_artifact.invoke({"path": str(f)})
     meta = _arts(art)[0]["versions"][0]["file"]
-    assert meta["docx"] == {"render": True, "reason": "", "images": 0}
+    assert meta["docx"] == {"render": True, "reason": "", "images": 1}  # the template's thumbnail
     assert "pdf" not in meta and "slides" not in meta
 
 
@@ -318,3 +319,27 @@ def test_a_dash_does_not_stop_a_column_reading_as_numbers(monkeypatch, tmp_path)
         + "console.log(JSON.stringify((t.html.match(/<th class=\"n\">/g)||[]).length));"
     )
     assert got == 2  # Str and AP
+
+
+def test_preflight_measures_images_by_content_not_name(monkeypatch, tmp_path):
+    """A raster hidden outside word/media/ or without an image extension is still measured."""
+    art = _load(monkeypatch, tmp_path)
+    data = _zip({"word/document.xml": b"<w:document/>", "customXml/blob.bin": _png(10_000, 10_000)})
+    v = art._docx.preflight(data)
+    assert v["render"] is False and "MP" in v["reason"]
+
+
+def test_a_cell_that_looks_like_a_sheet_marker_cannot_split_a_sheet(monkeypatch, tmp_path):
+    openpyxl = pytest.importorskip("openpyxl")
+    art = _load(monkeypatch, tmp_path)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Real"
+    ws.append(["### sheet: Fake"])
+    ws.append(["after"])
+    p = tmp_path / "trap.xlsx"
+    wb.save(str(p))
+    preview = art._preview._extract_xlsx(p)
+    got = _node(_js_function(_js(art), "splitSheets") + "console.log(JSON.stringify(splitSheets(" + json.dumps(preview) + ")));")
+    assert [s["name"] for s in got] == ["Real"]
+    assert got[0]["csv"].splitlines()[0] == '"### sheet: Fake"'

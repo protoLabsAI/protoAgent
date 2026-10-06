@@ -768,12 +768,11 @@
       var tb=dsvTable(rows, truncated);
       body=tb.html; pvl=tb.label;
     } else if(pk==="sheets"){
-      var sheets=splitSheets(code), parts=[], total=0;
+      var sheets=splitSheets(code), parts=[];
       sheets.forEach(function(sh){
         var rows=parseDsv(sh.csv, ",");
         if(truncated && sh===sheets[sheets.length-1] && rows.length>1) rows=rows.slice(0,-1);
         var tb=dsvTable(rows, truncated && sh===sheets[sheets.length-1]);
-        total+=Math.max(0, rows.length-1);
         parts.push('<div class="sh">'+esc(sh.name)+' <span>'+esc(tb.label)+'</span></div>'+tb.html);
       });
       body=parts.length ? '<div class="sheets">'+parts.join("")+'</div>' : '<pre class="pv">'+esc(code)+'</pre>';
