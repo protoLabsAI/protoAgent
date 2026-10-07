@@ -18,7 +18,11 @@
   <a href="https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml"><img src="https://github.com/protoLabsAI/protoAgent/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
 </p>
 
-<!-- HERO: lane A clip — agent delegates to Claude Code over ACP, streams its work, tests pass -->
+<p align="center">
+  <img src="docs/public/readme/hero-code-pane.gif" alt="protoAgent console: a chat tab sends a task to Claude Code, which plans, edits calc.py and test_calc.py, and runs pytest (3 passed) while the Diff pane beside it fills in with the changes" width="800">
+</p>
+
+<p align="center"><em>protoAgent hands a coding task to Claude Code. The diff pane fills in as the files change, and the tests pass.</em></p>
 
 ## Get it running
 
@@ -49,7 +53,7 @@ archetype. The [first-agent tutorial](./docs/tutorials/first-agent.md) walks eve
 
 | Your agent drives Claude Code / Codex | An autonomous dev team | A private desktop agent |
 | --- | --- | --- |
-| <!-- TILE: lane A --> | <!-- TILE: lane B --> | <!-- TILE: lane C --> |
+| <a href="docs/public/readme/hero-code-pane.gif"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <!-- TILE: lane B --> | <img src="docs/public/readme/install-plugin.gif" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
 | `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
 
 If protoAgent saves you a step, a ⭐ helps other people find it.
