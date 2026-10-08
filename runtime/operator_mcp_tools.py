@@ -146,6 +146,10 @@ def _exposed_tools(config, allow: set[str], *, knowledge_store, scheduler, inbox
     # graph.agent — get_all_tools doesn't filter it — so the bus must filter here too or a
     # disabled tool stays callable over MCP even though it never binds to the graph (#3248).
     tools = drop_disabled_tools(tools)
+    # Subagent-only tools (ADR 0117) are kept off the lead; over this bus the caller IS a
+    # lead (a foreign client, or the ACP brain), so they are never served, even by name.
+    held = {str(n) for n in (getattr(config, "tools_subagent_only", None) or [])}
+    tools = [t for t in tools if getattr(t, "name", None) not in held]
     # "*" = expose everything (minus a small danger set you must opt into by name) — so you
     # don't have to enumerate every tool. List specific names instead for tight control.
     star = "*" in allow

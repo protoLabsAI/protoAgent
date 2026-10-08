@@ -101,7 +101,14 @@ async def _operator_runtime_status():
     try:
         from graph.workspaces import manager as _ws
 
-        bound = [getattr(t, "name", "") for t in (getattr(STATE.graph, "bound_tools", None) or [])]
+        # Subagent-only tools (ADR 0117) back an action too: the lead delegates it.
+        bound = [
+            getattr(t, "name", "")
+            for t in [
+                *(getattr(STATE.graph, "bound_tools", None) or []),
+                *(getattr(STATE.graph, "subagent_only_tools", None) or []),
+            ]
+        ]
         contract = await asyncio.to_thread(_ws.capability_contract_warning, bound)
         if contract:
             warnings.append(contract)
@@ -303,7 +310,7 @@ def _operator_tools_list():
     # tools by the server that serves them, mirroring the plugin grouping.
     mcp_servers = [m.get("name") for m in (getattr(STATE, "mcp_meta", None) or []) if m.get("name")]
 
-    def add(tool, source=None, enabled=True):
+    def add(tool, source=None, enabled=True, subagent_only=False):
         name = getattr(tool, "name", None)
         if not name or name in seen or name in hidden:  # hidden → never surfaced (#2172)
             return
@@ -317,13 +324,18 @@ def _operator_tools_list():
                 "source": src,
                 "category": _tool_category(name, src, plugin_owner.get(name), mcp_servers),
                 "enabled": enabled,
+                **({"subagent_only": True} if subagent_only else {}),
             }
         )
 
     def result():
         # ``count`` stays the WIRED count (what the model can call) — the kicker's
         # "N wired tools" contract predates the disabled rows.
-        return {"tools": out, "count": sum(1 for t in out if t["enabled"]), "disabled": denylist}
+        return {
+            "tools": out,
+            "count": sum(1 for t in out if t["enabled"] and not t.get("subagent_only")),
+            "disabled": denylist,
+        }
 
     bound = getattr(STATE.graph, "bound_tools", None)
     if bound is not None:
@@ -331,6 +343,10 @@ def _operator_tools_list():
             add(t)
         for t in getattr(STATE.graph, "disabled_tools", None) or []:
             add(t, enabled=False)
+        # Held for subagents (ADR 0117): live, but not the lead's — flagged, and outside
+        # `count`, which stays what the lead model can call.
+        for t in getattr(STATE.graph, "subagent_only_tools", None) or []:
+            add(t, subagent_only=True)
         return result()
 
     # Pre-setup fallback (no compiled graph yet): re-derive the shared base.

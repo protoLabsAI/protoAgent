@@ -325,6 +325,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "tools_disabled": [],
     "tools_self_config_enabled": False,
     "tools_hidden": [],
+    "tools_subagent_only": [],
     "settings_hidden": [],
     "top_k": -1,
     "top_p": None,

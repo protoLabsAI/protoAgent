@@ -195,3 +195,24 @@ def test_discovery_failure_fails_closed_for_plugin_sections(monkeypatch, applied
     assert _call({"campaign.ffmpeg_path": "/x"}).startswith("Refused:")
     assert applied == []
     assert "Applied:" in _call({"routing.aux_model": "claude-opus-4-6"})
+
+
+# ── a subagent's tool allowlist is a permission (ADR 0117) ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"subagents.researcher.tools": ["media_grab"]},
+        {"subagents": {"researcher": {"tools": ["media_grab"]}}},  # nested can't smuggle it
+    ],
+)
+def test_refuses_widening_a_subagent_allowlist(updates, applied, no_markers):
+    out = _call(updates)
+    assert out.startswith("Refused:") and "allowlist" in out, out
+    assert applied == []
+
+
+def test_a_subagents_model_and_turns_still_apply(applied, no_markers):
+    assert "Applied:" in _call({"subagents.researcher.max_turns": 12})
+    assert len(applied) == 1

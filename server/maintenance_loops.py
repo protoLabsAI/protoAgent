@@ -588,7 +588,9 @@ def _audit_persona_tools(graph, *, trigger: str) -> None:
         from graph.soul_audit import audit_untooled_actions
 
         soul = read_soul()
-        names = [getattr(t, "name", str(t)) for t in getattr(graph, "bound_tools", None) or ()]
+        # Subagent-only tools (ADR 0117) back an action too: the lead delegates it.
+        held = getattr(graph, "subagent_only_tools", None) or ()
+        names = [getattr(t, "name", str(t)) for t in [*(getattr(graph, "bound_tools", None) or ()), *held]]
         if not soul or not names:
             return
         findings = audit_untooled_actions(soul, names)

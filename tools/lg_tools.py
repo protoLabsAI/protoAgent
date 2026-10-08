@@ -699,9 +699,13 @@ def _invocation_bound_tool_names() -> frozenset[str] | None:
         bound = getattr(STATE.graph, "bound_tools", None)
         if bound is None:
             return None
+        # Subagent-only tools (ADR 0117) are not the lead's, but the subagent that owns them
+        # loads its skills through this same graph state, so they are not PROVEN absent for
+        # this caller: never annotate them as unavailable.
+        held = getattr(STATE.graph, "subagent_only_tools", None) or []
         # ``bound_tools`` is a list of tool OBJECTS (each with ``.name``); mirror the
         # reader in ``server/agent_init`` so a stray non-tool entry can't raise here.
-        return frozenset(getattr(t, "name", None) or str(t) for t in bound)
+        return frozenset(getattr(t, "name", None) or str(t) for t in [*bound, *held])
     except Exception:  # noqa: BLE001 — advisory annotation must never break a skill load
         return None
 
@@ -1009,16 +1013,23 @@ def _tool_summary(t) -> str:
     return (first[:119].rstrip() + "…") if len(first) > 120 else first
 
 
-def build_search_tools_tool(all_tools, keep_names):
+def build_search_tools_tool(all_tools, keep_names, held_names=()):
     """Build the ``search_tools`` meta-tool over the *deferred* tools.
 
     It keyword-matches the deferred tools (everything not in ``keep_names``) by
     name + description and returns matches as a backticked bulleted list. The
     ``ToolDeferralMiddleware`` reads those backticked names from the result and
     binds the matched tools on subsequent turns (progressive disclosure).
+
+    ``held_names`` are ``tools.subagent_only`` tools (ADR 0117): listed only to a call
+    running under a turn fence that names them (a background subagent on the lead graph),
+    never to the lead, so deferral can still load them for the subagent that owns them.
     """
+    from graph.fence_scope import current_fence
+
     keep = set(keep_names)
-    catalog = [(t.name, _tool_summary(t)) for t in all_tools if getattr(t, "name", None) and t.name not in keep]
+    held = set(held_names)
+    full_catalog = [(t.name, _tool_summary(t)) for t in all_tools if getattr(t, "name", None) and t.name not in keep]
 
     def _render(pairs, header) -> str:
         lines = [header]
@@ -1037,6 +1048,8 @@ def build_search_tools_tool(all_tools, keep_names):
         on your next step. Leave ``query`` empty to list every available tool.
         Returns a bulleted list of ``name — purpose``.
         """
+        fence = set(current_fence())
+        catalog = [(n, s) for n, s in full_catalog if n not in held or n in fence]
         if not catalog:
             return "No additional tools are available beyond the ones already shown."
         terms = (query or "").lower().split()
