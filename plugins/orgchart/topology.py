@@ -150,6 +150,15 @@ def _norm(url: str) -> str:
     return u.rstrip("/")
 
 
+def _is_loopback(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    try:
+        return (urlsplit(url).hostname or "") in ("127.0.0.1", "localhost", "::1")
+    except ValueError:
+        return False
+
+
 def _hub_proxy_rid(url: str) -> str:
     """The remote id when ``url`` is this box's hub proxy for a remote member —
     ``http://127.0.0.1:<hub>/agents/<rid>`` (normalized), the URL "Add as delegate" writes
@@ -157,13 +166,9 @@ def _hub_proxy_rid(url: str) -> str:
     it proxies are the same agent, so the crawl must draw them as one node."""
     from urllib.parse import urlsplit
 
-    try:
-        u = urlsplit(url)
-    except ValueError:
+    if not _is_loopback(url):
         return ""
-    if (u.hostname or "") not in ("127.0.0.1", "localhost", "::1"):
-        return ""
-    parts = (u.path or "").strip("/").split("/")
+    parts = (urlsplit(url).path or "").strip("/").split("/")
     return parts[1] if len(parts) == 2 and parts[0] == "agents" and parts[1] else ""
 
 
@@ -452,37 +457,47 @@ async def _build(cfg: dict) -> dict:
     health = _health()  # delegate NAME -> {ok, latency_ms, checked_at}
 
     seed = _targets(_roster(), owner=self_base, cfg=cfg)
+    remotes = _fleet_remotes() if cfg.get("include_fleet_members", DEFAULTS["include_fleet_members"]) else []
+    # A delegate that reaches a member through the hub proxy IS that member: re-key it to
+    # the member's real URL so it stays ONE node with a delegate edge, crawled directly
+    # with the member's token, not a proxy node plus a `member` twin. Applied to every
+    # layer, since a local member's own "Add as delegate" entries carry the same URL.
+    member_url = {str(r.get("id") or ""): _norm(str(r.get("url"))) for r in remotes}
+    member_url.pop("", None)
+
+    def unproxy(targets: list[dict]) -> list[dict]:
+        for t in targets:
+            b = member_url.get(_hub_proxy_rid(t["id"])) if t["kind"] == "agent" else None
+            if b:
+                t.update(id=b, url=b, token="", proxied=True)  # the member's token is added below
+        return targets
+
+    unproxy(seed)
     # Health is name-keyed, so it may only be applied to OUR OWN entries — a peer's
-    # `coder` is a different process from ours and must never inherit its badge.
-    name_of = {t["id"]: t["name"] for t in seed}
+    # `coder` is a different process from ours and must never inherit its badge. A direct
+    # delegate to a member outranks a proxied one to the same member.
+    name_of = {t["id"]: t["name"] for t in seed if not t.get("proxied")}
+    for t in seed:
+        name_of.setdefault(t["id"], t["name"])
     tokens = {t["id"]: t["token"] for t in seed if t["token"]}
-    if cfg.get("include_fleet_members", DEFAULTS["include_fleet_members"]):
-        for rec in _fleet_remotes():
-            b = _norm(str(rec.get("url")))
-            # A delegate that reaches this member through the hub proxy is the member:
-            # re-key it to the member's real URL (and token) so it stays ONE node with a
-            # delegate edge, crawled directly — not a proxy node plus a `member` twin.
-            for t in seed:
-                if b and t["kind"] == "agent" and _hub_proxy_rid(t["id"]) == str(rec.get("id") or ""):
-                    name_of[b] = name_of.pop(t["id"], t["name"])
-                    tokens.pop(t["id"], None)
-                    t.update(id=b, url=b, token=str(rec.get("token") or ""))
-            if b and b != self_base and b not in {t["id"] for t in seed}:
-                seed.append(
-                    {
-                        "name": rec.get("name") or str(rec.get("id") or ""),
-                        "id": b,
-                        "kind": "agent",
-                        "url": b,
-                        "desc": "fleet member",
-                        "token": str(rec.get("token") or ""),
-                        "via": "member",
-                        "scope": None,
-                        "health": None,
-                    }
-                )
-            if rec.get("token"):
-                tokens.setdefault(b, str(rec["token"]))
+    for rec in remotes:
+        b = _norm(str(rec.get("url")))
+        if b and b != self_base and b not in {t["id"] for t in seed}:
+            seed.append(
+                {
+                    "name": rec.get("name") or str(rec.get("id") or ""),
+                    "id": b,
+                    "kind": "agent",
+                    "url": b,
+                    "desc": "fleet member",
+                    "token": str(rec.get("token") or ""),
+                    "via": "member",
+                    "scope": None,
+                    "health": None,
+                }
+            )
+        if rec.get("token"):
+            tokens.setdefault(b, str(rec["token"]))
 
     nodes: dict[str, dict] = {
         self_base: {"id": self_base, "name": self_name, "role": self_role, "up": True, "version": "", "kind": "self", "url": self_base}
@@ -572,7 +587,8 @@ async def _build(cfg: dict) -> dict:
                 *[_peer_delegates(client, b, tokens[b]) for b in crawlable], return_exceptions=True
             )
             frontier = [
-                (b, _targets(pl, owner=b, cfg=cfg))
+                # A peer on another box means ITS loopback by 127.0.0.1, not ours.
+                (b, unproxy(_targets(pl, owner=b, cfg=cfg)) if _is_loopback(b) else _targets(pl, owner=b, cfg=cfg))
                 for b, pl in zip(crawlable, peer_lists)
                 if isinstance(pl, list) and pl
             ]

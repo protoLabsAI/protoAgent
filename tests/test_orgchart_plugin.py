@@ -444,7 +444,67 @@ def test_delegate_through_the_hub_proxy_is_the_fleet_member_not_a_twin(monkeypat
     assert (ALPHA, GAMMA, "delegate") in edges  # crawled with the member's token
 
 
+def test_a_direct_delegate_outranks_a_proxied_one_for_the_same_members_health(monkeypatch):
+    calls: list[str] = []
+    _wire(
+        monkeypatch,
+        calls,
+        # the proxied entry FIRST, so roster order can't be what picks the winner
+        roster=[
+            {"type": "a2a", "name": "alpha-proxy", "url": "http://127.0.0.1:7870/agents/alpha-b8bb"},
+            {"type": "a2a", "name": "alpha-direct", "url": ALPHA, "auth": {"token": "tok-alpha"}},
+        ],
+        health={
+            "alpha-proxy": {"ok": False, "latency_ms": 999, "error": "x"},
+            "alpha-direct": {"ok": True, "latency_ms": 1},
+        },
+        remotes=[{"id": "alpha-b8bb", "name": "alpha", "url": ALPHA, "token": "tok-alpha"}],
+    )
+    data = asyncio.run(topo.get_topology({}))
+    alpha = [n for n in data["nodes"] if n["id"] == ALPHA]
+    assert len(alpha) == 1 and alpha[0]["latency_ms"] == 1 and "error" not in alpha[0]
+
+
+def _wire_local_peer(monkeypatch, peer: str, peer_delegates: list[dict]):
+    """This agent delegates to one tokened peer at ``peer``, which reports
+    ``peer_delegates``; alpha is a paired remote of this hub."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.startswith(peer) and request.url.path == "/api/delegates":
+            return httpx.Response(200, json={"delegates": peer_delegates})
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json={"name": request.url.host})
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(topo, "_roster", lambda: [{"type": "a2a", "name": "peer", "url": peer, "auth": {"token": "t"}}])
+    monkeypatch.setattr(topo, "_health", lambda: {})
+    monkeypatch.setattr(
+        topo, "_fleet_remotes", lambda: [{"id": "alpha-b8bb", "name": "alpha", "url": ALPHA, "token": "tok-alpha"}]
+    )
+    monkeypatch.setattr(topo, "_self_identity", lambda: ("hub", "http://127.0.0.1:7870", "org head"))
+
+
+def test_a_local_peers_proxied_delegate_is_the_member_too(monkeypatch):
+    peer = "http://127.0.0.1:7881"  # a local fleet member on the hub's box
+    _wire_local_peer(monkeypatch, peer, [{"type": "a2a", "name": "alpha", "url": "http://127.0.0.1:7870/agents/alpha-b8bb/a2a"}])
+    data = asyncio.run(topo.get_topology({}))
+    ids = {n["id"] for n in data["nodes"]}
+    assert "http://127.0.0.1:7870/agents/alpha-b8bb" not in ids
+    assert (peer, ALPHA) in {(e["from"], e["to"]) for e in data["edges"]}
+
+
+def test_a_remote_peers_loopback_url_is_its_own_box_not_ours(monkeypatch):
+    peer = "http://peer:7870"  # another machine: its 127.0.0.1 is itself
+    proxied = "http://127.0.0.1:7870/agents/alpha-b8bb"
+    _wire_local_peer(monkeypatch, peer, [{"type": "a2a", "name": "x", "url": proxied + "/a2a"}])
+    data = asyncio.run(topo.get_topology({}))
+    assert (peer, proxied) in {(e["from"], e["to"]) for e in data["edges"]}
+
+
 def test_hub_proxy_rid_only_matches_loopback_agent_paths():
+    assert topo._hub_proxy_rid("http://[::1]:7870/agents/v") == "v"
     assert topo._hub_proxy_rid("http://127.0.0.1:7870/agents/vera-b8bb") == "vera-b8bb"
     assert topo._hub_proxy_rid("http://localhost:7870/agents/x") == "x"
     assert topo._hub_proxy_rid("http://100.64.1.2:7870/agents/x") == ""
