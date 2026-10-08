@@ -854,6 +854,14 @@ class LangGraphConfig:
     # "not available, and not offered".
     tools_hidden: list[str] = field(default_factory=list)
 
+    # Subagent-only tools (config ``tools.subagent_only``, ADR 0117). Named tools are never
+    # bound to the LEAD agent (nor exposed over the operator MCP, nor reachable through a
+    # late tool such as execute_code's bridge), but stay resolvable by any subagent whose
+    # allowlist names them. Contains a domain's tools and their schemas inside the subagent
+    # that owns it, so the lead routes there via ``task`` instead of carrying them every turn.
+    # Not a deny: ``tools.disabled`` still removes a tool from subagents too.
+    tools_subagent_only: list[str] = field(default_factory=list)
+
     # Settings HIDE list (config ``settings.hidden``, #2172) — the settings half of
     # ``tools.hidden``. Entries are dotted field keys ("goal.max_iterations") or whole
     # group prefixes ("goal", including plugin groups like "careercoach"). A hidden
@@ -1983,6 +1991,7 @@ class LangGraphConfig:
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
+            tools_subagent_only=list(data.get("tools", {}).get("subagent_only", []) or []),
             settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),

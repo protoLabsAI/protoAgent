@@ -135,6 +135,7 @@ def _build_middleware(
     extra_middleware=None,
     stable_sections=None,
     bound_tool_names: frozenset[str] | None = None,
+    subagent_only: frozenset[str] = frozenset(),
 ):
     middleware = []
 
@@ -276,6 +277,12 @@ def _build_middleware(
     from graph.middleware.subagent_fence import SubagentFenceMiddleware
 
     middleware.append(SubagentFenceMiddleware())
+    # Subagent-only tools (ADR 0117): hidden from and blocked for the lead's unfenced
+    # passes; a fenced (background subagent) pass is left to the fence above.
+    if subagent_only:
+        from graph.middleware.subagent_only import SubagentOnlyMiddleware
+
+        middleware.append(SubagentOnlyMiddleware(subagent_only))
 
     # Multimodal tool results (#1930) — a tool that opts in (via the
     # graph.multimodal sentinel envelope) can return an image the vision model
@@ -1241,6 +1248,40 @@ async def run_manual_subagent_batch(
     return "\n\n".join(parts)
 
 
+def split_subagent_only(tools: list, config, *, resolvable: frozenset[str] | None = None) -> tuple[list, list]:
+    """``(lead, held)`` — partition ``tools`` by config ``tools.subagent_only`` (ADR 0117).
+
+    Logs the configured names nothing can use: ones no registered subagent allowlists, and
+    (given ``resolvable``, the in-graph ``task`` snapshot) ones an in-graph subagent can't
+    resolve because they are assembled after that snapshot (filesystem and late tools) —
+    only a background subagent, which runs the lead graph under its fence, reaches those."""
+    import logging
+
+    names = {str(n) for n in (getattr(config, "tools_subagent_only", None) or [])}
+    if not names:
+        return list(tools), []
+    lead = [t for t in tools if getattr(t, "name", None) not in names]
+    held = [t for t in tools if getattr(t, "name", None) in names]
+    log = logging.getLogger(__name__)
+    allowlisted = {n for sub in SUBAGENT_REGISTRY.values() for n in (getattr(sub, "tools", None) or [])}
+    orphaned = sorted(t.name for t in held if t.name not in allowlisted)
+    if orphaned:
+        log.warning(
+            "[tools] subagent_only %s: no subagent allowlists them, so nothing can call them. "
+            "Add them to a subagent's tools, or take them out of tools.subagent_only.",
+            orphaned,
+        )
+    if resolvable is not None:
+        late = sorted(t.name for t in held if t.name not in resolvable and t.name not in orphaned)
+        if late:
+            log.warning(
+                "[tools] subagent_only %s are assembled after subagents resolve their tools "
+                "(filesystem/late tools): an in-graph `task` can't use them, only a background one.",
+                late,
+            )
+    return lead, held
+
+
 def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
@@ -1689,6 +1730,8 @@ def create_agent_graph(
     # subagent via an allowlist either.
     all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
+    # What an in-graph `task` subagent can resolve: the snapshot _build_task_tools takes.
+    task_resolvable = frozenset(t.name for t in all_tools)
     if include_subagents:
         all_tools.extend(
             _build_task_tools(
@@ -1717,6 +1760,17 @@ def create_agent_graph(
     # inside get_all_tools, which fs tools bypass).
     all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
+    # Subagent-only tools (config ``tools.subagent_only``, ADR 0117). ``_build_task_tools``
+    # above already snapshotted its tool map, so an in-graph subagent allowlisting one
+    # resolves it. They stay in ``all_tools`` (the ToolNode) because a background subagent
+    # runs THIS graph under its fence; the lead is kept off them by SubagentOnlyMiddleware.
+    # A proxying late tool (execute_code's bridge) only ever sees the lead's view, and
+    # search_tools lists a held tool only to a pass whose fence names it.
+    held_names = {str(n) for n in (getattr(config, "tools_subagent_only", None) or [])}
+
+    def lead_view(tools: list) -> list:
+        return [t for t in tools if getattr(t, "name", None) not in held_names]
+
     # Plugin-contributed late tools (the late-tools seam) — factories that need the
     # FULLY assembled (and now denylist-final) toolset: core + subagent + plugin +
     # MCP tools. Built here, before the deferred meta-tool, so a late tool can wrap
@@ -1725,7 +1779,7 @@ def create_agent_graph(
     # raiser is skipped.
     for _late_factory in late_tool_factories or ():
         try:
-            _produced = _late_factory(all_tools, config)
+            _produced = _late_factory(lead_view(all_tools), config)
         except Exception:
             import logging
 
@@ -1748,7 +1802,7 @@ def create_agent_graph(
         from tools.lg_tools import build_search_tools_tool, resolve_deferred_keep
 
         keep = resolve_deferred_keep(config.tools_deferred_keep)
-        all_tools.append(build_search_tools_tool(all_tools, keep))
+        all_tools.append(build_search_tools_tool(all_tools, keep, held_names=held_names))
         # The meta-tool is denylistable like everything else — without this pass,
         # ``tools.disabled: [search_tools]`` silently re-binds it (it's appended after
         # the final filter above), which a Tools-tab row toggle would surface as a
@@ -1764,7 +1818,9 @@ def create_agent_graph(
     # can now do — the ADR 0096 spine ends at *use*, and nothing told it.
     from graph.tool_delta import record_toolset
 
-    record_toolset(t.name for t in all_tools)
+    # Split over the FINAL set, so a held late tool or search_tools is covered too.
+    lead_tools, subagent_only_tools = split_subagent_only(all_tools, config, resolvable=task_resolvable)
+    record_toolset(t.name for t in lead_tools)
 
     # Composed as labeled parts (#2243 P2) so PromptCapture can persist the
     # stable prefix's section boundaries with the blob it hashes — the prompt
@@ -1775,7 +1831,7 @@ def create_agent_graph(
     prompt_parts = build_system_prompt_parts(
         include_subagents=include_subagents,
         projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
-        bound_tool_names=frozenset(t.name for t in all_tools),
+        bound_tool_names=frozenset(t.name for t in lead_tools),
     )
     system_prompt = "\n\n".join(text for _label, text in prompt_parts)
 
@@ -1784,7 +1840,9 @@ def create_agent_graph(
         knowledge_store,
         skills_index=skills_index,
         extra_middleware=extra_middleware,
+        subagent_only=frozenset(t.name for t in subagent_only_tools),
         stable_sections=[{"label": label, "chars": len(text)} for label, text in prompt_parts],
+        # Held tools aren't missing for a skill: the lead delegates them (ADR 0117 D6).
         bound_tool_names=frozenset(t.name for t in all_tools),
     )
 
@@ -1808,10 +1866,13 @@ def create_agent_graph(
     # other consumer read exactly what's BOUND, instead of re-deriving the list
     # and drifting from it (set_goal advertised-but-unbound bd-2aa; task /
     # filesystem / execute_code under-reported bd-67j).
-    agent.bound_tools = list(all_tools)
+    agent.bound_tools = list(lead_tools)
     # The denylist's complement — what ``tools.disabled`` dropped, kept as tool objects
     # so /api/tools can list them (name/description/category) as toggle-off rows.
     agent.disabled_tools = list(disabled_tools)
+    # Live tools held for subagents only (ADR 0117) — /api/tools lists them, flagged, so a
+    # tool kept off the lead doesn't vanish from the console as if it were uninstalled.
+    agent.subagent_only_tools = list(subagent_only_tools)
     # #2388 P3 (true next-call preview): the prompt-preview route needs (a) the exact
     # labeled stable parts THIS graph was built with, and (b) the live KnowledgeMiddleware
     # so it can run compose_context(record=False) speculatively. Stamped like bound_tools —

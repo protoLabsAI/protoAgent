@@ -308,6 +308,7 @@ execute_code:
 tools:
   disabled: []              # tool names to DROP (the operator's denylist)
   hidden: []                # tool names to REMOVE ENTIRELY — denied AND never shown in the console
+  subagent_only: []         # tool names kept OFF the lead — only subagents that allowlist them get them
   deferred:
     enabled: false          # OFF by default — the full tool set is shown
     keep: []                # always-on tool names; empty = built-in base
@@ -317,6 +318,7 @@ tools:
 |---|---|---|
 | `disabled` | `[]` | Tool names to **drop** from the agent at graph build — covers the **fully assembled** set: core, plugin, MCP, the delegation tools, and the filesystem tools (so `disabled: [run_command]` removes shell access for this agent). Live-reloadable — in the console, **every row at Settings ▸ Capabilities ▸ Tools carries an on/off switch** that edits this list (a toggled-off tool stays listed, dimmed, so it can be re-enabled). Plugins still ADD tools on top (see [Plugins](/guides/plugins)). ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)) |
 | `hidden` | `[]` | A **hard superset of `disabled`** (#2172, [ADR 0071](../adr/0071-plugin-permissions-trust-model.md)): a hidden tool is denied at the graph like a disabled one, **and dropped from the console's tool inventory entirely** — it never renders as a toggle, so it can't be re-enabled from the UI. A setup-time trust control for restricted consoles and archetypes: the config file is the boundary, the UI is presentation. `disabled` = "off but visible"; `hidden` = "not available, and not offered". |
+| `subagent_only` | `[]` | Tool names **kept off the lead agent** but still available to any subagent whose `tools` allowlist names them ([ADR 0117](../adr/0117-subagent-only-tools.md)). The lead model is never offered them and a lead call to one is blocked, so it reaches them only by delegating with `task`: the domain's tools, their schemas and the context they generate stay inside the subagent that owns it. Background subagents get them too. They are kept out of `search_tools`, execute_code's bridge and the operator MCP. `disabled` still wins. Graph build logs a name no subagent allowlists, and filesystem or late tools, which only a background subagent can reach. The console's Tools list marks them "Subagents only". |
 | `deferred.enabled` | `false` | Withhold most tool schemas; expose them via `search_tools`. |
 | `deferred.keep` | `[]` | Tool names always shown. Empty → built-in base (keyless core + `task`/`task_batch`/`run_workflow`/`save_workflow` + `search_tools`). `search_tools` is always kept regardless. |
 

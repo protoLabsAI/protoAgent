@@ -800,6 +800,9 @@ export type ToolInfo = {
   source: "core" | "plugin" | "mcp";
   category?: string;
   enabled: boolean;
+  /** Held for subagents (`tools.subagent_only`, ADR 0117): live, but not the lead's, and
+   *  outside the response's `count`. */
+  subagent_only?: boolean;
 };
 
 export type ToolCall = {

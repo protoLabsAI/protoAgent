@@ -943,6 +943,10 @@
           "title": "0116 — A local-first data analyst: DuckDB over files in place, charts as Vega-Lite specs, and a plugin-service call seam"
         },
         {
+          "path": "adr/0117-subagent-only-tools.md",
+          "title": "0117 — Subagent-only tools: a domain's tools live in the subagent that owns it"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

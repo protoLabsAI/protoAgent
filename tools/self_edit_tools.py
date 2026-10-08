@@ -536,6 +536,15 @@ def _config_write_refusal(updates: dict) -> str | None:
             f"you, the executables that get spawned, operator credentials) — only your operator can "
             f"change them, from Settings. Everything else (models, routing, plugin behavior) is yours."
         )
+    # A subagent's tool allowlist is a permission, not a setting: widening it would hand a
+    # subagent (and the lead, through `task`) tools the operator held back, including the
+    # ``tools.subagent_only`` set (ADR 0117). Model / max_turns stay writable.
+    allowlists = sorted({p for p in paths if p.split(".", 1)[0] == "subagents" and "tools" in p.split(".")[2:3]})
+    if allowlists:
+        return (
+            f"Refused: {', '.join(allowlists)} is a subagent's tool allowlist, which decides what it "
+            f"may do — only your operator can change it. A subagent's model and max_turns are yours."
+        )
     executable = {p for p in paths if p.endswith(".<too-deep>") or _names_a_program(p)}
 
     # Layer 3, the manifest marker. Only a plugin section can carry one, so a pure core

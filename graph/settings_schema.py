@@ -1118,6 +1118,17 @@ FIELDS: list[Field] = [
         "and delegation tools. Applies on save (the graph rebuilds).",
     ),
     Field(
+        "tools.subagent_only",
+        "tools_subagent_only",
+        "Subagent-only tools",
+        "string_list",
+        "Tools",
+        "Tool names kept off the lead agent but still available to any subagent whose "
+        "allowlist names them — one per line. The lead reaches them only by delegating with "
+        "`task`, so a domain's tools stay inside the subagent that owns it. Applies on save "
+        "(the graph rebuilds).",
+    ),
+    Field(
         "tools.fleet_diagnostics.enabled",
         "tools_fleet_diagnostics_enabled",
         "Expose fleet diagnostics to the model",

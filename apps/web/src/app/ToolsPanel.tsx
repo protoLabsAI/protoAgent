@@ -83,7 +83,8 @@ function ToolsBody() {
         old && {
           ...old,
           tools: old.tools.map((t) => (t.name === name ? { ...t, enabled } : t)),
-          count: old.count + (enabled ? 1 : -1),
+          // A subagent-only row was never in `count` (the lead's wired tools).
+          count: old.tools.some((t) => t.name === name && t.subagent_only) ? old.count : old.count + (enabled ? 1 : -1),
           disabled: next,
         });
       return { key, prev };
@@ -145,12 +146,13 @@ function ToolsBody() {
     return a.localeCompare(b);
   });
 
-  const off = data.tools.length - data.count;
+  const off = data.tools.filter((t) => !t.enabled).length;
+  const held = data.tools.filter((t) => t.enabled && t.subagent_only).length;
   return (
     <>
       <PanelHeader
         title="Tools"
-        kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
+        kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""}${held ? ` · ${held} subagent-only` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
         {/* Managed Python runtime (ADR 0094) — only renders on a frozen desktop build with
@@ -232,6 +234,7 @@ function ToolsBody() {
                         <div className="tools-row-main">
                           <code className="tools-name">{t.name}</code>
                           {t.description ? <span className="tools-desc">{t.description}</span> : null}
+                          {t.subagent_only ? <span className="tools-desc">Subagents only</span> : null}
                         </div>
                         <Switch
                           checked={t.enabled}
