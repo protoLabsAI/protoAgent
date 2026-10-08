@@ -34,6 +34,37 @@ from runtime.session_ids import SessionId, require_session_id, session_id_proble
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
+
+# Per-session delete locks (see _api_delete_session). An entry lives only while a delete of
+# that session is running or queued, so the map never grows with deleted chats.
+_DELETE_LOCKS: dict[str, tuple[asyncio.Lock, int]] = {}
+
+
+class _delete_lock:
+    """``async with _delete_lock(sid)`` serializes deletes of one chat session."""
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+
+    async def __aenter__(self):
+        lock, users = _DELETE_LOCKS.get(self.session_id) or (asyncio.Lock(), 0)
+        _DELETE_LOCKS[self.session_id] = (lock, users + 1)
+        try:
+            await lock.acquire()
+        except BaseException:  # cancelled while queued (client gone): give the slot back
+            self._leave()
+            raise
+
+    async def __aexit__(self, *exc):
+        _DELETE_LOCKS[self.session_id][0].release()
+        self._leave()
+
+    def _leave(self) -> None:
+        lock, users = _DELETE_LOCKS[self.session_id]
+        if users <= 1:
+            _DELETE_LOCKS.pop(self.session_id, None)
+        else:
+            _DELETE_LOCKS[self.session_id] = (lock, users - 1)
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
@@ -626,13 +657,18 @@ def register_chat_routes(app, ui: str) -> None:
         sweep (#3957), which must never settle a forget a running delete still owns."""
         from graph import conversation_harvest as _harvest
 
-        if not forget:
-            return await _delete_session(session_id, harvest=harvest, retire=retire, forget=False)
-        _harvest.FORGETS_IN_FLIGHT.add(session_id)
-        try:
-            return await _delete_session(session_id, harvest=harvest, retire=retire, forget=True)
-        finally:
-            _harvest.FORGETS_IN_FLIGHT.discard(session_id)
+        # One delete per chat at a time. A delete with "save to memory" runs a model call
+        # first, so a slow one invites a retry; two retirements of the same thread then
+        # contend for the checkpoint DB write lock and one fails "database is locked". The
+        # retry now waits and finds nothing left to remove.
+        async with _delete_lock(session_id):
+            if not forget:
+                return await _delete_session(session_id, harvest=harvest, retire=retire, forget=False)
+            _harvest.FORGETS_IN_FLIGHT.add(session_id)
+            try:
+                return await _delete_session(session_id, harvest=harvest, retire=retire, forget=True)
+            finally:
+                _harvest.FORGETS_IN_FLIGHT.discard(session_id)
 
     async def _delete_session(session_id: str, *, harvest: bool, retire: bool, forget: bool):
         """Purge a chat session's checkpoints for both the A2A and chat prefix,
