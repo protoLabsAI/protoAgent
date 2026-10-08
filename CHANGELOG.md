@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.198.0] - 2026-10-08
+
+### Added
+- **Keep a domain's tools inside the subagent that owns it with `tools.subagent_only` (#4069).** Name tools there and the lead agent no longer has them: its model is never offered them, a call to one is blocked with a pointer to `task`, and neither `search_tools`, execute_code's bridge nor the operator MCP can surface them. Any subagent that allowlists them still gets them, in the foreground or in the background. The lead's prompt loses those schemas, and the domain's tool output stays in the subagent's context. `tools.disabled` still wins. The console's Tools list marks these "Subagents only". Agent self-config can no longer change a subagent's tool allowlist, since that list is a permission. See ADR 0117.
+
+### Fixed
+- **agent_browser reads the country back from an intl-tel-input v23+ phone picker (#4032).** On the live widget's newer markup — a `button.iti__selected-country` whose visible text is only the "+1" dial code, the committed country NAME in a `title`, and the dropdown portalled to a body-level `.iti--container` — `browser_select("Country", "United States")` no longer fails `Error: … reads "+1"`. The read-back resolves the owning `.iti` wrapper (via the button's `aria-controls`, so a selector that lands in the portalled container still works), reads the NAME from the button's title / aria-label / `.iti__a11y-text`, and a bare dial code (shared by the US and Canada) still never confirms a match. `browser_form_read` reports that field's value as the country NAME, not "+1".
+
+- **agent_browser handles a file input the widget REMOVES after attach (#4032).** On a Greenhouse résumé field that drops its `input[type=file]` from the DOM entirely on attach — leaving only a filename chip, the `<label for>` still pointing at the now-missing id — `browser_upload` no longer reports "nothing is attached". It re-finds the field's surviving wrapper (by its stored selector, then the orphaned `label[for]`, then the field label) and confirms the attach via the displayed filename, while still rejecting a chip that belongs to a sibling file field or a rejection message. `browser_form_read` now recovers such an orphaned file field as one `kind:'file'` row (the removed input's id, the bare filename as its value, required read off the label), without duplicating a field whose input is still live.
+
+- **The org chart draws a paired remote once, not twice (#4068).** A remote you add as a delegate from its fleet row points at the hub's proxy (`http://127.0.0.1:<hub>/agents/<id>/a2a`, ADR 0113), so the chart drew one node for the delegate and a second, dashed "member" node for the same agent at its real address. The chart now recognises that a hub-proxy delegate and the fleet member it reaches are the same agent. It draws one node with a delegate edge and crawls it with the member's stored token.
+
 ## [0.197.0] - 2026-10-06
 
 ### Added

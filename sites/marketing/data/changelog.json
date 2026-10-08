@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.198.0",
+    "date": "2026-10-08",
+    "changes": [
+      "Keep a domain's tools inside the subagent that owns it with tools.subagent_only (#4069).",
+      "agent_browser reads the country back from an intl-tel-input v23+ phone picker (#4032).",
+      "agent_browser handles a file input the widget REMOVES after attach (#4032).",
+      "The org chart draws a paired remote once, not twice (#4068)."
+    ]
+  },
+  {
     "version": "v0.197.0",
     "date": "2026-10-06",
     "changes": [
