@@ -150,6 +150,23 @@ def _norm(url: str) -> str:
     return u.rstrip("/")
 
 
+def _hub_proxy_rid(url: str) -> str:
+    """The remote id when ``url`` is this box's hub proxy for a remote member —
+    ``http://127.0.0.1:<hub>/agents/<rid>`` (normalized), the URL "Add as delegate" writes
+    for a paired remote (ADR 0113 D4) — else ``""``. Such a delegate and the fleet member
+    it proxies are the same agent, so the crawl must draw them as one node."""
+    from urllib.parse import urlsplit
+
+    try:
+        u = urlsplit(url)
+    except ValueError:
+        return ""
+    if (u.hostname or "") not in ("127.0.0.1", "localhost", "::1"):
+        return ""
+    parts = (u.path or "").strip("/").split("/")
+    return parts[1] if len(parts) == 2 and parts[0] == "agents" and parts[1] else ""
+
+
 def _short(s: str, cap: int = 34) -> str:
     """A compact role label from a card/config description: strip a leading "name — "
     label, keep the first clause, cap the length."""
@@ -442,6 +459,14 @@ async def _build(cfg: dict) -> dict:
     if cfg.get("include_fleet_members", DEFAULTS["include_fleet_members"]):
         for rec in _fleet_remotes():
             b = _norm(str(rec.get("url")))
+            # A delegate that reaches this member through the hub proxy is the member:
+            # re-key it to the member's real URL (and token) so it stays ONE node with a
+            # delegate edge, crawled directly — not a proxy node plus a `member` twin.
+            for t in seed:
+                if b and t["kind"] == "agent" and _hub_proxy_rid(t["id"]) == str(rec.get("id") or ""):
+                    name_of[b] = name_of.pop(t["id"], t["name"])
+                    tokens.pop(t["id"], None)
+                    t.update(id=b, url=b, token=str(rec.get("token") or ""))
             if b and b != self_base and b not in {t["id"] for t in seed}:
                 seed.append(
                     {

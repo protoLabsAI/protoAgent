@@ -421,6 +421,37 @@ def test_fleet_members_join_with_member_edges_and_tokens(monkeypatch):
     assert {(e["from"], e["to"]) for e in data["edges"]} >= {(ALPHA, GAMMA)}
 
 
+def test_delegate_through_the_hub_proxy_is_the_fleet_member_not_a_twin(monkeypatch):
+    """The "Add as delegate" button on a paired remote writes the hub-proxy URL (ADR 0113 D4). That
+    delegate and the member are one agent: one node, a delegate edge, crawled with the
+    member's stored token."""
+    calls: list[str] = []
+    health = {"alpha": {"ok": True, "latency_ms": 7, "checked_at": 1.0}}
+    _wire(
+        monkeypatch,
+        calls,
+        roster=[{"type": "a2a", "name": "alpha", "url": "http://127.0.0.1:7870/agents/alpha-b8bb/a2a"}],
+        health=health,
+        remotes=[{"id": "alpha-b8bb", "name": "alpha", "url": ALPHA, "token": "tok-alpha"}],
+    )
+    data = asyncio.run(topo.get_topology({}))
+    nodes = {n["id"]: n for n in data["nodes"]}
+    assert set(nodes) == {"http://self:7870", ALPHA, GAMMA}
+    assert nodes[ALPHA]["latency_ms"] == 7  # our prober's health still applies by name
+    edges = [(e["from"], e["to"], e["kind"]) for e in data["edges"]]
+    assert ("http://self:7870", ALPHA, "delegate") in edges
+    assert not any(k == "member" for _, _, k in edges)
+    assert (ALPHA, GAMMA, "delegate") in edges  # crawled with the member's token
+
+
+def test_hub_proxy_rid_only_matches_loopback_agent_paths():
+    assert topo._hub_proxy_rid("http://127.0.0.1:7870/agents/vera-b8bb") == "vera-b8bb"
+    assert topo._hub_proxy_rid("http://localhost:7870/agents/x") == "x"
+    assert topo._hub_proxy_rid("http://100.64.1.2:7870/agents/x") == ""
+    assert topo._hub_proxy_rid("http://127.0.0.1:7870/agents/x/sub") == ""
+    assert topo._hub_proxy_rid("http://127.0.0.1:7870") == ""
+
+
 def test_fleet_members_can_be_excluded(monkeypatch):
     calls: list[str] = []
     _wire(monkeypatch, calls, roster=[], remotes=[{"id": "alpha", "url": ALPHA, "token": "t"}])
