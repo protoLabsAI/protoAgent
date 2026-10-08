@@ -128,6 +128,13 @@ _READ_TIMEOUT = httpx.Timeout(20.0, connect=5.0)  # views, API reads — the pol
 # even though it isn't on this list.
 _STREAM_PATHS = frozenset({"a2a", "api/events"})
 _TURN_PATHS = frozenset({"api/chat"})
+# Chat-session operations that can run model calls are turn-sized too: deleting a chat with
+# "save to memory" summarizes the whole thread first, and compact/publish do the same. Under
+# the 20s view lane the hub answered 504 while the member was still working (and went on to
+# succeed), and the operator's retry then raced the first delete for the checkpoint DB lock.
+# Only MUTATIONS take this lane: the GET polls under api/chat/ (attend, turns) are exactly the
+# traffic the view lane bounds (#2590).
+_TURN_PREFIX = "api/chat/"
 
 
 def _timeout_for(request, path: str) -> httpx.Timeout:
@@ -136,6 +143,8 @@ def _timeout_for(request, path: str) -> httpx.Timeout:
     if norm in _STREAM_PATHS or "text/event-stream" in (request.headers.get("accept") or "").lower():
         return _STREAM_TIMEOUT
     if norm in _TURN_PATHS:
+        return _TURN_TIMEOUT
+    if norm.startswith(_TURN_PREFIX) and (getattr(request, "method", "GET") or "GET").upper() not in ("GET", "HEAD"):
         return _TURN_TIMEOUT
     return _READ_TIMEOUT
 

@@ -1702,3 +1702,59 @@ def test_v1_completions_tags_its_turns_with_an_origin(monkeypatch):
     c = _client(monkeypatch, seen=seen)
     c.post("/v1/chat/completions", json={"model": "protoagent", "messages": [{"role": "user", "content": "hi"}]})
     assert seen["origin"] == "v1"
+
+
+async def test_concurrent_deletes_of_one_chat_run_one_at_a_time(monkeypatch):
+    """A slow delete (harvest runs a model call) invited a retry, and two retirements of one
+    thread raced for the checkpoint DB write lock: one failed "database is locked". Deletes of
+    the same chat now queue; a different chat is not held up; the lock map empties after."""
+    import asyncio
+
+    import httpx
+
+    import operator_api.chat_routes as cr
+
+    active: dict[str, int] = {}
+    peak: dict[str, int] = {}
+    order: list[str] = []
+
+    async def _slow_retire(thread_id, *, harvest=None, cascade=True):
+        sid = thread_id.split(":", 1)[1]
+        active[sid] = active.get(sid, 0) + 1
+        peak[sid] = max(peak.get(sid, 0), active[sid])
+        order.append(thread_id)
+        await asyncio.sleep(0.05)
+        active[sid] -= 1
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _slow_retire)
+    app = _client(monkeypatch).app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as ac:
+        rs = await asyncio.gather(
+            ac.delete("/api/chat/sessions/s1?harvest=true"),
+            ac.delete("/api/chat/sessions/s1?harvest=false"),
+            ac.delete("/api/chat/sessions/s2"),
+        )
+    assert [r.status_code for r in rs] == [200, 200, 200]
+    assert peak == {"s1": 1, "s2": 1}  # never two retirements of the same chat at once
+    first_s1 = order.index("a2a:s1")
+    assert order[first_s1 + 1 :].index("chat:s1") < order[first_s1 + 1 :].index("a2a:s1")  # sequential
+    assert cr._DELETE_LOCKS == {}
+
+
+async def test_a_queued_delete_cancelled_while_waiting_leaves_no_lock_behind(monkeypatch):
+    import asyncio
+
+    import operator_api.chat_routes as cr
+
+    async with cr._delete_lock("s1"):
+        waiter = asyncio.create_task(cr._delete_lock("s1").__aenter__())
+        await asyncio.sleep(0)
+        assert cr._DELETE_LOCKS["s1"][1] == 2
+        waiter.cancel()
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            pass
+        assert cr._DELETE_LOCKS["s1"][1] == 1
+    assert cr._DELETE_LOCKS == {}
