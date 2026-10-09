@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.199.0",
+    "date": "2026-10-09",
+    "changes": [
+      "The desktop app tells you when a download has landed (#4073).",
+      "Deleting a fleet member's chat from the hub no longer times out or fails on retry (#4071)."
+    ]
+  },
+  {
     "version": "v0.198.0",
     "date": "2026-10-08",
     "changes": [
