@@ -9,6 +9,7 @@ use tauri::{
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::ShortcutState;
 
+mod downloads;
 mod hotkeys;
 mod navigation;
 mod sidecar;
@@ -419,8 +420,11 @@ pub fn run() {
             hotkeys::hotkeys_set,
             auth_token,
             pick_path,
-            navigation::new_window
+            navigation::new_window,
+            downloads::open_download,
+            downloads::reveal_download
         ])
+        .manage(downloads::Downloads::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -556,7 +560,9 @@ pub fn run() {
                 .on_navigation({
                     let app = app.handle().clone();
                     move |url| serve_navigation(&app, url.as_str())
-                });
+                })
+                // Saves land in Downloads and the console hears when they finish.
+                .on_download(downloads::handler);
             // Invisible title bar (macOS): no opaque chrome — content fills the
             // frame and the native traffic lights float top-left. The web shell
             // restores window-dragging + insets its topbar for the lights

@@ -71,6 +71,9 @@ pub(crate) fn open_chat_window<R: Runtime>(
             let app = app.clone();
             move |url| serve_navigation(&app, url.as_str())
         })
+        // Same as the main window: saves land in Downloads and the console hears when
+        // they finish (a chat export from a second window is a download too).
+        .on_download(crate::downloads::handler)
         .initialization_script(&init);
     #[cfg(target_os = "macos")]
     {
