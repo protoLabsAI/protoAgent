@@ -34,3 +34,16 @@ export function tauriCore(): TauriCore | null {
     return null;
   }
 }
+
+/** The `window.__TAURI__.event` accessor (`listen` only), for shell → console events such as
+ *  `download:finished`. Null outside the shell. */
+type TauriEvent = {
+  listen: <T>(event: string, handler: (e: { payload: T }) => void) => Promise<() => void>;
+};
+export function tauriEvent(): TauriEvent | null {
+  try {
+    return (window as unknown as { __TAURI__?: { event?: TauriEvent } }).__TAURI__?.event ?? null;
+  } catch {
+    return null;
+  }
+}

@@ -1,0 +1,14 @@
+/* The "Downloaded" toast (DownloadWatch): file name over its Open / Show in Finder actions.
+   Chrome comes from the DS toast; only this stack lives here. */
+.download-toast {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+}
+.download-toast-name {
+  overflow-wrap: anywhere;
+}
+.download-toast-actions {
+  display: inline-flex;
+  gap: var(--pl-space-2);
+}

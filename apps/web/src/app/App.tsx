@@ -17,6 +17,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
+import { DownloadWatch } from "./DownloadWatch";
 import { ScheduledWatch } from "./ScheduledWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
 import { ChatAttendance } from "./ChatAttendance";
@@ -928,6 +929,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           live into the spawning chat (a system message + toast) if it's still open —
           instead of waiting for the next message to surface it. */}
       <BackgroundWatch />
+      <DownloadWatch />
       {/* Scheduled tasks (#2990): when a fire completes, deliver its result back to the
           chat that created the schedule as a ScheduledReportCard (or a compact chip on
           recurring re-fires) if that chat is open — instead of it hiding in Activity. */}
