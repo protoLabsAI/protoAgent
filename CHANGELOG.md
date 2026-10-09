@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.199.0] - 2026-10-09
+
+### Added
+- **The desktop app tells you when a download has landed (#4073).** Downloading a file (an artifact, a chat export) used to stop at "Download started", so a slow save looked like nothing happened. The desktop app now shows a "Downloaded" toast once the file is saved, with **Open** (the default app for that file type) and **Show in Finder**, or a "Download failed" toast if it didn't save. Downloads go to your Downloads folder and never overwrite an existing file.
+
+### Fixed
+- **Deleting a fleet member's chat from the hub no longer times out or fails on retry (#4071).** A delete with "save to memory" summarizes the whole thread first, and the hub cut it off after 20 seconds with "agent did not respond in time" while the member went on to finish it. Chat deletes, compacts and publishes through the hub now get the same long timeout as a turn. Deleting the same chat twice at once no longer fails with "database is locked": the second delete waits for the first.
+
 ## [0.198.0] - 2026-10-08
 
 ### Added
