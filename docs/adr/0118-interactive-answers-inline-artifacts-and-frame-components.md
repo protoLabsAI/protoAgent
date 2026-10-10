@@ -1,6 +1,6 @@
 # 0118 — Interactive answers: inline artifacts in chat, streamed previews, a send-to-chat bridge, and frame-rendered plugin components
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-09
 - Builds on: [ADR 0038](./0038-generative-ui-artifacts-two-mode.md) (sandboxed artifacts, iframe vs `src/ext` UI), [ADR 0051](./0051-a2a-realtime-streaming-and-component-rendering.md) (`component-v1`, `show_component`, plugin kinds), [ADR 0061](./0061-frontend-extension-registries.md) (console extension registries), [ADR 0116](./0116-local-first-data-analyst-duckdb-and-vega-lite-charts.md) (the `vega-lite` kind, nonce CSP, vendoring, `--pl-color-chart-*` theming, `artifact.show` service), [ADR 0111](./0111-zed-operator-editor-acp-shim.md) D3 (tool-call args reach the wire only as an 800-char preview).
 - Amends: ADR 0051 (a fourth presentation tier between data components and the panel; plugin kinds can render without a console rebuild), ADR 0038 (one artifact, two placements).
@@ -72,7 +72,7 @@ An inline artifact **is** an artifact. It has the same store, versions, render v
 
 ### D2 — Inline placement: the `artifact-ref` chip hosts the artifact's own frame
 
-- **Tool.** `show_artifact` (and the `artifact.show` service from ADR 0116 D6) gains `placement: "panel" | "inline"`. The default is `"panel"`, so existing callers are unchanged. Inline is allowed for `html`, `svg`, `mermaid`, `react` and `vega-lite`. Other kinds (`markdown`, decks, PDFs, `file`) fall back to the panel with a note in the tool result.
+- **Tool.** `show_artifact` (and the `artifact.show` service from ADR 0116 D6) gains `placement: "panel" | "inline"`. **The default is `"inline"`** for the kinds inline supports (operator decision, 2026-10-10), so an interactive answer lands in the transcript unless the model asks for the panel with `placement="panel"`, as it should for a document or work product. Inline is allowed for `html`, `svg`, `mermaid`, `react` and `vega-lite`. Other kinds (`markdown`, decks, PDFs, `file`) fall back to the panel with a note in the tool result.
 - **Wire.** The `artifact-ref` component's props gain `inline: true` and an optional `height` hint (an int; 80–1200 px). The artifact plugin's validator accepts them. An older console ignores them and shows the chip, which is the degrade path.
 - **Shell embed mode.** The artifact shell gains a chrome-less embed mode (`/plugins/artifact/view?embed=<id>&v=<version>`). It renders exactly one version through the **same** frame builder as the panel: nonce CSP, vendored LIB map, theme tokens, loader lockdown and render-verdict reporting. There is no second frame builder.
 - **Console host.** `ArtifactRefChip` (`apps/web/src/artifacts/`) renders an inline ref as an embedded shell iframe. It uses the bearer/theme handshake `PluginView` already uses (`apps/web/src/app/PluginView.tsx`), **extracted into a shared module** rather than copied. The frame reports its content height. The host clamps it to **[80, 1200] px**, and anything taller scrolls inside the frame. The header shows the title, the version and an **Open in panel** button.
@@ -142,7 +142,7 @@ Inline frames, previews and frame components get only what ADR 0116 D5 set up:
 - **Libraries.** Vendored, SRI-pinned libraries served same-origin from the artifact vendor route.
 - **Theme.** The `--pl-*` tokens: `--pl-color-chart-series1…8`, axis/grid, fg/bg and fonts. Frames **re-theme live** when the console theme changes.
 
-There is no import map pointing at a CDN, and no new library is added by this ADR beyond **Idiomorph** (0BSD, for D3's preview). Adding three.js, d3 or gsap to the LIB map is a separate, per-library decision. Its cost is vendored bytes, its benefit what the skill can then promise. The ADR records OIU's set as the obvious candidates.
+There is no import map pointing at a CDN. Besides **Idiomorph** (0BSD, for D3's preview), **three.js, d3 and gsap join the vendored LIB map** (operator decision, 2026-10-10). Each is vendored byte-for-byte as its UMD/ESM build, SRI-pinned, served same-origin from the artifact vendor route, and noted in the vendor LICENSES file. Each loads only when an artifact asks for it. The skill documents them as available.
 
 ### D7 — Choosing the presentation is a skill, not a router (for now)
 
@@ -194,9 +194,11 @@ Each slice is independently mergeable into the epic branch. Dependencies are not
 | S11 | `register_component(…, frame=)` + loader + `GET /api/components` (D5, server) | `graph/plugins/registry.py`, loader, a route |
 | S12 | Console frame-component host + resolution order + bridge reuse [S6, S10, S11] | `apps/web/src/chat/ChatComponent.tsx`, `src/ext/componentRegistry.ts` |
 
-## Open questions (operator calls)
+## Operator decisions (2026-10-10)
 
-1. **Inline by default?** Should `show_artifact` default to `inline` for small html/svg/vega-lite artifacts, or stay `panel` and let the skill choose? This ADR says `panel` stays the default.
-2. **Live-frame cap.** Is 6 the right default, and should it be a setting?
-3. **`send` on by default.** This ADR argues yes, because the gesture is required and the turn is visible. Is that the call?
-4. **Libraries.** Which, if any, of three.js, d3 and gsap should join the vendored LIB map?
+1. **Inline by default: yes.** `show_artifact` defaults to `placement="inline"` for the kinds inline supports; documents and work products pass `placement="panel"` (D2).
+2. **Live-frame cap: 6**, as proposed (D2).
+3. **`send` on by default: yes**, behind the host-enforced gesture, busy, length and rate gates (D4).
+4. **Libraries: vendor three.js, d3 and gsap** (D6).
+
+The status moves to **Accepted**.
