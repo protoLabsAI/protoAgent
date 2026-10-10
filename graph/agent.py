@@ -1820,7 +1820,11 @@ def create_agent_graph(
 
     # Split over the FINAL set, so a held late tool or search_tools is covered too.
     lead_tools, subagent_only_tools = split_subagent_only(all_tools, config, resolvable=task_resolvable)
-    record_toolset(t.name for t in lead_tools)
+    # A held tool is still the agent's capability, reached through `task`, so moving a tool
+    # into or out of tools.subagent_only is not a toolset change to announce. Announcing it
+    # as "No longer available" sent a live agent (Frank, 10-10) off answering the note
+    # instead of reporting the work it had just delegated.
+    record_toolset(t.name for t in all_tools)
 
     # Composed as labeled parts (#2243 P2) so PromptCapture can persist the
     # stable prefix's section boundaries with the blob it hashes — the prompt

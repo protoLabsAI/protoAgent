@@ -137,7 +137,7 @@ A **skill** teaches the agent how and when to run a recurring workflow. Availabl
 Three pieces ([progressive disclosure, ADR 0060](/adr/0060-skill-progressive-disclosure)):
 
 1. **Authoring** — a skill is an [AgentSkills `SKILL.md`](/guides/skills) folder. You drop them in by hand, and the agent can author its own from a proven workflow via the `/distill` subagent (it writes a new `SKILL.md`). All land in the index as `source=disk`.
-2. **Indexing** — `graph/skills/index.py` is a SQLite/FTS5 store at `/sandbox/skills.db` (→ `~/.protoagent/skills.db` when `/sandbox` isn't writable). `SKILL.md` folders are re-seeded on every boot; console edits (Agent → Skills) index live.
+2. **Indexing** — `graph/skills/index.py` is a SQLite/FTS5 store at `<instance_root>/skills.db`. `SKILL.md` folders are re-seeded on every boot; console edits (Settings → Skills) index live.
 3. **Disclosure** — `KnowledgeMiddleware` injects an always-on `<available_skills>` block listing up to `skills.top_k` skills' `{name, description}` (recency-ordered, query-independent), and the agent calls the `load_skill(name)` tool to pull one skill's full procedure on demand (visible as a tool card). This replaced per-turn BM25 retrieval of full skill bodies. (The index is wired into `KnowledgeMiddleware` via `create_agent_graph`'s `skills_index`.)
 
 **Curation** — `python -m graph.skills.curator` runs a periodic sweep that deduplicates near-identical skills and decays confidence 50 % every 90 days of idleness. Skills below 0.2 confidence are pruned. `disk` skills are **pinned** (re-seeded from `SKILL.md` files, not curated). Run it on a cron or let operators trigger it manually — no automatic scheduling in the template.

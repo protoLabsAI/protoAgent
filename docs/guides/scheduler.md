@@ -1,18 +1,24 @@
 # Schedule future work
 
-protoAgent ships a scheduler so the agent can defer tasks to itself —
-"remind me about X tomorrow", "every Monday morning summarize last
-week's logs", "at 3pm check the deploy". The bundled `LocalScheduler`
-(sqlite + asyncio) is the one backend.
+Ask the agent to run a task later or on a recurring schedule, for example:
 
-## When to read this
+> Every Monday at 9am in America/Los_Angeles, summarize the last week's pipeline incidents.
 
-- You want forks (or your own multiple agents) to support reminders,
-  recurring sweeps, or any "do this later" intent.
-- You're spinning up multiple protoAgent instances on one box and
-  need scheduling state to stay isolated per agent.
+Open **Schedule** to confirm the saved prompt, timezone, and next fire time.
+The server must be running when the job fires. Results appear in **Activity**.
 
-## The three tools
+## Manage from the console
+
+Open **Schedule** to create a job, inspect its full prompt, edit its schedule, or
+cancel it. Use a named timezone when local time matters; an unspecified timezone
+uses UTC. Confirm the next fire time after saving.
+
+Write a self-contained prompt: a scheduled run does not receive the conversation
+that created it. Include the sources to read, the action to take, and the expected
+output. For example, write “review last week's pipeline incidents and post a
+summary,” rather than “do that thing we discussed.”
+
+## Scheduling tools
 
 When the scheduler is active, three tools land in `get_all_tools()`:
 
@@ -22,52 +28,24 @@ When the scheduler is active, three tools land in `get_all_tools()`:
 | `list_schedules()` | Show all jobs visible to *this* agent. |
 | `cancel_schedule(job_id)` | Remove a job by id. |
 
-Prompts are self-contained — the agent has no memory of the
-scheduling moment when the task fires, so write the prompt as a fresh
-turn ("review last week's pipeline incidents and post a summary",
-not "do that thing we discussed").
-
 ## Enabling / disabling
 
-`server/agent_init.py::_build_scheduler` builds the bundled
-`LocalScheduler` (sqlite, asyncio polling) at startup unless scheduling
-is turned off:
+Scheduling is enabled by default. Set `middleware.scheduler: false` to disable
+it durably, or use `SCHEDULER_DISABLED=1` as a process-level override. The scheduling
+tools are unavailable while disabled.
 
-1. `middleware.scheduler: false` in YAML → no scheduler. The three
-   tools don't ship. (Symmetric with `middleware.knowledge` /
-   `middleware.memory` — drawer/wizard editable, survives restarts.)
-   This is the canonical opt-out.
-2. `SCHEDULER_DISABLED=1` env → no scheduler. Runtime escape hatch
-   for fleet operators who can't edit config in the moment.
-
-The scheduler is **default on** — opt out via either path above for a
-stateless agent.
-
-```bash
-python -m server   # LocalScheduler on by default
-```
-
-## Manage from the console
-
-The agent schedules jobs via its tools, but operators can also view and manage
-them directly from the React console's **Schedule** surface — list current
-jobs, open one for the full prompt + details, create, **edit in place**, and
-cancel. It's backed by these operator-API endpoints:
+## Operator API
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/scheduler/jobs` | List jobs (`{jobs, backend}`) |
-| `POST` | `/api/scheduler/jobs` | Create — `{prompt, schedule, job_id?, timezone?}` → `{job}` |
-| `PUT` | `/api/scheduler/jobs/{id}` | Edit in place — a **partial** update: `{prompt?, schedule?, timezone?}` → `{job}` (id/created_at/last_fire preserved, next_fire recomputed) |
-| `DELETE` | `/api/scheduler/jobs/{id}` | Cancel → `{canceled}` |
+| `POST` | `/api/scheduler/jobs` | Create: `{prompt, schedule, job_id?, timezone?}` |
+| `PUT` | `/api/scheduler/jobs/{id}` | Partial update: `{prompt?, schedule?, timezone?}` |
+| `DELETE` | `/api/scheduler/jobs/{id}` | Cancel |
 
-`PUT` changes only the fields you send. An omitted field keeps the job's current
-value, so `{"schedule": "0 17 * * 1-5"}` reschedules without restating the prompt.
-`"timezone": null` (or `""`) is an explicit change back to UTC, which is different
-from leaving `timezone` out (that keeps the current zone). A field you do send is
-still validated: an empty `prompt` or `schedule`, or a body with no fields, returns `400`.
-
-A malformed `schedule` or `timezone` returns `400` and leaves the job untouched.
+An omitted field keeps its value. An explicit `timezone: null` or `""` switches
+back to UTC. Invalid schedules or timezones return `400` without changing the job;
+empty prompts, empty schedules, and updates with no fields also return `400`.
 
 ## Plugin-owned recurring jobs
 
@@ -103,17 +81,14 @@ an instance's jobs.db; it never crosses instances.
 
 ## Multi-agent isolation
 
-Every job is namespaced by `AGENT_NAME` so spinning up
-`gina-personal` alongside `gina-work` on the same box doesn't
-cross-fire prompts: the DB path is per agent
-(`/sandbox/scheduler/<agent_name>/jobs.db`, falling back to
-`~/.protoagent/scheduler/<agent_name>/jobs.db`), every row also carries
-`agent_name`, and all reads/writes filter on it.
+Default schedules live in the instance-private
+`<instance_root>/scheduler/agent/jobs.db`. Agent renaming keeps the same store;
+an existing name-keyed store may be adopted on first access.
 
-If you supply your own `job_id` in `schedule_task`, the id is stored
-as-is. Two agents sharing one DB path with the same user-supplied id will
-trip a primary-key collision (the second add raises a clear error). To
-avoid it, let the scheduler auto-generate (the auto-id is `<agent>-<uuid>`).
+`SCHEDULER_DB_DIR` selects an explicit parent directory, with jobs stored at
+`<override>/<agent_name>/jobs.db`. Avoid sharing that file between running instances:
+the scheduler owner-lock allows only one process to poll it. Use separate
+instance roots for independent agents; see [Run multiple instances](/guides/multi-instance).
 
 ## How firing works
 
@@ -138,8 +113,6 @@ push-notification path all behave identically.
 **Where the response lands.** The fired turn runs in the Activity thread
 (ADR 0003), so its output persists and shows up live in the console's
 **Activity** surface (pushed over `/api/events` as an `activity.message`).
-Before ADR 0003 a fired prompt minted a throwaway context and its answer
-was evicted unseen.
 
 ### Missed-fire recovery
 
@@ -153,20 +126,10 @@ On startup, jobs whose `next_fire` is in the past are inspected:
 
 ### Persistence path
 
-```bash
-# Default (Docker)
-/sandbox/scheduler/<agent_name>/jobs.db
-
-# Local fallback (when /sandbox isn't writable)
-~/.protoagent/scheduler/<agent_name>/jobs.db
-
-# Override
-export SCHEDULER_DB_DIR=/var/data/agents
-# → /var/data/agents/<agent_name>/jobs.db
-```
-
-Mount a volume at the configured path to survive container
-restarts (analogous to `audit/` and `knowledge/`).
+Use `protoagent config explain` to find the instance root. In the bundled Docker
+image, the default is `/sandbox/scheduler/agent/jobs.db`; on a normal host install,
+it is `~/.protoagent/default/scheduler/agent/jobs.db`. Mount a volume covering the
+instance root to preserve schedules across container restarts.
 
 ## Adding a case to your eval suite
 

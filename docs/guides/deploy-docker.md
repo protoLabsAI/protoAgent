@@ -1,15 +1,24 @@
 # Deploy in Docker (config-as-code: seed + UI override)
 
-Run protoAgent in a container so it boots **pre-configured** from a config baked into the image (the *seed*), while operators can still **override settings in the console** and have those edits **persist**. No setup wizard on a fresh instance, no force-overriding live edits.
+Run the published image, or bake a config seed into your own image while keeping
+console edits in a persistent data volume. You need Docker and access to a model
+endpoint.
 
-The copy-me reference is **[`examples/docker`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/docker)**:
+For a configured deployment, copy
+[`examples/docker`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/docker):
 
 ```bash
-cp -r examples/docker my-agent && cd my-agent
-# edit langgraph-config.seed.yaml, then:
-export OPENAI_API_KEY=sk-... A2A_AUTH_TOKEN=$(openssl rand -hex 24)
+cp -r examples/docker my-agent
+cd my-agent
+# Edit langgraph-config.seed.yaml, then:
+export OPENAI_API_KEY=sk-...
+export A2A_AUTH_TOKEN=$(openssl rand -hex 24)
 docker compose up -d --build
 ```
+
+Open <http://localhost:7870/app> and enter the operator token. Confirm `/healthz`
+returns `200` after the model connects. Use `docker compose logs agent` to inspect
+a failed boot or connection.
 
 ## One-command install
 
@@ -30,17 +39,12 @@ is versioned in the repo (so it tracks the agent) and:
    so the console serves at `/app`.
 4. **Runs a CLI wizard** that drives the **same `/api/config/*` endpoints as the
    browser setup wizard** — provider gateway URL, API key (silent), model
-   (fetched + validated live), and agent name — so it stays in parity for free.
+   (fetched + validated live), and agent name — without a separate config format.
 5. **Prints** where the agent is running.
 
 It's **idempotent**: re-running pulls the latest image, keeps the data volume,
 and offers to re-run the wizard. Over a **plain SSH session with no TTY** it
 starts the container and points you at `/app` to finish setup in a browser.
-
-**Serving the vanity URL.** The one-liner above uses the GitHub-raw URL, which
-works today. To serve it from `https://agent.protolabs.studio/install.sh`
-instead, point that path at the raw file (a CDN/redirect or a one-line reverse
-proxy) — the script content is identical.
 
 **Overrides** (all optional env vars):
 
@@ -64,7 +68,13 @@ image, no wizard) use the seed pattern below instead.
 
 ## The one trap to avoid
 
-The image declares `VOLUME /opt/protoagent/config`. That's deliberate — it persists wizard/console edits — but it means a config **volume** holds the live `langgraph-config.yaml`. So if you bake your config **as the live file** (`COPY my-config.yaml /opt/protoagent/config/langgraph-config.yaml`), the volume freezes your first-boot copy and **silently shadows every later image update**: enabling a plugin in a new image just… does nothing. Don't bake the live file.
+The bundled entrypoint sets `PROTOAGENT_HOME=/sandbox`; the live config is
+`/sandbox/config/langgraph-config.yaml`. Persist `/sandbox` with a named volume.
+A file baked at `/opt/protoagent/config/langgraph-config.yaml` is not the active
+config, and an existing live file takes precedence over first-boot seeds.
+
+Bake a seed outside the data volume and select it with `PROTOAGENT_SEED_CONFIG`.
+Update an existing instance through Settings or use merge-on-boot below.
 
 ## The pattern
 
@@ -76,26 +86,36 @@ COPY langgraph-config.seed.yaml /opt/agent/seed/langgraph-config.yaml
 ENV PROTOAGENT_SEED_CONFIG=/opt/agent/seed/langgraph-config.yaml
 ```
 
-On first boot, protoAgent copies the seed to the live `langgraph-config.yaml` and **never clobbers it afterward** (`ensure_live_config` is idempotent). Updating the seed in a new image re-seeds only a **fresh** instance — an existing one keeps its live config.
+On first boot, protoAgent copies the seed to the live config. Existing instances
+keep their settings when you update the seed. Use merge-on-boot below to apply
+seed changes to those instances.
 
-That last sentence is the catch, and it is why `PROTOAGENT_SEED_MERGE` exists (see below): with seed-once, the **declarative** half of your seed — agent identity, the A2A card `description`/`skills`, `plugins.enabled` — never reaches a volume that was seeded before you added it. The agent keeps serving the old value and nothing says so.
-
-**2. Persist the live config on a *named* volume** (not the image's anonymous one):
+**2. Persist the instance data on a named volume:**
 
 ```yaml
+services:
+  agent:
+    volumes:
+      - agent-sandbox:/sandbox
 volumes:
-  - agent-config:/opt/protoagent/config
+  agent-sandbox:
 ```
 
-Console/settings edits write here and survive reboots + image rolls.
+This preserves config, conversations, credentials, and plugin stores across
+container replacements.
 
-**3. Skip the wizard on a fresh instance** with `PROTOAGENT_HEADLESS_SETUP=1` — protoAgent validates the seed and auto-marks setup complete, so the instance comes up configured. Omit it if you'd rather complete setup interactively in the wizard.
+**3. Skip the wizard on a fresh instance** with `PROTOAGENT_HEADLESS_SETUP=1`.
+The server validates the seed and marks setup complete. Omit this variable to
+complete setup in the browser.
 
-**4. Keep secrets in the env, not the seed.** The model key is read from `OPENAI_API_KEY`; the seed (and your image) carry no credentials. In the console the api-key field shows blank (`api_key_configured: false`) — that's expected, the key is env-sourced.
+**4. Supply credentials through environment variables.** The example's legacy
+`model` block reads `OPENAI_API_KEY`. Explicit `providers` entries use per-connection credentials from `secrets.yaml`,
+which you can set through **Settings → Model → Connections**. Do not assume a
+provider entry inherits `OPENAI_API_KEY`. Keep secrets out of the seed and image.
 
 ## Merge-on-boot: keeping a declarative seed live
 
-Seed-once is right for **operator-owned** config — a console edit must never be undone by a restart. It is wrong for the **image-owned declarative** half, which is the part you actually want to change by rolling an image. Turn on merge-on-boot to get both:
+To update image-owned settings while preserving operator edits, enable:
 
 ```yaml
 environment:
@@ -111,26 +131,24 @@ On every boot the seed is re-applied against the live config, **per key**:
 | key was edited by an operator | **keep the operator's value** — never clobbered |
 | key was dropped from the seed, untouched | removed, so config falls back to its default |
 
-The middle row is what makes this durable rather than a one-shot. protoAgent records the seed *as applied* in `<config-dir>/.seed-applied.yaml` and compares against that, so it can tell "the image changed this" from "a human changed this". Without that baseline, the live file — itself a copy of the old seed — would win on every key it already had, and the second image roll would silently go missing exactly like the first.
+The server records the applied seed in `<config-dir>/.seed-applied.yaml` and
+uses that baseline to distinguish image changes from operator edits.
 
-Notes:
-
-- **Opt-in, and env-only.** Unset ⇒ today's seed-once behavior, byte for byte. It is deliberately not a config field: the flag would otherwise live in the very file being merged.
-- **Existing volumes are safe on the first merge boot.** With no `.seed-applied.yaml` yet there is no baseline, so every key already present is treated as operator-owned and kept; only genuinely new keys land. The baseline is written on the way out, and later rolls get the full behavior.
-- **Credentials never ride the merge.** Secret paths are skipped — they belong in `secrets.yaml`/the env, and writing one into the live YAML would put it in the exportable file in plaintext.
-- **Only `PROTOAGENT_SEED_CONFIG` is merge-eligible**, never the bundled `.example` template — that's a generic starter, not your declarative config.
-- Unknown/fork-added sections and YAML comments in the live file survive the rewrite.
-- A malformed seed logs and leaves the live config untouched; the agent still boots.
+- Without the flag, config is seeded once.
+- On the first merge boot of an existing volume, existing keys are treated as
+  operator-owned; only new keys are added. Later boots use the recorded baseline.
+- Secret fields are skipped. Supply credentials through the environment or
+  `secrets.yaml`.
+- Only the explicit `PROTOAGENT_SEED_CONFIG` participates, not the bundled template.
+- Unknown sections and YAML comments in the live file survive.
+- A malformed seed is logged and leaves the live config untouched.
 
 ## Baking a persona (SOUL.md)
 
-The persona has the **same** seed/live split as the config — and the same trap. The live `SOUL.md` sits under the config volume (`<instance_root>/config/SOUL.md`), and `read_soul` only falls back to the bundled `config/SOUL.md` when the live file is **absent**. So a placeholder materialised into the live path on an early boot (e.g. by a finished setup wizard) will **silently shadow** any persona you bake into the image later — the agent runs "Replace this file" forever, even after you `COPY` a real `SOUL.md` into the bundle.
-
-`ensure_live_soul` closes that gap on boot, seed-not-force like the config:
-
-- **Absent** live SOUL → seed it (so it's present and console-editable).
-- **Still the shipped starter placeholder** → heal it — replace with your baked persona.
-- **A real, authored SOUL** → never touched.
+The live persona is `<instance_root>/config/SOUL.md`. On boot,
+`ensure_live_soul` seeds a missing file or replaces the shipped placeholder.
+An authored live persona is preserved, so updating a baked seed will not
+overwrite it.
 
 Two ways to bake the persona, pick one:
 
@@ -164,27 +182,14 @@ can't change state there either. See
 
 ### Where the operator token lives
 
-Configure the token in the **server's environment** — `A2A_AUTH_TOKEN` (or `auth.token` in
-`langgraph-config.yaml`). That's the credential's home: it never lives in a browser, and
-rotating it instantly invalidates every client.
+Set `A2A_AUTH_TOKEN` in the server environment, or `auth.token` in the live
+config. Restart after changing an environment-sourced token; clients must then
+use the new token.
 
-The **browser console** has to authenticate too, so when you paste the token into its
-sign-in prompt it's cached in that browser's `localStorage`. Know the trade-off:
-
-- A script injected into the console's origin (XSS) could read that cached token and
-  exfiltrate it. The exposure is bounded by the default posture — the console binds
-  `127.0.0.1` and the whole API is default-deny bearer-gated — and the console renders
-  agent/model output only through sanitized markdown (no raw-HTML sink). Treat the cached
-  token like any browser-stored credential: don't expose the console beyond localhost
-  without a fronting auth proxy, and rotate `A2A_AUTH_TOKEN` if a workstation is compromised.
-- It stays in `localStorage` deliberately. An httpOnly cookie can't authenticate the
-  **desktop app** — its Tauri webview and the local HTTP sidecar are different origins, so a
-  `SameSite` cookie isn't sent cross-origin and `SameSite=None` needs the HTTPS the localhost
-  sidecar doesn't have — so a cookie would protect only the browser. And hashing/encrypting
-  the value at rest doesn't defend against same-origin XSS: a script in the page can read the
-  key and reuse the same code path the console uses to send the token. The effective lever,
-  if the console is ever exposed beyond localhost, is an egress limit (a CSP `connect-src`
-  allowlist) that blocks exfiltration for both the browser and the desktop.
+The browser console stores the token in `localStorage` after sign-in. A script
+running on that origin can read it, so use a trusted origin and rotate the token
+if the workstation is compromised. For public access, put an authentication proxy
+in front of the console; see [Expose to the world](/guides/exposing-protoagent).
 
 ## Expose it with a tunnel (ngrok / Cloudflare)
 
@@ -229,16 +234,16 @@ control (Cloudflare Access, an ngrok OAuth policy, or a fronting auth proxy) —
 
 | Want to… | Do |
 | --- | --- |
-| Change a setting | Edit it in the console — it persists on the config volume. |
+| Change a setting | Edit it in the console — it persists on the `/sandbox` volume. |
 | Roll out a new image | `docker compose pull && docker compose up -d` — live config (your edits) is preserved. |
-| Re-seed from an updated seed | Set `PROTOAGENT_SEED_MERGE=1` and roll normally — image-owned keys re-apply, operator edits stay. Without it: `docker compose down && docker volume rm <project>_agent-config && docker compose up -d` (loses all operator state). |
+| Re-seed from an updated seed | Set `PROTOAGENT_SEED_MERGE=1` and roll normally — image-owned keys re-apply, operator edits stay. Without it, change the live setting explicitly; removing the sandbox volume also deletes chats, stores, and credentials. |
 | Inspect the effective config | `GET /api/config` (or `/healthz` for `setup_complete`). |
 
 ## Reference
 
 - `PROTOAGENT_SEED_CONFIG` — file to seed the live config from on first boot (config-as-code).
-- `PROTOAGENT_SEED_MERGE` — `1` to **re-apply** that seed's image-owned keys on *every* boot instead of only the first. See [Merge-on-boot](#merge-on-boot-keeping-a-declarative-seed-live) below. Unset (the default) keeps seed-once.
+- `PROTOAGENT_SEED_MERGE` — `1` to **re-apply** that seed's image-owned keys on *every* boot instead of only the first. See [Merge-on-boot](#merge-on-boot-keeping-a-declarative-seed-live). Unset (the default) keeps seed-once.
 - `PROTOAGENT_SEED_SOUL` — file to seed the live `SOUL.md` persona from (persona-as-code); also heals a lingering starter placeholder. Falls back to the bundled `config/SOUL.md`.
-- `PROTOAGENT_CONFIG_DIR` — where the live config + setup marker live (default `/opt/protoagent/config`).
+- `PROTOAGENT_HOME` — the instance root; the bundled entrypoint sets `/sandbox`, with config and setup marker under `/sandbox/config/`.
 - `PROTOAGENT_HEADLESS_SETUP` — validate the seed + auto-complete setup (no wizard).
-- `PROTOAGENT_UI` — `console` (default) serves the operator console at `/app`.
+- `PROTOAGENT_UI` — `console` serves `/app`; the published image defaults to `none`, so the example compose file explicitly selects `console`.

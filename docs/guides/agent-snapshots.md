@@ -1,196 +1,85 @@
-# Agent snapshots — export, share, duplicate
+# Export or copy an agent
 
-A **snapshot** is an agent's *recipe*: its persona, config, plugin pins, MCP servers and
-skills, as a small zip. It is not a backup — no conversation history, no credentials, no
-plugin code. Importing one yields a **fresh** agent, not a resumed one.
+A snapshot is a zip containing an agent's setup: persona, configuration, plugin
+pins, MCP definitions, and skills. Importing creates a **new agent**. To recover
+existing chats, credentials, or runtime state, use a
+[data backup](/guides/backup-and-restore).
 
-Governed by [ADR 0091](../adr/0091-agent-snapshot-portability.md).
+## What a snapshot includes {#what-travels-and-what-doesn-t}
 
-## What travels, and what doesn't
+| Included | Supplied separately on the destination |
+| --- | --- |
+| Persona and configuration, with recognized secrets removed | Credentials and subscription sign-in |
+| Plugin repository URLs and pinned revisions | Plugin code, installed during import |
+| MCP definitions with secret values removed | Required commands and their credentials |
+| Skill directories | Managed runtimes and local work folders |
+| Optional knowledge text, with the CLI export flag | Chat history and runtime databases |
 
-| Travels | Doesn't |
-|---|---|
-| `SOUL.md` (the persona) | Conversation history, checkpoints, telemetry |
-| Config, secret-stripped | `secrets.yaml`, `.fleet-token`, device tokens |
-| `plugins.lock` pins (url + resolved SHA) | Plugin **code** — re-installed from the pins |
-| MCP server definitions (values nulled) | **Memory** — never, under any flag |
-| Knowledge — **only if you opt in** (see below) | |
-| `SKILL.md` directories | Every runtime sqlite store |
+Read the review and exported files before sharing. The exporter strips known
+secret fields and recognizable credential patterns; it cannot recognize every
+private detail or secret embedded in prose.
 
-The bar is 12-Factor's: **the artifact could be pushed to a public gist without leaking a
-credential.** There is a test that greps a built snapshot's bytes for known secrets.
+## Export from the app {#export}
 
-That holds for a **definition-only** snapshot, which is the default. It does **not** hold
-once you add a knowledge seed — see [Carrying knowledge](#carrying-knowledge-opt-in).
+1. Open **Settings → Snapshot** for the agent you want to copy.
+2. Read the review: credentials the destination needs, scrubbed text, and paths
+   to change on the destination.
+3. Choose **Download snapshot** and keep the zip. It includes the review as
+   `REVIEW.md`. If the agent changed during review, the app refreshes it;
+   read the refreshed review before downloading.
 
-## Export
+<span id="two-kinds-of-finding-two-different-responses"></span>
 
-**Console** — Settings ▸ Agent ▸ Snapshot. It opens on a *review*: which credentials the
-target will need, what was scrubbed, what was skipped. The download is a second click.
+A credential scrubbed from the export remains in the source agent. Replace or
+remove an exposed credential there too. A scrubbed machine-local path needs to
+be selected again on the destination.
 
-**CLI** — works on a **stopped** agent, which is the usual case when you're moving one:
+## Import into a new agent {#import}
 
-```bash
-protoagent agent export --dry-run          # the review; writes nothing
-protoagent agent export -o ~/snapshots/
-```
+1. Open **Settings → Fleet → New agent → From a snapshot**.
+2. Choose the zip and give the new agent a name.
+3. Review the plugin repositories, granted capabilities, and required credentials.
+   Import installs and runs the plugin code named in the plan.
+4. Supply the required credentials you want this agent to use, then choose the
+   button that installs the listed plugins and creates the agent.
+5. Open the new fleet member and send a short test message. If it needs setup,
+   follow the setup prompt or [connect a model](/guides/model-connections).
+6. Check its work folders and any local commands. A path or binary from the
+   source machine may not exist on this one. Install the
+   [document runtime](/guides/python-runtime) if the destination desktop needs it.
 
-Every zip carries a `REVIEW.md` describing what was stripped, so the disclosure can't get
-separated from the artifact.
+<span id="importing-runs-code-—-read-the-plan"></span>
+<span id="the-new-agent-arrives-incomplete"></span>
 
-### Two kinds of finding, two different responses
+Only import a snapshot whose plugin sources you trust. Its filesystem, shell,
+MCP, delegate, and tracing settings travel with the definition and are shown
+in the plan. Review them before applying it.
 
-The exporter runs a pattern sweep over free text (a token pasted into `SOUL.md` or a config
-field isn't key-shaped, so the structural strip can't see it). What it reports splits in two:
+## Duplicate on the same machine {#duplicating-an-agent}
 
-- **Credential-shaped text** — scrubbed from the snapshot, but **still in the source agent**.
-  Treat it as exposed: rotate it, then remove it there.
-- **Machine-local paths** — scrubbed because they carry your username. Nothing to rotate;
-  re-point them on the target.
+Export the source agent and import it under another name using the steps above.
+The duplicate has its own fresh history and stores. Re-enter credentials as
+needed, even when both agents live on the same machine.
 
-Scrubbing free text is a **safety net, not a guarantee**. It can't recognize a credential
-that reads like ordinary prose, so read the artifact before publishing it.
+## Include knowledge {#carrying-knowledge-opt-in}
 
-## Carrying knowledge (opt-in)
-
-```bash
-protoagent agent export --include-knowledge
-```
-
-Off by default. Turned on, the agent's knowledge travels as domain-tagged markdown under
-`knowledge/` — text, not the raw sqlite, because the source's embeddings were computed
-against *its* gateway and mean nothing on a target that may use a different model.
-
-**This changes what the file is.** A definition-only snapshot is publishable; one carrying
-knowledge is not. The two risks sit on different axes:
-
-- **Credentials** — the export strips them, and a test asserts none survive.
-- **Knowledge** — contains no credentials and may still be the last thing you want public:
-  project detail, client names, internal notes.
-
-So the review retracts the publishable claim, at the top and in bold, and lists every domain
-with its chunk count so you can decide domain by domain. Treat the file the way you'd treat
-the source documents themselves.
-
-**Memory is never included** — not even with the flag. What an agent recalls about a
-person's sessions ([ADR 0069](../adr/0069-memory-delivery-layer.md)) is a different kind of data
-with a different consent question, and a snapshot is something you hand to someone else.
-Knowledge can be reviewed a domain at a time; accreted personal memory realistically cannot.
-
-On import the seed is re-ingested into the new agent's own store, so it is **searchable
-immediately**. Semantic recall needs embeddings the target must compute itself, and its
-gateway may not be configured yet — so the source docs are also kept at `knowledge-seed/` in
-the new workspace. Run `protoagent knowledge ingest` on them once the gateway is set up.
-
-## Import
-
-**Console** — Settings ▸ Fleet ▸ New agent ▸ *From a snapshot*.
-
-**CLI**:
-
-```bash
-protoagent agent import vera-snapshot.zip --dry-run
-protoagent agent import vera-snapshot.zip --name vera-2 --yes \
-  --secret providers.gateway=sk-…
-```
-
-### Carrying knowledge (opt-in)
+The app's export is definition-only. The CLI can also include private knowledge:
 
 ```bash
 protoagent agent export --include-knowledge
 ```
 
-Off by default. Turned on, the agent's knowledge travels as domain-tagged markdown under
-`knowledge/` — text, not the raw sqlite, because the source's embeddings were computed
-against *its* gateway and mean nothing on a target that may use a different model.
+Review this zip as carefully as the source documents. It can contain learned
+facts, project details, names, and credentials embedded in knowledge text.
+Session-summary files, the designated memory domains, and always-on entries
+are excluded; **that does not mean every personal fact is excluded**.
 
-**This changes what the file is.** A definition-only snapshot is publishable; one carrying
-knowledge is not. The two risks sit on different axes:
+The destination ingests this text into its own store for keyword recall. It
+must compute embeddings using its own gateway for semantic recall; copies of
+seed files stay in `knowledge-seed/` for that purpose.
 
-- **Credentials** — the export strips them, and a test asserts none survive.
-- **Knowledge** — contains no credentials and may still be the last thing you want public:
-  project detail, client names, internal notes.
+<span id="carrying-knowledge-opt-in-1"></span>
+<span id="the-model-connection-travels-as-a-registry"></span>
 
-So the review retracts the publishable claim, at the top and in bold, and lists every domain
-with its chunk count so you can decide domain by domain. Treat the file the way you'd treat
-the source documents themselves.
-
-**Memory is never included** — not even with the flag. What an agent recalls about a
-person's sessions ([ADR 0069](../adr/0069-memory-delivery-layer.md)) is a different kind of data
-with a different consent question, and a snapshot is something you hand to someone else.
-Knowledge can be reviewed a domain at a time; accreted personal memory realistically cannot.
-
-On import the seed is re-ingested into the new agent's own store, so it is **searchable
-immediately**. Semantic recall needs embeddings the target must compute itself, and its
-gateway may not be configured yet — so the source docs are also kept at `knowledge-seed/` in
-the new workspace. Run `protoagent knowledge ingest` on them once the gateway is set up.
-
-## Importing runs code — read the plan
-
-A snapshot names plugin repositories. Applying it clones them and enables their code
-**in-process, with your privileges**. So import is always two steps: you get a *plan* first
-— every plugin URL (with unfamiliar sources flagged), every capability the config grants,
-every credential needed — and nothing is written until you accept it. The CLI refuses
-without `--yes`; the console's button says what it is about to install.
-
-Capability settings (`filesystem.allow_run`, `operator.allowed_dirs`, `mcp.servers`,
-`delegates`, `tracing.host`) apply **verbatim** and are shown in the plan rather than stripped. They're part
-of the agent's definition — silently neutering them would hand you a duplicate that behaves
-differently for reasons the plan couldn't enumerate. protoAgent's model is trust and consent,
-not sandboxing ([ADR 0071](../adr/0071-plugin-permissions-trust-model.md)): the control is
-seeing what you're accepting.
-
-Import only snapshots from a source you trust, exactly as you would a plugin or a
-dependency.
-
-### The model connection travels as a registry
-
-A snapshot's config is written in the provider-registry shape
-([ADR 0106](../adr/0106-provider-registry.md)) wherever the registry can say what the
-retiring `model.provider`, `model.api_base` and `model.api_key` said (#3128):
-
-- a Claude / ChatGPT subscription set as `model.provider` qualifies every bare model name it
-  routed — the lead and each aux / compaction / goal / subagent / fallback slot
-  (`anthropic-oauth:claude-sonnet-4-5`);
-- an endpoint the source pinned becomes its `gateway` connection **when the source box had no
-  connections of its own** — only then is that endpoint the `gateway` connection. On a box
-  that declares connections it serves only the retiring readers, so it travels as it is;
-- anything the source left to its box — typically a fleet member's endpoint — is left out
-  entirely, so the target box supplies its own. Nothing is ever written as a blank value: an
-  empty `base_url` would *replace* the target's endpoint rather than inherit it.
-
-Until #3128 finishes, a few runtime paths still read the retiring fields directly (bare model
-names, the default model route, knowledge embeddings, transcription, the plugin gateway
-client, the context-window probe, egress auto-allow, `--setup` validation). So the manifest's
-`model_aliases` records which connection each moved value pointed at, and the import restates
-**exactly those values, read from those connections** — never one the source did not set.
-
-Snapshots exported before this change still import: they are staged in the same shape,
-judged against the box you import onto, so they load with the meaning they had.
-
-### The new agent arrives incomplete
-
-No credentials travel, so a freshly imported agent can't reach its gateway until you supply
-them — via `--secret NAME=VALUE`, the console's import form, or that agent's Settings ▸
-Secrets afterwards. Only credentials the **source** agent actually had are reported missing;
-one a plugin merely declares isn't, because the original didn't have it either.
-
-A connection's key is named by the connection — `providers.<id>`. The retiring
-`model.api_key` is asked for as `providers.gateway` only where it *is* that connection's key
-(the source box had no connections, so the loader made it one); everywhere else it
-authenticates only the retiring single-gateway endpoint and keeps its name, because filing it
-under a connection would send it to that connection's endpoint instead. `--dry-run` prints the
-names this snapshot needs, and `--secret model.api_key=…` is still accepted where the plan
-asks for `providers.gateway`.
-
-## Duplicating an agent
-
-Export from the source, import with a new name:
-
-```bash
-protoagent agent export -o /tmp/vera.zip
-protoagent agent import /tmp/vera.zip --name vera-staging --yes
-```
-
-Identity is re-stamped on import — the copy gets its own name, its own instance id, and its
-own data scope, so the two never collide.
+For CLI export/import commands, exact exclusions, connection inheritance, and
+older snapshot compatibility, see [Snapshot reference](/reference/agent-snapshots).

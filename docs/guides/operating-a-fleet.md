@@ -1,10 +1,10 @@
 # Operating a fleet
 
-> **Read-only surface.** The fleet telemetry rollup ([ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md)) is a **read-only observability window** — it reports what the fleet is doing, not what to do about it. Every corrective step in this guide is an explicit operator procedure that requires your approval before acting and a verification step before it is considered done. The hub never autonomously restarts or reconfigures a member.
-
-This guide assumes your fleet is running (see [Run a fleet](./fleet.md)) and your hub is on v0.132 or later (the fleet telemetry rollup ships with ADR 0006 Slices 1–2). For an interactive view of the same fleet — presence, the TURN column, member detail with a live log tail, and the work feed — open the [fleet deck](./fleet-deck.md) (`protoagent fleet`).
-
----
+Check fleet health, roll out an update, investigate failures, and recover members.
+Start with a [running fleet](./fleet.md). The telemetry rollup is read-only;
+corrective actions are operator commands and do not run automatically.
+Use the [fleet deck](./fleet-deck.md) (`protoagent fleet`) for interactive status,
+logs, and member controls.
 
 ## 1. Health-check pass
 

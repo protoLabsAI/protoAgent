@@ -1,37 +1,24 @@
 # CLI coding agents over ACP
 
-Hand a real coding job to a purpose-built **CLI coding agent** — protoCLI (`proto`),
-Claude Code, Codex, Gemini CLI — and get the result back. A coding agent carries its
-own file access, shell, repo-map, and edit/verify loop, so it reads/edits/runs code
-in a repo far better than a generic tool loop.
+Hand a coding job to a CLI agent such as Claude Code, Codex, or protoCLI, then
+read its result in chat. protoAgent launches the coder as an `acp` delegate over
+the Agent Client Protocol. The lead agent keeps its own memory, tools, and goals.
 
-You reach one through the unified [delegate registry](/guides/delegates) (ADR 0025)
-as an **`acp` delegate**: `delegate_to(target, query)`. protoAgent is the ACP
-*client*; `proto --acp` (or another CLI's ACP mode) is the matching server, driven
-over the [Agent Client Protocol](https://agentclientprotocol.com) — JSON-RPC 2.0
-over the child's stdin/stdout.
-
-**This is the supported way to use a coding agent.** The other direction — letting a
-coding agent *be* the runtime for every turn — is [deprecated](/guides/acp-runtime):
-as a delegate, the coding agent does the coding work while protoAgent's own loop keeps
-the turn, so memory, goals, skills, and tool policy all still apply.
-
-::: tip History
-This used to be a standalone `coding_agent` plugin contributing a `code_with` tool
-([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp)). That tool was **retired** in
-favour of `delegate_to` with an `acp` delegate, which does the same over one tool
-alongside a2a/openai delegates and a console panel. The ACP client mechanics
-described here are unchanged — `delegate_to` reuses them.
-:::
-
-> **Security:** a coding agent gets **file + shell access in its workdir** (confined
-> to that directory — see [Permission posture](#permission-posture)). Declare it
-> deliberately, and prefer a scoped/throwaway `workdir`.
+You need the coder and its ACP adapter installed and signed in, plus an existing
+work directory. The subprocess uses its own file and shell tools and inherits
+protoAgent's credentials. A workdir sets its starting directory; it is **not an
+OS-enforced sandbox**. See [Permission posture](#permission-posture).
 
 ## Configure an `acp` delegate
 
-Coding agents run as local subprocesses, so they're declared in YAML (not in-app
-Settings — each grants local authority and deserves a deliberate edit):
+1. Open **Settings → Delegates** and add a **Coding agent**.
+2. Pick a preset or enter the adapter command and arguments. Set the workdir and
+   permission policy.
+3. Click **Test** to check the ACP handshake, then **Save**.
+4. Ask the lead agent to send it a small, self-contained job and inspect the result.
+
+Alternatively, edit the instance's `langgraph-config.yaml` (find it with
+`protoagent config explain`):
 
 ```yaml
 # config/langgraph-config.yaml
@@ -41,7 +28,7 @@ delegates:
     description: Coding agent — implements a change in a repo.
     command: proto              # binary on PATH
     args: ["--acp"]             # ACP server mode
-    workdir: ~/dev/my-repo      # session cwd — the confinement boundary
+    workdir: ~/dev/my-repo      # starting directory for the session
     permissions: allowlist      # auto | allowlist | readonly
     # env: { SOME_KEY: value }  # optional extra env, merged over the process env
     # timeout_s: 900            # optional per-call timeout (seconds)
@@ -50,8 +37,9 @@ delegates:
 ```
 
 The delegates registry is **enabled by default** — there's no plugin to turn on.
-Declaring (or editing) the `delegates` list hot-reloads on **Save & Reload**: the
-first delegate you add registers `delegate_to` for the next turn, no restart.
+Add or edit delegates in **Settings → Delegates**, then choose **Save** to
+apply them without a restart. The first delegate adds `delegate_to` for the
+next turn.
 
 ### Other coding agents
 
@@ -131,34 +119,22 @@ run it zero-install with `command: npx, args: ["-y", "@agentclientprotocol/codex
 (the form the [ACP-runtime](/guides/acp-runtime) and [MCP](/guides/mcp) guides use, and
 the built-in preset).
 
-::: warning `@zed-industries/codex-acp` is retired — and its failure mode is confusing
-The older Zed adapter is a **sealed ~188 MB Rust bundle with a codex core compiled in**.
-It never invokes the `codex` on your `PATH`, so its codex is frozen at whatever the
-adapter shipped — and its last publish was **2026-06-08**. Point a newer model at it and
-the API answers:
+If Codex reports that a model requires a newer CLI, check the adapter's resolved
+Codex dependency as well as the CLI on your PATH:
 
-```
-400 invalid_request_error — The '<model>' model requires a newer version of Codex.
-Please upgrade to the latest app or CLI and try again.
+```bash
+npm view @agentclientprotocol/codex-acp dependencies
 ```
 
-Truthful, and unactionable: upgrading your `codex` CLI changes nothing (the adapter
-doesn't use it), and `npx -y` already fetched the newest adapter there is. The ACP-org
-package is a thin wrapper that depends on **`@openai/codex` as an ordinary npm dep**, so
-the codex it drives tracks the real package. Switch the `args` and the error goes away.
-
-It's still a *pinned* dep (a caret on a `0.x` version only floats the patch), so the
-adapter can lag the CLI by a minor. If a brand-new model is rejected, check the adapter's
-resolved codex before assuming your setup is wrong:
-`npm view @agentclientprotocol/codex-acp dependencies`.
-:::
+Use the ACP adapter configured by the current preset. An older adapter can embed
+or pin a different Codex version, so upgrading a separate CLI may not update it.
 
 ::: tip Need a model the adapter is too old for, today?
 `codex mcp-server` runs **your** installed codex as an MCP server over stdio — so it's the
 binary you upgraded, at whatever version you're on. Wire it up as an [MCP
 server](/guides/mcp) rather than a delegate. The trade-off is real: codex becomes a set of
 tools bound to your agent, **not** a `delegate_to` target, so you lose the delegate framing
-— its own session, `workdir` confinement, [managed git](#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076),
+— its own session, configured working directory, [managed git](#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076),
 and the `background=True` fan-out path.
 :::
 
@@ -236,8 +212,9 @@ Action kinds come from the ACP request (`toolCall.kind`: `read` / `edit` /
 > **Per-action** live HITL (approve each individual edit/shell command as the agent
 > works) is **not** available — it would require pausing a blocking subprocess
 > session mid-turn. Use `permissions: readonly`/`allowlist` for deterministic
-> per-action control. With no container isolation, the `workdir` is the sandbox:
-> scope it to a throwaway checkout (or a disposable git worktree) for untrusted runs.
+> per-action control. The permission policy controls only
+> requests the adapter sends to the host. A disposable worktree separates edits; use
+> process or container isolation when you need to restrict the subprocess itself.
 
 ### Environment
 
@@ -303,7 +280,7 @@ git harness under `manage_git: true`, §Managed git below). No second secret sto
 
 ### Parallel builds: a worktree-backed coder pool
 
-One coder in one `workdir` is **sequential** — a second `code_with`/`delegate_to` into the
+One coder in one `workdir` is **sequential** — a second `delegate_to` into the
 same directory while the first is mid-edit will collide (shared working tree + index +
 branch). An orchestrator that wants to build several independent things at once (a lead
 fanning issues out to a crew) needs each concurrent coder in its **own** working tree.

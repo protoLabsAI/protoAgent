@@ -1,88 +1,34 @@
 # Delegates — the agents & endpoints your agent can talk to
 
-A **built-in registry** ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel))
-that gives the lead agent **one tool — `delegate_to(target, query)`** — over a
-unified roster of delegates it can hand work to:
+Add a delegate when your agent needs to hand work to another agent or model.
+The built-in `delegate_to(target, query)` tool dispatches to the names you register.
 
-| `type` | What it is | Dispatch |
-|---|---|---|
-| **a2a** | A fleet **agent** over the A2A protocol | JSON-RPC `message/send` (+ poll) |
-| **openai** | An OpenAI-compatible **model endpoint** — ask another model | `POST /v1/chat/completions` |
-| **acp** | A CLI **coding agent** (protoCLI, Claude Code, …) over ACP — the [supported way](/guides/coding-agents) to use one | the ADR 0024 `AcpClient` |
-
-This unifies what used to be three separate things — `peer_consult` (a2a),
-`code_with` (acp), and "no way to ask another model" — into one hot-swappable
-roster.
-
-### Programmatic dispatch from a plugin
-
-A server-side plugin can use the host service instead of importing delegate or
-ACP internals:
-
-```python
-invoke = registry.host.invoke_delegate
-if invoke is None:
-    raise RuntimeError("no delegates configured")
-reply = await invoke(
-    "coder",
-    "Review this room thread",
-    "conversation:thread-42",
-    permissions="readonly",
-)
-```
-
-The optional conversation key applies only to ACP delegates. It isolates the
-cached client and persisted ACP session for one stable conversation while
-preserving the configured command, workdir, environment, and roster entry. A
-conversation key is refused for other delegate types rather than ignored.
-Explicit ACP teardown closes every cached conversation variant for that
-exact launch and policy definition. Hot reload clears the host service before
-rebinding the current roster, so removed delegates cannot remain callable.
-
-`permissions="readonly"` is a per-invocation ceiling enforced by the ACP host,
-not prompt guidance. The host intersects it with the delegate's configured
-by-kind policy, disables framework-managed Git for that call, and rejects
-write/execute requests even if the configured policy would allow them. A
-delegate type that cannot enforce the ceiling is refused. The configured
-roster remains unchanged.
-
-Manage delegates three ways: the **console panel** (Workspace settings ▸
-Delegates), a **REST API**, or **config** — all hot-swappable (changes apply on
-the next turn, no restart). See [ADR 0025](/adr/0025-unified-delegate-registry-and-panel).
+| Type | Use it for |
+| --- | --- |
+| `a2a` | Another agent reachable over A2A |
+| `openai` | Another OpenAI-compatible model endpoint |
+| `acp` | A local [CLI coding agent](/guides/coding-agents) |
 
 ## Manage in the console (panel)
 
-Open **Workspace settings ▸ Delegates** (a built-in — always on, alongside Tools,
-MCP, and Subagents). The panel:
+1. Open **Settings → Delegates** and add an entry.
+2. Choose **A2A agent**, **Model endpoint**, or **Coding agent**, then fill in the
+   connection fields. A coding agent needs an installed command and an existing workdir.
+3. Click **Test**. Correct any connection or launch error before sending work.
+4. Click **Save**. The roster updates for the next turn without a restart.
 
-- **lists** your delegates with a type badge, a `secret set` / `⚠ unconfigured`
-  marker, a **live health dot** (a background prober probes each delegate
-  periodically — green reachable / red down / grey not-yet-checked), and a per-row
-  **Test** button for an on-demand probe. For an `acp` (coding-agent) delegate the
-  probe runs only the ACP `initialize` handshake — **not** a session — so it's cheap
-  and side-effect-free, never opening a thread against the agent on a timer
-  ([#1300](https://github.com/protoLabsAI/protoAgent/issues/1300));
-- shows a **`last call failed`** pill when the most recent real dispatch raised, with
-  the reason on hover. This is a *different* question from the health dot, and the two
-  can disagree: because an `acp` probe stops at the handshake, a coder whose binary
-  launches fine but fails every *session* shows **green** while every `delegate_to`
-  call fails. The pill is where that shows up outside the chat that triggered it. It
-  clears on the next successful dispatch, and only a failed dispatch counts — stopping
-  a turn isn't the delegate's fault, and a coder that runs but reports it couldn't do
-  the job dispatched fine;
-- **adds** one via a **type picker** (A2A agent / Model endpoint / Coding agent)
-  and a form generated from each type's field schema;
-- **edits / deletes** existing ones; secrets you enter are routed to
-  `secrets.yaml` and never shown back (the form says *"set — leave blank to keep"*).
+Edit or delete entries in the same panel. Secret inputs retain the saved value
+when left blank and never display it again.
 
-Saving writes the config + secret and hot-reloads, so the new roster is live on
-the next turn.
+The health dot means **reachable**, not that the last job succeeded. For ACP,
+Test checks only the initial handshake. The **last call failed** pill reports a
+failed dispatch separately; hover it for the reason. A successful later dispatch
+clears it.
 
 ## Declare delegates
 
-The registry is a **built-in** — always on, can't be disabled, and managed in
-**Workspace settings ▸ Delegates** (no plugin to install or turn on). It does
-nothing until you declare a delegate, so just add entries:
+For config-as-code, add a top-level `delegates` list to the instance's live
+`langgraph-config.yaml` (locate it with `protoagent config explain`):
 
 ```yaml
 # config/langgraph-config.yaml
@@ -111,17 +57,18 @@ delegates:
 ```
 
 `delegates` is a **top-level list** (ORBIS-style), not a plugin config section.
-Editing it and hitting **Save & Reload** rebuilds the roster live — no restart
-(protoAgent re-runs the plugin's `register()` with the new config).
+To apply delegate edits from the app, use **Settings → Delegates → Save**.
+The roster rebuilds live without a restart.
 
 ## Let the agent propose one (`propose_delegate`)
 
-An empty roster used to be a dead end: the agent could see nobody was configured
-and could only describe, in prose, what it needed. Since core 0.145 (#2953) the
-`delegates` plugin registers **`propose_delegate(entry, reason)`** —
-*unconditionally*, even when the roster is empty and `delegate_to` /
-`list_agents` therefore aren't bound — so *"register Claude Code as our coder"*
-has a real move behind it. Registration stays **consent-gated**:
+Ask the agent to propose a delegate, for example:
+
+> Register Claude Code as our coder for ~/dev/my-repo.
+
+The `propose_delegate(entry, reason)` tool validates the proposal, tests its
+connection, and pauses for your approval. It is available even with an empty
+roster. Review the command, workdir, permissions, and probe result before approving.
 
 1. **Validate** — the entry goes through the same per-type schema the panel and
    `POST /api/delegates` use; a malformed entry or a name that already exists
@@ -297,7 +244,7 @@ That is deliberate: a tokenless loopback delegate presents the fleet service tok
 accepts it, and the hub's proxy presents the remote's **stored** (paired) token. The remote's
 credential stays on the hub's fleet row, so rotating or re-pairing it fixes every delegate
 at once. Don't set a token on such a delegate. If it answers `401`, the hub has no working
-token for that remote: pair it (Settings ▸ Agents ▸ Pair…) or edit its token on the fleet
+token for that remote: pair it (Settings ▸ Fleet ▸ Discover ▸ Pair…) or edit its token on the fleet
 row. A remote agent that is *not* a fleet member is still a plain `a2a` delegate with its
 own Auth token.
 
@@ -357,6 +304,38 @@ curl -s -X POST localhost:7870/api/delegates -d '{"name":"opus","type":"openai",
   "url":"https://api.proto-labs.ai/v1","model":"protolabs/reasoning","api_key":"…"}'
 curl -s -X POST localhost:7870/api/delegates/test -d '{"type":"a2a","url":"https://peer/a2a"}'
 ```
+
+## Programmatic dispatch from a plugin
+
+A server-side plugin can use the host service instead of importing delegate or
+ACP internals:
+
+```python
+invoke = registry.host.invoke_delegate
+if invoke is None:
+    raise RuntimeError("no delegates configured")
+reply = await invoke(
+    "coder",
+    "Review this room thread",
+    "conversation:thread-42",
+    permissions="readonly",
+)
+```
+
+The optional conversation key applies only to ACP delegates. It isolates the
+cached client and persisted ACP session for one stable conversation while
+preserving the configured command, workdir, environment, and roster entry. A
+conversation key is refused for other delegate types rather than ignored.
+Explicit ACP teardown closes every cached conversation variant for that
+exact launch and policy definition. Hot reload clears the host service before
+rebinding the current roster, so removed delegates cannot remain callable.
+
+`permissions="readonly"` is a per-invocation ceiling enforced by the ACP host,
+not prompt guidance. The host intersects it with the delegate's configured
+by-kind policy, disables framework-managed Git for that call, and rejects
+write/execute requests even if the configured policy would allow them. A
+delegate type that cannot enforce the ceiling is refused. The configured
+roster remains unchanged.
 
 ## Relationship to `code_with` / `peer_consult`
 

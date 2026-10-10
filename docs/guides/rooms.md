@@ -1,455 +1,125 @@
-# Rooms — `@name` group chat in a thread
+# Talk to delegates in a room
 
-Type **`@proto what broke the build?`** in chat and `proto` answers *in the transcript,
-under its own name*. No lead-agent turn runs, nothing is paraphrased, and the answer is
-the delegate's own words. Address several at once — `@proto @reviewer what broke?` —
-and you have a **room**: a conversation with more than two participants in it.
+Start a chat message with `@name` to get a delegate's own reply in your chat.
+Address several delegates to let them discuss the same task. The conversation
+stays in the current chat; you don't need to create a separate room.
 
-A room is not a separate feature with its own store, panel, or lifecycle. It is what a
-chat thread *is* once more than one voice has spoken in it.
+## Set up and send a message {#what-name-does}
 
-## What `@name` does
+1. Add the participants in **Settings → Delegates** and test their connections.
+   Use each delegate's registered name. See [Delegates](/guides/delegates) if you
+   haven't connected one yet.
+2. Start your message with the names, followed by the task:
 
-1. The leading run of `@` tokens is resolved against your [delegate
-   roster](/guides/delegates). `@proto @reviewer fix it` addresses **both**; the first
-   token that doesn't resolve begins the message, so `@proto @nope hi` addresses `proto`
-   with the message `@nope hi` — a mid-message `@` is prose, as always.
-2. Each addressee is dispatched **sequentially, in the order you wrote them**, with a
-   catch-up on the room (below).
-3. Both halves of each exchange — your message and the reply — are written onto the
-   thread, attributed.
+   ```text
+   @coder @reviewer check the login change. Identify failures before editing files.
+   ```
 
-If the *first* token names no reachable delegate you get the roster back instead of the
-text being run as a prompt:
+3. Read the replies under each participant's name. They answer in the order you
+   named them; later participants can see earlier replies.
+4. Send a message without a leading `@name` to return to the lead agent:
 
-```
-Unknown or unreachable delegate: @prto. Available: proto, reviewer, claude-code.
-```
+   ```text
+   Summarize their findings and propose the next step.
+   ```
 
-A delegate that fails to answer is recorded as having failed, in the room, rather than
-vanishing:
+One name, such as `@reviewer check this plan`, requests one reply. An `@name`
+inside ordinary message text does not direct the message to that participant.
+If the first name is unknown, the chat shows the available delegates. Check the
+spelling against that list.
 
-```
-Delegate @proto failed: connection refused
-```
+## Continue the discussion {#multi-round-rooms}
 
-That matters: the *next* thing you type goes to the **lead agent**, and it needs to know
-the address happened.
+With several addressees, the same participants can reply for up to **three
+rounds** by default. The exchange ends earlier if everyone passes. A failed
+participant drops out of later rounds. A single addressee gets one turn.
 
-## The thread is the transcript
+When you see **“The room stopped at its 3-round cap”**, the participants had not
+finished discussing. Read their proposals before continuing. To continue,
+address the participants again with the remaining question:
 
-There is no room table, no room registry, no participant list on disk. The
-checkpointer thread that already holds your chat holds the room too — each room message
-is stamped structurally with who said it (`<room-message from="proto">`).
-
-Everything else is derived from those stamps, which is the point:
-
-- **Membership.** "Who is in this chat" is *whoever has spoken here*. The lead agent is
-  told, at each model call, who the cast is — recomputed from the thread every time, so
-  it can never drift from what actually happened.
-- **Catch-up.** "The room since you last spoke" is computed from the same stamps rather
-  than from a stored watermark. A stored watermark can drift; a derived one cannot.
-
-And because the room is the thread, the lead agent reads all of it. Ask *"so what did
-they decide?"* one message later and it answers from the same history you're looking at.
-
-::: tip Membership is awareness, not permission
-Naming the cast makes the lead *prefer* participants who already have the context — the
-same reason you would. It never fences `delegate_to`: every delegate on the roster stays
-reachable whether or not it has spoken here.
-:::
-
-## Catch-up: the room since you last spoke
-
-An addressed participant is not handed the whole conversation. It gets the messages that
-landed **since its own last message**, attributed by author:
-
-```
-You are taking part in a group chat. Here is what has been said since you last spoke:
-
-[operator] what broke the build?
-[reviewer] I'd blame auth
-
-You have been addressed directly as @proto. Reply to this message:
-
-what broke the build?
+```text
+@coder @reviewer agree on the smallest fix and the checks needed to verify it.
 ```
 
-That window is what keeps the cost of a room proportional to *the conversation* rather
-than to its length. It is also sent to **every** participant on **every** address,
-whatever else that participant remembers of the room on its own side — see [what a
-participant remembers](#what-a-participant-remembers-between-addresses) below.
-
-The window is bounded twice, and whichever bound trips first wins:
-
-| Knob | Default | Max | Bounds |
-|---|---|---|---|
-| `room.catchup_max_messages` | `40` | `500` | how many **thread messages** are replayed |
-| `room.catchup_max_chars` | `8000` | `200000` | the total size of that replay |
-
-"Thread messages", not "room messages": the window counts every authored message since
-the participant last spoke — your own turns and the lead agent's replies as well as room
-traffic. So a first `@` in a long ordinary chat can truncate before a single room message
-exists, and `40` is 40 *messages of any kind*, not 40 replies from participants.
-
-The window is taken from the **newest end** — the messages being replied to. A
-participant that has been quiet for 300 messages gets the recent room, not a
-context-window-sized bill for its own silence.
-
-**When it truncates, you are told.** The reply carries a note naming each participant
-whose answer was given on a clipped view, and which knob to raise:
-
-> _Older messages were left out of the catch-up for @proto — the room since they last
-> spoke is longer than the window. Raise `room.catchup_max_messages` /
-> `room.catchup_max_chars` to widen it._
-
-This exists because the alternative — dropping the tail quietly — leaves you with a
-confident answer given on a partial view of the room and no way to know. The workaround
-people reach for is to re-mention, which fragments the very conversation the room is
-holding.
-
-Only participants that actually **answered** are named. A dispatch that failed never
-produced an answer for the clipping to have shaped, and a note under `Delegate @proto
-failed: connection refused` telling you to widen a catch-up window would point you at a
-knob that has nothing to do with the failure. A `pass` is excluded for the same reason.
-
-::: tip On a first address, "since they last spoke" means the whole thread
-A participant that has never spoken here has no watermark, so its window starts at the
-top of the thread — mostly your chat with the lead agent. That is the common way this
-note appears on the very first `@` in a busy thread.
-:::
-
-## Multi-round rooms
-
-With `room.max_rounds: 1` an address is **one round**: each addressee answers once, and
-the exchange ends. That is fine for *"ask two people the same thing"* and useless for
-*"let them work it out"* — neither ever sees the other's answer as something to respond to.
-
-Above 1 the same cast runs again. The default is `3`:
-
-```yaml
-room:
-  max_rounds: 3
-```
-
-- **The cast is the addressed set**, resolved before anything is dispatched, and it never
-  grows. Rounds 2..N re-run exactly those participants, in the order you wrote them — so
-  each one now sees, through its catch-up, what the others just said. Nobody is ever
-  dispatched only to decide they had nothing to say.
-- **Participants are *told* they can pass.** Above 1 round, the prompt an addressee
-  receives ends with the offer: *"If you have nothing to add, reply with exactly `pass`
-  and nothing else."* That instruction is the whole mechanism — a model that was never
-  invited to decline does not decline, and every room would then run to its cap. At
-  `max_rounds: 1` the offer is not sent at all, which is why single-round prompts are
-  unchanged.
-- **`pass` means silence.** A reply that is empty, or is just `pass` — bare, in parens,
-  with a full stop, in backticks, quoted or emphasised — is not written to the room and
-  does not count as speaking. A participant with nothing to add can say so without either
-  polluting the transcript or keeping the room alive. (`pass` *inside* a sentence — "I'd
-  pass on that approach" — is an answer, and so is a qualified one: *"Pass, but note the
-  auth change"* carries something the room needs, so it is recorded and it keeps the room
-  going.)
-- **A round in which nobody spoke settles the room.** It stops there. This is the normal,
-  good ending, and it is deliberately quiet: no note, nothing added to the reply.
-- **A participant with nothing new to read is told so.** If everyone who spoke after it
-  was silent, its catch-up is empty; instead of re-sending the original question as if
-  nothing had happened — which gets you the same answer twice, word for word — the prompt
-  says *"Nothing new has been said since you last spoke"*, and it can pass.
-- **The cap is the backstop, and it announces itself.** If `room.max_rounds` rounds run
-  and the conversation still hasn't settled, the reply says so:
-
-  > _The room stopped at its 3-round cap — the conversation had not settled. Ask again
-  > to continue it, or raise `room.max_rounds`._
-
-- **A failed address is not retried.** A participant whose dispatch failed is dropped
-  from later rounds. A dead delegate does not answer faster the third time, and retrying
-  it once per round is how a bounded room turns into N times the timeout you wait
-  through. That holds even for the failure that says the peer is *alive* — `still
-  running after 300s without observable progress — the peer may still be working`: for an
-  `a2a` delegate, `poll_timeout_s` is the time since the last material task observation,
-  not a cap on the whole turn. A `SendMessage` or `GetTask` response that changes the
-  same task's visible state, context, status message, or artifact content resets that
-  inactivity clock; repeated identical `TASK_STATE_WORKING` polls do not. Re-addressing
-  it would open a **second** task on a peer already busy with the first, wait the same
-  timeout again, and still return nothing. The member is not quietly written off: its
-  failure is recorded in the room, and the adapter's own wording (including "raise its
-  poll timeout") is quoted straight to you. And for an `a2a` member, its answer is not
-  lost either — see [late answers](#late-answers-from-a-member-still-working).
-- **A room needs two participants to be a room.** `@one-agent do X` is one round however
-  high `max_rounds` is, and so is a room that has lost all but one participant. With a
-  single speaker there is nothing new between its own reply and its next turn — the
-  catch-up is empty by construction — so a further round would re-send your original words
-  verbatim to a delegate that already carried them out, file writes and bill included.
-  `room.max_rounds` is one global knob; it must not multiply the cost of the most common
-  address, which is to a single agent.
-
-At `max_rounds: 1` almost none of this is observable: no pass offer in the prompt, no pass
-handling, no cap note, exactly the single pass rooms originally made. The one addition
-there is the **truncation note** above, and only when the window actually truncated.
-
-### When to raise it
-
-Raise it when you want the participants to **react to each other**, not just answer you:
-a design disagreement between two agents, a review where one raises something the other
-should respond to, a plan two specialists have to reconcile. One round cannot do any of
-those — the second addressee sees the first's answer, but the first never sees a word
-back.
-
-Set it to 1 when you are fanning the *same* question out to several participants and
-intend to read the answers yourself. A second round there costs dispatches and buys you
-agreement noise.
-
-The cost is easy to reason about, which is the point of bounding rounds rather than time:
-**at most `max_rounds` × (participants) dispatches**, and the room stops the moment a
-whole round is silent. Two things pull the real number below that ceiling — a participant
-that stays silent is not written to the room, and a participant whose address *failed* is
-dropped from every later round (if that leaves fewer than two, the room ends there).
-
-Budget for the cap, not for a settle. A round goes quiet only when **nobody in it spoke**
-— every remaining participant either sent a bare `pass` or returned nothing at all — so
-how often a room settles early is a property of your models, not a guarantee. Start at
-`2` or `3`. If you
-never see the cap note, your rooms are ending by settling — the healthy case, with the cap
-doing its job as a backstop; if you see it every time, the conversation needs more room
-than you gave it (or the participants are talking past each other, which more rounds
-won't fix).
-
-Every round is also written **permanently onto the thread**, because the thread is the
-transcript — so N rounds of participant output ride in every later lead-agent turn's
-context until compaction. That is the second half of the cost, and it is why the cap is
-low by default.
-
-::: warning Rounds are bounded; time is not
-There is deliberately **no wall-clock cap** on a round. A turn-length limit declares work
-dead while a participant is still doing it, and a room that "settles" around members who
-were mid-deploy is worse than one that takes a while. Bound the number of rounds instead.
-
-The flip side: the whole room runs inside the thread's write lock, so with a high
-`max_rounds` and slow participants every other writer on that thread — a scheduled fire, a
-goal continuation, an inbound A2A turn, compact — waits for it. Each dispatch is still
-bounded by the delegate's own configured timeout (`poll_timeout_s` as the no-progress
-bound for `a2a`, `timeout_s` for `acp`); the room adds none of its own.
-:::
-
-### Who decides who speaks next
-
-Only **you** (by addressing) and the **lead agent** (by calling `delegate_to`). The round
-driver picks the next speakers from the addressed set and the room's own structure — it
-never reads a delegate's reply for intent. A delegate cannot pull a third party into the
-room by mentioning them; reply-text chaining shipped once and was removed as a capability
-leak. The one thing read out of a reply is whether it was a `pass`.
-
-## Configuration
-
-All three knobs live in `langgraph-config.yaml` and are editable from **Settings ▸
-Behavior ▸ Room**. All are hot-reloaded on Save & Reload.
-
-```yaml
-room:
-  catchup_max_messages: 40   # messages replayed to an addressed participant
-  catchup_max_chars: 8000    # …and the size ceiling on that replay
-  max_rounds: 3              # the default; 1 = each addressee answers once
-```
-
-A zero or negative value on any of them is read as "leave it at the default", never as
-"send nothing" or "address nobody". Each also has a ceiling — `500` messages, `200000`
-characters, `10` rounds — and a larger value is clamped to it rather than obeyed. These
-are per-dispatch cost knobs: an unbounded catch-up ships the whole thread as the prompt
-on every address, and because an addressed run holds the thread lock from start to
-finish, an unbounded round count parks your own thread behind every one of those
-dispatches. The Settings form will not offer a value above the ceiling; a hand-edited
-`langgraph-config.yaml` is kept as written and clamped when the room reads it.
-
-## What a participant remembers between addresses
-
-`conversation_key` — the parameter that gives a delegate a conversation of its own, keyed
-to *this* thread — rides to every delegate type that has one to continue.
-`DelegateRegistry.dispatch` refuses it for the type that doesn't:
-
-| Delegate type | Between addresses it remembers… |
-|---|---|
-| **acp** (protoCLI, Claude Code, …) | its own session, keyed to this thread |
-| **a2a** (a fleet agent) | its own side of the conversation, if it keeps one — the room re-sends the A2A `contextId` that peer assigned this thread |
-| **openai** (a model endpoint) | nothing |
-
-The `a2a` row is the one to read carefully, because it is a *best effort* in a way the
-other two are not. A2A's `contextId` is the protocol's "these messages are one
-conversation" grouping key, and the **peer** owns it: the room never invents one, it
-echoes back the id the peer itself assigned on the previous address. So the outcome
-depends on who you addressed —
-
-- **A protoAgent peer** (a fleet member, another instance) resolves an inbound `contextId`
-  to a chat thread of its own, so it genuinely picks the conversation back up. The catch-up
-  window stops being its whole world.
-- **A peer that assigns no `contextId`, or ignores the one we send**, remembers nothing —
-  exactly as before. Nothing fails and nothing is retried; the room simply carries on
-  sending the catch-up.
-- **A peer that answers every conversation with the *same* `contextId`** (its
-  authenticated session, say) merges your rooms on its side. Two of your chats become one
-  conversation to it. Nothing on the wire lets a client detect that, which is what "the
-  peer owns it" costs: the room keeps its threads apart, the peer need not.
-
-Which is why **the catch-up window is still sent to everyone, every time**. It is the
-floor, not an optimization to be skipped once continuity exists — and for an `openai`
-delegate (a stateless chat endpoint: every call is a fresh completion, so a conversation
-key would name nothing and it is refused rather than silently accepted) it remains the
-participant's *entire* picture of the room.
-
-### The conversation is the chat, not the `@`
-
-Continuity is keyed to *this chat thread and this participant* — not to how the
-participant was reached. Your `@name` addresses and the lead's own `delegate_to` calls to
-the same participant in the same chat are turns of **one** conversation on its side, which
-is what it means for [a delegation to be a room address](#who-decides-who-speaks-next). That
-is how `acp` has always worked, and `a2a` now matches it. Two consequences worth knowing:
-
-- Ask a peer something unrelated with `delegate_to` and it answers *inside* the room's
-  conversation, with the room's history behind it. That is usually what you want from a
-  participant; it is not what you want from a one-off lookup.
-- **`delegate_to(background=True)`, a parked-task resume, and a managed-git `item_id`
-  claim all bypass the room helper**, so each dispatches with no conversation key and
-  opens a conversation of its own. A background delegation to a participant that is also
-  in the room is therefore a *second* conversation with it, not a continuation.
-
-There is no per-call switch for this; the lever is *which* call you make.
-
-### What that changes about tuning the caps
-
-It changes what a wide window is *for*, and it splits the advice by who is in the room.
-
-Before, the window had to carry the participant's whole world, so the honest instinct was
-to widen it — a truncation note meant a participant answered on a partial view of a room
-it could not otherwise see. For a participant that resumes, the same content is now paid
-for **twice**: once in its own thread, and again in the catch-up you ship on top. Widening
-the caps for a room of protoAgent peers buys re-transmission, not knowledge.
-
-So:
-
-- **A room of resuming peers** — the window's job shrinks to *"what did I miss while I
-  wasn't the one being addressed"*, which the since-you-last-spoke watermark already
-  scopes. The defaults are generous for that, and a truncation note is worth much less
-  alarm: the clipped tail is mostly a re-send of what the peer already has. Reach for the
-  caps only when the note keeps naming the *same* participant, which means the room really
-  is outrunning it.
-- **A room with any `openai` participant, or any peer that assigns no `contextId`** —
-  nothing has changed. The window is still that participant's entire picture, truncation
-  still means it answered on a partial view, and the caps are still the only lever.
-- **Mixed rooms take the second rule**, because the caps are per-room, not per-participant.
-
-That is also why truncation is surfaced rather than swallowed: the note names *which*
-participant was clipped, which is exactly what you need to tell the two cases apart.
-
-### What continuity does not survive
-
-Deliberately, in each case — the fallback is always "open a fresh context", i.e. the
-behavior every address had before this existed, which is why none of it fails loudly:
-
-- **A restart.** The map from thread to peer context is in-memory and process-local. An
-  upgrade or a desktop relaunch ends every room's continuity, silently, and the next
-  address starts a new conversation on the peer.
-- **Rewind, and deleting the chat.** These are the ones that would otherwise be a *leak*
-  rather than a loss: rewind means "discard everything after this" and delete promises the
-  history is removed, so both drop the pointer. Without that, the next address would
-  rejoin the peer's copy of the conversation and the erased exchange would come back in
-  the participant's voice. (An `acp` participant's session is a live subprocess and is
-  **not** torn down by either gesture — a coding agent addressed in a rewound thread still
-  remembers.)
-- **Re-pointing a delegate's `url`, renaming it, or editing its credential.** A context id
-  only means anything to the peer that minted it — and to the principal it minted it for.
-- **Being addressed under a second delegate name.** Each name keeps its own conversation,
-  so one fleet member on two roster rows holds two half-rooms. Two roster rows can carry
-  two different credentials, and merging them on a matching url would cross that boundary
-  — address a member under one name.
-- **The participant asking a question it cannot be sent the answer to.** When an addressed
-  peer pauses for input (`ask_human`, a tool approval), the room shows you the `⏸ … needs
-  input` handle and the peer's thread is left holding that question. A room address is not
-  a resume — a peer that is paused would queue your next message behind the pause and hand
-  back the *same* question — so the room drops the pointer instead: your next `@` opens a
-  clean conversation and is answered normally, exactly as it was before continuity
-  existed. Only the lead can actually answer a pause, with
-  `delegate_to(target=…, resume_task_id=…)`, and that goes straight to the parked task.
-- **An address that failed with the peer still working.** "Still running after Ns without
-  observable progress", or a read that timed out on a peer answering inline: the room
-  writes `(could not be reached: …)` and moves on, so whatever that turn eventually
-  produced is in a conversation this side has no record of. The pointer goes with it —
-  otherwise the next address would both inherit that invisible history and queue behind
-  the turn the room already gave up on. What the room keeps instead is the *task*, so it
-  can collect that turn's answer when it finishes ([late
-  answers](#late-answers-from-a-member-still-working)) — and a collected answer lands on
-  this thread, which is when the pointer comes back. An address that failed because the
-  peer was *unreachable* keeps its continuity: nothing happened on the peer, so nothing
-  about its conversation changed.
-
-**Compaction is the exception that keeps it.** `/compact` shortens *your* side to save
-your window; it is not a claim that anything was unsaid, and the peer manages its own
-context. Dropping continuity there would throw away the thing that makes a long room
-affordable.
-
-That list doubles as the **reset**: there is no "forget this room" button, so if you want
-a participant to start clean, rewind or delete the chat, or restart the instance. And
-note what none of it does — nothing is *ended* on the peer. It keeps its session and its
-content; what goes away is this side's ability to rejoin it. An incognito message that
-opens with `@name` is the same story: the peer stores the exchange the way it stores any
-other, exactly as it did before continuity existed.
-
-### What continuity is not
-
-It is not a way to rejoin work already in flight. Re-addressing a peer that is still
-working starts a *second* task beside the first rather than joining it — which is why [a
-failed address is not retried](#multi-round-rooms), even the failure that says the peer
-may still be working. That failure also drops the conversation, so your next address opens
-a clean one: it will be answered, and it will not queue behind the abandoned turn. The
-abandoned turn's own answer is a separate matter — the room collects it (below).
-
-### Late answers from a member still working
-
-When an `a2a` member's address gives up with the peer still working — *"still running
-after Ns without observable progress"* — the room keeps that task's id and **collects** it
-in the background: it asks the peer about that one task (`GetTask`, read-only) every few
-seconds, backing off to every 30s, until it settles. The reply you get says so:
-
-> _Still waiting on @slow in the background — a late answer will be posted here if it
-> finishes._
-
-When the task finishes, its answer is posted to this chat as that member's own message,
-marked as having arrived after its turn, and the lead agent gets a turn to take it in —
-the same way a `delegate_to(background=True)` reply arrives. If the task fails instead,
-you get that as a failed message from the member. If it stops on a question (`⏸ … needs
-input`), the question and its resume handle go to the lead, which is the only one that can
-answer it.
-
-What it deliberately is **not**:
-
-- **Not a re-address.** Collection never sends the member a message, so it cannot open a
-  duplicate task, and the member stays dropped from the room's remaining rounds. A late
-  answer is not a turn: it does not restart the room or extend `max_rounds`.
-- **Not durable.** Like continuity, the handle is in memory: a restart ends every
-  collection, and the member simply stays failed, as it always did.
-- **Not forever.** A collection gives up after an hour of the task still running, or after
-  losing touch with the peer eight polls in a row, and says so in the chat. A peer that
-  no longer knows the task (it restarted, or dropped it) ends the collection quietly.
-- **Not proof against erasing history.** Rewinding or deleting the chat while the member is
-  still being waited on withdraws the collection with everything else in [the list
-  above](#what-continuity-does-not-survive), so an answer to history you erased does not
-  reappear in it. So does re-pointing the delegate, changing its credential or removing it.
-- **One per member per chat.** If the same member times out again in the same chat before
-  the first answer arrives, the newer task replaces the older one, and only the newer
-  answer is collected.
-- **Quiet in incognito.** A late answer to an incognito message still lands in the chat, but
-  the lead is not woken to take it in.
-
-The lead's own `delegate_to` gets the same treatment: a foreground delegation that gives up
-on a still-working `a2a` peer tells the lead the answer will be delivered on a later turn,
-so it neither re-delegates the work nor reports the answer as lost. This needs a peer that
-hands the task back when asked to — every protoAgent does; a peer that holds the request
-open until it has finished leaves no task to collect.
-
-It is not a *record*, either. The room's transcript is this thread, and that is the only
-copy you can read, search, export or rewind. What continuity buys is that the participant
-does not have to be re-told the room from scratch every time you address it.
-
-## See also
-
-- [Delegates](/guides/delegates) — the roster `@name` resolves against
-- [CLI coding agents over ACP](/guides/coding-agents) — the type with a persistent local session
-- [Fleet](/guides/fleet) — many named agents on one host, addressable over `a2a`
+<span id="when-to-raise-it"></span>
+<span id="who-decides-who-speaks-next"></span>
+
+For a longer discussion, raise **Max rounds per address** in **Settings → Behavior → Room**
+and use **Save & apply**. Set it to `1` when you want each participant to answer
+once. Extra rounds can increase waiting time and model usage; a round cap does
+not mean the participants reached agreement.
+
+## Supply enough context {#catch-up-the-room-since-you-last-spoke}
+
+Participants receive recent messages since they last spoke, bounded by **40
+messages** and **8,000 characters** by default. A participant joining for the
+first time receives the recent end of the current chat. Your messages and the
+lead agent's replies count toward these limits too.
+
+A note naming a participant says when older messages were left out of its
+catch-up. Include the missing decision, relevant file paths, or constraints in
+your next request. If this happens repeatedly, raise the catch-up limits in
+**Settings → Behavior → Room**.
+
+<span id="what-that-changes-about-tuning-the-caps"></span>
+
+Don't assume every participant can recover omitted history: coding agents
+and some remote agents keep their own conversations, while model endpoints
+rely on the supplied catch-up. See [participant continuity](/explanation/rooms#participant-continuity)
+for the differences.
+
+## Recover from a failed or slow reply {#late-answers-from-a-member-still-working}
+
+| What you see | What to do |
+| --- | --- |
+| Unknown or unreachable name | Check the delegate roster, spelling, and connection test |
+| Connection refused or authentication error | Check the delegate's URL, running state, and credentials in **Settings → Delegates**, then test again |
+| “Still running … without observable progress” | The remote agent may still be working. Avoid sending the same task again while it is busy |
+| “Still waiting … in the background” | A late answer will be posted in this chat if the remote task finishes; it does not restart the room's rounds |
+| A participant needs input | Give the lead agent the requested answer and the displayed resume handle so it can resume the delegated task |
+
+<span id="what-continuity-is-not"></span>
+
+Re-addressing an agent that is still working starts another task. It does not
+join the existing one. Collection gives up after an hour or repeated failed polls, with a chat notice.
+A restart stops collection because the pending handle is not persisted.
+You can inspect the remote agent's own console to check work that continues there.
+
+## Start a fresh conversation {#what-a-participant-remembers-between-addresses}
+
+<span id="start-a-fresh-conversation"></span>
+<span id="the-conversation-is-the-chat-not-the"></span>
+<span id="what-continuity-does-not-survive"></span>
+
+Use a new chat when you want a separate task. In the same chat, subsequent
+addresses can continue a participant's own conversation. Restarting clears
+local pointers used to resume remote conversations. Rewinding or deleting
+a chat clears those remote pointers too, but does not erase the remote agent's
+copy. A local coding agent's live session can retain its history after a rewind.
+
+Incognito controls the lead agent's memory handling. It does not make a
+delegate's conversation incognito or erase content the delegate stores. See
+[Manage memory](/guides/manage-memory#use-incognito).
+
+## Room settings {#configuration}
+
+Change these in **Settings → Behavior → Room**, then **Save & apply**:
+
+| Setting | Default | Maximum |
+| --- | --- | --- |
+| Catch-up window (messages) | 40 | 500 |
+| Catch-up window (characters) | 8,000 | 200,000 |
+| Max rounds per address | 3 | 10 |
+
+Zero or negative values restore the default; they do not turn rooms off.
+The limits apply to context and rounds, not to the total elapsed time of a task.
+
+## Further reading {#see-also}
+
+<span id="the-thread-is-the-transcript"></span>
+
+- [How rooms work](/explanation/rooms): transcript, dispatch, continuity, and late answers.
+- [Delegates](/guides/delegates): connect and test participants.
+- [CLI coding agents](/guides/coding-agents): connect a coding agent.
+- [Fleet](/guides/fleet): run several agents on one host.

@@ -13,7 +13,7 @@ Same checklist as `TEMPLATE.md` in the repo, kept in sync. Use this when you've 
 Set your agent's **user-facing** name in **config** — it flows to the console
 brand, window/tab title, agent card, and system prompt:
 
-- `identity.name` in `config/langgraph-config.yaml` (or the setup wizard), and
+- `identity.name` in the instance's live `langgraph-config.yaml` (or the setup wizard), and
 - `config/SOUL.md` for persona — it's loaded into the system prompt, so you don't
   edit `graph/prompts.py`. (The model answers natively — there is no
   `<scratch_pad>`/`<output>` protocol to preserve; reasoning streams on the gateway's
@@ -50,7 +50,7 @@ The starter tools ship by default: `current_time`, `calculator`, `web_search`,
 `fetch_url` (keyless general) plus the memory, scheduler, notes, and tasks tools.
 
 - **Drop** the ones you don't want via config — list them under `tools.disabled`
-  in `config/langgraph-config.yaml` (live-reloadable). No `get_all_tools()` edit.
+  in the instance's live `langgraph-config.yaml` (live-reloadable). No `get_all_tools()` edit.
 - **Add** your own as a **plugin** (`plugins/<id>/` with a `register(registry)`),
   so they're discovered without touching core. See [Plugins](/guides/plugins).
 
@@ -83,7 +83,8 @@ See [Configure subagents](/guides/subagents) for the full pattern.
 
 ## 4. Point at a model
 
-Edit `config/langgraph-config.yaml::model.name`. Two options:
+Find the live config with `protoagent config explain`, then edit `model.name`.
+For gateway connections, two options:
 
 1. **Gateway alias** — register `protolabs/<your-name>` in your LiteLLM gateway, set `name: protolabs/<your-name>`. Swapping models becomes a gateway edit.
 2. **Direct model** — set `name: openai/gpt-4o` or `anthropic/claude-opus-4-8` and let the gateway route through directly.

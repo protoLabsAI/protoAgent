@@ -14,7 +14,7 @@ key is **ignored** (no OS/binary/license gating is parsed or enforced).
 |---|---|---|---|
 | `name` | string | ✅ | Unique. Lowercase-with-hyphens by convention. A live skill with the same `name` overrides a bundled one. |
 | `description` | string | ✅ | The skill's **summary in the `<available_skills>` index** — the only thing the agent sees before deciding to `load_skill` one, so write it "pushy": say plainly *when* to use the skill. Truncated at **1024 chars**. |
-| `tools` (or `metadata.tools`) | list[string] | — | Advisory tool names the skill relies on. Surfaced to the model (as `Relevant tools:`) when it loads the skill — a hint, not a gate ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)). On load they're reconciled against the tools actually bound to that invocation plus the known host-config gates; any that are missing or configuration-refused (e.g. the project-registration tool when `onboarding.enabled` is off) are flagged as `Unavailable in this context:` before the procedure — the body still loads. |
+| `tools` (or `metadata.tools`) | list[string] | — | Advisory tool names the skill relies on. The index flags missing declared tools before the procedure is loaded; the skill remains listed. Surfaced to the model (as `Relevant tools:`) when it loads the skill — a hint, not a gate ([ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)). On load they're reconciled against the tools actually bound to that invocation plus the known host-config gates; any that are missing or configuration-refused (e.g. the project-registration tool when `onboarding.enabled` is off) are flagged as `Unavailable in this context:` before the procedure — the body still loads. |
 | `user_facing` | bool | — | `true` → the skill is invokable as a `/<slash>` chat command ([ADR 0052](/adr/0052-user-facing-skills-slash-commands)). Default `false`. Truthy spellings: `true` / `1` / `yes` / `on`. |
 | `user_only` | bool | — | `true` → an **operator-only** skill: it's a `/<slash>` command, but it is **withheld from the agent's `<available_skills>` index** — the agent never sees or loads it ([ADR 0060](/adr/0060-skill-progressive-disclosure)). **Implies `user_facing`.** Default `false`. Use it for procedures you want to run on demand without the agent reaching for them on its own. |
 | `slash` | string | — | The `/<token>` trigger for a `user_facing` skill (whitespace-free). Blank → slugified `name` (lowercased, non-alphanumerics → hyphens). |
@@ -45,9 +45,9 @@ Roots, later wins on duplicate `name`:
 | Root | Source tag | Writable |
 |---|---|---|
 | `<repo>/config/skills/<slug>/SKILL.md` (bundled examples) | `disk` | read-only |
-| `<config-dir>/skills/<slug>/SKILL.md` (`skills.dir` override) | `disk` | ✅ |
+| `<config-dir>/skills/<slug>/SKILL.md` (`<config-dir>` = `<instance_root>/config`; `skills.dir` override) | `disk` | ✅ |
 | plugin-bundled skill dirs | `disk` | via the plugin |
-| operator/console-authored (`user_skills_dir()`) | `disk` | ✅ (live CRUD) |
+| `<instance_root>/skills/<slug>/SKILL.md` (console-authored) | `disk` | ✅ (live CRUD) |
 
 Sub-folders are organizational only — a skill is named by its frontmatter, not its path.
 
@@ -70,15 +70,15 @@ idle-decay, no auto-prune — `--prune` opts in). See the [Skills guide](/guides
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Load skills + list the `<available_skills>` index at all |
-| `db_path` | `/sandbox/skills.db` | Index location (→ `~/.protoagent/skills.db` fallback) |
+| `db_path` | `/sandbox/skills.db` | Index location (legacy default resolves to `<instance_root>/skills.db`) |
 | `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (rest via `list_skills`; bodies via `load_skill`) |
 | `dir` | `""` | Override the writable skills root |
 | `scope` | `""` (→ `scoped`) | Tier: `scoped` (private, **default**) · `shared` (one commons) · `layered` (read commons ∪ private, write private, `promote` to lift) ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)). Sharing is opt-in — a fresh agent keeps its learned skills private. |
 | `shared` | `false` | Back-compat boolean — `true` → `scope: shared` when `scope` is blank |
 
-The shared-tier **commons** base dir is `commons.path` (blank → `~/.protoagent/commons`). The commons
+The shared-tier **commons** base dir is `commons.path` (blank → `<box_root>/commons`). The commons
 is **host-level and un-scoped** — every agent on the host reads the same `commons.path` regardless of
-`instance.id`, so isolate two co-located fleets by giving each a distinct `commons.path`. Boot logs
+the instance root, so isolate two co-located fleets by giving each a distinct `commons.path`. Boot logs
 the active tier + path (`[skills] tier=… into …`). Curate the commons by hand —
 `skills promote`/`forget` (it's curator-immutable; see the source table above).
 `GET /api/runtime/status` reports `skills.count`.
