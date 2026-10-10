@@ -489,6 +489,20 @@ def register_operator_routes(
     async def _tools():
         return tools_list()
 
+    @app.get("/api/components")
+    async def _components_catalog():
+        """Live component-v1 kinds a renderer can receive (ADR 0118 D5) — the core widgets
+        plus every plugin-contributed kind — as ``[{name, plugin, frame_url}]``. ``plugin`` is
+        null for a core widget; ``frame_url`` is the public ``/plugins/<id>/<frame>`` page a
+        frame kind renders in, else null. Read-only module state (rebound on every plugin
+        reload), so no injected accessor; operator-bearer gated like the rest of /api."""
+        from graph.components import component_catalog
+
+        try:
+            return component_catalog()
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     @app.get("/api/background")
     async def _background_jobs(session: str = "", status: str = "", limit: int = 100):
         """Background subagent jobs (ADR 0050) — read-only list for the console.
