@@ -1694,8 +1694,6 @@ export function ChatSessionSlot({
     ],
   );
 
-  if (!session) return null;
-
   // Send-to-chat bridge target (ADR 0118 D4 / S10b): an inline artifact frame rendered in THIS
   // session's transcript reaches its chat through here. `send` reuses the NORMAL turn path so the
   // message is an ordinary, visible user turn — just tagged (`sentVia`) with the artifact it came
@@ -1703,7 +1701,10 @@ export function ChatSessionSlot({
   // busy" gate: a streaming / attended-server / HITL-parked turn refuses a fresh artifact send.
   // Both are latest-closures so the stable context value always reads current state; the memo
   // only re-keys on the session id so inline hosts don't re-subscribe every render. (The panel
-  // can provide the same shape to reach the active chat tab.)
+  // can provide the same shape to reach the active chat tab.) These MUST stay above the
+  // `if (!session) return null;` early return so the hook count is stable when the slot's
+  // session flips null↔present (mounts before sessions load, or is deleted while mounted);
+  // the null guards below are therefore live, not dead code.
   const artifactIsBusy = useLatestCallback(
     () => status === "streaming" || Boolean(serverTurnControl) || Boolean(hitl),
   );
@@ -1721,6 +1722,8 @@ export function ChatSessionSlot({
         : null,
     [artifactSessionId, artifactIsBusy, sendFromArtifact],
   );
+
+  if (!session) return null;
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
