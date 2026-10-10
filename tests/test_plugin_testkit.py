@@ -13,6 +13,7 @@ so the test never clobbers the real host.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 import sys
@@ -173,6 +174,31 @@ def test_testkit_is_service_name_matches_the_host():
         None,
     ):
         assert testkit._is_service_name(name) == is_service_name(name), f"service-name drift for {name!r}"
+
+
+def test_testkit_source_imports_only_stdlib_no_host_modules():
+    # The AUTHORITATIVE host-free guard, stronger than the behavioural parity tests above:
+    # those stay green even with a `from graph.* import ...` present (in-repo the host IS
+    # importable), so they can't catch the exact regression register_service once had —
+    # `from graph.plugin_services import is_service_name`. The testkit is vendored VERBATIM
+    # into a standalone plugin's CI (module docstring), where NO protoAgent package exists,
+    # so any absolute import of a non-stdlib top-level module turns the whole file into an
+    # ImportError there. Parse the real source and assert every absolute import resolves to
+    # the stdlib — a protoAgent-internal import (graph/server/knowledge/…) fails HERE.
+    tree = ast.parse(Path(testkit.__file__).read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):  # ast.walk reaches lazy imports nested inside methods too
+        if isinstance(node, ast.Import):
+            tops = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:  # skip the plugin's own relatives
+            tops = [(node.module or "").split(".")[0]]
+        else:
+            continue
+        offenders += [t for t in tops if t and t not in sys.stdlib_module_names]
+    assert not offenders, (
+        "graph/plugins/testkit.py must stay stdlib-only so it runs when vendored host-free, "
+        f"but it imports non-stdlib module(s): {sorted(set(offenders))}"
+    )
 
 
 def test_testkit_accept_component_frame_matches_the_host():
