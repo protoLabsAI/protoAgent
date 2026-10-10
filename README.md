@@ -139,6 +139,10 @@ protoagent plugin install https://github.com/you/your-plugin
 ```
 
 Plugins run with the server's privileges. Review their code before enabling them.
+The bundled [`agent_browser`](./plugins/agent_browser/) plugin opens websites,
+fills forms, and captures screenshots or PDFs. Follow
+[Browser automation](./docs/guides/browser-automation.md) to set up its browser runtime.
+
 Browse the [plugin directory](https://agent.protolabs.studio/plugins), then use
 [Install and manage plugins](./docs/guides/plugin-registry.md). To build your own,
 start with [Extend protoAgent](./docs/guides/extend.md) or the

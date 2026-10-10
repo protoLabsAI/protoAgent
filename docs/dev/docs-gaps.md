@@ -150,6 +150,18 @@ Chromium fixtures, or the frozen server check as proof of these native flows.
 Cross-platform raw data moves remain explicitly unvalidated in the backup guide.
 Prefer definition snapshots when moving to a new platform.
 
+## Publication reconciliation — 2026-10-10
+
+Reconciled this audit with current `main`, retaining the README demo assets,
+epic review policy, new archetype and tool settings, and artifact preview docs.
+Updated chat-deletion guidance for the current app: ordinary chats harvest by
+default, incognito chats never harvest, and the dialog makes forget and harvest
+mutually exclusive. The API can still accept both flags.
+
+The integrated docs build resolves 12,586 local links and 3,041 section links
+across 231 pages; all 71 checked prior section URLs remain. Generated navigation
+and API checks and the commit secret scan passed.
+
 ## Ongoing checks
 
 - Keep commands, wizard labels, store paths, and defaults aligned with source.
