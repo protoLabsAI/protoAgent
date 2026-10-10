@@ -238,6 +238,67 @@ describe("ArtifactRefChip", () => {
     expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
   });
 
+  // The backend re-emits an inline ref for EVERY version of an inline artifact
+  // (update_artifact/rewrite_artifact keep the inline placement), so several version frames of
+  // one artifact id coexist in the transcript. The live-frame registry must key by (id, version),
+  // not id alone — else the versions collapse into one slot and the cap stops holding.
+  const metaMany = (version_count: number) =>
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count, oldest: 1 };
+      return { artifacts };
+    });
+
+  const renderInline = (versions: number[], host: ReturnType<typeof createInlineFrameHost>) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            // The SAME artifact id at different versions — what a revised inline answer emits.
+            versions.map((v) =>
+              h(ArtifactRefChip, { key: v, props: { artifact_id: "a-1", version: v, title: "Chart", kind: "html", inline: true, height: 240 } }),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  it("the live-frame cap counts each VERSION of one artifact separately — siblings don't share a slot", async () => {
+    metaMany(3);
+    const host = createInlineFrameHost(2); // cap 2, so a third version frame forces one eviction
+    renderInline([1, 2, 3], host);
+    await flush();
+    // Three inline hosts of the one artifact; keyed by id alone they'd all share a slot and the
+    // cap wouldn't bite (three live frames). Keyed by (id, version) the cap holds: two frames, one
+    // resume card — and the two live frames point at distinct versions.
+    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(3);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
+    const srcs = [...container.querySelectorAll('[data-testid="artifact-inline-frame"]')].map((f) => f.getAttribute("src"));
+    expect(new Set(srcs).size).toBe(2);
+  });
+
+  it("unmounting one version's host leaves its sibling versions' frames live — release is per (id, version)", async () => {
+    metaMany(2);
+    const host = createInlineFrameHost(6); // room for both, so neither is evicted
+    renderInline([1, 2], host);
+    await flush();
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+    // Drop version 1's host. Keyed by id alone, its release would delete the shared slot and flip
+    // version 2 to a resume card; keyed by (id, version) it only frees its own slot.
+    renderInline([2], host);
+    await flush();
+    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
+  });
+
   it("an inline ref whose artifact is gone falls back to the inert chip — no frame", async () => {
     meta(null);
     await mount({ ...REF, inline: true });

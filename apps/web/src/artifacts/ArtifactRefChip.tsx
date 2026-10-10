@@ -56,6 +56,18 @@ function embedSrc(ref: Pick<ArtifactRef, "id" | "version">): string {
   return `${ARTIFACT_EMBED_PATH}?embed=${encodeURIComponent(ref.id)}&v=${ref.version}`;
 }
 
+// The live-frame registry key for an inline ref: the artifact id AND its version, never the id
+// alone. The backend re-emits an inline ref on every edit — update_artifact/rewrite_artifact keep
+// the inline placement (plugins/artifact/_tools.py `ref_tail(art, inline=_store._is_inline(art))`)
+// — so several version frames of one artifact coexist in the transcript. Keying by id alone would
+// collapse them into one slot: the 6-frame cap wouldn't hold, and evicting or releasing one
+// version would flip every sibling version with it. Version first (a digit-only run), then a
+// space, then the id: the first space is always the separator, so distinct (id, version) pairs
+// never alias even when the id itself contains spaces.
+function frameKey(ref: Pick<ArtifactRef, "id" | "version">): string {
+  return `v${ref.version} ${ref.id}`;
+}
+
 function useRefMeta(id: string, enabled: boolean) {
   const qc = useQueryClient();
   // A create/edit/delete anywhere (the agent, the panel's own editor or trash) → refresh the
@@ -166,10 +178,12 @@ function InlineArtifactHost({
   older: boolean;
 }) {
   const host = useContext(InlineFrameHostContext);
-  const id = artifact.id;
+  // Each (artifact, version) gets its OWN live slot — see frameKey: an inline artifact re-emits a
+  // fresh ref per version, and keying by id alone would collapse the versions into one.
+  const key = frameKey(artifact);
   const src = useMemo(() => embedSrc(artifact), [artifact.id, artifact.version]);
   const { ref: slotRef, mounted } = useLazyMount<HTMLDivElement>();
-  const live = useSyncExternalStore(host.subscribe, () => host.isLive(id));
+  const live = useSyncExternalStore(host.subscribe, () => host.isLive(key));
   // Seeded from the optional `height` prop hint (0 = none), then driven by the frame's reported
   // height. Kept across a live→resume flip (the host component stays mounted) so the card
   // doesn't jump; the registry also remembers it for a remount.
@@ -184,13 +198,13 @@ function InlineArtifactHost({
   // is the one that goes (not whichever mounted first).
   useEffect(() => {
     if (!mounted) return;
-    host.register(id);
+    host.register(key);
     const el = slotRef.current;
     let io: IntersectionObserver | undefined;
     if (el && typeof IntersectionObserver !== "undefined") {
       io = new IntersectionObserver(
         (entries) => {
-          if (entries.some((e) => e.isIntersecting)) host.touch(id);
+          if (entries.some((e) => e.isIntersecting)) host.touch(key);
         },
         { rootMargin: "0px" },
       );
@@ -198,10 +212,10 @@ function InlineArtifactHost({
     }
     return () => {
       io?.disconnect();
-      host.release(id);
+      host.release(key);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- slotRef is a stable ref object
-  }, [mounted, host, id]);
+  }, [mounted, host, key]);
 
   // Size the frame from the height it reports (protoArtifact:height — S5). Gated on e.source
   // being THIS frame's own window, the strong guarantee; the payload is a single int the shell
@@ -221,11 +235,11 @@ function InlineArtifactHost({
       }
       if (m.type !== "protoArtifact:height") return;
       const h = typeof m.height === "number" ? m.height : NaN;
-      setMeasured(host.measure(id, h));
+      setMeasured(host.measure(key, h));
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [live, host, id, src]);
+  }, [live, host, key, src]);
 
   // The live re-theme PluginView performs (ADR 0026 / S6), reused verbatim so the embed repaints
   // on a console theme switch without a reload.
@@ -249,7 +263,7 @@ function InlineArtifactHost({
     [],
   );
 
-  const resume = useCallback(() => host.register(id), [host, id]);
+  const resume = useCallback(() => host.register(key), [host, key]);
   const shownHeight = measured ?? MIN_FRAME_HEIGHT;
 
   return (
