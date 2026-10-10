@@ -176,6 +176,12 @@
       "sha512-CToErkDzmSle4BCcUm0qqqWrjXJuUd2g0On8SLez8p9Bf6rZHE7oxMdgARb0dOYKeZkH9wblI+J5PF6fxRttYQ=="],
     pdfjsWorker: ["pdfjs-worker.min.mjs",
       "sha512-cgsoOrm2N2zEbj1vccst4py/Wf4vyUBwoMXCSaT7WI/vGKCYc33zBWj2TPeYFpdtESAOHCvzzxKe+lxMDatk9Q=="],
+    // three.js r170 (MIT): the package's own self-contained minified ESM build
+    // (build/three.module.min.js), byte-for-byte. Resolved via the `three` import-map
+    // specifier below for 3D `html`/`react` artifacts; SRI-pinned here like every other
+    // vendored module. Notices in vendor/three.LICENSES.txt.
+    three: ["three.module.min.js",
+      "sha512-zTnt1Hf43YVf2to5DC6GE6cPRSC/xgPJDf3PLQussTsaDak1uHdbnWtIYnOQiL40AIa2OZfFkayQXVdzL1/DqA=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
@@ -193,7 +199,7 @@
   // Curated ESM import map for `react` artifacts (offline-vendored, served same-origin with
   // CORS). Bare specifiers resolve to the vendored modules: react/react-dom via tiny shims that
   // re-export the UMD globals (so the artifact, the @pl/ui wrappers, and any lib share ONE
-  // React instance), plus d3 / chart.js / lucide and the authored @pl/ui DS wrappers.
+  // React instance), plus d3 / chart.js / lucide / three and the authored @pl/ui DS wrappers.
   var V = ORIGIN + "/plugins/artifact/vendor/";
   var IMPORTMAP = JSON.stringify({ imports: {
     "react": V + "react.shim.mjs",
@@ -203,7 +209,8 @@
     "d3": V + "d3.mjs",
     "chart.js": V + "chartjs.mjs",
     "chart.js/auto": V + "chartjs.mjs",
-    "lucide": V + "lucide.mjs"
+    "lucide": V + "lucide.mjs",
+    "three": V + "three.module.min.js"
   }});
   // Prose styling for markdown, keyed to --pl-* tokens (the DS link supplies component classes).
   var MD_CSS = '#md{max-width:50rem;margin:0 auto;padding:20px;line-height:1.6}'
@@ -599,8 +606,36 @@
     return m[0] + inject + code.slice(m[0].length);
   }
 
+  // An html artifact may ship its OWN <script type="importmap">. Only the first import map in a
+  // document takes effect, so stacking the shell's ahead of it would silently shadow the
+  // author's. Merge instead: the author's entries win, the shell's fill in the curated
+  // specifiers the author didn't name, and the author's tag is lifted out so ONE map remains.
+  // An author map that isn't valid JSON is left exactly as written and the shell's is not
+  // injected, which is the pre-ADR-0118 behavior for that artifact.
+  var AUTHOR_IMPORTMAP = /<script\b[^>]*\btype\s*=\s*["']?importmap["']?[^>]*>([\s\S]*?)<\/script\s*>/i;
+  function htmlImportMap(code){
+    var m = AUTHOR_IMPORTMAP.exec(code);
+    if (!m) return {code: code, map: IMPORTMAP};
+    var own;
+    try { own = JSON.parse(m[1]); } catch (e) { return {code: code, map: null}; }
+    if (!own || typeof own !== "object" || Array.isArray(own)) return {code: code, map: null};
+    var merged = {imports: Object.assign({}, JSON.parse(IMPORTMAP).imports, own.imports || {})};
+    if (own.scopes) merged.scopes = own.scopes;
+    if (own.integrity) merged.integrity = own.integrity;
+    return {code: code.slice(0, m.index) + code.slice(m.index + m[0].length), map: JSON.stringify(merged)};
+  }
+
   function srcdoc(kind, code, links) {
-    if (kind === "html") return htmlDoc(code, dsLink() + base(kind));
+    // `html` gets the SAME curated ESM import map as `react` (injected ahead of the author's
+    // own markup by htmlDoc, so it precedes any `<script type="module">` the artifact ships):
+    // a plain html artifact can then `import * as THREE from "three"` (or d3 / chart.js / lucide)
+    // and the bare specifier resolves to the same-origin vendored module — the three.js (ADR 0118
+    // D6) support promised in the changelog/LICENSES only works because of this map, not base().
+    // An author's own import map is merged into it, never shadowed (htmlImportMap).
+    if (kind === "html") {
+      var im = htmlImportMap(code);
+      return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? '<script type="importmap">' + im.map + '<\/script>' : ''));
+    }
     if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + gfxScript({}) +
       '<script>__artVP.full();<\/script></body>';
     // mermaid.run() is async: the viewport + code links mount once the <svg> exists. A rejected
