@@ -377,10 +377,54 @@ def prune_superseded_progress(task: Task) -> int:
     return removed
 
 
+# Duplicated for the same import-chain reason as above; locked together by
+# tests/test_stream_args.py.
+_TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json"
+
+
+def drop_tool_args_history(task: Task) -> int:
+    """Remove every streamed tool-args-v1 Message from ``task.history``, in place.
+    Returns the number removed.
+
+    Streamed tool arguments (ADR 0118 D3) are a LIVE-ONLY preview: the executor emits them
+    as tool-args-v1 DataParts on WORKING frames so the console can render an artifact as the
+    model writes it, but the finished artifact replaces the preview the moment the tool
+    runs. The a2a-sdk ``TaskManager`` would otherwise move each one into durable history
+    (like reasoning), so a reattach or a reload would replay stale partial args. They carry
+    nothing a durable task needs — drop them entirely. Only agent messages whose parts are
+    ALL tool-args DataParts are touched; a message mixing one with other parts is kept."""
+    from a2a.types import Role
+
+    def _is_tool_args(msg) -> bool:
+        if msg.role != Role.ROLE_AGENT or not msg.parts:
+            return False
+        for part in msg.parts:
+            if part.WhichOneof("content") != "data":
+                return False
+            mime = part.metadata.fields["mimeType"].string_value if "mimeType" in part.metadata.fields else ""
+            if mime != _TOOL_ARGS_MIME:
+                return False
+        return True
+
+    keep = [m for m in task.history if not _is_tool_args(m)]
+    removed = len(task.history) - len(keep)
+    if removed:
+        # `keep` holds references into task.history — copy before clearing.
+        kept = []
+        for m in keep:
+            c = type(m)()
+            c.CopyFrom(m)
+            kept.append(c)
+        del task.history[:]
+        task.history.extend(kept)
+    return removed
+
+
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     """Durable task store that coalesces contiguous reasoning-v1 history runs
-    into one Message per run on every save (#1710), and keeps only the latest
-    delegate-progress snapshot per delegation (#3979). Streaming frames are
+    into one Message per run on every save (#1710), keeps only the latest
+    delegate-progress snapshot per delegation (#3979), and drops live-only
+    tool-args-v1 previews entirely (ADR 0118 D3). Streaming frames are
     untouched — this is persistence-shape only, so the wire contract and the
     live thinking bubble are unchanged."""
 
@@ -393,6 +437,10 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             prune_superseded_progress(task)
         except Exception:  # noqa: BLE001 — pruning must never lose a save
             log.exception("[a2a] delegate-progress pruning failed; saving unpruned")
+        try:
+            drop_tool_args_history(task)
+        except Exception:  # noqa: BLE001 — dropping previews must never lose a save
+            log.exception("[a2a] tool-args history drop failed; saving with previews")
         await super().save(task, context)
 
 
