@@ -113,3 +113,41 @@ describe("ChatMessageView — a dangling markdown marker never paints while stre
     expect(md()).toContain("`");
   });
 });
+
+describe("ChatMessageView — a send-to-chat user turn shows a 'from ‹title›' label (ADR 0118 D4)", () => {
+  it("renders the artifact's title on a user message tagged with sentVia", () => {
+    const message: ChatMessage = {
+      id: "u1",
+      role: "user",
+      content: "Recompute at 42",
+      status: "done",
+      sentVia: { via: "artifact", artifact_id: "art-inline", version: 2, title: "Inline calc" },
+    };
+    render(message);
+    const label = container.querySelector('[data-testid="chat-from-artifact"]');
+    expect(label?.textContent).toContain("from Inline calc");
+    // The text itself still renders as an ordinary, visible user turn.
+    expect(container.querySelector(".pl-message--user")?.textContent).toContain("Recompute at 42");
+  });
+
+  it("falls back to the artifact id when no title rode along, and renders model text, not markup", () => {
+    const message: ChatMessage = {
+      id: "u2",
+      role: "user",
+      content: "go",
+      status: "done",
+      sentVia: { via: "artifact", artifact_id: "art-xyz", version: 1, title: '<img src=x onerror="window.__pwned=1">' },
+    };
+    render(message);
+    expect(container.querySelector('[data-testid="chat-from-artifact"]')?.textContent).toContain(
+      '<img src=x',
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
+  it("an ordinary typed user turn has no from-label", () => {
+    render({ id: "u3", role: "user", content: "hello", status: "done" });
+    expect(container.querySelector('[data-testid="chat-from-artifact"]')).toBeNull();
+  });
+});
