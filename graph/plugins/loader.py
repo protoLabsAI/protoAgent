@@ -64,6 +64,11 @@ class PluginLoadResult:
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
     chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only chat control commands
     components: dict = field(default_factory=dict)  # component-v1 kind -> props validator (#3617)
+    # component-v1 kind -> {"plugin", "frame_url"} (ADR 0118 D5, #4087). Parallel to
+    # ``components``; carries each kind's owning plugin id and the public
+    # ``/plugins/<id>/<frame>`` URL it renders in (``frame_url`` None when the kind declared
+    # no frame), so GET /api/components can tell a renderer where a frame kind lives.
+    component_frames: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)  # "<plugin_id>.<name>" -> callable (ADR 0116)
     service_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
     meta: list[dict] = field(default_factory=list)
@@ -943,7 +948,17 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 # Resolved config section (ADR 0019) — defaults if not in plugin_config.
                 section = manifest.config_section or manifest.id
                 pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
-                registry = PluginRegistry(manifest.id, manifest.path, config=pconf, config_section=section)
+                # Hand the registry the manifest's auth-exempt prefixes so a component ``frame``
+                # (ADR 0118 D5) can be validated against them at register() time — without this
+                # the list is empty and every frame-declaring component would be refused and
+                # silently dropped in production.
+                registry = PluginRegistry(
+                    manifest.id,
+                    manifest.path,
+                    config=pconf,
+                    config_section=section,
+                    public_paths=manifest.public_paths,
+                )
                 registry.display_name = str(manifest.name or manifest.id)
             with timed_lifecycle_phase(manifest.id, "registration"):
                 register(registry)
@@ -1098,6 +1113,15 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 log.warning("[plugins] %s: component %s collides — skipped", manifest.id, name)
                 continue
             result.components[name] = validator
+            # Carry the kind's optional frame through (ADR 0118 D5, S11b): its owning plugin
+            # plus the public ``/plugins/<id>/<frame>`` URL the registry already validated
+            # against the manifest's public_paths — or None when the kind declared no frame.
+            # Stored for every kept plugin kind so GET /api/components can attribute it.
+            frame = getattr(registry, "component_frames", {}).get(name)
+            result.component_frames[name] = {
+                "plugin": manifest.id,
+                "frame_url": f"/plugins/{manifest.id}/{frame}" if frame else None,
+            }
         for name, fn in getattr(registry, "services", {}).items():  # plugin services (ADR 0116)
             # register_service namespaces every name, but `registry.services` is a plain dict a
             # plugin could write to directly — so the loader re-checks: a plugin provides ONLY

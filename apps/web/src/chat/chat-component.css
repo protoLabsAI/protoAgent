@@ -15,6 +15,11 @@
 
 /* table — chrome comes from the DS `Table` primitives (.pl-table); this wrapper
    only owns the surrounding card layout (.chat-comp / .chat-comp-table). */
+.chat-comp-source {
+  margin-top: var(--pl-space-2);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
 
 /* key-value */
 .chat-comp-kv dl {
@@ -175,4 +180,150 @@
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-2xs);
   line-height: 16px;
+}
+
+/* inline artifact host (ADR 0118 D2 / S7b) — the artifact's own embed frame rendered right in
+   the transcript, under a small head with the title · version and an Open-in-panel button. */
+.artifact-ref-inline {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  margin: var(--pl-space-1) 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-md);
+  overflow: hidden;
+  background: var(--pl-color-bg-raised);
+}
+.artifact-ref-inline__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-bottom: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+}
+.artifact-ref-inline__spacer {
+  flex: 1 1 auto;
+}
+.artifact-ref-inline__open {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__open:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.artifact-ref-inline__open:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+.artifact-ref-inline__frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+.artifact-ref-inline__body {
+  width: 100%;
+}
+.artifact-ref-inline__resume {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 0;
+  background: var(--pl-color-bg-inset, var(--pl-color-bg));
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__resume:hover {
+  color: var(--pl-color-fg);
+}
+/* The host's send-to-chat verdict (ADR 0118 D4): the needs-confirm prompt / an in-place
+   rejection ("the agent is busy", a refused link). Sits under the frame so the operator sees
+   where their click landed. */
+.artifact-ref-inline__bridge {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-top: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg);
+}
+.artifact-ref-inline__bridge--rejected {
+  color: var(--pl-color-fg-muted);
+}
+.artifact-ref-inline__bridge-msg {
+  flex: 1 1 auto;
+}
+.artifact-ref-inline__bridge-btn {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__bridge-btn:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.artifact-ref-inline__bridge-btn:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+/* The frame-component host's send-to-chat / openLink verdict (ADR 0118 D4 / S12b): the same
+   needs-confirm prompt / in-place rejection the inline artifact frame shows, under the component
+   frame. Mirrors .artifact-ref-inline__bridge so the two read identically. */
+.frame-component-host__bridge {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-top: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg);
+}
+.frame-component-host__bridge--rejected {
+  color: var(--pl-color-fg-muted);
+}
+.frame-component-host__bridge-msg {
+  flex: 1 1 auto;
+}
+.frame-component-host__bridge-btn {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.frame-component-host__bridge-btn:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.frame-component-host__bridge-btn:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+/* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). */
+.chat-from-artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  margin-bottom: var(--pl-space-1);
+  font-size: var(--pl-font-size-2xs);
+  color: var(--pl-color-fg-muted);
 }

@@ -8,6 +8,7 @@ ROOT anchors there off the repo root rather than the test's parent dir."""
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -676,7 +677,7 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     html = art._SHELL_HTML + art._SHELL_JS
     assert "cdnjs.cloudflare.com" not in html  # no external CDN dependency
     assert "/plugins/artifact/vendor/" in html  # served same-origin
-    # all twelve libs present, each with an integrity hash.
+    # all thirteen libs present, each with an integrity hash.
     for lib in (
         "mermaid.min.js",
         "react.production.min.js",
@@ -690,9 +691,10 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
         "docx-preview.min.js",
         "pdfjs.min.mjs",
         "pdfjs-worker.min.mjs",
+        "three.module.min.js",  # r170 self-contained ESM, import-map resolved (ADR 0118 D6)
     ):
         assert lib in html
-    assert html.count("sha512-") == 12 and 'integrity="' in html
+    assert html.count("sha512-") == 13 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html
@@ -726,6 +728,46 @@ def test_vendor_route_serves_js_and_blocks_traversal(monkeypatch, tmp_path):
     assert c.get("/plugins/artifact/vendor/..%2f__init__.py").status_code == 404
 
 
+def test_three_js_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
+    """three.js (ADR 0118 D6, operator decision 2026-10-10): the r170 self-contained
+    minified ESM build is vendored same-origin, importable via the bare `three`
+    specifier the same way as d3, and SRI-pinned — the shell's integrity hash is the
+    sha512 of the EXACT bytes the vendor route serves, never a CDN."""
+    import base64
+    import hashlib
+
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    # the vendor route serves the file: same-origin, CORS, immutable, as JavaScript.
+    r = c.get("/plugins/artifact/vendor/three.module.min.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"  # opaque-sandbox cross-origin fetch
+    served = r.content
+
+    # the shell's "three" SRI == sha512 of those served bytes (the ADR 0118 D6 vendoring fence).
+    js = art._SHELL_JS
+    want = "sha512-" + base64.b64encode(hashlib.sha512(served).digest()).decode()
+    assert want in js, "shell three SRI does not match sha512 of the served vendored bytes"
+
+    # resolvable from the no-same-origin sandbox the way d3 is: bare `three` → the same-origin
+    # vendored module in the import map, and the module is SELF-CONTAINED — no further
+    # `import … from "./three.core.min.js"` subresource that the nonce CSP / allowlist would
+    # block (r171+ split that out; r170 is the last single-file release). So an html/react
+    # artifact importing "three" loads with no CSP or SRI error.
+    html = art._SHELL_HTML + js
+    # `"three": V + "three.module.min.js"` — the vendor prefix lives in V, so assert the
+    # specifier, the same-origin prefix and the filename separately (as the sibling tests do).
+    assert '"three":' in html and "/plugins/artifact/vendor/" in html and "three.module.min.js" in html
+    assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
+    assert b"three.core" not in served  # single-file build — nothing else to fetch
+    assert b"export{" in served  # it is an ES module, importable as-is
+
+
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
 
 
@@ -744,6 +786,7 @@ def test_react_kind_uses_import_map_and_module_babel(monkeypatch, tmp_path):
         ('"d3":', "d3.mjs"),
         ('"chart.js":', "chartjs.mjs"),
         ('"lucide":', "lucide.mjs"),
+        ('"three":', "three.module.min.js"),
     ):
         assert spec in html and file in html, spec
 
@@ -1491,9 +1534,32 @@ def _html_doc(art):
     return build
 
 
+def _import_map_script(js):
+    """Rebuild the ESM import-map ``<script>`` the shell concatenates for html/react artifacts,
+    from the REAL ``IMPORTMAP`` specifier list in shell.js — so dropping the ``three`` entry (or
+    the html branch no longer injecting the map) fails these assertions rather than passing on a
+    source string that happens to appear in the react branch."""
+    import json
+    import re
+
+    m = re.search(r"var IMPORTMAP = JSON\.stringify\(\{ imports: \{(.+?)\}\s*\}\);", js, re.S)
+    assert m, "IMPORTMAP moved or changed shape — keep this extraction in sync"
+    pairs = re.findall(r'"([^"]+)":\s*V\s*\+\s*"([^"]+)"', m.group(1))
+    assert pairs, "no `spec: V + file` entries found in IMPORTMAP"
+    imports = {spec: "/plugins/artifact/vendor/" + file for spec, file in pairs}
+    return '<script type="importmap">' + json.dumps({"imports": imports}) + "</script>"
+
+
 def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_path):
     js = _load(monkeypatch, tmp_path)._SHELL_JS
-    assert 'if (kind === "html") return htmlDoc(code, dsLink() + base(kind));' in js
+    # html still routes through the prologue-aware builder (injection inside <head>) AND now
+    # carries the curated ESM import map, like react (regression: it used to inject only
+    # dsLink()+base(), so a bare `import … from "three"` had no map and failed — ADR 0118 D6).
+    assert "var im = htmlImportMap(code);" in js
+    assert (
+        "return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? "
+        "'<script type=\"importmap\">' + im.map + '<\\/script>' : ''));"
+    ) in js
     assert "dsLink() + base(kind) + code" not in js  # the prepend that displaced the doctype
 
 
@@ -1530,6 +1596,30 @@ def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_p
 )
 def test_html_injection_keeps_the_document_prologue_first(monkeypatch, tmp_path, code, expected):
     assert _html_doc(_load(monkeypatch, tmp_path))(code) == expected
+
+
+def test_html_artifact_srcdoc_carries_the_three_import_map(monkeypatch, tmp_path):
+    """Regression (review of #4118): an html artifact importing three must resolve the bare
+    ``three`` specifier. The html kind used to inject only ``dsLink()+base()`` — no import map —
+    so ``import * as THREE from "three"`` failed in EVERY html artifact (only react got the map),
+    making the three.js support promised in the changelog/LICENSES a no-op. Build the html srcdoc
+    through the real prologue-aware builder and assert the curated map lands inside ``<head>``,
+    ahead of the author's module, with ``three`` → the same-origin vendored file."""
+    art = _load(monkeypatch, tmp_path)
+    importmap = _import_map_script(art._SHELL_JS)
+    assert '"three":' in importmap and "three.module.min.js" in importmap  # the specifier resolves
+
+    code = (
+        "<!doctype html><html><head></head><body>"
+        '<script type="module">import * as THREE from "three";new THREE.Scene();</script>'
+        "</body></html>"
+    )
+    doc = _html_doc(art)(code, inject=importmap)
+    # the import map is present and sits inside the head, BEFORE the author module that uses it —
+    # an import map after a module load would be ignored, so ordering is what makes `three` resolve.
+    assert importmap in doc
+    assert doc.index("<head>") < doc.index(importmap) < doc.index("<body>")
+    assert doc.index(importmap) < doc.index('import * as THREE from "three"')
 
 
 # ── pinning: exempt a long-lived artifact from history eviction ─────────────────────
@@ -2375,3 +2465,48 @@ def test_save_file_artifact_not_found_names_where_it_looked(monkeypatch, tmp_pat
     _fence(monkeypatch, art, workspace=ws)
     out = art.save_file_artifact.invoke({"path": "sheets/missing.pdf"})
     assert "No file at" in out and "workspace" in out
+
+
+# ── html import map: merged with an author's own map, never stacked ahead of it ─────────────
+
+
+def _run_html_import_map(code: str) -> dict:
+    from tests.test_artifact_slides import _js_function, _node
+
+    js = (Path(__file__).resolve().parents[1] / "plugins" / "artifact" / "shell.js").read_text(encoding="utf-8")
+    regex_line = next(line for line in js.splitlines() if "var AUTHOR_IMPORTMAP = " in line)
+    harness = "\n".join(
+        [
+            'var IMPORTMAP = JSON.stringify({imports: {three: "/v/three.module.min.js", d3: "/v/d3.mjs"}});',
+            regex_line,
+            _js_function(js, "htmlImportMap"),
+            f"console.log(JSON.stringify(htmlImportMap({json.dumps(code)})));",
+        ]
+    )
+    return _node(harness)
+
+
+def test_html_without_its_own_import_map_gets_the_shell_map():
+    out = _run_html_import_map("<p>hi</p><script type=module>import * as T from 'three'</script>")
+    assert json.loads(out["map"])["imports"]["three"] == "/v/three.module.min.js"
+    assert out["code"].startswith("<p>hi</p>")
+
+
+def test_an_author_import_map_is_merged_with_author_entries_winning_and_lifted_out():
+    code = (
+        '<head><script type="importmap">{"imports": {"three": "./my-three.js", "lodash": "./lodash.js"}, '
+        '"scopes": {"/x/": {"a": "./a.js"}}}</script></head><body>x</body>'
+    )
+    out = _run_html_import_map(code)
+    merged = json.loads(out["map"])
+    assert merged["imports"] == {"three": "./my-three.js", "d3": "/v/d3.mjs", "lodash": "./lodash.js"}
+    assert merged["scopes"] == {"/x/": {"a": "./a.js"}}
+    assert "importmap" not in out["code"]  # exactly one map remains: the merged one
+    assert out["code"] == "<head></head><body>x</body>"
+
+
+def test_an_unparseable_author_import_map_is_left_alone_and_no_shell_map_is_added():
+    code = '<script type="importmap">{not json</script><p>x</p>'
+    out = _run_html_import_map(code)
+    assert out["map"] is None
+    assert out["code"] == code

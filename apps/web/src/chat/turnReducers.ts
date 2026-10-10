@@ -6,8 +6,11 @@
 // over the session's messages.
 
 import type { ChatMessage, ComponentSpec, ToolCall, ToolEvent, TurnUsage } from "../lib/types";
+import type { ToolArgsEvent } from "../lib/api/a2aStream";
 import { addComponent, addToolRef, appendReasoning, appendText, replaceText } from "./parts";
 import { isTaskPaused } from "./taskState";
+import { appendToolArgs, emptyToolArgs, toToolArgsBuffer } from "./toolArgsBuffer";
+import type { ToolArgsBuffer, ToolArgsBuffers } from "./toolArgsBuffer";
 
 export function applyText(message: ChatMessage, text: string, append: boolean): ChatMessage {
   return {
@@ -178,6 +181,43 @@ export function createParkTracker() {
       if (next === parked) return null;
       parked = next;
       return next ? "parked" : "unparked";
+    },
+  };
+}
+
+/** The live turn's streamed tool-argument previews (ADR 0118 D3), keyed by tool-call id — the
+ *  per-tool-call buffer `chat/toolArgsBuffer` holds, wired into the turn's live state.
+ *
+ *  Fed from the frame dispatcher's `onToolArgs` (a2aStream.ts), which decodes `tool-args-v1`
+ *  ONLY off live WORKING frames. It is CLEARED when the turn ends — the previews never outlive
+ *  their turn — and, being live-only, is never created or populated during hydration or a
+ *  reattach replay: the durable store drops tool-args frames from history and snapshot replay
+ *  never decodes one, so a reload shows the finished tool-call card, never a stale partial.
+ *  Nothing renders it yet — S8 consumes `get`/`all`. */
+export function createToolArgsTracker() {
+  let buffers: ToolArgsBuffers = emptyToolArgs();
+  return {
+    /** Fold one decoded tool-args-v1 frame into its tool call's buffer. */
+    push(evt: ToolArgsEvent): void {
+      buffers = appendToolArgs(buffers, evt);
+    },
+    /** The current preview for a tool call id, or undefined. */
+    get(id: string): ToolArgsBuffer | undefined {
+      return toToolArgsBuffer(buffers, id);
+    },
+    /** Every tool call's preview this turn, keyed by id. */
+    all(): Record<string, ToolArgsBuffer> {
+      const out: Record<string, ToolArgsBuffer> = {};
+      for (const id of Object.keys(buffers)) out[id] = toToolArgsBuffer(buffers, id)!;
+      return out;
+    },
+    /** Drop every preview — the turn ended, and this state never outlives its turn. */
+    clear(): void {
+      buffers = emptyToolArgs();
+    },
+    /** How many tool calls have a preview buffered (0 right after `clear`). */
+    get size(): number {
+      return Object.keys(buffers).length;
     },
   };
 }

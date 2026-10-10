@@ -125,6 +125,324 @@ def _paragraph_break(before: str, after: str) -> str:
     return "\n" * max(0, 2 - have)
 
 
+# ── Streamed tool arguments (tool-args-v1, ADR 0118 D3) ─────────────────────────
+#
+# A tool may declare ``metadata={"stream_args": "<arg>"}``. While the model streams that
+# tool's call, we extract the named STRING argument incrementally from the raw
+# ``tool_call_chunks`` JSON — a small partial-JSON scanner kept HERE in ``server/`` (no new
+# cross-layer import) — and yield ``("tool_args", {id, arg, offset, chunk, done})`` frames.
+# The executor relays them as a LIVE-ONLY ``tool-args-v1`` DataPart; they are never
+# persisted to task history nor replayed on reattach/hydration. The console never parses
+# partial JSON — it receives decoded substrings.
+
+# Flush cadence: at most ~4 Hz, OR whenever the pending decoded text reaches 2 KB,
+# whichever trips first, plus a final ``done: True`` frame.
+_TOOL_ARGS_FLUSH_INTERVAL_S = 0.25
+_TOOL_ARGS_FLUSH_CHARS = 2048
+# Stop streaming (silently) once the extracted value passes the artifact size cap. A
+# server-local bound mirroring the artifact plugin's default max source size
+# (``ARTIFACT_MAX_CODE_KB`` = 512 KB); ``server/`` must not import a plugin's config.
+_TOOL_ARGS_MAX_CHARS = 512 * 1024
+
+# Returned by the locator when the arg is present but its value is not a string (a number,
+# object, array, bool or null): a non-string value yields no frames at all.
+_NOT_A_STRING = object()
+
+_JSON_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
+
+def _skip_ws(s: str, i: int) -> int:
+    n = len(s)
+    while i < n and s[i] in " \t\n\r":
+        i += 1
+    return i
+
+
+def _decode_escape(s: str, i: int) -> tuple[str | None, int]:
+    """Decode the escape at ``s[i] == '\\'``. Returns ``(char, next_index)``, or
+    ``(None, i)`` when the sequence is TRUNCATED (a trailing ``\\`` or an incomplete
+    ``\\uXXXX``) so the caller can hold it back until more arrives."""
+    if i + 1 >= len(s):
+        return None, i
+    e = s[i + 1]
+    if e == "u":
+        if i + 6 > len(s):
+            return None, i  # incomplete \uXXXX — hold back
+        try:
+            return chr(int(s[i + 2 : i + 6], 16)), i + 6
+        except ValueError:
+            # Not valid hex: a malformed escape must not wedge the stream — treat the
+            # backslash as a literal and move on.
+            return "\\", i + 1
+    if e in _JSON_ESCAPES:
+        return _JSON_ESCAPES[e], i + 2
+    # Unknown (JSON-invalid) escape — emit the char after the backslash, leniently.
+    return e, i + 2
+
+
+def _read_json_string(s: str, i: int) -> tuple[str | None, int]:
+    """Read a COMPLETE JSON string whose opening quote is ``s[i]``. Returns
+    ``(value, index_after_closing_quote)``, or ``(None, i)`` if it is not yet complete."""
+    j = i + 1
+    n = len(s)
+    out: list[str] = []
+    while j < n:
+        c = s[j]
+        if c == '"':
+            return "".join(out), j + 1
+        if c == "\\":
+            dec, j2 = _decode_escape(s, j)
+            if dec is None:
+                return None, i  # truncated escape ⇒ string not complete yet
+            out.append(dec)
+            j = j2
+            continue
+        out.append(c)
+        j += 1
+    return None, i  # no closing quote yet
+
+
+def _skip_json_value(s: str, i: int) -> int | None:
+    """Index just past a COMPLETE JSON value starting at ``s[i]``, or None if the value is
+    not yet complete. Used to step over keys that are not the one we stream."""
+    i = _skip_ws(s, i)
+    if i >= len(s):
+        return None
+    c = s[i]
+    if c == '"':
+        _, j = _read_json_string(s, i)
+        return None if j == i else j
+    if c in "{[":
+        depth = 0
+        j = i
+        n = len(s)
+        while j < n:
+            ch = s[j]
+            if ch == '"':
+                _, k = _read_json_string(s, j)
+                if k == j:
+                    return None  # unterminated string inside
+                j = k
+                continue
+            if ch in "{[":
+                depth += 1
+            elif ch in "}]":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            j += 1
+        return None
+    # number / true / false / null — complete only once a delimiter (or whitespace)
+    # follows; a token that runs to the buffer's end may still be growing.
+    n = len(s)
+    j = i
+    while j < n and s[j] not in ",}] \t\n\r":
+        j += 1
+    return None if j >= n else j
+
+
+def _locate_string_value(s: str, key: str):
+    """Locate the top-level string value for ``key`` in the object ``s`` (JSON still
+    streaming). Returns the index of the value's FIRST content char (just past its opening
+    quote); ``_NOT_A_STRING`` if the arg is present but non-string; or None when the key is
+    not yet resolvable (keep waiting). Any key order is handled."""
+    i = _skip_ws(s, 0)
+    if i >= len(s) or s[i] != "{":
+        return None
+    i = _skip_ws(s, i + 1)
+    n = len(s)
+    while i < n:
+        if s[i] == "}":
+            return None  # object closed without the key — nothing to stream
+        if s[i] != '"':
+            return None  # waiting for the next key, or malformed
+        name, j = _read_json_string(s, i)
+        if name is None:
+            return None  # key still arriving
+        j = _skip_ws(s, j)
+        if j >= n or s[j] != ":":
+            return None
+        j = _skip_ws(s, j + 1)
+        if j >= n:
+            return None  # value hasn't started
+        if name == key:
+            return (j + 1) if s[j] == '"' else _NOT_A_STRING
+        k = _skip_json_value(s, j)
+        if k is None:
+            return None  # this earlier value isn't complete yet
+        k = _skip_ws(s, k)
+        if k >= n or s[k] not in ",}":
+            return None
+        if s[k] == "}":
+            return None  # object done, key absent
+        i = _skip_ws(s, k + 1)
+    return None
+
+
+def _decode_value_delta(s: str, i: int) -> tuple[str, int, bool]:
+    """Decode the body of a JSON string value from ``s[i]`` (the first not-yet-decoded
+    content char). Returns ``(decoded_delta, next_index, done)``. Stops — WITHOUT consuming
+    — at an unterminated trailing escape, so the next feed resumes at the backslash."""
+    out: list[str] = []
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == '"':
+            return "".join(out), i + 1, True
+        if c == "\\":
+            dec, j = _decode_escape(s, i)
+            if dec is None:
+                break  # incomplete escape — hold back
+            out.append(dec)
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), i, False
+
+
+@dataclasses.dataclass
+class _ArgStream:
+    """Incremental extraction of one tool call's declared string arg (ADR 0118 D3)."""
+
+    arg: str
+    raw: str = ""  # accumulated tool_call_chunks arg JSON for this call
+    content_start: int | None = None  # index of the value's first content char in ``raw``
+    pos: int | None = None  # resume index for the incremental decoder
+    emitted: int = 0  # chars already emitted across frames (the running offset)
+    pending: str = ""  # decoded, not yet flushed
+    last_flush: float = 0.0  # monotonic of the last flush (0.0 ⇒ the first chunk flushes now)
+    done: bool = False  # the value's closing quote was seen
+    dead: bool = False  # not-a-string, overflowed, or already finalized ⇒ no more frames
+
+    def feed(self, fragment: str) -> None:
+        """Append raw arg JSON and decode as much of the value as is now unambiguous."""
+        if self.dead or self.done or not fragment:
+            return
+        self.raw += fragment
+        if self.content_start is None:
+            located = _locate_string_value(self.raw, self.arg)
+            if located is None:
+                return
+            if located is _NOT_A_STRING:
+                self.dead = True
+                return
+            self.content_start = located
+            self.pos = located
+        delta, self.pos, self.done = _decode_value_delta(self.raw, self.pos)
+        if delta:
+            self.pending += delta
+
+
+def _stream_args_map() -> dict[str, str]:
+    """``{tool_name: arg}`` for every bound tool declaring ``metadata={"stream_args": arg}``.
+    Read off the compiled graph's final toolset and cached on it, so it is rebuilt only when
+    the graph is (a reload replaces the object)."""
+    graph = getattr(STATE, "graph", None)
+    if graph is None:
+        return {}
+    cached = getattr(graph, "_stream_args_cache", None)
+    if isinstance(cached, dict):
+        return cached
+    out: dict[str, str] = {}
+    tools = [*(getattr(graph, "bound_tools", None) or []), *(getattr(graph, "subagent_only_tools", None) or [])]
+    for tool in tools:
+        meta = getattr(tool, "metadata", None)
+        tname = getattr(tool, "name", None)
+        if isinstance(meta, dict) and isinstance(tname, str):
+            arg = meta.get("stream_args")
+            if isinstance(arg, str) and arg:
+                out[tname] = arg
+    with contextlib.suppress(Exception):
+        graph._stream_args_cache = out
+    return out
+
+
+def _arg_stream_frames(scanner_id: str, stream: _ArgStream, *, force: bool):
+    """Yield at most one ``tool_args`` frame for ``stream`` — when it has 2 KB pending, is
+    due on the time floor, has finished, or ``force`` (the model-end flush)."""
+    if stream.dead:
+        return
+    # Size cap: once the value passes the artifact cap, stop silently — no further frames,
+    # not even a done.
+    if stream.emitted + len(stream.pending) > _TOOL_ARGS_MAX_CHARS:
+        stream.dead = True
+        return
+    final = stream.done or force
+    if final and not stream.pending and stream.emitted == 0 and not stream.done:
+        # Forced to finalize but nothing was ever extracted (the arg never appeared) —
+        # there is no preview to terminate.
+        stream.dead = True
+        return
+    due = (
+        final
+        or len(stream.pending) >= _TOOL_ARGS_FLUSH_CHARS
+        or (bool(stream.pending) and time.monotonic() - stream.last_flush >= _TOOL_ARGS_FLUSH_INTERVAL_S)
+    )
+    if not due or (not stream.pending and not final):
+        return
+    chunk, stream.pending = stream.pending, ""
+    offset = stream.emitted
+    stream.emitted += len(chunk)
+    stream.last_flush = time.monotonic()
+    if final:
+        stream.dead = True  # the terminal frame is the last one
+    yield ("tool_args", {"id": scanner_id, "arg": stream.arg, "offset": offset, "chunk": chunk, "done": final})
+
+
+def _feed_arg_streams(st: _TurnStreamState, tccs) -> _Frames:
+    """Feed each streamed tool-call chunk into its arg scanner and yield preview frames.
+    A continuation chunk carries only ``(args, index)``, so correlate by ``index`` to the
+    id seen on the naming chunk."""
+    if not tccs:
+        return
+    sa_map = _stream_args_map()
+    if not sa_map and not st.arg_streams:
+        return
+    for tcc in tccs:
+        tcid, tcname, tcidx = tcc.get("id"), tcc.get("name"), tcc.get("index")
+        if tcid and tcname and tcname in sa_map and tcid not in st.arg_streams:
+            st.arg_streams[tcid] = _ArgStream(arg=sa_map[tcname])
+            if isinstance(tcidx, int):
+                st.arg_stream_by_index[tcidx] = tcid
+        rid = tcid if (tcid and tcid in st.arg_streams) else None
+        if rid is None and isinstance(tcidx, int):
+            rid = st.arg_stream_by_index.get(tcidx)
+        stream = st.arg_streams.get(rid) if rid else None
+        if stream is None:
+            continue
+        frag = tcc.get("args")
+        if frag:
+            stream.feed(frag)
+        yield from _arg_stream_frames(rid, stream, force=False)
+
+
+def _finalize_arg_streams(st: _TurnStreamState, output) -> _Frames:
+    """Terminate every live arg stream at model end (a final ``done`` frame), and cover a
+    model that delivered the args only at end (never as chunks) by seeding one from the
+    full tool-call args."""
+    sa_map = _stream_args_map()
+    for tc in getattr(output, "tool_calls", None) or []:
+        if not isinstance(tc, dict):
+            continue
+        tcid, tcname = tc.get("id"), tc.get("name")
+        if not tcid or tcid in st.arg_streams or tcname not in sa_map:
+            continue
+        arg = sa_map[tcname]
+        args = tc.get("args")
+        stream = _ArgStream(arg=arg)
+        if isinstance(args, str):
+            stream.feed(args)
+        elif isinstance(args, dict) and isinstance(args.get(arg), str):
+            # Pre-parsed args (non-streaming model): inject the value, mark complete.
+            stream.pending, stream.done = args[arg], True
+        else:
+            continue
+        st.arg_streams[tcid] = stream
+    for rid, stream in list(st.arg_streams.items()):
+        yield from _arg_stream_frames(rid, stream, force=True)
+
+
 # ── The event loop, decomposed (#3880) ─────────────────────────────────────────
 #
 # `_run_turn_stream` is a thin dispatch: `_TurnStreamState` holds the accumulators the
@@ -173,6 +491,11 @@ class _TurnStreamState:
     bg_delegations: dict[str, dict] = dataclasses.field(default_factory=dict)
     # tool_call ids already surfaced as a start frame
     announced_tools: set[str] = dataclasses.field(default_factory=set)
+    # Streamed tool arguments (ADR 0118 D3): tool_call id → its incremental arg extractor,
+    # plus the index→id map a continuation tool_call_chunk (which carries no id) correlates
+    # by. Empty unless a bound tool declared ``stream_args`` AND the model streamed its call.
+    arg_streams: dict[str, "_ArgStream"] = dataclasses.field(default_factory=dict)
+    arg_stream_by_index: dict[int, str] = dataclasses.field(default_factory=dict)
 
 
 _Frames = Iterator[tuple[str, Any]]
@@ -360,7 +683,8 @@ def _on_chat_model_stream(st: _TurnStreamState, event: dict, name: str, parent_t
     # A goal's tool-less closing call (graph/middleware/goal_checkpoint.py) has its tool
     # calls dropped — never card one, or the card would stay "running" forever.
     closing = is_closing_call_event(event.get("metadata"))
-    for tcc in () if closing else (getattr(chunk, "tool_call_chunks", None) or []):
+    tccs = () if closing else (getattr(chunk, "tool_call_chunks", None) or [])
+    for tcc in tccs:
         tcid, tcname = tcc.get("id"), tcc.get("name")
         # A `delegate_to` gets NO tool card — it renders as an authored room
         # bubble at on_tool_end instead (#3042). Marked announced so neither this
@@ -396,6 +720,10 @@ def _on_chat_model_stream(st: _TurnStreamState, event: dict, name: str, parent_t
     # the stored text. Billing is untouched.
     if not _speaks_for_the_lead(event.get("metadata") or {}):
         return
+    # Streamed tool arguments (ADR 0118 D3): extract a stream_args tool's declared string
+    # arg incrementally from this call's tool_call_chunks and surface ("tool_args", …)
+    # preview frames. The lead's own answering call only — mirrored at on_chat_model_end.
+    yield from _feed_arg_streams(st, tccs)
     # Native reasoning: the model's REAL thinking, streamed on its own channel.
     # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into
     # additional_kwargs; reasoning chunks carry NO `content`, so this is checked
@@ -443,6 +771,11 @@ def _on_chat_model_stream(st: _TurnStreamState, event: dict, name: str, parent_t
 
 def _on_chat_model_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
     output = event.get("data", {}).get("output")
+    # Terminate any streamed tool-arg preview for this model call (ADR 0118 D3) with a
+    # final done frame — also covering a model that delivered the args only at end. The
+    # lead's own call only, mirroring where the previews are produced.
+    if not parent_tool_id:
+        yield from _finalize_arg_streams(st, output)
     # Finalize each tool card with its full args, keyed by the tool_call id.
     # `announced_tools` is scoped to THIS turn: this pass also surfaces a card
     # for any tool the stream path didn't announce (e.g. a non-streaming model)

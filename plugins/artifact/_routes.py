@@ -130,6 +130,7 @@ _VENDOR_FILES = {
     "chartjs.mjs",
     "lucide.mjs",
     "marked.mjs",
+    "three.module.min.js",  # three.js r170 self-contained ESM build — 3D `html`/`react` artifacts
     # … React shims + authored design-system wrappers
     "react.shim.mjs",
     "react-dom-client.shim.mjs",

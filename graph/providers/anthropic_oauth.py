@@ -28,6 +28,8 @@ import time
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
+from pydantic import PrivateAttr
+
 from graph.providers.oauth import resolve_anthropic_oauth
 
 if TYPE_CHECKING:
@@ -167,6 +169,25 @@ def oauth_default_headers() -> dict[str, str]:
     }
 
 
+def _stream_args_tool_names(tools: Any) -> set[str]:
+    """Names of the ``tools`` whose source tool declares ``metadata={"stream_args": …}``.
+
+    ADR 0118 D3: a write tool (show/update/rewrite_artifact) tags the string argument the
+    server streams as a live inline preview. Only the source ``BaseTool`` carries that
+    metadata — by the time the Anthropic request payload is built the tools are wire-format
+    dicts (name + schema) — so we read it off the bound objects and match by name later.
+    Resolving from the bound set (not a hard-coded list) keeps any future ``stream_args``
+    tool in sync automatically. Mirrors ``server.turn_stream._stream_args_map``.
+    """
+    names: set[str] = set()
+    for tool in tools or []:
+        meta = getattr(tool, "metadata", None)
+        name = getattr(tool, "name", None)
+        if isinstance(meta, dict) and isinstance(name, str) and meta.get("stream_args"):
+            names.add(name)
+    return names
+
+
 try:
     from langchain_anthropic import ChatAnthropic
 
@@ -180,6 +201,21 @@ try:
         """
 
         oauth_token: str = ""
+        # Names of bound tools that declared ``stream_args`` — captured in ``bind_tools``
+        # (where the source tool's metadata is still visible) and consumed in
+        # ``_get_request_payload`` to flip on ``eager_input_streaming`` (ADR 0118 D3, #4120).
+        _stream_args_tool_names: set[str] = PrivateAttr(default_factory=set)
+
+        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+            """Record which bound tools declare ``stream_args`` before binding.
+
+            Tool metadata lives only on the source ``BaseTool`` objects passed here; the
+            request payload sees Anthropic-format dicts, so we remember the names now and
+            match by name in ``_get_request_payload`` to enable input streaming on exactly
+            those tools (#4120). Otherwise a pass-through to stock ``ChatAnthropic``.
+            """
+            self._stream_args_tool_names = _stream_args_tool_names(tools)
+            return super().bind_tools(tools, **kwargs)
 
         @cached_property
         def _client_params(self) -> dict[str, Any]:
@@ -246,6 +282,14 @@ try:
                 payload = clamp_request_images(payload)
             except Exception:  # noqa: BLE001 — clamping must never be what fails a turn
                 log.warning("[anthropic-oauth] image clamping skipped", exc_info=True)
+            # Stream the arguments of write tools as they arrive so the D3 inline preview
+            # streams, instead of landing in one burst at message end (#4120). Scoped to
+            # tools whose source tool declared ``stream_args`` (resolved by name from the
+            # set captured in ``bind_tools``); a plain tool is left untouched.
+            if self._stream_args_tool_names:
+                for tool in payload.get("tools") or []:
+                    if isinstance(tool, dict) and tool.get("name") in self._stream_args_tool_names:
+                        tool["eager_input_streaming"] = True
             return payload
 
         def _lane_key(self) -> str:

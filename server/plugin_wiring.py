@@ -332,6 +332,10 @@ def _apply_plugin_registries(plugins) -> None:
     from graph import components as _components
 
     _components.set_plugin_components(getattr(plugins, "components", None))
+    # Frame map (ADR 0118 D5, #4087) — rebound in the same step as the component set so a
+    # disabled plugin's frame kind leaves GET /api/components, and a newly-enabled one's
+    # appears, without a restart. getattr: a bundle built before this field existed still loads.
+    _components.set_plugin_component_frames(getattr(plugins, "component_frames", None))
     # Plugin services (ADR 0116) — rebound wholesale so a disabled plugin's service stops
     # resolving through sdk.service the moment the reload commits.
     from graph import plugin_services as _plugin_services

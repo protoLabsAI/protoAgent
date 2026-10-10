@@ -2,11 +2,12 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Timer, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 
+import { StreamingPreview } from "../artifacts/StreamingPreview";
 import { openDocument } from "../docviewer";
 import { slashCommandName } from "../ext/slashRegistry";
 import { loadBackgroundReport } from "../lib/api";
@@ -28,7 +29,7 @@ import { Markdown } from "./LazyMarkdown";
 import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
-import { WorkBlock } from "./WorkBlock";
+import { WorkBlock, findInlineArtifactRef, inlineArtifactPreview, spotlightToolId } from "./WorkBlock";
 import { foldPlan, toolsForGroup } from "./parts";
 import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 import { useBackgroundJob } from "./backgroundJobStore";
@@ -164,6 +165,22 @@ export function ChatMessageView({
             : undefined
       }
     >
+      {/* A user turn a frame's send-to-chat bridge started (ADR 0118 D4): a small "from ‹title›"
+          label so the operator can tell it apart from one they typed. It is still a normal,
+          visible user message; the label is the only thing that changes. Both frame origins —
+          an inline artifact (S10b) and a plugin component (S12b) — render the same chip; the
+          label falls back to the artifact id or the component kind when no title was supplied.
+          Title/kind are model/plugin-authored → render as React text, never markup. */}
+      {message.role === "user" && message.sentVia ? (
+        <div className="chat-from-artifact" data-testid="chat-from-artifact">
+          <Sparkles size={12} aria-hidden />
+          <span>
+            from{" "}
+            {message.sentVia.title ||
+              (message.sentVia.via === "component" ? message.sentVia.kind : message.sentVia.artifact_id)}
+          </span>
+        </div>
+      ) : null}
       {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
           lead agent's paraphrase of them — say whose. The role stays "assistant" so every
           other renderer is untouched; the chip is the only thing that changes. */}
@@ -194,6 +211,37 @@ export function ChatMessageView({
           // `leadParts` is text the bubble already showed before the turn folded (a reasoning
           // model's pre-tool sentence): it stays inline above the WorkBlock — never yanked into it.
           const { fold, leadParts, workParts, answerParts } = foldPlan(parts, streaming);
+          // S8c handover: while a streaming inline `show_artifact`'s live preview owns the WorkBlock
+          // spotlight, the artifact's own inline frame (S7b) must NOT also render in the answer below
+          // — two frames would stack and the preview's measured height would be lost to a fresh mount
+          // at the ref's own height (the layout jump). So once the ref has landed, pull it out of the
+          // answer and hand it to the WorkBlock, which (on `done`) swaps the preview for it seeded
+          // with the last measured height. The ref is correlated to the SPOTLIT call by emission order
+          // (findInlineArtifactRef over the FULL parts, keyed on the spotlit id) — never the last
+          // inline ref in the turn, which in a turn that already rendered an earlier inline artifact
+          // would be that OTHER artifact's ref, not this call's. Decided off the SAME spotlit call the
+          // preview renders from (spotlightToolId + inlineArtifactPreview) so the suppression and the
+          // render can't diverge. Once the turn settles the spotlight is gone and the ref renders
+          // normally in the answer.
+          // The streaming inline `show_artifact` call that gets the LIVE PREVIEW in the spotlight
+          // (ADR 0118 D3, S8c). Derived for BOTH the folded and unfolded paths off the SAME spotlit
+          // call, so the folded WorkBlock and the unfolded render below can never diverge on which
+          // tool they preview / hand over. Claude on the OAuth lane sends no reasoning, so its
+          // artifact turn never folds (foldPlan needs reasoning AND a tool) — leaving the preview,
+          // which only the WorkBlock spotlight hosted, with nowhere to mount (#4121). Gated on
+          // `streaming` alone (not `fold && streaming`) so the unfolded case computes it too.
+          const spotlitId = streaming ? spotlightToolId(workParts) : undefined;
+          const spotlitCall = spotlitId ? message.toolCalls?.find((c) => c.id === spotlitId) : undefined;
+          const spotlitPreview = spotlitCall ? inlineArtifactPreview(spotlitCall, message.toolArgs) : null;
+          const handoverRef = spotlitId && spotlitPreview ? findInlineArtifactRef(parts, spotlitId) : null;
+          const answerToRender = handoverRef
+            ? answerParts.filter((p) => !(p.kind === "component" && p.spec === handoverRef))
+            : answerParts;
+          const renderFinal = handoverRef
+            ? (height: number) => (
+                <ChatComponent spec={{ ...handoverRef, props: { ...handoverRef.props, height } }} />
+              )
+            : undefined;
           // The turn's LAST part is the one still streaming: a marker it ends on with nothing
           // after it yet (`**`, `` ` ``, `- `) is held back so it never paints as a literal
           // (danglingMarker.ts). Settled text, and every earlier part, renders verbatim.
@@ -232,9 +280,28 @@ export function ChatMessageView({
               {[
                 ...leadParts.map(renderInline),
                 ...(fold
-                  ? [<WorkBlock key="work" parts={workParts} toolCalls={message.toolCalls} streaming={streaming} />]
-                  : workParts.map(renderInline)),
-                ...answerParts.map(renderInline),
+                  ? [<WorkBlock key="work" parts={workParts} toolCalls={message.toolCalls} toolArgs={message.toolArgs} streaming={streaming} renderFinal={renderFinal} />]
+                  : [
+                      ...workParts.map(renderInline),
+                      // Unfolded turns have no WorkBlock, so the live artifact preview (and its S8c
+                      // handover to the real inline frame) that the WorkBlock spotlight hosts has no
+                      // home. Render it here through the SAME StreamingPreview path so a turn with a
+                      // tool call but NO reasoning — Claude on the OAuth lane — still shows the live
+                      // preview and hands it over, instead of a plain tool card and no preview (#4121).
+                      ...(spotlitPreview
+                        ? [
+                            <div className="work-spotlight" key="spotlight">
+                              <StreamingPreview
+                                buffer={spotlitPreview.buffer}
+                                kind={spotlitPreview.kind}
+                                title={spotlitPreview.title}
+                                renderFinal={renderFinal}
+                              />
+                            </div>,
+                          ]
+                        : []),
+                    ]),
+                ...answerToRender.map(renderInline),
               ]}
             </>
           );

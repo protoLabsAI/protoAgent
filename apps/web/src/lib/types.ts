@@ -1179,6 +1179,12 @@ export type ChatMessage = {
    *  text/tool-call order is preserved. Absent on history-loaded messages, which fall
    *  back to the grouped reasoning→toolCalls→content layout. */
   parts?: ChatPart[];
+  /** LIVE-ONLY streamed tool-argument previews (ADR 0118 D3), keyed by tool-call id — the
+   *  per-tool-call buffer the console decodes off working frames (`chat/toolArgsBuffer`,
+   *  structurally the `ToolArgsBuffer` view). Stamped while the turn streams so the WorkBlock can
+   *  render a live artifact preview, and DROPPED when the turn settles: never persisted, never
+   *  rebuilt on hydration/reattach (a reload shows the finished tool card, never a stale partial). */
+  toolArgs?: Record<string, { arg: string; text: string; done: boolean }>;
   /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
    *  above the answer; never part of `content`. */
   reasoning?: string;
@@ -1207,6 +1213,18 @@ export type ChatMessage = {
    *  instead of a full-size assistant bubble. Persisted, so the card treatment survives reload;
    *  absent on operator-initiated turns, which stay full-size. */
   origin?: string;
+  /** Origin tag for a user turn a frame's send-to-chat bridge started (ADR 0118 D4), instead of
+   *  the operator typing it. The turn is a NORMAL, visible user message — this only records WHERE
+   *  the click came from, so the bubble can show a small "from ‹title›" label and the turn stays
+   *  auditable as the user's. Two frame origins carry it:
+   *    - an inline ARTIFACT frame (S10b): `{via, artifact_id, version}` — exactly the D4 metadata;
+   *    - a plugin COMPONENT frame (S12b): `{via, kind, plugin}` — the component-v1 kind and the
+   *      plugin that owns the frame (`plugin` null for a core frame kind).
+   *  `title` is a display convenience the host supplies for the label. Absent on a normally-typed
+   *  turn. */
+  sentVia?:
+    | { via: "artifact"; artifact_id: string; version: number; title?: string }
+    | { via: "component"; kind: string; plugin: string | null; title?: string };
   /** A server turn's result that `chat.resumed` APPENDED, because this transcript had no
    *  preview of that turn to replace: a scheduled fire or a watch reaction that landed while
    *  some other turn here was still running. It is not that running turn's row. So the

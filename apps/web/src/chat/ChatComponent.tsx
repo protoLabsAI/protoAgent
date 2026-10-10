@@ -1,12 +1,14 @@
 import "./chat-component.css";
 
-import type { JSX } from "react";
+import { useContext, useId, type JSX } from "react";
 
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 
 import { CodeRefChip } from "../codeviewer/CodeRefChip";
-import { registeredChatComponents } from "../ext/componentRegistry";
+import { resolveChatComponent, type ComponentFrame } from "../ext/componentRegistry";
+import { useComponentCatalog } from "../lib/api/components";
 import type { ComponentSpec } from "../lib/types";
+import { ComponentFrameRegistryContext, FrameComponentHost } from "./FrameComponentHost";
 
 // Curated, data-only chat component registry (ADR 0051 Slice 2). Renders typed
 // component-v1 DataParts inline in the transcript. No code execution — props are pure
@@ -38,6 +40,10 @@ function Title({ props }: { props: Record<string, unknown> }) {
 function TableComponent({ props }: { props: Record<string, unknown> }) {
   const columns = Array.isArray(props.columns) ? (props.columns as unknown[]).map(asString) : [];
   const rows = Array.isArray(props.rows) ? (props.rows as Row[]) : [];
+  // Optional attribution caption (ADR 0118). props are untrusted: ignore a non-string source,
+  // cap it at 200 chars, and render it as plain text — JSX escapes it, so never as HTML. A
+  // missing/empty source renders nothing, leaving the table markup identical to before.
+  const source = typeof props.source === "string" ? props.source.slice(0, 200) : "";
   return (
     <div className="chat-comp chat-comp-table">
       <Title props={props} />
@@ -61,6 +67,7 @@ function TableComponent({ props }: { props: Record<string, unknown> }) {
           ))}
         </TBody>
       </Table>
+      {source ? <div className="chat-comp-source">Source: {source}</div> : null}
     </div>
   );
 }
@@ -119,12 +126,55 @@ const BUILTINS: Record<string, (p: { props: Record<string, unknown> }) => JSX.El
 };
 
 export function ChatComponent({ spec }: { spec: ComponentSpec }) {
-  // Registered (fork/plugin) renderers win over the built-ins of the same name, so a fork can
-  // both add new kinds and re-skin a built-in (#1323).
-  const Renderer = registeredChatComponents()[spec.component] ?? BUILTINS[spec.component];
-  if (!Renderer) {
+  // Resolution order (ADR 0118 D5 / S12b), in componentRegistry.resolveChatComponent:
+  //   1. a TS-registered (fork/plugin) renderer — ALWAYS wins, so a fork can add new kinds AND
+  //      re-skin a built-in or override a frame kind (#1323);
+  //   2. a core BUILT-IN renderer;
+  //   3. a plugin FRAME from the live component catalog (`frame_url`) — hosted in a sandboxed,
+  //      bearer-free iframe, so a plugin ships a component with NO console rebuild;
+  //   4. otherwise a labelled "unsupported" note.
+  // The catalog self-refreshes on plugin (re)loads, so a newly-enabled plugin's kind resolves
+  // without a reload. An empty/absent catalog (a pre-S11 server, a failed fetch) simply leaves
+  // only steps 1–2, exactly as before.
+  const { catalog } = useComponentCatalog();
+  const entry = catalog.find((e) => e.name === spec.component) ?? null;
+  const frame: ComponentFrame | null = entry ? { frame_url: entry.frame_url, plugin: entry.plugin } : null;
+  const resolved = resolveChatComponent(spec.component, BUILTINS, frame);
+  // The per-chat-view frame registry shared by EVERY frame component in this transcript, so the
+  // six-live-frame cap bounds them together (ChatSessionSlot scopes one per chat view; the module
+  // default keeps even a standalone render bounded). Without passing it, each host would make its
+  // own one-frame registry and the cap would never apply.
+  const frameRegistry = useContext(ComponentFrameRegistryContext);
+  // A per-OCCURRENCE id for the frame host — NOT the component kind. The registry keys its live
+  // slot, remembered height, and send rate-window by this id and reference-counts repeats, so
+  // keying by kind would collapse every occurrence of one plugin kind in the transcript into a
+  // SINGLE slot: the six-live-frame cap wouldn't hold, and all those copies would share one
+  // height and one rate window. `useId()` is stable across this instance's renders and unique per
+  // occurrence (React guarantees tree-uniqueness), exactly the per-instance key ArtifactRefChip's
+  // frameKey mints from (id, version). The kind is passed separately below for the origin tag.
+  const frameId = useId();
+
+  if (resolved.via === "unsupported") {
     return <div className="chat-comp chat-comp-unknown">[unsupported component: {spec.component}]</div>;
   }
+  if (resolved.via === "frame") {
+    // A plugin-served page renders the component in a locked-down, bearer-free iframe. `kind` +
+    // `plugin` tag a send's origin ({via:"component", kind, plugin}); props are forwarded verbatim.
+    return (
+      <div className="chat-comp chat-comp-frame">
+        <FrameComponentHost
+          id={frameId}
+          frameUrl={resolved.frameUrl}
+          kind={spec.component}
+          plugin={resolved.plugin}
+          props={spec.props || {}}
+          registry={frameRegistry}
+          title={spec.component}
+        />
+      </div>
+    );
+  }
+  const Renderer = resolved.render;
   try {
     return <Renderer props={spec.props || {}} />;
   } catch {
