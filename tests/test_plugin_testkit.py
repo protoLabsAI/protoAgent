@@ -151,6 +151,73 @@ def test_testkit_slugify_matches_the_host_slugifier():
         assert testkit._slugify_slash(raw) == slugify_slash(raw), f"slug drift for {raw!r}"
 
 
+def test_testkit_is_service_name_matches_the_host():
+    # register_service used to `from graph.plugin_services import is_service_name`, breaking the
+    # host-free contract when the file is vendored into a standalone plugin's CI. It now uses a
+    # local duplicate; this keeps the two in sync (same reasoning as the slugifier above).
+    from graph.plugin_services import is_service_name
+
+    for name in (
+        "artifact.show",  # canonical
+        "my-plugin.do_thing",  # hyphen in id, underscore in name
+        "A1.b2",
+        "artifact.Show",  # uppercase in name part — invalid
+        "artifact.",  # empty name part
+        ".show",  # empty id part
+        "no-dot",  # not namespaced
+        "a.b.c",  # too many segments
+        "artifact.show-it",  # hyphen in name part — invalid
+        "",
+        "x" * 130 + ".y",  # over the length cap
+        123,  # not a string
+        None,
+    ):
+        assert testkit._is_service_name(name) == is_service_name(name), f"service-name drift for {name!r}"
+
+
+def test_testkit_accept_component_frame_matches_the_host():
+    # The frame validator (ADR 0118 D5) is likewise duplicated host-free; keep the copies in sync.
+    from graph.plugins.registry import _accept_component_frame as host_accept
+
+    public = ["/plugins/p/component.html", "/plugins/p/ui/"]
+    cases = [
+        ("p", "component.html", public),  # accepted
+        ("p", "ui/widget.html", public),  # under a public subtree
+        ("p", "/etc/passwd", public),  # absolute
+        ("p", "../secret.html", public),  # parent traversal
+        ("p", "private.html", public),  # not listed
+        ("p", "component.html", []),  # nothing public
+        ("p", "  ", public),  # blank
+    ]
+    for pid, frame, pp in cases:
+        assert testkit._accept_component_frame(pid, frame, pp) == host_accept(pid, frame, pp), (
+            f"frame drift for {frame!r} / {pp!r}"
+        )
+
+
+def test_fake_registry_register_service_runs_host_free_and_mirrors_refusals():
+    # The fixed code path: register_service no longer imports graph.plugin_services, so it must
+    # still namespace + validate exactly like the host (raising where the host warns-and-skips).
+    reg = testkit.FakeRegistry(plugin_id="artifact")
+
+    def fn():
+        return None
+
+    reg.register_service("show", fn, description="Create a chart")
+    assert reg.services == {"artifact.show": fn}
+    assert reg.service_meta["artifact.show"] == {"plugin_id": "artifact", "description": "Create a chart"}
+
+    reg.register_service("artifact.render", fn)  # already namespaced — kept as-is
+    assert "artifact.render" in reg.services
+
+    with pytest.raises(ValueError):  # bad bare name (hyphen) the host would refuse
+        reg.register_service("bad-name", fn)
+    with pytest.raises(ValueError):  # non-callable
+        reg.register_service("notcallable", "nope")
+    with pytest.raises(ValueError):  # duplicate — host keeps the first
+        reg.register_service("show", fn)
+
+
 def test_fake_registry_captures_chat_commands_slugified():
     reg = testkit.FakeRegistry()
 

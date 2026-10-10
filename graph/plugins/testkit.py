@@ -230,6 +230,19 @@ def _slugify_slash(raw: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower()).strip("-")
 
 
+# ``<plugin_id>.<name>`` service name (ADR 0116) — duplicates
+# ``graph.plugin_services.SERVICE_NAME_RE`` / ``is_service_name`` rather than importing them,
+# because this file is host-free by contract (vendored verbatim into standalone plugin CI); a
+# parity test keeps the copies in sync — same reasoning as ``_slugify_slash`` above.
+_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\.[a-z][a-z0-9_]*$")
+
+
+def _is_service_name(name) -> bool:
+    """True for a well-formed ``<plugin_id>.<name>`` service name — mirrors
+    ``graph.plugin_services.is_service_name``."""
+    return isinstance(name, str) and len(name) <= 128 and bool(_SERVICE_NAME_RE.match(name))
+
+
 def _accept_component_frame(plugin_id: str, frame, public_paths) -> str | None:
     """Validate a component ``frame`` exactly as ``PluginRegistry`` does (ADR 0118 D5):
     a path relative to ``/plugins/<id>`` that is safe (no leading ``/``, no ``..``) and
@@ -381,11 +394,9 @@ class FakeRegistry:
         being dropped with a warning, so a registration the host would refuse fails the test.
         To exercise a CONSUMER, put fakes in the live table instead:
         ``graph.plugin_services.set_plugin_services({"artifact.show": fake})``."""
-        from graph.plugin_services import is_service_name
-
         pid = self.plugin_id
         key = name if isinstance(name, str) and name.startswith(f"{pid}.") else f"{pid}.{name}"
-        if not is_service_name(key) or not callable(fn):
+        if not _is_service_name(key) or not callable(fn):
             raise ValueError(f"service {name!r} would be refused by the host (bad name or non-callable)")
         if key in self.services:
             raise ValueError(f"service {key} registered twice — the host keeps only the first")
