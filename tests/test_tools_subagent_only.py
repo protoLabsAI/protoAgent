@@ -255,3 +255,19 @@ async def test_a_fenced_background_pass_runs_a_held_tool_end_to_end():
 async def test_an_unfenced_lead_call_to_a_held_tool_is_blocked_end_to_end():
     result = await _run_turn()
     assert result.status == "error" and "subagent-only" in result.content and "grabbed" not in result.content
+
+
+def test_moving_a_tool_into_subagent_only_is_not_announced_as_removed():
+    """A held tool is still the agent's, through `task`. Announcing it as "No longer available"
+    sent a live agent off answering that note instead of reporting its delegated work."""
+    from graph import tool_delta
+
+    tool_delta.reset_for_tests()
+    create_agent_graph(LangGraphConfig(), extra_tools=[media_grab, media_search])
+    tool_delta.take_pending_delta()  # the first build establishes the baseline
+    create_agent_graph(
+        LangGraphConfig(tools_subagent_only=["media_grab", "media_search"]),
+        extra_tools=[media_grab, media_search],
+    )
+    assert tool_delta.take_pending_delta() is None
+    tool_delta.reset_for_tests()
