@@ -32,6 +32,11 @@ COMPONENT_TYPES = ("table", "keyvalue", "timeline", "code-ref")
 CODE_REF_NOTE_MAX = 280
 _CODE_REF_STR_MAX = {"project": 200, "path": 4096, "note": CODE_REF_NOTE_MAX}
 
+# table `source` cap (ADR 0118): an optional provenance caption — a short string naming
+# where the rows came from. Unlike code-ref, the table has no strict schema; the source is
+# the ONLY vetted prop, and an invalid one is dropped without failing the table.
+TABLE_SOURCE_MAX = 200
+
 
 # ── Plugin-contributed component types (#3617) ─────────────────────────────────────────
 # A plugin can add its OWN component-v1 kind — a pointer chip into its console view, say —
@@ -90,6 +95,16 @@ def validate_component_props(component: str, props: dict) -> str | None:
             log.warning("[components] %s validator raised: %s", component, exc)
             return f"{component} validator failed"
         return None if why is None else str(why)
+    if component == "table":
+        # ADR 0118: `source` is an optional provenance caption. A source that isn't a
+        # string ≤ TABLE_SOURCE_MAX chars is dropped — the prop only; the table stays
+        # valid. A table with no `source` key is left untouched, so it validates exactly
+        # as before this prop existed.
+        if isinstance(props, dict) and "source" in props:
+            src = props["source"]
+            if not isinstance(src, str) or len(src) > TABLE_SOURCE_MAX:
+                del props["source"]
+        return None
     if component != "code-ref":
         return None
     if not isinstance(props, dict):
