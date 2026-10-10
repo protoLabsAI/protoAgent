@@ -254,6 +254,11 @@ has to read the whole epic as one diff at the end.
   means a finder lane did not run and that part of the diff is unreviewed. Re-run the
   panel (`@vera review` on the PR) before merging. The board enforces this for projects
   with `require_complete_review: true` (projectBoard-plugin#520).
+  If the re-review is **also** incomplete, the panel cannot finish this diff. Seen on
+  #4101: a finder lane ran its whole output budget as reasoning and returned no answer.
+  Run an adversarial review subagent over the slice instead, post its result on the PR,
+  and merge by hand. A hand merge skips the gate, so never merge without that substitute
+  review.
 - **Do not put `merge-hold` on slices bound for the epic.** The operator's hands-on test
   happens once, on the epic, before it goes to `main`. A per-slice hold only freezes
   the dependency chain behind it.
