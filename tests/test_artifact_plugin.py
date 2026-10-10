@@ -1533,9 +1533,31 @@ def _html_doc(art):
     return build
 
 
+def _import_map_script(js):
+    """Rebuild the ESM import-map ``<script>`` the shell concatenates for html/react artifacts,
+    from the REAL ``IMPORTMAP`` specifier list in shell.js — so dropping the ``three`` entry (or
+    the html branch no longer injecting the map) fails these assertions rather than passing on a
+    source string that happens to appear in the react branch."""
+    import json
+    import re
+
+    m = re.search(r"var IMPORTMAP = JSON\.stringify\(\{ imports: \{(.+?)\}\s*\}\);", js, re.S)
+    assert m, "IMPORTMAP moved or changed shape — keep this extraction in sync"
+    pairs = re.findall(r'"([^"]+)":\s*V\s*\+\s*"([^"]+)"', m.group(1))
+    assert pairs, "no `spec: V + file` entries found in IMPORTMAP"
+    imports = {spec: "/plugins/artifact/vendor/" + file for spec, file in pairs}
+    return '<script type="importmap">' + json.dumps({"imports": imports}) + "</script>"
+
+
 def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_path):
     js = _load(monkeypatch, tmp_path)._SHELL_JS
-    assert 'if (kind === "html") return htmlDoc(code, dsLink() + base(kind));' in js
+    # html still routes through the prologue-aware builder (injection inside <head>) AND now
+    # carries the curated ESM import map, like react (regression: it used to inject only
+    # dsLink()+base(), so a bare `import … from "three"` had no map and failed — ADR 0118 D6).
+    assert (
+        'if (kind === "html") return htmlDoc(code, dsLink() + base(kind) + '
+        '\'<script type="importmap">\' + IMPORTMAP + \'<\\/script>\');'
+    ) in js
     assert "dsLink() + base(kind) + code" not in js  # the prepend that displaced the doctype
 
 
@@ -1572,6 +1594,30 @@ def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_p
 )
 def test_html_injection_keeps_the_document_prologue_first(monkeypatch, tmp_path, code, expected):
     assert _html_doc(_load(monkeypatch, tmp_path))(code) == expected
+
+
+def test_html_artifact_srcdoc_carries_the_three_import_map(monkeypatch, tmp_path):
+    """Regression (review of #4118): an html artifact importing three must resolve the bare
+    ``three`` specifier. The html kind used to inject only ``dsLink()+base()`` — no import map —
+    so ``import * as THREE from "three"`` failed in EVERY html artifact (only react got the map),
+    making the three.js support promised in the changelog/LICENSES a no-op. Build the html srcdoc
+    through the real prologue-aware builder and assert the curated map lands inside ``<head>``,
+    ahead of the author's module, with ``three`` → the same-origin vendored file."""
+    art = _load(monkeypatch, tmp_path)
+    importmap = _import_map_script(art._SHELL_JS)
+    assert '"three":' in importmap and "three.module.min.js" in importmap  # the specifier resolves
+
+    code = (
+        "<!doctype html><html><head></head><body>"
+        '<script type="module">import * as THREE from "three";new THREE.Scene();</script>'
+        "</body></html>"
+    )
+    doc = _html_doc(art)(code, inject=importmap)
+    # the import map is present and sits inside the head, BEFORE the author module that uses it —
+    # an import map after a module load would be ignored, so ordering is what makes `three` resolve.
+    assert importmap in doc
+    assert doc.index("<head>") < doc.index(importmap) < doc.index("<body>")
+    assert doc.index(importmap) < doc.index('import * as THREE from "three"')
 
 
 # ── pinning: exempt a long-lived artifact from history eviction ─────────────────────

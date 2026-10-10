@@ -607,7 +607,12 @@
   }
 
   function srcdoc(kind, code, links) {
-    if (kind === "html") return htmlDoc(code, dsLink() + base(kind));
+    // `html` gets the SAME curated ESM import map as `react` (injected ahead of the author's
+    // own markup by htmlDoc, so it precedes any `<script type="module">` the artifact ships):
+    // a plain html artifact can then `import * as THREE from "three"` (or d3 / chart.js / lucide)
+    // and the bare specifier resolves to the same-origin vendored module — the three.js (ADR 0118
+    // D6) support promised in the changelog/LICENSES only works because of this map, not base().
+    if (kind === "html") return htmlDoc(code, dsLink() + base(kind) + '<script type="importmap">' + IMPORTMAP + '<\/script>');
     if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + gfxScript({}) +
       '<script>__artVP.full();<\/script></body>';
     // mermaid.run() is async: the viewport + code links mount once the <svg> exists. A rejected
