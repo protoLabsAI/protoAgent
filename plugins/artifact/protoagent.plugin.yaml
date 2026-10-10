@@ -35,6 +35,7 @@ config:
   max_blob_kb: 25600
   max_preview_kb: 64
   ask_max_chars: 4000
+  open_link_origins: []
 settings:
   - { key: ask_enabled, label: "Interactive artifacts", type: bool, description: "Let artifacts call back to the agent via window.protoArtifact.ask() — turns them into mini-apps (game NPCs, tutors, generators). Off by default: it lets artifact code trigger LLM calls." }
   - { key: ask_system, label: "Ask system instruction", type: string, description: "Optional system prompt wrapping every window.protoArtifact.ask() call (e.g. a persona or guardrails). Only used when interactive artifacts are on." }
@@ -45,6 +46,7 @@ settings:
   - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
   - { key: max_blob_kb, label: "Max file size (KB)", type: number, description: "Max size of a file saved via save_file_artifact (stored as a sidecar blob); a larger file is rejected." }
   - { key: max_preview_kb, label: "Max file preview (KB)", type: number, description: "Max extracted-text preview kept per file version (the diffable projection shown in the panel)." }
+  - { key: open_link_origins, label: "Allowed openLink origins", type: string_list, description: "Origins an artifact's window.protoArtifact.openLink(url) may open in a new tab (one per line, e.g. https://example.com). Empty = any https origin. Non-https links are always refused." }
 # The shell page is PUBLIC (an iframe page-load can't carry a bearer, and the page
 # derives its slug base from /plugins/…); its data routes are gated under
 # /api/plugins/artifact (plugin-view rule 2).
