@@ -232,7 +232,7 @@ export function ChatMessageView({
               {[
                 ...leadParts.map(renderInline),
                 ...(fold
-                  ? [<WorkBlock key="work" parts={workParts} toolCalls={message.toolCalls} streaming={streaming} />]
+                  ? [<WorkBlock key="work" parts={workParts} toolCalls={message.toolCalls} toolArgs={message.toolArgs} streaming={streaming} />]
                   : workParts.map(renderInline)),
                 ...answerParts.map(renderInline),
               ]}

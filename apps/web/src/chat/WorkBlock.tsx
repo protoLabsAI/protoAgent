@@ -3,13 +3,41 @@ import { BookOpen, Brain, Wrench } from "lucide-react";
 import { ToolCard } from "@protolabsai/ui/tool-card";
 import { Tooltip } from "@protolabsai/ui/overlays";
 
+import { StreamingPreview } from "../artifacts/StreamingPreview";
 import type { ChatPart, ToolCall } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { toolsForGroup } from "./parts";
 import { ReasoningCard } from "./ReasoningCard";
+import type { ToolArgsBuffer } from "./toolArgsBuffer";
 import { ToolCalls } from "./ToolCalls";
 
 type ToolsPart = Extract<ChatPart, { kind: "tools" }>;
+
+/** A streaming `show_artifact` call whose declared `code` is arriving live (S3) AND whose
+ *  placement is `inline`: the one tool call that gets a LIVE PREVIEW in the spotlight instead of
+ *  the plain running card (ADR 0118 D3, S8c). Returns the preview's inputs, or null for every
+ *  other call — a non-artifact tool, a non-inline artifact, or one with no buffered args yet. The
+ *  kind/title ride the tool's args from the start frame; the streamed markup is the buffer. */
+function inlineArtifactPreview(
+  call: ToolCall | undefined,
+  toolArgs: Record<string, ToolArgsBuffer> | undefined,
+): { buffer: ToolArgsBuffer; kind: string; title: string } | null {
+  if (!call || call.name !== "show_artifact") return null;
+  const buffer = toolArgs?.[call.id];
+  if (!buffer) return null;
+  try {
+    const args = JSON.parse(call.input ?? "{}") as { kind?: unknown; placement?: unknown; title?: unknown };
+    if (args.placement !== "inline") return null;
+    return {
+      buffer,
+      kind: typeof args.kind === "string" ? args.kind : "",
+      title: typeof args.title === "string" ? args.title : "",
+    };
+  } catch {
+    // Args still mid-stream / not valid JSON — no placement to key on yet, so no preview.
+    return null;
+  }
+}
 
 /** A skill load is a `load_skill` tool call; the skill name rides its JSON input. */
 function skillName(input?: string): string {
@@ -37,10 +65,15 @@ function plural(n: number, one: string): string {
 export function WorkBlock({
   parts,
   toolCalls,
+  toolArgs,
   streaming,
 }: {
   parts: ChatPart[];
   toolCalls?: ToolCall[];
+  /** Live streamed tool-argument previews, keyed by tool-call id (ADR 0118 D3). Present only on a
+   *  live turn; a streaming inline `show_artifact` call with a buffer here gets a live preview in
+   *  the spotlight. Absent/empty → every card renders exactly as before. */
+  toolArgs?: Record<string, ToolArgsBuffer>;
   streaming: boolean;
 }) {
   // Tally the turn's work. Tool ids come from the timeline; resolve each to its call so we
@@ -120,6 +153,11 @@ export function WorkBlock({
     if (last && last.ids.length) spotlightIds = [last.ids[last.ids.length - 1]];
   }
 
+  // When the spotlit tool is a streaming inline `show_artifact`, the spotlight hosts a LIVE PREVIEW
+  // of the artifact as the model writes it (S8c), instead of the plain running card. Every other
+  // spotlit tool keeps the usual spotlight card.
+  const spotlightPreview = inlineArtifactPreview(spotlightIds.length ? callById.get(spotlightIds[0]) : undefined, toolArgs);
+
   return (
     <div className="work">
       <ToolCard name={header} status={streaming ? "running" : "done"} className="work-block">
@@ -139,7 +177,15 @@ export function WorkBlock({
       </ToolCard>
       {spotlightIds.length > 0 ? (
         <div className="work-spotlight">
-          <ToolCalls calls={toolsForGroup(spotlightIds, toolCalls)} spotlight />
+          {spotlightPreview ? (
+            <StreamingPreview
+              buffer={spotlightPreview.buffer}
+              kind={spotlightPreview.kind}
+              title={spotlightPreview.title}
+            />
+          ) : (
+            <ToolCalls calls={toolsForGroup(spotlightIds, toolCalls)} spotlight />
+          )}
         </div>
       ) : null}
     </div>
