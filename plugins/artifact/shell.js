@@ -176,6 +176,12 @@
       "sha512-CToErkDzmSle4BCcUm0qqqWrjXJuUd2g0On8SLez8p9Bf6rZHE7oxMdgARb0dOYKeZkH9wblI+J5PF6fxRttYQ=="],
     pdfjsWorker: ["pdfjs-worker.min.mjs",
       "sha512-cgsoOrm2N2zEbj1vccst4py/Wf4vyUBwoMXCSaT7WI/vGKCYc33zBWj2TPeYFpdtESAOHCvzzxKe+lxMDatk9Q=="],
+    // three.js r170 (MIT): the package's own self-contained minified ESM build
+    // (build/three.module.min.js), byte-for-byte. Resolved via the `three` import-map
+    // specifier below for 3D `html`/`react` artifacts; SRI-pinned here like every other
+    // vendored module. Notices in vendor/three.LICENSES.txt.
+    three: ["three.module.min.js",
+      "sha512-zTnt1Hf43YVf2to5DC6GE6cPRSC/xgPJDf3PLQussTsaDak1uHdbnWtIYnOQiL40AIa2OZfFkayQXVdzL1/DqA=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
@@ -193,7 +199,7 @@
   // Curated ESM import map for `react` artifacts (offline-vendored, served same-origin with
   // CORS). Bare specifiers resolve to the vendored modules: react/react-dom via tiny shims that
   // re-export the UMD globals (so the artifact, the @pl/ui wrappers, and any lib share ONE
-  // React instance), plus d3 / chart.js / lucide and the authored @pl/ui DS wrappers.
+  // React instance), plus d3 / chart.js / lucide / three and the authored @pl/ui DS wrappers.
   var V = ORIGIN + "/plugins/artifact/vendor/";
   var IMPORTMAP = JSON.stringify({ imports: {
     "react": V + "react.shim.mjs",
@@ -203,7 +209,8 @@
     "d3": V + "d3.mjs",
     "chart.js": V + "chartjs.mjs",
     "chart.js/auto": V + "chartjs.mjs",
-    "lucide": V + "lucide.mjs"
+    "lucide": V + "lucide.mjs",
+    "three": V + "three.module.min.js"
   }});
   // Prose styling for markdown, keyed to --pl-* tokens (the DS link supplies component classes).
   var MD_CSS = '#md{max-width:50rem;margin:0 auto;padding:20px;line-height:1.6}'

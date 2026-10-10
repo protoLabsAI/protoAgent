@@ -676,7 +676,7 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     html = art._SHELL_HTML + art._SHELL_JS
     assert "cdnjs.cloudflare.com" not in html  # no external CDN dependency
     assert "/plugins/artifact/vendor/" in html  # served same-origin
-    # all twelve libs present, each with an integrity hash.
+    # all thirteen libs present, each with an integrity hash.
     for lib in (
         "mermaid.min.js",
         "react.production.min.js",
@@ -690,9 +690,10 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
         "docx-preview.min.js",
         "pdfjs.min.mjs",
         "pdfjs-worker.min.mjs",
+        "three.module.min.js",  # r170 self-contained ESM, import-map resolved (ADR 0118 D6)
     ):
         assert lib in html
-    assert html.count("sha512-") == 12 and 'integrity="' in html
+    assert html.count("sha512-") == 13 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html
@@ -726,6 +727,46 @@ def test_vendor_route_serves_js_and_blocks_traversal(monkeypatch, tmp_path):
     assert c.get("/plugins/artifact/vendor/..%2f__init__.py").status_code == 404
 
 
+def test_three_js_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
+    """three.js (ADR 0118 D6, operator decision 2026-10-10): the r170 self-contained
+    minified ESM build is vendored same-origin, importable via the bare `three`
+    specifier the same way as d3, and SRI-pinned — the shell's integrity hash is the
+    sha512 of the EXACT bytes the vendor route serves, never a CDN."""
+    import base64
+    import hashlib
+
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    # the vendor route serves the file: same-origin, CORS, immutable, as JavaScript.
+    r = c.get("/plugins/artifact/vendor/three.module.min.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"  # opaque-sandbox cross-origin fetch
+    served = r.content
+
+    # the shell's "three" SRI == sha512 of those served bytes (the ADR 0118 D6 vendoring fence).
+    js = art._SHELL_JS
+    want = "sha512-" + base64.b64encode(hashlib.sha512(served).digest()).decode()
+    assert want in js, "shell three SRI does not match sha512 of the served vendored bytes"
+
+    # resolvable from the no-same-origin sandbox the way d3 is: bare `three` → the same-origin
+    # vendored module in the import map, and the module is SELF-CONTAINED — no further
+    # `import … from "./three.core.min.js"` subresource that the nonce CSP / allowlist would
+    # block (r171+ split that out; r170 is the last single-file release). So an html/react
+    # artifact importing "three" loads with no CSP or SRI error.
+    html = art._SHELL_HTML + js
+    # `"three": V + "three.module.min.js"` — the vendor prefix lives in V, so assert the
+    # specifier, the same-origin prefix and the filename separately (as the sibling tests do).
+    assert '"three":' in html and "/plugins/artifact/vendor/" in html and "three.module.min.js" in html
+    assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
+    assert b"three.core" not in served  # single-file build — nothing else to fetch
+    assert b"export{" in served  # it is an ES module, importable as-is
+
+
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
 
 
@@ -744,6 +785,7 @@ def test_react_kind_uses_import_map_and_module_babel(monkeypatch, tmp_path):
         ('"d3":', "d3.mjs"),
         ('"chart.js":', "chartjs.mjs"),
         ('"lucide":', "lucide.mjs"),
+        ('"three":', "three.module.min.js"),
     ):
         assert spec in html and file in html, spec
 
