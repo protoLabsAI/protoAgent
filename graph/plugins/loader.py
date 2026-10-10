@@ -943,7 +943,17 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 # Resolved config section (ADR 0019) — defaults if not in plugin_config.
                 section = manifest.config_section or manifest.id
                 pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
-                registry = PluginRegistry(manifest.id, manifest.path, config=pconf, config_section=section)
+                # Hand the registry the manifest's auth-exempt prefixes so a component ``frame``
+                # (ADR 0118 D5) can be validated against them at register() time — without this
+                # the list is empty and every frame-declaring component would be refused and
+                # silently dropped in production.
+                registry = PluginRegistry(
+                    manifest.id,
+                    manifest.path,
+                    config=pconf,
+                    config_section=section,
+                    public_paths=manifest.public_paths,
+                )
                 registry.display_name = str(manifest.name or manifest.id)
             with timed_lifecycle_phase(manifest.id, "registration"):
                 register(registry)

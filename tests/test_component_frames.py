@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from graph.config import LangGraphConfig
+from graph.plugins import loader as plugin_loader
+from graph.plugins.loader import load_plugins
 from graph.plugins.registry import PluginRegistry
 from graph.plugins.testkit import FakeRegistry
 
@@ -112,3 +115,45 @@ def test_fake_registry_raises_on_a_frame_the_host_would_refuse(frame, public_pat
     with pytest.raises(ValueError):
         reg.register_component("thing-ref", _v, frame=frame)
     assert reg.components == {} and reg.component_frames == {}
+
+
+# ── loader wiring: the production registry actually sees the manifest's public_paths ──────
+# The unit tests above pass public_paths by hand; they stay green even if load_plugins builds
+# the registry without them. These exercise the real loader so a frame that the manifest
+# exposes survives end-to-end (and one it doesn't is still refused + its kind dropped).
+
+_FRAME_PLUGIN = '''
+def _v(props):
+    return None
+
+def register(registry):
+    registry.register_component("thing-ref", _v, frame="component.html")
+'''
+
+
+def _make_frame_plugin(root: Path, pid: str, *, public_paths: list[str]) -> None:
+    d = root / pid
+    d.mkdir(parents=True, exist_ok=True)
+    pp = "".join(f"  - {p}\n" for p in public_paths)
+    (d / "protoagent.plugin.yaml").write_text(
+        f"id: {pid}\nname: {pid} plugin\nversion: 0.1.0\nenabled: true\npublic_paths:\n{pp}",
+        encoding="utf-8",
+    )
+    (d / "__init__.py").write_text(_FRAME_PLUGIN, encoding="utf-8")
+
+
+def test_loader_passes_manifest_public_paths_so_a_frame_component_loads(tmp_path, monkeypatch):
+    # The frame lives under a declared public_path → the component survives load_plugins.
+    _make_frame_plugin(tmp_path, "p", public_paths=["/plugins/p/component.html"])
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    res = load_plugins(LangGraphConfig())
+    assert "thing-ref" in res.components  # not refused + dropped as it was before the wiring
+
+
+def test_loader_drops_a_frame_component_whose_manifest_omits_the_public_path(tmp_path, monkeypatch):
+    # Manifest exposes a DIFFERENT page, so this frame is genuinely not public → still refused,
+    # taking the whole kind with it (same log-and-skip as a bad name).
+    _make_frame_plugin(tmp_path, "p", public_paths=["/plugins/p/other.html"])
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    res = load_plugins(LangGraphConfig())
+    assert "thing-ref" not in res.components
