@@ -95,14 +95,16 @@ services:
     ports:
       - "7870:7870"
     volumes:
-      - audit:/sandbox/audit
-      - knowledge:/sandbox/knowledge
+      - data:/sandbox
 
   watchtower:
     image: containrrr/watchtower
     command: --interval 60 --label-enable
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  data:
 ```
 
 Watchtower polls `latest` every 60 seconds and recreates the container when the image hash changes.
@@ -125,45 +127,15 @@ Releases are **manual / on-demand** — merging a PR does **not** cut a release.
 
 ### Backup & restore
 
-All durable state lives under one **data dir** — `/sandbox` in a container,
-`~/.protoagent` otherwise. It holds the SQLite conversation checkpoints
-(`checkpoints.db`), the knowledge store (`knowledge/`), the audit log
-(`audit/audit.jsonl`), scheduler jobs (`scheduler/<agent>/jobs.db`), and the
-inbox / activity / telemetry / background stores.
+Persist the whole instance root at `/sandbox`, including config, credentials,
+conversations, schedules, and plugin stores. Mounting only `audit/` and
+`knowledge/` loses the remaining state when a container is replaced.
 
-> The sample compose above persists only `audit` and `knowledge`. Because
-> Watchtower **recreates** the container on every image update, anything not on a
-> mounted volume is lost — conversation history, scheduled jobs, the inbox. For a
-> durable deployment, mount the whole data dir (e.g. `data:/sandbox`) so every
-> store survives a recreate; the backup below then snapshots all of it.
-
-The SQLite stores run in **WAL mode**, so a naive `tar` of a live file can copy a
-torn page (a write in flight) or miss the `-wal` / `-shm` sidecars — producing a
-backup that won't open. Two safe options:
-
-**Cold (simplest, always consistent)** — stop the agent, archive, restart:
-
-```bash
-docker compose stop my-agent          # or Ctrl-C / systemctl stop
-tar czf protoagent-$(date +%F).tgz -C /sandbox .   # ~/.protoagent for a non-container run
-docker compose start my-agent
-```
-
-**Hot (no downtime)** — take a consistent snapshot of each live DB with SQLite's
-online backup, then archive the snapshots:
-
-```bash
-sqlite3 /sandbox/checkpoints.db ".backup '/tmp/backup/checkpoints.db'"
-# repeat for knowledge/*.db and scheduler/<agent>/jobs.db, then tar /tmp/backup + audit/
-```
-
-**Restore** — stop the agent, replace the data dir from the archive, restart:
-
-```bash
-docker compose stop my-agent
-tar xzf protoagent-2026-06-14.tgz -C /sandbox
-docker compose start my-agent
-```
+Follow [Docker backups](/guides/backup-and-restore#docker-backups) to archive the
+named volume from the Docker host and restore into a separate volume. Stop the
+agent before copying its SQLite files. `/sandbox` is a path **inside the
+container**, not a directory the host can archive directly unless you explicitly
+bind-mounted it.
 
 ### Shutdown semantics
 

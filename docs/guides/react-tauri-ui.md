@@ -1,259 +1,157 @@
-# Operator console
+# Use the app
 
-The operator console is protoAgent's UI: a React + Vite single-page app served at
-`/app`, and the same app wrapped as a **Tauri desktop binary** with a frozen Python
-sidecar. It's the **default and only** UI — Gradio was removed; `/` redirects to
-`/app`. This guide covers running it, its layout, and how its surfaces behave. For the
-HTTP it speaks to, see the [Operator REST API](/reference/operator-api); to run with no
-UI at all, see [Run headless](/guides/headless).
+Use protoAgent to chat with an agent, inspect its work, and change its settings.
+The desktop app and browser console share the same controls. For installation,
+follow [Set up your first agent](/tutorials/first-agent).
 
 ## Run it
 
-```bash
-python -m server                 # console at http://localhost:7870/app  ( / → /app )
-```
-
-The server mounts the console when `apps/web/dist/index.html` exists; otherwise it boots
-API-only. The `--ui` tier (env `PROTOAGENT_UI`) selects it:
-
-- `console` (default) — the React console at `/app` + the full API/A2A surface.
-- `none` — API + A2A + `/metrics` only (headless servers, fleet members). `full` is a
-  **deprecated alias for `console`** (the old Gradio tier; it logs a warning).
-
-Build the console from the `@protoagent/web` workspace:
-
-```bash
-npm ci
-npm run build --workspace @protoagent/web    # tsc + vite build → apps/web/dist
-npm run dev   --workspace @protoagent/web     # Vite dev server (proxies the API)
-```
-
-The repo ships a prebuilt `dist/`; rebuild after changing console source or pulling
-frontend changes. For an isolated dev instance (separate port + data), use
-`scripts/dev.sh` (`:7871`).
+Open the desktop app, or start an installed Python package with `protoagent serve`
+and visit <http://localhost:7870>. For a source checkout, build the frontend first:
+[Build and test the console](/guides/build-console).
 
 ## Layout
 
-The shell (DS `AppShell`) is a **left rail** of grouped surfaces, a **right sidebar** of
-the agent's live state, a **utility bar**, and an optional **bottom panel**. The core rail
-surfaces — **Chat**, **Activity** (thread + inbox), **Knowledge** (a searchable store),
-**Studio** (workflows), **Agent**, **Plugins**, **Settings** — each fan out to sub-views
-via an in-surface segmented control. Enabled plugins add their own views (ADR 0026), each
-declaring a placement: `rail`, `right` (right-sidebar panel), or `bottom`. Press **⌘⇧K** /
-**Ctrl-Shift-K** for the [command palette](/guides/command-palette) to jump anywhere.
+Use the rail to open **Chat**, **Activity**, **Knowledge**, and **Settings**.
+Enabled plugins add their own views. Goals, tasks, schedules, and notes provide
+views of the agent's ongoing work.
 
-The **Agent** surface is the agent's own makeup, tabbed: **Identity** (edit its name +
-`SOUL.md` inline — saving merge-applies config + hot-reloads the graph) · **Tools** (live
-inventory by source) · **MCP** (servers) · **Subagents** (the delegate roster) ·
-**Skills** (the skill index) · **Middleware** (per-turn graph middleware).
-
-The **right sidebar** holds the agent's working state + triggers — **Goals** (standing
-conditions, set in chat with `/goal`) · **Tasks** (its task board) · **Schedule**
-(cron/one-off fires), plus **Notes** (its notebook, which ships as the `notes` plugin).
-
-In a [fleet](/guides/fleet), the console is slug-routed (`/app/agent/<id>/`) and the hub
-reverse-proxies each window to its agent — switch agents in place or open two at once.
+Press **⌘⇧K** / **Ctrl-Shift-K** for the
+[command palette](/guides/command-palette), or click the search icon, to jump to a
+surface or Settings section. In a [fleet](/guides/fleet), switch agents or open
+separate windows to work with more than one at once.
 
 ## Chat
 
-Multi-session: sessions persist in `localStorage`, hidden ones stay mounted so background
-streams keep running, and each carries its own status + goal panel. The composer has
-slash-command autocomplete (from `GET /api/chat/commands`) and renders assistant markdown.
+Open a chat, write a message, and send it. Each conversation has its own history
+and status. Switching tabs lets another conversation continue working.
 
-- **Live tool-call cards** — each tool the agent invokes streams in as a collapsible card
-  (name, running→done/error, input/result), via the `tool-call-v1` DataPart (see
-  [Extensions § tool-call-v1](/reference/extensions)).
-- **Skill loads** — when the agent loads a skill's procedure on demand it appears as an
-  ordinary `load_skill` tool-call card (progressive disclosure, [Skills](/guides/skills)).
-- **Mid-turn steering** — send a message while a turn runs and it folds in at the next
-  model call ([Mid-turn steering](/explanation/steering)).
+- **Tool-call cards** show what the agent called, whether it is running or finished,
+  and its input and result. Expand a card to inspect it.
+- **Slash commands:** type `/` to see available commands and installed skills.
+- **Steering:** send another message while the agent works to give it a correction
+  or more context. It reads that message at the next model call.
+- **Model:** choose one for this chat; see [Connect and change models](/guides/model-connections).
+- **Delegation:** a [delegate](/guides/delegates) can return a reply under its own
+  name; background work appears above the composer.
 
-Streaming uses A2A **`SendStreamingMessage`** in the browser.
+The browser streams replies directly. Desktop streams through the native shell;
+if that relay fails, it falls back to displaying the completed reply.
 
-> **Desktop (WKWebView) exception.** WKWebView won't deliver a `text/event-stream` body
-> through `fetch()`, so the desktop app detects the shell (`isDesktopWebview()`) and routes
-> the turn through the **non-streaming `POST /api/chat`** — one request, full reply,
-> rendered once (no live token/tool-card streaming in the desktop chat; browsers keep the
-> streaming `/a2a` path).
+## Save a conversation
 
-## Reactive surfaces (ADR 0003)
+Run `/export` to download the current chat as Markdown. Check the status note
+and your downloads folder. Read the file before sharing: recognizable secret
+patterns are redacted, but private content and unrecognized secrets can remain.
+This export is a readable record; restoring the app's history needs a
+[data backup](/guides/backup-and-restore).
 
-The console holds one `EventSource` open to `GET /api/events` for its lifetime
-(`lib/events.ts`), backed by an in-process `EventBus`. The topbar **live dot** reflects
-the connection; producers `bus.publish(...)` and every connected console receives it.
+To empty or delete a chat and choose what saved memory to remove, follow
+[Manage memory](/guides/manage-memory#delete-a-chat).
 
-> **Playwright note:** a long-lived SSE connection never lets `networkidle` settle —
-> navigate e2e with `waitUntil: "load"`.
+## Create and download documents
 
-- **Activity** (`activity/ActivitySurface.tsx`) — the durable Activity thread: agent-initiated
-  turns (e.g. scheduled fires) land here; the operator can reply into the `system:activity`
-  context. An unread badge counts events that arrive while you're elsewhere.
-- **Inbox** — the read/dismiss view of the authenticated `POST /api/inbox` intake channel
-  (webhooks, scripts, sister agents). Items have a `now`/`next`/`later` priority; `now`
-  fires an Activity turn immediately, the rest queue for the agent's `check_inbox` tool.
+[Work with documents and files](/guides/documents-and-files) covers attaching
+sources, choosing a save folder, creating office documents, downloading results,
+and asking for revisions. File artifacts are available from their chat chips
+or the **Artifact** panel.
 
-## Agent, Settings & Telemetry
+## Activity and inbox {#reactive-surfaces-adr-0003}
 
-- **Settings** is **schema-driven**: `GET /api/settings/schema` returns fields grouped by
-  section (type, value, default, description, `restart` flag); the surface renders inputs
-  generically, so new config fields appear without a UI change. Saving POSTs only changed
-  fields, writes the YAML (secrets split to `secrets.yaml`), and **hot-reloads the agent
-  in-process** — most changes apply without a restart (those that don't carry a `restart`
-  badge). Secrets are never echoed (`(set)` / `unset`). Registry: `graph/settings_schema.py`.
-- **Telemetry** (Settings ▸ Overview, ADR 0006) — the local per-turn cost/latency rollup
-  (totals, by-model table, recent turns) from `GET /api/telemetry/{summary,recent}`.
-- **Skills** (Agent ▸ Skills) — browses the skill index: each skill is **pinned** (a
-  `SKILL.md` on disk) or **learned** (non-disk, curated), with confidence + last-used, a
-  search filter, and delete. (Surfaced via `GET /api/playbooks`.)
+**Activity** holds agent-initiated work, including scheduled tasks. Open it to
+read results or reply in the Activity conversation. The unread badge counts new
+items while you are elsewhere; the live dot shows the event connection.
+
+**Inbox** holds messages from webhooks, scripts, and other agents. A `now` item
+starts an Activity turn immediately; `next` and `later` items wait for the agent
+to check them. Read or dismiss items here.
+
+## Change settings {#agent-settings-telemetry}
+
+Open **Settings** to change the focused agent:
+
+| Section | Use it to |
+| --- | --- |
+| **Identity** | Change its name and persona (`SOUL.md`) |
+| **Model → Connections** | Add or test model endpoints and subscription logins |
+| **Tools**, **MCP**, **Plugins** | Control tools and integrations |
+| **Skills**, **Subagents**, **Delegates** | Manage procedures and agents it can call |
+| **Knowledge** | Tune recall and memory |
+| **Operator & access**, **Devices** | Configure access and pairing |
+| **Telemetry** | Inspect local usage, cost, and latency |
+
+Most changes apply on save. A setting that needs a restart carries a restart
+badge. Secret inputs show whether a value is set; they do not display it again.
+
+## Inspect and control memory
+
+Open **Memory** to read past-session summaries, edit hot memory, or inspect what
+was injected into a turn. **Knowledge → Store** searches saved facts and documents
+and offers review, edit, and delete controls. Follow [Manage memory](/guides/manage-memory)
+for those tasks, including incognito and deleting a chat's saved content.
 
 ## Working memory & the filesystem fence
 
-The agent's stores are **agent-global** — one instance-scoped store each, shared by the
-agent's tools and the console (no per-project selector). Tasks lives at `$BEADS_DB_PATH`;
-notes ship as the `notes` plugin (`/api/plugins/notes/note`).
+The focused agent's knowledge, tasks, notes, and memory are shared across its
+chats. They belong to the agent instance, rather than to a selected project.
 
-`filesystem.projects` in `langgraph-config.yaml` — the **Work folders** editor under
-Tools ▸ Filesystem — is the **filesystem security fence** for the agent's file/shell
-tools (unrelated to notes/tasks). Each entry is a named root with its own `write` flag;
-every `read_file` / `write_file` / `run_command` path is joined to a root and re-resolved,
-so out-of-fence paths are rejected before any I/O (`..` and symlinks resolved before the
-containment check). Configure none and the agent gets a single default `workspace` root.
-See [ADR 0007](../adr/0007-directory-aware-operator-agent.md).
+In **Settings → Tools → Filesystem → Work folders**, add the directories the
+agent can access. Each root has its own write permission. File tools resolve
+paths and symlinks against these roots and reject paths outside them. With no
+explicit folders, they use the instance's default `workspace` directory.
 
-Every path-valued setting (a `type: "path"` field in `graph/settings_schema.py`, plus the
-Work-folders rows) renders a **Browse…** picker over `GET /api/fs/browse` — a read-only
-listing of the **server's** directories. It has to be server-side: the console frequently
-configures a machine it isn't running on, and the browser's own pickers
-(`webkitdirectory`, `showDirectoryPicker()`) describe the client's filesystem and can't
-produce an absolute path on the server at all. Plugin-declared fields can set
-`type: path` (and `path_kind: file`) to get the same control, and `multiple: true` for a
-list of paths (one row + Browse… each, stored as one `\n`-joined string).
+**Browse…** lists directories on the **server's machine**. When configuring a
+remote agent, choose paths that exist there. The `operator.allowed_dirs` and
+`operator.project_dir` config fields do not grant file access.
 
-A path that is **not on the server's filesystem** must stay `type: "string"` —
-`secrets_manager.path` is a folder inside a remote vault (1Password/Bitwarden), so a
-local browser would point at the wrong machine entirely. The test for `type: path` is
-"would `ls` on this box resolve it?", not "does it look like a path?".
+## The code pane
 
-### The code pane
+Enable **Settings → Tools → Filesystem → Shell & filesystem tools** and
+**Code pane**, then **Save & apply**. Both switches must be on.
 
-A read-only file and diff viewer docked beside chat (ADR 0112) — the **Code** surface,
-on the right dock by default and always on a dock that isn't chat's. It's built for the
-operator as navigator: the agent points at evidence, and you read it at your own pace.
+Open a file from a path link in chat or an agent's code chip. **File** shows
+its contents and highlighted lines; **Diff** shows working-tree changes against
+the latest commit. Use **Recent** to return to a file you opened earlier.
 
-**It's an opt-in toolset, off by default.** Turn it on per agent in **Settings ▸
-Capabilities ▸ Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane** (config
-`filesystem.code_pane: true`). It needs the filesystem toolset itself switched on too
-(`filesystem.enabled: true`). With filesystem tools off, `code_pane: true` does nothing,
-so enable both. The switch applies on
-save — the Code surface appears (or goes) without a reload, because the console reads it
-from `/api/runtime/status` `code_pane.enabled`, per fleet window. While it's off: the agent
-has no `show_code` tool, `GET /api/fs/file` and `GET /api/fs/diff` answer 404
-`{code: "disabled"}`, there's no Code surface in the rail, command palette or launcher, no
-follow mode, file links open your external editor (below), and a `show_code` chip from an
-earlier chat renders as plain text (`project/path:lines — note`). Everything below
-describes the pane with the toolset **on**.
+On desktop, **Follow** moves the pane to files the agent uses. **Pin** holds
+it in place while you read. On a phone, open code chips yourself. Files use
+the same work-folder access rules as file tools. Hidden, missing, binary, or
+oversized files show a notice rather than their normal preview.
 
-- **The agent points.** The `show_code(project, path, line, end_line, note)` tool drops a
-  chip in the transcript (`path:12-18` plus a one-line "why") and, on the live turn,
-  opens the pane at that range with the note as a banner. A reload or a replayed
-  transcript never reopens it, and on a phone nothing opens by itself: tap the chip.
-- **You click.** A file path in a tool result opens in the pane at the line (see below).
-- **File tab.** Syntax-highlighted and line-numbered, with the range highlighted and
-  scrolled into view. The header has copy-path and ↗ to open the file in your external
-  editor. **Recent** lists the last 20 files you opened; click one to go back to it. The
-  open file and Recent survive a reload of the tab (sessionStorage). A file longer than
-  20,000 lines is shown as a window around the target line, with **Earlier** / **Later**
-  paging. A line longer than 2,000 characters is cut by the server, and the pane says so.
-  Secret-like files (`.env`, keys, `secrets.yaml`, …) show as *Hidden*. A binary file
-  shows its size, and a deleted file says it no longer exists.
-- **Diff tab.** The project's working tree vs `HEAD` (`GET /api/fs/diff`): changed files
-  with +/- counts (untracked ones included, secret-like ones listed but hidden), and a
-  unified patch for the file you pick. A pure rename shows *Renamed from …*, and a new
-  file over the server's 256 KB limit shows *Too large to show*. Click a line to open it
-  in the File tab. A deleted line opens the current file where that line used to be.
-- **Follow** (desktop only, off by default). While it's on, each `read_file`,
-  `search_files`, `edit_file` or `write_file` the agent finishes moves the pane to that
-  file, at most once every 800 ms. **Pin** holds the pane where it is while you read.
+## Open files in your editor
 
-The pane reads through `GET /api/fs/file`, the same fence `read_file` uses. It needs no
-`/api/fs/roots`, so it works for a remote fleet member too. The highlighter
-(`@pierre/diffs` over Shiki) is a lazy chunk that loads the first time the pane opens.
-Files over 5,000 lines render as plain text, and the view is virtualized.
+In **Settings → Chat → Open files in**, choose **protoAgent**, **Zed**,
+**VS Code**, **Cursor**, or **Off**. **protoAgent** opens the code pane and is
+available while that pane's toolset is enabled. With it selected,
+**External editor** chooses where ⌘/Ctrl-click and the pane's ↗ button open a file.
+With an external editor selected, ⌘/Ctrl-click opens the pane instead.
 
-### Open files in your editor
+These choices belong to this browser or console and stay put when you switch
+agents. External-editor links need a shared filesystem; for a remote agent,
+use the code pane to read files on its machine.
 
-File paths in the fs tools' results are links: `read_file` gets a header link to the file
-(at its `offset`), each `file:line` hit in `search_files` opens at that line, and every
-path from `find_files` / `write_file` / `edit_file` opens the file. **Settings ▸ Chat ▸
-Open files in** picks where a click goes: **protoAgent** (the default while the code pane
-toolset is on) opens the code pane; **Zed**, **VS Code** or **Cursor** open your editor;
-**Off** keeps paths as plain text. With the code pane off, **protoAgent** isn't offered and
-a saved protoAgent choice opens your external editor (Zed unless you picked another)
-instead, until the pane is turned back on. With protoAgent selected, **External editor** picks what ⌘/Ctrl-click and the pane's
-↗ open. With an editor selected, ⌘/Ctrl-click opens the pane instead. Both choices are
-saved per browser (localStorage `protoagent.openFilesIn` and `protoagent.editor`), not in
-agent config. They describe the machine you're sitting at, so they stay put when you switch
-fleet agents. If you had set the editor to Off before the pane shipped, links stay off.
+## Desktop controls {#desktop-app-tauri}
 
-The tools speak project-relative paths, so the console joins them onto each project's
-absolute root from `GET /api/fs/roots` (`{"roots": {"<project>": "<abs root>"}}`) — the
-live fence the tools actually resolve through, not the ADR 0095 registry
-`/api/projects` reports (explicit `filesystem.projects` or the workspace default can
-shadow it). The links are `zed://file/<abs>:<line>` (and `vscode://`, `cursor://`), so
-they only resolve when the console and the agent share a filesystem — a local server or
-the desktop app; a remote fleet member's paths don't exist on your machine. When an editor
-is the click target, results render as plain text exactly as before if the preference is
-Off, the project is unknown, or the roots haven't loaded.
+The desktop app starts its bundled server. Closing the main window hides it;
+use **Quit** from the tray menu to exit. The tray also offers **Check for Updates…**.
+An available update opens release notes and an **Update & Restart** action.
 
-> **Desktop app:** WKWebView/WebView2 can't load `zed://` themselves, so the Tauri shell
-> (`apps/desktop/src-tauri/src/navigation.rs`) hands these links to the OS through
-> `tauri-plugin-opener` — on both the same-window navigation path (`serve_navigation`)
-> and the new-window path (`route_new_window`). It is a strict allowlist: only
-> `zed://file/…`, `vscode://file/…` and `cursor://file/…` pass (`is_editor_link`); every
-> other custom scheme is still dropped, so web content can't launch arbitrary URL
-> handlers.
-
-> `operator.allowed_dirs` and `operator.project_dir` are **not** that fence, despite the
-> names. `allowed_dirs` is inert (its enforcement helper has no callers since tasks went
-> instance-global and notes became a plugin); `project_dir` only names the console's
-> current project for the setup wizard and runtime status. Neither grants the agent any
-> file access.
-
-## Desktop app (Tauri)
-
-`apps/desktop/` wraps the console as a Tauri v2 binary. `apps/desktop/sidecar/build_sidecar.py`
-PyInstaller-freezes the headless server (`binaries/protoagent-server-<triple>`), and
-`src-tauri/src/sidecar.rs` spawns it via `externalBin` with `--ui console` on port `7870`. The
-frozen build bundles the `plugins/` tree and `--collect-all`s `tools`/`websockets`/`mcp`
-(plugins load by file path, which PyInstaller's scan misses; a runtime-installed comms
-plugin, ADR 0058, can only import what's bundled). Signed macOS DMG / Linux AppImage+deb /
-Windows NSIS artifacts + an in-app updater ship from the desktop-build CI, dispatched
-manually per release (`gh workflow run desktop-build.yml -f tag=vX.Y.Z`) — see
-`docs/guides/releasing.md` § Desktop. The shell also runs one update check **at launch, in
-parallel with engine startup** (#2203): the in-app UpdateNotice pulls that result the moment
-it mounts and opens the changelog modal if a newer build exists — so the prompt lands before
-the engine finishes booting, then the normal 10s-settle + 6h re-check cycle takes over.
-
-On a frozen build, `execute_code` (and the document skills behind it) need the one-click
-[managed Python runtime](/guides/python-runtime) — Settings ▸ Tools shows the install card
-until it's provisioned.
-
-On macOS, `spawn_sidecar` augments the sidecar's `PATH` with the user's login-shell `PATH`
-(via `$SHELL -ilc`, plus the Homebrew/local fallbacks) before spawning. A Finder/Dock launch
-otherwise inherits only `launchd`'s minimal `PATH`, so `npx`/`node`/ACP coding-agent adapters
-would be invisible and a `delegate_to` ACP launch would fail with `binary not on PATH`
-([#1299](https://github.com/protoLabsAI/protoAgent/issues/1299)).
+To create office documents, install the
+[managed Python runtime](/guides/python-runtime) from **Settings → Tools**.
+For Windows installation and recovery, see [Windows desktop](/guides/windows-desktop).
 
 ## Testing the console
 
-A Playwright smoke suite (`apps/web/e2e/`) drives the **built** SPA against a deterministic
-mock backend (`mock-server.mjs` serves `dist/` + the API/`a2a` subset from `fixtures.mjs`)
-— no Python, model, or network. Specs cover tool-call cards, slash autocomplete, and that
-every surface mounts.
+Developer build, packaging, API, and testing details are in
+[Build and test the console](/guides/build-console) and the
+[operator API reference](/reference/operator-api).
 
-```bash
-npm run test:e2e --workspace @protoagent/web   # builds, boots the mock, runs headless
-```
+## Protect your data and resolve problems
 
-CI runs it as the **Web E2E smoke** job. When you add a console feature, extend the mock
-fixtures + a spec rather than reaching for a live backend.
+[Back up your app data](/guides/backup-and-restore) to preserve chats, memory,
+settings, and credentials. Use **Settings → Snapshot** when you want a recipe
+for a fresh agent instead; it does not restore your history.
+
+If chat, a plugin, or a document task fails, start with
+[Troubleshooting](/guides/troubleshooting). It points from the error to the
+relevant setting and explains what to check before resetting anything.

@@ -70,7 +70,7 @@ Each agent needs its CLI **installed + authenticated** on the host. Defaults are
    operator tool, ADR 0060) + your message. ACP sessions are stateful, so the agent keeps history —
    we don't resend the world each turn, which keeps the agent's own prompt caching intact.
 3. **Tools** — protoAgent's operator tools are published as an MCP server (see
-   [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server)) and **mounted into
+   [MCP → Expose this agent](/guides/mcp#expose-this-agent-as-an-mcp-server-operator-tools)) and **mounted into
    the ACP session** (`session/new` `mcpServers`). The coding agent calls `task_create`,
    `memory_recall`, `run_workflow`, … alongside its own tools. As it works, its tool calls stream
    to the chat as **tool cards** (`tool_start`/`tool_end`), the same as the native runtime.

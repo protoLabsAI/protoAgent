@@ -1,8 +1,38 @@
 # Configuration
 
-`config/langgraph-config.yaml` is the runtime config. Loaded at server boot by `graph/config.py::LangGraphConfig.from_yaml()`. All fields have defaults; the YAML only needs to override what's changing.
+The live config is `<instance_root>/config/langgraph-config.yaml`. All fields
+have defaults; YAML overrides the values you change. Use **Settings** to edit the
+running agent, or locate its files and the source of each effective value with:
 
-**Template vs. live file.** The repo tracks `config/langgraph-config.example.yaml` (the shipped template, with defaults + comments). The live `config/langgraph-config.yaml` is **untracked** — it's per-deployment state, written by the setup wizard / settings drawer. On first run the server copies the template into place (`config_io.ensure_live_config`), so edits never dirty a tracked file. Secrets are split out further into `config/secrets.yaml` (see [Secrets](#secrets)).
+```bash
+protoagent config explain
+# Source checkout:
+uv run python -m server config explain
+```
+
+## File locations
+
+| Installation | Instance root | Live config |
+| --- | --- | --- |
+| Source or Python package, default instance | `~/.protoagent/default` | `~/.protoagent/default/config/langgraph-config.yaml` |
+| Named host instance | `<box_root>/<PROTOAGENT_INSTANCE>` | `<instance_root>/config/langgraph-config.yaml` |
+| Packaged desktop | The app's per-user config directory | `<instance_root>/config/langgraph-config.yaml` |
+| Bundled Docker image | `/sandbox` | `/sandbox/config/langgraph-config.yaml` |
+
+`PROTOAGENT_HOME` sets an explicit instance root. Otherwise, `PROTOAGENT_INSTANCE`
+selects a directory under `PROTOAGENT_BOX_ROOT` (normally `~/.protoagent`, or
+`/sandbox` in Docker). With neither set, the instance is `default`.
+Identity resolves from environment variables before config loads; `instance.id`
+in YAML does not select the data root. See [Run multiple instances](/guides/multi-instance).
+
+The repository's `config/langgraph-config.example.yaml` is a read-only seed.
+First boot creates the live config under the instance root. Persona (`SOUL.md`),
+secrets (`secrets.yaml`), and the setup marker (`.setup-complete`) are siblings of
+that file. In examples below, `config/` means this instance's live config directory.
+
+Machine-shared defaults live in `<box_root>/host-config.yaml`. Settings resolve
+through the App → Host → Agent cascade; `config explain` shows provenance and
+redacts secrets.
 
 ## Full example
 
@@ -127,7 +157,7 @@ auth:
 
 `LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). A declared connection's key has no env tier — `OPENAI_API_KEY` only feeds the `gateway` the loader builds for a config with no `providers:` block. So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts all three fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value. (`auth.federation_token` doesn't share `from_yaml`'s env-var fallback above — its own env source, `A2A_FEDERATION_TOKEN`, is read one layer down, by the A2A auth guard itself; see "Federation token" below.)
 
-### External secrets manager (ADR 0080)
+### External secrets manager (ADR 0080) {#secrets_manager}
 
 Instead of hand-maintaining env vars (or wrapping the process in `infisical run`), the server can **pull secrets from Infisical itself** and export them as env vars — at boot, on every config reload, and on a refresh interval, so rotation lands without a restart. Enable it with the `secrets_manager` section (or Settings ▸ Secrets manager, which includes a connection test and a sync-now button):
 
@@ -145,7 +175,7 @@ secrets_manager:
   override_env: false              # true = manager values beat pre-existing env vars
 ```
 
-Semantics — deliberately boring:
+Behavior:
 
 - **Fetched values land in the env fallback tier.** The precedence above is unchanged: `secrets.yaml` → main YAML → env; the manager merely populates env. An env var you exported yourself always shadows the manager (flip `override_env` for rotation-wins), and only vars the hydrator *set itself* are ever updated or removed on refresh.
 - **Bootstrap credentials stay local** — the universal-auth machine identity (`client_id` / `client_secret`) is the one pair that can't come from the manager. It resolves like any core secret: `secrets_manager.client_id/client_secret` in `secrets.yaml` (where the Settings UI stores them, never echoed back) → main YAML → the `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` env vars. The recommended posture: *secrets.yaml holds only the machine identity; every other credential lives in the manager.* Fetched values can never overwrite the bootstrap pair or `PROTOAGENT_*` instance identity.
@@ -351,7 +381,7 @@ telemetry:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
-| `db_path` | `/sandbox/telemetry.db` | SQLite path; `/sandbox`→`~/.protoagent` fallback, instance-scoped (ADR 0004). |
+| `db_path` | `/sandbox/telemetry.db` | SQLite path; the legacy `/sandbox` default resolves to `<instance_root>/telemetry.db`. |
 
 ## `tracing`
 
@@ -762,11 +792,14 @@ Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) forma
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Load `SKILL.md` skills and list the `<available_skills>` index. |
-| `db_path` | `/sandbox/skills.db` | FTS5 index path. Falls back to `~/.protoagent/skills.db` when the configured path isn't writable. |
+| `db_path` | `/sandbox/skills.db` (legacy) | Private FTS5 index resolves to `<instance_root>/skills.db`; shared mode uses `<commons>/skills.db`. The legacy configured path no longer selects private storage. |
 | `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (the rest stay reachable via `list_skills`; any one's body loads on demand via `load_skill`). |
-| `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` honors `PROTOAGENT_CONFIG_DIR`). |
+| `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` is `<instance_root>/config`). |
 
-Skills load from two roots — bundled (`config/skills/`, shipped) and writable (`<config-dir>/skills/`, your drop-ins); live skills override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`. See the [Skills guide](../guides/skills.md) for authoring.
+Skills load from bundled `config/skills/`, live `<config-dir>/skills/`, the console's
+`<instance_root>/skills/`, and enabled plugins' skill directories. Live skills
+override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`.
+See the [Skills guide](../guides/skills.md) for authoring.
 
 ## `a2a`
 
@@ -824,7 +857,7 @@ checkpoint:
 
 | Key | Default | What |
 |---|---|---|
-| `db_path` | `/sandbox/checkpoints.db` | SQLite path (`/sandbox`→`~/.protoagent` fallback, instance-scoped). Blank → in-memory (chat history doesn't survive a restart). |
+| `db_path` | `/sandbox/checkpoints.db` | SQLite path (legacy `/sandbox` default resolves to `<instance_root>/checkpoints.db`). Blank → in-memory (chat history doesn't survive a restart). |
 | `keep_per_thread` | `5` | How many checkpoints to retain per conversation thread. |
 | `max_age_days` | `30` | Drop checkpoints older than this. |
 | `prune_interval_hours` | `6` | How often the background pruner runs. |
@@ -856,7 +889,7 @@ workflows:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Expose `run_workflow` / `save_workflow` and load `*.yaml` recipes. |
-| `dir` | `/sandbox/workflows` | Writable recipe root (`/sandbox`→`~/.protoagent` fallback). Bundled recipes also load from `workflows/`. |
+| `dir` | `/sandbox/workflows` | Writable recipe root (legacy `/sandbox` default resolves beneath the instance root). Bundled recipes also load from `workflows/`. |
 
 The workflows **plugin**'s own settings live in their own section, `workflow_runs` (not `workflows`, which is this built-in one): `workflow_runs.max_runs` (default `200`) is how many finished runs `.runs/` keeps.
 
@@ -894,6 +927,6 @@ Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) s
 
 | Env var | Default | What |
 |---|---|---|
-| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_DB_DIR` | `<instance_root>/scheduler` | Explicit parent-directory override; jobs use `<override>/<agent_name>/jobs.db` when set. The default private path is `<instance_root>/scheduler/agent/jobs.db`. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
 | `SCHEDULER_DISABLED` | unset | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |

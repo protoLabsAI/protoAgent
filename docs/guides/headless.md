@@ -1,20 +1,18 @@
 # Run headless (API + A2A, no UI)
 
-protoAgent is an **API-first agent server**. The web console is optional — run it
-headless and drive it entirely over HTTP: the **OpenAI-compatible** chat API, the
-**A2A** protocol, or both at once. Same agent, same tools/skills/memory/goals — just
-no browser.
+Run protoAgent as a service and drive it through the OpenAI-compatible API or A2A.
+Configure a model connection first; [Headless setup](#headless-setup) covers that step.
 
 ## Run it
 
 ```bash
-python -m server --ui none --host 0.0.0.0 --port 7870
+protoagent serve --ui none
+# Source checkout:
+uv run python -m server --ui none
 ```
 
-That's the whole thing: `--ui none` serves the API, A2A, and `/metrics` and skips the
-console. Everything below is what you get and how to drive it — the tier table, the
-two APIs, and auth (**set a token before binding to `0.0.0.0`** — see
-[Auth](#auth)).
+This binds to loopback and serves the APIs and metrics without a console. To accept
+remote traffic, set an auth token before selecting a network bind; see [Auth](#auth).
 
 ## UI tiers (ADR 0010)
 
@@ -30,7 +28,7 @@ deprecation warning and behaves as `console`) — the old Gradio chat tier it on
 named has been removed.
 
 ```bash
-python -m server --ui none --host 0.0.0.0 --port 7870
+A2A_AUTH_TOKEN="$PROTOAGENT_TOKEN" protoagent serve --ui none --host 0.0.0.0 --port 7870
 # or: PROTOAGENT_UI=none python -m server
 ```
 
@@ -39,8 +37,8 @@ first — see Auth.)
 
 ### Headless setup
 
-No wizard needed. Provision the config (`config/langgraph-config.yaml` +
-`config/secrets.yaml`) and mark setup complete in one shot, then serve:
+No wizard needed. Locate the instance with `protoagent config explain` and provision
+`<instance_root>/config/langgraph-config.yaml` plus `secrets.yaml` and mark setup complete in one shot, then serve:
 
 ```bash
 python -m server --setup     # validate the live config + mark setup, then exit
@@ -50,7 +48,7 @@ python -m server --ui none   # serve
 ### Sign in to a Claude or ChatGPT subscription, headless
 
 A headless agent can hold a durable subscription credential (ADR 0097) — no console
-required. Both flows are headless-friendly by construction: Codex is a device code, and
+required. Codex uses a device code, and
 the Claude PKCE flow *displays* a code instead of needing a redirect listener on the box.
 You approve on any device and hand the result back.
 

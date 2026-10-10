@@ -1,15 +1,9 @@
 # Bundles — install, update, and publish plugin sets
 
-You want several plugins that work *together* — a board tool plus a browser plus the
-delegate spine — installed, updated, and removed as **one** thing, instead of
-hand-assembling URLs, refs, and `plugins.enabled`. That's a **bundle**
-([ADR 0040](/adr/0040-plugin-bundles)): a repo whose `protoagent.bundle.yaml` *names*
-a pinned set of plugin repos plus everything needed to make them useful on arrival.
-
-A published bundle repo that ships an `archetype:` block is an **archetype repo**
-(`cowork-archetype`, `engineer-archetype`, …) — the repo an agent starter type ships in.
-The mechanism is always "bundle"; the product noun is always "archetype". (The old
-term "stack" is retired — [ADR 0100](/adr/0100-agent-archetypes), amended 2026-08-19.)
+Install, update, or remove a pinned set of plugins as one bundle. Its
+`protoagent.bundle.yaml` lists the plugins and their default configuration.
+An optional `archetype:` block also adds a starter agent type to the new-agent
+picker. See [Fleet](/guides/fleet) for creating an agent from one.
 
 ## The manifest
 
@@ -55,7 +49,7 @@ SHA-pinned in `plugins.lock` — and the bundle itself is recorded in the lock's
 Unknown `archetype:` keys warn at install rather than vanishing.
 
 A member listed by a URL that a bundled plugin **supersedes** (the plugin moved into
-core, see [When a plugin moves into core](/guides/plugin-registry#when-a-plugin-moves-into-core-supersedes))
+core, see [When a plugin moves into core](/guides/publish-a-plugin#when-a-plugin-moves-into-core-supersedes))
 is skipped like `builtin: true`, with nothing fetched, and it's still turned on by the
 bundle's `enabled:` list. Keep listing it by URL: that is what older hosts need.
 
@@ -97,7 +91,7 @@ clonable until the operator widens the allowlist. Keys under core sections (`mod
 Where you install from decides what happens (ADR 0040, as amended):
 
 - **Console** (Settings ▸ Plugins ▸ install by URL, the setup wizard's archetype pick,
-  or Settings ▸ Agents ▸ new agent) — **installs, enables the curated set, seeds
+  or Settings ▸ Fleet ▸ new agent) — **installs, enables the curated set, seeds
   `config:`/`mcp:`/`secrets:`, and hot-reloads.** Installing is the consent
   (trust-by-default, [ADR 0071](/adr/0071-plugin-permissions-trust-model)). The wizard
   and new-agent picker collect the declared `${input}`s and secrets under **Advanced**
@@ -166,7 +160,7 @@ warns when a running server keeps removed members live until its next reload.
    that maintains one always-current candidate PR per archetype repo (#2645/#2669).
 3. **Ship the archetype block** so installing your bundle puts a starter card in the
    new-agent picker ([ADR 0100](/adr/0100-agent-archetypes) has the full field set) —
-   see [Fleet — bundles & archetypes](/guides/fleet#bundles--archetypes--start-from-a-type).
+   see [Fleet — bundles & archetypes](/guides/fleet#bundles-and-archetypes).
 4. **Register it** (first-party repos): add a row to `archetype_repos:` in
    `config/plugin-directory.yaml`. A guard test cross-checks the shipped archetype
    catalog against this registry, so a renamed or retired repo can't drift unnoticed.

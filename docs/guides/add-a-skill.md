@@ -1,14 +1,8 @@
-# Add a custom skill
+# Advertise a capability to other agents
 
-A *skill* here is a named capability **A2A callers can dispatch to**. It lives on the
-agent card, not in your Python code: adding one does not create a new handler — it
-advertises an existing capability so callers can target it.
-
-::: warning Not the same as a `SKILL.md` skill
-If you're trying to teach *your own* agent a procedure it loads mid-turn, that's a
-[`SKILL.md` skill](/guides/skills) — a different subsystem that happens to share the
-word. This page is only about what other agents can call over A2A.
-:::
+Advertise an existing capability on your A2A agent card so other agents can
+discover and request it. A card entry does not implement a new handler.
+To teach your own agent a procedure, write a [`SKILL.md` skill](/guides/skills).
 
 ## When you need a skill
 
@@ -20,7 +14,8 @@ You don't need a skill for "things the chat UI does" — the React console chat 
 
 ## 1. Declare it in config
 
-Card skills are config-driven ([#570](/reference/configuration#a2a)) — declare them in the `a2a:` section of `config/langgraph-config.yaml`, **not** by editing `server/a2a.py`. Each entry is a spec:
+Card skills are config-driven ([#570](/reference/configuration#a2a)) — declare them in the `a2a:` section of the instance's live `langgraph-config.yaml`
+(find it with `protoagent config explain`). Each entry is a spec:
 
 ```yaml
 a2a:
@@ -118,7 +113,8 @@ Assert your config declares the skill (it flows to the card via `_resolved_skill
 ```python
 def test_config_advertises_summarize_pr():
     from graph.config import LangGraphConfig
-    cfg = LangGraphConfig.from_yaml("config/langgraph-config.yaml")
+    from infra.paths import instance_paths
+    cfg = LangGraphConfig.from_yaml(instance_paths().config_yaml)
     assert "summarize_pr" in {s["id"] for s in cfg.a2a_skills}
 ```
 
