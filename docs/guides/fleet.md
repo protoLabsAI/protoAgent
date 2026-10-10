@@ -1,19 +1,21 @@
 # Fleet — many agents on one host
 
-Run several named agents on one machine, each fully **isolated**, each runnable in the
-**background**, each built from a reusable **archetype** — and switchable in place from
-**one console** (slug-routed, per-agent layout/theme). The fleet is a handful of composable
-primitives:
+Run several agents from one console. Each has its own config, chats, memory, and
+stores; the hub starts and stops local members and routes you to their consoles.
+Model connections and optional commons can be shared across the box.
 
-| Primitive | What it is | ADR |
-|---|---|---|
-| **Workspace** | a named agent — its own config, secrets, plugins, scoped data, port | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
-| **Bundle** | a curated, pinned set of plugins installed as one | [0040](../adr/0040-plugin-bundles.md) |
-| **Archetype** | a starter *agent type* in the new-agent picker — a persona plus an optional bundle; the shipped catalog plus any installed bundle that declares one. Ships in an **archetype repo** (`cowork-archetype`, `engineer-archetype`, …; the old "stack" term is retired) | [0100](../adr/0100-agent-archetypes.md) |
-| **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
-| **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
-| **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
-| **Fleet deck** | the same fleet in a terminal — roster, conversations, parked questions, management, every hub on the box ([guide](./fleet-deck.md)) | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+## Create an agent in the console
+
+1. Open **Settings → Fleet** and start the new-agent flow.
+2. Choose **Basic** for a minimal agent, or an archetype for a particular job.
+3. Name it and fill in any required configuration. For Project Manager, register
+   a coding delegate first; see [Build with a coding agent](/guides/build-with-a-coding-agent).
+4. Create it, then open its console from the fleet roster. Send a small prompt
+   to confirm its model connection works.
+
+The console creates the workspace and carries the hub's model configuration by
+default. If the agent cannot start, inspect the roster's error and verify its
+model connection and required tools.
 
 ## Quick start
 
@@ -37,14 +39,26 @@ python -m server fleet ls
 python -m server fleet
 ```
 
+## Fleet components
+
+| Primitive | What it is | ADR |
+|---|---|---|
+| **Workspace** | a named agent — its own config, secrets, plugins, scoped data, port | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
+| **Bundle** | a curated, pinned set of plugins installed as one | [0040](../adr/0040-plugin-bundles.md) |
+| **Archetype** | a starter *agent type* in the new-agent picker — a persona plus an optional bundle; the shipped catalog plus any installed bundle that declares one. Ships in an **archetype repo** (`cowork-archetype`, `engineer-archetype`, …; the old "stack" term is retired) | [0100](../adr/0100-agent-archetypes.md) |
+| **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
+| **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
+| **Fleet deck** | the same fleet in a terminal — roster, conversations, parked questions, management, every hub on the box ([guide](./fleet-deck.md)) | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
+
 ## Workspaces — a named, isolated agent
 
-A **workspace** is a directory that *is* an agent. Its `langgraph-config.yaml`,
-`secrets.yaml`, `plugins.lock`, and `config/plugins/` live there (so
-`PROTOAGENT_CONFIG_DIR=<ws>` is its whole identity), and `instance.id = <name>` scopes its
-**private data** (goals, chat history, memory, knowledge) to `~/.protoagent/<name>/*` — so
-agents on one host never collide (the leak that motivated this; see
-[multi-instance](./multi-instance.md)).
+A workspace is an agent's instance root. Its config and secrets live in `config/`,
+installed plugins in `plugins/`, and its lock at `plugins.lock`; private stores
+also live beneath that root. The supervisor launches it with `PROTOAGENT_HOME`
+pointing there and `PROTOAGENT_INSTANCE` identifying the member. It inherits the
+hub's box root for shared settings and commons. See
+[Run multiple instances](./multi-instance.md).
 
 ```bash
 workspace new <name> [--from <cfg>] [--bundle <url>] [--input KEY=VALUE …] [--soul FILE] [--port auto] [--shared-skills]
@@ -75,7 +89,7 @@ refuses a conflicting box login or a residual local override marked disconnected
 of choosing a credential silently. Set `inherit_config: false` for no model/provider-secret
 inheritance and no legacy OAuth transfer; an existing box OAuth store remains host-shared.
 
-## Bundles & archetypes — start from a type
+## Bundles & archetypes — start from a type {#bundles-and-archetypes}
 
 A **bundle** ([ADR 0040](../adr/0040-plugin-bundles.md)) is a repo whose
 `protoagent.bundle.yaml` names a *pinned set of plugins* to install together, plus a
@@ -266,25 +280,19 @@ streaming work is waited out).
 
 ## The unified console — every agent in one UI
 
-*(Shipped — ADR 0042 slices 2–5.)* The **hub** (any running agent) serves one console and
-reverse-proxies each agent window's chat / A2A / SSE / WebSockets to that agent's backend,
-keyed by the **URL slug** (`/app/agent/<id>/`) — so every window targets its own agent:
-switch in place from the topbar, or open two agents in two windows at once. Per-agent chat,
-theme and layout follow the slug; a stopped agent **resumes from its checkpoint** when you
-navigate to it; "+ New agent" runs the archetype picker. A plugin view served by a member
-that opens a **WebSocket** (e.g. `agent_browser`'s live viewport) works through the hub too:
-the slug proxy forwards WS upgrades, not just HTTP/SSE ([#883](https://github.com/protoLabsAI/protoAgent/issues/883), shipped v0.35.0). Settings → Agents is the fleet manager
-(create / start / stop / rename / remove), and **Discover** finds other protoAgents on the
-box, the LAN (mDNS) and your **tailnet** (via the Tailscale CLI). **mDNS is off by default**
-([#1802](https://github.com/protoLabsAI/protoAgent/issues/1802)) — an agent stays quiet on the
-network and won't announce itself over LAN Bonjour unless you enable `fleet.discovery.mdns`
-(Settings → Host → Discovery), a privacy/security-first default. Local-box and tailnet discovery
-and manual register are unaffected, and the fleet console still lists your own members (it reads
-them from disk, not mDNS). To flip a local member
-on or off without opening Settings, press **⌘⇧K → Fleet Room** and use the start/stop
-control on that member's roster row (only local members get one — never the host, a remote
-member, or the agent serving the window you're in) — see
-[command palette](./command-palette.md).
+Use the topbar to switch agents or open agents in separate windows. Each window
+keeps its agent's chat, theme, and layout. Opening a stopped local agent resumes
+it from its checkpoint; **New agent** opens the archetype picker.
+
+Open **Settings → Fleet** to create, start, stop, rename, or remove members.
+**Discover** finds protoAgents on this machine and your tailnet, and on the LAN
+when mDNS is enabled. **mDNS is off by default**; enable **mDNS discovery** under
+**Box runtime** to advertise and browse LAN agents. This does not affect the
+local roster, which reads your members from disk.
+
+For quick start/stop controls, press **⌘⇧K → Fleet Room**. Only other local
+members have these controls; the host, remote members, and the agent serving
+your current window do not. See [Command palette](/guides/command-palette).
 
 **Fleet settings are hub-only.** The topbar dropdown's **Fleet settings** item is enabled
 on the host window (and on a standalone instance — that's where you create your first
@@ -295,7 +303,7 @@ opened directly on its own port — the member self-reports `member: true` on it
 A **remote** member opened at its own URL stays enabled on purpose: it's an independent
 instance that may run its own fleet, and registration is one-sided on the hub.
 
-## Remote fleet members — the agent there, the UI here
+## Remote fleet members — the agent there, the UI here {#remote-fleet-members-the-agent-there-the-ui-here}
 
 *(ADR 0042 §I.)* A fleet member doesn't have to be local: register any reachable protoAgent
 by URL and it becomes a **switchable member** — a slug window like any peer, with the hub
@@ -309,7 +317,7 @@ On the other machine:
 A2A_AUTH_TOKEN=<secret> python -m server --port 7871 --host 0.0.0.0 --ui none
 ```
 
-On this one — Settings → Agents → **Discover** → **Pair…** on the found row (see *Pairing*
+On this one — Settings → Fleet → **Discover** → **Pair…** on the found row (see *Pairing*
 below), **➕ Add to this fleet** for an open remote with no token, or register manually with
 a pasted token (the stored token is attached by the proxy; the browser never sees it):
 

@@ -1,30 +1,18 @@
-# Plugins
+# Build plugins
 
-Plugins are **drop-in packages** that extend protoAgent without forking it. A
-plugin contributes **tools**, bundled **skills**, FastAPI **routes**, background
-**surfaces**, **subagents**, **middleware**, knowledge backends/embedders, goal
-verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
-Plugins run **in-process** with the agent's privileges, so they're **disabled by
-default** and you opt in explicitly — only enable plugins you trust.
+Build a plugin to add tools, skills, routes, background work, or console views
+without changing core. Plugins run in the server process with its privileges.
+Enable only code you trust. Some bundled plugins are enabled by default; the
+`delegates` registry is built in and needs no enable step.
 
-> The first-party **Telegram** integration ships bundled as a plugin
-> (`plugins/telegram/`), opt-in via `plugins: { enabled: [telegram] }`.
-> Integrations like **Discord**, **GitHub**, **Google** Gmail/Calendar, and **Slack** install as
-> **external** plugins from their own repos (browse + install them in Settings ▸
-> Plugins ▸ Discover). To drive a **CLI coding agent over ACP**, enable the **delegates**
-> plugin and declare an `acp` delegate — see
-> [CLI coding agents over ACP](/guides/coding-agents).
-
-> **Trust model.** This is the in-process / trusted model (matching Hermes): an
-> enabled plugin's `register()` runs as the agent. Don't enable code you
-> haven't reviewed. Untrusted third-party *tools* are better added via
-> [MCP](./mcp.md) (out-of-process).
+To use an existing plugin, follow [Install and publish plugins](/guides/plugin-registry).
+Telegram is bundled; Discord, GitHub, Google, and Slack install from external repos.
 
 ## Start here
 
-This page explains how to *build* one. When you already know the shape and just need a
-signature, a field, or a flag, go to the reference instead — it is generated from the code,
-so it is complete and current by construction:
+For a first working example, use [Build your first plugin](/tutorials/first-plugin).
+This guide covers the contribution contracts. The references below are generated
+from source signatures and docstrings:
 
 | Reference | Contents |
 | --- | --- |
@@ -36,22 +24,9 @@ so it is complete and current by construction:
 | [View bridge](/reference/plugin-view-bridge) | The sandboxed-iframe `postMessage` protocol |
 | [Event bus topics](/reference/plugin-events) | Every topic core publishes, with payload keys |
 
-New to plugins? [Build your first plugin](/tutorials/first-plugin) is the twenty-minute version,
-and [Plugin architecture](/explanation/plugin-architecture) explains the model — what runs
-in-process, what's sandboxed, and when your code is called.
-
-Otherwise, pick the job you actually have:
-
-| I want to… | Go to |
-| --- | --- |
-| **Turn on a plugin that ships with protoAgent** | Settings ▸ Plugins ▸ Installed, or `plugins: { enabled: [telegram] }` — [Enable one](#enable-one) |
-| **Install someone else's plugin from a git URL** | [Install & publish plugins](/guides/plugin-registry) |
-| **Write my own** | [Anatomy](#anatomy) — the manifest, `register()`, and what you can contribute (tools, routes, a console view, …) |
-| **Add a console surface to one** | [Building a plugin view](/guides/building-react-plugin-views) |
-| **Turn my agent into a chat bot** | [Build a communication plugin](/guides/communication-plugins) |
-
-The rest of this page walks the plugin contract top to bottom — read it once when you
-write your first plugin, then use the [reference pages](/reference/) for lookup.
+For console UI, see [Build a plugin view](/guides/build-a-plugin-view). For messaging
+integrations, see [Build a communication plugin](/guides/communication-plugins).
+[Plugin architecture](/explanation/plugin-architecture) explains loading and trust.
 
 ## Anatomy
 
@@ -90,7 +65,7 @@ federation_paths: []      # prefixes under THIS plugin's own namespace that acce
                           # the /api operator ceiling is lowered. See below.
 ```
 
-**Every field, with its type and default: [Plugin manifest reference](/reference/plugin-manifest).** Generated from the dataclass the loader reads, so it can't fall behind. The fields worth explaining rather than listing have their own sections below.
+**Every field, with its type and default: [Plugin manifest reference](/reference/plugin-manifest).** Generated from the manifest dataclass. The fields worth explaining rather than listing have their own sections below.
 
 ### Entry — `register(registry)`
 
@@ -160,7 +135,7 @@ restarts what it was **doing**. The recipe:
 1. **Persist the operator's INTENT, not the run state.** When the operator starts the work,
    write a durable flag (`wanted: true`); when they *deliberately* stop it, clear the flag.
    Module-level state resets on reload, so the flag lives on disk — a small JSON in the
-   per-agent config dir (`PROTOAGENT_CONFIG_DIR`), the same store your watch/plan state uses.
+   instance store returned by `sdk.plugin_store(plugin_id=registry.plugin_id)`.
 2. **Distinguish a lifecycle stop from an operator stop.** The surface `stop` hook
    (shutdown/reload) must halt the task **without** clearing the intent — a reload isn't a
    decision. Only the operator's own stop clears it. (A single `stop_ops()` that both halts
@@ -273,7 +248,7 @@ stay mounted until restart, but the path is operator-only again, so a peer gets 
 than a stale door. The live set is visible alongside the public prefixes on the member
 well-known path.
 
-### Middleware — `register_middleware` (ADR 0032)
+### Middleware — `register_middleware` (ADR 0032) {#middleware-register-middleware-adr-0032}
 
 A plugin can contribute a LangGraph **`AgentMiddleware`** — the per-turn hook layer
 (`before_model` / `after_model` / `wrap_tool_call` / …) the core uses for knowledge
@@ -404,8 +379,7 @@ db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
 ```
 
 **Every call, with its signature and failure mode: [Plugin SDK reference](/reference/plugin-sdk-api).**
-It is generated from the source, so it is complete and current — this guide deliberately
-doesn't restate it.
+The reference is generated from source signatures and docstrings.
 
 Two things the reference can't tell you. First, **import it inside the function that uses
 it** if your plugin must also run host-free in its own test suite; a module-level
@@ -727,9 +701,10 @@ surface + route + tools (+ status probe) examples.
 
 ## Where plugins live & how they're enabled {#enable-one}
 
-Two roots (like skills): bundled `plugins/` (shipped, e.g. the `hello` example)
-and live `<config-dir>/plugins/` (your drop-ins; `<config-dir>` honors
-`PROTOAGENT_CONFIG_DIR`, override with `plugins.dir`). Live overrides bundled by `id`.
+Bundled plugins live in the shipped `plugins/` tree. Installed plugins and local
+drop-ins live in `<instance_root>/plugins/`; `plugins.dir` or
+`PROTOAGENT_PLUGINS_DIR` can override that directory. Run `protoagent config explain`
+to find it. A live plugin overrides a bundled plugin with the same `id`.
 
 `plugins.dir` must be an **absolute** path. A relative one is ignored with a warning
 (the instance's own plugins dir is used instead): it would resolve against the working

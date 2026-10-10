@@ -125,7 +125,7 @@ valid plugin, #1644).
 > entry recorded from a superseded URL, at any version. That refines the #1574 rule, in
 > which a recorded copy always won. A copy recorded from any other URL (a fork) is still
 > a deliberate override, and every other URL still gets the refusal above. See
-> [When a plugin moves into core](/guides/plugin-registry#when-a-plugin-moves-into-core-supersedes).
+> [When a plugin moves into core](/guides/publish-a-plugin#when-a-plugin-moves-into-core-supersedes).
 >
 > Two consequences of that skip are deliberate. It runs **before the `sources.allow`
 > allowlist** (D3): nothing is fetched from the retired URL, and what ends up enabled is

@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.200.0] - 2026-10-10
+
+### Fixed
+- **Moving a tool to a subagent no longer tells the agent the tool is gone (#4104).** Holding a tool for a subagent with `tools.subagent_only` made the agent's next turn say "No longer available" for that tool, although the agent still reaches it through `task`. A live agent answered that note instead of reporting the work it had just delegated. Only a real add or remove is announced now.
+
+- **A review lane that spends a whole turn thinking is retried with thinking off, not nudged into the same loop (#4115).** On the Qwen3.8 thinking lane a long turn can loop inside `<think>` and end with no text, which left the lane without its findings and the review incomplete. The completion guard's nudge sent the whole loop back to the model with thinking still on, and the model carried on repeating it. The retry now drops that turn's reasoning and makes one call with thinking off, so the lane writes its deliverable from what it has already read.
+
+### Docs
+- **PROTO.md documents how epic branches are reviewed and landed (#4110).** Slice PRs into `epic/<name>` are the review of record. A slice merges only on a complete panel pass; a `neutral` incomplete-coverage verdict means part of the diff is unreviewed. Slices bound for the epic get no `merge-hold`, because the hands-on test happens once, on the epic. `main` is synced into the epic regularly. The epic → `main` PR is reviewed by attestation (each commit traced to a reviewed slice or a clean sync merge) instead of re-reviewing the whole epic diff. The epic lands as a merge commit.
+
+- **App guides now cover model connections, documents, memory, and data recovery (#4113).**
+  Put prerequisites and current app controls first, shorten repeated introductions,
+  and separate user tasks from authoring reference. Correct source startup,
+  snapshot privacy, file locations, phone access, and stopped backup/restore
+  procedures while preserving existing guide section URLs.
+
 ## [0.199.0] - 2026-10-09
 
 ### Added

@@ -601,7 +601,7 @@ a header) while the store stays default-deny; `media.public: true`
 (core config) opts the whole store public, and `media.retention_days`
 prunes old files. A `media.saved` event is broadcast on the bus.
 
-## Host services — `registry.host`
+## Host services — `registry.host` {#host-services-registry-host}
 
 Services the *server* owns: calling the agent, the event bus, live config. The server
 populates them before any surface starts, so they are `None` at import time and in

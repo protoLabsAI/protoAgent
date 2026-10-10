@@ -1,14 +1,8 @@
 # Sync a fork from upstream
 
-A fork of this template (roxy, protoTrader, gina, …) pulls fixes + features down
-from `upstream/main` with `git merge`. Two avoidable footguns bite that flow on
-almost every fork — both fixed by the rules below. Bake them in once and every
-sync after is near-trivial.
-
-> **The one rule that matters most:** sync with a **real merge commit, never a
-> squash.** Squashing breaks the fork's merge base — the "behind" count stays
-> permanently inflated and every later sync re-conflicts on code already
-> integrated.
+Pull changes from `upstream/main` with a merge commit. Use a real merge rather
+than a squash so Git retains the shared history and avoids re-conflicting on
+changes already integrated.
 
 ## Setup (once per fork)
 

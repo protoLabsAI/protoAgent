@@ -5,7 +5,7 @@
       "items": [
         {
           "path": "tutorials/first-agent.md",
-          "title": "Spin up your first agent"
+          "title": "Set up your first agent"
         }
       ]
     },
@@ -46,12 +46,36 @@
       "label": "Getting started",
       "items": [
         {
-          "path": "guides/fork-the-template.md",
-          "title": "Fork the template (fast path)"
+          "path": "guides/react-tauri-ui.md",
+          "title": "Use the app"
         },
         {
-          "path": "guides/customize-and-deploy.md",
-          "title": "Customize & deploy"
+          "path": "guides/model-connections.md",
+          "title": "Connect and change models"
+        },
+        {
+          "path": "guides/documents-and-files.md",
+          "title": "Work with files and documents"
+        },
+        {
+          "path": "guides/python-runtime.md",
+          "title": "Enable document creation"
+        },
+        {
+          "path": "guides/plugin-registry.md",
+          "title": "Install and manage plugins"
+        },
+        {
+          "path": "guides/backup-and-restore.md",
+          "title": "Back up and restore data"
+        },
+        {
+          "path": "guides/troubleshooting.md",
+          "title": "Fix a problem in the app"
+        },
+        {
+          "path": "guides/agent-snapshots.md",
+          "title": "Export or copy an agent"
         }
       ]
     },
@@ -101,7 +125,7 @@
         },
         {
           "path": "guides/add-a-skill.md",
-          "title": "Add a custom skill (A2A card)"
+          "title": "Advertise a capability (A2A card)"
         },
         {
           "path": "guides/subagents.md",
@@ -117,12 +141,16 @@
       "label": "Knowledge & memory",
       "items": [
         {
+          "path": "guides/manage-memory.md",
+          "title": "Inspect and manage memory"
+        },
+        {
           "path": "guides/ingestion.md",
           "title": "Ingest documents & media"
         },
         {
           "path": "guides/knowledge.md",
-          "title": "Tune the knowledge store (RAG)"
+          "title": "Tune knowledge recall"
         }
       ]
     },
@@ -135,7 +163,7 @@
         },
         {
           "path": "guides/rooms.md",
-          "title": "Rooms (@name group chat)"
+          "title": "Talk to delegates in a room"
         },
         {
           "path": "guides/coding-agents.md",
@@ -180,19 +208,27 @@
         },
         {
           "path": "guides/plugins.md",
-          "title": "Plugins"
+          "title": "Build plugins"
+        },
+        {
+          "path": "guides/build-a-plugin-view.md",
+          "title": "Build a plugin view (quickstart)"
         },
         {
           "path": "guides/building-react-plugin-views.md",
-          "title": "Building a plugin view"
+          "title": "Plugin views (full guide)"
+        },
+        {
+          "path": "guides/bundles.md",
+          "title": "Bundles (plugin sets)"
         },
         {
           "path": "guides/communication-plugins.md",
           "title": "Build a communication plugin"
         },
         {
-          "path": "guides/plugin-registry.md",
-          "title": "Install & publish plugins (git URLs)"
+          "path": "guides/publish-a-plugin.md",
+          "title": "Publish a plugin"
         },
         {
           "path": "guides/discord.md",
@@ -208,8 +244,8 @@
       "label": "Console & UI",
       "items": [
         {
-          "path": "guides/react-tauri-ui.md",
-          "title": "Operator console (React/Tauri)"
+          "path": "guides/build-console.md",
+          "title": "Build and test the console"
         },
         {
           "path": "guides/windows-desktop.md",
@@ -217,7 +253,7 @@
         },
         {
           "path": "guides/python-runtime.md",
-          "title": "Managed Python runtime (desktop)"
+          "title": "Enable document creation (desktop)"
         },
         {
           "path": "guides/command-palette.md",
@@ -243,10 +279,6 @@
         {
           "path": "guides/cli.md",
           "title": "The protoagent command (CLI)"
-        },
-        {
-          "path": "guides/agent-snapshots.md",
-          "title": "Agent snapshots (export, share, duplicate)"
         },
         {
           "path": "guides/deploy.md",
@@ -294,6 +326,14 @@
       "label": "Forks & evals",
       "items": [
         {
+          "path": "guides/fork-the-template.md",
+          "title": "Fork the template (fast path)"
+        },
+        {
+          "path": "guides/customize-and-deploy.md",
+          "title": "Customize & deploy"
+        },
+        {
           "path": "guides/operator-fork.md",
           "title": "Build an operator fork (Roxy)"
         },
@@ -332,6 +372,15 @@
       ]
     },
     {
+      "label": "Knowledge & memory",
+      "items": [
+        {
+          "path": "reference/knowledge.md",
+          "title": "Knowledge settings and tools"
+        }
+      ]
+    },
+    {
       "label": "A2A, fleet & delegates",
       "items": [
         {
@@ -345,6 +394,10 @@
         {
           "path": "reference/agent-card.md",
           "title": "Agent card"
+        },
+        {
+          "path": "reference/agent-snapshots.md",
+          "title": "Agent snapshots"
         },
         {
           "path": "reference/extensions.md",
@@ -382,6 +435,10 @@
         {
           "path": "reference/plugin-view-bridge.md",
           "title": "Plugin view bridge (wire protocol)"
+        },
+        {
+          "path": "reference/command-palette.md",
+          "title": "Command palette extensions"
         },
         {
           "path": "reference/plugin-events.md",
@@ -450,6 +507,10 @@
     {
       "label": "A2A, fleet & delegates",
       "items": [
+        {
+          "path": "explanation/rooms.md",
+          "title": "How rooms work"
+        },
         {
           "path": "explanation/a2a-protocol.md",
           "title": "A2A protocol"

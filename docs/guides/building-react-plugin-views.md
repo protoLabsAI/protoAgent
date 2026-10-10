@@ -1,20 +1,15 @@
 # Building a plugin view
 
-A plugin can add a **console surface** — a rail icon that opens a view (a chart, an editor, a
-dashboard, a generative-UI panel), or a view that **replaces** the built-in chat panel
-(`slot: "chat"`, ADR 0045). The model is simple and **sandboxed**: the plugin **serves its own
-page**, and the console renders it in an **iframe**. No host build, no shared bundle — so the same
-plugin works whether it's bundled in the repo or **installed from a git URL** (ADR 0027).
+A plugin serves its own page, and the console displays it in an iframe. Declare a
+rail view for a dashboard or editor, or `slot: "chat"` to replace the chat panel.
+The host console does not need rebuilding when the plugin changes.
 
-> **Why iframes, not in-process React?** A plugin's UI is third-party code. The whole field
-> sandboxes third-party/generated UI in iframes (Claude Artifacts, Open WebUI, CodePen). It's the
-> right boundary *and* it keeps plugins trivially distributable. (We tried Module Federation for
-> in-process React; ADR 0038 retired it — heavier than a fork needs, less safe than untrusted code
-> requires. Forks that want native in-process components use the build-time `src/ext/` seam instead —
-> see [below](#fork-components-no-plugin-no-iframe).)
+Start with the [plugin-view quickstart](/guides/build-a-plugin-view). This guide
+covers the bridge, event subscriptions, and chat-slot behavior. For build-time
+components inside a fork, see [Fork components](#fork-components-no-plugin-no-iframe).
 
 > [!TIP]
-> **Copy the gold-standard.** [`examples/plugins/chat_example`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/plugins/chat_example)
+> **Copy the example.** [`examples/plugins/chat_example`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/plugins/chat_example)
 > is a single-page vanilla-JS view that follows every rule below — the init/theme handshake, live
 > re-theming, slug-aware routing, the DS kit, and a real turn over a gated `/api/` route. Start by
 > copying it: `cp -r examples/plugins/chat_example plugins/`.
@@ -192,7 +187,7 @@ Reload — Chat becomes the example panel. Disable (or delete) the copy and the 
 Forks have an in-process alternative: register a `src/ext` surface with `id: "chat"` (ADR 0038 D3) —
 it overrides the slot ahead of plugin claims, with full React context.
 
-## The init handshake (bearer + theme)
+## The init handshake (bearer + theme) {#the-init-handshake-bearer--theme}
 
 After the iframe loads, the console **posts a message** to it — so your page gets the operator bearer
 (for its own API calls) and the console theme tokens (to match the look) **without a token in the
@@ -220,7 +215,7 @@ The message is sent same-origin and targeted at your page's origin. In practice 
 this — [the DS kit](#the-kit-helpers-plugin-kitjs) wires it for you and maps `theme` onto its `--pl-*`
 tokens.
 
-## The kit helpers (`plugin-kit.js`)
+## The kit helpers (`plugin-kit.js`) {#the-kit-helpers-plugin-kitjs}
 
 The console serves the design-system kit same-origin at **`<base>/_ds/plugin-kit.{css,js}`** — the
 no-hardcode escape hatch. `plugin-kit.css` gives `--pl-*` tokens + `.pl-*` components;
@@ -573,7 +568,7 @@ sandboxed.
 
 ## References
 
-- [Build a plugin view (quickstart)](/how-to/build-a-plugin-view) — the short entry the DS kit header
+- [Build a plugin view (quickstart)](/guides/build-a-plugin-view) — the short entry the DS kit header
   points to, plus the kit helper API at a glance.
 - [Security & trust model](../explanation/security-and-trust.md) — why plugin UIs are sandboxed
   iframes, and the "installing a plugin runs its code" trust posture.

@@ -1,12 +1,16 @@
 # Environment variables
 
-Every env var the template reads at runtime.
+Runtime environment variables for model connections, instance paths, and deployment.
+Run `protoagent config explain` to inspect resolved paths and settings provenance.
 
-## Required
+## Model credentials
+
+An API key is needed only when the selected endpoint requires one. Subscription
+connections use OAuth; local endpoints may be keyless.
 
 | Variable | What |
 |---|---|
-| `OPENAI_API_KEY` | LiteLLM gateway master key (or direct provider key if not using a gateway). Read by `graph/llm.py`. |
+| `OPENAI_API_KEY` | Key for the legacy gateway connection synthesized when no `providers:` block exists. Explicit provider entries read their own keys from `secrets.yaml`. |
 
 ## External secrets manager (ADR 0080)
 
@@ -27,10 +31,17 @@ Every env var the template reads at runtime.
 
 | Variable | Default | What |
 |---|---|---|
-| `PROTOAGENT_CONFIG_DIR` | `<repo>/config` | Writable config root — live `langgraph-config.yaml`, `secrets.yaml`, `.setup-complete`, and the live `skills/` + `plugins/` dirs. The desktop sidecar points this at the per-user app-data dir. |
-| `PROTOAGENT_WORKSPACE` | (a `workspace` dir) | Overrides the default project root for the on-by-default fenced filesystem toolset. |
-| `PROTOAGENT_MODEL` | (unset) | Overrides `model.name` on every config load — used by `evals/sweep.py` to run one agent against many models without editing YAML. |
-| `PROTOAGENT_INSTANCE` | (unset) | Opt-in data-scoping key (ADR 0004): namespaces the knowledge/notes/tasks/checkpoint stores so several agents share a backend without colliding. Seeded from `instance.id` in config. |
+| `PROTOAGENT_BOX_ROOT` | `~/.protoagent`, or `/sandbox` when present | Machine-shared root for host config, credentials, commons, and heartbeats. |
+| `PROTOAGENT_HOME` | `<box_root>/<instance>` | Explicit instance root; takes precedence over the instance id for path selection. Config lives in its `config/` directory and stores beneath the root. |
+| `PROTOAGENT_INSTANCE` | `default` | Instance id used to select `<box_root>/<id>` when `PROTOAGENT_HOME` is unset. Resolves from the environment, not YAML. |
+| `PROTOAGENT_HOST_CONFIG` | `<box_root>/host-config.yaml` | Override for the machine-shared config file. |
+| `PROTOAGENT_WORKSPACE` | `<instance_root>/workspace` | Default root for fenced file and shell tools. |
+| `PROTOAGENT_PLUGINS_DIR` | `<instance_root>/plugins` | Installed-plugin root; must be absolute. |
+| `PROTOAGENT_PLUGINS_LOCK` | `<instance_root>/plugins.lock` | Plugin lockfile path. |
+| `PROTOAGENT_MODEL` | (unset) | Overrides `model.name` on each load, including model sweeps. |
+
+`PROTOAGENT_CONFIG_DIR` is retained only for legacy migration; it no longer selects
+live runtime paths. See [Run multiple instances](/guides/multi-instance).
 
 ## Native OAuth subscription providers (ADR 0097)
 
@@ -49,7 +60,7 @@ Every env var the template reads at runtime.
 | `PROTOAGENT_HEADLESS` | (unset) | **Deprecated** alias for `PROTOAGENT_UI=console` (or `--headless`) — it still serves the React console; for no UI use `PROTOAGENT_UI=none`. |
 | `PROTOAGENT_HEADLESS_SETUP` | (unset) | Set `1`/`true` to auto-complete setup from a validated config even outside the `none` tier (no wizard). The `none` tier implies this. |
 
-Setup without the wizard: `python -m server --setup` validates the live config (`model.api_base` set + key resolvable via `secrets.yaml`/`OPENAI_API_KEY`) and writes `.setup-complete`, then exits. In the `none` tier the server auto-completes the same way on boot, or **fails fast** if the config is invalid. Readiness is exposed at `GET /healthz` (503 until the graph compiles).
+Setup without the wizard: `python -m server --setup` validates the live config (resolved model endpoint and credentials, or a native subscription provider) and writes `.setup-complete`, then exits. In the `none` tier the server auto-completes the same way on boot, or **fails fast** if the config is invalid. Readiness is exposed at `GET /healthz` (503 until the graph compiles).
 
 ## Fleet (ADR 0042)
 
@@ -58,13 +69,13 @@ The hub spawns local fleet members as detached `--ui none` processes on their ow
 | Variable | Default | Purpose |
 |---|---|---|
 | `PROTOAGENT_FLEET_AUTOSTART` | (unset) | Comma-separated member ids or display names the hub **(re)starts on boot** (ADR 0072) — a container recreate or host restart kills the members' detached processes and `fleet.json` keeps now-dead pids, so without this a declared crew stays down until re-activated by hand. The config key `fleet.autostart: [id, …]` is the durable form; this env var is the Docker/headless fallback. Idempotent (already-running members skipped), best-effort (a missing workspace is logged and skipped), and hub-only. Pairs with the config-as-code deploy pattern — see the [fleet guide](../guides/fleet.md#deploying-a-team). |
-| `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` | (unset) | By default the hub **spins its local members down when it shuts down** ("host down → fleet down" — keeps a rebuilt hub from leaving members running stale code; sessions resume from their `instance.id`-scoped checkpoints on the next switch, so it stops processes, not work). Set `1`/`true` to keep members running across a hub restart — for genuinely long-running detached agents. |
+| `PROTOAGENT_FLEET_KEEP_MEMBERS_ON_EXIT` | (unset) | By default the hub **spins its local members down when it shuts down** ("host down → fleet down" — keeps a rebuilt hub from leaving members running stale code; sessions resume from their instance-scoped checkpoints on the next switch, so it stops processes, not work). Set `1`/`true` to keep members running across a hub restart — for genuinely long-running detached agents. |
 | `PROTOAGENT_FLEET_MAX_WARM` | `0` | Keep-N-warm cap: at most this many members stay running; switching to another resumes it and evicts the least-recently-active beyond the cap (`0`/unset = unlimited). |
 | `PROTOAGENT_FLEET_WARM_GRACE` | `0` | Seconds a just-active member is spared from keep-warm eviction (may be mid background turn); `0` = pure LRU. |
 | `PROTOAGENT_DISCOVERY_DISABLE` | (unset) | Set `1`/`true` to skip the automatic at-boot fleet-discovery sweep (local port-scan + mDNS browse + tailnet scan across the discovery port range). `scripts/live_smoke.py` sets this on its spawned server so an "isolated" smoke run never probes a co-located real protoAgent (#2651) — it does not affect manual discovery (`GET /api/fleet/discover`) or a directly-called `discover()`/`boot_sweep()`. |
 | `PROTOAGENT_TRUSTED_HOSTS` | (unset) | Comma-separated extra `Host` names an **open** instance (no bearer, no X-API-Key) is served under. An open instance answers only requests addressed to a name it recognizes, on every path and WebSocket ([#3668](https://github.com/protoLabsAI/protoAgent/issues/3668); the fleet proxy's remote-member gate, [#3662](https://github.com/protoLabsAI/protoAgent/issues/3662), uses the same list). IP literals, `localhost`/`*.localhost`, `*.ts.net`, this machine's `<name>.local` mDNS name (not its bare or DNS hostname, which the network's DNS answers), a named bind address and the hosts of `A2A_ALLOWED_ORIGINS` are already trusted. Set this when a reverse proxy forwards another public name (e.g. nginx `proxy_set_header Host $host`), or when other containers reach an open, `PROTOAGENT_ALLOW_OPEN=1` agent by its compose service name (`PROTOAGENT_TRUSTED_HOSTS=agent`). Any other `Host` gets `403` (a WebSocket is closed `1008`). A token-gated instance ignores it. |
 
-## Authentication — A2A bearer token
+## Authentication — A2A bearer token {#authentication-a2a-bearer-token}
 
 | Variable | Default | What |
 |---|---|---|
@@ -72,7 +83,11 @@ The hub spawns local fleet members as detached `--ui none` processes on their ow
 
 When unset, startup logs a WARNING (`"A2A auth token not configured — endpoint is open"`) and accepts all traffic — fine for local dev (and safe behind the loopback-default bind, see `PROTOAGENT_HOST`), not for an exposed deployment. **A non-loopback bind with no token refuses to start** unless `PROTOAGENT_ALLOW_OPEN=1` (see above). When set, the agent card advertises `securitySchemes.bearer`.
 
-**Scope.** The guard covers everything that can drive the agent: `/a2a`, the operator API (`/api/*` — run subagents, rewrite config/SOUL, schedule jobs), `/api/chat`, and `/v1/*`. **Public (never guarded):** `/healthz`, `/.well-known/agent-card.json`, `/metrics`, the static console at `/app`, and the read-only `/api/events` SSE stream (browsers' `EventSource` can't send an `Authorization` header; it exposes only activity/inbox events, no action).
+**Scope.** The guard covers `/a2a`, `/api/*`, and `/v1/*`. Health, agent-card,
+and static console routes remain public. `/metrics` requires auth when the instance
+is token-gated; `PROTOAGENT_PUBLIC_METRICS=1` permits anonymous scraping. EventSource
+streams such as `/api/events` authenticate with short-lived query tokens, because
+browser EventSource cannot send bearer headers.
 
 **Console.** When a token is set, the React console sends it as a bearer on every API + A2A call. On the first 401 the console prompts for the token ("Authentication required") and stores it in `localStorage["protoagent.authToken"]` — no devtools needed; local/desktop runs (no token) need nothing.
 
@@ -101,7 +116,7 @@ The bundled `KnowledgeStore` (sqlite + FTS5) is enabled by default. See [Configu
 
 | Variable | Default | What |
 |---|---|---|
-| `KNOWLEDGE_DB_PATH` | (unset — uses YAML `knowledge.db_path`) | Runtime override for the sqlite path. Falls back to `~/.protoagent/knowledge/agent.db` when the resolved path is unwritable (e.g. running locally without `/sandbox`). |
+| `KNOWLEDGE_DB_PATH` | `<instance_root>/knowledge/agent.db` | Explicit SQLite path override. Legacy `/sandbox` config defaults resolve through the instance root; an explicit non-`/sandbox` YAML path is also an override. |
 
 To opt out entirely, set `middleware.knowledge: false` in YAML. The memory tools (`memory_ingest`, `memory_recall`, etc.) are dropped from the agent loop when the store is disabled.
 
@@ -112,15 +127,16 @@ persistent, instance-scoped store each, shared by the agent's tools and the
 operator console. They are *not* per-project (there's no `.automaker/notes/` or
 `.beads/` inside project directories). The filesystem fence for the file/shell
 tools is `filesystem.projects` (ADR 0007, the console's **Work folders**), not
-`operator.allowed_dirs` — that key is inert and unrelated to these stores. Each falls
-back from a non-writable `/sandbox` to `~/.protoagent/…` for local dev and is
-instance-scoped via `PROTOAGENT_INSTANCE`.
+`operator.allowed_dirs` — that key is inert and unrelated to these stores. Default stores resolve beneath the instance root.
 
 | Variable | Default | What |
 |---|---|---|
-| `NOTES_PATH` | `/sandbox/notes/workspace.json` | The console Notes panel workspace + the `notes_*` tools. |
-| `TASKS_DB_PATH` | `/sandbox/tasks/issues.db` | The in-process tasks issue store (the `task_*` tools + the console Tasks panel). |
-| `GOAL_PATH` | `/sandbox/goals` | Directory of per-session goal JSON files (goal mode). |
+| `GOAL_PATH` | `<instance_root>/goals` | Directory of per-session goal files. |
+| `TASKS_DB_PATH` | `<instance_root>/tasks/issues.db` | Explicit task-store path; `BEADS_DB_PATH` is a legacy alias. |
+| `NOTES_DIR` | `<instance_root>/notes` | Notes-directory override. With an explicit instance id, the plugin adds that id below the override. |
+
+The Notes plugin stores `note.md` in that directory. `NOTES_PATH` is not its
+runtime override.
 
 ## Audit log
 
@@ -134,7 +150,7 @@ The bundled scheduler is enabled by default. See [Schedule future work](/guides/
 
 | Variable | Default | What |
 |---|---|---|
-| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_DB_DIR` | `<instance_root>/scheduler` | Explicit parent-directory override; when set, jobs use `<override>/<agent_name>/jobs.db`. The default instance-private path is `<instance_root>/scheduler/agent/jobs.db`; an existing name-keyed store may be adopted. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
 | `SCHEDULER_FIRE_TIMEOUT_S` | `600` | How long a fire waits for the turn (`message/send` blocks until the turn is terminal). Must exceed a real turn — too low false-fails long turns. Fires run off the poll loop, so this doesn't stall the cadence. |
 | `SCHEDULER_DISABLED` | (unset) | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |

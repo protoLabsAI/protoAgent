@@ -1,11 +1,8 @@
-# Seed config (config-as-code). protoAgent copies this to the live
-# langgraph-config.yaml on FIRST boot only (via PROTOAGENT_SEED_CONFIG), then never
-# clobbers it — operators override settings in the console and those edits persist
-# on the config volume. Updating this seed only affects a FRESH instance (or one
-# whose config volume you've cleared); existing instances keep their live config.
-#
-# Secrets do NOT go here — the api_key is read from the OPENAI_API_KEY env, so this
-# file (and your image) carries no credentials.
+# First boot copies this seed into /sandbox/config/langgraph-config.yaml.
+# Persist /sandbox to keep console edits across container replacements.
+# PROTOAGENT_SEED_MERGE=1 applies later seed changes while keeping operator edits.
+# The legacy model block below reads its credential from OPENAI_API_KEY.
+# Keep secrets out of this seed and the image.
 identity:
   name: my-agent
 

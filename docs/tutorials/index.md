@@ -1,12 +1,13 @@
 # Tutorials
 
-Learning-oriented walkthroughs. Start here if you're new to protoAgent. Grouped by **domain** (same order as the other sections).
+Start with your first agent, then build a skill, tool, or plugin. Each walkthrough
+ends with a working example.
 
 ## Getting started
 
 | Tutorial | What you'll end up with |
 |---|---|
-| [Spin up your first agent](/tutorials/first-agent) | A forked, renamed container you can chat with locally |
+| [Set up your first agent](/tutorials/first-agent) | A local agent connected to a model, with a working chat |
 
 ## Skills, subagents & workflows
 

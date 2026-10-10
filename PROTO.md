@@ -17,7 +17,8 @@ and an A2A surface. Python is the core; TypeScript is the console.
   discoverable front door: `protoagent --help` lists the management subcommands
   (`plugin` / `workspace` / `fleet` / `skills` / `config`) plus lifecycle
   (`up` / `down` / `status` / `serve` / `setup`); `protoagent up` runs the instance
-  detached and `protoagent status` reports it. Both front doors route through the
+  detached and `protoagent status` reports it. For an installed package, use `protoagent`; a source checkout uses
+  `uv run python -m server` because uv does not install the project CLI. Both front doors route through the
   same dispatcher (`server/cli.py::dispatch`), so `python -m server <sub>` keeps
   working. Console is served from `apps/web/dist`; `/healthz` is the readiness probe.
 - **Isolated dev instance (don't stomp prod data):** `scripts/dev.sh` runs a
@@ -65,25 +66,24 @@ and an A2A surface. Python is the core; TypeScript is the console.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is
   `@protoagent/web`). **Changing/bumping a dependency requires npm ≥ 11**
   (`npm install -g npm@11`) — see the npm-10 no-op gotcha below.
-- **Console Node version:** `.nvmrc` pins **Node 20**, matching CI — `nvm use` at the repo root.
-  Node 25+ pre-defines the Web Storage globals (25 enabled them by default; 20/22/23/24 don't),
-  which shadowed jsdom's in the unit suite and
-  failed 127 tests at `localStorage.clear()` on a clean tree; `apps/web/vitest.setup.ts` now
-  repairs that so a newer Node still runs green, but `.nvmrc` is what keeps you on CI's version
-  in the first place (#3213).
-- **Console dev loop (frontend):** `npm run dev` (HMR) / `npm run preview` (built dist) serve
+- **Console Node version:** `.nvmrc` pins Node 20, matching CI. Run `nvm use` at
+  the repository root. The unit setup repairs Web Storage globals on newer Node
+  versions, but use the pinned version when comparing local results with CI.
+- **Console dev loop (frontend):** `npm run dev --workspace @protoagent/web` (HMR) /
+  `npm run preview --workspace @protoagent/web` (built dist) serve
   the console on `:5173` and **proxy all backend calls (`/api`, `/a2a`, events, `/agents`,
   `/plugins`, `/_ds`) to `PROTOAGENT_API_BASE`, default `http://127.0.0.1:7871`** — the
   ISOLATED dev instance from `scripts/dev.sh`, **not** the default/prod `:7870` the desktop app
-  runs. So the correct loop is *`scripts/dev.sh` (backend, :7871) + `npm run dev` (frontend)* —
-  both isolated, so dev testing never touches your `~/.protoagent` data. Vite prints a loud red
+  runs. Use *`scripts/dev.sh` (backend, :7871) +
+  `npm run dev --workspace @protoagent/web` (frontend)* —
+  instance data is separate, while box-level config and credentials remain shared. Vite prints a loud red
   guard if you ever point `PROTOAGENT_API_BASE` at `:7870`. (Historically it defaulted to
   `:7870`, which silently crossed dev traffic into the prod/desktop instance.)
 
 ## Must pass before opening a PR
 
-Run the **same commands CI runs** (`.github/workflows/checks.yml`) — locally,
-before the PR, not after. CI is the merge gate; a red PR is wasted cycles.
+Run the **same commands CI runs** (`.github/workflows/checks.yml`) locally before
+opening a PR.
 
 **The fast gate is one command** — the same repo-owned script CI's `lint` job
 invokes, so the local and CI gates can't drift:
@@ -167,80 +167,73 @@ new one instead of pushing to your branch.
 
 ## Landing a PR
 
-**Nothing merges your PR but you.** No bot, no schedule, and no reviewer presses
-the button — so a PR that is green and approved still sits there until a human or
-a live agent session merges it. When the session driving a PR ends, the PR stops.
-That is how #3270 sat green + approved for **60 hours** with three blocked
-children behind it, and it is the single most common way work here stalls.
+Enable auto-merge when opening a PR:
 
-**So enable auto-merge when you OPEN the PR, not when you remember:**
-
-```
+```bash
 gh pr create ... && gh pr merge --auto --squash --delete-branch
 ```
 
-This works — `main` is governed by a **repository ruleset** (not legacy branch
-protection) that requires 8 status checks and zero approvals, and auto-merge is
-enabled on the repo. Two things about that ruleset are worth knowing before you
-conclude otherwise:
+`main` uses a repository ruleset. Inspect it with
+`gh api repos/:owner/:repo/rulesets`; the legacy branch-protection API can return
+404 for a ruleset-protected branch.
 
-- **`gh api repos/:owner/:repo/branches/main/protection` returns 404 "Branch not
-  protected".** That is what the *legacy* API says about a repo governed by a
-  ruleset; it does not mean `main` is unprotected. Read
-  `gh api repos/:owner/:repo/rulesets` instead. Concluding "no protection, so
-  auto-merge cannot work" from that 404 is exactly how the habit never formed.
-- **`QA panel` is NOT one of the required checks.** The required set is CI only:
-  `Verify workspace config`, `Python tests`, `Web E2E smoke`,
-  `Lint (ruff + import contracts)`, `gitleaks (tree)`, `A2A live smoke (lean tier)`,
-  `build`, `Windows tests (native)`.
+**Confirm review covers the current head before landing.** `Review at head` is a
+required check comparing the PR's head with the panel's verdict. It does not
+judge verdict quality: a `WARN` passes this check. The panel's own `QA panel`
+status is not a required ruleset check, so inspect the review too.
 
-**Which is why auto-merge does not excuse you from checking the review.** Confirm
-the panel reviewed **the head you are actually merging** before you land it:
-
-```
+```bash
 gh pr view <N> --json headRefOid -q .headRefOid
 gh api repos/:owner/:repo/pulls/<N>/reviews \
-  -q '.[]|select(.user.login=="protoreview[bot]")|.body' | grep -o 'head=[0-9a-f]\{12\}'
+  -q '.[]|select(.user.login=="protoreview[bot]")|.body'
 ```
 
-A missing verdict is **silent** — no status, nothing red, `mergeStateStatus` still
-`CLEAN`. An advanced head is supposed to get a delta review (ADR 0078 D5), but if
-you merge before it re-runs, the code that landed was never reviewed and nothing
-in the PR says so. ADR 0078 D3 names this failure directly; it has happened here
-(#3298 merged at a head the panel had never seen, and an integration-branch merge
-put 65 files on `main` with no panel verdict at all).
+Panel reviews record `head=<12-character SHA>`. If the verdict matches but
+`Review at head` is stale, dispatch `gh workflow run "Review at head"`. The
+scheduled sweep can be delayed; `pull_request_review` events only help branches
+that contain the workflow. The `skip-review-gate` label waives the check with a
+recorded status description when a verdict cannot be obtained. Implementation:
+`scripts/review_at_head.py`; tests: `tests/test_review_at_head.py`.
 
-**The `Review at head` check does that comparison for you.**
-`.github/workflows/review-at-head.yml` posts a commit status on every open PR
-answering one question — is there a panel verdict for *this* head SHA? It does
-not re-judge code (a `WARN` passes; verdict quality is the panel's own `QA panel`
-status), and it is posted even when the panel never runs, which is precisely the
-silence it removes. Logic and rationale: `scripts/review_at_head.py`, covered by
-`tests/test_review_at_head.py`. Escape hatch when a verdict is never coming:
-the **`skip-review-gate`** label, which passes the check with the waiver recorded
-in the status description.
+A red **“QA panel: N finding(s) persist”** counts unresolved review threads,
+including other reviewers' threads. Read the threads even if the panel returned PASS.
 
-It is **required** on the `main` ruleset, so a red `Review at head` blocks the
-merge. If the panel has already reviewed your head and the check is still red, it
-is just stale — a sweep refreshes every open PR, or run it now with
-`gh workflow run "Review at head"` rather than waiting. The cron asks for every
-10 minutes; GitHub throttles high-frequency schedules, and the **observed**
-interval on this repo is closer to 30 (01:10, 01:40, 02:09, 02:47 on the day it
-landed), so treat the manual dispatch as the fast path, not the exception. (The `pull_request_review` fast path only
-fires for PRs whose branch contains the workflow file, which is why the sweep, not
-the event, is the guarantee.)
+**For sliced work, only the final slice says `Fixes #N`.** Earlier slices say
+`Refs #N` so the issue remains open until all acceptance criteria are delivered.
 
-Also, when reading a red gate: **"QA panel: N finding(s) persist" is usually not
-the panel's own finding.** That gate counts *unresolved review threads* — Vera can
-return PASS with zero findings while the check is red because a CodeRabbit thread
-is still open. Read the threads, not the check description.
+### Epic branches: review slice by slice, land the epic by attestation
 
-**Slices: only the LAST one says `Fixes #N`.** A closing keyword on slice 1 closes
-the issue the moment that PR merges, and every remaining acceptance criterion
-loses its tracker while the closed issue reads as "delivered". Earlier slices say
-`Refs #N`. The tell that it already happened is a shipped config knob that nothing
-reads — see #3170 (its gate landed in #3304, the tool in #3306, and the binding
-had no issue at all until #3313).
+A feature too big for one PR ships on a long-lived `epic/<name>` branch (ADR 0114 and
+ADR 0118 ran this way). **The slice PRs are the review of record**, so the reviewer never
+has to read the whole epic as one diff at the end.
+
+- **Each slice PR targets `epic/<name>`, never `main`, and gets the full panel.** CI
+  runs on `epic/**` bases. A slice merges into the epic only on a **complete** PASS at
+  its head. A `neutral` `QA panel` ("Incomplete pass", `hold:incomplete-coverage`)
+  means a finder lane did not run and that part of the diff is unreviewed. Re-run the
+  panel (`@vera review` on the PR) before merging. The board enforces this for projects
+  with `require_complete_review: true` (projectBoard-plugin#520).
+  If the re-review is **also** incomplete, the panel cannot finish this diff. Seen on
+  #4101: a finder lane ran its whole output budget as reasoning and returned no answer.
+  Run an adversarial review subagent over the slice instead, post its result on the PR,
+  and merge by hand. A hand merge skips the gate, so never merge without that substitute
+  review.
+- **Do not put `merge-hold` on slices bound for the epic.** The operator's hands-on test
+  happens once, on the epic, before it goes to `main`. A per-slice hold only freezes
+  the dependency chain behind it.
+- **Sync `main` into the epic regularly.** A clean merge introduces nothing new to
+  review. If the sync conflicts, resolve it in its own small PR into the epic, so the
+  resolution is reviewed like any other slice.
+- **The epic → `main` PR is reviewed by attestation, not re-review.** The reviewer
+  attributes every commit in `main..epic/<name>` to a slice PR with a complete PASS, or
+  to a clean sync merge. It reviews only what is left over (direct pushes, conflict
+  fixes, slices with incomplete reviews) and posts an attestation table as its
+  verdict (pr-reviewer-plugin#271, `pr_reviewer.epic_attestation`, on by default). Merge
+  the epic with a **merge commit**, not a squash, so each slice stays
+  visible in `git log` and `blame`.
+- **Only the epic → `main` PR says `Fixes #<epic issue>`.** A slice says
+  `Refs #<epic issue>` plus `Fixes` for its own slice issue; otherwise the first slice
+  merge closes the epic.
 
 ## Filing issues
 
@@ -288,28 +281,14 @@ label before concluding the loop is stuck.
 
 ## House rules & gotchas that bite
 
-These are the failures that actually recur — read them before you edit.
-
-- **A console feature can be green in every browser and dead in the desktop app — the
-  Tauri shell is an untested seam.** Tauri's drag-drop handler is **on by default**, and on
-  macOS `wry` implements it by overriding the webview's `NSDraggingDestination` methods and
-  returning early **without calling `super`** when the handler accepts — which Tauri's default
-  handler always does. WKWebView's own drop handling therefore never runs and the page sees no
-  `dragover` and no `drop` (Tauri's own docs say the same for Windows). This silently killed
-  **every** HTML5 drop surface in the packaged app at once — fleet roster reorder, the chat
-  composer's drag-a-file-to-attach, the knowledge store's — while all three worked in Chrome,
-  Safari and the whole Playwright suite. Every `WebviewWindowBuilder` must keep
-  `.disable_drag_drop_handler()` (`apps/desktop/src-tauri/src/lib.rs`); nothing in the console
-  consumes the native `tauri://drag-*` events. When a UI bug report contradicts a green suite,
-  **ask which surface it was tested on before you re-read the diff** — the desktop app is
-  WKWebView inside Tauri, not the engine CI runs.
-
-  Two testing corollaries: `locator.dragTo()` routes through Playwright's own drag helper, so it
-  can pass over an interaction a real mouse would never start — probe with raw
-  `page.mouse.down/move(steps)/up`. And the default drag image is the **dragged element**, so a
-  small handle produces a ghost nobody sees and a working drag reads as broken:
-  `setDragImage(<the row>, …)`, and populate `dataTransfer` (Firefox refuses to start a drag on
-  an empty one).
+- **Test console interactions in the desktop shell.** A green Chromium suite
+  does not establish WKWebView or WebView2 behavior. Every desktop
+  `WebviewWindowBuilder` must keep `.disable_drag_drop_handler()` so HTML
+  drag-and-drop reaches the page; the console does not consume native
+  `tauri://drag-*` events. When a report contradicts the suite, establish which
+  surface was tested. Probe drag behavior with raw `page.mouse.down/move(steps)/up`
+  as well as `locator.dragTo()`. Use `setDragImage(<row>, …)` for small handles and
+  populate `dataTransfer` so Firefox can start the drag.
 
 - **A message's `content` already contains its `tool_use` blocks — never sum
   `content` + `tool_calls`.** LangChain's `tool_calls` is a parsed *mirror* of the same
@@ -330,36 +309,13 @@ These are the failures that actually recur — read them before you edit.
   accessor or use `instance_paths().store("<name>")`. Identity comes from env only —
   never config-file content. `config explain` prints the resolved layout.
 
-- **npm 10 silently no-ops workspace dependency bumps — use npm ≥ 11.** With a
-  dep resolved under `apps/web/node_modules/` (e.g. `@protolabsai/ui`, nested
-  because its pinned `@protolabsai/design` conflicts with the hoisted one),
-  npm 10's arborist keeps the old version through **every** supported command —
-  root `npm install` after a range bump, `npm install <pkg>@<v> -w
-  @protoagent/web`, `npm update <pkg> -w` — even when the locked version no
-  longer satisfies the manifest range. No error, nothing changes (repro'd
-  three ways, 2026-07-12). npm 11 (`npm install -g npm@11`) resolves the same
-  bump correctly with a plain root `npm install`. The two arborists also
-  disagree about peer-stub reachability, so **npm 10's `ci` rejects an
-  npm-11-generated lockfile** ("Missing: @types/react@… from lock file") —
-  which is why every CI job touching the root lockfile pins `npm install -g
-  npm@11` before `npm ci` (**the Dockerfile web-builder stage too** — node:20-slim
-  ships npm 10; missing it broke every GHCR publish + the v0.101.0 release
-  build until fixed) and the checks/desktop-build/marketing-deploy/docs
-  workflows). Keep new workflows consistent. After any dep bump, regenerate
-  `THIRD_PARTY_LICENSES.md` (`uv run python scripts/gen_attribution.py`) or
-  the attribution gate fails.
-
-  **This is now enforced**: root `package.json` declares `engines.npm >= 11` and
-  `.npmrc` sets `engine-strict=true`, so npm 10 fails the install outright
-  instead of silently building a wrong tree. Added after the no-op cost real
-  debugging time: `@protolabsai/ui` sat at `0.54.1` under
-  `apps/web/node_modules` while the manifest said `^0.57.0`, shadowing the
-  correctly-hoisted copy. The only visible symptom was
-  `currencyMathRender.test.ts` failing — on a currency guard the DS didn't ship
-  until `0.55.1` — which reads exactly like a product regression, while CI (npm
-  11) stayed green. `npm ls @protolabsai/ui` is the tell: it prints
-  `invalid: "^0.57.0"`. If a console unit test fails locally but passes in CI,
-  check the installed tree before reading the code.
+- **Use npm ≥ 11 for every workspace install and dependency change.** npm 10
+  can retain an outdated nested dependency after a range bump and rejects some
+  npm-11-generated lockfiles. Root `engines.npm` and `.npmrc` enforce the version.
+  Pin `npm install -g npm@11` before `npm ci` in new CI jobs and Docker builders.
+  If a local web test fails while CI passes, inspect the installed tree with
+  `npm ls @protolabsai/ui` before changing code. Regenerate
+  `THIRD_PARTY_LICENSES.md` after dependency changes.
 
 - **No unused variables.** ruff selects `F` (pyflakes); `F841` (assigned-but-
   unused) **fails CI** and `ruff check --fix` does **not** auto-fix it. Don't
@@ -400,20 +356,14 @@ These are the failures that actually recur — read them before you edit.
   The same applies to `docs/reference/plugin-view-bridge.md` when the console
   grows a `protoagent:*` bridge message (`tests/test_plugin_view_bridge_docs.py`).
 
-- **Rebinding a core chord — or folding away a palette command — reddens a docs test.**
-  `tests/test_keybinding_docs.py` re-derives both from the console source. Change a
-  `defaultKeys` in `apps/web/src/keybindings/coreKeybindings.ts` and it fails with the
-  exact `file:line` of every stale claim, *plus* the pages in `_MUST_STATE_THE_CHORD`
-  (the guides a user learns the chord from) that would otherwise just go quiet. A claim
-  is a glyph joined to the name it opens — adjacent ("⌘K clear") or across a short
-  connective ("⌘⇧K / Ctrl-Shift-K **for** the command palette") — so a *historical*
-  mention stays legal. Chords the desktop shell owns are read from
-  `apps/desktop/src-tauri/src/hotkeys.rs` and never judged against the in-app binding: the
-  ⌥Space launcher *is* the palette, and CI must not "correct" that sentence. The third
-  check reads command **names**: `press ⌘⇧K → <command>` has to name something
-  `usePaletteRegistry.ts` still registers — #1769 folded **Toggle Fleet Agent** into the
-  Fleet Room and the fleet guide went on telling operators to type it. #2949 swapped
-  ⌘K/⌘⇧K with nothing watching, and the docs stayed inverted until #3281.
+- **Update docs when changing shortcuts or palette commands.**
+  `tests/test_keybinding_docs.py` derives shortcuts from
+  `apps/web/src/keybindings/coreKeybindings.ts`, desktop global shortcuts from
+  `apps/desktop/src-tauri/src/hotkeys.rs`, and command names from
+  `usePaletteRegistry.ts`. It checks both stale claims and required mentions in
+  `_MUST_STATE_THE_CHORD`. Preserve historical mentions when useful, but teach
+  only current commands. The desktop ⌥Space launcher is also a palette; do not
+  compare it with the in-app binding.
 
 - **Import layering (enforced by `lint-imports`).** `graph/` and the infra
   packages (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/
@@ -456,6 +406,20 @@ These are the failures that actually recur — read them before you edit.
 
 - **DS AppShell width is controlled.** Store rail widths verbatim; never
   re-clamp them (re-clamping breaks drag-to-collapse).
+
+## Documentation changes
+
+- Lead task guides with prerequisites, the action, and the expected result. Put
+  implementation details and migration history after the procedure or link to
+  reference/explanation pages. Preserve useful URLs and anchors when moving content.
+- Check commands, UI labels, config paths, and defaults against source. Source
+  checkouts need a frontend build and use `uv run python -m server`; packaged
+  installs use `protoagent`.
+- After sidebar edits, run `python scripts/gen_docs_nav.py` so in-app help matches
+  the site. Keep primary task pages in the corpus sections (`tutorials`, `guides`,
+  `reference`, `explanation`, `adr`).
+- Validate with `npm run docs:build`, the docs-related tests, and generated-doc
+  checks. Change generated reference prose at its source, then regenerate it.
 
 ## Conventions
 

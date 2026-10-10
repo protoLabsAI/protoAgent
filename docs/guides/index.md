@@ -1,119 +1,122 @@
 # How-To Guides
 
-Task-oriented procedures, grouped by **domain** (the same order used across Tutorials, Reference, and Explanation). Assumes you already have a running agent — see [Tutorials](/tutorials/) if not (the wizard runs with zero setup).
+Find the task you need below. If you have not installed an agent yet, start with
+[Set up your first agent](/tutorials/first-agent).
 
 ## Getting started
 
-Fork the template and make it yours.
-
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Fork the template (fast path)](/guides/fork-the-template) | Terse checklist for experienced forkers |
-| [Customize & deploy](/guides/customize-and-deploy) | You've evaluated via the wizard and now want to fork, rename, and ship your own image |
+| [Use the app](/guides/react-tauri-ui) | Chat, inspect progress, and change settings |
+| [Connect and change models](/guides/model-connections) | Add a connection, sign in, and choose a model |
+| [Work with files and documents](/guides/documents-and-files) | Attach files, create documents, and download results |
+| [Enable document creation](/guides/python-runtime) | Install the desktop interpreter and document libraries |
+| [Install and manage plugins](/guides/plugin-registry) | Install, configure, update, or remove plugins |
+| [Back up and restore data](/guides/backup-and-restore) | Preserve chats and settings, and recover a saved copy |
+| [Fix a problem in the app](/guides/troubleshooting) | Resolve connection, tool, plugin, and file-access errors |
+| [Export or copy an agent](/guides/agent-snapshots) | Create a fresh agent from a portable recipe |
+| [Add documents and media](/guides/ingestion) | Add files, web pages, PDFs, and media to knowledge |
 
 ## Agent core & runtime
 
-Shape how the agent's loop behaves — standing goals, timers, middleware hooks, the runtime brain.
-
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Goal mode](/guides/goal-mode) | You want the agent to pursue a standing goal across turns, not just answer one-shot |
-| [Watches](/guides/watches) | You want the agent to supervise many external conditions at once — poll a metric, react when it trips |
-| [Schedule future work](/guides/scheduler) | You want the agent to defer tasks to itself ("remind me tomorrow", recurring sweeps) — bundled local sqlite |
-| [Middleware](/guides/middleware) | You want pre/post hooks on the agent turn (plugin-contributed) |
-| [System lifecycle events](/guides/lifecycle-events) | You want plugins/skills to react to boot, idle-wake, or the desktop shell coming to the foreground (event-bus broadcasts) |
+| [Goal mode](/guides/goal-mode) | Keep working toward a checked outcome |
+| [Watches](/guides/watches) | React when an external condition changes |
+| [Schedule future work](/guides/scheduler) | Run one-time or recurring tasks later |
+| [Middleware](/guides/middleware) | Add hooks around model and tool calls |
+| [System lifecycle events](/guides/lifecycle-events) | React to boot, wake, or app activation |
 | [Run on a coding agent (ACP runtime)](/guides/acp-runtime) | **Deprecated** — you already run an `acp:*` runtime and need its reference. For new work, hand coding jobs to an [`acp` delegate](/guides/delegates) instead |
 
 ## Skills, subagents & workflows
 
-Give the agent reusable, named capabilities and delegates.
-
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Skills (`SKILL.md`)](/guides/skills) | You want to drop in reusable, load-on-demand skill instructions in the AgentSkills `SKILL.md` format |
-| [Add a custom skill (A2A card)](/guides/add-a-skill) | You want A2A callers to dispatch a named capability — a *card* skill, distinct from the `SKILL.md` skills above |
-| [Configure subagents](/guides/subagents) | You want specialized delegates beyond the shipped `researcher` |
-| [Reusable workflows](/guides/workflows) | You want declarative multi-step recipes (`*.yaml`) the agent can run on demand |
-| [Verifier-grounded coder (`coder_solve`)](/guides/coder) | You want the agent to solve a verifiable coding task via an execution-grounded search ladder (the `coder` plugin) |
+| [Skills (`SKILL.md`)](/guides/skills) | Teach reusable procedures with `SKILL.md` |
+| [Advertise a capability (A2A card)](/guides/add-a-skill) | Advertise an existing capability on the A2A card |
+| [Configure subagents](/guides/subagents) | Configure specialized workers |
+| [Reusable workflows](/guides/workflows) | Run a defined sequence of subagent steps |
+| [Verifier-grounded coder (`coder_solve`)](/guides/coder) | Solve a coding task against an executable verifier |
 
 ## Knowledge & memory
 
 Load content the agent can recall, and tune how it's retrieved.
 
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Ingest documents & media](/guides/ingestion) | You want to pull files, web pages, PDFs, or audio/video into the knowledge store |
-| [Tune the knowledge store (RAG)](/guides/knowledge) | You want to adjust hybrid retrieval — `top_k`, `vector_k`, `rrf_k`, `min_score`, embeddings |
+| [Ingest documents & media](/guides/ingestion) | Add files, web pages, PDFs, and media to knowledge |
+| [Manage memory](/guides/manage-memory) | Inspect, correct, review, and remove saved context |
+| [Tune knowledge recall](/guides/knowledge) | Check retrieval and adjust embeddings and context limits |
 
 ## A2A, fleet & delegates
 
 Connect your agent to other agents and endpoints, and run many of them.
 
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Delegates (agents & endpoints)](/guides/delegates) | You want to manage the agents + endpoints your agent talks to via `delegate_to` (a2a / openai / acp), hot-swappable from the console |
-| [Rooms (`@name` group chat)](/guides/rooms) | You want to address a delegate directly from chat, put several of them in one conversation, or tune how far a room runs before it stops |
-| [CLI coding agents over ACP](/guides/coding-agents) | You want the agent to hand a coding job to protoCLI / Claude Code / Codex and get the result back — **the supported way** to use a coding agent |
-| [Run a fleet (workspaces, archetypes, supervisor)](/guides/fleet) | You want many named agents on one host — created from archetypes, run in the background, sharing a skills commons |
-| [Portfolio (one PM, many team boards)](/guides/portfolio) | You want one PM agent to dispatch work to, and track, several team-agents' project boards across repos — over A2A |
-| [Agent snapshots (export, share, duplicate)](/guides/agent-snapshots) | You want to hand someone your agent's *recipe* — persona, config, plugin pins, skills — as a small zip, or stand up a duplicate from one |
-| [Build out your agent with a coding agent](/guides/build-with-a-coding-agent) | You've forked the template and want to grow it through a project-manager agent, a board, and coder delegates instead of typing every change |
+| [Delegates (agents & endpoints)](/guides/delegates) | Add, test, and manage callable agents and endpoints |
+| [Rooms (`@name` group chat)](/guides/rooms) | Address one or several delegates in chat |
+| [CLI coding agents over ACP](/guides/coding-agents) | Hand coding work to a CLI agent over ACP |
+| [Run a fleet (workspaces, archetypes, supervisor)](/guides/fleet) | Create and manage agents on one host |
+| [Fleet deck](/guides/fleet-deck) | Inspect and control the fleet from a terminal |
+| [Portfolio (one PM, many team boards)](/guides/portfolio) | Coordinate project boards across team agents |
+| [Agent snapshots (export, share, duplicate)](/guides/agent-snapshots) | Export an agent recipe or create a copy |
+| [Build out your agent with a coding agent](/guides/build-with-a-coding-agent) | Ship changes through a PM, project board, and coding delegates |
 
 ## Tools, MCP & plugins
 
-Add capability without forking — external tools, drop-in packages, channels.
-
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Extend protoAgent](/guides/extend) | The map for adding capability without forking — plugins, views, MCP |
-| [Connect MCP servers](/guides/mcp) | You want to plug external tools into the agent via the Model Context Protocol (stdio / HTTP) |
-| [Plugins](/guides/plugins) | You want drop-in packages that add tools, skills, routes, background surfaces, subagents and managed MCP servers without forking (Discord ships this way; Google/Slack install as external plugins) |
-| [Building a plugin view](/guides/building-react-plugin-views) | You want a plugin to add its own console surface — a left-rail view (dashboard/chart/editor) or a panel that replaces the built-in chat |
-| [Build a communication plugin](/guides/communication-plugins) | You want a new inbound/outbound channel (like Discord) as a plugin surface |
-| [Install & publish plugins (git URLs)](/guides/plugin-registry) | You want to install a plugin from a git URL, or publish one as a shareable repo (tools + skills + subagents + workflows + views) |
-| [Bundles](/guides/bundles) | You want several plugins installed, updated, and removed as one tested set — or to publish an archetype repo of your own (manifest, pin lifecycle, verify CI, archetype card) |
-| [Discord surface](/guides/discord) | You want the agent reachable from Discord (the first-party `discord` plugin) |
-| [File GitHub issues (`/issue`)](/guides/file-github-issues) | You want to file a GitHub issue straight from the console — the `/issue` command or the util-bar widget |
-| [Friction log](/guides/friction-log) | You want to triage what keeps getting in the agent's way: the Friction view, `/friction`, filing rows as issues, tuning what reaches its working state, and clearing noise |
+| [Extend protoAgent](/guides/extend) | Choose settings, skills, MCP, plugins, or a fork |
+| [Connect MCP servers](/guides/mcp) | Connect external MCP tools over stdio or HTTP |
+| [Build plugins](/guides/plugins) | Build tools, routes, background work, or views |
+| [Build a plugin view (quickstart)](/guides/build-a-plugin-view) | Add a working iframe view to a plugin |
+| [Building a plugin view](/guides/building-react-plugin-views) | Use the view bridge, chat slot, and event subscriptions |
+| [Build a communication plugin](/guides/communication-plugins) | Build a messaging-platform integration |
+| [Publish a plugin](/guides/publish-a-plugin) | Package dependencies and list a plugin for other users |
+| [Bundles](/guides/bundles) | Manage a pinned plugin set or publish an archetype |
+| [Discord surface](/guides/discord) | Receive and answer Discord DMs and mentions |
+| [File GitHub issues (`/issue`)](/guides/file-github-issues) | Submit an issue from the console |
+| [Friction log](/guides/friction-log) | Triage tooling problems and clear resolved friction |
 
 ## Console & UI
 
-Surface the agent to people — the operator console, or no UI at all.
-
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Operator console (React/Tauri)](/guides/react-tauri-ui) | You want the multi-chat React console and to package it for desktop |
-| [Windows desktop app (install & recovery)](/guides/windows-desktop) | You're installing or troubleshooting the packaged Windows build — supported system, SmartScreen posture, data locations, updates, and recovery |
-| [Managed Python runtime (desktop)](/guides/python-runtime) | You're on the desktop app and `execute_code` / the document skills (docx · xlsx · pptx · pdf) need their one-click interpreter install |
-| [Command palette (⌘⇧K)](/guides/command-palette) | You want the fast keyboard path to jump between surfaces + inline chat |
-| [Developer flags](/guides/developer-flags) | You want to merge a half-built feature behind a tiered flag (off/dev/beta/on) instead of a long-lived branch |
-| [Access from your phone (LAN / Tailscale)](/guides/phone-access) | You want to drive the agent from your phone — installable PWA over your LAN or tailnet, add-to-home-screen |
-| [Pair devices and agents](/guides/pairing) | You want a phone or another protoAgent to get its own revocable token for this agent — QR or typed code, making the agent reachable, revoking, and delegating to a paired remote |
-| [Run headless (API + A2A)](/guides/headless) | You want the agent as a service — REST + A2A — with no UI |
+| [Use the app](/guides/react-tauri-ui) | Chat, inspect progress, and change settings |
+| [Windows desktop app (install & recovery)](/guides/windows-desktop) | Install, update, or recover the Windows app |
+| [Enable document creation (desktop)](/guides/python-runtime) | Install the desktop interpreter and document libraries |
+| [Command palette (⌘⇧K)](/guides/command-palette) | Jump to surfaces, settings, and commands |
+| [Build and test the console](/guides/build-console) | Develop the frontend or package the desktop app |
+| [Developer flags](/guides/developer-flags) | Gate unfinished features by release tier |
+| [Access from your phone (LAN / Tailscale)](/guides/phone-access) | Open the console from a phone over LAN or Tailscale |
+| [Pair devices and agents](/guides/pairing) | Issue and revoke per-device or per-agent tokens |
+| [Run headless (API + A2A)](/guides/headless) | Run the agent as an API service |
 
 ## Operate & deploy
 
-Ship it, isolate it, fence it in, and watch it.
-
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [The `protoagent` command (CLI)](/guides/cli) | You want the terminal control plane — install, run, and manage an instance without the console |
-| [Deploy via GHCR](/guides/deploy) | You're ready to ship and want auto-deploy wired up |
-| [Deploy in Docker (config-as-code)](/guides/deploy-docker) | You want a container that boots pre-configured from a baked seed while console edits still persist |
-| [Deploy on Proxmox (reusable LXC template)](/guides/deploy-proxmox) | You run Proxmox and want a clone-in-seconds template for test/fleet instances |
-| [Releasing](/guides/releasing) | You're cutting a versioned release (semver bump → image → GitHub release) |
-| [Run multiple instances](/guides/multi-instance) | You want several scoped agents (data isolation) on one host |
-| [Sandboxing & egress](/guides/sandboxing) | You want to fence the filesystem + outbound network |
-| [Expose to the world](/guides/exposing-protoagent) | You want an agent reachable from the public internet — A2A only, token-gated, console hidden |
-| [Wire Langfuse + Prometheus](/guides/observability) | You need traces and metrics in production |
-| [Operating a fleet (health, rollout, triage, recovery)](/guides/operating-a-fleet) | You're running a multi-member fleet and need health-check, upgrade, incident-triage, and recovery procedures |
+| [The `protoagent` command (CLI)](/guides/cli) | Install and manage an instance from a terminal |
+| [Deploy via GHCR](/guides/deploy) | Publish an image and configure automatic deployment |
+| [Deploy in Docker (config-as-code)](/guides/deploy-docker) | Persist a container and apply config seeds |
+| [Deploy on Proxmox (reusable LXC template)](/guides/deploy-proxmox) | Create a reusable Docker-in-LXC template |
+| [Releasing](/guides/releasing) | Publish a versioned release |
+| [Run multiple instances](/guides/multi-instance) | Separate instance config and stores on one machine |
+| [Sandboxing & egress](/guides/sandboxing) | Limit filesystem and network access |
+| [Expose to the world](/guides/exposing-protoagent) | Expose token-gated A2A routes while keeping the console private |
+| [Wire Langfuse + Prometheus](/guides/observability) | Configure traces, metrics, and audit logs |
+| [Model concurrency](/guides/model-concurrency) | Limit parallel model calls and inspect queue pressure |
+| [Operating a fleet (health, rollout, triage, recovery)](/guides/operating-a-fleet) | Check health, roll out updates, and recover members |
 
 ## Forks & evals
 
 Build a downstream operator fork, keep it synced, and measure it.
 
-| Guide | When to read |
+| Guide | Task |
 |---|---|
-| [Build an operator fork (Roxy)](/guides/operator-fork) | You're building a portfolio-manager / operator agent on top of the template |
-| [Sync a fork from upstream](/guides/upstream-sync) | Your fork needs to pull fixes + features down from the template (merge-not-squash) |
-| [Eval your fork](/guides/evals) | You want a baseline pass-rate for the tools / memory / A2A surface in your fork |
+| [Fork the template](/guides/fork-the-template) | Create a fork using the developer checklist |
+| [Customize and deploy](/guides/customize-and-deploy) | Configure a fork and ship an image |
+| [Build an operator fork (Roxy)](/guides/operator-fork) | Build a portfolio-manager agent on the template |
+| [Sync a fork from upstream](/guides/upstream-sync) | Merge upstream changes into a fork |
+| [Eval your fork](/guides/evals) | Measure tool, memory, and protocol behavior |

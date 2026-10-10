@@ -17,6 +17,15 @@ model call instead of a lost lane. Bounded by ``max_nudges``, and each nudge is 
 ordinary model pass, so it spends the subagent's ``max_turns`` budget like any other.
 
 A subagent that declares neither never gets this middleware; its stack is unchanged.
+
+A REASONING-ONLY turn gets a different retry (#3584, then Vera on protoAgent#4108): the
+model spent the whole turn thinking and produced no text. On the Qwen3.8 thinking lane
+that is a degenerate loop inside ``<think>`` (one paragraph repeated dozens of times)
+closed by an EOS sampled mid-thought; the gateway's ``blank_recovery`` continuation never
+sees it because every protoAgent call streams. A plain nudge cannot recover it: it
+round-trips the whole loop back as the turn's ``reasoning_content``, with thinking still
+on, and the model resumes the same paragraph. So the retry drops the failed turn's
+reasoning from the history and makes ONE model call with thinking off.
 """
 
 from __future__ import annotations
@@ -37,6 +46,7 @@ log = logging.getLogger(__name__)
 NUDGE_MARK = "[completion-guard]"
 GUARD = "completion"
 LINE_GUARD = "completion-line"  # the single ask for a closing line the caller requires
+REASONING_GUARD = "completion-reasoning"  # the thinking-off retry after a reasoning-only turn
 # The wrap-up warning sent once as the turn budget runs out (#3559).
 BUDGET_MARK = "[turn-budget]"
 CONTEXT_MARK = "[context-budget]"
@@ -56,7 +66,7 @@ def _text(message) -> str:
 def nudges_sent(messages) -> int:
     # By tag, never by text: the task prompt is a HumanMessage too (#3556). Both kinds of
     # nudge count toward the one budget; the closing-line ask is further capped at one.
-    return sum(1 for m in messages or [] if is_guard_note(m, GUARD) or is_guard_note(m, LINE_GUARD))
+    return sum(1 for m in messages or [] if any(is_guard_note(m, g) for g in (GUARD, LINE_GUARD, REASONING_GUARD)))
 
 
 def task_prompt(messages) -> str:
@@ -103,6 +113,44 @@ def reasoning_only(message) -> bool:
     extra = getattr(message, "additional_kwargs", None) or {}
     reasoning = str(extra.get("reasoning_content") or extra.get("reasoning") or "")
     return len(reasoning) >= REASONING_ONLY_MIN_CHARS and len(_text(message).strip()) <= REASONING_ONLY_MAX_TEXT
+
+
+def without_reasoning(message: AIMessage) -> AIMessage:
+    """The same turn (same id, so the state reducer REPLACES it) minus its reasoning.
+
+    A reasoning-only turn's reasoning is the failure itself — on protoAgent#4108 a 45k-char
+    loop ending in a literal ``<|im_end|>``. Round-tripped (#2642), it is the first thing the
+    retry reads, and the model picks the loop back up where it stopped.
+    """
+    extra = {k: v for k, v in (message.additional_kwargs or {}).items() if k not in ("reasoning_content", "reasoning")}
+    return message.model_copy(update={"additional_kwargs": extra})
+
+
+def thinking_off_settings(model, settings: dict | None = None) -> dict | None:
+    """``model_settings`` for one call to ``model`` with thinking OFF — or None when the slot
+    has no switch we know to be safe to send.
+
+    Only an OpenAI-compatible thinking slot qualifies: its ``extra_body`` already carries
+    ``thinking`` enabled or ``chat_template_kwargs`` (the operator turned thinking on through
+    the gateway). Anything else — Claude, a plain OpenAI model — is never sent a template
+    kwarg it may reject. ``chat_template_kwargs.enable_thinking: false`` is the switch the
+    vLLM lane honours (probed through the gateway, 2026-10-10: ``thinking: {type: disabled}``
+    alone still produced reasoning); ``thinking`` is set too for a DeepSeek-style fallback.
+    """
+    base = (settings or {}).get("extra_body")
+    if not isinstance(base, dict):
+        base = getattr(model, "extra_body", None)
+    if not isinstance(base, dict):
+        return None
+    thinking = base.get("thinking")
+    on = isinstance(thinking, dict) and thinking.get("type") == "enabled"
+    if not on and "chat_template_kwargs" not in base:
+        return None
+    template = base.get("chat_template_kwargs")
+    template = dict(template) if isinstance(template, dict) else {}
+    template["enable_thinking"] = False
+    body = {**base, "thinking": {"type": "disabled"}, "chat_template_kwargs": template}
+    return {**(settings or {}), "extra_body": body}
 
 
 def describe_turn(message) -> str:
@@ -217,16 +265,8 @@ class CompletionGuardMiddleware(AgentMiddleware):
         if has_deliverable and not owed:
             return None
         sent = nudges_sent(messages)
-        # A reasoning-only turn (#3584): the model spent its output thinking — 20–30k chars of
-        # `reasoning_content` — and emitted no content, or one sentence of intent. A nudge buys
-        # another ~8k tokens of the same (0 of 5 recovered on the second nudge, ~4 minutes
-        # each). One nudge is the fair ask; a second reasoning-only turn ends the lane.
-        if sent >= 1 and reasoning_only(last):
-            log.warning(
-                "[completion-guard] reasoning-only turn after a nudge; letting the run end (%s)",
-                describe_turn(last),
-            )
-            return None
+        if not has_deliverable and reasoning_only(last):
+            return self._reasoning_retry(messages, last, sent)
         if sent >= self._max_nudges:
             # What the record cannot say otherwise (#3582): a lane that ends on "Let me verify
             # X" twice looks the same whether its output was cut (finish_reason=length), its
@@ -272,6 +312,56 @@ class CompletionGuardMiddleware(AgentMiddleware):
                 describe_turn(last),
             )
         return {"jump_to": "model", "messages": [guard_note(GUARD, note)]}
+
+    def _reasoning_retry(self, messages, last: AIMessage, sent: int) -> dict | None:
+        """A reasoning-only turn (#3584): ONE retry with thinking off, its loop not replayed.
+
+        Before, a nudge with thinking still on got another ~8k tokens of the same loop (0 of
+        5 recovered; on protoAgent#4108 the retry's reasoning repeated the failed turn's last
+        paragraph word for word). Thinking off, the model answers from what it has read.
+        A retry that is itself reasoning-only — or a run out of nudges — ends the lane.
+        """
+        previous = messages[-2] if len(messages) >= 2 else None
+        if is_guard_note(previous, REASONING_GUARD) or sent >= self._max_nudges:
+            log.warning(
+                "[completion-guard] reasoning-only turn %s; letting the run end (%s)",
+                "after a thinking-off retry" if is_guard_note(previous, REASONING_GUARD) else f"after {sent} nudge(s)",
+                describe_turn(last),
+            )
+            return None
+        note = (
+            f"{NUDGE_MARK} Your last turn spent itself deliberating and ended without any output — "
+            f"no tool call and not {self._contract}. Do not re-analyse. Write the deliverable now "
+            "from what you have already read; state anything you did not get to as a `Gap:` line."
+        )
+        reasoning = (last.additional_kwargs or {}).get("reasoning_content") or (last.additional_kwargs or {}).get(
+            "reasoning"
+        )
+        log.warning(
+            "[completion-guard] reasoning-only turn; retrying once with thinking off, %d chars of its "
+            "reasoning dropped (nudge %d/%d, %s)",
+            len(str(reasoning or "")),
+            sent + 1,
+            self._max_nudges,
+            describe_turn(last),
+        )
+        update: list = [without_reasoning(last)] if last.id else []
+        return {"jump_to": "model", "messages": [*update, guard_note(REASONING_GUARD, note)]}
+
+    @staticmethod
+    def _thinking_off(request):
+        """The model call right after a reasoning-only retry note runs with thinking off."""
+        messages = getattr(request, "messages", None) or []
+        if not messages or not is_guard_note(messages[-1], REASONING_GUARD):
+            return request
+        settings = thinking_off_settings(request.model, request.model_settings)
+        return request if settings is None else request.override(model_settings=settings)
+
+    def wrap_model_call(self, request, handler):  # type: ignore[override]
+        return handler(self._thinking_off(request))
+
+    async def awrap_model_call(self, request, handler):  # type: ignore[override]
+        return await handler(self._thinking_off(request))
 
     def before_model(self, state, runtime):  # type: ignore[override]
         return self._wrap_up(state) or self._context_wrap_up(state)
