@@ -1,25 +1,21 @@
 # Build your first plugin
 
-In the [previous tutorial](/tutorials/first-tool) you added a tool by editing the agent's own
-source. That works, but it means your change lives in a fork you have to keep merging.
-
-A **plugin** is the alternative: a self-contained directory that adds tools, routes, views, and
-more, without touching core. In this tutorial you'll scaffold one, give it a tool the agent can
-call, add a console view, and enable it — about twenty minutes, no fork.
-
-You need a running agent from [Spin up your first agent](/tutorials/first-agent).
+Build a plugin with a tool, console view, and host-free tests. You need a running
+agent from [Set up your first agent](/tutorials/first-agent). Use `protoagent` from
+an installed package, or replace it with `uv run python -m server` in a checkout.
+For a smaller tool-only example, see [Write your first tool](/tutorials/first-tool).
 
 ## 1. Scaffold it
 
 ```bash
-python -m server plugin new "Word Count" --view --tests
+protoagent plugin new "Word Count" --view --tests
 ```
 
-That writes `plugins/word-count/` with a manifest, a `register()` entry point, a working tool, a
+The command prints the new directory, normally `<instance_root>/plugins/word-count/`, with a manifest, a `register()` entry point, a working tool, a
 console view, and a host-free test suite:
 
 ```
-plugins/word-count/
+<instance_root>/plugins/word-count/
 ├── protoagent.plugin.yaml   # the manifest — what the host reads before importing anything
 ├── __init__.py              # register(registry) — your contributions
 ├── tests/                   # a suite that runs with no protoAgent installed
@@ -31,8 +27,8 @@ plugins/word-count/
 └── pyproject.toml
 ```
 
-The plugin is **not enabled yet**, and it won't be until you say so. That's deliberate: a plugin
-runs in-process with the agent's privileges, so enabling is always an explicit act.
+The scaffold starts disabled. Review its code before enabling it: plugins run
+with the server's privileges.
 
 ## 2. Look at the manifest
 
@@ -55,8 +51,9 @@ can list and configure a plugin it has never run. Every field is in the
 
 ## 3. Write the tool
 
-Open `__init__.py`. The scaffold left you a `word_count_hello` tool — replace it with something
-that does real work:
+Open `__init__.py`. Inside `register()`, replace the `word_count_hello` tool
+definition and its `registry.register_tool(...)` call. Keep the scaffolded view
+and data-router registrations below them. The function should begin with:
 
 ```python
 from langchain_core.tools import tool
@@ -76,19 +73,20 @@ def register(registry):
         return f"{words} words, {len(text)} characters"
 
     registry.register_tool(word_count)
+    # Keep the scaffolded view and data-router registrations here.
 ```
 
-Two things worth noticing, because they're the whole plugin contract:
+Registration and tool selection follow two rules:
 
-- **`register(registry)` is called once, at load.** It runs before the graph is built, so anything
-  you register is in place by the agent's first turn.
+- **`register(registry)` runs at load and config reload.** It contributes tools before
+  the graph is built; registration must tolerate being called again.
 - **The docstring is the tool's interface.** The model reads it to decide when to call the tool and
   what to pass — it is prompt text, not a comment.
 
 ## 4. Enable it
 
 In the console: **Settings ▸ Plugins ▸ Installed**, toggle *Word Count*. Or in
-`config/langgraph-config.yaml`:
+the instance's live `langgraph-config.yaml` (locate it with `protoagent config explain`):
 
 ```yaml
 plugins:
@@ -106,7 +104,8 @@ warning rather than raising.
 ## 5. Run the tests
 
 ```bash
-cd plugins/word-count && python -m pytest tests/ -q
+cd <plugin-directory>
+python -m pytest tests/ -q
 ```
 
 These run with **no protoAgent host at all** — the [testkit](/reference/plugin-testkit) loads your

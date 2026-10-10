@@ -19,9 +19,9 @@ Five wrong guesses at an agent cancel every pending code; mint a new one and car
 ## Before you pair: make this agent reachable
 
 A phone or a hub on another machine can't reach an agent bound to loopback (`127.0.0.1`),
-which is the default for a desktop or local run. If you open **Settings ▸ Devices ▸ Add a
-device** (or *Pair an agent*) on a loopback-bound agent, the panel says so and offers
-**Allow devices on my network**, listing the addresses it could be reached on. Tailnet
+which is the default for a desktop or local run. Open **Settings ▸ Devices ▸ Add a
+device** (or **Pair an agent**). If the agent is loopback-bound, the reachability
+notice lists addresses; choose **Tailnet** or **Wi-Fi** to allow access. Tailnet
 addresses come first and are marked as the safer pick: only your own devices can reach a
 tailnet address, from any network, while a Wi-Fi (LAN) address is reachable by anything on
 that network.
@@ -52,8 +52,13 @@ first, since they stop being reachable anyway.
 On a headless server, skip the panel and start it reachable, with a token:
 
 ```bash
-A2A_AUTH_TOKEN=$(openssl rand -hex 24) python -m server --host 0.0.0.0 --port 7870
+PROTOAGENT_PAIR_TOKEN=$(openssl rand -hex 24)
+printf '%s\n' "$PROTOAGENT_PAIR_TOKEN"
+A2A_AUTH_TOKEN="$PROTOAGENT_PAIR_TOKEN" protoagent serve --host 0.0.0.0 --port 7870
 ```
+
+Keep the displayed token for any client that needs the shared operator login.
+In a source checkout, replace `protoagent serve` with `uv run python -m server`.
 
 Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clients to a
 *secured* instance; it is not a way to open one up.
@@ -91,7 +96,7 @@ claims it.
   $ protoagent pair
   Pairing code for ava:  K7QM2-XPA4F   (expires in 4:59)
 
-  On the hub, enter it under Settings ▸ Agents ▸ Pair…, or run:
+  On the hub, enter it under Settings ▸ Fleet ▸ Discover ▸ Pair…, or run:
     protoagent fleet pair http://100.64.1.2:7870 K7QM2-XPA4F   (tailnet)
     protoagent fleet pair http://192.168.1.20:7870 K7QM2-XPA4F   (lan)
   ```

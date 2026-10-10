@@ -17,7 +17,7 @@ show different tool lists.
 | Source | Example tools | Bound when |
 |---|---|---|
 | **Core** — this page | `web_search`, `memory_recall`, `schedule_task` | per-tool gates [below](#at-a-glance) |
-| **Plugins** (`register_tools`) | `read_note`, `docs_search`, `delegate_to`, `github_get_pr` | the plugin is enabled — see [Plugin tools](#plugin-tools) |
+| **Plugins** (`register_tool`) | `read_note`, `docs_search`, `delegate_to`, `github_get_pr` | the plugin is enabled — see [Plugin tools](#plugin-tools) |
 | **Subagent delegation** | `task`, `task_batch` | subagents are included in the build ([Subagents](/guides/subagents)) |
 | **Filesystem fence** | `read_file`, `edit_file`, `run_command` | [`filesystem`](/reference/configuration#filesystem) — **on by default**, fenced to `workspace` |
 | **MCP servers** | `<server>__<tool>` | [`mcp.enabled`](/guides/mcp), or a plugin's managed server |
@@ -196,7 +196,7 @@ ended up with, and `GET /api/tools` is the same view over HTTP.
 
 ## General
 
-### `current_time`
+### `current_time` {#current_time}
 
 ```python
 async def current_time(timezone: str = "UTC") -> str
@@ -234,7 +234,7 @@ attribute access (`(1).__class__`) — anything that isn't pure arithmetic.
 
 Success: `"2 ** 10 = 1024"`. Division by zero: `"Error: division by zero"`.
 
-### `web_search`
+### `web_search` {#web_search}
 
 ```python
 async def web_search(query: str, max_results: int = 5) -> str
@@ -251,7 +251,7 @@ DuckDuckGo text search via the `ddgs` package. No API key. `max_results` is clam
 Network failures, rate limits and import errors come back as `"Error: …"` strings, so the
 model can read them and degrade rather than losing the turn.
 
-### `fetch_url`
+### `fetch_url` {#fetch_url}
 
 ```python
 async def fetch_url(url: str, max_chars: int = 8000) -> str
@@ -281,7 +281,7 @@ User-Agent is `protoAgent/0.1 (+https://github.com/protoLabsAI/protoAgent)`.
 
 ## Asking the operator
 
-### `ask_human`
+### `ask_human` {#ask_human}
 
 ```python
 def ask_human(question: str) -> str
@@ -300,7 +300,7 @@ rather than parking the task forever the runtime auto-answers with a "no operato
 sentinel (bounded; it force-completes past the budget). Prefer proceeding with a stated
 assumption there. Use this for a decision you genuinely must wait on — never for narration.
 
-### `request_user_input`
+### `request_user_input` {#request_user_input}
 
 ```python
 def request_user_input(title: str, steps: list[dict], description: str = "") -> str
@@ -330,7 +330,7 @@ question, use `ask_human`.
 
 ## Rendering
 
-### `show_component`
+### `show_component` {#show_component}
 
 ```python
 def show_component(component: str, props: dict, title: str = "") -> str
@@ -375,7 +375,7 @@ back the scheduled `/dream` (memory consolidation) and `/distill` (workflow → 
 self-gate, which is why they're unconditional here. The update/delete tools are separately
 guarded by the unified self-improvement policy.
 
-### `load_skill`
+### `load_skill` {#load_skill}
 
 ```python
 def load_skill(name: str) -> str
@@ -386,7 +386,7 @@ one-line summary ([ADR 0060](/adr/0060-skill-progressive-disclosure)); this retu
 skill's complete body. `name` must match a `<skill name="…">` exactly. An unknown name returns
 the available names (capped at 40, then a pointer to `list_skills`) rather than an error.
 
-### `list_skills`
+### `list_skills` {#list_skills}
 
 ```python
 def list_skills() -> str
@@ -395,7 +395,7 @@ def list_skills() -> str
 Every skill in the index — `name [source · confidence] — description` — so a distill pass
 extends instead of duplicating. Read-only.
 
-### `save_skill`
+### `save_skill` {#save_skill}
 
 ```python
 def save_skill(name: str, description: str, body: str, tools: list[str] | None = None,
@@ -408,7 +408,7 @@ capture decays and self-cleans rather than accumulating. `description` is requir
 the skill gets matched. A self-improvement pass can supply `provenance_reason`; the producing
 session is recorded automatically.
 
-### `update_skill`
+### `update_skill` {#update_skill}
 
 ```python
 def update_skill(name: str, description: str, body: str, reason: str,
@@ -421,7 +421,7 @@ supplied. Bundled/commons skills are read-only, and flat shared stores receive n
 skill writers. The outgoing file is copied unchanged under `skills/.history/<slug>/` before
 the live artifact changes; a JSON sidecar records the mutation session and reason.
 
-### `delete_skill`
+### `delete_skill` {#delete_skill}
 
 ```python
 def delete_skill(name: str, reason: str, source_session_id: str = "") -> str
@@ -430,7 +430,7 @@ def delete_skill(name: str, reason: str, source_session_id: str = "") -> str
 Uses the same gate and read-only rules as `update_skill`. The complete outgoing artifact is
 archived before deletion, providing the rollback copy named in the tool result.
 
-### `recent_activity`
+### `recent_activity` {#recent_activity}
 
 ```python
 def recent_activity(limit: int = 30, window_hours: int = 168) -> str
@@ -448,7 +448,7 @@ these, and [Ingestion](/guides/ingestion) for the pipeline `knowledge_ingest` dr
 The memory tools are defined in `tools/memory_tools.py` (`_build_memory_tools`) and bound by
 `get_all_tools()` when a knowledge store is present.
 
-### `memory_ingest`
+### `memory_ingest` {#memory_ingest}
 
 ```python
 async def memory_ingest(
@@ -484,7 +484,7 @@ so `memory_recall` can cite `src:` for it later.
 Returns `"Stored chunk 17 in 'preferences'."`, or an error string when the store is
 unavailable.
 
-### `knowledge_ingest`
+### `knowledge_ingest` {#knowledge_ingest}
 
 ```python
 async def knowledge_ingest(source: str, domain: str = "general", title: str | None = None) -> str
@@ -501,7 +501,7 @@ a slow source is detached as a background job instead of blocking the turn. Fili
 under `domain="hot"` is an always-on write, so with `knowledge.hot_write_confirm` on the tool
 refuses it the same way `memory_ingest` does — before anything is fetched.
 
-### `memory_recall`
+### `memory_recall` {#memory_recall}
 
 ```python
 async def memory_recall(
@@ -530,7 +530,7 @@ is the only way an on-demand memory surfaces. `include_superseded=True` (D7) als
 rows a newer revision replaced, each tagged `[superseded]` — the audit history for "what did
 we believe before?". Returns `"No matches."` when nothing clears the threshold.
 
-### `session_search`
+### `session_search` {#session_search}
 
 ```python
 async def session_search(query: str, limit: int = 5, surface: str = "") -> str
@@ -556,7 +556,7 @@ without requiring it to guess the wording first. It is not unconditional —
 `context.prior_sessions: off` turns it off entirely, and goal-driven turns suppress it —
 so on those turns this search is the ONLY way back to a past session, wording guess and all.
 
-### `recall_session`
+### `recall_session` {#recall_session}
 
 ```python
 async def recall_session(session_id: str) -> str
@@ -568,7 +568,7 @@ persisted summary — messages and final output, reasoning-stripped, capped at ~
 line per prior session (id · timestamp · surface · topic · message count), so this is the
 on-demand path to the content. Errors cleanly on an unknown or malformed id.
 
-### `memory_list`
+### `memory_list` {#memory_list}
 
 ```python
 async def memory_list(
@@ -586,7 +586,7 @@ Most-recent-first listing, filtered by domain, `memory_kind`, `delivery_policy` 
 awaits the operator's verdict — confirmation is theirs to give, never the agent's. Useful for
 "what did I log today?".
 
-### `memory_stats`
+### `memory_stats` {#memory_stats}
 
 ```python
 async def memory_stats() -> str
@@ -594,7 +594,7 @@ async def memory_stats() -> str
 
 Per-domain chunk counts plus a total — the sanity check that an ingest actually landed.
 
-### `forget_memory`
+### `forget_memory` {#forget_memory}
 
 ```python
 async def forget_memory(chunk_id: int, reason: str = "") -> str
@@ -611,7 +611,7 @@ audit trail.
 
 ## Scheduling
 
-### `schedule_task`
+### `schedule_task` {#schedule_task}
 
 ```python
 async def schedule_task(prompt: str, when: str, job_id: str | None = None, timezone: str | None = None) -> str
@@ -630,7 +630,7 @@ Prompts must be **self-contained**: the agent has no memory of the scheduling mo
 task fires, so write a fresh turn ("review last week's pipeline incidents and post a summary"),
 not a back-reference ("do that thing we discussed").
 
-### `list_schedules`
+### `list_schedules` {#list_schedules}
 
 ```python
 async def list_schedules() -> str
@@ -640,7 +640,7 @@ This agent's scheduled jobs — one per line with id, next fire, schedule and pr
 Multi-agent isolation is real: each agent only sees jobs it created. `"No scheduled jobs."`
 when empty.
 
-### `cancel_schedule`
+### `cancel_schedule` {#cancel_schedule}
 
 ```python
 async def cancel_schedule(job_id: str) -> str
@@ -685,7 +685,7 @@ yield is durable across restart. For an absolute time or a recurring cadence use
 The agent's own planning board — an in-process SQLite issue tracker, mirrored to the console
 Tasks panel. Tasks are attributed to the session that created them.
 
-### `task_create`
+### `task_create` {#task_create}
 
 ```python
 def task_create(title: str, description: str = "", priority: int = 2, issue_type: str = "task") -> str
@@ -695,7 +695,7 @@ Open an issue and return its id. `priority` is 0 (highest) to 3 (low); `issue_ty
 `task` / `bug` / `feature` / `chore` / `epic`. An invalid value returns `"Error: …"` rather
 than raising.
 
-### `task_list`
+### `task_list` {#task_list}
 
 ```python
 def task_list(include_closed: bool = False) -> str
@@ -704,7 +704,7 @@ def task_list(include_closed: bool = False) -> str
 One line per issue — `[status] id (pN, type) title`. Open issues only unless
 `include_closed=True`. `"No issues on the board."` when empty.
 
-### `task_update`
+### `task_update` {#task_update}
 
 ```python
 def task_update(issue_id: str, status: str = "", title: str = "", description: str = "",
@@ -714,7 +714,7 @@ def task_update(issue_id: str, status: str = "", title: str = "", description: s
 Change any subset of fields. `status` is `open` / `in_progress` / `blocked` / `deferred` /
 `closed`. Leave a string field empty — or `priority` at `-1` — to keep it unchanged.
 
-### `task_close`
+### `task_close` {#task_close}
 
 ```python
 def task_close(issue_id: str, reason: str = "") -> str
@@ -724,7 +724,7 @@ Close an issue as done or won't-do, with an optional `reason`.
 
 ## Inbox
 
-### `check_inbox`
+### `check_inbox` {#check_inbox}
 
 ```python
 async def check_inbox(priority_floor: str = "next", limit: int = 10) -> str
@@ -745,7 +745,7 @@ Both surfaces are **plugin-verifier only**. The tools hardcode `type="plugin"`, 
 cannot open a shell, test or data goal on itself — those stay operator-only via `/goal` and
 the operator API. A verifier name looks like `<plugin-id>:<name>`.
 
-### `list_verifiers`
+### `list_verifiers` {#list_verifiers}
 
 ```python
 async def list_verifiers() -> str
@@ -757,7 +757,7 @@ Every verifier registered on this instance: the core types (`command`, `test`, `
 `set_goal` / `create_watch`.** When none are registered it says so explicitly — which is the
 signal that goal mode is on but has nothing it can verify.
 
-### `set_goal`
+### `set_goal` {#set_goal}
 
 ```python
 def set_goal(condition: str, check: str, check_args: dict | None = None,
@@ -772,7 +772,7 @@ An unknown `check` is rejected up front, listing the registered verifiers — wi
 the goal would be created but could never pass, spinning to the iteration cap and finishing
 `unachievable`. Also errors when goal mode is off or there's no active session.
 
-### `update_goal_plan`
+### `update_goal_plan` {#update_goal_plan}
 
 ```python
 def update_goal_plan(plan: str) -> str
@@ -783,7 +783,7 @@ what failed). It's persisted and fed back into the next continuation prompt, whi
 coherent plan survives across iterations. A harmless no-op when goal mode is off or no goal is
 active.
 
-### `abandon_goal`
+### `abandon_goal` {#abandon_goal}
 
 ```python
 def abandon_goal(reason: str) -> str
@@ -793,7 +793,7 @@ Flag the active goal unachievable and stop the loop. The goal finishes `unachiev
 the turn — **unless the verifier finds it already met, which wins**. No-op when no goal is
 active.
 
-### `create_watch`
+### `create_watch` {#create_watch}
 
 ```python
 def create_watch(condition: str, check: str, check_args: dict | None = None, run_prompt: str = "",
@@ -826,7 +826,7 @@ until something clears it:
 `watch_id` defaults to a slug of the condition; pass one to hold two watches on the same
 condition. Set `expires_in_s` on any repeating watch unless you really mean forever.
 
-### `list_watches`
+### `list_watches` {#list_watches}
 
 ```python
 def list_watches() -> str
@@ -835,7 +835,7 @@ def list_watches() -> str
 Every watch for this agent — id · status · condition · verifier — or a note when there are
 none.
 
-### `update_watch`
+### `update_watch` {#update_watch}
 
 ```python
 async def update_watch(watch_id: str, condition: str | None = None, run_prompt: str | None = None,
@@ -851,7 +851,7 @@ recreating resets the stall history and starts the evidence over.
 supplied", removing an expiry entirely needs its own flag: `clear_deadline=true` (passing both
 is an error). A finished watch can't be edited — set a new one.
 
-### `clear_watch`
+### `clear_watch` {#clear_watch}
 
 ```python
 def clear_watch(watch_id: str) -> str
@@ -861,7 +861,7 @@ Remove a watch by the id `list_watches` shows. Reports whether it existed.
 
 ## Introspection & onboarding
 
-### `show_config`
+### `show_config` {#show_config}
 
 ```python
 def show_config(section: str = "", offset: int = 0, limit: int = 0) -> str
@@ -912,7 +912,7 @@ hold tokens; every value in them is masked, along with any key that names a cred
 depth. Masked values read as `«redacted»`, so the agent still learns that a credential *is*
 set — a blank stays blank, because masking one would claim a token is present when none is.
 
-### `onboard_project`
+### `onboard_project` {#onboard_project}
 
 ```python
 async def onboard_project(repo: str = "", name: str | None = None, write: bool | None = None, github_repo: str = "") -> str
@@ -933,7 +933,7 @@ local paths, `file://`, `ext::`-style transports and anything starting with `-` 
 before git runs. An existing checkout is reused untouched (no fetch), with its drift from the
 tracking branch reported.
 
-### `register_local_project`
+### `register_local_project` {#register_local_project}
 
 ```python
 async def register_local_project(path: str, name: str | None = None, write: bool | None = None) -> str
@@ -959,7 +959,7 @@ the agent tells the operator what to configure.
 
 ## Self-configuration
 
-### `set_config`
+### `set_config` {#set_config}
 
 ```python
 async def set_config(updates: dict) -> str
@@ -1013,7 +1013,7 @@ valid write.
 
 ## Persona
 
-### `edit_soul`
+### `edit_soul` {#edit_soul}
 
 ```python
 async def edit_soul(section: str, content: str, mode: str = "replace",
@@ -1049,7 +1049,7 @@ degraded identity.
 
 ## Progressive disclosure
 
-### `search_tools`
+### `search_tools` {#search_tools}
 
 ```python
 def search_tools(query: str = "", limit: int = 10) -> str

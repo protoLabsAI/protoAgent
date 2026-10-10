@@ -1,10 +1,8 @@
 # Sandboxing & egress
 
-protoAgent's built-in isolation is **application-level**, and it's honest about
-it ([ADR 0008](/adr/0008-sandboxing-and-openshell)). For real OS-enforced
-isolation — kernel-level filesystem locking, syscall filtering, and
-deny-by-default network egress — run protoAgent **under NVIDIA OpenShell**. This
-guide covers both layers.
+Configure filesystem and network limits for the agent's tools. Built-in limits
+operate at the application level; for OS-enforced isolation, run the agent under
+NVIDIA OpenShell. This guide covers both layers.
 
 ## What protoAgent enforces on its own
 

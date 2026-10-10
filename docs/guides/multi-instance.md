@@ -1,88 +1,72 @@
 # Run multiple instances
 
-Running several protoAgent instances on one machine needs each one's on-disk
-state (conversation checkpoints, knowledge, skills, workflows, memory, scheduled
-jobs, inbox) kept separate. How much you need to do depends on how you run them.
-See [ADR 0004](/adr/0004-multi-instance-data-scoping) for the full rationale.
+Give each independently managed agent its own instance root and port. This
+separates config, credentials, chats, memory, knowledge, tasks, and schedules.
+For agents managed together from one console, use the [fleet](/guides/fleet).
 
-## The easy path: one container per instance
+## Shared machine: set an instance id
 
-Each container has its own filesystem, so the default `/sandbox/...` paths are
-**already isolated** — nothing to configure. This is the recommended way to run
-a fleet. Give each container a distinct port if you expose them on the host.
-
-## Shared filesystem: set an instance id
-
-When several instances share one filesystem — multiple bare processes on a host,
-or containers that mount the **same** volume — the default paths (and the
-`~/.protoagent/...` fallback used when `/sandbox` isn't writable) would collide.
-Scope each instance with a distinct id:
+Run these in separate terminals:
 
 ```bash
-PROTOAGENT_INSTANCE=alice  python -m server --port 7871
-PROTOAGENT_INSTANCE=bob    python -m server --port 7872
+PROTOAGENT_INSTANCE=alice uv run python -m server --port 7871
+PROTOAGENT_INSTANCE=bob uv run python -m server --port 7872
 ```
 
-or in `config.yaml`:
+These use `~/.protoagent/alice/` and `~/.protoagent/bob/`. Each instance has a
+`config/` directory and its own stores. Both inherit machine-shared defaults
+from `~/.protoagent/host-config.yaml`.
 
-```yaml
-instance_id: alice
-```
+Without an explicit root or id, the default instance lives at
+`~/.protoagent/default/`. Changing the agent's display name does not move its
+state. Changing the instance id selects a different directory; existing data
+stays in the old one.
 
-With an id set, **every** store nests under it — e.g.
-`~/.protoagent/alice/checkpoints.db`, `~/.protoagent/scheduler/alice/…/jobs.db`,
-`~/.protoagent/alice/memory/`, and so on — so two ids never share a file. The
-env var wins over the config field.
+Instance identity comes from the environment. Setting `instance.id` or
+`instance_id` in YAML does not select the root. `PROTOAGENT_CONFIG_DIR` is retired
+as a runtime root selector.
 
-## Don't want to name every instance? Auto-scope (#706)
+## Choose explicit roots
 
-Running a lot of instances on one box and don't want to set an id for each? Turn on
-**auto-scoping** — each instance derives a stable id from its **working directory** so
-co-located instances never silently share the root:
+`PROTOAGENT_HOME` takes precedence over the instance id when selecting a directory:
 
 ```bash
-PROTOAGENT_AUTO_SCOPE=1   # export once (e.g. in your shell profile)
+PROTOAGENT_HOME=/srv/agents/alice protoagent serve --port 7871
 ```
 
-With it on, an instance with no explicit `PROTOAGENT_INSTANCE` scopes to
-`<dirname>-<hash>` of its cwd — isolated by default, stable across restarts. It's
-**opt-in** (default off) because turning it on relocates an existing *unscoped*
-deployment's data to its scoped dir. Instances launched from the **same** directory
-(e.g. on different ports) still need an explicit `PROTOAGENT_INSTANCE` — and the server
-**warns loudly at boot** whenever it runs unscoped against a non-empty data home, so the
-silent clobbering of #706 can't happen quietly.
+For a throwaway test instance that also needs separate machine-shared config,
+credentials, and heartbeats, set a box root:
 
-### Opt-in — no migration
-
-Leaving the id **unset** keeps the exact single-instance paths used today, so
-existing deployments are untouched. Scoping is purely additive: set an id only
-when you actually run more than one instance on shared storage. (Note: a
-*non-default agent name* does **not** auto-scope — only an explicit instance id
-does — so naming your agent never silently moves its data.)
-
-One instance = one id + one port. Renaming an instance's id points it at a fresh
-data root; the old data stays under the old id (no auto-migration).
-
-## Safety interlock
-
-Even with the guidance above, a misconfiguration (two instances sharing a
-`jobs.db`) is easy to make and fails *silently* — both schedulers poll the same
-table and a due job is fired by whichever ticks first, so the other never sees
-it. To catch this, the scheduler takes an **exclusive owner-lock** on its
-`jobs.db` at startup. If another live instance already holds it, the scheduler
-logs a loud error and **does not start** (the rest of the agent serves normally):
-
-```
-[scheduler] jobs.db at <path> is already owned by another live instance —
-not starting the scheduler. Run each instance with a distinct
-PROTOAGENT_INSTANCE (or agent name) so they don't share a jobs.db.
+```bash
+PROTOAGENT_BOX_ROOT=/tmp/pa-review PROTOAGENT_INSTANCE=review \
+  uv run python -m server --port 7881
 ```
 
-The fix is always the same: give the instances distinct `PROTOAGENT_INSTANCE`
-ids (or run them in separate containers).
+A fresh box root has no model connection; configure one before testing chat.
+
+## Containers
+
+The bundled entrypoint sets `PROTOAGENT_HOME=/sandbox`. Use a separate data volume
+for each container, and a different published host port. Containers that mount the
+same volume share state even if their container names differ.
+
+Explicit store overrides such as `KNOWLEDGE_DB_PATH`, `MEMORY_PATH`, `GOAL_PATH`,
+and `SCHEDULER_DB_DIR` can point outside the instance root. Keep those separate too.
+
+## Check isolation
+
+Run `protoagent config explain` with the same environment as each server. Confirm
+that the instance roots and store paths differ. From a connected console, the
+same report is available at `GET /api/config/explain`.
+
+The scheduler takes an exclusive lock on its `jobs.db`. If another process owns
+it, scheduling waits and retries while the rest of the server remains available.
+Give the instances distinct roots or correct the scheduler override. The lock
+protects scheduling; it does not isolate the other stores.
 
 ## Related
 
-- [ADR 0004 — Multi-Instance Data Scoping](/adr/0004-multi-instance-data-scoping)
-- [Scheduler](/guides/scheduler)
 - [Configuration](/reference/configuration)
+- [Environment variables](/reference/environment-variables)
+- [Schedule future work](/guides/scheduler)
+- [Instance paths decision](/adr/0065-two-tier-instance-paths)

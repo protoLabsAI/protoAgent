@@ -118,7 +118,8 @@ Every write is typed on the way in, and every memory has a lifecycle after it:
    agent-remembered fact just as it does for a harvested one. The session id is
    read from the graph state the tool was invoked with, never from the model:
    provenance the model could set is provenance it could forge.
-2. **Confirmation.** The operator confirms, rejects, or re-opens a row with
+2. **Confirmation.** Pending rows remain eligible for delivery; rejecting is
+   the action that excludes a row. The operator confirms, rejects, or re-opens a row with
    `POST /api/memory/chunks/{id}/review` and a body of `{"state": "confirmed" |
    "rejected" | "pending"}` — the Memory inspector's verdict. Rejecting never
    deletes: the row keeps its content and history and simply stops being
@@ -297,15 +298,25 @@ hit never outranks an operator- or agent-authored one, while relevance order is
 preserved within a tier. A floor (`knowledge.inject_min_trust`) can exclude low
 tiers from auto-injection entirely; excluded content stays reachable on demand
 via `memory_recall`, tier visible. The knobs, with worked examples:
-[Tune the knowledge store → Memory delivery controls](../guides/knowledge.md#memory-delivery-controls-adr-0069).
+[Knowledge reference → Delivery controls](../reference/knowledge.md#memory-delivery-controls-adr-0069).
 
 ### Incognito threads
 
-A thread flagged incognito leaves no memory trail and reads none in: no session
-summary is written, the retire-time harvest skips it, and the digest / hot
-memory / RAG injection is skipped for its turns. The skill index still injects
-— capability, not memory. (How to flag a thread — slash command, API field, A2A
-metadata: [the guide](../guides/knowledge.md#incognito-threads).)
+Incognito suppresses automatic memory delivery and persistence for the current
+turn: no session summary, digest, hot memory, or document-hit injection. Harvest
+skips incognito threads and compaction writes no archive; the skill index still
+injects because it describes capabilities. The chat transcript still persists.
+Explicit memory tools, plugin operations, and delegate retention are independent
+of this flag.
+
+The console sends the flag on every message while the tab is incognito.
+`POST /api/chat` accepts `"incognito": true`; A2A messages carry it in metadata.
+API callers must set it on every turn. A thread's latest operator message
+controls its mode, so turning incognito off can let later summarization include
+earlier content. Start a new ordinary chat to keep the histories separate.
+Manual `/compact` refuses in incognito because it requires an archive; automatic
+compaction can still shorten the live context without archiving it. See
+[Use incognito](../guides/manage-memory.md#use-incognito) for the app controls.
 
 ## Forensics: the injection log
 
@@ -375,7 +386,7 @@ tuning guidance in [Tune the knowledge store](../guides/knowledge.md)):
 | `inject_namespaces` | `[]` | namespaces allowed to auto-inject (empty = unfiltered; `""` matches un-namespaced) |
 | `inject_min_trust` | `1` | trust floor for auto-injection: 1 = down-weight only, 2 = drop external, 3 = operator-only |
 | `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` and `knowledge_ingest` refuse always-on writes (`domain="hot"` or `delivery_policy="always"`) |
-| `scope` | `scoped` | tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private) · `shared` (host commons) · `layered` (read commons ∪ private, write private). See [Tune the knowledge store → Sharing across a fleet](../guides/knowledge.md#sharing-knowledge-across-a-fleet-the-commons) |
+| `scope` | `scoped` | tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private) · `shared` (host commons) · `layered` (read commons ∪ private, write private). See [Knowledge reference → Fleet commons](../reference/knowledge.md#sharing-knowledge-across-a-fleet-the-commons) |
 | `middleware.knowledge` | `true` | turn the whole subsystem on/off |
 | `context.budget_pct` | `8` | (its own `context:` block) the projected-context ceiling as a % of the model window ([D6](#delivery-budget-and-priority-adr-0108-d6)); `0` = unbounded |
 
@@ -395,7 +406,9 @@ hybrid via `evals.sweep`. See [Eval your fork](../guides/evals.md).
 - [ADR 0021 — Agent memory: extract, don't dump](../adr/0021-agent-memory-architecture.md)
 - [ADR 0069 — Memory delivery layer](../adr/0069-memory-delivery-layer.md) — digest, framing, provenance, trust tiers, injection record
 - [ADR 0070 — Background results](../adr/0070-background-results-push-resume.md) — why `background:*` workers leave no summary trail
-- [Tune the knowledge store](../guides/knowledge.md) — the tuning knobs + the delivery-control recipes
+- [Manage memory](../guides/manage-memory.md) — inspect, correct, reject, and delete saved context
+- [Tune knowledge recall](../guides/knowledge.md) — check retrieval and compare settings
+- [Knowledge reference](../reference/knowledge.md) — settings, tools, and delivery controls
 - [ADR 0041 — Workspaces & tiered stores](../adr/0041-workspaces-and-tiered-stores.md) — the private/commons tiering behind `knowledge.scope`
 - [Run a fleet](../guides/fleet.md) — sharing a knowledge commons across many agents on one host
 - [Prompt contracts](prompt-contracts.md) — the stable prompt this projected context is deliberately kept out of, and the size ceilings that keep it cacheable

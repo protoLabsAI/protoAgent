@@ -1,89 +1,115 @@
-# Spin up your first agent
+# Set up your first agent
 
-About 5 minutes. You need Python 3.11+ and an OpenAI-compatible API key (OpenAI direct, LiteLLM gateway, Anthropic-via-gateway, Ollama, anything that speaks the OpenAI REST shape).
+Install protoAgent, connect a model, and send your first message. You need a model
+endpoint (hosted or local), or a supported Claude or ChatGPT subscription.
 
-No forking, no `sed`, no Docker for your first run. That's all in [Customize & deploy](/guides/customize-and-deploy) once you've decided this template works for you.
+## 1. Install and start
 
-## 1. Get the code
+**Desktop:** [download protoAgent](https://agent.protolabs.studio/download) for
+your operating system and open it. The server and console are bundled.
 
-```bash
-git clone https://github.com/protoLabsAI/protoAgent.git my-agent
-cd my-agent
-```
-
-## 2. Install dependencies & run
-
-Dependencies live in `pyproject.toml` (the single source of truth), so both
-modern `uv` and classic `pip` just work.
-
-**uv (recommended)** — creates the venv, installs the core deps, runs the server:
+**Python package:** with uv installed, run:
 
 ```bash
-uv sync && uv run python -m server          # core, serves the React console (--ui console)
-# Add the Google surface with the extra:
-#   uv sync --extra google && uv run python -m server
-# Re-running and already synced? `uv run --no-sync python -m server`.
+uvx --from protolabs-agent protoagent serve
 ```
 
-**pip** — `requirements.txt` installs the core + Google surface set:
+Keep the terminal open, then visit <http://localhost:7870>.
+
+::: details Run from a source checkout
+You need Git, uv, Python 3.11+, Node 20, and npm 11+. Build the console before
+starting the server:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt            # == pip install -e .[google]
-python -m server
+git clone https://github.com/protoLabsAI/protoAgent.git
+cd protoAgent
+uv sync --frozen
+npm ci
+npm run build --workspace @protoagent/web
+uv run python -m server
 ```
 
-You should see:
+If you use nvm, `nvm use` selects the repository's Node version. Node 20 ships an
+older npm; run `npm install -g npm@11` if `npm --version` is below 11.
 
-```
-LangGraph agent initialized (setup wizard not complete — graph not compiled. Open the UI to finish setup.)
-Starting protoagent on http://0.0.0.0:7870
-```
+On Windows, keep the checkout near the drive root, such as `C:\src\protoAgent`,
+to avoid long dependency paths.
+:::
 
-## 3. Open the setup wizard
+## 2. Choose and name your agent
 
-Visit <http://localhost:7870> in a browser. Because `config/.setup-complete` doesn't exist yet, you'll land in the wizard instead of the chat UI.
+The setup wizard opens on a fresh instance. Click **Next**, choose **Basic** for
+this walkthrough, and give the agent a name. Leave the starting persona as-is;
+you can edit it later in **Settings → Identity**.
 
-Walk through the four steps:
+Other archetypes add a persona and tools for a particular job. Use
+[Enable document creation](/guides/python-runtime) for Cowork's desktop
+requirements, or [Build with a coding agent](/guides/build-with-a-coding-agent)
+for Project Manager setup.
 
-1. **Connect to your model.** Paste your API base URL (`https://api.openai.com/v1` for OpenAI direct, `http://localhost:4000/v1` for a local LiteLLM gateway) and API key. Click **Test connection & fetch models** — the dropdown fills with whatever the endpoint actually exposes. Pick one.
-2. **Name your agent and pick an archetype.** Short lowercase slug (e.g. `product-director`). The archetype seeds the persona (the agent's base `SOUL.md`) and, for bundle-backed ones, installs their plugins: **Basic** is the safe default (no plugins); **Cowork** pairs on documents; **Engineer** is a hands-on navigator for your own repos (it guides, you write the fix); under *Advanced*, **Design System Engineer** and **Project Manager** install their bundles and add a *Configure* step that asks for what the bundle can't guess (for Project Manager, five fields: the repo path and the coder delegate — both **required**, and the create is refused until a registered `acp` coding delegate is picked — plus the GitHub repo, whether to start the build loop, and whether the loop merges its own reviewed PRs (on by default); see [Build with a coding agent](/guides/build-with-a-coding-agent), including its *Before you start* list of the host binaries the step can't install); **Custom** starts from a blank SOUL template. *See what's included* previews a bundle's plugins and persona before you commit. Edit the loaded persona text freely.
-3. **Tools & middleware.** A broad starter set is enabled by default — the keyless general tools (`current_time`, `calculator`, `web_search`, `fetch_url`), the two HITL tools (`ask_human`, `request_user_input`), `show_component`, `load_skill` and the curation tools, plus memory, scheduler, tasks and inbox tools wherever their store is present. The on-by-default `notes`, `docs` and `artifact` plugins add more on top. (See [Starter tools](/reference/starter-tools) for the full list; drop any via `tools.disabled`.) Leave **Audit**, **Memory**, **Knowledge**, and **Scheduler** middleware on — the template ships a working sqlite + FTS5 store under `/sandbox/knowledge/agent.db` and a sqlite-backed scheduler under `/sandbox/scheduler/<agent_name>/jobs.db`, both with `~/.protoagent/...` fallbacks outside Docker.
-4. **Optional — you, security, autostart.** Your name makes the agent address you directly. A2A auth token blank for local dev, set it before you expose the port. "Launch this agent automatically on login" installs a macOS LaunchAgent so the server is up after every reboot without remembering to `python -m server`.
+## 3. Connect a model
 
-Hit **Launch agent**. The wizard closes, the chat UI appears, and the Configuration drawer on the right is now populated with your choices.
+In **Brain**, choose a connection:
 
-## 4. Try it
+- **Gateway model:** enter an OpenAI-compatible base URL and any required API key.
+  For example, use `https://api.openai.com/v1` for OpenAI or
+  `http://localhost:4000/v1` for a local LiteLLM gateway. Choose a model from the
+  fetched list (**Probe** loads the gateway models).
+- **Claude subscription** or **ChatGPT / Codex subscription:** follow the sign-in
+  controls, then choose an available model. These routes use a subscription login
+  instead of an API key.
 
-In the chat box:
+Click **Test connection**. Continue when the wizard reports that the model
+responded. If it fails, check the endpoint URL, credentials, and selected model;
+for a local endpoint, confirm its server is running.
+
+To add a CLI coding agent for coding jobs, configure a
+[delegate](/guides/coding-agents) after setup.
+
+## 4. Finish and chat
+
+Review your choices and click **Finish**. Once the chat opens, send:
 
 > What time is it in Tokyo?
 
-The agent calls `current_time`, returns an ISO-8601 timestamp, and explains what it found.
+You should see a `current_time` tool call followed by a reply. Then try:
 
-Then:
+> Find three recent articles about the A2A protocol and summarize them with links.
 
-> Find three recent articles about the A2A protocol and summarize them.
+This exercises web search, URL fetching, and the model's tool loop. If the reply
+fails, read the error in chat and check **Settings → Model → Connections**. If a
+tool is unavailable, check **Settings → Tools** and the
+[starter-tool reference](/reference/starter-tools).
 
-The agent calls `web_search`, then `fetch_url` on the top results, and hands back a synthesis. That round-trip exercises the full tool loop + LLM call + streaming response path.
+## Find your configuration
 
-## What just happened
+Setup saves the model connection, name, and persona for this instance. To see the
+actual paths and where settings came from, run:
 
-- Your answers were written to `config/langgraph-config.yaml` (human-readable — peek at it).
-- The persona preset was written to `config/SOUL.md`.
-- A `config/.setup-complete` marker was created so the next boot goes straight to chat.
-- The agent card at <http://localhost:7870/.well-known/agent-card.json> now reflects your agent name.
-- If you checked autostart, `~/Library/LaunchAgents/ai.protolabs.<name>.plist` was installed and `launchctl load`-ed.
+```bash
+protoagent config explain
+# In a source checkout:
+uv run python -m server config explain
+```
+
+A normal source or package install writes config to
+`~/.protoagent/default/config/`, including `langgraph-config.yaml`, `secrets.yaml`,
+and `SOUL.md`. Desktop and Docker use different roots; the
+[configuration reference](/reference/configuration) explains the layout.
 
 ## Changing your mind
 
-- **Any field** — open the Configuration drawer on the right side of the chat UI. Every wizard field is there, plus a few advanced ones (temperature, max_tokens, max_iterations, knowledge store settings).
-- **The whole wizard** — expand the drawer's "Re-run setup wizard" accordion and click **Run wizard now**. Your current values pre-fill every step.
-- **Autostart** — toggle it off in the wizard or the drawer; the LaunchAgent is removed and the plist file deleted.
+Use **Settings → Identity** for the name and persona, **Model → Connections** for
+connections, and **Tools** or **Plugins** for capabilities. Adding a connection
+does not switch the primary model; follow
+[Connect and change models](/guides/model-connections) to select it and save.
 
-## Where to go next
+## Next steps
 
-- [Write your first tool](/tutorials/first-tool) — wire a custom LangChain tool into the loop
-- [Customize & deploy](/guides/customize-and-deploy) — fork the template, rename throughout, ship a GHCR image
-- [Add a custom skill](/guides/add-a-skill) — expose the new behaviour on the A2A agent card
+- [Use the app](/guides/react-tauri-ui) — chats, settings, and progress.
+- [Back up your data](/guides/backup-and-restore) — preserve chats and settings.
+- [Fix a problem](/guides/troubleshooting) — recover from a failed connection or task.
+- [Work with files and documents](/guides/documents-and-files) — attach files, create documents, and download them.
+- [Add documents and media](/guides/ingestion) — give the agent material to recall.
+- [Install a plugin](/guides/plugin-registry) — connect more tools and integrations.
+- [Write your first skill](/tutorials/first-skill) — teach a reusable procedure.

@@ -7,13 +7,13 @@ const base = process.env.DOCS_BASE || "/protoAgent/";
 // Social-card copy. Mirrors the marketing site's BaseLayout so a shared docs
 // link unfurls with the same card as a shared homepage link.
 const SOCIAL_DESCRIPTION =
-  "A lean, A2A-native agent on LangGraph. Ships a small core, grows with git-URL plugins. Run one agent or orchestrate a fleet; drive it from a console, the OpenAI API, or A2A. Local-first, yours to fork.";
+  "AI agents on your own machine. Chat, work with documents, connect tools, and hand coding jobs to your CLI agents.";
 const SOCIAL_IMAGE = "https://agent.protolabs.studio/docs/social-preview.png";
 
 export default defineConfig({
   title: "protoAgent",
   description:
-    "Template repository for building protoLabs A2A agents on LangGraph.",
+    "Set up, use, extend, and operate local AI agents with protoAgent.",
   base,
 
   // Follow the reader's OS colour scheme, same as the marketing site this sits
@@ -69,7 +69,7 @@ export default defineConfig({
         {
           text: "Getting started",
           collapsed: false,
-          items: [{ text: "Spin up your first agent", link: "/tutorials/first-agent" }],
+          items: [{ text: "Set up your first agent", link: "/tutorials/first-agent" }],
         },
         {
           text: "Skills, subagents & workflows",
@@ -97,8 +97,14 @@ export default defineConfig({
           text: "Getting started",
           collapsed: false,
           items: [
-            { text: "Fork the template (fast path)", link: "/guides/fork-the-template" },
-            { text: "Customize & deploy", link: "/guides/customize-and-deploy" },
+            { text: "Use the app", link: "/guides/react-tauri-ui" },
+            { text: "Connect and change models", link: "/guides/model-connections" },
+            { text: "Work with files and documents", link: "/guides/documents-and-files" },
+            { text: "Enable document creation", link: "/guides/python-runtime" },
+            { text: "Install and manage plugins", link: "/guides/plugin-registry" },
+            { text: "Back up and restore data", link: "/guides/backup-and-restore" },
+            { text: "Fix a problem in the app", link: "/guides/troubleshooting" },
+            { text: "Export or copy an agent", link: "/guides/agent-snapshots" },
           ],
         },
         {
@@ -120,7 +126,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Skills (SKILL.md)", link: "/guides/skills" },
-            { text: "Add a custom skill (A2A card)", link: "/guides/add-a-skill" },
+            { text: "Advertise a capability (A2A card)", link: "/guides/add-a-skill" },
             { text: "Configure subagents", link: "/guides/subagents" },
             { text: "Reusable workflows", link: "/guides/workflows" },
           ],
@@ -129,8 +135,9 @@ export default defineConfig({
           text: "Knowledge & memory",
           collapsed: false,
           items: [
+            { text: "Inspect and manage memory", link: "/guides/manage-memory" },
             { text: "Ingest documents & media", link: "/guides/ingestion" },
-            { text: "Tune the knowledge store (RAG)", link: "/guides/knowledge" },
+            { text: "Tune knowledge recall", link: "/guides/knowledge" },
           ],
         },
         {
@@ -138,7 +145,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Delegates (agents & endpoints)", link: "/guides/delegates" },
-            { text: "Rooms (@name group chat)", link: "/guides/rooms" },
+            { text: "Talk to delegates in a room", link: "/guides/rooms" },
             { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
             { text: "Verifier-grounded coder (coder_solve)", link: "/guides/coder" },
             { text: "Fleet (many agents on one host)", link: "/guides/fleet" },
@@ -154,10 +161,12 @@ export default defineConfig({
           items: [
             { text: "Extend protoAgent (start here)", link: "/guides/extend" },
             { text: "Connect MCP servers", link: "/guides/mcp" },
-            { text: "Plugins", link: "/guides/plugins" },
-            { text: "Building a plugin view", link: "/guides/building-react-plugin-views" },
+            { text: "Build plugins", link: "/guides/plugins" },
+            { text: "Build a plugin view (quickstart)", link: "/guides/build-a-plugin-view" },
+            { text: "Plugin views (full guide)", link: "/guides/building-react-plugin-views" },
+            { text: "Bundles (plugin sets)", link: "/guides/bundles" },
             { text: "Build a communication plugin", link: "/guides/communication-plugins" },
-            { text: "Install & publish plugins (git URLs)", link: "/guides/plugin-registry" },
+            { text: "Publish a plugin", link: "/guides/publish-a-plugin" },
             { text: "Discord surface", link: "/guides/discord" },
             { text: "Browser automation", link: "/guides/browser-automation" },
           ],
@@ -166,9 +175,9 @@ export default defineConfig({
           text: "Console & UI",
           collapsed: false,
           items: [
-            { text: "Operator console (React/Tauri)", link: "/guides/react-tauri-ui" },
+            { text: "Build and test the console", link: "/guides/build-console" },
             { text: "Windows desktop app (install & recovery)", link: "/guides/windows-desktop" },
-            { text: "Managed Python runtime (desktop)", link: "/guides/python-runtime" },
+            { text: "Enable document creation (desktop)", link: "/guides/python-runtime" },
             { text: "Command palette (⌘⇧K)", link: "/guides/command-palette" },
             { text: "Developer flags (gate pre-release features)", link: "/guides/developer-flags" },
             { text: "Access from your phone (LAN / Tailscale)", link: "/guides/phone-access" },
@@ -180,7 +189,6 @@ export default defineConfig({
           collapsed: true,
           items: [
             { text: "The protoagent command (CLI)", link: "/guides/cli" },
-            { text: "Agent snapshots (export, share, duplicate)", link: "/guides/agent-snapshots" },
             { text: "Deploy via GHCR", link: "/guides/deploy" },
             { text: "Deploy in Docker (seed + UI override)", link: "/guides/deploy-docker" },
             { text: "Deploy on Proxmox (reusable LXC template)", link: "/guides/deploy-proxmox" },
@@ -197,6 +205,8 @@ export default defineConfig({
           text: "Forks & evals",
           collapsed: true,
           items: [
+            { text: "Fork the template (fast path)", link: "/guides/fork-the-template" },
+            { text: "Customize & deploy", link: "/guides/customize-and-deploy" },
             { text: "Build an operator fork (Roxy)", link: "/guides/operator-fork" },
             { text: "Sync a fork from upstream", link: "/guides/upstream-sync" },
             { text: "Eval your fork", link: "/guides/evals" },
@@ -220,12 +230,18 @@ export default defineConfig({
           items: [{ text: "Skills (SKILL.md)", link: "/reference/skills" }],
         },
         {
+          text: "Knowledge & memory",
+          collapsed: false,
+          items: [{ text: "Knowledge settings and tools", link: "/reference/knowledge" }],
+        },
+        {
           text: "A2A, fleet & delegates",
           collapsed: false,
           items: [
             { text: "A2A endpoints", link: "/reference/a2a-endpoints" },
             { text: "A2A conformance", link: "/reference/a2a-conformance" },
             { text: "Agent card", link: "/reference/agent-card" },
+            { text: "Agent snapshots", link: "/reference/agent-snapshots" },
             { text: "Extensions", link: "/reference/extensions" },
           ],
         },
@@ -240,6 +256,7 @@ export default defineConfig({
             { text: "Plugin testkit", link: "/reference/plugin-testkit" },
             { text: "Plugin CLI", link: "/reference/plugin-cli" },
             { text: "Plugin view bridge (wire protocol)", link: "/reference/plugin-view-bridge" },
+            { text: "Command palette extensions", link: "/reference/command-palette" },
             { text: "Event bus topics", link: "/reference/plugin-events" },
             { text: "Coding-agent dispatch (ACP)", link: "/reference/plugin-coding-agent" },
           ],
@@ -278,6 +295,7 @@ export default defineConfig({
           text: "A2A, fleet & delegates",
           collapsed: false,
           items: [
+            { text: "How rooms work", link: "/explanation/rooms" },
             { text: "A2A protocol", link: "/explanation/a2a-protocol" },
             { text: "Cost & trace propagation", link: "/explanation/cost-and-trace" },
           ],
